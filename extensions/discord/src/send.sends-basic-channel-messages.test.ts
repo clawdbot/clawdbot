@@ -216,6 +216,30 @@ describe("resolveDiscordTargetChannelId", () => {
 });
 
 describe("sendMessageDiscord", () => {
+  it("keeps missing platform identity ambiguous in progress and final results", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });
+    postMock.mockResolvedValue({ channel_id: "789" });
+    const onDeliveryResult = vi.fn();
+
+    const result = await sendMessageDiscord("channel:789", "hello", {
+      rest,
+      token: "t",
+      cfg: DISCORD_TEST_CFG,
+      onDeliveryResult,
+    });
+
+    expect(postMock).toHaveBeenCalledOnce();
+    expect(onDeliveryResult).toHaveBeenCalledOnce();
+    for (const delivery of [result, onDeliveryResult.mock.calls[0]?.[0]]) {
+      expect(delivery).toMatchObject({
+        messageId: "",
+        channelId: "789",
+        receipt: { platformMessageIds: [], parts: [] },
+      });
+    }
+  });
+
   function expectReplyReference(
     body: { message_reference?: unknown } | undefined,
     messageId: string,
@@ -571,6 +595,38 @@ describe("sendMessageDiscord", () => {
       expect(onPlatformSendDispatch).toHaveBeenCalledTimes(2);
       const messageRequests = loopback.requests.filter((request) => request.method === "POST");
       expect(messageRequests).toHaveLength(1);
+    } finally {
+      await loopback.close();
+    }
+  });
+
+  it("fences provider-owned delivery after async dispatch refresh and before REST I/O", async () => {
+    const loopback = await createDiscordLoopbackRest();
+    try {
+      const authorityRevoked = new Error("delivery authority revoked after dispatch refresh");
+      let authorityActive = true;
+      const onPlatformSendDispatch = async () => {
+        await Promise.resolve();
+        authorityActive = false;
+      };
+      const assertPlatformSendAuthorized = () => {
+        if (!authorityActive) {
+          throw authorityRevoked;
+        }
+      };
+
+      await expect(
+        sendMessageDiscord("channel:789", "must not send", {
+          rest: loopback.rest,
+          token: "test-token",
+          cfg: DISCORD_TEST_CFG,
+          onPlatformSendDispatch,
+          assertPlatformSendAuthorized,
+        }),
+      ).rejects.toBe(authorityRevoked);
+
+      const messageRequests = loopback.requests.filter((request) => request.method === "POST");
+      expect(messageRequests).toHaveLength(0);
     } finally {
       await loopback.close();
     }

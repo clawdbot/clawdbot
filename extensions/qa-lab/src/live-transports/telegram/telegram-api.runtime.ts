@@ -24,6 +24,7 @@ export function buildTelegramQaConfig(
   baseCfg: OpenClawConfig,
   params: {
     apiRoot: string;
+    directMessageOnly?: boolean;
     groupId: string;
     sutAccountId: string;
     sutToken: string;
@@ -71,7 +72,9 @@ export function buildTelegramQaConfig(
             enabled: true,
             botToken: params.sutToken,
             apiRoot: params.apiRoot,
-            dmPolicy: "disabled",
+            ...(params.directMessageOnly
+              ? { dmPolicy: "allowlist", allowFrom: [params.testerUserId] }
+              : { dmPolicy: "disabled" }),
             groups: {
               [params.groupId]: {
                 groupPolicy: "allowlist",

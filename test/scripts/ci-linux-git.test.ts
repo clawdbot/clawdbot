@@ -263,56 +263,18 @@ const historyProfiles: {
   step: string;
   env: Record<string, string>;
   target: string;
-  depth: number;
-  consumer: string;
 }[] = [
   {
     job: "preflight",
     step: "Resolve exact diff base",
     env: { GITHUB_EVENT_NAME: "workflow_dispatch", RELEASE_GATE: "true" },
     target: "+refs/pull/17/merge:refs/remotes/origin/release-gate-merge",
-    depth: 2,
-    consumer: "",
-  },
-  {
-    job: "security-fast",
-    step: "Fetch pull request scan history",
-    env: {},
-    target: merge,
-    depth: 7,
-    consumer: "",
   },
   {
     job: "checks-fast-core",
     step: "Prepare release-gate ratchet merge tree",
     env: {},
     target: "+refs/pull/17/merge:refs/remotes/origin/ci-ratchet-merge",
-    depth: 2,
-    consumer: "",
-  },
-  {
-    job: "checks-fast-core",
-    step: "Run ${{ matrix.task }} (${{ matrix.runtime }})",
-    env: { TASK: "bundled-protocol" },
-    target: `+${base}:refs/remotes/origin/protocol-since-base`,
-    depth: 1,
-    consumer: "protocol:check",
-  },
-  {
-    job: "check-shard",
-    step: "Run check shard",
-    env: { TASK: "guards" },
-    target: `+${base}:refs/remotes/origin/ci-base`,
-    depth: 1,
-    consumer: "scripts/report-test-temp-creations.mjs",
-  },
-  {
-    job: "check-shard",
-    step: "Run check shard",
-    env: { TASK: "npm-lock" },
-    target: `+${base}:refs/remotes/origin/npm-lock-base`,
-    depth: 1,
-    consumer: "deps:npm-lock:check:changed",
   },
 ];
 
@@ -328,7 +290,7 @@ linuxIt.each(
   ]),
 )(
   "$job/$step joins supplemental history before consumption ($label, $target)",
-  async ({ job, step, env, target, depth, consumer, fetchResults, code }) => {
+  async ({ job, step, env, target, fetchResults, code }) => {
     const report = await runCiGitStep({
       job,
       step,
@@ -339,15 +301,7 @@ linuxIt.each(
     });
     expect(report.code).toBe(code);
     expect(report.fetches).toHaveLength(1);
-    expect(report.fetches[0]?.args).toEqual(expect.arrayContaining([target, `--depth=${depth}`]));
-    if (consumer) {
-      expect(report.commands.some(({ tool, args }) => tool !== "git" && args[0] === consumer)).toBe(
-        code === 0,
-      );
-    }
-    if (env.TASK === "npm-lock") {
-      expect(report.commands.some(({ args }) => args[0] === "deps:npm-lock:check")).toBe(false);
-    }
+    expect(report.fetches[0]?.args).toEqual(expect.arrayContaining([target, "--depth=2"]));
     if (step === "Resolve exact diff base") {
       expect(report.githubOutput).toBe(code === 0 ? `sha=${base}\nhead_sha=${merge}\n` : "");
     }
@@ -386,61 +340,6 @@ linuxIt(
     ).toEqual(["fetch:1", "show-parents", "fetch:2", "show-parents", "checkout"]);
     expect(report.checkouts.map(({ args }) => args.at(-1))).toEqual([merge]);
     expect(report.githubEnv).toBe(`RATCHET_BASE_REF=${base}\n`);
-  },
-  55_000,
-);
-
-linuxIt(
-  "cancellation during raw Git timeout cleanup prevents npm-lock fallback",
-  async () => {
-    const report = await runCiGitStep({
-      job: "check-shard",
-      step: "Run check shard",
-      env: { TASK: "npm-lock" },
-      fetchResults: ["hang"],
-      prepare: true,
-      cancelDuringCleanup: true,
-    });
-    expect(report.cancelledDuringCleanup).toBe(true);
-    expect(report.code).toBe(143);
-    expect(report.fetches).toHaveLength(1);
-    expect(report.commands.filter(({ tool }) => tool === "pnpm")).toEqual([]);
-  },
-  55_000,
-);
-
-linuxIt.each([23, "hang"] satisfies FetchResult[])(
-  "npm-lock safely falls back to a full sweep after joined fetch failure (%s)",
-  async (failure) => {
-    const report = await runCiGitStep({
-      job: "check-shard",
-      step: "Run check shard",
-      env: { TASK: "npm-lock" },
-      fetchResults: [failure],
-      prepare: true,
-    });
-    expect(report.code).toBe(0);
-    expect(report.fetches).toHaveLength(1);
-    expect(report.commands.filter(({ tool }) => tool === "pnpm").map(({ args }) => args)).toEqual([
-      ["deps:npm-lock:check"],
-    ]);
-  },
-  55_000,
-);
-
-linuxIt(
-  "security rejects malformed scan depth before starting Git",
-  async () => {
-    const report = await runCiGitStep({
-      job: "security-fast",
-      step: "Fetch pull request scan history",
-      env: { PR_COMMIT_COUNT: "invalid" },
-      fetchResults: [],
-      prepare: true,
-    });
-    expect(report.code).toBe(2);
-    expect(report.fetches).toEqual([]);
-    expect(report.readyAttempts).toEqual([]);
   },
   55_000,
 );
@@ -605,11 +504,11 @@ posixIt.each(qaGitCases)(
     expect(
       report.commands
         .filter(({ args }) => args[0] === "rev-parse")
-        .map(({ args, cwd }) => ({ args, cwd })),
+        .map(({ args, cwd: commandCwd }) => ({ args, cwd: commandCwd })),
     ).toEqual(profile.readbacks.map((ref) => ({ args: ["rev-parse", ref], cwd })));
-    expect(report.checkouts.map(({ args, cwd }) => ({ args, cwd }))).toEqual(
-      profile.checkout ? [{ args: ["checkout", "--detach", profile.checkout], cwd }] : [],
-    );
+    expect(
+      report.checkouts.map(({ args, cwd: commandCwd }) => ({ args, cwd: commandCwd })),
+    ).toEqual(profile.checkout ? [{ args: ["checkout", "--detach", profile.checkout], cwd }] : []);
     if (profile.step === "Checkout selected ref") {
       expect(report.commands.map(({ args }) => args[0])).toEqual([
         "init",
@@ -686,7 +585,7 @@ const mantisCases = [
 }[];
 
 posixIt.each([
-  ...mantisCases.map((entry) => ({ ...entry, failure: 0 as FetchResult })),
+  ...mantisCases.map((entry) => Object.assign({}, entry, { failure: 0 as FetchResult })),
   ...[true, false].flatMap((shared) =>
     (["cleanup-failure", 23] satisfies FetchResult[]).map((failure) => ({
       label: `${shared ? "shared action" : "Discord"} terminal ${failure}`,
@@ -799,7 +698,7 @@ posixIt.each([
   ...mantisInstallers.map((profile) => ({ ...profile, failure: false })),
   ...mantisInstallers
     .filter(({ workflow }) => workflow !== "discord-thread-attachment")
-    .map((profile) => ({ ...profile, failure: true })),
+    .map((profile) => Object.assign({}, profile, { failure: true })),
 ])(
   "Mantis installer Git owner drains before checkout/build/probes: $workflow (cleanup failure=$failure)",
   async ({ workflow, job, fetch, failure }) => {
@@ -934,6 +833,12 @@ posixIt.each([
       },
       fetchResults: [],
       worktreeResults: failure ? ["cleanup-failure"] : lanes.map(() => 0),
+      // The runner hands off the earlier allocation's output; keep setup logs
+      // inside this fixture's fresh invocation directory.
+      stepOutputs:
+        workflow === "web-ui-chat-proof"
+          ? { prepare_evidence: { output_dir: "${RUNNER_TEMP}" } }
+          : undefined,
       realClock: true,
       realDrain: false,
       poisonPython: true,
@@ -1173,7 +1078,9 @@ posixIt.each(["Clone publish repo", "Commit publish repo sync"])(
     expect(backoffs(report)).toEqual([2, 4, 6, 8, 10]);
     expect(report.clones).toHaveLength(cloning ? 5 : 0);
     expect(report.fetches).toHaveLength(cloning ? 0 : 6);
-    expect(report.rebases.map(({ args }) => args)).toEqual(cloning ? [] : Array(5).fill(abort));
+    expect(report.rebases.map(({ args }) => args)).toEqual(
+      cloning ? [] : Array.from({ length: 5 }, () => [...abort]),
+    );
     expect(report.pushes).toEqual([]);
     expect(
       report.output

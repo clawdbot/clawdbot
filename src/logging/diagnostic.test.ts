@@ -14,6 +14,7 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import { emitCoreModelRequestStartedDiagnosticEvent } from "../infra/diagnostic-model-request.js";
+import { emitCoreSemanticRunProgressDiagnosticEvent } from "../infra/diagnostic-semantic-run-progress.js";
 import { DEFAULT_UNDICI_STREAM_TIMEOUT_MS } from "../infra/net/undici-global-dispatcher.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withDiagnosticPhase } from "./diagnostic-phase.js";
@@ -22,12 +23,12 @@ import {
   createDiagnosticEmbeddedRunOwner,
   markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
+  markDiagnosticRunProgress,
   resetDiagnosticRunActivityForTest,
   startDiagnosticRunActivityTracking,
 } from "./diagnostic-run-activity.js";
 import {
   markDiagnosticModelStartedForTest,
-  markDiagnosticRunProgressForTest,
   markDiagnosticToolStartedForTest,
 } from "./diagnostic-run-activity.test-support.js";
 import type { SessionAttentionClassification } from "./diagnostic-session-attention.js";
@@ -210,16 +211,21 @@ describe("diagnostic session state pruning", () => {
     expect(diagnosticSessionStates.size).toBe(1);
   });
 
-  it("caps tracked session states to a bounded max", () => {
-    const now = Date.now();
-    for (let i = 0; i < 2001; i += 1) {
-      vi.setSystemTime(now + i);
-      getDiagnosticSessionState({ sessionKey: `session-${i}` }).queueDepth = 1;
-    }
+  it.each(["session-0", ""])(
+    "caps tracked session states when the oldest key is %j",
+    (oldestKey) => {
+      const now = Date.now();
+      for (let i = 0; i < 2001; i += 1) {
+        vi.setSystemTime(now + i);
+        getDiagnosticSessionState({
+          sessionKey: i === 0 ? oldestKey : `session-${i}`,
+        }).queueDepth = 1;
+      }
 
-    expect(diagnosticSessionStates.size).toBe(2000);
-    expect(diagnosticSessionStates.has("session-0")).toBe(false);
-  });
+      expect(diagnosticSessionStates.size).toBe(2000);
+      expect(diagnosticSessionStates.has(oldestKey)).toBe(false);
+    },
+  );
 
   it("reuses keyed session state when later looked up by sessionId", () => {
     const keyed = getDiagnosticSessionState({
@@ -533,7 +539,7 @@ describe("stuck session diagnostics threshold", () => {
 
     vi.advanceTimersByTime(20_000);
     markDiagnosticSessionProgress({ sessionId: "s1", sessionKey: "main" });
-    markDiagnosticRunProgressForTest({
+    markDiagnosticRunProgress({
       sessionId: "s1",
       sessionKey: "main",
       reason: "embedded_run:progress",
@@ -566,7 +572,7 @@ describe("stuck session diagnostics threshold", () => {
 
     vi.advanceTimersByTime(15_500);
     markDiagnosticSessionProgress({ sessionId: "s1", sessionKey: "main" });
-    markDiagnosticRunProgressForTest({
+    markDiagnosticRunProgress({
       sessionId: "s1",
       sessionKey: "main",
       reason: "embedded_run:progress",
@@ -705,7 +711,7 @@ describe("stuck session diagnostics threshold", () => {
     try {
       logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
       markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
-      markDiagnosticRunProgressForTest({
+      markDiagnosticRunProgress({
         sessionId: "s1",
         sessionKey: "main",
         reason: "codex_app_server:notification:rawResponseItem/completed",
@@ -792,7 +798,7 @@ describe("stuck session diagnostics threshold", () => {
     logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
     markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
     vi.advanceTimersByTime(120_000);
-    markDiagnosticRunProgressForTest({
+    markDiagnosticRunProgress({
       sessionId: "s1",
       sessionKey: "main",
       reason: "embedded_run:progress",
@@ -877,7 +883,7 @@ describe("stuck session diagnostics threshold", () => {
 
       for (let i = 0; i < 20; i += 1) {
         vi.advanceTimersByTime(29_000);
-        markDiagnosticRunProgressForTest({
+        markDiagnosticRunProgress({
           sessionId: "s1",
           sessionKey: "main",
           runId: "run-1",
@@ -962,7 +968,7 @@ describe("stuck session diagnostics threshold", () => {
         totalMs: 20 * 60_000,
         inboundEveryMs: 25_000,
         onInbound: () => {
-          markDiagnosticRunProgressForTest({
+          markDiagnosticRunProgress({
             sessionId: "s1",
             sessionKey: "main",
             runId: "run-1",
@@ -1123,7 +1129,7 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
-  it("does not recover repeated requests after semantic output resets the clock", () => {
+  it("does not recover repeated requests after semantic output resets the clock", async () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();
     const stuckSessionAbortMs = 90_000;
@@ -1149,18 +1155,17 @@ describe("stuck session diagnostics threshold", () => {
         model: "retrying-model",
         observationUnit: "request",
       });
-      markDiagnosticRunProgressForTest({
+      emitCoreSemanticRunProgressDiagnosticEvent({
         ...ref,
         reason: "assistant:progress",
-        progressKind: "semantic",
       });
+      await vi.advanceTimersByTimeAsync(0);
 
       for (let elapsedMs = 0; elapsedMs < stuckSessionAbortMs; elapsedMs += 30_000) {
         vi.advanceTimersByTime(30_000);
-        markDiagnosticRunProgressForTest({
+        markDiagnosticRunProgress({
           ...ref,
           reason: "model_call:stream_progress",
-          progressKind: "liveness",
         });
       }
     } finally {
@@ -1237,7 +1242,7 @@ describe("stuck session diagnostics threshold", () => {
       });
 
       vi.advanceTimersByTime(stuckSessionAbortMs - 15_000);
-      markDiagnosticRunProgressForTest({
+      markDiagnosticRunProgress({
         sessionId: "s1",
         sessionKey: "main",
         runId: "run-1",
@@ -2177,7 +2182,7 @@ describe("stuck session diagnostics threshold", () => {
       logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "test" });
       logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
       markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
-      markDiagnosticRunProgressForTest({
+      markDiagnosticRunProgress({
         sessionId: "s1",
         sessionKey: "main",
         reason: terminalReason,

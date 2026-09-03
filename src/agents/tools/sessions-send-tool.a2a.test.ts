@@ -398,12 +398,18 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
   });
 
-  it("notifies the requester when delayed target delivery fails after acceptance", async () => {
-    vi.mocked(waitForAgentRun).mockResolvedValueOnce({
+  it.each([
+    {
       status: "timeout",
       error: "target run failed after delivery acceptance",
       pendingError: true,
-    });
+    },
+    {
+      status: "error",
+      error: "target run failed after delivery acceptance\nstderr: socket hang up",
+    },
+  ] as const)("notifies the requester when accepted delivery ends with $status", async (wait) => {
+    vi.mocked(waitForAgentRun).mockResolvedValueOnce(wait);
 
     await runSessionsSendA2AFlow({
       targetSessionKey: "agent:worker:discord:group:dev",
@@ -485,6 +491,7 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     vi.mocked(waitForAgentRun).mockResolvedValueOnce({
       status: "error",
       error: "gateway closed (1006)",
+      retryableTransportError: true,
     });
 
     await runSessionsSendA2AFlow({

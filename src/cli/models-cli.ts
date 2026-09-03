@@ -437,7 +437,7 @@ export function registerModelsCli(program: Command) {
 
   auth
     .command("paste-token")
-    .description("Paste a token into auth-profiles.json and update config")
+    .description("Save a token in an auth profile and update config")
     .option("--agent <id>", "Agent id (default: configured default agent)")
     .requiredOption("--provider <name>", "Provider id (e.g. anthropic)")
     .option("--profile-id <id>", "Auth profile id (default: <provider>:manual)")
@@ -463,7 +463,7 @@ export function registerModelsCli(program: Command) {
 
   auth
     .command("paste-api-key")
-    .description("Paste an API key into auth-profiles.json and update config")
+    .description("Save an API key in an auth profile and update config")
     .option("--agent <id>", "Agent id (default: configured default agent)")
     .requiredOption("--provider <name>", "Provider id (e.g. openai)")
     .option("--profile-id <id>", "Auth profile id (default: <provider>:manual)")

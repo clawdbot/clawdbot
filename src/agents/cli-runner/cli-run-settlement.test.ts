@@ -1,10 +1,14 @@
-/** Tests bounded transcript-flush probing before reusing CLI bindings. */
+/** Tests native CLI continuity projection and bounded transcript-flush probing. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionEntry } from "../../config/sessions.js";
 import {
   isCliBindingFlushed,
   restoreCliRunnerTestDeps,
   setCliRunnerTestDeps,
 } from "../cli-runner.js";
+import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
+import { applyCliSessionBindingResult, getCliSessionBinding } from "../cli-session.js";
+import { buildBlockedCliRunResult, buildCliRunResult } from "./cli-run-settlement.js";
 
 describe("isCliBindingFlushed", () => {
   const workspaceDir = "/tmp/openclaw-workspace";
@@ -130,4 +134,50 @@ describe("isCliBindingFlushed", () => {
     ).toBe(true);
     expect(probe).toHaveBeenCalledTimes(1);
   });
+});
+
+describe("CLI native continuity projection", () => {
+  it.each(["blocked", "no-native-id", "native", "stateless"])(
+    "projects only explicit native continuity from a %s result",
+    (kind) => {
+      const context = buildPreparedCliRunContext({ provider: "claude-cli" });
+      const result =
+        kind === "blocked"
+          ? buildBlockedCliRunResult({
+              context,
+              message: "Blocked by the test policy",
+              preparedContextAgentMeta: {},
+              sessionBindingDisabled: false,
+            })
+          : buildCliRunResult({
+              context,
+              output: { text: "done" },
+              effectiveCliSessionId: kind === "native" ? "next-native-session" : undefined,
+              bindingFlushOk: kind !== "no-native-id",
+              usedHistoryPrompt: false,
+              userTurnHandled: true,
+              sessionBindingDisabled: kind === "stateless",
+              preparedContextAgentMeta: {},
+            });
+      const entry: SessionEntry = {
+        sessionId: context.params.sessionId,
+        updatedAt: 1,
+        cliSessionBindings: { "claude-cli": { sessionId: "previous-native-session" } },
+      };
+
+      applyCliSessionBindingResult(entry, "claude-cli", result.meta.agentMeta);
+
+      expect(entry.sessionId).toBe(context.params.sessionId);
+      expect(result.meta.agentMeta?.sessionId).toBe(
+        kind === "native" ? "next-native-session" : context.params.sessionId,
+      );
+      expect(getCliSessionBinding(entry, "claude-cli")?.sessionId).toBe(
+        kind === "native"
+          ? "next-native-session"
+          : kind === "stateless"
+            ? undefined
+            : "previous-native-session",
+      );
+    },
+  );
 });

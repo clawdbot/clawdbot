@@ -12,6 +12,7 @@ import {
   finalizeNodePairingCleanupClaim,
   recordPairedNodeConnection,
 } from "../../../infra/device-pairing-node.js";
+import { getGatewaySuspendAdmissionPhase } from "../../../process/gateway-work-admission.js";
 import { hasMultipleSessionSharingIdentities } from "../../../state/user-profiles.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../../../version.js";
 import { resolveChatAttachmentPolicy } from "../../chat-attachment-policy.js";
@@ -146,6 +147,8 @@ export async function sendGatewayHello(
         GATEWAY_SERVER_CAPS.SESSION_SCOPED_CHAT_METADATA,
         GATEWAY_SERVER_CAPS.SESSION_UNREAD_ACK_CONTRACT,
         GATEWAY_SERVER_CAPS.SESSION_GOAL_START,
+        GATEWAY_SERVER_CAPS.SESSION_SETTINGS_CONTRACT,
+        GATEWAY_SERVER_CAPS.SESSION_SETTINGS_CAS,
         GATEWAY_SERVER_CAPS.SYSTEM_AGENT_WIZARD_CANCEL,
         GATEWAY_SERVER_CAPS.SYSTEM_AGENT_SETUP_MODEL_REF,
         GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES,
@@ -216,6 +219,8 @@ export async function sendGatewayHello(
     }
   }
   try {
+    // Bootstrap bookkeeping can await; hello must supersede any earlier admission event.
+    snapshot.suspension = { phase: getGatewaySuspendAdmissionPhase() };
     await sendFrame({ type: "res", id: frame.id, ok: true, payload: helloOk });
   } catch (err) {
     if (bootstrapHandoff) {

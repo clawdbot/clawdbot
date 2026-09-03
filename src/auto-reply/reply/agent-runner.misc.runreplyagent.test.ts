@@ -18,7 +18,7 @@ import {
   type TestModelFallbackRunnerParams,
 } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
-import { clearRuntimeConfigSnapshot } from "../../config/config.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -461,6 +461,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       agentEvents?: Array<{ stream: string; data: Record<string, unknown> }>;
       config?: OpenClawConfig;
       onBlockReply?: (payload: unknown) => Promise<void> | void;
+      onAgentRunTerminalOutcome?: (outcome: "completed" | "failed") => void;
     },
   ) {
     const sessionKey = "main";
@@ -501,7 +502,10 @@ describe("runReplyAgent auto-compaction token update", () => {
         reasoningLevel: "on",
       },
       reply: {
-        opts: options?.onBlockReply ? { onBlockReply: options.onBlockReply } : undefined,
+        opts: {
+          onBlockReply: options?.onBlockReply,
+          onAgentRunTerminalOutcome: options?.onAgentRunTerminalOutcome,
+        },
         sessionEntry,
         sessionStore: { [sessionKey]: sessionEntry },
         sessionKey,
@@ -625,6 +629,26 @@ describe("runReplyAgent auto-compaction token update", () => {
       compactionCount: 0,
     };
     const prompt = "What is two plus two? Answer in one short sentence without tools.";
+    const config: OpenClawConfig = {
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://example.test",
+            models: [
+              {
+                id: "claude-opus-4-6",
+                name: "Test model",
+                contextTokens: 32_768,
+                reasoning: false,
+                input: ["text"],
+                maxTokens: 8_192,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    };
     registerMemoryFlushPlanResolverForTest(({ cfg, contextWindowTokens }) => {
       expect(cfg?.models?.providers?.anthropic?.models).toMatchObject([
         { id: "claude-opus-4-6", contextTokens: 32_768 },
@@ -651,7 +675,10 @@ describe("runReplyAgent auto-compaction token update", () => {
       },
     });
     runEmbeddedAgentMock.mockImplementation(
-      async (params: { trigger?: string; prompt?: string }) => {
+      async (params: { trigger?: string; prompt?: string; config?: OpenClawConfig }) => {
+        expect(params.config?.models?.providers?.anthropic?.models).toEqual(
+          config.models?.providers?.anthropic?.models,
+        );
         if (params.trigger === "memory") {
           await replaceTranscriptEvents(scope, [terminalEvent(7_039, 34)]);
           return {
@@ -664,10 +691,11 @@ describe("runReplyAgent auto-compaction token update", () => {
       },
     );
     try {
+      // Memory-flush persistence reads runtime config again; share its authoritative source
+      // with the queued turn so the selected model cannot escape into real catalog discovery.
+      setRuntimeConfigSnapshot(config, config);
       await replaceSessionEntry(scope, sessionEntry);
       await replaceTranscriptEvents(scope, [terminalEvent(10_920, 10)]);
-      // Store preparation can populate the shared test config snapshot.
-      clearRuntimeConfigSnapshot();
       const result = await createBaseRun({
         followup: { prompt },
         run: {
@@ -677,26 +705,7 @@ describe("runReplyAgent auto-compaction token update", () => {
           sessionFile: path.join(tmp, "session.jsonl"),
           workspaceDir: tmp,
           model: "claude-opus-4-6",
-          config: {
-            models: {
-              providers: {
-                anthropic: {
-                  baseUrl: "https://example.test",
-                  models: [
-                    {
-                      id: "claude-opus-4-6",
-                      name: "Test model",
-                      contextTokens: 32_768,
-                      reasoning: false,
-                      input: ["text"],
-                      maxTokens: 8_192,
-                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    },
-                  ],
-                },
-              },
-            },
-          },
+          config,
         },
         reply: {
           commandBody: prompt,
@@ -725,6 +734,11 @@ describe("runReplyAgent auto-compaction token update", () => {
 
   it.each([
     ["without side effects", { meta: { agentMeta: {} } }, true],
+    [
+      "with only a reply directive",
+      { payloads: [{ text: "[[reply_to_current]]" }], meta: { agentMeta: {} } },
+      true,
+    ],
     ["after hidden compaction", { meta: { agentMeta: { compactionCount: 1 } } }, true],
     [
       "after an intentional terminal tool batch",
@@ -734,7 +748,9 @@ describe("runReplyAgent auto-compaction token update", () => {
   ] satisfies Array<[string, Record<string, unknown>, boolean]>)(
     "accounts for empty interactive direct replies %s",
     async (_label, agentResult, fallback) => {
-      const result = await runEmptyDirectReply(agentResult);
+      const onAgentRunTerminalOutcome = vi.fn();
+      const result = await runEmptyDirectReply(agentResult, { onAgentRunTerminalOutcome });
+      expect(onAgentRunTerminalOutcome).toHaveBeenLastCalledWith(fallback ? "failed" : "completed");
       if (!fallback) {
         expect(result).toBeUndefined();
         return;
@@ -1120,6 +1136,26 @@ describe("runReplyAgent auto-compaction token update", () => {
     );
     expect(stored[sessionKey as keyof typeof stored]?.totalTokens).toBe(44_000);
   });
+
+  it.each([0, 0.25])(
+    "preserves cost-only total %s in reply diagnostics and persistence",
+    async (total) => {
+      const { sessionKey, stored, usageEvent } = await runBaseReplyWithAgentMeta({
+        tmpPrefix: "openclaw-usage-diagnostic-cost-only-",
+        collectDiagnostics: true,
+        agentMeta: { usage: { cost: { total } } },
+      });
+
+      expect(usageEvent).toMatchObject({ type: "model.usage", costUsd: total });
+      expect(usageEvent).not.toHaveProperty("context.used");
+      const entry = stored[sessionKey as keyof typeof stored];
+      expect(entry?.estimatedCostUsd).toBe(total);
+      for (const key of ["inputTokens", "outputTokens", "cacheRead", "cacheWrite"] as const) {
+        expect(entry?.[key]).toBeUndefined();
+      }
+      expect(entry?.totalTokensFresh).not.toBe(true);
+    },
+  );
 
   it("falls back to last-call prompt usage for live diagnostic context", async () => {
     const { usageEvent } = await runBaseReplyWithAgentMeta({
@@ -2578,21 +2614,13 @@ describe("runReplyAgent response usage footer", () => {
   });
 });
 
-describe("runReplyAgent transient HTTP retry", () => {
-  it("retries once after transient 521 HTML failure and then succeeds", async () => {
-    vi.useFakeTimers();
-    const retryStarted = createDeferred();
-    runtimeErrorMock.mockImplementationOnce(() => retryStarted.resolve());
-    runEmbeddedAgentMock
-      .mockRejectedValueOnce(
-        new Error(
-          `521 <!DOCTYPE html><html lang="en-US"><head><title>Web server is down</title></head><body>Cloudflare</body></html>`,
-        ),
-      )
-      .mockResolvedValueOnce({
-        payloads: [{ text: "Recovered response" }],
-        meta: {},
-      });
+describe("runReplyAgent transient HTTP failures", () => {
+  it("does not retry a transient provider failure in the reply layer", async () => {
+    runEmbeddedAgentMock.mockRejectedValueOnce(
+      new Error(
+        `521 <!DOCTYPE html><html lang="en-US"><head><title>Web server is down</title></head><body>Cloudflare</body></html>`,
+      ),
+    );
 
     const runPromise = createBaseRun({
       context: { Provider: "telegram", MessageSid: "msg" },
@@ -2603,17 +2631,12 @@ describe("runReplyAgent transient HTTP retry", () => {
       },
     }).run();
 
-    await retryStarted.promise;
-    await vi.advanceTimersByTimeAsync(2_500);
     const result = await runPromise;
 
-    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
-    expect(runtimeErrorMock).toHaveBeenCalledWith(
-      'Transient HTTP provider error before reply (521 <!DOCTYPE html><html lang="en-US"><head><title>Web server is down</title></head><body>Cloudflare</body></html>). Retrying once in 2500ms.',
-    );
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
 
     const payload = Array.isArray(result) ? result[0] : result;
-    expect(payload?.text).toContain("Recovered response");
+    expect(payload?.text).toContain("provider internal error");
   });
 });
 

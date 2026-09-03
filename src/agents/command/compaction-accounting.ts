@@ -1,26 +1,9 @@
+import { hasSameCompactionWriter } from "../../auto-reply/reply/agent-runner-compaction-accounting.js";
 import { incrementCompactionCount } from "../../auto-reply/reply/session-updates.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import type {
-  CompactionAccountingFact,
-  CompactionAccountingTarget,
-} from "../embedded-agent-runner/run/internal-params.js";
+import type { CompactionAccountingFact } from "../embedded-agent-runner/run/internal-params.js";
 
 type DurableCompactionFact = Extract<CompactionAccountingFact, { kind: "durable" }>;
-
-function hasSameCompactionWriter(
-  previous: CompactionAccountingTarget | undefined,
-  current: CompactionAccountingTarget,
-): boolean {
-  // Physical session IDs may rotate while the binding and retained writer stay fixed.
-  return (
-    previous !== undefined &&
-    previous.agentId === current.agentId &&
-    previous.sessionKey === current.sessionKey &&
-    previous.storePath === current.storePath &&
-    previous.lifecycleRevision === current.lifecycleRevision &&
-    previous.activeWriterRunId === current.activeWriterRunId
-  );
-}
 
 /** Keeps command context observations and completed counts on their original writer. */
 export function createCommandCompactionAccounting(params: {

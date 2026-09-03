@@ -8,7 +8,7 @@ import { terminateCodexAppServerOrphan } from "./transport-process-containment.j
 import { prepareCodexAppServerProcessRegistration } from "./transport-process-registration.js";
 import { readCodexAppServerProcessSnapshot } from "./transport-process-snapshot.js";
 
-const procfs = vi.hoisted(() => ({ files: new Map<string, string | Error>() }));
+const procfs = vi.hoisted(() => ({ files: new Map<string, string | Error | (() => string)>() }));
 vi.mock("node:fs/promises", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:fs/promises")>();
   return {
@@ -18,7 +18,8 @@ vi.mock("node:fs/promises", async (importOriginal) => {
       if (typeof file !== "string" || !file.startsWith("/proc/")) {
         return original.readFile(...args);
       }
-      const value = procfs.files.get(file);
+      const stored = procfs.files.get(file);
+      const value = typeof stored === "function" ? stored() : stored;
       return typeof value === "string"
         ? Promise.resolve(value)
         : Promise.reject(value ?? Object.assign(new Error("gone"), { code: "ENOENT" }));
@@ -89,22 +90,44 @@ describe("Codex registration procfs boundary", () => {
     await state.cleanup();
   });
 
-  it("preserves a live owner's registration despite an unreadable unrelated process", async () => {
-    const registration = { parent, child: { ...child, commandFingerprint } };
-    store.register("owned", registration);
+  it.for(["immediate", "delayed"])(
+    "preserves a live owner's registration during %s inspection despite an unreadable unrelated process",
+    async (mode) => {
+      const registration = { parent, child: { ...child, commandFingerprint } };
+      store.register("owned", registration);
+      if (mode === "delayed") {
+        let now = Date.now();
+        vi.spyOn(Date, "now").mockImplementation(() => now);
+        procfs.files.set("/proc/sys/kernel/random/boot_id", () => {
+          now += 3_000;
+          return bootId;
+        });
+      }
 
-    await expect(
-      Promise.all([
-        prepareCodexAppServerProcessRegistration(),
-        prepareCodexAppServerProcessRegistration(),
-      ]),
-    ).resolves.toHaveLength(2);
+      await expect(
+        Promise.all([
+          prepareCodexAppServerProcessRegistration(),
+          prepareCodexAppServerProcessRegistration(),
+        ]),
+      ).resolves.toHaveLength(2);
 
-    expect(store.lookup("owned")).toEqual(registration);
-    expect(kill).not.toHaveBeenCalled();
-  });
+      expect(store.lookup("owned")).toEqual(registration);
+      expect(kill).not.toHaveBeenCalled();
+    },
+  );
 
-  it.for(["readable", "permission", "malformed", "deadline", "missing-observer"])(
+  it.for([
+    "readable",
+    "startup",
+    "slow-snapshot",
+    "slow-command",
+    "slow-inspection",
+    "exhausted-inspection",
+    "permission",
+    "malformed",
+    "deadline",
+    "missing-observer",
+  ])(
     "registers a direct child despite an unreadable unrelated process only with usable ownership: %s",
     async (mode, ctx) => {
       addProcess(child.pid, process.pid);
@@ -131,7 +154,30 @@ describe("Codex registration procfs boundary", () => {
         spawned.removeAllListeners();
       });
       const register = await prepareCodexAppServerProcessRegistration();
-      if (mode === "missing-observer") {
+      if (mode.startsWith("slow-") || mode === "exhausted-inspection") {
+        let now = Date.now();
+        vi.spyOn(Date, "now").mockImplementation(() => now);
+        const delayMs = mode === "exhausted-inspection" ? 6_000 : 3_000;
+        if (mode !== "slow-command") {
+          procfs.files.set("/proc/sys/kernel/random/boot_id", () => {
+            now += delayMs;
+            return bootId;
+          });
+        }
+        if (mode !== "slow-snapshot") {
+          procfs.files.set(`/proc/${child.pid}/cmdline`, () => {
+            expect(store.entries()).toEqual([]);
+            now += delayMs;
+            return command.replaceAll(" ", "\0");
+          });
+        }
+      } else if (mode === "startup") {
+        let reads = 0;
+        procfs.files.set(`/proc/${child.pid}/cmdline`, () => {
+          expect(store.entries()).toEqual([]);
+          return reads++ === 0 ? "" : command.replaceAll(" ", "\0");
+        });
+      } else if (mode === "missing-observer") {
         procfs.files.delete(`/proc/${process.pid}/stat`);
       } else if (mode !== "readable") {
         procfs.files.set(
@@ -146,9 +192,14 @@ describe("Codex registration procfs boundary", () => {
       const registered = register(spawned);
       spawned.emit("spawn");
 
-      if (mode !== "readable") {
+      if (mode !== "readable" && mode !== "startup" && !mode.startsWith("slow-")) {
         await expect(registered).rejects.toMatchObject({
-          reason: mode === "permission" || mode === "deadline" ? mode : "unavailable",
+          reason:
+            mode === "exhausted-inspection"
+              ? "deadline"
+              : mode === "permission" || mode === "deadline"
+                ? mode
+                : "unavailable",
         });
         expect(store.entries()).toEqual([]);
         expect(kill).not.toHaveBeenCalled();

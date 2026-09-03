@@ -173,9 +173,11 @@ struct WatchInboxStoreOperationTests {
         try Self.withStore { store, _ in
             store.consume(appSnapshot: Self.snapshot(id: "initial-snapshot", sentAtMs: 100))
             let attempt = store.markAppCommandSending(.sendChat)
+            store.beginVoiceTurn(commandId: "voice-command")
             store.consume(appSnapshot: Self.snapshot(id: "refreshed-snapshot", sentAtMs: 200))
 
             #expect(store.appCommandStatus?.code == .sending)
+            #expect(store.isAwaitingVoiceReply)
             #expect(store.isCurrentAppCommandAttempt(attempt, gatewayStableID: "watch-test-gateway"))
             #expect(store.markAppCommandResult(Self.result(.delivered), command: .sendChat, attemptID: attempt))
             #expect(store.appCommandStatus?.code == .sent)
@@ -190,15 +192,127 @@ struct WatchInboxStoreOperationTests {
 
             store.consume(appSnapshot: Self.snapshot(id: "original-owner", gatewayStableID: originalGateway))
             let attempt = store.markAppCommandSending(.sendChat)
+            store.beginVoiceTurn(commandId: "original-voice-command")
             store.consume(appSnapshot: Self.snapshot(id: "replacement-owner", gatewayStableID: replacementGateway))
 
             #expect(store.appCommandStatus == nil)
+            #expect(!store.isAwaitingVoiceReply)
             #expect(!store.isCurrentAppCommandAttempt(attempt, gatewayStableID: originalGateway))
             #expect(!store.markAppCommandResult(Self.result(.delivered), command: .sendChat, attemptID: attempt))
+            store.consume(chatCompletion: WatchChatCompletionMessage(
+                commandId: "original-voice-command",
+                replyText: "Reply from the previous gateway"))
+            #expect(store.takeVoiceReply() == nil)
 
             let restoredStore = WatchInboxStore(defaults: defaults, requestNotificationAuthorization: false)
             #expect(restoredStore.appCommandStatus == nil)
+            #expect(!restoredStore.isAwaitingVoiceReply)
             #expect(restoredStore.appSnapshot?.gatewayStableID?.utf8.elementsEqual(replacementGateway.utf8) == true)
+        }
+    }
+
+    @Test func `switching chat sessions retires voice replies and the previous preview`() throws {
+        try Self.withStore { store, defaults in
+            var original = Self.snapshot(id: "original-session")
+            original.chatItems = [WatchChatItem(id: "old-message", role: "assistant", text: "Previous chat")]
+            store.consume(appSnapshot: original)
+            store.beginVoiceTurn(commandId: "original-voice-command")
+
+            var replacement = Self.snapshot(id: "replacement-session")
+            replacement.sessionKey = "another-session"
+            store.consume(appSnapshot: replacement)
+
+            #expect(!store.isAwaitingVoiceReply)
+            #expect(store.appSnapshot?.chatItems == nil)
+            store.consume(chatCompletion: WatchChatCompletionMessage(
+                commandId: "original-voice-command",
+                replyText: "Reply from the previous session"))
+            #expect(store.takeVoiceReply() == nil)
+
+            let restored = WatchInboxStore(defaults: defaults, requestNotificationAuthorization: false)
+            #expect(!restored.isAwaitingVoiceReply)
+            #expect(restored.appSnapshot?.chatItems == nil)
+        }
+    }
+
+    @Test func `failed voice command stops waiting but queued delivery does not`() throws {
+        try Self.withStore { store, _ in
+            store.consume(appSnapshot: Self.snapshot(id: "owner-snapshot"))
+            let attempt = store.markAppCommandSending(.sendChat)
+            store.beginVoiceTurn(commandId: "voice-command")
+
+            #expect(store.markAppCommandResult(Self.result(.queued), command: .sendChat, attemptID: attempt))
+            #expect(store.isAwaitingVoiceReply)
+            #expect(store.markAppCommandResult(
+                Self.result(.notSent, errorMessage: "iPhone unavailable"), command: .sendChat, attemptID: attempt))
+            #expect(!store.isAwaitingVoiceReply)
+            #expect(store.appCommandStatus?.detail == "iPhone unavailable")
+            store.consume(chatCompletion: WatchChatCompletionMessage(commandId: "voice-command", replyText: "Late"))
+            #expect(store.takeVoiceReply() == nil)
+        }
+    }
+
+    @Test(arguments: ["timer", "readback", "completion", "relaunch"])
+    func `expired spoken replies leave a visible readback timeout without failing delivery`(
+        observation: String) throws
+    {
+        try Self.withStore { store, defaults in
+            store.consume(appSnapshot: Self.snapshot(id: "voice-owner"))
+            let attempt = store.markAppCommandSending(.sendChat)
+            #expect(store.markAppCommandResult(Self.result(.delivered), command: .sendChat, attemptID: attempt))
+            store.voiceTurnState.begin(
+                commandId: "expired-voice-command",
+                nowMs: WatchVoiceTurnState.nowMs() - WatchVoiceTurnState.timeoutMs - 1)
+            store.persistVoiceTurnState()
+
+            let observed: WatchInboxStore
+            switch observation {
+            case "timer":
+                #expect(store.voiceReplyTimeoutNanoseconds() == nil)
+                observed = store
+            case "readback":
+                #expect(store.takeVoiceReply() == nil)
+                observed = store
+            case "completion":
+                store.consume(chatCompletion: WatchChatCompletionMessage(
+                    commandId: "expired-voice-command", replyText: "Late reply"))
+                observed = store
+            default:
+                observed = WatchInboxStore(defaults: defaults, requestNotificationAuthorization: false)
+            }
+
+            #expect(!observed.isAwaitingVoiceReply)
+            #expect(observed.appCommandStatus?.code != .failed)
+            #expect(observed.appCommandStatusText == String(localized:
+                "Spoken reply timed out. Check Chat on iPhone."))
+            observed.consume(chatCompletion: WatchChatCompletionMessage(
+                commandId: "expired-voice-command", replyText: "Late reply"))
+            #expect(observed.takeVoiceReply() == nil)
+
+            let restored = WatchInboxStore(defaults: defaults, requestNotificationAuthorization: false)
+            #expect(restored.appCommandStatusText == observed.appCommandStatusText)
+            var replacement = Self.snapshot(id: "replacement-session")
+            replacement.sessionKey = "another-session"
+            restored.consume(appSnapshot: replacement)
+            #expect(restored.appCommandStatus == nil)
+        }
+    }
+
+    @Test func `canceling a spoken reply keeps successful delivery and does not report a timeout`() throws {
+        try Self.withStore { store, _ in
+            store.consume(appSnapshot: Self.snapshot(id: "voice-owner"))
+            let attempt = store.markAppCommandSending(.sendChat)
+            #expect(store.markAppCommandResult(Self.result(.delivered), command: .sendChat, attemptID: attempt))
+            let sentStatus = store.appCommandStatusText
+            store.beginVoiceTurn(commandId: "canceled-voice-command")
+
+            store.cancelVoiceTurn()
+            #expect(store.voiceReplyTimeoutNanoseconds() == nil)
+            #expect(store.appCommandStatusText == sentStatus)
+            #expect(store.appCommandStatus?.code == .sent)
+            store.consume(chatCompletion: WatchChatCompletionMessage(
+                commandId: "canceled-voice-command", replyText: "Late reply"))
+            #expect(store.takeVoiceReply() == nil)
         }
     }
 

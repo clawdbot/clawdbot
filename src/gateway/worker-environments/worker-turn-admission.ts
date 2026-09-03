@@ -1,9 +1,8 @@
 import { randomUUID } from "node:crypto";
-import {
-  withSessionPlacementForcedTerminalSettlement,
-  type LocalTurnPlacementClaim,
-} from "../../agents/session-placement-admission.js";
+import type { LocalTurnPlacementClaim } from "../../agents/session-placement-admission.js";
+import { withSessionPlacementForcedTerminalSettlement } from "../../agents/session-placement-forced-terminal-settlement.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { createAbortError } from "../../infra/abort-signal.js";
 import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../../sessions/session-lifecycle-admission.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import type {
@@ -192,9 +191,21 @@ export async function executeLocalTurn<T>(params: {
   });
   // Forced terminalization and ordinary completion share this exact-claim closure.
   // Replacement fencing makes a late finally harmless after recovery settles it.
-  const settle = () => releaseClaimIfOwned(params.placements, turnClaim);
+  let closed = false;
+  const settle = () => {
+    closed = true;
+    return releaseClaimIfOwned(params.placements, turnClaim);
+  };
   try {
-    return await withSessionPlacementForcedTerminalSettlement(settle, params.runLocal);
+    return await withSessionPlacementForcedTerminalSettlement(
+      settle,
+      () => {
+        if (closed || !params.placements.validateTurnClaim(turnClaim)) {
+          throw createAbortError("session placement turn settlement is closed");
+        }
+      },
+      params.runLocal,
+    );
   } finally {
     await settle();
   }

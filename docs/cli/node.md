@@ -97,6 +97,8 @@ Options:
 - `--tls-fingerprint <sha256>`: Expected TLS certificate fingerprint (sha256)
 - `--node-id <id>`: Override the client instance ID stored in shared SQLite state (does not reset pairing)
 - `--display-name <name>`: Override the node display name
+- `--share-installed-apps`: On macOS, advertise installed applications through `device.apps`
+- `--no-share-installed-apps`: Disable installed application sharing
 
 ## Gateway auth for node host
 
@@ -149,9 +151,12 @@ Options:
 - `--port <port>`: Gateway WebSocket port (default: `18789`)
 - `--context-path <path>`: Gateway WebSocket context path (e.g. `/openclaw-gw`). Appended to the WebSocket URL.
 - `--tls`: Use TLS for the gateway connection
+- `--no-tls`: Force a plaintext Gateway connection even when the local Gateway config enables TLS
 - `--tls-fingerprint <sha256>`: Expected TLS certificate fingerprint (sha256)
 - `--node-id <id>`: Override the client instance ID stored in shared SQLite state (does not reset pairing)
 - `--display-name <name>`: Override the node display name
+- `--share-installed-apps`: On macOS, advertise installed applications through `device.apps`
+- `--no-share-installed-apps`: Disable installed application sharing
 - `--runtime <node|bun>`: Service runtime (default: `node`). Bun 1.4+ with WAL-reset-safe `node:sqlite` is an explicit opt-in; Node remains recommended.
 - `--force`: Reinstall/overwrite if already installed
 
@@ -257,6 +262,11 @@ when set):
 | `state/openclaw.sqlite` (`config_machine_state`, key `nodeHost.config`) | Client instance ID, display name, and Gateway connection metadata. The client sends this ID as `instanceId`.                     |
 | `state/openclaw.sqlite` (`device_identities`, `primary`)                | Signed Ed25519 keypair and derived device ID. For signed connections, this device ID is the routed node ID and pairing identity. |
 | `state/openclaw.sqlite` (`device_auth_tokens`)                          | Paired device tokens, keyed by cryptographic device ID and role.                                                                 |
+
+`gatewayLocal` in `node.list` and `node.describe` marks an exact match with the
+primary device identity in the Gateway's state directory. Overriding `--node-id`
+does not change it. A node with its own state directory and key is separate, even
+on the same machine. Listing or describing nodes does not create identity credentials.
 
 `--node-id` changes only the client instance ID in shared SQLite state. It does
 not change the cryptographic device ID or clear pairing auth. Migrating a retired

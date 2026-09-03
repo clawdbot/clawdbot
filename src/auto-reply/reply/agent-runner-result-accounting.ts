@@ -1,9 +1,7 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { consolidateLiveModelSwitchAfterRun } from "../../agents/live-model-switch.js";
-import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
@@ -157,12 +155,6 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
   }
 
   const usage = runResult.meta?.agentMeta?.usage;
-  const hasBillableUsageBuckets =
-    usage &&
-    (usage.input !== undefined ||
-      usage.output !== undefined ||
-      usage.cacheRead !== undefined ||
-      usage.cacheWrite !== undefined);
   const promptTokens = runResult.meta?.agentMeta?.promptTokens;
   const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
   const providerUsed =
@@ -260,15 +252,6 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
       });
     }
   }
-  const usedCliProvider = isCliProvider(providerUsed, cfg);
-  const cliSessionId = usedCliProvider
-    ? normalizeOptionalString(runResult.meta?.agentMeta?.sessionId)
-    : undefined;
-  const cliSessionBinding = usedCliProvider
-    ? runResult.meta?.agentMeta?.cliSessionBinding
-    : undefined;
-  const clearCliSessionBinding =
-    usedCliProvider && runResult.meta?.agentMeta?.clearCliSessionBinding === true;
   const runtimeContextTokens =
     typeof runResult.meta?.agentMeta?.contextTokens === "number" &&
     Number.isFinite(runResult.meta.agentMeta.contextTokens) &&
@@ -327,9 +310,6 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     contextBudgetStatus:
       compactionCount === undefined ? runResult.meta?.agentMeta?.contextBudgetStatus : undefined,
     systemPromptReport: runResult.meta?.systemPromptReport,
-    cliSessionId,
-    cliSessionBinding,
-    clearCliSessionBinding,
     preserveFreshTotalTokensOnStaleUsage: preflightCompactionApplied,
     agentHarnessId: runResult.meta?.agentMeta?.agentHarnessId,
   });
@@ -363,7 +343,6 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     fallbackAttempts,
     fallbackExhausted,
     fallbackTransition,
-    hasBillableUsageBuckets,
     modelUsed,
     payloadArray,
     preserveUserFacingSessionState,

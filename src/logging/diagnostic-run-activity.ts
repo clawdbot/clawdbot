@@ -85,7 +85,7 @@ type ModelStartedActivityEvent = Pick<
 type RunProgressEvent = Pick<
   Extract<DiagnosticEventPayload, { type: "run.progress" }>,
   "runId" | "sessionId" | "sessionKey" | "reason"
-> & { progressKind?: "semantic" | "liveness" };
+>;
 
 const activityByRef = new Map<string, SessionActivity>();
 const activityByRunId = new Map<string, SessionActivity>();
@@ -303,6 +303,15 @@ export function markDiagnosticOwnedToolActivity(
   }
 }
 
+function hasDiagnosticActivityOwner(activity: SessionActivity): boolean {
+  for (const registration of activeDiagnosticOwners.values()) {
+    if (registration.activity === activity) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function recordModelStarted(
   event: ModelStartedActivityEvent,
   provenance?: CoreModelRequestLifecycleProvenance,
@@ -322,13 +331,7 @@ function recordModelStarted(
   if (!activity) {
     return;
   }
-  if (
-    !provenance &&
-    !coreRequestForTest &&
-    [...activeDiagnosticOwners.values()].some(({ activity: ownerActivity }) =>
-      Object.is(ownerActivity, activity),
-    )
-  ) {
+  if (!provenance && !coreRequestForTest && hasDiagnosticActivityOwner(activity)) {
     return;
   }
   if (shouldIgnoreRecoveredOwnerStartEvent(activity, event)) {
@@ -372,12 +375,7 @@ function recordModelEnded(
   if (!activity) {
     return;
   }
-  if (
-    !provenance &&
-    [...activeDiagnosticOwners.values()].some(({ activity: ownerActivity }) =>
-      Object.is(ownerActivity, activity),
-    )
-  ) {
+  if (!provenance && hasDiagnosticActivityOwner(activity)) {
     activity.activeModelCalls.delete(modelCallKey(event));
     return;
   }
@@ -430,12 +428,10 @@ function recordRunCompleted(
   }
   activity.activeTools.clear();
   activity.activeModelCalls.clear();
-  const hasCoreOwner = [...activeDiagnosticOwners.values()].some(
-    ({ activity: ownerActivity, owner }) =>
-      ownerActivity === activity && owner.runId === event.runId,
-  );
-  if (hasCoreOwner) {
-    return;
+  for (const registration of activeDiagnosticOwners.values()) {
+    if (registration.activity === activity && registration.owner.runId === event.runId) {
+      return;
+    }
   }
   activityByRunId.delete(event.runId);
   if (activity.repeatedRequestOwnerRunId === event.runId) {
@@ -669,10 +665,6 @@ export function getDiagnosticEmbeddedRunActivitySequence(): number {
   return embeddedRunSequence;
 }
 
-function markDiagnosticRunProgressForTest(params: RunProgressEvent): void {
-  applyRunProgress(params, params.progressKind === "semantic");
-}
-
 function markDiagnosticModelStartedForTest(params: ModelStartedActivityEvent): void {
   recordModelStarted(params, undefined, true);
 }
@@ -687,7 +679,6 @@ function installDiagnosticRunActivityTestApi(): void {
     Symbol.for("openclaw.diagnosticRunActivityTestApi")
   ] = {
     markDiagnosticModelStartedForTest,
-    markDiagnosticRunProgressForTest,
     markDiagnosticToolStartedForTest: recordToolStarted,
   };
 }

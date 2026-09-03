@@ -21,10 +21,20 @@ export function hasDeadcodeScannedSource(changedPaths: string[]): boolean {
   return changedPaths.map(normalizeChangedPath).some((p) => DEADCODE_SOURCE_PATH_RE.test(p));
 }
 
+const PROTOCOL_EVENT_COVERAGE_INPUT_RE =
+  /^(?:src\/gateway\/(?:server-methods-list|events)\.ts|scripts\/(?:(?:check-protocol-event-coverage|changed-lanes|check-changed)\.m[jt]s|tsx\.mjs|lib\/(?:(?:tsx-cli-shim|record-shared)\.mjs|local-check-runtime\.mts)|protocol-event-coverage\.allowlist\.json)|apps\/(?:ios\/Sources|shared\/OpenClawKit\/Sources)\/.+\.swift|apps\/android\/app\/src\/main\/java\/ai\/openclaw\/app\/.+\.kt)$/u;
+
+export function hasProtocolEventCoverageInput(changedPaths: string[]): boolean {
+  // Match the guard's scan roots and excluded directories, including deleted inputs.
+  return changedPaths
+    .map(normalizeChangedPath)
+    .some(
+      (p) => PROTOCOL_EVENT_COVERAGE_INPUT_RE.test(p) && !/\/(?:Tests|\.build|build)\//u.test(p),
+    );
+}
+
 const SCRIPTS_TYPECHECK_PATH_RE =
   /^(?:scripts\/.*\.(?:[cm]?ts|[cm]?tsx)|tsconfig\.scripts\.json)$/u;
-const TEST_ROOT_TYPECHECK_PATH_RE =
-  /^(?:test\/(?!fixtures\/).*\.(?:[cm]?ts|[cm]?tsx)|test\/tsconfig\/tsconfig\.test\.root\.json)$/u;
 /** @internal Shared repository-script contract. */
 export const LIVE_DOCKER_AUTH_SHELL_TARGETS = [
   "scripts/lib/live-docker-auth.sh",
@@ -59,6 +69,7 @@ export const RELEASE_METADATA_PATHS = new Set([
   "apps/android/version.json",
   "apps/ios/CHANGELOG.md",
   "apps/macos/Sources/OpenClaw/Resources/Info.plist",
+  "apps/mobile/version.json",
   "docs/.generated/config-baseline.counts.json",
   "docs/.generated/config-baseline.sha256",
   "docs/install/updating.md",
@@ -161,7 +172,11 @@ export function detectChangedLanes(
     if (SCRIPTS_TYPECHECK_PATH_RE.test(changedPath)) {
       lanes.scripts = true;
     }
-    if (TEST_ROOT_TYPECHECK_PATH_RE.test(changedPath)) {
+    if (
+      facts.isRootTestSource ||
+      changedPath === "test/tsconfig.json" ||
+      changedPath === "test/tsconfig/tsconfig.test.root.json"
+    ) {
       lanes.testRoot = true;
     }
 
@@ -216,6 +231,23 @@ export function detectChangedLanes(
         lanes.extensionTests = true;
         reasons.push(`${changedPath}: extension production`);
       }
+      continue;
+    }
+
+    // Shared inputs retain their Node/tooling owner as well as browser checks.
+    if (
+      changedPath === "tsconfig.json" ||
+      /^packages\/normalization-core\/(?:package\.json|src\/record-coerce\.ts)$/u.test(changedPath)
+    ) {
+      lanes.ui = true;
+      reasons.push(`${changedPath}: shared browser renderer input`);
+    }
+
+    // Native hosts bundle this DOM runtime; the Node-only core graph cannot own it.
+    if (changedPath.startsWith("packages/mermaid-renderer/")) {
+      lanes.ui = true;
+      lanes.coreTests = true;
+      reasons.push(`${changedPath}: shared browser renderer`);
       continue;
     }
 

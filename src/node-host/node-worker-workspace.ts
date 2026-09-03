@@ -673,6 +673,8 @@ export class NodeWorkerWorkspaceRuntime {
           }
           const hashMemo = takeWorkspaceHashMemo(this.workspaceHashMemos, generationKey);
           const stdout = await runNodeWorkerWorkspaceTransfer({
+            seedsRoot: this.seedsRoot,
+            gatewayNamespace: input.gatewayNamespace,
             gatewayUrl: gateway.url,
             gatewayTlsFingerprint: gateway.tlsFingerprint,
             gatewayCloudflareAccess: gateway.cloudflareAccess,

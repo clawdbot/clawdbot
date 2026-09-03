@@ -50,7 +50,6 @@ import type {
 import {
   deriveSessionTitle,
   buildStoreChildSessionIndex,
-  getSingleRowChildSessionCandidates,
   isFinitePositiveTimestamp,
   isCurrentSessionChildOwner,
   shouldKeepStoreOnlyChildLink,
@@ -488,16 +487,11 @@ function prepareSessionList(params: ListSessionsFromStoreParams) {
   const sharedRowContext =
     usePreparedChildReads || selection.entries.length > 0 ? getRowContext() : undefined;
   const storePath = hasIncognito ? params.storePath : (params.durableStorePath ?? params.storePath);
-  const childCandidates =
-    !usePreparedChildReads && selection.entries.length > 0
-      ? getSingleRowChildSessionCandidates({ storePath, store })
-      : undefined;
   const storeChildSessionsByKey = buildStoreChildSessionIndex({
     store,
     keys: selection.entries.map(([key]) => key),
     now,
     subagentRuns: usePreparedChildReads ? sharedRowContext?.subagentRuns : undefined,
-    candidates: childCandidates,
     excludedChildKeys: filteredSessionKeys,
     requireCurrentController: !usePreparedChildReads,
   });
@@ -533,13 +527,7 @@ function buildSessionsListResult(
   // unchanged; per-agent maps resolve by the same identity.
   const preparedDefaultsCatalog =
     modelCatalog instanceof Map
-      ? modelCatalog.get(
-          opts.agentId
-            ? normalizeAgentId(opts.agentId)
-            : normalizeAgentId(
-                tryResolveLegacyCompatibilityAgentId(cfg) ?? LEGACY_IMPLICIT_AGENT_ID,
-              ),
-        )
+      ? modelCatalog.get(resolveSessionsListDefaultsAgentId(cfg, opts.agentId))
       : undefined;
   const defaultsCatalog =
     modelCatalog instanceof Map ? preparedDefaultsCatalog?.entries : modelCatalog;
@@ -568,6 +556,15 @@ function buildSessionsListResult(
     }),
     sessions,
   };
+}
+
+export function resolveSessionsListDefaultsAgentId(
+  cfg: OpenClawConfig,
+  requestedAgentId?: string,
+): string {
+  return requestedAgentId
+    ? normalizeAgentId(requestedAgentId)
+    : normalizeAgentId(tryResolveLegacyCompatibilityAgentId(cfg) ?? LEGACY_IMPLICIT_AGENT_ID);
 }
 
 export function filterAndSortSessionEntries(params: {

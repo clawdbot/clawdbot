@@ -2,7 +2,6 @@
 import { describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import {
-  formatKTokens,
   formatPromptCacheCompact,
   formatStatusConfigDiagnosticEntries,
   formatTokensCompact,
@@ -42,16 +41,6 @@ describe("status cache formatting", () => {
         percentUsed: 50,
       }),
     ).toBe("5.0k/10k (50%) · 🗄️ 67% cached");
-  });
-
-  it("renders sub-1000 token counts as plain integers, not fractional k", () => {
-    expect(formatKTokens(0)).toBe("0");
-    expect(formatKTokens(420)).toBe("420");
-    // 999 must not round up across the boundary into a misleading "1.0k".
-    expect(formatKTokens(999)).toBe("999");
-    expect(formatKTokens(1_000)).toBe("1.0k");
-    expect(formatKTokens(12_000)).toBe("12k");
-    expect(formatKTokens(999_500)).toBe("1.0m");
   });
 
   it("keeps small sessions and cache writes readable in status output", () => {

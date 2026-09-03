@@ -909,6 +909,7 @@ function assertAgentError() {
     : "";
   const combined = `${stdout}\n${stderr}`;
   const expectedErrors = [
+    'Agent harness runtime "codex" is unavailable. (reason=owner-plugin-not-activatable, ownerPluginId=codex)',
     'Requested agent harness "codex" is not registered',
     "Unknown model: codex/",
     'Agent harness runtime "codex" is not present in the prepared registry.',

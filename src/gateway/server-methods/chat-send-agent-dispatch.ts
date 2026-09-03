@@ -9,6 +9,7 @@ import { classifyAgentRunTerminalOutcome } from "../../agents/agent-run-terminal
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { dispatchInboundMessageWithProjectedDispatcher } from "../../auto-reply/dispatch.js";
 import type { ReplyDispatchRun } from "../../auto-reply/get-reply-options.types.js";
+import { isReplyPayloadStatusNotice } from "../../auto-reply/reply-payload.js";
 import type { ReplyMessageInjectionAttempt } from "../../auto-reply/reply/reply-run-registry.js";
 import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
@@ -66,6 +67,7 @@ type StartChatDispatchParams = {
   context: GatewayRequestHandlerOptions["context"];
   toolsAllow?: string[];
   skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
+  skillLibraryAuthoring?: import("../../skills/library/authoring.js").SkillLibraryAuthoringCapability;
   cronCreatorAuthority: ReturnType<ChatSendExternalAuthorityAdmission["resolve"]>;
   externalAuthorityAdmission: ChatSendExternalAuthorityAdmission | undefined;
   injection: {
@@ -87,6 +89,17 @@ type StartChatDispatchParams = {
   userTurn: ReturnType<typeof createGatewayChatUserTurnController>;
 };
 
+function formatReturnedAgentErrors(messages: string[]): string | undefined {
+  const [primary, ...additional] = [...new Set(messages)];
+  if (!primary || additional.length === 0) {
+    return primary;
+  }
+  if (additional.length === 1) {
+    return `${primary}\n\nAdditional error: ${additional[0]}`;
+  }
+  return `${primary}\n\nAdditional errors:\n${additional.map((message) => `- ${message}`).join("\n")}`;
+}
+
 export function startChatDispatch(params: StartChatDispatchParams): void {
   const {
     admissionStartedAt,
@@ -96,6 +109,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     context,
     toolsAllow,
     skillWorkshopProposalRevision,
+    skillLibraryAuthoring,
     cronCreatorAuthority,
     externalAuthorityAdmission,
     injection,
@@ -225,8 +239,16 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     }
     emitServerTiming("first-assistant-event", undefined, dispatchStartedAtMs);
   };
+  const dispatchAdmission = {
+    run: <T>(operation: () => Promise<T>) =>
+      gatewayWorkAdmission.run(() =>
+        userTurnRecorder.withPendingInput
+          ? userTurnRecorder.withPendingInput(operation)
+          : operation(),
+      ),
+  };
   const dispatch = replyDispatch
-    .runAgentMediaTranscript(gatewayWorkAdmission, () =>
+    .runAgentMediaTranscript(dispatchAdmission, () =>
       measureDiagnosticsTimelineSpan(
         "gateway.chat_send.dispatch_inbound",
         async () => {
@@ -281,8 +303,12 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                 changes.forEach((change) => emitSessionsChanged(context, change)),
               replyOptions: {
                 prepareAssistantTranscriptMessage: replyDispatch.prepareAssistantTranscriptMessage,
+                ...(admission.admittedSessionSettings
+                  ? { admittedSessionSettings: admission.admittedSessionSettings }
+                  : {}),
                 runId: clientRunId,
                 skillWorkshopProposalRevision,
+                skillLibraryAuthoring,
                 ...(cronCreatorAuthority
                   ? { cronCreatorAuthorityCapability: cronCreatorAuthority }
                   : {}),
@@ -432,27 +458,33 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
           // Delivered warnings or source replies cannot replace either authoritative result.
           const runtimeClassification = runtimeOutcome
             ? classifyAgentRunTerminalOutcome(runtimeOutcome)
-            : recordedOutcome === "failed"
-              ? "failure"
-              : recordedOutcome === "completed"
-                ? "success"
-                : undefined;
+            : recordedOutcome && (recordedOutcome === "failed" ? "failure" : "success");
           const runtimeCancelled = runtimeClassification === "cancellation";
           const runtimeFailed =
             runtimeClassification === "failure" || runtimeClassification === "timeout";
           const returnedAgentErrorPayloads = replyDispatch.deliveredReplies
             .map((entryInner) => entryInner.payload)
             .filter((payload) => payload.isError);
+          // Native streams cannot publish a host-authored warning. Give a warning-only
+          // turn the normal reply owner without reclassifying the runtime outcome.
+          const hasOnlyFinalWarnings =
+            returnedAgentErrorPayloads.length > 0 &&
+            replyDispatch.deliveredReplies.every(
+              ({ kind, payload }) =>
+                (kind === "final" && payload.isError === true) ||
+                isReplyPayloadStatusNotice(payload),
+            );
           const hasReturnedAgentError = runtimeClassification
             ? runtimeFailed
             : returnedAgentErrorPayloads.length > 0 &&
               (agentRunStarted || !isInternalTextSlashCommandTurn);
           const returnedAgentErrorMessage =
             runtimeOutcome?.error ??
-            (returnedAgentErrorPayloads
-              .map((payload) => payload.text?.trim())
-              .filter((text): text is string => Boolean(text))
-              .join(" | ") ||
+            (formatReturnedAgentErrors(
+              returnedAgentErrorPayloads
+                .map((payload) => payload.text?.trim())
+                .filter((text): text is string => Boolean(text)),
+            ) ||
               (runtimeFailed ? "agent run failed" : undefined));
           if (
             !userTurnRecorder.hasPersisted() &&
@@ -468,7 +500,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
           // A dispatched runtime owns its persisted turn; this owner projects
           // only settled, post-hook replies. Native runtimes project their own stream.
           if (
-            (!agentRunStarted || replyDispatchRun) &&
+            (!agentRunStarted || replyDispatchRun || hasOnlyFinalWarnings) &&
             !queuedFollowup.isEnqueued() &&
             !hasReturnedAgentError &&
             !context.chatRunState.hasAbortMarker(clientRunId)

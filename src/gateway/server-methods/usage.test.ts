@@ -8,7 +8,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
-import { withEnvAsync } from "../../test-utils/env.js";
+import { withEnv, withEnvAsync } from "../../test-utils/env.js";
 
 vi.mock("../../infra/session-cost-usage.js", async () => {
   const actual = await vi.importActual<typeof import("../../infra/session-cost-usage.js")>(
@@ -110,20 +110,6 @@ describe("gateway usage helpers", () => {
       throw new Error(result.error);
     }
     return result.value;
-  }
-
-  function withTimeZone<T>(timeZone: string, run: () => T): T {
-    const previous = process.env.TZ;
-    process.env.TZ = timeZone;
-    try {
-      return run();
-    } finally {
-      if (previous === undefined) {
-        delete process.env.TZ;
-      } else {
-        process.env.TZ = previous;
-      }
-    }
   }
 
   beforeEach(() => {
@@ -277,36 +263,42 @@ describe("gateway usage helpers", () => {
     expectUtcDateRange(result, "2024-02-29", "2024-03-01");
   });
 
-  it("resolveDateRange uses specific UTC offset for explicit dates", () => {
+  it.each([
+    ["UTC+14:00", "2026-01-31T10:00:00.000Z", "2026-02-02T09:59:59.999Z"],
+    ["UTC-12:00", "2026-02-01T12:00:00.000Z", "2026-02-03T11:59:59.999Z"],
+    ["UTC+5:30", "2026-01-31T18:30:00.000Z", "2026-02-02T18:29:59.999Z"],
+    ["UTC-0:30", "2026-02-01T00:30:00.000Z", "2026-02-03T00:29:59.999Z"],
+    ["UTC+0", "2026-02-01T00:00:00.000Z", "2026-02-02T23:59:59.999Z"],
+    ["UTC-0", "2026-02-01T00:00:00.000Z", "2026-02-02T23:59:59.999Z"],
+  ])("resolveDateRange applies valid explicit UTC offset %s", (utcOffset, start, end) => {
     const range = expectDateRange(
       testApi.resolveDateRange({
         startDate: "2026-02-01",
         endDate: "2026-02-02",
         mode: "specific",
-        utcOffset: "UTC+5:30",
+        utcOffset,
       }),
     );
-    const start = Date.UTC(2026, 1, 1) - 5.5 * 60 * 60 * 1000;
-    const endStart = Date.UTC(2026, 1, 2) - 5.5 * 60 * 60 * 1000;
-    expect(range.startMs).toBe(start);
-    expect(range.endMs).toBe(endStart + dayMs - 1);
+    expect(range.startMs).toBe(Date.parse(start));
+    expect(range.endMs).toBe(Date.parse(end));
   });
 
-  it("resolveDateRange uses IANA timezone boundaries across a DST transition", () => {
-    const range = expectDateRange(
-      testApi.resolveDateRange({
-        startDate: "2026-10-25",
-        endDate: "2026-10-25",
-        mode: "specific",
-        timeZone: "Europe/Vienna",
-        // The IANA zone must take precedence over this pre-transition fixed offset.
-        utcOffset: "UTC+2",
-      }),
-    );
-
-    expect(range.startMs).toBe(Date.UTC(2026, 9, 24, 22));
-    expect(range.endMs).toBe(Date.UTC(2026, 9, 25, 23) - 1);
-  });
+  it.each(["UTC+2", "UTC+99", "UTC-12:01"])(
+    "resolveDateRange gives IANA DST boundaries precedence over %s",
+    (utcOffset) => {
+      const range = expectDateRange(
+        testApi.resolveDateRange({
+          startDate: "2026-10-25",
+          endDate: "2026-10-25",
+          mode: "specific",
+          timeZone: "Europe/Vienna",
+          utcOffset,
+        }),
+      );
+      expect(range.startMs).toBe(Date.UTC(2026, 9, 24, 22));
+      expect(range.endMs).toBe(Date.UTC(2026, 9, 25, 23) - 1);
+    },
+  );
 
   it("resolveDateRange crosses a skipped IANA civil date for the prior day's end", () => {
     const range = expectDateRange(
@@ -333,27 +325,66 @@ describe("gateway usage helpers", () => {
     });
   });
 
-  it("resolveDateRange falls back to UTC when specific mode offset is missing or invalid", () => {
-    const missingOffset = expectDateRange(
-      testApi.resolveDateRange({
-        startDate: "2026-02-01",
-        endDate: "2026-02-02",
-        mode: "specific",
-      }),
-    );
-    const invalidOffset = expectDateRange(
-      testApi.resolveDateRange({
-        startDate: "2026-02-01",
-        endDate: "2026-02-02",
-        mode: "specific",
-        utcOffset: "UTC+14:30",
-      }),
-    );
-    expect(missingOffset.startMs).toBe(Date.UTC(2026, 1, 1));
-    expect(missingOffset.endMs).toBe(Date.UTC(2026, 1, 2) + dayMs - 1);
-    expect(invalidOffset.startMs).toBe(Date.UTC(2026, 1, 1));
-    expect(invalidOffset.endMs).toBe(Date.UTC(2026, 1, 2) + dayMs - 1);
-  });
+  it.each([undefined, null, "", "  "])(
+    "resolveDateRange retains UTC for omitted or blank offset %j",
+    (utcOffset) => {
+      expectUtcDateRange(
+        testApi.resolveDateRange({
+          startDate: "2026-02-01",
+          endDate: "2026-02-02",
+          mode: "specific",
+          utcOffset,
+        }),
+        "2026-02-01",
+        "2026-02-02",
+      );
+    },
+  );
+
+  it.each(["UTC+14:01", "UTC-12:01", "UTC+99", "UTC+5:60", "UTC+5.5", "bad", 330])(
+    "resolveDateRange rejects malformed explicit UTC offset %j",
+    (utcOffset) => {
+      expect(
+        testApi.resolveDateRange({
+          startDate: "2026-02-01",
+          endDate: "2026-02-02",
+          mode: "specific",
+          utcOffset,
+        }),
+      ).toEqual({
+        ok: false,
+        error: "invalid utcOffset: expected UTC-12:00 through UTC+14:00",
+      });
+    },
+  );
+
+  it.each(["usage.cost", "sessions.usage"] as const)(
+    "%s rejects invalid explicit offsets before loading usage",
+    async (method) => {
+      for (const utcOffset of ["UTC+14:01", "UTC-12:01", "UTC+99"]) {
+        const respond = vi.fn();
+        await expectDefined(
+          usageHandlers[method],
+          "usage handler",
+        )({
+          respond,
+          params: { mode: "specific", utcOffset },
+          context: { getRuntimeConfig: () => ({}) },
+        } as unknown as Parameters<(typeof usageHandlers)[typeof method]>[0]);
+        expect(respond).toHaveBeenCalledOnce();
+        expect(respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "invalid utcOffset: expected UTC-12:00 through UTC+14:00",
+          ),
+        );
+      }
+      expect(vi.mocked(loadCostUsageSummaryFromCache)).not.toHaveBeenCalled();
+      expect(vi.mocked(discoverAllSessions)).not.toHaveBeenCalled();
+    },
+  );
 
   it("resolveDateRange uses specific offset for today/day math after UTC midnight", () => {
     vi.useFakeTimers();
@@ -371,7 +402,7 @@ describe("gateway usage helpers", () => {
 
   it("resolveDateRange uses gateway local day boundaries in gateway mode", () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-02-05T12:34:56.000Z"));
+    vi.setSystemTime(new Date(2026, 1, 5, 12, 34, 56));
     const range = expectDateRange(testApi.resolveDateRange({ days: 1, mode: "gateway" }));
     const expectedStart = new Date(2026, 1, 5).getTime();
     expect(range.startMs).toBe(expectedStart);
@@ -379,7 +410,9 @@ describe("gateway usage helpers", () => {
   });
 
   it("resolveDateRange uses gateway calendar end boundaries for explicit DST-short days", () => {
-    withTimeZone("America/New_York", () => {
+    withEnv({ TZ: "America/New_York" }, () => {
+      expect(new Date("2026-03-08T05:00:00.000Z").getTimezoneOffset()).toBe(300);
+      expect(new Date("2026-03-09T04:00:00.000Z").getTimezoneOffset()).toBe(240);
       const range = expectDateRange(
         testApi.resolveDateRange({
           startDate: "2026-03-08",
@@ -387,13 +420,15 @@ describe("gateway usage helpers", () => {
           mode: "gateway",
         }),
       );
-      expect(range.startMs).toBe(new Date(2026, 2, 8).getTime());
-      expect(range.endMs).toBe(new Date(2026, 2, 9).getTime() - 1);
+      expect(range.startMs).toBe(Date.parse("2026-03-08T05:00:00.000Z"));
+      expect(range.endMs).toBe(Date.parse("2026-03-09T04:00:00.000Z") - 1);
     });
   });
 
   it("resolveDateRange keeps trailing gateway ranges on calendar days across DST", () => {
-    withTimeZone("America/New_York", () => {
+    withEnv({ TZ: "America/New_York" }, () => {
+      expect(new Date("2026-03-08T05:00:00.000Z").getTimezoneOffset()).toBe(300);
+      expect(new Date("2026-03-09T04:00:00.000Z").getTimezoneOffset()).toBe(240);
       vi.useFakeTimers();
       vi.setSystemTime(new Date("2026-03-09T12:00:00.000Z"));
       const range = expectDateRange(
@@ -402,8 +437,8 @@ describe("gateway usage helpers", () => {
           mode: "gateway",
         }),
       );
-      expect(range.startMs).toBe(new Date(2026, 2, 8).getTime());
-      expect(range.endMs).toBe(new Date(2026, 2, 10).getTime() - 1);
+      expect(range.startMs).toBe(Date.parse("2026-03-08T05:00:00.000Z"));
+      expect(range.endMs).toBe(Date.parse("2026-03-10T04:00:00.000Z") - 1);
     });
   });
 

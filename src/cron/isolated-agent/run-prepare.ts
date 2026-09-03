@@ -242,6 +242,7 @@ export async function prepareCronRunContext(params: {
     cfg: runtimeCfg,
     sessionKey: agentSessionKey,
     sourceSessionKey,
+    skillLibrarySelections: input.job.skillLibrarySelections,
     agentId,
     nowMs: now,
     forceNew: usesDetachedRunSession,
@@ -308,12 +309,14 @@ export async function prepareCronRunContext(params: {
       fallbackEntry,
       resetBoundaryReason,
       update,
+      assertCommitAllowed,
     }: {
       storePath: string;
       sessionKey: string;
       fallbackEntry: SessionEntry;
       resetBoundaryReason?: "cron-stale";
       update: (entry: SessionEntry | undefined) => SessionEntry;
+      assertCommitAllowed?: () => void;
     }) => {
       const { applySessionEntryLifecycleMutation, patchSessionEntryCore } =
         await loadSessionAccessorRuntime();
@@ -337,7 +340,7 @@ export async function prepareCronRunContext(params: {
       await patchSessionEntryCore(
         { storePath, sessionKey, agentId },
         (_entry, context) => update(context.existingEntry),
-        { fallbackEntry, replaceEntry: true },
+        { fallbackEntry, replaceEntry: true, assertCommitAllowed },
       );
     };
     const persistSessionEntry = createPersistCronSessionEntry({
@@ -564,6 +567,7 @@ export async function prepareCronRunContext(params: {
       config: cfgWithAgentDefaults,
       agentId,
       existingSnapshot: cronSession.sessionEntry.skillsSnapshot,
+      librarySelections: cronSession.sessionEntry.skillLibrarySelections,
       isFastTestEnv: params.isFastTestEnv,
     });
     await persistCronSkillsSnapshotIfChanged({

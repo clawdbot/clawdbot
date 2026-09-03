@@ -73,37 +73,6 @@ async function expectIdleTimeout(
   }
 }
 
-async function expectReadResponseTextSnippetCase(params: {
-  response: Response;
-  options: Parameters<typeof readResponseTextSnippet>[1];
-  expected: string;
-}) {
-  await expect(readResponseTextSnippet(params.response, params.options)).resolves.toBe(
-    params.expected,
-  );
-}
-
-async function expectReadResponseWithLimitSuccessCase(params: {
-  response: Response;
-  maxBytes: number;
-  expected: Buffer;
-  options?: Parameters<typeof readResponseWithLimit>[2];
-}) {
-  const buf = await readResponseWithLimit(params.response, params.maxBytes, params.options);
-  expect(buf).toEqual(params.expected);
-}
-
-async function expectReadResponseWithLimitFailureCase(params: {
-  response: Response;
-  maxBytes: number;
-  options?: Parameters<typeof readResponseWithLimit>[2];
-  expectedError: RegExp | string;
-}) {
-  await expect(
-    readResponseWithLimit(params.response, params.maxBytes, params.options),
-  ).rejects.toThrow(params.expectedError);
-}
-
 describe("cancelUnreadResponseBody", () => {
   it("cancels unread bodies and ignores cancellation failures", async () => {
     const cancel = vi.fn(() => {
@@ -211,13 +180,23 @@ describe("readResponseWithLimit", () => {
     },
   );
 
+  it("reads all chunks within the limit", async () => {
+    const response = new Response(makeStream([new Uint8Array([1, 2]), new Uint8Array([3, 4])]));
+
+    await expect(readResponseWithLimit(response, 100)).resolves.toEqual(Buffer.from([1, 2, 3, 4]));
+  });
+
+  it.each([0.5, 3.5])("reports overflow for a fractional byte budget of %s", async (maxBytes) => {
+    const response = new Response(makeStream([new Uint8Array([1, 2, 3]), new Uint8Array([4, 5])]));
+
+    await expect(
+      readResponseWithLimit(response, maxBytes, {
+        onOverflow: ({ maxBytes: limit }) => new Error(`Exceeded ${limit} bytes`),
+      }),
+    ).rejects.toThrow(`Exceeded ${maxBytes} bytes`);
+  });
+
   it.each([
-    {
-      name: "reads all chunks within the limit",
-      response: new Response(makeStream([new Uint8Array([1, 2]), new Uint8Array([3, 4])])),
-      maxBytes: 100,
-      expected: Buffer.from([1, 2, 3, 4]),
-    },
     {
       name: "throws when total exceeds maxBytes",
       response: new Response(makeStream([new Uint8Array([1, 2, 3]), new Uint8Array([4, 5, 6])])),
@@ -234,28 +213,16 @@ describe("readResponseWithLimit", () => {
       },
       expectedError: "custom: 10 > 5",
     },
-  ] as const)("$name", async ({ response, maxBytes, options, expected, expectedError }) => {
-    if (expected !== undefined) {
-      await expectReadResponseWithLimitSuccessCase({ response, maxBytes, options, expected });
-      return;
-    }
-
-    await expectReadResponseWithLimitFailureCase({
-      response,
-      maxBytes,
-      options,
-      expectedError,
-    });
+  ] as const)("$name", async ({ response, maxBytes, options, expectedError }) => {
+    await expect(readResponseWithLimit(response, maxBytes, options)).rejects.toThrow(expectedError);
   });
 
   it.each([Number.NaN, Number.POSITIVE_INFINITY, -1])(
     "rejects invalid maxBytes before reading: %s",
     async (maxBytes) => {
-      await expectReadResponseWithLimitFailureCase({
-        response: new Response(makeStream([new Uint8Array([1, 2, 3])])),
-        maxBytes,
-        expectedError: /maxBytes must be a non-negative finite number/,
-      });
+      await expect(
+        readResponseWithLimit(new Response(makeStream([new Uint8Array([1, 2, 3])])), maxBytes),
+      ).rejects.toThrow(/maxBytes must be a non-negative finite number/);
     },
   );
 
@@ -306,12 +273,7 @@ describe("readResponseWithLimit", () => {
     }
   });
 
-  it.each([
-    {
-      name: "does not time out while chunks keep arriving",
-      expected: Buffer.from([1, 2]),
-    },
-  ] as const)("$name", async ({ expected }) => {
+  it("does not time out while chunks keep arriving", async () => {
     vi.useFakeTimers();
     try {
       const body = makeStream([new Uint8Array([1]), new Uint8Array([2])], 10);
@@ -319,7 +281,7 @@ describe("readResponseWithLimit", () => {
       const readPromise = readResponseWithLimit(res, 100, { chunkTimeoutMs: 500 });
       await vi.advanceTimersByTimeAsync(25);
       const buf = await readPromise;
-      expect(buf).toEqual(expected);
+      expect(buf).toEqual(Buffer.from([1, 2]));
     } finally {
       vi.useRealTimers();
     }
@@ -529,7 +491,7 @@ describe("readResponseTextSnippet", () => {
       expected: "ab…",
     },
   ] as const)("$name", async ({ response, options, expected }) => {
-    await expectReadResponseTextSnippetCase({ response, options, expected });
+    await expect(readResponseTextSnippet(response, options)).resolves.toBe(expected);
   });
 
   it("rejects invalid maxBytes before reading text snippets", async () => {
@@ -553,18 +515,24 @@ describe("readResponseTextSnippet", () => {
   });
 
   it.each([
-    {
-      name: "applies the idle timeout while reading snippets",
-      createReadPromise: () => {
-        const res = new Response(makeStallingStream([new Uint8Array([65, 66])]));
-        return readResponseTextSnippet(res, { maxBytes: 64, chunkTimeoutMs: 50 });
-      },
-    },
-  ] as const)(
-    "$name",
-    async ({ createReadPromise }) => {
-      await expectIdleTimeout(createReadPromise);
-    },
-    5_000,
-  );
+    { maxBytes: 0.5, text: "", size: 3 },
+    { maxBytes: 3.5, text: "abc", size: 6 },
+  ])("returns whole bytes under a fractional prefix budget of $maxBytes", async (expected) => {
+    const response = new Response(
+      makeStream([new TextEncoder().encode("abc"), new TextEncoder().encode("def")]),
+    );
+
+    await expect(readResponseTextPrefix(response, expected.maxBytes)).resolves.toEqual({
+      text: expected.text,
+      size: expected.size,
+      truncated: true,
+    });
+  });
+
+  it("applies the idle timeout while reading snippets", async () => {
+    await expectIdleTimeout(() => {
+      const res = new Response(makeStallingStream([new Uint8Array([65, 66])]));
+      return readResponseTextSnippet(res, { maxBytes: 64, chunkTimeoutMs: 50 });
+    });
+  }, 5_000);
 });

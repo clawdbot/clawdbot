@@ -47,7 +47,7 @@ import {
 import {
   codexNodeTerminalCapability,
   createCodexTerminalNodeHostCommand,
-  requireCatalogEligibleThread,
+  createCodexTerminalStartNodeHostCommand,
   type CodexTerminalConfigSources,
 } from "./session-catalog-terminal.js";
 import type {
@@ -258,7 +258,8 @@ export async function listCodexSessionCatalog(params: {
       .filter(
         (node) =>
           node.gatewayLocal !== true &&
-          node.commands?.includes(CODEX_APP_SERVER_THREADS_LIST_COMMAND) &&
+          (node.commands?.includes(CODEX_APP_SERVER_THREADS_LIST_COMMAND) ||
+            codexNodeTerminalCapability(node).canStartTerminal) &&
           (!requestedHostIds || requestedHostIds.has(`node:${node.nodeId}`)),
       )
       .slice(0, MAX_HOST_COUNT - localHosts.length);
@@ -268,6 +269,7 @@ export async function listCodexSessionCatalog(params: {
       label: "Paired nodes",
       kind: "node",
       connected: false,
+      canStartTerminal: false,
       sessions: [],
       error: catalogError("NODE_LIST_FAILED", error),
     };
@@ -282,17 +284,17 @@ export async function listCodexSessionCatalog(params: {
     runtime: params.runtime,
     sessionEntries: params.sessionEntries,
   });
-  const nodeHosts = nodes.toSorted(compareNodeLabels).map(async (node) => {
-    const host = await listPairedNode({
+  const nodeHosts = nodes.toSorted(compareNodeLabels).map((node) =>
+    listPairedNode({
       agentId,
       runtime: params.runtime,
       node,
       query,
       adoptedSessions: adoptedNodeSessions,
+      terminalCapabilities: codexNodeTerminalCapability(node),
       ...(params.onHost ? { onHost: params.onHost } : {}),
-    });
-    return Object.assign(host, codexNodeTerminalCapability(node));
-  });
+    }),
+  );
   return { hosts: await Promise.all([...localHosts, ...nodeHosts]) };
 }
 
@@ -377,7 +379,7 @@ export function createCodexSessionCatalogNodeHostCommands(
         const request = bindRequest(paramsJSON);
         const action = readNodeTranscriptParams(request.params);
         try {
-          await requireCatalogEligibleThread(request.control, action.threadId);
+          await request.control.requireEligibleThread(action.threadId);
           const page = parseTranscriptPage(
             await request.control.listTurnPage({
               threadId: action.threadId,
@@ -397,6 +399,7 @@ export function createCodexSessionCatalogNodeHostCommands(
       },
     },
     createCodexTerminalNodeHostCommand(bindRequest, configSources),
+    createCodexTerminalStartNodeHostCommand(),
   ];
 }
 
@@ -451,7 +454,7 @@ export async function readCodexSessionTranscript(params: {
   source?: CodexCatalogHome;
 }): Promise<CodexSessionTranscriptPage> {
   if (params.source || params.hostId === CODEX_LOCAL_SESSION_HOST_ID) {
-    await requireCatalogEligibleThread(params.control, params.threadId);
+    await params.control.requireEligibleThread(params.threadId);
     const listParams = {
       threadId: params.threadId,
       limit: params.limit,

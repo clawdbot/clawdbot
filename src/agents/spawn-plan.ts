@@ -73,25 +73,6 @@ export function resolveSpawnChannelAccountId(params: {
   return normalizeOptionalString(channels?.[channel]?.defaultAccount) ?? "default";
 }
 
-export function resolveConversationRefForThreadBinding(params: {
-  cfg: OpenClawConfig;
-  channel?: string;
-  accountId?: string;
-  to?: string;
-  threadId?: string | number;
-  groupId?: string;
-}): { conversationId: string; parentConversationId?: string } | null {
-  return resolveInboundConversationResolution({
-    cfg: params.cfg,
-    channel: params.channel,
-    accountId: params.accountId,
-    to: params.to,
-    threadId: params.threadId,
-    groupId: params.groupId,
-    isGroup: true,
-  });
-}
-
 function resolveRequesterBoundConversationRef(params: {
   bindingService: SessionBindingService;
   requesterSessionKey?: string;
@@ -232,7 +213,7 @@ export function prepareSpawnThreadBinding(params: {
       error: `Thread bindings do not support ${placement} placement for ${policy.channel}.`,
     };
   }
-  const fallback = resolveConversationRefForThreadBinding({
+  const fallback = resolveInboundConversationResolution({
     cfg: params.cfg,
     channel: policy.channel,
     accountId: policy.accountId,

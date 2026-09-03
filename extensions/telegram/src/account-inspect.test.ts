@@ -6,8 +6,63 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withEnv } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { inspectTelegramAccount } from "./account-inspect.js";
+import { createTelegramPluginConfig } from "./config-adapter.js";
 
 describe("inspectTelegramAccount SecretRef resolution", () => {
+  it.each([
+    { accountId: "alerts", configured: true, tokenStatus: "available" },
+    { accountId: "work", configured: false, tokenStatus: "available" },
+    { accountId: "missing", configured: false, tokenStatus: "missing" },
+    { accountId: "unavailable", configured: true, tokenStatus: "configured_unavailable" },
+    { accountId: "unknown", configured: false, tokenStatus: "missing" },
+  ])(
+    "preserves owner status for $accountId without resolving credentials",
+    ({ accountId, configured, tokenStatus }) => {
+      withEnv({ TELEGRAM_BOT_TOKEN: undefined, TG_INSPECTION_MISSING: undefined }, () => {
+        const cfg: OpenClawConfig = {
+          channels: {
+            telegram: {
+              defaultAccount: "alerts",
+              webhookUrl: "https://example.test/telegram",
+              groups: { "*": { requireMention: false } },
+              accounts: {
+                alerts: { botToken: "123:shared" },
+                work: { botToken: "123:shared" },
+                missing: {},
+                unavailable: { botToken: "${TG_INSPECTION_MISSING}" },
+              },
+            },
+          },
+        };
+        const inspected = inspectTelegramAccount({ cfg, accountId });
+        const config = createTelegramPluginConfig();
+        expect(inspected).toMatchObject({
+          accountId,
+          enabled: true,
+          configured,
+          tokenStatus,
+          mode: "webhook",
+          allowUnmentionedGroups: true,
+        });
+        expect(config.describeAccount?.(inspected, cfg)?.configured).toBe(configured);
+        if (accountId === "work") {
+          expect(inspected).toHaveProperty(
+            "stateReason",
+            config.unconfiguredReason?.(inspected, cfg),
+          );
+          expect(config.unconfiguredReason?.(inspected, cfg)).toContain('account "alerts"');
+        }
+        if (accountId === "unknown") {
+          expect(inspected).toHaveProperty(
+            "stateReason",
+            config.unconfiguredReason?.(inspected, cfg),
+          );
+          expect(config.unconfiguredReason?.(inspected, cfg)).toContain("unknown accountId");
+        }
+      });
+    },
+  );
+
   it("resolves default env SecretRef templates in read-only status paths", () => {
     withEnv({ TG_STATUS_TOKEN: "123:token" }, () => {
       const cfg: OpenClawConfig = {

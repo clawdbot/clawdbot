@@ -479,12 +479,20 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           if (statusReactionsEnabled) {
             await statusReactions.setTool(payload.name);
           }
-          if (payload.phase === "start") {
-            progress.progressWorkCounter.noteToolCall(payload.name);
-          }
           return await progress.progressDraft.pushToolEvent(payload);
         },
         onItemEvent: async (payload) => {
+          // Slack freezes notification text on the first post. Keep incomplete
+          // preambles out of the compositor until a message actually exists;
+          // later edits may stream. A timer or tool event must not flush "I".
+          if (
+            payload.kind === "preamble" &&
+            (payload.phase === "start" || payload.phase === "update") &&
+            !draftStream?.messageId() &&
+            !delivery.streamSession?.delivered
+          ) {
+            return false;
+          }
           if (progress.isProgressMode && payload.kind === "preamble") {
             if (progress.shouldYieldDraftProgress()) {
               return false;
@@ -546,7 +554,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   } catch (err) {
     dispatchError = err;
   } finally {
-    progress.progressDraft.cancel();
+    await progress.cancel();
     if (!progress.useDraftProgressCard) {
       await draftStream?.discardPending();
     }
@@ -582,7 +590,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     } catch (err) {
       if (err instanceof SlackStreamNotDeliveredError) {
         streamFallbackDelivered = await delivery.deliverPendingStreamFallback(finalStream, err);
-        if (!streamFallbackDelivered) {
+        if (!streamFallbackDelivered && !finalStream.stoppedBySlack) {
           dispatchError ??= err;
         }
       } else {
@@ -595,6 +603,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         }
       }
     }
+  }
+
+  if (finalStream?.stoppedBySlack) {
+    delivery.acknowledgeStoppedStreamedDeliveries(finalStream);
   }
 
   const anyReplyDelivered = hasVisibleInboundReplyDispatch(settledDispatchResult, {

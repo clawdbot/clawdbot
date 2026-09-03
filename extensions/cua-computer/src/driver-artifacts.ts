@@ -26,6 +26,18 @@ function resolvePackageEntry(packageName: string): string | undefined {
 }
 
 function resolvePackageJson(packageName: string): string | undefined {
+  if (packageName !== "@trycua/cua-driver") {
+    const sdkManifestPath = resolvePackageJson("@trycua/cua-driver");
+    if (!sdkManifestPath) {
+      return undefined;
+    }
+    // Native packages belong to the SDK, not the plugin's dependency tree.
+    try {
+      return createRequire(sdkManifestPath).resolve(`${packageName}/package.json`);
+    } catch {
+      return undefined;
+    }
+  }
   try {
     return requireFromPlugin.resolve(`${packageName}/package.json`);
   } catch {}

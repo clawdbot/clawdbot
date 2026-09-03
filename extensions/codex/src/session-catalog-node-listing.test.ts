@@ -10,6 +10,7 @@ import {
   registerCodexSessionCatalog,
   createCodexSessionCatalogNodeHostCommands,
   config,
+  idleThread,
   createControl,
   createEligibleControl,
   createRuntime,
@@ -46,6 +47,7 @@ describe("Codex supervision catalog", () => {
     const control = createControl({ listPage });
     const bindingStore = Object.assign(createCodexTestBindingStore(), {
       managedThreads: {
+        has: vi.fn(async () => false),
         mark: vi.fn(async () => undefined),
         snapshot: vi.fn(
           async () => new Map<string, ReadonlySet<string>>([["home-main", new Set(["managed"])]]),
@@ -125,6 +127,8 @@ describe("Codex supervision catalog", () => {
         kind: "node",
         nodeId: "devbox",
         canContinueCodex: false,
+        canOpenTerminalCodex: false,
+        canStartTerminal: false,
         connected: true,
         sessions: [{ threadId: "remote", name: "Remote task", status: "idle", archived: false }],
       },
@@ -388,6 +392,7 @@ describe("Codex supervision catalog", () => {
         },
         query: { limitPerHost: 40 },
         adoptedSessions: new Map(),
+        terminalCapabilities: { canStartTerminal: true, canOpenTerminalCodex: true },
       });
 
       await vi.advanceTimersByTimeAsync(8_000);
@@ -424,11 +429,15 @@ describe("Codex supervision catalog", () => {
         },
         query: { limitPerHost: 40 },
         adoptedSessions: new Map(),
+        terminalCapabilities: { canStartTerminal: true, canOpenTerminalCodex: true },
         onHost,
       });
 
       await vi.advanceTimersByTimeAsync(8_000);
-      await expect(pending).resolves.toMatchObject({ error: { code: "NODE_INVOKE_FAILED" } });
+      await expect(pending).resolves.toMatchObject({
+        canStartTerminal: true,
+        error: { code: "NODE_INVOKE_FAILED" },
+      });
       expect(onHost).not.toHaveBeenCalled();
 
       resolveInvoke({
@@ -441,6 +450,8 @@ describe("Codex supervision catalog", () => {
       expect(onHost).toHaveBeenCalledWith(
         expect.objectContaining({
           hostId: "node:slow-node",
+          canStartTerminal: true,
+          canOpenTerminalCodex: true,
           sessions: [expect.objectContaining({ threadId: "late-thread" })],
         }),
       );
@@ -577,17 +588,9 @@ describe("Codex supervision catalog", () => {
     } as OpenClawConfig;
     const command = createCodexSessionCatalogNodeHostCommands(
       createEligibleControl({
-        listPage: vi.fn(async () => ({
-          sessions: [
-            {
-              threadId,
-              status: "idle",
-              source: "atlas",
-              cwd: "/node/catalog/cwd",
-              archived: false,
-            },
-          ],
-        })),
+        requireEligibleThread: vi.fn(async () =>
+          idleThread({ id: threadId, source: { custom: "atlas" }, cwd: "/node/catalog/cwd" }),
+        ),
       }),
       {
         getPluginConfig: () => ({ appServer: { homeScope: "agent" } }),

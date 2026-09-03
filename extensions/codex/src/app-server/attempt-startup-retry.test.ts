@@ -225,23 +225,27 @@ describe("Codex app-server startup retry", () => {
       });
       const commandSpy = vi
         .spyOn(processSnapshot, "readCodexAppServerProcessCommand")
-        .mockImplementation(async (pid, deadline) => {
-          if (pid !== firstChild?.pid) {
-            return readCommand(pid, deadline);
+        .mockImplementation(async (observed, deadline) => {
+          if (observed.pid !== firstChild?.pid) {
+            return readCommand(observed, deadline);
           }
           await expect
             .poll(() => fs.readFile(`${fixture.spawnCountPath}.ready`, "utf8").catch(() => ""))
             .toBe("ready");
-          expect(await readCommand(pid, deadline)).toBeDefined();
+          expect(await readCommand(observed, deadline)).toBeDefined();
           firstChild.kill("SIGUSR2");
           // Keep Node's event loop occupied until the OS has exited the real child.
           // Inspection then refuses registration before JS can deliver exit or stderr.
           const exitedBy = Date.now() + 5_000;
           let exited = false;
           while (Date.now() < exitedBy) {
-            const inspected = childProcess.spawnSync("ps", ["-o", "stat=", "-p", String(pid)], {
-              encoding: "utf8",
-            });
+            const inspected = childProcess.spawnSync(
+              "ps",
+              ["-o", "stat=", "-p", String(observed.pid)],
+              {
+                encoding: "utf8",
+              },
+            );
             if (inspected.status === 1 || inspected.stdout.trim().startsWith("Z")) {
               exited = true;
               break;
@@ -567,7 +571,7 @@ describe("Codex app-server startup retry", () => {
     }
   });
 
-  it("preserves the shared client and binding after resume overload exhausts", async () => {
+  it("preserves the shared client and binding on an overloaded resume with a sibling lease", async () => {
     const fixture = await createStartupFailureFixture("overload");
     const sibling = await startFixtureAttempt(fixture);
     sibling.turnRoute.release();
@@ -582,6 +586,7 @@ describe("Codex app-server startup retry", () => {
       expect(binding?.threadId).toBe("thread-recovered");
       const requestsBeforeResume = await fs.readFile(fixture.requestLogPath, "utf8");
 
+      // An unrelated lease must not hide a native refusal or lose its healthy client.
       await expect(startFixtureAttempt(fixture)).rejects.toMatchObject({
         name: "CodexAppServerRpcError",
         code: -32_001,
@@ -589,7 +594,7 @@ describe("Codex app-server startup retry", () => {
       });
       const requests = await fs.readFile(fixture.requestLogPath, "utf8");
       expect(new Set(requests.slice(requestsBeforeResume.length).trim().split("\n"))).toEqual(
-        new Set(["thread/resume"]),
+        new Set(["thread/read", "thread/resume"]),
       );
       await expect(testCodexAppServerBindingStore.read(identity)).resolves.toEqual(binding);
 

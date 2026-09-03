@@ -13,7 +13,6 @@ export type ChatHistoryBoundaryProps = {
 export const CHAT_HISTORY_BOUNDARY_HEIGHT_PX = 44;
 
 export function renderChatHistoryBoundary(props: ChatHistoryBoundaryProps): TemplateResult {
-  const label = props.loading ? t("chat.thread.loadingEarlier") : t("chat.thread.showEarlier");
   return html`
     <div class="chat-history-boundary ${props.loading ? "chat-history-boundary--loading" : ""}">
       <span class="chat-history-boundary__line" aria-hidden="true"></span>
@@ -25,7 +24,10 @@ export function renderChatHistoryBoundary(props: ChatHistoryBoundaryProps): Temp
         aria-label=${t("chat.thread.showEarlier")}
         @click=${props.onShowEarlier}
       >
-        <span role="status">${label}</span>
+        <span aria-hidden="true">${t("chat.thread.showEarlier")}</span>
+        <span class="sr-only" role="status">
+          ${props.loading ? t("chat.thread.loadingEarlier") : t("chat.thread.showEarlier")}
+        </span>
       </button>
       <span class="chat-history-boundary__line" aria-hidden="true"></span>
     </div>

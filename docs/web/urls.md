@@ -59,15 +59,15 @@ the builder inserts `~key` before it, for example
 and appears only when the unescaped form would be ambiguous.
 
 The reserved single-segment literal rest names are `main`, `global`, `boot`,
-and `sessions`. The configured `session.mainKey` joins that set at runtime.
-Exactly one segment after the agent id is literal when it is reserved or does
-not contain a valid short id; otherwise it is a short reference. Two or more
-segments after the agent id are always literal.
+and `sessions`. Exactly one segment after the agent id is literal when it is
+reserved or does not contain a valid short id; otherwise it is a short reference.
+Two or more segments after the agent id are always literal.
 
-Only the configured `session.mainKey` collapses to the agent-only main-session
-path. With `session.mainKey: "workspace"`, `agent:research:workspace` becomes
-`/chat/research`, while the distinct key `agent:research:main` remains the
-literal path `/chat/research/main`.
+The canonical main session `agent:research:main` uses the agent-only path
+`/chat/research`. Custom `session.mainKey` values are ignored by config loading;
+setting it to `"workspace"` does not make `/chat/research/workspace` a main-session
+route. It follows ordinary session lookup; if no existing session matches, it shows
+**Session not found**.
 
 ### Stability contract
 
@@ -279,10 +279,14 @@ no route-specific URL parameters.
 | Skill Workshop      | `/skills/workshop`          | -                         | -                                                                 |
 | Skills              | `/skills`                   | -                         | -                                                                 |
 | Plugins             | `/settings/plugins`         | -                         | `/settings/plugins/discover`                                      |
-| Automations         | `/cron`                     | -                         | -                                                                 |
+| Automations         | `/cron`                     | -                         | `?job=<jobId>`, `?job=<jobId>&run=<runId>`                        |
 | Tasks               | `/tasks`                    | -                         | -                                                                 |
 | Devices             | `/settings/devices`         | `/nodes`                  | Shared settings parameters below                                  |
 | Plugin tab host     | `/plugin`                   | -                         | `?plugin=<pluginId>&id=<tabId>`                                   |
+
+Automation links open the exact job independently of the current list filters or
+loaded page. Adding `run` opens its run history and highlights the matching loaded
+run. A missing job shows the Gateway's lookup error.
 
 Settings routes that use schema-backed deep links accept `?section=<section>`,
 `?advanced=1`, and `#<setting-id>`. These values select content within the page;

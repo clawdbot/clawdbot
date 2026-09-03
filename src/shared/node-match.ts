@@ -26,15 +26,6 @@ export type NodeMatchCandidate = {
   clientId?: string;
 };
 
-type ScoredNodeMatch = {
-  /** Candidate that matched one of the accepted query shapes. */
-  node: NodeMatchCandidate;
-  /** Match class strength; higher classes outrank all tie-break heuristics. */
-  matchScore: number;
-  /** Tie-break score within one match class, such as connected/current-client preference. */
-  selectionScore: number;
-};
-
 /** Normalizes human node names into stable lookup keys for fuzzy CLI/API matching. */
 function normalizeNodeKey(value: string) {
   // Emoji components can also be marks (variation selectors and keycaps); drop
@@ -128,44 +119,6 @@ function resolveMatchScore(
   return 0;
 }
 
-function scoreNodeCandidate(node: NodeMatchCandidate, matchScore: number): number {
-  let score = matchScore;
-  if (node.connected === true) {
-    score += 100;
-  }
-  if (isCurrentOpenClawClient(node.clientId)) {
-    score += 10;
-  } else if (isLegacyClawdbotClient(node.clientId)) {
-    score -= 10;
-  }
-  return score;
-}
-
-function resolveScoredMatches(
-  nodes: NodeMatchCandidate[],
-  query: string,
-  allowCompactDisplayName: boolean,
-): ScoredNodeMatch[] {
-  const trimmed = normalizeOptionalString(query);
-  if (!trimmed) {
-    return [];
-  }
-  const normalized = normalizeNodeKey(trimmed);
-  return nodes
-    .map((node) => {
-      const matchScore = resolveMatchScore(node, trimmed, normalized, allowCompactDisplayName);
-      if (matchScore === 0) {
-        return null;
-      }
-      return {
-        node,
-        matchScore,
-        selectionScore: scoreNodeCandidate(node, matchScore),
-      };
-    })
-    .filter((entry): entry is ScoredNodeMatch => entry !== null);
-}
-
 /** Resolves a single node id or throws an operator-readable unknown/ambiguous-node error. */
 export function resolveNodeIdFromCandidates(
   nodes: NodeMatchCandidate[],
@@ -177,35 +130,37 @@ export function resolveNodeIdFromCandidates(
     throw new Error("node required");
   }
 
-  const rawMatches = resolveScoredMatches(nodes, q, allowCompactDisplayName);
-  if (rawMatches.length === 1) {
-    return rawMatches[0]?.node.nodeId ?? "";
-  }
-  if (rawMatches.length === 0) {
+  const normalized = normalizeNodeKey(q);
+  const scoredMatches = nodes
+    .map((node) => ({
+      node,
+      matchScore: resolveMatchScore(node, q, normalized, allowCompactDisplayName),
+    }))
+    .filter((match) => match.matchScore > 0);
+  if (scoredMatches.length === 0) {
     const known = listKnownNodes(nodes);
     throw new Error(`unknown node: ${q}${known ? ` (known: ${known})` : ""}`);
   }
 
-  const topMatchScore = Math.max(...rawMatches.map((match) => match.matchScore));
-  const strongestMatches = rawMatches.filter((match) => match.matchScore === topMatchScore);
-  if (strongestMatches.length === 1) {
-    return strongestMatches[0]?.node.nodeId ?? "";
-  }
+  const topMatchScore = Math.max(...scoredMatches.map((match) => match.matchScore));
+  const strongestMatches = scoredMatches
+    .filter((match) => match.matchScore === topMatchScore)
+    .map((match) => match.node);
 
-  // Only after the strongest match class is isolated do operational tie-breakers
-  // like connected state and current-client preference choose a winner.
-  const topSelectionScore = Math.max(...strongestMatches.map((match) => match.selectionScore));
-  const matches = strongestMatches.filter((match) => match.selectionScore === topSelectionScore);
+  // Connected state only breaks ties within the strongest match class. Client
+  // identity may disambiguate known legacy migrations, never other current nodes.
+  const connectedMatches = strongestMatches.filter((match) => match.connected === true);
+  const matches = connectedMatches.length > 0 ? connectedMatches : strongestMatches;
   if (matches.length === 1) {
-    return matches[0]?.node.nodeId ?? "";
+    return matches[0]?.nodeId ?? "";
   }
 
-  const preferred = pickPreferredLegacyMigrationMatch(matches.map((match) => match.node));
+  const preferred = pickPreferredLegacyMigrationMatch(matches);
   if (preferred) {
     return preferred.nodeId;
   }
 
   throw new Error(
-    `ambiguous node: ${q} (matches: ${matches.map((match) => formatNodeCandidateLabel(match.node)).join(", ")})`,
+    `ambiguous node: ${q} (matches: ${matches.map(formatNodeCandidateLabel).join(", ")})`,
   );
 }

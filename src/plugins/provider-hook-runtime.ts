@@ -194,7 +194,7 @@ function findProviderRuntimePluginInRegistry(params: {
   provider: string;
   ownerRefs: readonly string[];
 }): ProviderPlugin | undefined {
-  return listProviderRuntimePluginsInRegistry(params.registry).find((plugin) => {
+  const entry = params.registry.providers.find(({ provider: plugin }) => {
     if (params.ownerRefs.length > 0) {
       return (
         matchesProviderLiteralId(plugin, params.provider) ||
@@ -203,14 +203,7 @@ function findProviderRuntimePluginInRegistry(params: {
     }
     return matchesProviderPluginRef(plugin, params.provider);
   });
-}
-
-function listProviderRuntimePluginsInRegistry(
-  registry: PluginRegistry,
-): Array<ProviderPlugin & { pluginId: string }> {
-  return registry.providers.map((entry) =>
-    Object.assign({}, entry.provider, { pluginId: entry.pluginId }),
-  );
+  return entry ? Object.assign({}, entry.provider, { pluginId: entry.pluginId }) : undefined;
 }
 
 function hasConfiguredModelProvider(params: {
@@ -222,7 +215,7 @@ function hasConfiguredModelProvider(params: {
   );
 }
 
-export function resolveProviderPluginsForHooks(params: {
+export function resolveLoadedProviderPluginsForHooks(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -231,15 +224,19 @@ export function resolveProviderPluginsForHooks(params: {
   modelRefs?: readonly string[];
   applyAutoEnable?: boolean;
   pluginMetadataSnapshot?: PluginMetadataRegistryView;
-}): ProviderPlugin[] {
+}): ProviderPlugin[] | undefined {
   const filterRegistryPlugins = (registry: PluginRegistry) => {
     const onlyPluginIds = params.onlyPluginIds ? new Set(params.onlyPluginIds) : undefined;
-    return listProviderRuntimePluginsInRegistry(registry).filter(
-      (plugin) =>
-        (!onlyPluginIds || onlyPluginIds.has(plugin.pluginId)) &&
-        (!params.providerRefs?.length ||
-          params.providerRefs.some((providerRef) => matchesProviderPluginRef(plugin, providerRef))),
-    );
+    return registry.providers
+      .filter(
+        ({ pluginId, provider }) =>
+          (!onlyPluginIds || onlyPluginIds.has(pluginId)) &&
+          (!params.providerRefs?.length ||
+            params.providerRefs.some((providerRef) =>
+              matchesProviderPluginRef(provider, providerRef),
+            )),
+      )
+      .map(({ pluginId, provider }) => Object.assign({}, provider, { pluginId }));
   };
   const generationRegistry = getPluginRuntimeGenerationRegistry();
   if (generationRegistry) {
@@ -247,28 +244,34 @@ export function resolveProviderPluginsForHooks(params: {
   }
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
-  // Request/lifecycle scopes and the active process registry already own loaded plugin runtime.
-  // Reuse them like findProviderRuntimePluginInLoadedRegistries does: a scoped load here rebuilds
-  // plugin runtime from source on the request path and stalls the gateway event loop for seconds.
-  // Only a hit proves the prepared registry serves this query; an empty result may mean the scope
-  // never loaded these plugins, so the scoped load below stays authoritative on a miss.
+  // An empty generation is authoritative. Outside a generation, only a loaded
+  // hit proves the registry serves this query; preparation may discover on a miss.
   const scopedRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
-  const preparedRegistry =
-    scopedRegistry && registryContainsRuntimePluginIds(scopedRegistry, params.onlyPluginIds)
-      ? scopedRegistry
-      : getLoadedRuntimePluginRegistry({
-          env,
-          workspaceDir,
-          requiredPluginIds: params.onlyPluginIds,
-        });
-  const preparedPlugins = preparedRegistry ? filterRegistryPlugins(preparedRegistry) : [];
-  if (preparedPlugins.length > 0) {
-    return preparedPlugins;
+  for (const registry of [
+    scopedRegistry,
+    getLoadedRuntimePluginRegistry({ env, workspaceDir, requiredPluginIds: params.onlyPluginIds }),
+  ]) {
+    if (registry && registryContainsRuntimePluginIds(registry, params.onlyPluginIds)) {
+      const plugins = filterRegistryPlugins(registry);
+      if (plugins.length > 0) {
+        return plugins;
+      }
+    }
+  }
+  return undefined;
+}
+
+export function resolveProviderPluginsForHooks(
+  params: Parameters<typeof resolveLoadedProviderPluginsForHooks>[0],
+): ProviderPlugin[] {
+  const loaded = resolveLoadedProviderPluginsForHooks(params);
+  if (loaded) {
+    return loaded;
   }
   return resolvePluginProvidersCore({
     ...params,
-    workspaceDir,
-    env,
+    workspaceDir: params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState(),
+    env: params.env ?? process.env,
     activate: false,
     applyAutoEnable: params.applyAutoEnable,
     skipIfLoadInFlight: true,
@@ -344,9 +347,9 @@ export function resolveProviderRuntimePlugin(
     : !registryState?.key
       ? load()
       : (() => {
-          const cached = defaultProviderRuntimePluginCache.getResult(cacheKey);
-          if (cached.hit) {
-            return cached.value;
+          const cached = defaultProviderRuntimePluginCache.get(cacheKey);
+          if (cached !== undefined) {
+            return cached;
           }
           const loaded = load();
           defaultProviderRuntimePluginCache.set(cacheKey, loaded);

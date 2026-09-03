@@ -257,6 +257,42 @@ describe("video generation invocation QA", () => {
     });
   });
 
+  it("reports the fractional save cap when a generated video has no provider URL", async () => {
+    const root = tempDirs.make("openclaw-qa-video-fractional-cap-");
+    const maxBytes = createMp4Fixture().byteLength;
+    const provider: VideoGenerationProvider = {
+      id: "qa-capped-video",
+      defaultModel: "capped-v1",
+      models: ["capped-v1"],
+      isConfigured: () => true,
+      capabilities: {},
+      generateVideo: async () => ({
+        videos: [
+          {
+            buffer: Buffer.concat([createMp4Fixture(), Buffer.from([0x00])]),
+            mimeType: "video/mp4",
+          },
+        ],
+      }),
+    };
+    const config = createConfig("qa-capped-video/capped-v1", []);
+    config.agents!.defaults!.mediaMaxMb = maxBytes / (1024 * 1024);
+
+    await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(root, "state") }, async () => {
+      const tool = requireVideoTool(
+        createVideoGenerateTool({
+          config,
+          agentDir: path.join(root, "agent"),
+          workspaceDir: root,
+          preparedModelRuntime: createPreparedRuntime([provider]),
+        }),
+      );
+      await expect(
+        tool.execute("qa-video-fractional-cap", { prompt: "Generate a capped QA clip." }),
+      ).rejects.toThrow("Media exceeds 24B limit");
+    });
+  });
+
   it("rejects unknown and wrong-typed provider options before provider invocation", async () => {
     let providerCalls = 0;
     const createProvider = (id: string, model: string): VideoGenerationProvider => ({

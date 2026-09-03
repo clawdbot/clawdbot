@@ -1,13 +1,10 @@
-/** Persists usage, cost, model, and CLI session metadata after reply runs. */
+/** Persists usage, cost, and model metadata after reply runs. */
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  clearCliSession,
-  setCliSessionBinding,
-  setCliSessionId,
-} from "../../agents/cli-session.js";
+import { clearCliSession } from "../../agents/cli-session.js";
 import {
   deriveSessionTotalTokens,
+  hasBillableUsage,
   hasNonzeroUsage,
   type NormalizedUsage,
 } from "../../agents/usage.js";
@@ -22,13 +19,11 @@ import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
+import { estimateAggregateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 
-function applyCliSessionIdToSessionPatch(
+function applyCliSessionClearToSessionPatch(
   params: {
     providerUsed?: string;
-    cliSessionId?: string;
-    cliSessionBinding?: import("../../config/sessions.js").CliSessionBinding;
     clearCliSessionBinding?: boolean;
   },
   entry: SessionEntry,
@@ -41,26 +36,6 @@ function applyCliSessionIdToSessionPatch(
   if (params.clearCliSessionBinding === true) {
     const nextEntry = { ...entry, ...patch };
     clearCliSession(nextEntry, cliProvider);
-    return {
-      ...patch,
-      cliSessionIds: nextEntry.cliSessionIds,
-      cliSessionBindings: nextEntry.cliSessionBindings,
-      claudeCliSessionId: nextEntry.claudeCliSessionId,
-    };
-  }
-  if (params.cliSessionBinding) {
-    const nextEntry = { ...entry, ...patch };
-    setCliSessionBinding(nextEntry, cliProvider, params.cliSessionBinding);
-    return {
-      ...patch,
-      cliSessionIds: nextEntry.cliSessionIds,
-      cliSessionBindings: nextEntry.cliSessionBindings,
-      claudeCliSessionId: nextEntry.claudeCliSessionId,
-    };
-  }
-  if (params.cliSessionId) {
-    const nextEntry = { ...entry, ...patch };
-    setCliSessionId(nextEntry, cliProvider, params.cliSessionId);
     return {
       ...patch,
       cliSessionIds: nextEntry.cliSessionIds,
@@ -83,7 +58,7 @@ function estimateSessionRunCostUsd(params: {
   providerUsed?: string;
   modelUsed?: string;
 }): number | undefined {
-  if (!hasNonzeroUsage(params.usage)) {
+  if (!hasBillableUsage(params.usage)) {
     return undefined;
   }
   const cost = resolveModelCostConfig({
@@ -92,7 +67,7 @@ function estimateSessionRunCostUsd(params: {
     config: params.cfg,
     agentDir: params.agentDir,
   });
-  return asNonNegativeFiniteNumber(estimateUsageCost({ usage: params.usage, cost }));
+  return asNonNegativeFiniteNumber(estimateAggregateUsageCost({ usage: params.usage, cost }));
 }
 
 /** Persists usage accounting and selected runtime metadata to the session store. */
@@ -123,8 +98,7 @@ export async function persistSessionUsageUpdate(params: {
   promptTokens?: number;
   isHeartbeat?: boolean;
   systemPromptReport?: SessionSystemPromptReport;
-  cliSessionId?: string;
-  cliSessionBinding?: import("../../config/sessions.js").CliSessionBinding;
+  /** Compaction invalidates native continuity with its accounting commit. */
   clearCliSessionBinding?: boolean;
   /** Presence overrides usage inference; undefined tokens explicitly mean current context is unknown. */
   currentContextSnapshot?: { tokens: number | undefined };
@@ -143,6 +117,7 @@ export async function persistSessionUsageUpdate(params: {
   const cfg = params.cfg ?? getRuntimeConfig();
   const agentHarnessId = normalizeOptionalString(params.agentHarnessId);
   const hasUsage = hasNonzeroUsage(params.usage);
+  const hasBilling = hasBillableUsage(params.usage);
   const hasPromptTokens =
     typeof params.promptTokens === "number" &&
     Number.isFinite(params.promptTokens) &&
@@ -153,13 +128,13 @@ export async function persistSessionUsageUpdate(params: {
   const hasCurrentContextSnapshot = params.currentContextSnapshot !== undefined;
   const currentContextTokens = resolveNonNegativeTokenCount(params.currentContextSnapshot?.tokens);
 
-  if (
+  // A monetary-only update must not invalidate the existing context observation.
+  const hasContextUpdate =
     hasUsage ||
     hasFreshContextSnapshot ||
     hasCurrentContextSnapshot ||
-    params.modelUsed ||
-    params.contextTokensUsed
-  ) {
+    Boolean(params.modelUsed || params.contextTokensUsed);
+  if (hasBilling || hasContextUpdate) {
     try {
       await patchSessionEntryCore(
         { agentId, storePath, sessionKey },
@@ -233,10 +208,9 @@ export async function persistSessionUsageUpdate(params: {
             patch.cacheRead = cacheUsage?.cacheRead ?? 0;
             patch.cacheWrite = cacheUsage?.cacheWrite ?? 0;
           }
-          // Snapshot cost like tokens (runEstimatedCostUsd is already computed from
-          // cumulative run usage, so assign directly instead of accumulating).
-          // Fixes #69347: cost was inflated 1x-72x by accumulating on every persist.
-          if (runEstimatedCostUsd !== undefined) {
+          if (hasBilling && !preserveUserFacingRunState) {
+            // Snapshot cumulative run cost once, including unknown cost; accumulating
+            // or retaining a prior amount would attach stale dollars to new tokens.
             patch.estimatedCostUsd = runEstimatedCostUsd;
           }
           if (totalTokens !== undefined && !preserveUserFacingRunState) {
@@ -249,6 +223,7 @@ export async function persistSessionUsageUpdate(params: {
             }
           } else if (
             !preserveUserFacingRunState &&
+            hasContextUpdate &&
             (hasCurrentContextSnapshot ||
               params.preserveFreshTotalTokensOnStaleUsage !== true ||
               entry.totalTokensFresh !== true)
@@ -258,7 +233,7 @@ export async function persistSessionUsageUpdate(params: {
           }
           return preserveUserFacingRunState
             ? patch
-            : applyCliSessionIdToSessionPatch(params, entry, patch);
+            : applyCliSessionClearToSessionPatch(params, entry, patch);
         },
         {
           skipMaintenance: true,

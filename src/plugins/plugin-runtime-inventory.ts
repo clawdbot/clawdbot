@@ -29,6 +29,7 @@ export function listEnabledPluginRecords(config: OpenClawConfig): EnabledPluginR
         resolveEffectivePluginActivationState({
           id: plugin.id,
           origin: plugin.origin,
+          channelIds: plugin.channels,
           config: normalizedConfig,
           rootConfig: config,
           enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin),

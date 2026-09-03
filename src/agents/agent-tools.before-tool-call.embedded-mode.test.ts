@@ -19,6 +19,7 @@ import type { HookRunner } from "../plugins/hooks.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { PluginApprovalResolutions } from "../plugins/types.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveBeforeToolCallApprovalOutcome } from "./agent-tools.before-tool-call.approval.js";
 import { runBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
@@ -106,6 +107,54 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
     resetGlobalHookRunner();
   });
+
+  it.each(["request", "waitDecision"])(
+    "cancels the gateway approval %s transport when the owning tool lifetime ends",
+    async (phase) => {
+      const controller = new AbortController();
+      const parked = createDeferredCore();
+      const pending = createDeferredCore<Record<string, unknown>>();
+      let transportCancelled = false;
+      mockCallGatewayTool.mockImplementation(async (method, _options, _request, extra) => {
+        if (method !== `plugin.approval.${phase}`) {
+          return { id: "generation-approval", status: "accepted" };
+        }
+        const signal = extra?.signal;
+        const abort = () => {
+          transportCancelled = true;
+          pending.reject(signal?.reason);
+        };
+        signal?.addEventListener("abort", abort, { once: true });
+        parked.resolve();
+        try {
+          return await pending.promise;
+        } finally {
+          signal?.removeEventListener("abort", abort);
+        }
+      });
+      const outcome = resolveBeforeToolCallApprovalOutcome({
+        result: {
+          requireApproval: {
+            pluginId: "mcp-policy",
+            title: "MCP write",
+            description: "Approve remote mutation",
+          },
+        },
+        toolName: "mcp_write",
+        baseParams: {},
+        signal: controller.signal,
+      });
+      try {
+        await parked.promise;
+        controller.abort(new Error("Permission change"));
+        expect(transportCancelled).toBe(true);
+        await expect(outcome).resolves.toMatchObject({ blocked: true });
+      } finally {
+        pending.reject(controller.signal.reason);
+        await outcome;
+      }
+    },
+  );
 
   it("carries the host receipt fence beside the execution identity token", async () => {
     const executionIdentityToken = createExecutionIdentityAdmissionToken("run-receipt-fence");

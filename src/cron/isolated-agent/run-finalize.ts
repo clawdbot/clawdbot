@@ -12,7 +12,7 @@ import {
   CODE_MODE_MCP_CATALOG_MISS_MESSAGE,
   isEmbeddedRunTerminalToolFailure,
 } from "../../agents/embedded-agent-runner/terminal-tool-failure.js";
-import { deriveContextPromptTokens } from "../../agents/usage.js";
+import { deriveContextPromptTokens, hasBillableUsage } from "../../agents/usage.js";
 import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions.js";
 import {
@@ -45,7 +45,6 @@ import {
   DEFAULT_CONTEXT_TOKENS,
   deriveSessionTotalTokens,
   hasNonzeroUsage,
-  isCliProvider,
 } from "./run.runtime.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
 import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
@@ -66,7 +65,6 @@ export async function finalizeCronRun(params: {
   const { prepared, execution } = params;
   const finalRunResult = execution.runResult;
   const payloads = finalRunResult.payloads ?? [];
-  let telemetry: CronRunTelemetry | undefined;
   const cleanupRunSession = async (reason: string) => {
     await cleanupCronRunSessionAfterRun({
       job: prepared.input.job,
@@ -86,11 +84,14 @@ export async function finalizeCronRun(params: {
     if (finalRunResult.meta?.systemPromptReport) {
       prepared.cronSession.sessionEntry.systemPromptReport = finalRunResult.meta.systemPromptReport;
     }
-    adoptCronRunSessionMetadata({
-      entry: prepared.cronSession.sessionEntry,
-      sessionKey: prepared.agentSessionKey,
-      runMeta: finalRunResult.meta?.agentMeta,
-    });
+    // CLI session ids belong to native continuity, never the local transcript owner.
+    if (finalRunResult.meta?.executionTrace?.runner !== "cli") {
+      adoptCronRunSessionMetadata({
+        entry: prepared.cronSession.sessionEntry,
+        sessionKey: prepared.agentSessionKey,
+        runMeta: finalRunResult.meta?.agentMeta,
+      });
+    }
   }
   const usage = finalRunResult.meta?.agentMeta?.usage;
   const diagnosticUsage = finalRunResult.meta?.agentMeta?.diagnosticUsage ?? usage;
@@ -160,24 +161,9 @@ export async function finalizeCronRun(params: {
     });
     prepared.cronSession.sessionEntry.contextTokens = contextTokens;
     prepared.cronSession.sessionEntry.contextTokensSource = contextTokensSource;
-    if (isCliProvider(providerUsed, prepared.cfgWithAgentDefaults)) {
-      const cliSessionBinding = finalRunResult.meta?.agentMeta?.cliSessionBinding;
-      const cliSessionId = finalRunResult.meta?.agentMeta?.sessionId?.trim();
-      if (finalRunResult.meta?.agentMeta?.clearCliSessionBinding === true) {
-        const { clearCliSession } = await import("../../agents/cli-runner.runtime.js");
-        clearCliSession(prepared.cronSession.sessionEntry, providerUsed);
-      } else if (cliSessionBinding?.sessionId?.trim()) {
-        const { setCliSessionBinding } = await import("../../agents/cli-runner.runtime.js");
-        setCliSessionBinding(prepared.cronSession.sessionEntry, providerUsed, cliSessionBinding);
-      } else if (cliSessionId) {
-        const { setCliSessionId } = await import("../../agents/cli-runner.runtime.js");
-        setCliSessionId(prepared.cronSession.sessionEntry, providerUsed, cliSessionId);
-      }
-    }
   }
+  let telemetry: CronRunTelemetry = { model: modelUsed, provider: providerUsed };
   if (hasNonzeroUsage(usage)) {
-    const { estimateUsageCost, resolveModelCostConfig } =
-      await import("../../utils/usage-format.js");
     const input = usage.input ?? 0;
     const output = usage.output ?? 0;
     const cacheRead = usage.cacheRead ?? 0;
@@ -191,14 +177,6 @@ export async function finalizeCronRun(params: {
       typeof lastCallTotalTokens === "number" && lastCallTotalTokens > 0
         ? lastCallTotalTokens
         : undefined;
-    const costConfig = resolveModelCostConfig({
-      provider: providerUsed,
-      model: modelUsed,
-      config: prepared.cfgWithAgentDefaults,
-    });
-    const runEstimatedCostUsd = asNonNegativeFiniteNumber(
-      estimateUsageCost({ usage, cost: costConfig }),
-    );
     prepared.cronSession.sessionEntry.inputTokens = input;
     prepared.cronSession.sessionEntry.outputTokens = output;
     const bucketTotalTokens = input + output + cacheRead + cacheWrite;
@@ -226,18 +204,27 @@ export async function finalizeCronRun(params: {
     }
     prepared.cronSession.sessionEntry.cacheRead = cacheRead;
     prepared.cronSession.sessionEntry.cacheWrite = cacheWrite;
-    // Snapshot cost like tokens (runEstimatedCostUsd is already computed from
-    // cumulative run usage, so assign directly instead of accumulating).
-    // Fixes #69347: cost was inflated 1x-72x by accumulating on every persist.
-    if (runEstimatedCostUsd !== undefined) {
-      prepared.cronSession.sessionEntry.estimatedCostUsd = runEstimatedCostUsd;
-    }
     telemetry = {
       model: modelUsed,
       provider: providerUsed,
       usage: telemetryUsage,
     };
-    if (isDiagnosticsEnabled(prepared.cfgWithAgentDefaults)) {
+  }
+  if (hasBillableUsage(usage) || hasBillableUsage(diagnosticUsage)) {
+    const { estimateAggregateUsageCost, resolveModelCostConfig } =
+      await import("../../utils/usage-format.js");
+    const costConfig = resolveModelCostConfig({
+      provider: providerUsed,
+      model: modelUsed,
+      config: prepared.cfgWithAgentDefaults,
+    });
+    if (hasBillableUsage(usage)) {
+      // Monetary facts do not establish token/context counters; unknown cost clears old dollars.
+      prepared.cronSession.sessionEntry.estimatedCostUsd = asNonNegativeFiniteNumber(
+        estimateAggregateUsageCost({ usage, cost: costConfig }),
+      );
+    }
+    if (isDiagnosticsEnabled(prepared.cfgWithAgentDefaults) && hasBillableUsage(diagnosticUsage)) {
       const diagnosticInput = diagnosticUsage?.input ?? 0;
       const diagnosticOutput = diagnosticUsage?.output ?? 0;
       const diagnosticCacheRead = diagnosticUsage?.cacheRead ?? 0;
@@ -248,13 +235,8 @@ export async function finalizeCronRun(params: {
         typeof diagnosticUsage?.total === "number" && Number.isFinite(diagnosticUsage.total)
           ? Math.max(diagnosticBucketTotalTokens, diagnosticUsage.total)
           : diagnosticBucketTotalTokens;
-      const hasDiagnosticBillableUsageBuckets =
-        diagnosticUsage?.input !== undefined ||
-        diagnosticUsage?.output !== undefined ||
-        diagnosticUsage?.cacheRead !== undefined ||
-        diagnosticUsage?.cacheWrite !== undefined;
       const diagnosticEstimatedCostUsd = asNonNegativeFiniteNumber(
-        estimateUsageCost({ usage: diagnosticUsage, cost: costConfig }),
+        estimateAggregateUsageCost({ usage: diagnosticUsage, cost: costConfig }),
       );
       const contextUsedTokens = deriveContextPromptTokens({
         lastCallUsage,
@@ -289,14 +271,12 @@ export async function finalizeCronRun(params: {
           limit: contextTokens,
           ...(contextUsedTokens !== undefined ? { used: contextUsedTokens } : {}),
         },
-        ...(hasDiagnosticBillableUsageBuckets && diagnosticEstimatedCostUsd !== undefined
+        ...(diagnosticEstimatedCostUsd !== undefined
           ? { costUsd: diagnosticEstimatedCostUsd }
           : {}),
         durationMs: execution.runEndedAt - execution.runStartedAt,
       });
     }
-  } else {
-    telemetry = { model: modelUsed, provider: providerUsed };
   }
   await prepared.persistSessionEntry();
   await prepared.runContinuationSession?.seal({ basePersisted: true });

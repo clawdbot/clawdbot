@@ -54,6 +54,7 @@ export function resolvePluginHookDirs(params: {
     const activationState = resolvePolicyPluginActivationState({
       id: record.id,
       origin: record.origin,
+      channelIds: record.channels,
       config: normalizedPlugins,
       rootConfig: params.config,
     });

@@ -27,6 +27,8 @@ export function validateReleaseToolingIdentity(
   },
 ): ReleaseToolingIdentity;
 
+export function runReleaseToolingGh(args: string[]): string;
+
 export function verifyReleaseToolingIdentity(
   input: ReleaseToolingIdentityInput & {
     repository: string;

@@ -152,7 +152,7 @@ export function resolveGatewayListenerPids(listeners: PortListener[]): number[] 
 
 export async function resolveScheduledTaskOwnedGatewayPids(
   env: GatewayServiceEnv,
-  context?: { port: number | null; probeHosts: readonly string[] },
+  context?: { port: number | null; probeHosts?: readonly string[] },
   installedCommand?: GatewayServiceCommandConfig | null,
 ): Promise<number[]> {
   const command =
@@ -163,16 +163,11 @@ export async function resolveScheduledTaskOwnedGatewayPids(
   if (!installedArguments?.length) {
     return [];
   }
-  const resolvedContext = context ?? {
-    port: resolveScheduledTaskCommandPort(env, command),
-    probeHosts: await resolveGatewayServiceProbeHosts({ env, command }),
-  };
-  const port = resolvedContext.port;
+  const port = context ? context.port : resolveScheduledTaskCommandPort(env, command);
   if (!port) {
     return [];
   }
 
-  const ownedPids = new Set<number>();
   const snapshot = readWindowsProcessSnapshot();
   if (process.platform === "win32") {
     if (!snapshot) {
@@ -186,10 +181,12 @@ export async function resolveScheduledTaskOwnedGatewayPids(
     // A listener can be dual-stack or belong to another task; Windows control requires CIM argv proof.
     return [];
   }
-  // Portable tests use listener command lines because CIM process snapshots exist only on Windows.
-  const diagnostics = await inspectPortUsage(port, {
-    probeHosts: resolvedContext.probeHosts,
-  }).catch(() => null);
+  // CIM argv proves Windows ownership without loading Gateway config. Only the
+  // portable listener path needs bind hosts, after a usable command and port exist.
+  const ownedPids = new Set<number>();
+  const probeHosts =
+    context?.probeHosts ?? (await resolveGatewayServiceProbeHosts({ env, command }));
+  const diagnostics = await inspectPortUsage(port, { probeHosts }).catch(() => null);
   if (diagnostics?.status === "busy") {
     for (const listener of diagnostics.listeners) {
       if (typeof listener.pid !== "number" || !listener.commandLine) {
@@ -223,7 +220,6 @@ export async function resolveListenerBackedScheduledTaskRuntime(
   const command = await readScheduledTaskCommand(env).catch(() => null);
   const context = {
     port: resolveScheduledTaskCommandPort(env, command),
-    probeHosts: await resolveGatewayServiceProbeHosts({ env, command }),
   };
   const pids = await resolveScheduledTaskOwnedGatewayPids(env, context, command);
   return pids.length > 0

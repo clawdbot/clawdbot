@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
+import { PreparedModelCatalogConfigReplacedError } from "../agents/prepared-model-catalog.errors.js";
 import type * as AuthChoiceModelCheck from "../commands/auth-choice.model-check.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayTlsConfig } from "../config/types.gateway.js";
@@ -770,7 +771,7 @@ describe("finalizeSetupWizard", () => {
     );
   });
 
-  it("bounds the bootstrap hatch TUI run timeout", async () => {
+  it("seeds the bootstrap hatch message for a ready catalog with a bounded timeout", async () => {
     vi.spyOn(fs, "access").mockResolvedValueOnce(undefined);
     const select = vi.fn(async (params: { message: string }) => {
       if (params.message === "How do you want to hatch your agent?") {
@@ -791,6 +792,35 @@ describe("finalizeSetupWizard", () => {
       message: "Wake up, my friend!",
       initialMessageTimeoutMs: 300_000,
     });
+  });
+
+  it("finishes without a hatch message when the prepared catalog owner was replaced", async () => {
+    vi.spyOn(fs, "access").mockResolvedValueOnce(undefined);
+    loadModelCatalog.mockRejectedValueOnce(
+      new PreparedModelCatalogConfigReplacedError("/tmp/replaced-agent"),
+    );
+    const prompter = createLaterPrompter();
+
+    await expect(
+      finalizeSetupWizard(createFinalizeArgs("quickstart", { prompter })),
+    ).resolves.toEqual({ launchedTui: true });
+
+    expect(runTui).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: undefined,
+      }),
+    );
+    expect(resolveDefaultModelCatalogFacts).not.toHaveBeenCalled();
+    expect(resolveDefaultModelAuthStatus).not.toHaveBeenCalled();
+  });
+
+  it("propagates unrelated prepared catalog failures", async () => {
+    const error = new Error("catalog read failed");
+    loadModelCatalog.mockRejectedValueOnce(error);
+
+    await expect(finalizeSetupWizard(createFinalizeArgs("quickstart"))).rejects.toBe(error);
+
+    expect(runTui).not.toHaveBeenCalled();
   });
 
   it("passes physical catalog routes into the bootstrap auth decision", async () => {
@@ -1275,6 +1305,38 @@ describe("finalizeSetupWizard", () => {
     expect(result.gateway).toEqual({ status: "failed", error: "service install exploded" });
     expectNoteContains(prompter, "service install exploded", "Gateway");
   });
+
+  it.each([
+    { systemdAvailable: true, supervisor: undefined },
+    { systemdAvailable: false, supervisor: undefined },
+    { systemdAvailable: true, supervisor: "external" },
+  ])(
+    "never enables lingering or installs services for explicit skips ($systemdAvailable, $supervisor)",
+    async ({ systemdAvailable, supervisor }) => {
+      await withPlatform("linux", async () => {
+        await withEnvAsync({ OPENCLAW_SUPERVISOR_MODE: supervisor }, async () => {
+          isSystemdUserServiceAvailable.mockResolvedValue(systemdAvailable);
+          const prompter = createLaterPrompter();
+
+          const result = await ensureGatewayServiceForOnboarding(
+            createFinalizeArgs("quickstart", { prompter }),
+          );
+
+          expect(result.gateway).toEqual({
+            status: "skipped",
+            reason: supervisor ? "external" : systemdAvailable ? "explicit" : "systemd-unavailable",
+          });
+          expect(readSystemdUserLingerStatus).not.toHaveBeenCalled();
+          expect(gatewayServiceIsLoaded).not.toHaveBeenCalled();
+          expect(gatewayServiceInstall).not.toHaveBeenCalled();
+          expect(gatewayServiceRestart).not.toHaveBeenCalled();
+          expect(startGatewayService).not.toHaveBeenCalled();
+          expect(prompter.confirm).not.toHaveBeenCalled();
+          expect(prompter.select).not.toHaveBeenCalled();
+        });
+      });
+    },
+  );
 
   it("recognizes external supervision before probing Linux systemd", async () => {
     await withPlatform("linux", async () => {

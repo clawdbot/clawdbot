@@ -10,6 +10,7 @@ import {
   beginSessionWorkAdmission,
   cancelSessionWorkAdmissionHandoff,
 } from "../../sessions/session-lifecycle-admission.js";
+import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "./main-session-recovery-admission.js";
 import { getMainSessionRecoveryRetryCount } from "./main-session-recovery-state.js";
 import { markStartupOrphanedMainSessionsForRecovery } from "./main-session-restart-recovery-marking.js";
 import {
@@ -178,6 +179,7 @@ async function recoverExpectedRestartRecovery(params: {
   const admission = await beginSessionWorkAdmission({
     scope: params.storePath,
     identities: [params.sessionKey, params.expectedClaim?.canonicalSessionKey, expectedSessionId],
+    owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER,
     assertAllowed: assertExpectedCurrent,
     revalidateAllowed: assertExpectedCurrent,
   });
@@ -201,7 +203,6 @@ async function recoverExpectedRestartRecovery(params: {
     );
   } finally {
     cancelSessionWorkAdmissionHandoff(handoffId);
-    admission.release();
   }
 }
 
@@ -229,7 +230,7 @@ export function scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease(param
         storePath: params.storePath,
         gatewayRuntime,
       });
-    });
+    }, "main-session:restart-recovery");
   void runRecoveryRetries({
     initialDelayMs: 0,
     maxRetries: params.maxRetries ?? MAX_RECOVERY_RETRIES,
@@ -309,27 +310,29 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
         shouldContinue,
         gatewayRuntime: params.gatewayRuntime,
       });
-    });
+    }, "main-session:startup-recovery");
   };
   const reconcileExhaustedTargets = async (targets: Iterable<ExhaustedRestartRecoveryTarget>) => {
     const outcomes = await Promise.allSettled(
       [...targets].map((target) =>
-        runWithGatewayIndependentRootWorkAdmission(async () =>
-          recoverExpectedRestartRecovery({
-            cfg: params.getConfig(),
-            expectedTarget: {
-              canonicalSessionKey: target.canonicalSessionKey,
-              sessionId: target.sessionId,
+        runWithGatewayIndependentRootWorkAdmission(
+          async () =>
+            recoverExpectedRestartRecovery({
+              cfg: params.getConfig(),
+              expectedTarget: {
+                canonicalSessionKey: target.canonicalSessionKey,
+                sessionId: target.sessionId,
+                sessionKey: target.sessionKey,
+              },
+              lifecycleGeneration,
+              observationOnly: true,
               sessionKey: target.sessionKey,
-            },
-            lifecycleGeneration,
-            observationOnly: true,
-            sessionKey: target.sessionKey,
-            shouldContinue,
-            storePath: target.storePath,
-            stateDir: params.stateDir,
-            gatewayRuntime: params.gatewayRuntime,
-          }),
+              shouldContinue,
+              storePath: target.storePath,
+              stateDir: params.stateDir,
+              gatewayRuntime: params.gatewayRuntime,
+            }),
+          "main-session:target-recovery",
         ),
       ),
     );

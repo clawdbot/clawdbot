@@ -11,11 +11,15 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, isAbsolute, join } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { gte as semverGte, valid as validSemver } from "semver";
 import { describe, expect, it } from "vitest";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mts";
-import { PACKAGE_INSTALL_GUARD_RELATIVE_PATH } from "../../scripts/lib/package-dist-inventory.ts";
+import {
+  LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
+  PACKAGE_LIFECYCLE_MARKER_CONTRACT_RELATIVE_PATH,
+  PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH,
+} from "../../scripts/lib/package-lifecycle-marker.mjs";
 import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../../scripts/lib/workspace-bootstrap-smoke.mts";
 
 const CHECK_SCRIPT = "scripts/check-openclaw-package-tarball.mts";
@@ -75,7 +79,7 @@ function withTarball(
     includeCodeModeWorker?: boolean;
     includeCodeModeWorkerInInventory?: boolean;
     includeControlUi?: boolean;
-    includeInstallGuard?: boolean;
+    includeLifecycleMarker?: boolean;
     includeShrinkwrap?: boolean;
     includeWorkspaceTemplates?: boolean;
     packageJson?: Record<string, unknown>;
@@ -130,12 +134,12 @@ function withTarball(
               `# ${relativePath}\n`,
             ]),
           );
-    const installGuardFile =
-      options.includeInstallGuard === false
+    const lifecycleMarkerFile =
+      options.includeLifecycleMarker === false
         ? {}
         : {
-            [PACKAGE_INSTALL_GUARD_RELATIVE_PATH]:
-              "OpenClaw package preinstall has not completed.\n",
+            [PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH]: "pending\n",
+            [PACKAGE_LIFECYCLE_MARKER_CONTRACT_RELATIVE_PATH]: "export {};\n",
           };
     const shrinkwrapFile =
       (options.includeShrinkwrap ?? usesLegacyShrinkwrapByDefault(version))
@@ -151,7 +155,7 @@ function withTarball(
     const tarFiles = {
       ...workspaceTemplates,
       ...controlUiFiles,
-      ...installGuardFile,
+      ...lifecycleMarkerFile,
       ...shrinkwrapFile,
       ...(includeCodeModeWorker ? { [CODE_MODE_WORKER_PATH]: "export {};\n" } : {}),
       ...files,
@@ -165,8 +169,12 @@ function withTarball(
     // against restrictive host umasks the way the packer normalizes artifacts.
     chmodTreeWorldReadable(packageRoot);
 
-    const tarball = join(root, "openclaw.tgz");
-    const pack = spawnSync("tar", ["-czf", tarball, "-C", root, "package"], {
+    const tarball = join(
+      root,
+      process.platform === "win32" ? "openclaw.tgz" : "openclaw:local.tgz",
+    );
+    const pack = spawnSync("tar", ["-czf", `./${basename(tarball)}`, "package"], {
+      cwd: root,
       encoding: "utf8",
     });
     expect(pack.status, pack.stderr).toBe(0);
@@ -257,6 +265,32 @@ describe("check-openclaw-package-tarball", () => {
     expect(extra.stderr).not.toContain("OpenClaw package tarball does not exist");
   });
 
+  it.skipIf(process.platform === "win32").each(["missing", "relative", "empty"])(
+    "validates packages without executing archive-neighbor gzip (%s PATH)",
+    (pathKind) => {
+      withTarball(["dist/index.js"], { "dist/index.js": "export {};\n" }, (tarball) => {
+        const callerDir = join(dirname(tarball), "caller");
+        const pathEntry = pathKind === "relative" ? "bin" : "";
+        const archiveGzip = join(dirname(tarball), pathEntry, "gzip");
+        mkdirSync(callerDir);
+        mkdirSync(dirname(archiveGzip), { recursive: true });
+        // GNU tar looks up gzip through PATH; an archive must not become that lookup's cwd.
+        writeFileSync(archiveGzip, '#!/bin/sh\n: > "$0.executed"\nexit 73\n', { mode: 0o755 });
+        const result = spawnSync(process.execPath, [resolve(CHECK_SCRIPT), tarball], {
+          cwd: callerDir,
+          encoding: "utf8",
+          env:
+            pathKind === "missing"
+              ? {}
+              : { ...process.env, PATH: `${pathEntry}${delimiter}${process.env.PATH ?? ""}` },
+        });
+        expect.soft(existsSync(`${archiveGzip}.executed`)).toBe(false);
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
+      });
+    },
+  );
+
   it.skipIf(process.platform === "win32")("rejects owner-only tar entry modes", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-package-tarball-modes-"));
     try {
@@ -270,7 +304,8 @@ describe("check-openclaw-package-tarball", () => {
       chmodTreeWorldReadable(packageRoot);
       chmodSync(join(packageRoot, "dist", "index.js"), 0o600);
       const tarball = join(root, "openclaw.tgz");
-      const pack = spawnSync("tar", ["-czf", tarball, "-C", root, "package"], {
+      const pack = spawnSync("tar", ["-czf", `./${basename(tarball)}`, "package"], {
+        cwd: root,
         encoding: "utf8",
       });
       expect(pack.status, pack.stderr).toBe(0);
@@ -299,7 +334,8 @@ describe("check-openclaw-package-tarball", () => {
       ["dist/index.js"],
       { "dist/index.js": "export {};\n", ...largeEntryList },
       (tarball) => {
-        const listing = spawnSync("tar", ["-tf", tarball], {
+        const listing = spawnSync("tar", ["-tf", `./${basename(tarball)}`], {
+          cwd: dirname(tarball),
           encoding: "utf8",
           maxBuffer: NODE_DEFAULT_SPAWN_MAX_BUFFER_BYTES * 2,
         });
@@ -308,7 +344,10 @@ describe("check-openclaw-package-tarball", () => {
           NODE_DEFAULT_SPAWN_MAX_BUFFER_BYTES,
         );
 
-        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+        const result = spawnSync("node", [resolve(CHECK_SCRIPT), basename(tarball)], {
+          cwd: dirname(tarball),
+          encoding: "utf8",
+        });
 
         expect(result.status, result.stderr).toBe(0);
         expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
@@ -317,7 +356,7 @@ describe("check-openclaw-package-tarball", () => {
   });
 
   it.runIf(process.platform !== "win32")(
-    "removes the extract dir when tar extraction fails",
+    "resolves caller-relative tar and removes the extract dir when extraction fails",
     () => {
       const root = mkdtempSync(join(tmpdir(), "openclaw-package-tarball-extract-fail-"));
       try {
@@ -331,9 +370,9 @@ describe("check-openclaw-package-tarball", () => {
             "#!/usr/bin/env node",
             "const fs = require('node:fs');",
             "const args = process.argv.slice(2);",
-            "if (args[0] === '-tf') { console.log('package/package.json'); process.exit(0); }",
-            "if (args[0] === '-tvf') { console.log('-rw-r--r-- 0/0 0 2026-08-29 package/package.json'); process.exit(0); }",
-            "if (args[0] !== '-xf') { throw new Error('unexpected tar operation'); }",
+            "if (args[0].includes('v')) { console.log('-rw-r--r-- 0/0 0 2026-08-29 package/package.json'); process.exit(0); }",
+            "if (args[0].includes('t')) { console.log('package/package.json'); process.exit(0); }",
+            "if (!args[0].includes('x')) { throw new Error('unexpected tar operation'); }",
             "const outputDir = args[args.indexOf('-C') + 1];",
             "if (!fs.statSync(outputDir).isDirectory()) { throw new Error('missing extract dir'); }",
             "fs.writeFileSync(process.env.OPENCLAW_TEST_EXTRACT_DIR_FILE, outputDir);",
@@ -350,13 +389,13 @@ describe("check-openclaw-package-tarball", () => {
           env: {
             ...process.env,
             OPENCLAW_TEST_EXTRACT_DIR_FILE: extractDirFile,
-            PATH: `${fakeBin}${delimiter}${process.env.PATH ?? ""}`,
+            PATH: `${relative(process.cwd(), fakeBin)}${delimiter}${process.env.PATH ?? ""}`,
           },
         });
 
         expect(result.status).not.toBe(0);
         expect(result.stderr).toContain("extract denied");
-        expect(result.stderr).toContain("tar -xf failed");
+        expect(result.stderr).toMatch(/tar -x(?:z)?f failed/u);
         const extractDir = readFileSync(extractDirFile, "utf8");
         expect(isAbsolute(extractDir)).toBe(true);
         expect(existsSync(extractDir)).toBe(false);
@@ -388,27 +427,40 @@ describe("check-openclaw-package-tarball", () => {
     it(testCase.name, () => checkTarball(testCase));
   }
 
-  it("requires an install guard omitted from the dist inventory", () => {
+  it("requires package lifecycle state outside the dist inventory", () => {
     checkTarball({
       version: "0.0.0",
-      options: { includeInstallGuard: false },
+      options: { includeLifecycleMarker: false },
       status: "nonzero",
-      stderr: [`missing required tar entry ${PACKAGE_INSTALL_GUARD_RELATIVE_PATH}`],
+      stderr: [`missing required tar entry ${PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH}`],
     });
 
     checkTarball({
-      inventory: ["dist/index.js", PACKAGE_INSTALL_GUARD_RELATIVE_PATH],
+      version: "2026.8.2",
+      files: {
+        "dist/index.js": "export {};\n",
+        [LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH]: "pending\n",
+      },
       status: "nonzero",
-      stderr: [
-        `package dist inventory must omit install guard ${PACKAGE_INSTALL_GUARD_RELATIVE_PATH}`,
-      ],
+      stderr: [`forbidden legacy tar entry ${LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH}`],
     });
 
     checkTarball({
-      version: "2026.7.1",
-      options: { includeInstallGuard: false },
+      version: "2026.8.1",
+      options: { includeLifecycleMarker: false },
       status: 0,
-      stderr: ["legacy package omits the preinstall completion guard"],
+      stderr: ["legacy package omits the lifecycle pending marker"],
+    });
+
+    checkTarball({
+      version: "2026.8.1",
+      files: {
+        "dist/index.js": "export {};\n",
+        [PACKAGE_LIFECYCLE_MARKER_CONTRACT_RELATIVE_PATH]: "export {};\n",
+      },
+      options: { includeLifecycleMarker: false },
+      status: "nonzero",
+      stderr: [`missing required tar entry ${PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH}`],
     });
   });
 

@@ -190,7 +190,6 @@ vi.mock("../../agents/embedded-agent-helpers.js", async () => {
     isContextOverflowError: (message?: string) => state.isContextOverflowErrorMock(message),
     isLikelyContextOverflowError: (message?: string) =>
       state.isLikelyContextOverflowErrorMock(message),
-    isTransientHttpError: () => false,
     sanitizeUserFacingText: (text?: string) => text ?? "",
   };
 });
@@ -603,6 +602,18 @@ export function expectBlockReplyCall(
   expectMockCallArgFields(onBlockReply, index, "block reply payload", fields);
 }
 
+/**
+ * Session-store paths reach production resolution, which derives a real agent
+ * SQLite file from the store's directory. A shared /tmp path would therefore
+ * open the machine-wide agent database and make unrelated suites depend on it.
+ */
+export function makeTestSessionStorePath(): string {
+  return path.join(
+    useAutoCleanupTempDirTracker(onTestFinished).make("openclaw-agent-execution-store-"),
+    "sessions.json",
+  );
+}
+
 export function createMinimalRunAgentTurnParams(overrides?: {
   followupRun?: FollowupRun;
   opts?: GetReplyOptions;
@@ -659,7 +670,11 @@ export function createNonDirectFailureSessionCtx(
   } as unknown as TemplateContext;
 }
 
-export function setupAgentRunnerExecutionTestState() {
+export async function setupAgentRunnerExecutionTestState() {
+  // Each suite awaits collection readiness after its imported mock harnesses register.
+  // Hook timeouts cannot cancel imports; cleanup must not overtake module readiness.
+  await getExecuteAgentTurnForTest();
+
   beforeEach(() => {
     vi.useRealTimers();
     state.runEmbeddedAgentMock.mockReset();

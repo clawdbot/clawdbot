@@ -1,7 +1,6 @@
 // Config-flow step tests cover doctor repair step ordering and mutation planning.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../config/config.js";
-import type { DoctorConfigPreflightResult } from "../../doctor-config-preflight.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.openclaw.js";
 
 const { migrateLegacyConfigMock, stripUnknownConfigKeysMock } = vi.hoisted(() => ({
   migrateLegacyConfigMock: vi.fn(),
@@ -19,8 +18,7 @@ vi.mock("../../doctor-config-analysis.js", () => ({
 import { applyLegacyCompatibilityStep, applyUnknownConfigKeyStep } from "./config-flow-steps.js";
 
 function createLegacyStepResult(
-  snapshot: Pick<DoctorConfigPreflightResult["snapshot"], "parsed" | "legacyIssues"> &
-    Partial<DoctorConfigPreflightResult["snapshot"]>,
+  snapshot: Pick<ConfigFileSnapshot, "parsed" | "legacyIssues"> & Partial<ConfigFileSnapshot>,
   doctorFixCommand = "openclaw doctor --fix",
 ) {
   return applyLegacyCompatibilityStep({

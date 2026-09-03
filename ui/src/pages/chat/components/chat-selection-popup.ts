@@ -1,16 +1,14 @@
-// Floating toolbar over selected chat text: "More details" asks the session
-// companion immediately; "Ask in side chat" pre-fills the session rail.
+// Floating toolbar over selected chat text: "Ask in side chat" pre-fills the
+// session rail.
 // Mirrors the imperative reply-context-menu pattern in chat-thread.ts.
 
 import { t } from "../../../i18n/index.ts";
 
 type ChatSelectionPopupActions = {
-  onMoreDetails: (selection: string) => void;
   onAskSideChat: (selection: string) => void;
 };
 
-let activeSelectionPopup: HTMLDivElement | null = null;
-let removeDismissListeners: (() => void) | null = null;
+let activeSelectionPopup: { element: HTMLDivElement; listeners: AbortController } | null = null;
 let selectionPopupTimer: number | null = null;
 
 export function removeChatSelectionPopup() {
@@ -20,10 +18,9 @@ export function removeChatSelectionPopup() {
     window.clearTimeout(selectionPopupTimer);
     selectionPopupTimer = null;
   }
-  activeSelectionPopup?.remove();
+  activeSelectionPopup?.element.remove();
+  activeSelectionPopup?.listeners.abort();
   activeSelectionPopup = null;
-  removeDismissListeners?.();
-  removeDismissListeners = null;
 }
 
 function selectionTextWithinChatBubble(
@@ -45,34 +42,11 @@ function selectionTextWithinChatBubble(
   return text.trim() ? text : null;
 }
 
-function createSelectionPopupButton(
-  label: string,
-  iconPath: string,
-  onActivate: () => void,
-): HTMLButtonElement {
+function createSelectionPopupButton(label: string, onActivate: () => void): HTMLButtonElement {
   const button = document.createElement("button");
   button.type = "button";
   button.setAttribute("aria-label", label);
-
-  const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  icon.setAttribute("viewBox", "0 0 24 24");
-  icon.setAttribute("width", "14");
-  icon.setAttribute("height", "14");
-  icon.setAttribute("fill", "none");
-  icon.setAttribute("stroke", "currentColor");
-  icon.setAttribute("stroke-width", "2");
-  icon.setAttribute("stroke-linecap", "round");
-  icon.setAttribute("stroke-linejoin", "round");
-  icon.setAttribute("aria-hidden", "true");
-  icon.setAttribute("focusable", "false");
-  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  path.setAttribute("d", iconPath);
-  icon.appendChild(path);
-
-  const text = document.createElement("span");
-  text.textContent = label;
-
-  button.append(icon, text);
+  button.textContent = label;
   // pointerdown would collapse the selection before click fires; the popup
   // must keep the selection alive until the action reads it.
   button.addEventListener("pointerdown", (event) => event.preventDefault());
@@ -98,19 +72,13 @@ function showChatSelectionPopup(
     action(selectionText);
   };
   popup.append(
-    createSelectionPopupButton(
-      t("chat.messages.moreDetails"),
-      "M12 3v2m0 14v2M5.6 5.6l1.5 1.5m9.8 9.8 1.5 1.5M3 12h2m14 0h2M5.6 18.4l1.5-1.5m9.8-9.8 1.5-1.5",
-      () => activate(actions.onMoreDetails),
-    ),
-    createSelectionPopupButton(
-      t("chat.messages.askInSideChat"),
-      "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z",
-      () => activate(actions.onAskSideChat),
+    createSelectionPopupButton(t("chat.messages.askInSideChat"), () =>
+      activate(actions.onAskSideChat),
     ),
   );
   document.body.appendChild(popup);
-  activeSelectionPopup = popup;
+  const listeners = new AbortController();
+  activeSelectionPopup = { element: popup, listeners };
 
   const popupRect = popup.getBoundingClientRect();
   let left = selectionRect.left + selectionRect.width / 2 - popupRect.width / 2;
@@ -141,16 +109,11 @@ function showChatSelectionPopup(
   // The popup is position:fixed against a since-scrolled selection rect;
   // dismiss instead of chasing the text.
   const handleScroll = () => removeChatSelectionPopup();
-  document.addEventListener("pointerdown", handlePointerDown, true);
-  document.addEventListener("selectionchange", handleSelectionChange);
-  document.addEventListener("keydown", handleKeydown);
-  document.addEventListener("scroll", handleScroll, { capture: true, passive: true });
-  removeDismissListeners = () => {
-    document.removeEventListener("pointerdown", handlePointerDown, true);
-    document.removeEventListener("selectionchange", handleSelectionChange);
-    document.removeEventListener("keydown", handleKeydown);
-    document.removeEventListener("scroll", handleScroll, { capture: true });
-  };
+  const { signal } = listeners;
+  document.addEventListener("pointerdown", handlePointerDown, { capture: true, signal });
+  document.addEventListener("selectionchange", handleSelectionChange, { signal });
+  document.addEventListener("keydown", handleKeydown, { signal });
+  document.addEventListener("scroll", handleScroll, { capture: true, passive: true, signal });
 }
 
 export function handleChatSelectionPointerUp(

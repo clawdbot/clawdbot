@@ -43,12 +43,13 @@ openclaw_plugins_cleanup_fixture_servers() {
   done
 }
 
+# Use explicit statuses: Bash 5.2 bare returns inside EXIT cleanup reuse the original failure.
 openclaw_plugins_signal_fixture_process() {
   local pid="$1"
   local signal="$2"
   if kill -0 -- "-$pid" >/dev/null 2>&1; then
     kill "-$signal" -- "-$pid" >/dev/null 2>&1 || true
-    return
+    return 0
   fi
   kill "-$signal" "$pid" >/dev/null 2>&1 || true
 }
@@ -66,11 +67,11 @@ openclaw_plugins_stop_fixture_process() {
   interval="$(openclaw_plugins_read_nonnegative_decimal_env OPENCLAW_PLUGINS_FIXTURE_STOP_INTERVAL_SECONDS 0.25)" || return $?
   if declare -F openclaw_e2e_stop_process >/dev/null 2>&1; then
     openclaw_e2e_stop_process "$pid"
-    return
+    return "$?"
   fi
   openclaw_plugins_signal_fixture_process "$pid" TERM
   for _ in $(seq 1 "$attempts"); do
-    ! openclaw_plugins_fixture_process_alive "$pid" && { wait "$pid" >/dev/null 2>&1 || true; return; }
+    ! openclaw_plugins_fixture_process_alive "$pid" && { wait "$pid" >/dev/null 2>&1 || true; return 0; }
     sleep "$interval"
   done
   openclaw_plugins_signal_fixture_process "$pid" KILL
@@ -263,6 +264,8 @@ start_npm_fixture_registry() {
   for _ in $(seq 1 100); do
     if [[ -s "$server_port_file" ]]; then
       export NPM_CONFIG_REGISTRY="http://127.0.0.1:$(cat "$server_port_file")"
+      # Override both spellings so an inherited prerelease registry cannot win in npm.
+      export npm_config_registry="$NPM_CONFIG_REGISTRY"
       return 0
     fi
     if ! kill -0 "$server_pid" 2>/dev/null; then

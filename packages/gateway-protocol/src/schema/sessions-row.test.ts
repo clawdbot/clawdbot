@@ -27,6 +27,7 @@ describe("SessionRowSchema", () => {
       ],
       participantCount: 2,
       archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
+      archiveReason: "manual",
       icon: "🦞",
       channelAvatarUrl: "/__openclaw__/channel-avatar/agent%3Amain%3Amain",
       visibility: "suggest",
@@ -55,6 +56,7 @@ describe("SessionRowSchema", () => {
       createdActor: { avatarUrl: "/api/users/profile-ada/avatar?v=7" },
       participantCount: 2,
       archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
+      archiveReason: "manual",
       channelAvatarUrl: "/__openclaw__/channel-avatar/agent%3Amain%3Amain",
       visibility: "suggest",
       sharingRole: "owner",
@@ -66,6 +68,9 @@ describe("SessionRowSchema", () => {
       false,
     );
     expect(Value.Check(SessionRowSchema, { ...roundTripped, lastRunId: "" })).toBe(false);
+    expect(Value.Check(SessionRowSchema, { ...roundTripped, archiveReason: "unknown" })).toBe(
+      false,
+    );
   });
 
   it("keeps sessions.assignOwner target actors closed and non-empty", () => {

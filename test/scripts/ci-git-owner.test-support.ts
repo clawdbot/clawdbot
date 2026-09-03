@@ -42,19 +42,19 @@ const moved = "d".repeat(40);
 const merge = "e".repeat(40);
 const defaults: Record<string, string> = {
   CHECKOUT_REPO: "fixture/checkout",
+  CHECKOUT_TOKEN: "",
   CHECKOUT_REF: candidate,
   CHECKOUT_SHA: candidate,
   CHECKOUT_FALLBACK_REF: candidate,
   CHECKOUT_EVENT_REF: "refs/heads/main",
   WORKFLOW_SHA: harness,
+  CHECKOUT_GIT_COMMITS_JSON: "null",
   GITHUB_EVENT_NAME: "push",
   GITHUB_REPOSITORY: "fixture/checkout",
   DEFAULT_BRANCH: "main",
   EVENT_BASE_SHA: base,
   GH_TOKEN: "",
   PULL_REQUEST_NUMBER: "17",
-  PR_COMMIT_COUNT: "5",
-  PR_MERGE_SHA: merge,
   TARGET_SHA: candidate,
   RELEASE_GATE: "false",
   FROZEN_TARGET: "false",
@@ -64,8 +64,6 @@ const defaults: Record<string, string> = {
   RUN_UI_TESTS: "false",
   HOSTED_RUNNER_STRIPES: "false",
   RUNNER_PROFILE: "github",
-  PR_BASE_SHA: base,
-  DIFF_BASE_SHA: base,
   PROTOCOL_SINCE_BASE_SHA: base,
   RATCHET_PR_HEAD_SHA: candidate,
 };
@@ -115,6 +113,7 @@ export async function runCiGitStep(options: {
   policy?: string;
   inlinePolicy?: boolean;
   step?: string;
+  stepOutputs?: Record<string, Record<string, string>>;
   env?: Record<string, string>;
   fetchResults: FetchResult[];
   cloneResults?: FetchResult[];
@@ -135,6 +134,7 @@ export async function runCiGitStep(options: {
   checkoutResults?: number[];
   mergeSnapshots?: { sha: string; head: string }[];
   prepare?: boolean;
+  checkoutBeforeStep?: boolean;
   cancelDuringCleanup?: boolean;
   cleanupCancelMatch?: string;
   startupDelay?: { tree: number };
@@ -167,6 +167,12 @@ export async function runCiGitStep(options: {
       ".github/workflows/linux-app-release.yml",
       ".github/workflows/macos-release.yml",
       ".github/workflows/npm-placeholder-bootstrap.yml",
+    ].includes(options.workflow.file);
+  const pluginRelease =
+    typeof options.workflow === "object" &&
+    [
+      ".github/workflows/plugin-clawhub-release.yml",
+      ".github/workflows/plugin-npm-release.yml",
     ].includes(options.workflow.file);
   const publisher = options.action === "publish-generated-pr";
   const externalOwner =
@@ -206,8 +212,9 @@ export async function runCiGitStep(options: {
     `linux:${options.scenario ?? "configured"}`,
     (root) => {
       const actions = path.join(root, "trusted-actions");
-      if (options.performance)
+      if (options.performance) {
         performanceFixture = preparePerformanceFixture(root, options.performance);
+      }
       env = stepEnvironment(step, {
         PUBLISH_ACTION_PATH: path.resolve(".github/actions/publish-generated-pr"),
         CONTENTS_TOKEN: "fixture-contents",
@@ -277,6 +284,9 @@ export async function runCiGitStep(options: {
           mkdirSync(path.join(directory, ".git"), { recursive: true });
           writeFileSync(path.join(directory, ".git/preexisting.lock"), "not invocation-owned\n");
         }
+        if (pluginRelease) {
+          writeFileSync(path.join(workspace, "package.json"), '{"version":"2026.8.33"}\n');
+        }
       }
       if (options.startupDelay?.tree) {
         writeFileSync(
@@ -293,7 +303,7 @@ export async function runCiGitStep(options: {
         );
         if (
           action === "git-owner" &&
-          (publisher || maturity || releaseAdmission || options.performance)
+          (publisher || maturity || pluginRelease || releaseAdmission || options.performance)
         ) {
           source = source.replace(
             "def main():",
@@ -383,10 +393,11 @@ def main():`,
           docsAgent,
           docsPublish,
           maturity,
+          pluginRelease,
           releaseAdmission,
           checkoutResults: options.checkoutResults,
           mergeSnapshots: options.mergeSnapshots,
-          consumers: Boolean(options.prepare || externalOwner),
+          consumers: Boolean(options.prepare || options.checkoutBeforeStep || externalOwner),
           cancelDuringCleanup: options.cancelDuringCleanup,
           cleanupCancelMatch: options.cleanupCancelMatch,
           baseAvailableAfter: options.baseAvailableAfter,
@@ -399,6 +410,11 @@ def main():`,
         }),
       );
       let run = renderGitTestClock(step.run, clock);
+      for (const [stepId, outputs] of Object.entries(options.stepOutputs ?? {})) {
+        for (const [name, value] of Object.entries(outputs)) {
+          run = run.replaceAll(`\${{ steps.${stepId}.outputs.${name} }}`, value);
+        }
+      }
       if (externalOwner) {
         const prepare = parse(readFileSync(".github/actions/git-owner/action.yml", "utf8")) as {
           runs: { steps: { run?: string }[] };
@@ -430,6 +446,11 @@ ${run}`;
         writeFileSync(path.join(root, "prepare.sh"), renderGitTestClock(prepare.run, clock));
         // Run the actual prepare body in its own shell: its exec must not replace the caller.
         run = `CHECKOUT_KIND=${prepareEnv.CHECKOUT_KIND} bash --noprofile --norc -eo pipefail "$TMPDIR/prepare.sh"\n${run}`;
+      }
+      if (options.checkoutBeforeStep) {
+        const checkout = readCiCheckoutStep(options.job ?? "checks-fast-core");
+        writeFileSync(path.join(root, "bootstrap.sh"), renderGitTestClock(checkout.run, clock));
+        run = `bash --noprofile --norc -eo pipefail "$TMPDIR/bootstrap.sh"\n${run}`;
       }
       if (options.performance) {
         const mapfileShim =
@@ -531,6 +552,7 @@ ${run}`;
         initialBranch: publisherFixture?.initialBranch,
         publication: publisherFixture?.inspect(report.output, false),
         performance: performanceFixture?.inspect(),
+        pluginSourcePackage: pluginRelease ? readOutput("temp/fixture-source-package.json") : "",
         pushLog: readOutput("runner-temp/generated-pr-push.log"),
         workspace,
         githubOutput: readOutput("github-output"),

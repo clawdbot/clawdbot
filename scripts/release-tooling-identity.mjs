@@ -291,7 +291,7 @@ function parseJson(raw, label) {
   }
 }
 
-function runReleaseToolingGh(args) {
+export function runReleaseToolingGh(args) {
   return execFileSync("gh", args, {
     encoding: "utf8",
     killSignal: "SIGKILL",

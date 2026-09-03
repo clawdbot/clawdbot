@@ -444,7 +444,14 @@ describe("SearchableSelectList", () => {
     expect(selectedValue).toBe(rawValue);
   });
 
-  it("calls onCancel when escape is pressed", () => {
+  it.each(
+    ["", "gemini"].flatMap((query) => [
+      { name: "Escape", key: "\x1b", query },
+      { name: "Ctrl+C", key: "\u0003", query },
+      { name: "Kitty Ctrl+C", key: "\x1b[99;5u", query },
+      { name: "modifyOtherKeys Ctrl+C", key: "\x1b[27;5;99~", query },
+    ]),
+  )("cancels query '$query' with $name", ({ query, key }) => {
     const list = new SearchableSelectList(testItems, 5, mockTheme);
     let cancelled = false;
 
@@ -452,9 +459,11 @@ describe("SearchableSelectList", () => {
       cancelled = true;
     };
 
-    // Press escape
-    list.handleInput("\x1b");
+    typeInput(list, query);
+    const selected = list.getSelectedItem();
+    list.handleInput(key);
 
     expect(cancelled).toBe(true);
+    expect(list.getSelectedItem()).toBe(selected);
   });
 });

@@ -27,7 +27,6 @@ import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { watchAgentScope } from "../../lib/agents/index.ts";
-import { copyToClipboard } from "../../lib/clipboard.ts";
 import { openEditor } from "../../lib/editor-links.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -61,6 +60,10 @@ import {
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
+import {
+  canCopySessionMarkdown,
+  runSessionNavigationAction,
+} from "../../lib/sessions/session-menu-navigation.ts";
 import { searchVisibleSessionTranscripts } from "../../lib/sessions/transcript-search.ts";
 import { formatPreservedWorktreesNotice } from "../../lib/sessions/worktree-preservation.ts";
 import { showToast } from "../../lib/toast.ts";
@@ -414,21 +417,6 @@ class SessionsPage extends OpenClawLightDomElement {
     // Only route-driven expansion narrows the list query; interactive drawer
     // opens must keep loading the full roster (see sessionListOptions).
     this.deepLinkSessionKey = data.expandedSessionKey;
-    if (!this.gatewayLifecycle.isRouteDataCurrent(data) || data.sessions !== context.sessions) {
-      this.routeDataEnabled = false;
-      void this.refreshSessionList();
-      if (data.expandedSessionKey) {
-        void this.loadCheckpoint(data.expandedSessionKey);
-      }
-      return;
-    }
-    this.result = data.result
-      ? filterSessionRows(data.result, { archivedFilter: data.statusFilter })
-      : null;
-    this.appliedListResult = data.result;
-    this.error = data.error;
-    this.loading = data.loading;
-    this.ensureAgentIdentities(this.result);
     if (data.expandedSessionKey) {
       void this.loadCheckpoint(data.expandedSessionKey);
     }
@@ -652,8 +640,8 @@ class SessionsPage extends OpenClawLightDomElement {
     this.page = 0;
     this.selectedKeys = new Set();
     this.deepLinkSessionKey = null;
-    // Route navigation refetches (statusFilter is in loaderDeps); mask the old
-    // view's rows until the new result applies via applyRouteData.
+    // Route navigation changes the managed query; mask the old view's rows
+    // until its current list subscription publishes.
     this.loading = true;
     this.error = null;
     context.navigate(
@@ -1434,6 +1422,9 @@ class SessionsPage extends OpenClawLightDomElement {
         .anchor=${menu}
         .trigger=${this.sessionMenuTrigger}
         .disabled=${this.loading}
+        .navigationAllowed=${true}
+        .copyMarkdownAllowed=${canCopySessionMarkdown(gateway)}
+        .splitAllowed=${false}
         .actionDisabledReasons=${sessionMenuReasons({
           snapshot: gateway,
           session: row,
@@ -1462,8 +1453,17 @@ class SessionsPage extends OpenClawLightDomElement {
               openEditor(action.editor, action.path);
               break;
             case "copy-session-id":
-              void copyToClipboard(row.sessionId ?? "").then((copied) => {
-                showToast({ message: t(copied ? "common.copied" : "common.copyFailed") });
+            case "copy-session-link":
+            case "copy-markdown":
+            case "open-new-tab":
+            case "open-new-window":
+            case "split-right":
+            case "split-below":
+              void runSessionNavigationAction(action.kind, {
+                context,
+                session: row,
+                agentId: row.agentId,
+                isCurrent: () => this.isConnected && this.context === context,
               });
               break;
             case "toggle-pin":
@@ -1480,6 +1480,9 @@ class SessionsPage extends OpenClawLightDomElement {
               break;
             case "set-icon":
               void this.patchSession(row.key, { icon: action.icon });
+              break;
+            case "reset-appearance":
+              void this.patchSession(row.key, { icon: null, color: null });
               break;
             case "fork":
               void this.forkSession(row.key, row.hasActiveRun === true);

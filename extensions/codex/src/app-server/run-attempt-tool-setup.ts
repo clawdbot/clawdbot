@@ -7,7 +7,8 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   captureFinalCodexCronCreatorToolAllowlist,
-  materializeStaticMcpToolsForScheduledHarnessRun,
+  formatMcpCodexApprovalRemedy,
+  materializeStaticMcpToolsForHarnessRun,
 } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { resolveCodexPluginsPolicy, shouldAutoApproveCodexAppServerApprovals } from "./config.js";
 import {
@@ -24,14 +25,22 @@ import {
   createCodexDynamicToolBridge,
   projectCodexExecutableDynamicTools,
 } from "./dynamic-tools.js";
+import { hasCodexNativeToolCatalog, loadCodexNativeToolCatalog } from "./native-tool-catalog.js";
 import { CodexCompactionPlanState } from "./plan-compaction-state.js";
+import {
+  requestPluginApprovalOutcome,
+  type ExecApprovalDecision,
+} from "./plugin-approval-roundtrip.js";
+import type { CodexDynamicToolSpec } from "./protocol.js";
 import { emitCodexAppServerEvent } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
 import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
 import {
+  buildScheduledCodexAppServerConnectionIdentity,
   captureScheduledCodexAppAuthority,
   resolveScheduledCodexAppCreatorCaptureDecision,
 } from "./scheduled-app-authority.js";
+import { releaseLeasedSharedCodexAppServerClient } from "./shared-client.js";
 
 function isAuthorityResolutionOperationAbort(error: unknown, signal: AbortSignal | undefined) {
   return signal?.aborted === true && error === signal.reason;
@@ -49,7 +58,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     hookChannelId,
     codexMcpToolOverrides,
     authenticatedScheduledMode,
-    ownsScheduledConfiguredMcpSurface,
+    configuredMcpSurface,
     canResolveScheduledConfiguredMcpCreatorAuthority,
   } = runtime;
   const {
@@ -61,10 +70,12 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     effectiveWorkspace,
     effectiveCwd,
     sandboxSessionKey,
+    contextSessionKey,
     sandbox,
     sessionPermissionPolicy,
     runAbortController,
     sessionAgentId,
+    policyAgentId,
     pluginConfig,
     profilerEnabled,
     agentDir,
@@ -146,20 +157,28 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     value?: { version: 1; source: "final-executable-surface" };
   } = {};
   const scheduledAppAuthoritySourceRef: {
-    current?: Omit<
-      Parameters<typeof captureScheduledCodexAppAuthority>[0],
-      "profileId" | "accountId"
-    >;
+    current?: Omit<Parameters<typeof captureScheduledCodexAppAuthority>[0], "auth">;
   } = {};
   const preparedChatgptAuth =
     connection.startupPreparedAuth?.kind === "profile" &&
     connection.startupPreparedAuth.snapshot?.loginParams.type === "chatgptAuthTokens" &&
     connection.startupPreparedAuth.snapshot.chatgptAccountId
       ? {
+          kind: "prepared-profile" as const,
           profileId: connection.startupPreparedAuth.profileId,
           accountId: connection.startupPreparedAuth.snapshot.chatgptAccountId,
         }
       : undefined;
+  const configuredAppServerAuth =
+    !preparedChatgptAuth && connection.appServer.start.transport !== "stdio"
+      ? {
+          kind: "configured-app-server" as const,
+          connectionFingerprint: buildScheduledCodexAppServerConnectionIdentity(
+            connection.appServer,
+          ),
+        }
+      : undefined;
+  const scheduledCodexAppAuth = preparedChatgptAuth ?? configuredAppServerAuth;
   const appPolicy = resolveCodexPluginsPolicy(pluginConfig);
   const codexAppsMayBeVisible =
     appPolicy.enabled &&
@@ -170,6 +189,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     usesSupervisionConnection: connection.usesSupervisionConnection,
     homeScope: connection.appServer.start.homeScope,
     hasPreparedAccountIdentity: Boolean(preparedChatgptAuth),
+    hasConfiguredAppServerIdentity: Boolean(configuredAppServerAuth),
   });
   const codexAppAuthorityUnavailableReason = appCreatorCapture.unavailableReason;
   const canResolveScheduledCodexAppAuthority = appCreatorCapture.supported;
@@ -193,6 +213,8 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     | undefined;
   const runtimeYieldCompletionClaim: { current?: () => boolean } = {};
   const commonToolParams = {
+    // Both catalogs describe one attempt; a later attempt discovers fresh connections.
+    nodeExecAvailability: {},
     params: dynamicToolParams,
     resolvedWorkspace,
     effectiveWorkspace,
@@ -204,6 +226,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     nativeProviderWebSearchSupport,
     runAbortController,
     sessionAgentId,
+    policyAgentId,
     pluginConfig,
     profilerEnabled,
     ...(params.cronCreatorAuthorityUnavailableReason === "queued-local-operator" &&
@@ -248,6 +271,32 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         }
       : {}),
   };
+  let nativeSpecs: CodexDynamicToolSpec[] | undefined;
+  if (hasCodexNativeToolCatalog(mutable.startupBinding)) {
+    runAbortController.signal.throwIfAborted();
+    params.hostCapabilities.assertActive();
+    const client = await connection.attemptClientFactory({
+      startOptions: connection.appServer.start,
+      authProfileId: connection.startupClientAuthProfileId,
+      agentDir,
+      config: params.config,
+      timeoutMs: connection.appServer.requestTimeoutMs,
+    });
+    try {
+      nativeSpecs = await loadCodexNativeToolCatalog({
+        client,
+        binding: mutable.startupBinding,
+        appServer: connection.appServer,
+        agentDir,
+        assertCurrent: () => {
+          runAbortController.signal.throwIfAborted();
+          params.hostCapabilities.assertActive();
+        },
+      });
+    } finally {
+      releaseLeasedSharedCodexAppServerClient(client);
+    }
+  }
   const tools = await buildDynamicTools({
     ...commonToolParams,
     registerRunCleanup: (cleanup) => runCleanups.push(cleanup),
@@ -260,12 +309,14 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       toolState.webSearchAllowed = allowed;
     },
   });
-  const registeredTools = await buildDynamicTools({
-    ...commonToolParams,
-    forceHeartbeatTool: true,
-    ignoreDisableMessageTool: true,
-    ignoreRuntimePlan: true,
-  });
+  const registeredTools = nativeSpecs
+    ? []
+    : await buildDynamicTools({
+        ...commonToolParams,
+        forceHeartbeatTool: true,
+        ignoreDisableMessageTool: true,
+        ignoreRuntimePlan: true,
+      });
   const policyContext = {
     config: params.config,
     sessionKey: sandboxSessionKey,
@@ -273,7 +324,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       params.sessionKey && params.sessionKey !== sandboxSessionKey ? params.sessionKey : undefined,
     sessionId: params.sessionId,
     runId: params.runId,
-    agentId: sessionAgentId,
+    agentId: policyAgentId,
     agentDir: agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId),
     agentAccountId: params.agentAccountId,
     messageProvider: params.messageProvider ?? params.messageChannel,
@@ -322,10 +373,11 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     ...(params.memberRoleIds?.length ? { roleIds: [...params.memberRoleIds] } : {}),
   };
   const hasRequester = Object.keys(requester).length > 0;
-  const scheduledConfiguredMcp = ownsScheduledConfiguredMcpSurface
-    ? await materializeStaticMcpToolsForScheduledHarnessRun({
+  const configuredMcp = configuredMcpSurface
+    ? await materializeStaticMcpToolsForHarnessRun({
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
+        agentId: sessionAgentId,
         workspaceDir: effectiveWorkspace,
         agentDir: policyContext.agentDir,
         cfg: params.config,
@@ -336,6 +388,33 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         autoApproveCodexAppServerApprovals: shouldAutoApproveCodexAppServerApprovals(
           connection.appServer,
         ),
+        projectedMcpServers: bundleMcpThreadConfig.configPatch?.mcp_servers,
+        ...(configuredMcpSurface === "transient"
+          ? {
+              requestInteractiveCodexApproval: async (approval) => {
+                const allowedDecisions: ExecApprovalDecision[] =
+                  approval.mode === "prompt"
+                    ? ["allow-once", "deny"]
+                    : ["allow-once", "allow-always", "deny"];
+                const outcome = await requestPluginApprovalOutcome({
+                  hostCapabilities: params.hostCapabilities,
+                  signal: approval.signal,
+                  title: `Run MCP tool ${approval.serverName}/${approval.toolName}`,
+                  description: `Codex approval mode "${approval.mode}" requires an operator decision before this MCP tool runs. ${formatMcpCodexApprovalRemedy(approval.serverName)}`,
+                  allowedDecisions,
+                  toolName: approval.safeToolName,
+                  toolCallId: approval.toolCallId,
+                  mcpTool: { server: approval.serverName, tool: approval.toolName },
+                  isMcpToolApprovalActive: approval.isActive,
+                });
+                if (outcome !== "approved-once" && outcome !== "approved-session") {
+                  throw new Error(
+                    `${approval.serverName}/${approval.toolName}: interactive Codex approval (${approval.mode}) was not granted: ${outcome}`,
+                  );
+                }
+              },
+            }
+          : {}),
         policyContext,
         warn: (message) => embeddedAgentLog.warn(message),
       })
@@ -358,7 +437,10 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
           requesterSenderId: params.senderId,
           agentAccountId: params.agentAccountId,
           messageChannel: params.messageChannel ?? params.messageProvider,
-          reservedToolNames,
+          reservedToolNames: [
+            ...reservedToolNames,
+            ...(configuredMcp?.tools.map((tool) => tool.name) ?? []),
+          ],
           toolsAllow: params.toolsAllow,
           policyContext,
           warn: (message) => embeddedAgentLog.warn(message),
@@ -367,11 +449,11 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     // MCP tools exactly like every other dynamic tool. Filter both lists with the
     // same rule so execution and advertised specs stay name-aligned.
     const scopedExecutable = filterCodexDynamicTools(
-      scheduledConfiguredMcp?.tools ?? scopedMcpTools?.tools ?? [],
+      [...(configuredMcp?.tools ?? []), ...(scopedMcpTools?.tools ?? [])],
       pluginConfig,
     );
     const scopedAdvertised = filterCodexDynamicTools(
-      scheduledConfiguredMcp?.tools ?? scopedMcpTools?.advertisedTools ?? [],
+      [...(configuredMcp?.tools ?? []), ...(scopedMcpTools?.advertisedTools ?? [])],
       pluginConfig,
     );
     const toolsWithScopedMcp =
@@ -386,7 +468,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       remoteWorkspaceRoot: connection.appServer.remoteWorkspaceRoot,
       remoteWorkspaceRequestTimeoutMs: connection.appServer.requestTimeoutMs,
       sessionId: params.sessionId,
-      sessionKey: sandboxSessionKey,
+      sessionKey: contextSessionKey,
       runId: params.runId,
       channelId: hookChannelId,
       currentChannelProvider: resolveCodexMessageToolProvider(params),
@@ -412,6 +494,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     toolBridge = createCodexDynamicToolBridge({
       tools: toolsWithScopedMcp,
       registeredTools: registeredWithScopedMcp,
+      registeredSpecs: nativeSpecs,
       signal: runAbortController.signal,
       computerContextEpoch,
       loading: resolveCodexDynamicToolsLoadingForRuntime(pluginConfig, effectiveRuntimeModelId, {
@@ -465,11 +548,11 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         }
         const appSource = scheduledAppAuthoritySourceRef.current;
         const runtimeAuthority =
-          canResolveScheduledCodexAppAuthority && preparedChatgptAuth
+          canResolveScheduledCodexAppAuthority && scheduledCodexAppAuth
             ? appSource
               ? await captureScheduledCodexAppAuthority({
                   ...appSource,
-                  ...preparedChatgptAuth,
+                  auth: scheduledCodexAppAuth,
                   signal: options?.signal,
                 })
               : (() => {
@@ -487,12 +570,11 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
           });
         }
         const authorityRuntimeId = `cron-authority:${params.runId}`;
-        let materialized: Awaited<
-          ReturnType<typeof materializeStaticMcpToolsForScheduledHarnessRun>
-        >;
+        let materialized: Awaited<ReturnType<typeof materializeStaticMcpToolsForHarnessRun>>;
         try {
-          materialized = await materializeStaticMcpToolsForScheduledHarnessRun({
+          materialized = await materializeStaticMcpToolsForHarnessRun({
             sessionId: authorityRuntimeId,
+            agentId: sessionAgentId,
             workspaceDir: effectiveWorkspace,
             agentDir: policyContext.agentDir,
             cfg: params.config,
@@ -503,6 +585,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
             autoApproveCodexAppServerApprovals: shouldAutoApproveCodexAppServerApprovals(
               connection.appServer,
             ),
+            projectedMcpServers: bundleMcpThreadConfig.configPatch?.mcp_servers,
             policyContext,
             warn: (message) => embeddedAgentLog.warn(message),
             retireSessionRuntimeAfterDispose: true,
@@ -549,8 +632,9 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       tools: toolsWithScopedMcp,
       registeredTools: registeredWithScopedMcp,
       scopedMcpTools,
-      scheduledConfiguredMcp,
-      configuredMcpOwnershipVersion: ownsScheduledConfiguredMcpSurface ? (1 as const) : undefined,
+      configuredMcp,
+      configuredMcpOwnershipVersion:
+        configuredMcpSurface === "scheduled" ? (1 as const) : undefined,
       cronCreatorToolAllowlist,
       cronCreatorToolAllowlistCaptureRef,
       scheduledAppAuthoritySourceRef,
@@ -570,7 +654,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     // Materialized runtimes are attempt-owned only after this function returns.
     // Dispose here when filtering, schema projection, or bridge setup fails first.
     await scopedMcpTools?.dispose();
-    await scheduledConfiguredMcp?.dispose();
+    await configuredMcp?.dispose();
     throw error;
   }
 }

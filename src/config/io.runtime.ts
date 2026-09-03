@@ -303,6 +303,7 @@ export async function writeConfigFile(
     explicitSetValueSource: options.explicitSetPaths
       ? (options.explicitSetValueSource ?? cfg)
       : undefined,
+    persistCanonicalAgentRoster: options.persistCanonicalAgentRoster,
     allowedAgentRosterRemovals: options.allowedAgentRosterRemovals,
     allowIncludeAncestorExplicitSetPaths: options.allowIncludeAncestorExplicitSetPaths,
     afterWrite: options.afterWrite,

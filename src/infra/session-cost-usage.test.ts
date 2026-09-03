@@ -36,7 +36,6 @@ import {
   loadSessionUsageTimeSeries as loadSessionUsageTimeSeriesForAgent,
   resolveExistingUsageSessionFile as resolveExistingUsageSessionFileForAgent,
 } from "./session-cost-usage.js";
-import { testing as sessionCostUsageTestApi } from "./session-cost-usage.test-support.js";
 
 type WithOptionalAgentId<T> = T extends (params: infer P) => unknown
   ? Omit<P, "agentId"> & { agentId?: string }
@@ -82,7 +81,7 @@ function waitForFast<T>(
 }
 
 async function refreshSessionCostUsageForTest(sessionFile: string): Promise<void> {
-  await sessionCostUsageTestApi.usageCostRefreshRuntime.refreshCostUsageCacheForAgent({
+  await refreshCostUsageCacheForAgent({
     agentId: "main",
     sessionFiles: [sessionFile],
   });
@@ -1110,7 +1109,7 @@ describe("session cost usage", () => {
     });
   });
 
-  it("rebuilds invalid rollups and preserves untimestamped usage on append", async () => {
+  it("rebuilds obsolete pricing rollups and preserves untimestamped usage on append", async () => {
     const root = await makeSessionCostRoot("cost-cache-v8-untimestamped-upgrade");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
@@ -1158,7 +1157,7 @@ describe("session cost usage", () => {
         version: number;
         rollup: { untimestamped: { totals: { totalTokens: number } } };
       };
-      currentRollup.version = 0;
+      currentRollup.version = 2;
       currentRollup.rollup.untimestamped.totals.totalTokens = 9_999;
       expect(
         writeSessionCostUsageRollup({
@@ -1206,8 +1205,8 @@ describe("session cost usage", () => {
         version: number;
         rollup: { untimestamped: { totals: { totalTokens: number } } };
       };
-      expect(appendedRollup.version).toBe(2);
       expect(appendedRollup.rollup.untimestamped.totals.totalTokens).toBe(1_000);
+      expect(appendedRollup.version).toBe(3);
 
       const allTime = await loadSessionCostSummariesFromCache({
         sessions: [session],

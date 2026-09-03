@@ -1,4 +1,5 @@
 // Gateway event subscription wiring for agent, heartbeat, transcript, and lifecycle broadcasts.
+import { isDefinitiveRunLifecycle } from "../agents/agent-run-terminal-outcome.js";
 import {
   isAuditLedgerEnabled,
   isExecutionIdentityCollectionEnabled,
@@ -24,6 +25,7 @@ import { clearAgentRunContext, getAgentRunContext } from "../infra/agent-run-reg
 import { onTrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
+import { onGatewaySuspendAdmissionChange } from "../process/gateway-work-admission.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createLazyPromise, createLazyPromiseLoader } from "../shared/lazy-runtime.js";
@@ -200,7 +202,6 @@ export function startGatewayEventSubscriptions(params: {
     runId: string;
     clientRunId: string;
     sessionId?: string;
-    observedAt: number;
     persistence: Promise<void>;
   }) => {
     let tracked = false;
@@ -217,6 +218,8 @@ export function startGatewayEventSubscriptions(params: {
       const lifecycleGeneration = entry.lifecycleGeneration?.trim();
       const sessionKey = entry.sessionKey.trim();
       const sessionId = run.sessionId?.trim() || entry.sessionId.trim();
+      // Lazy chat consumption must retain the terminal time stamped at ingress.
+      const observedAt = entry.projectSessionTerminalObservedAt;
       if (entry.controlUiVisible !== false && lifecycleGeneration && sessionKey && sessionId) {
         void run.persistence.catch(() => {
           params.restartRecoveryCandidates.set(candidateRunId, {
@@ -224,7 +227,7 @@ export function startGatewayEventSubscriptions(params: {
             lifecycleGeneration,
             sessionKey,
             sessionId,
-            observedAt: run.observedAt,
+            observedAt,
           });
         });
       }
@@ -379,7 +382,7 @@ export function startGatewayEventSubscriptions(params: {
         trackedEntry.lifecycleGeneration === eventLifecycleGeneration;
       const claimIsComplete = !evt.contextClaimId || terminalAuthority !== undefined;
       const canPersistTerminal =
-        lifecyclePhase === "end" &&
+        isDefinitiveRunLifecycle({ phase: lifecyclePhase, data: evt.data }) &&
         evt.projectSessionLifecycle !== false &&
         trackedOwnerIsCurrent &&
         claimIsComplete;
@@ -409,7 +412,6 @@ export function startGatewayEventSubscriptions(params: {
           runId: evt.runId,
           clientRunId,
           sessionId: evt.sessionId,
-          observedAt,
           persistence,
         });
         if (!tracked) {
@@ -527,7 +529,11 @@ export function startGatewayEventSubscriptions(params: {
       context: { sessionKey: evt.sessionKey },
     });
   });
+  const unsubscribeSuspension = onGatewaySuspendAdmissionChange((phase) => {
+    params.broadcast("gateway.suspension", { phase });
+  });
   const lifecycleUnsub = () => {
+    unsubscribeSuspension();
     unsubscribeProfileChanges();
     unsubscribeLifecycle();
   };

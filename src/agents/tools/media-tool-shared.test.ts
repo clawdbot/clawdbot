@@ -234,6 +234,48 @@ describe("resolveMediaToolReferenceAccess", () => {
   );
 });
 
+describe("resolveCapabilityModelConfigForTool", () => {
+  it("does not load runtime providers while resolving an explicitly configured model", () => {
+    const listProviders = vi.fn(() => {
+      throw new Error("runtime provider list should not run for explicit model config");
+    });
+
+    expect(
+      resolveCapabilityModelConfigForTool({
+        modelConfig: { primary: "qwen/wan2.6-t2v" },
+        providers: listProviders,
+      }),
+    ).toEqual({ primary: "qwen/wan2.6-t2v" });
+    expect(listProviders).not.toHaveBeenCalled();
+  });
+
+  it("orders auto-detected provider defaults by canonical aliases", () => {
+    expect(
+      resolveCapabilityModelConfigForTool({
+        cfg: {
+          agents: { defaults: { model: { primary: "media-alias/gpt-5.5" } } },
+        },
+        providers: [
+          {
+            id: "fal",
+            defaultModel: "fal-ai/minimax/video-01-live",
+            isConfigured: () => true,
+          },
+          {
+            id: "openai",
+            aliases: ["media-alias"],
+            defaultModel: "sora-2",
+            isConfigured: () => true,
+          },
+        ],
+      }),
+    ).toEqual({
+      primary: "openai/sora-2",
+      fallbacks: ["fal/fal-ai/minimax/video-01-live"],
+    });
+  });
+});
+
 describe("hasGenerationToolAvailability", () => {
   it("accepts config-backed custom provider auth for generation providers", () => {
     const cfg = {

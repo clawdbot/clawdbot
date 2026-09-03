@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   activateSelfRemovingControl,
   captureUiProofEnabled,
@@ -9,12 +10,10 @@ import {
   installMockGateway,
   openSessionMenuSubmenu,
   requireRecord,
-  sessionRow,
   sessionsListResponse,
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
-const proofDir = path.join(process.cwd(), ".artifacts/control-ui-e2e/group-identity-20260827");
 
 suite.define(() => {
   it.each(["sessions", "sidebar", "selection", "header"] as const)(
@@ -25,7 +24,9 @@ suite.define(() => {
         locale: "en-US",
         serviceWorkers: "block",
         viewport,
-        recordVideo: captureUiProofEnabled ? { dir: proofDir, size: viewport } : undefined,
+        recordVideo: captureUiProofEnabled
+          ? { dir: path.join(suite.artifactDir, "group-identity-20260827"), size: viewport }
+          : undefined,
       });
       const page = await context.newPage();
       const video = page.video();
@@ -50,9 +51,12 @@ suite.define(() => {
       });
       const capture = async (stage: string) => {
         if (captureUiProofEnabled) {
-          await mkdir(proofDir, { recursive: true });
+          await mkdir(path.join(suite.artifactDir, "group-identity-20260827"), { recursive: true });
           await page.screenshot({
-            path: path.join(proofDir, `${surface}-${stage}.png`),
+            path: path.join(
+              path.join(suite.artifactDir, "group-identity-20260827"),
+              `${surface}-${stage}.png`,
+            ),
             animations: "disabled",
             fullPage: true,
           });
@@ -86,7 +90,7 @@ suite.define(() => {
           await row.getByRole("button", { name: "Open session menu" }).click();
         }
         await openSessionMenuSubmenu(page, batch ? "Move 2 to group" : "Move to group");
-        await activateSelfRemovingControl(page.getByRole("menuitem", { name: "New group…" }));
+        await activateSelfRemovingControl(page.getByRole("menuitem", { name: "New group" }));
         const input = page.getByLabel("New group name");
         await input.fill(group);
         await capture("editing");
@@ -94,10 +98,7 @@ suite.define(() => {
         await gateway.waitForRequest("sessions.groups.put");
 
         // Deletion/recreation changes the durable identity, unlike ordinary reset.
-        await gateway.setMethodResponse(
-          "sessions.list",
-          sessionsListResponse([replacement, survivor]),
-        );
+        await gateway.setSessionsListResponse(sessionsListResponse([replacement, survivor]));
         await gateway.emitGatewayEvent("sessions.changed", {
           ...replacement,
           sessionKey: original.key,
@@ -181,7 +182,9 @@ suite.define(() => {
       } finally {
         await suite.closeBrowserContext(context);
         if (video) {
-          await video.saveAs(path.join(proofDir, `${surface}.webm`));
+          await video.saveAs(
+            path.join(path.join(suite.artifactDir, "group-identity-20260827"), `${surface}.webm`),
+          );
         }
       }
     },

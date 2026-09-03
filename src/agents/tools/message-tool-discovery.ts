@@ -30,6 +30,7 @@ import { buildMessageToolSchemaFromActions } from "./message-tool-schema-scoping
 import { MESSAGE_TOOL_SCHEMA_BUILDERS } from "./message-tool-schema.js";
 export type MessageToolDiscoveryParams = {
   cfg: OpenClawConfig;
+  currentChatType?: ChatType;
   currentChannelProvider?: string;
   currentChannelId?: string;
   currentThreadTs?: string;
@@ -142,6 +143,7 @@ function buildMessageActionDiscoveryInput(
   return {
     cfg: params.cfg,
     ...(channel ? { channel } : {}),
+    chatType: params.currentChatType,
     currentChannelId: params.currentChannelId,
     currentThreadTs: params.currentThreadTs,
     currentMessageId: params.currentMessageId,

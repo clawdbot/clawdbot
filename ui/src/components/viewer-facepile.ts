@@ -74,7 +74,7 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) selfUser?: AuthenticatedUser | null;
   @property({ attribute: false }) selfInstanceId?: string;
   @property({ attribute: false }) sessionKey?: string;
-  @property({ attribute: false }) excludeIdentity?: SessionParticipantIdentity;
+  @property({ attribute: false }) excludeIdentities: readonly SessionParticipantIdentity[] = [];
   @property({ attribute: false }) staticParticipants?: readonly SessionParticipant[];
   /** Prepared live presence for the collapsed Online section. */
   @property({ attribute: false }) staticUsers?: readonly PresenceViewer[];
@@ -88,13 +88,7 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) personActivity?: PersonActivityRouting;
 
   override render() {
-    const viewers = projectPresenceViewers(
-      this.presencePayload,
-      this.selfUser,
-      this.selfInstanceId,
-      this.sessionKey,
-      this.excludeIdentity,
-    );
+    // Prepared faces must not evict the cached live projection used by sibling rows.
     const users = this.staticParticipants
       ? this.staticParticipants.map(({ identity, label, avatarUrl }) => ({
           identity,
@@ -103,7 +97,14 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
           avatarUrl,
           watchedSessions: [],
         }))
-      : (this.staticUsers ?? viewers);
+      : (this.staticUsers ??
+        projectPresenceViewers(
+          this.presencePayload,
+          this.selfUser,
+          this.selfInstanceId,
+          this.sessionKey,
+          this.excludeIdentities,
+        ));
     if (users.length === 0) {
       return nothing;
     }

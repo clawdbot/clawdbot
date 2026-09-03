@@ -54,12 +54,27 @@ export function attachRuntimeUserTurnTranscriptRecorder(
   return runtimeMessage;
 }
 
+function readRuntimeUserTurnTranscriptRecorder(
+  runtimeMessage: AgentMessage,
+): UserTurnTranscriptRecorder | undefined {
+  return Reflect.get(runtimeMessage, RUNTIME_USER_TURN_TRANSCRIPT_RECORDER) as
+    | UserTurnTranscriptRecorder
+    | undefined;
+}
+
+/** A steered message retains its own live custody while another turn owns the runtime. */
+export function withRuntimeUserTurnTranscriptRecorder<T>(
+  runtimeMessage: AgentMessage,
+  append: () => T,
+): T {
+  const recorder = readRuntimeUserTurnTranscriptRecorder(runtimeMessage);
+  return recorder?.withPendingInput ? recorder.withPendingInput(append) : append();
+}
+
 export function takeRuntimeUserTurnTranscriptRecorder(
   runtimeMessage: AgentMessage,
 ): UserTurnTranscriptRecorder | undefined {
-  const recorder = Reflect.get(runtimeMessage, RUNTIME_USER_TURN_TRANSCRIPT_RECORDER) as
-    | UserTurnTranscriptRecorder
-    | undefined;
+  const recorder = readRuntimeUserTurnTranscriptRecorder(runtimeMessage);
   if (recorder) {
     Reflect.deleteProperty(runtimeMessage, RUNTIME_USER_TURN_TRANSCRIPT_RECORDER);
   }

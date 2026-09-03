@@ -4,6 +4,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import {
+  createAutoEnabledStatusConfig,
+  createCompatChainFixture,
   createCompatibilityNotice,
   createCustomHook,
   createInstalledPluginIndexSnapshot,
@@ -230,21 +232,6 @@ function expectAutoEnabledStatusLoad(params: { rawConfig: unknown }) {
   });
 }
 
-function createCompatChainFixture() {
-  const config = { plugins: { allow: ["telegram"] } };
-  const pluginIds = ["anthropic", "openai"];
-  const enabledConfig = {
-    plugins: {
-      allow: ["telegram"],
-      entries: {
-        anthropic: { enabled: true },
-        openai: { enabled: true },
-      },
-    },
-  };
-  return { config, pluginIds, enabledConfig };
-}
-
 function expectBundledCompatChainApplied(params: {
   config: unknown;
   pluginIds: string[];
@@ -254,29 +241,13 @@ function expectBundledCompatChainApplied(params: {
   expect(withBundledPluginEnablementCompatMock).toHaveBeenCalledWith({
     config: params.config,
     pluginIds: params.pluginIds,
+    activation: "defaults",
   });
   if (params.loadModules) {
     expectPluginLoaderCall({ config: params.enabledConfig, loadModules: true });
     return;
   }
   expectMetadataSnapshotLoaderCall({ config: params.enabledConfig, loadModules: false });
-}
-
-function createAutoEnabledStatusConfig(
-  entries: Record<string, unknown>,
-  rawConfigOverrides?: Record<string, unknown>,
-) {
-  const rawConfig = {
-    plugins: {},
-    ...rawConfigOverrides,
-  };
-  const autoEnabledConfig = {
-    ...rawConfig,
-    plugins: {
-      entries,
-    },
-  };
-  return { rawConfig, autoEnabledConfig };
 }
 
 function expectAutoEnabledDemoCompatibilityNoticesPreserveRawConfig() {
@@ -670,57 +641,72 @@ describe("plugin status reports", () => {
     expect(plugin?.imported).toBe(true);
   });
 
-  it("builds an inspect report with capability shape and policy", () => {
-    loadConfigMock.mockReturnValue({
-      plugins: {
-        entries: {
-          google: {
-            hooks: { allowPromptInjection: false, allowConversationAccess: true },
-            subagent: {
-              allowModelOverride: true,
-              allowedModels: ["openai/gpt-5.5"],
+  it.each(["google", "GoOgLe"])(
+    "builds an inspect report with capability shape and policy for %s",
+    (pluginId) => {
+      loadConfigMock.mockReturnValue({
+        plugins: {
+          entries: {
+            google: {
+              hooks: {
+                allowPromptInjection: false,
+                allowConversationAccess: true,
+                timeoutMs: 1700,
+                timeouts: { gateway_stop: 1300 },
+              },
+              subagent: {
+                allowModelOverride: true,
+                allowedModels: ["openai/gpt-5.5"],
+              },
             },
           },
         },
-      },
-    });
-    setPluginLoadResult({
-      plugins: [
-        createPluginRecord({
-          id: "google",
-          name: "Google",
-          description: "Google provider plugin",
-          origin: "bundled",
-          providerIds: ["google"],
-          mediaUnderstandingProviderIds: ["google"],
-          imageGenerationProviderIds: ["google"],
-          webSearchProviderIds: ["google"],
-        }),
-      ],
-      diagnostics: [{ level: "warn", pluginId: "google", message: "watch this surface" }],
-    });
+      });
+      setPluginLoadResult({
+        plugins: [
+          createPluginRecord({
+            id: pluginId,
+            name: "Google",
+            description: "Google provider plugin",
+            origin: "bundled",
+            providerIds: ["google"],
+            mediaUnderstandingProviderIds: ["google"],
+            imageGenerationProviderIds: ["google"],
+            webSearchProviderIds: ["google"],
+          }),
+        ],
+        diagnostics: [{ level: "warn", pluginId, message: "watch this surface" }],
+      });
 
-    const inspect = expectInspectReport("google");
+      const inspect = expectInspectReport(pluginId);
 
-    expectInspectShape(inspect, {
-      shape: "hybrid-capability",
-      capabilityMode: "hybrid",
-      capabilityKinds: ["text-inference", "media-understanding", "image-generation", "web-search"],
-    });
-    expect(inspect.compatibility).toStrictEqual([]);
-    expectInspectPolicy(inspect, {
-      allowPromptInjection: false,
-      allowConversationAccess: true,
-      hookTimeoutMs: undefined,
-      hookTimeouts: undefined,
-      allowModelOverride: true,
-      allowedModels: ["openai/gpt-5.5"],
-      hasAllowedModelsConfig: true,
-    });
-    expect(inspect.diagnostics).toEqual([
-      { level: "warn", pluginId: "google", message: "watch this surface" },
-    ]);
-  });
+      expectInspectShape(inspect, {
+        shape: "hybrid-capability",
+        capabilityMode: "hybrid",
+        capabilityKinds: [
+          "text-inference",
+          "media-understanding",
+          "image-generation",
+          "web-search",
+        ],
+      });
+      expect(inspect.compatibility).toStrictEqual([]);
+      expectInspectPolicy(inspect, {
+        allowPromptInjection: false,
+        allowConversationAccess: true,
+        hookTimeoutMs: 1700,
+        hookTimeouts: { gateway_stop: 1300 },
+        allowModelOverride: true,
+        allowedModels: ["openai/gpt-5.5"],
+        hasAllowedModelsConfig: true,
+      });
+      expect(inspect.diagnostics).toEqual([
+        { level: "warn", pluginId, message: "watch this surface" },
+      ]);
+      expect(inspect.plugin.id).toBe(pluginId);
+      expect(buildAllPluginInspectReports()).toEqual([inspect]);
+    },
+  );
 
   it("prefers exact plugin ids over display names in individual and all inspect reports", () => {
     setPluginLoadResult({
@@ -1098,7 +1084,6 @@ describe("plugin status reports", () => {
 
   it("formats and summarizes compatibility notices", () => {
     const notice = createCompatibilityNotice({ pluginId: "legacy-plugin", code: "hook-only" });
-
     expect(formatPluginCompatibilityNotice(notice)).toBe(`legacy-plugin ${HOOK_ONLY_MESSAGE}`);
     expect(summarizePluginCompatibility([notice])).toEqual({
       noticeCount: 1,

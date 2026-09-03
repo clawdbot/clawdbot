@@ -23,7 +23,7 @@ import {
   type ManagerIndexFixture,
 } from "./manager-index.test-support.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
-import type { MemoryIndexManager } from "./manager.js";
+import { MemoryIndexManager } from "./manager.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 
@@ -354,7 +354,7 @@ describe("memory index", () => {
     }
   });
 
-  it("reindexes legacy curated provenance before the first automatic candidate read", async () => {
+  it("withholds legacy curated candidates until background provenance repair succeeds", async () => {
     const projectKey = "github.com/openclaw/openclaw";
     await fs.writeFile(
       path.join(fixture.paths.workspace, "MEMORY.md"),
@@ -414,6 +414,13 @@ describe("memory index", () => {
         upgradedManager as unknown as { runSync: (params?: MemorySyncParams) => Promise<void> },
         "runSync",
       );
+      await expect(
+        Promise.all([
+          upgradedManager.listCuratedProjectCandidates({ activeProjectKeys: [projectKey] }),
+          upgradedManager.listTriggerCandidates({ activeProjectKeys: [projectKey] }),
+        ]),
+      ).resolves.toEqual([[], []]);
+      await upgradedManager.sync({ reason: "test-repair-complete" });
       const [projectCandidates, triggerCandidates] = await Promise.all([
         upgradedManager.listCuratedProjectCandidates({ activeProjectKeys: [projectKey] }),
         upgradedManager.listTriggerCandidates({ activeProjectKeys: [projectKey] }),
@@ -721,7 +728,9 @@ describe("memory index", () => {
           return await realReaddir(...args);
         });
       try {
-        await expect(manager.sync({ reason: "cli", force: true })).rejects.toBe(scanError);
+        await expect(manager.sync({ reason: "cli", force: true })).rejects.toThrow(
+          "memory source scan failed",
+        );
       } finally {
         readdirSpy.mockRestore();
       }
@@ -777,6 +786,64 @@ describe("memory index", () => {
       role: "agent",
       agent_id: "main",
     });
+  });
+
+  it("reports an uninitialized status without creating agent or registry databases", async () => {
+    const stateDir = path.join(fixture.paths.workspace, "missing-status-state");
+    fixture.setStateDir(stateDir);
+    const agentPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+    const statePath = path.join(stateDir, "state", "openclaw.sqlite");
+
+    const result = await getMemorySearchManager({
+      cfg: createCfg({}),
+      agentId: "main",
+      purpose: "status",
+      inspectSources: true,
+    });
+
+    try {
+      expect(result.error).toBeUndefined();
+      expect(result.manager?.status()).toMatchObject({
+        files: 0,
+        chunks: 0,
+        dirty: true,
+        custom: { indexIdentity: { status: "missing" } },
+      });
+      await expect(fs.access(agentPath)).rejects.toThrow("ENOENT");
+      await expect(fs.access(statePath)).rejects.toThrow("ENOENT");
+    } finally {
+      await result.manager?.close?.();
+    }
+  });
+
+  it("reads committed WAL status without changing database artifacts", async () => {
+    const cfg = createCfg({});
+    const indexingManager = await getFreshManager(cfg, "cli");
+    await indexingManager.sync({ reason: "test", force: true });
+    await indexingManager.close?.();
+
+    const agentPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+    const writer = new DatabaseSync(agentPath);
+    let statusManager: MemoryIndexManager | undefined;
+    try {
+      writer.exec("PRAGMA wal_autocheckpoint = 0; PRAGMA wal_checkpoint(TRUNCATE);");
+      writer
+        .prepare("UPDATE memory_index_sources SET hash = ? WHERE path = ? AND source = 'memory'")
+        .run("committed-in-wal", "memory/2026-01-12.md");
+      const databaseBefore = await fs.readFile(agentPath);
+      const walBefore = await fs.readFile(`${agentPath}-wal`);
+
+      statusManager = await getFreshManager(cfg, "status", true);
+      expect(statusManager.status().dirty).toBe(true);
+      await statusManager.close?.();
+      statusManager = undefined;
+
+      expect(await fs.readFile(agentPath)).toEqual(databaseBefore);
+      expect(await fs.readFile(`${agentPath}-wal`)).toEqual(walBefore);
+    } finally {
+      await statusManager?.close?.();
+      writer.close();
+    }
   });
 
   it("batches dirty memory chunks across files", async () => {
@@ -1139,6 +1206,8 @@ describe("memory index", () => {
       expect(nextManager.status().custom?.indexIdentity).toEqual({
         status: "mismatched",
         reason: "index was built for model old-embed, expected new-embed",
+        code: "model",
+        owner: "configuration",
       });
       providerFixture.embedBatchCalls = 0;
 
@@ -1161,6 +1230,8 @@ describe("memory index", () => {
       expect(nextManager.status().custom?.indexIdentity).toEqual({
         status: "mismatched",
         reason: "index was built for model old-embed, expected new-embed",
+        code: "model",
+        owner: "configuration",
       });
     } finally {
       await nextManager.close?.();
@@ -1316,6 +1387,8 @@ describe("memory index", () => {
       expect(nextManager.status().custom?.indexIdentity).toEqual({
         status: "missing",
         reason: "index metadata is missing",
+        code: "metadata_missing",
+        owner: "openclaw",
       });
 
       const results = await nextManager.search("alpha");
@@ -1326,6 +1399,36 @@ describe("memory index", () => {
       expect(results.some((result) => result.path.endsWith("memory/2026-01-13.md"))).toBe(true);
     } finally {
       await nextManager.close?.();
+    }
+  });
+
+  it.each([
+    { name: "omitted default", purpose: undefined, dirty: true },
+    { name: "explicit default", purpose: "default", dirty: true },
+    { name: "status", purpose: "status", dirty: false },
+    { name: "CLI", purpose: "cli", dirty: false },
+    { name: "maintenance", purpose: "maintenance", dirty: false },
+  ] as const)("starts an indexed $name manager with dirty=$dirty", async ({ purpose, dirty }) => {
+    const cfg = createCfg({
+      provider: "none",
+      vectorEnabled: false,
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const initial = await getFreshManager(cfg);
+    await initial.sync({ reason: "test", force: true });
+    await initial.close?.();
+
+    const next =
+      purpose === "maintenance"
+        ? await MemoryIndexManager.get({ cfg, agentId: "main", purpose })
+        : await getFreshManager(cfg, purpose);
+    if (!next) {
+      throw new Error(`Expected ${purpose ?? "default"} memory manager`);
+    }
+    try {
+      expect(next.status().dirty).toBe(dirty);
+    } finally {
+      await next.close?.();
     }
   });
 
@@ -1383,6 +1486,8 @@ describe("memory index", () => {
       expect(nextManager.status().custom?.indexIdentity).toEqual({
         status: "missing",
         reason: "index metadata is missing",
+        code: "metadata_missing",
+        owner: "openclaw",
       });
       const row = db.prepare("SELECT model FROM memory_index_chunks LIMIT 1").get();
       expect(row?.model).toBe("semantic-embed");
@@ -1472,6 +1577,8 @@ describe("memory index", () => {
         expect(status.custom?.indexIdentity).toEqual({
           status: "missing",
           reason: "index metadata is missing",
+          code: "metadata_missing",
+          owner: "openclaw",
         });
       } finally {
         await nextManager.close?.();
@@ -2032,6 +2139,8 @@ describe("memory index", () => {
         expect(nextManager.status().custom?.indexIdentity).toEqual({
           status: "mismatched",
           reason: "index was built for model old-embed, expected new-embed",
+          code: "model",
+          owner: "configuration",
         });
         const results = await nextManager.search("alpha");
         expect(results).toStrictEqual([]);
@@ -2293,6 +2402,38 @@ describe("memory index", () => {
     }
   });
 
+  it("refreshes diagnostic byte totals after indexing without changing the serving manager", async () => {
+    const cfg = createCfg({ provider: "none" });
+    const serving = await getPersistentManager(cfg);
+    await serving.sync({ reason: "test", force: true });
+    const diagnostic = await getFreshManager(cfg, "cli", true);
+    try {
+      expect(diagnostic).not.toBe(serving);
+      const previousBytes = diagnostic.status().sourceCounts?.[0]?.chunkBytes;
+      expect(previousBytes).toBeGreaterThan(0);
+      await fs.writeFile(
+        path.join(fixture.paths.memory, "2026-01-12.md"),
+        "# Reindexed diagnostic\n\nFresh expedition notes 🦞 with a different stored payload size.\n",
+      );
+
+      await diagnostic.sync({ reason: "cli", force: true });
+
+      const db = Reflect.get(diagnostic, "db") as DatabaseSync;
+      const storedBytes = db
+        .prepare(
+          "SELECT SUM(length(CAST(text AS BLOB)) + length(CAST(embedding AS BLOB))) AS bytes FROM memory_index_chunks WHERE source = 'memory'",
+        )
+        .get()?.bytes;
+      const refreshedBytes = diagnostic.status().sourceCounts?.[0]?.chunkBytes;
+      expect(refreshedBytes).toBe(storedBytes);
+      expect(refreshedBytes).not.toBe(previousBytes);
+    } finally {
+      await diagnostic.close();
+    }
+    expect((await getMemorySearchManager({ cfg, agentId: "main" })).manager).toBe(serving);
+    expect(serving.status().sourceCounts?.[0]?.chunkBytes).toBeUndefined();
+  });
+
   it("reports vector availability after probe", async () => {
     const cfg = createCfg({ vectorEnabled: true });
     const manager = await getPersistentManager(cfg);
@@ -2396,10 +2537,14 @@ describe("memory index", () => {
         storeAvailable: undefined,
       });
 
-      const db = Reflect.get(statusManager, "db") as DatabaseSync;
-      db.prepare("UPDATE memory_index_meta SET value = '1' WHERE key = ?").run(
-        "memory_vector_rebuild_v1",
-      );
+      const writer = new DatabaseSync(resolveOpenClawAgentSqlitePath({ agentId: "main" }));
+      try {
+        writer
+          .prepare("UPDATE memory_index_meta SET value = '1' WHERE key = ?")
+          .run("memory_vector_rebuild_v1");
+      } finally {
+        writer.close();
+      }
       expect(statusManager.status().vector?.index).toEqual({ state: "incomplete" });
     } finally {
       await statusManager.close?.();
@@ -2658,18 +2803,21 @@ describe("memory index", () => {
       const statusManager = await getFreshManager(cfg, "status", true);
       trackManager(statusManager);
       expect(statusManager.status().dirty).toBe(true);
+      await statusManager.close?.();
 
-      await statusManager.sync({ reason: "cli" });
+      const repairManager = await getFreshManager(cfg, "cli");
+      trackManager(repairManager);
+      await repairManager.sync({ reason: "cli" });
       expect(providerFixture.embedBatchCalls).toBe(0);
-      const deletedResults = await statusManager.search("ORBIT-DELETE-91", {
+      const deletedResults = await repairManager.search("ORBIT-DELETE-91", {
         minScore: 0,
         sources: ["sessions"],
       });
       expect(deletedResults.some((result) => result.path.includes(sessionId))).toBe(false);
       await expect(
-        statusManager.search("ORBIT-SURVIVE-92", { minScore: 0, sources: ["sessions"] }),
+        repairManager.search("ORBIT-SURVIVE-92", { minScore: 0, sources: ["sessions"] }),
       ).resolves.not.toEqual([]);
-      const db = Reflect.get(statusManager, "db") as DatabaseSync;
+      const db = Reflect.get(repairManager, "db") as DatabaseSync;
       const sourceCount = db
         .prepare("SELECT COUNT(*) AS count FROM memory_index_sources WHERE source = 'sessions'")
         .get() as { count: number };

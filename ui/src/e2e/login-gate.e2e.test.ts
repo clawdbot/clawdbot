@@ -1,10 +1,14 @@
 // Control UI tests cover the responsive disconnected login gate.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import {
+  captureControlUiE2eFailureDiagnostics,
+  controlUiSessionUrl,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -13,12 +17,22 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) =>
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
 });
-const RECOVERY_ARTIFACT_DIR = path.resolve(".artifacts/control-ui-e2e/zombie-reload");
+let RECOVERY_ARTIFACT_DIR: string;
+beforeEach(() => {
+  RECOVERY_ARTIFACT_DIR = createControlUiE2eArtifactDir("zombie-reload");
+});
 
 async function renderLoginGate(page: Page): Promise<void> {
+  const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
   const response = await page.goto(suite.server.baseUrl);
   expect(response?.status()).toBe(200);
-
+  await gateway.waitForRequest("connect");
+  await gateway.rejectDeferred("connect", {
+    code: "INVALID_REQUEST",
+    message: "token missing",
+    details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
+  });
+  await page.locator(".login-gate").waitFor();
   await mountLoginGate(page);
 }
 
@@ -154,7 +168,6 @@ suite.define(() => {
       await page.getByRole("button", { name: /Server updated/u }).waitFor({ timeout: 10_000 });
       expect(await page.locator("openclaw-login-gate").count()).toBe(0);
       expect(await page.locator("openclaw-router-outlet").getAttribute("inert")).not.toBeNull();
-      await mkdir(RECOVERY_ARTIFACT_DIR, { recursive: true });
       await page.screenshot({
         path: path.join(RECOVERY_ARTIFACT_DIR, "01-reload-required.png"),
         fullPage: true,
@@ -292,11 +305,58 @@ suite.define(() => {
       expect((bounds.headerTop ?? 0) - (bounds.noticeBottom ?? 0)).toBeCloseTo(44, 3);
       expect(bounds.noticeLeft).toBe(bounds.navRight);
       expect(bounds.noticeRight).toBe(bounds.mainRight);
-      await mkdir(RECOVERY_ARTIFACT_DIR, { recursive: true });
       await page.screenshot({
         path: path.join(RECOVERY_ARTIFACT_DIR, "02-reconnecting-actions-blocked.png"),
         fullPage: true,
       });
+    } finally {
+      await closeContext(context);
+    }
+  });
+
+  it("keeps the session header available while disabling Gateway actions on reconnect", async () => {
+    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
+    const page = await context.newPage();
+    const sessionKey = "agent:main:main";
+    const gateway = await installMockGateway(page, { sessionKey });
+
+    try {
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
+      const header = page.locator(".chat-pane__header");
+      await header.waitFor({ state: "visible" });
+      await gateway.setOnline(false);
+
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const app = document.querySelector("openclaw-app") as HTMLElement & {
+              runtime?: { context: { gateway: { snapshot: { phase: string } } } };
+            };
+            return app.runtime?.context.gateway.snapshot.phase;
+          }),
+        )
+        .toBe("reconnecting");
+      await page.screenshot({
+        path: path.join(RECOVERY_ARTIFACT_DIR, "03-session-reconnecting-after.png"),
+        fullPage: true,
+      });
+
+      expect(await page.locator(".connection-action-block").count()).toBe(0);
+      expect(await page.locator("#control-ui-main").getAttribute("inert")).toBeNull();
+      const outlet = page.locator("openclaw-router-outlet");
+      expect(await outlet.getAttribute("inert")).toBeNull();
+      expect(await outlet.getAttribute("aria-disabled")).toBeNull();
+      expect(await header.isVisible()).toBe(true);
+
+      const headerActions = header.locator(".chat-pane__actions");
+      expect(
+        await headerActions.evaluate((element) => (element as HTMLFieldSetElement).disabled),
+      ).toBe(true);
+      const actionButtons = headerActions.getByRole("button");
+      expect(await actionButtons.count()).toBeGreaterThan(0);
+      for (const button of await actionButtons.all()) {
+        expect(await button.isDisabled()).toBe(true);
+      }
     } finally {
       await closeContext(context);
     }
@@ -338,6 +398,39 @@ suite.define(() => {
       expectedTitle: "Auth required",
     },
     {
+      name: "missing identity header",
+      error: {
+        code: "INVALID_REQUEST",
+        message: "unauthorized",
+        details: { code: ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED },
+      },
+      expectedKind: "trusted-proxy",
+      expectedTitle: "Proxy authentication required",
+    },
+    {
+      name: "proxy account rejection",
+      error: {
+        code: "INVALID_REQUEST",
+        message: "unauthorized",
+        details: {
+          code: ConnectErrorDetailCodes.AUTH_UNAUTHORIZED,
+          authReason: "trusted_proxy_user_not_allowed",
+        },
+      },
+      expectedKind: "trusted-proxy",
+      expectedTitle: "Proxy authentication required",
+    },
+    {
+      name: "disallowed browser origin",
+      error: {
+        code: "INVALID_REQUEST",
+        message: "origin not allowed",
+        details: { code: ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED },
+      },
+      expectedKind: "origin-not-allowed",
+      expectedTitle: "Browser origin not allowed",
+    },
+    {
       name: "pairing approval",
       error: {
         code: "NOT_PAIRED",
@@ -356,21 +449,65 @@ suite.define(() => {
       expectedKind: "network",
       expectedTitle: "Could not connect",
     },
+    {
+      name: "profile verification",
+      error: {
+        code: "UNAVAILABLE",
+        message: "Authenticated profile verification is unavailable; retry the request.",
+        details: { code: ConnectErrorDetailCodes.AUTHENTICATED_PROFILE_UNAVAILABLE },
+        retryable: true,
+      },
+      expectedKind: "profile-unavailable",
+      expectedTitle: "Profile verification unavailable",
+    },
+    {
+      name: "GitHub profile rate limit",
+      error: {
+        code: "UNAVAILABLE",
+        message:
+          "GitHub is rate limiting profile verification. Retry shortly; if this continues, ask a gateway administrator to check the GitHub API credential.",
+        details: { code: ConnectErrorDetailCodes.AUTHENTICATED_PROFILE_UNAVAILABLE },
+        retryable: true,
+      },
+      expectedKind: "profile-unavailable",
+      expectedTitle: "Profile verification unavailable",
+    },
   ])("renders $name guidance from the application gateway snapshot", async (fixture) => {
-    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
+    const viewport = { height: 900, width: 1280 };
+    const context = await suite.browser.newContext({
+      viewport,
+      recordVideo: { dir: RECOVERY_ARTIFACT_DIR, size: viewport },
+    });
     const page = await context.newPage();
-    const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+    const gateway = await installMockGateway(page, {
+      methodResponses: { connect: { __mockError: fixture.error } },
+    });
 
     try {
       await page.goto(suite.server.baseUrl);
       await gateway.waitForRequest("connect");
-      await gateway.rejectDeferred("connect", fixture.error);
 
+      await page.locator(".login-gate__failure").waitFor();
+      // Retryable guidance must survive a real reconnect, including time spent capturing proof.
+      if (fixture.error.code === "UNAVAILABLE") {
+        await gateway.waitForRequest("connect", { after: 1 });
+      }
+      await page.screenshot({
+        path: path.join(RECOVERY_ARTIFACT_DIR, "login-failure.png"),
+        fullPage: true,
+        animations: "disabled",
+      });
       const failure = page.locator(`.login-gate__failure[data-kind="${fixture.expectedKind}"]`);
       await failure.waitFor({ timeout: 10_000 });
       expect(await failure.locator(".login-gate__failure-title").textContent()).toBe(
         fixture.expectedTitle,
       );
+    } catch (error) {
+      await captureControlUiE2eFailureDiagnostics(page, {
+        error: error instanceof Error ? error : new Error(String(error)),
+        label: `login-guidance-${fixture.name}`,
+      });
+      throw error;
     } finally {
       await closeContext(context);
     }

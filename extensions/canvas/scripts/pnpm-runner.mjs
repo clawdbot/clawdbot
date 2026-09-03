@@ -106,21 +106,21 @@ function isNodeRunnablePnpmExecPath(value) {
   return hasNodeShebang(value);
 }
 
-function escapeForCmdExe(arg) {
-  if (WINDOWS_UNSAFE_CMD_CHARS_RE.test(arg)) {
-    throw new Error(`unsafe Windows cmd.exe argument detected: ${JSON.stringify(arg)}`);
-  }
-  const escaped = arg.replace(/\^/g, "^^");
-  if (!escaped.includes(" ") && !escaped.includes('"')) {
-    return escaped;
-  }
-  return `"${escaped.replace(/"/g, '""')}"`;
-}
-
 function buildCmdExeCommandLine(command, args) {
-  const escapedCommand = escapeForCmdExe(command);
-  const commandLine = [escapedCommand, ...args.map(escapeForCmdExe)].join(" ");
-  return escapedCommand.startsWith('"') ? `"${commandLine}"` : commandLine;
+  const escaped = [command, ...args].map((arg) => {
+    if (WINDOWS_UNSAFE_CMD_CHARS_RE.test(arg)) {
+      throw new Error(`unsafe Windows cmd.exe argument detected: ${JSON.stringify(arg)}`);
+    }
+    // Quote through cmd and the CRT; consume backslash runs once to avoid quadratic scans.
+    const quoted = arg
+      .replace(/\\+/g, (backslashes, offset) => {
+        const next = arg[offset + backslashes.length];
+        return next === '"' || next === undefined ? backslashes.repeat(2) : backslashes;
+      })
+      .replace(/"/g, '""');
+    return `"${quoted}"`;
+  });
+  return `"${escaped.join(" ")}"`;
 }
 
 function windowsCmdSpec(command, args, comSpec) {

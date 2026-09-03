@@ -7,6 +7,7 @@ import { patchSettings } from "../../app/settings.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../../app/user-profile.ts";
 import { navigateMarkdownSession } from "../../components/markdown-session-links.ts";
 import { personActivityRouting } from "../../components/person-activity-link.ts";
+import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
 import {
   resolveControlUiFollowUpMode,
@@ -16,7 +17,6 @@ import {
   chatModelUnavailableMessage,
   resolveChatModelUnavailableReason,
 } from "../../lib/chat/model-select-state.ts";
-import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   pickFreshestObserverDigest,
@@ -25,11 +25,15 @@ import {
 } from "../../lib/observer-digest.ts";
 import { hasSessionPresenceViewers } from "../../lib/presence-users.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
-import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
+import {
+  buildAgentMainSessionKey,
+  resolveUiConfiguredMainKey,
+} from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
-import { generateUUID } from "../../lib/uuid.ts";
+import { resolveComposerAvailability } from "./chat-composer-availability.ts";
 import { mutateChatGoal, submitChatGoalDraft } from "./chat-goals.ts";
-import { clearChatHistory, getChatHistoryVersion } from "./chat-history.ts";
+import { clearChatHistory } from "./chat-history-actions.ts";
+import { getChatHistoryVersion } from "./chat-history-state.ts";
 import { resolveChatMessageAccess } from "./chat-message-access.ts";
 import { requiresChatModelSetup } from "./chat-model-setup.ts";
 import { ChatPaneLayoutRender } from "./chat-pane-layout-render.ts";
@@ -66,7 +70,7 @@ import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import { maybeResetToolStream } from "./stream-reconciliation.ts";
-import { resolveActiveRunOutputTokens, resolveChatProjectionRunId } from "./tool-stream.ts";
+import { resolveChatProjectionRunId } from "./tool-stream-status.ts";
 import { configureToolTitleFetcher } from "./tool-titles.ts";
 import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";
 
@@ -96,25 +100,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       digest: observerDigest,
     });
     const workspaceConflict = workspaceResultConflictFromPlacement(selectedSession?.placement);
-    const publishClient = state.client;
     const placement = selectedSession?.placement;
-    const publicationHasDirectPlacement = !placement || placement.state === "local";
-    const cloudIdlePublication =
-      Boolean(placement) && placement?.state !== "local" && !hasAbortableSessionRun(state);
-    const canPublishPullRequest =
-      Boolean(publishClient) &&
-      Boolean(selectedSession?.key && !selectedSessionArchived) &&
-      !hasAbortableSessionRun(state) &&
-      publicationHasDirectPlacement &&
-      hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
-      isGatewayMethodAdvertised(this.context.gateway.snapshot, "sessions.github.publish") === true;
-    const diskSpace = placement?.state === "active" ? placement.diskSpace : undefined;
-    const terminalReason = (placement as { terminalReason?: string } | undefined)?.terminalReason;
-    const placementFailureReason =
-      placement?.state === "failed" ? placement.recoveryError : terminalReason;
-    const placementRunError = placementFailureReason
-      ? { summary: t("chat.cloudWorkerFailed", { error: placementFailureReason }) }
-      : null;
     const visibleWorkspaceConflict =
       workspaceConflict &&
       this.dismissedWorkspaceConflictRefs.get(selectedSession?.key ?? state.sessionKey) !==
@@ -183,6 +169,10 @@ export class ChatPane extends ChatPaneLayoutRender {
       session: selectedSession,
     });
     const gatewaySnapshot = this.context.gateway.snapshot;
+    const placementComposer = this.placementComposerPresentation(
+      selectedSession,
+      placementStartup !== null,
+    );
     const canDismissProgressCard =
       state.connected &&
       !sessionParticipationBlocked &&
@@ -247,11 +237,6 @@ export class ChatPane extends ChatPaneLayoutRender {
       presenceEntries: readPresenceEntries(this.presencePayload),
       presenceInstanceId: gatewaySnapshot.client?.instanceId,
     });
-    const runOutputTokens = resolveActiveRunOutputTokens({
-      localRunId: state.chatRunId,
-      activeRunIds: selectedSession?.activeRunIds,
-      usageByRun: state.chatRunUsageById,
-    });
     const projectionRunId = resolveChatProjectionRunId({
       localRunId: state.chatRunId,
       activeRunIds: selectedSession?.activeRunIds,
@@ -295,9 +280,76 @@ export class ChatPane extends ChatPaneLayoutRender {
           effortAccess: mutationAccess.effort,
           permissionAccess: mutationAccess.permission,
           canSelectFull: hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null),
-          toastAnchor: this,
           onModelSetup: () => this.context.navigate("model-setup"),
         });
+    const composerState = getChatComposerState(this.presentationId);
+    const publicationScope = this.captureConnectionScope();
+    const publicationOwnerKey = () =>
+      JSON.stringify([
+        resolveCurrentSelfUser({
+          snapshotUser: this.context.gateway.snapshot.selfUser,
+          presenceEntries: readPresenceEntries(this.presencePayload),
+          presenceInstanceId: this.context.gateway.snapshot.client?.instanceId,
+        })?.identity ?? null,
+        this.context.gateway.snapshot.hello?.auth?.role,
+        this.context.gateway.snapshot.hello?.auth?.scopes,
+        selectedChatSessionRow(state)?.sessionId,
+        selectedChatSessionRow(state)?.sharingRole,
+        selectedChatSessionRow(state)?.visibility,
+        this.isCurrentSessionArchived(state),
+        sessionParticipationBlocked,
+      ]);
+    const publicationOwner = publicationOwnerKey();
+    const publicationAvailable = Boolean(
+      publicationScope &&
+      selectedSession?.key &&
+      isGatewayMethodAdvertised(gatewaySnapshot, "sessions.github.publish") === true,
+    );
+    this.githubPublication.sync(
+      publicationAvailable && publicationScope && selectedSession
+        ? {
+            client: publicationScope.client,
+            key: `${publicationScope.generation}:${selectedSession.key}:${publicationOwner}`,
+            sessionKey: selectedSession.key,
+            canWrite:
+              !selectedSessionArchived &&
+              !sessionParticipationBlocked &&
+              hasOperatorWriteAccess(gatewaySnapshot.hello?.auth ?? null),
+            personalReady:
+              !hasAbortableSessionRun(state) &&
+              !isCloudWorkerPlacementState(placement?.state) &&
+              !workspaceConflict,
+            isCurrent: () =>
+              this.presented &&
+              this.isConnectionScopeCurrent(publicationScope) &&
+              selectedChatSessionRow(state)?.key === selectedSession.key &&
+              publicationOwnerKey() === publicationOwner,
+          }
+        : null,
+    );
+    const sessionDisabledBanner = this.sessionDisabledBanner({
+      catalogDisabledReason,
+      modelSetupRequired,
+      restartRecoveryTombstoned,
+      selectedSessionArchived,
+      selectedSessionId: selectedSession?.sessionId?.trim() || undefined,
+      sessionKey: state.sessionKey,
+      unarchiveAccess: mutationAccess.unarchive,
+    });
+    const composerAvailability = resolveComposerAvailability({
+      catalog: Boolean(catalogKey),
+      catalogCanSend: this.catalogSession?.canContinue === true,
+      catalogDisabledReason,
+      modelSetupRequired,
+      baseDisabledReason: disabledReason,
+      baseDisabledReasonTone: sessionParticipationBlocked && !suggestionViewer ? "info" : "danger",
+      selectedSessionArchived,
+      restartRecoveryTombstoned,
+      placement: placementComposer,
+      sendHoldReason,
+      placementStartupPending: placementStartup !== null,
+      sessionDisabledBanner,
+    });
     const props: ChatProps = {
       transcript: this.transcript,
       paneId: this.presentationId,
@@ -356,7 +408,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       stream: catalogKey ? null : state.chatStream,
       streamStartedAt: catalogKey ? null : state.chatStreamStartedAt,
       runId: catalogKey ? null : projectionRunId,
-      runOutputTokens: catalogKey ? null : runOutputTokens,
+      runUsageById: catalogKey ? undefined : state.chatRunUsageById,
       assistantAvatarUrl: resolveChatAvatarUrl(state),
       sendShortcut: state.settings.chatSendShortcut,
       followUpMode: state.chatFollowUpMode,
@@ -379,6 +431,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       offline: gatewaySnapshot.offlineStable,
       gatewayClient: state.client,
       composerHoldToRecord: state.settings.composerHoldToRecord,
+      realtimeTalkInputDeviceId: state.settings.realtimeTalkInputDeviceId,
       onComposerHoldToRecordChange: (enabled) => {
         state.settings = patchSettings({ composerHoldToRecord: enabled });
       },
@@ -389,35 +442,18 @@ export class ChatPane extends ChatPaneLayoutRender {
       onTypingChange: typingEnabled
         ? (typing, preview) => this.sendTypingState(typing, preview)
         : undefined,
-      canSend: catalogKey
-        ? this.catalogSession?.canContinue === true
-        : !modelSetupRequired &&
-          !modelUnavailableMessage &&
-          !selectedSessionArchived &&
-          !restartRecoveryTombstoned &&
-          (!sessionParticipationBlocked || suggestionViewer) &&
-          !sendHoldReason,
+      ...composerAvailability,
       disabledReason:
-        catalogDisabledReason ?? disabledReason ?? (placementStartup ? null : sendHoldReason),
-      disabledReasonTone:
-        sessionParticipationBlocked && !suggestionViewer && !catalogDisabledReason
-          ? "info"
-          : "danger",
-      disabledBanner: this.sessionDisabledBanner({
-        catalogDisabledReason,
-        modelSetupRequired,
-        restartRecoveryTombstoned,
-        selectedSessionArchived,
-        selectedSessionId: selectedSession?.sessionId?.trim() || undefined,
-        sessionKey: state.sessionKey,
-        unarchiveAccess: mutationAccess.unarchive,
-      }),
+        state.chatRunError?.kind === "auth_refresh" &&
+        composerAvailability.disabledReason === modelUnavailableMessage
+          ? null
+          : composerAvailability.disabledReason,
       modelSetupRequired:
         modelSetupRequired && !selectedSessionArchived && !restartRecoveryTombstoned,
       onModelSetup: () => this.context.navigate("model-setup"),
       error: state.lastError,
-      diskSpace,
-      runError: catalogKey ? null : (state.chatRunError ?? placementRunError),
+      diskSpace: placementComposer.diskSpace,
+      runError: catalogKey ? null : (state.chatRunError ?? placementComposer.runError),
       inlineApproval: sessionParticipationBlocked ? null : inlineApproval,
       approvalBusy: overlays?.snapshot?.approvalBusy,
       approvalCanGrant: overlays?.snapshot?.approvalCanGrant ?? false,
@@ -448,7 +484,10 @@ export class ChatPane extends ChatPaneLayoutRender {
             state,
             selectedSession,
             currentAgentId,
-            getChatComposerState(this.presentationId).capabilityMenuView.startsWith("tools:"),
+            composerState.capabilityMenuView.startsWith("tools:"),
+            composerState.capabilityMenuOpen &&
+              (composerState.capabilityMenuView === "skills" ||
+                composerState.capabilityMenuView.startsWith("library:")),
           ),
       swarmSessions: this.swarmHydrator?.rows ?? [],
       sessionHost: {
@@ -480,61 +519,7 @@ export class ChatPane extends ChatPaneLayoutRender {
         this.requestUpdate();
       },
       onDismissPullRequest: this.dismissSessionPullRequest,
-      githubPublicationBusy: this.githubPublicationBusy,
-      githubPublicationResult: this.githubPublicationResult,
-      githubPublicationError: this.githubPublicationError,
-      githubPublicationGuidance: cloudIdlePublication
-        ? t("chat.pullRequests.cloudPublicationGuidance")
-        : undefined,
-      onPublishPullRequest: canPublishPullRequest
-        ? () => {
-            if (this.githubPublicationBusy || !selectedSession?.key) {
-              return;
-            }
-            const scope = this.captureConnectionScope();
-            if (!scope) {
-              return;
-            }
-            const sessionKey = selectedSession.key;
-            const idempotencyKey = this.githubPublicationIdempotencyKey ?? generateUUID();
-            this.githubPublicationIdempotencyKey = idempotencyKey;
-            const requestVersion = ++this.githubPublicationRequestVersion;
-            const ownsResult = () =>
-              this.presented &&
-              this.githubPublicationRequestVersion === requestVersion &&
-              this.isConnectionScopeCurrent(scope) &&
-              selectedChatSessionRow(scope.state)?.key === sessionKey;
-            this.githubPublicationBusy = true;
-            this.githubPublicationError = null;
-            this.requestUpdate();
-            void import("./chat-github-publication.ts")
-              .then(({ requestGitHubPublication }) =>
-                requestGitHubPublication(scope.client, {
-                  sessionKey,
-                  idempotencyKey,
-                }),
-              )
-              .then((result) => {
-                if (ownsResult()) {
-                  this.githubPublicationResult = result;
-                  if (result.status === "published" || result.status === "failed") {
-                    this.githubPublicationIdempotencyKey = null;
-                  }
-                }
-              })
-              .catch((error: unknown) => {
-                if (ownsResult()) {
-                  this.githubPublicationError = formatUiError(error);
-                }
-              })
-              .finally(() => {
-                if (ownsResult()) {
-                  this.githubPublicationBusy = false;
-                  this.requestUpdate();
-                }
-              });
-          }
-        : undefined,
+      githubPublication: this.githubPublication.view(),
       onOpenWorkspaceFile: (target) => openSessionWorkspaceFile(state, target),
       onOpenSessionLink: (target) => navigateMarkdownSession(this.context, target),
       onRevealWorkspaceFile: (path) => revealSessionWorkspaceFile(state, path),
@@ -630,7 +615,6 @@ export class ChatPane extends ChatPaneLayoutRender {
         suggestionViewer || catalogKey
           ? undefined
           : (draft, submissionAction) => submitChatGoalDraft(state, draft, submissionAction),
-      onCompanionQuestion: (question) => void this.submitSessionCompanionQuestion(question),
       onCompanionPrefill: this.prefillSessionCompanionQuestion,
       replyTarget: state.chatReplyTarget ?? null,
       onClearReply: () => {
@@ -659,6 +643,11 @@ export class ChatPane extends ChatPaneLayoutRender {
       onOpenImage: state.handleOpenImage,
       assistantName: state.assistantName,
       assistantAvatar: state.assistantAvatar,
+      senderAgentAvatars: state.senderAgentAvatars,
+      mainKey: resolveUiConfiguredMainKey({
+        agentsList: this.context.agents.state.agentsList,
+        hello: this.context.gateway.snapshot.hello,
+      }),
       userId: selfUser?.identity?.type === "profile" ? selfUser.identity.id : null,
       userName: selfUser?.name ?? state.userName,
       userAvatar: selfUser?.avatarUrl ?? state.userAvatar,

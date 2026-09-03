@@ -19,6 +19,8 @@ import {
   resolveEffectiveAgentSkillFilter,
 } from "../discovery/agent-filter.js";
 import { normalizeSkillFilter } from "../discovery/filter.js";
+import { assertUnambiguousManagedSkillNames } from "../library/command-name.js";
+import { loadSkillLibrarySelection } from "../library/selection.js";
 import { getSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { mergeRemoteNodeSkillEntries } from "../runtime/remote-skills.js";
 import { fingerprintSkillSnapshotConfig } from "../runtime/snapshot-config-fingerprint.js";
@@ -27,6 +29,7 @@ import type {
   ParsedSkillFrontmatter,
   SkillEligibilityContext,
   SkillEntry,
+  SkillSnapshot,
 } from "../types.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
 import { resolveBundledAllowlist, shouldIncludeSkill } from "./config.js";
@@ -164,6 +167,7 @@ function filterSkillEntries(
   eligibility?: SkillEligibilityContext,
 ): SkillEntry[] {
   const bundledAllowlist = resolveBundledAllowlist(config);
+  assertUnambiguousManagedSkillNames(entries);
   let filtered = entries.filter((entry) =>
     shouldIncludeSkill({ entry, config, bundledAllowlist, eligibility }),
   );
@@ -685,6 +689,7 @@ export function loadVisibleSkills(
     config?: OpenClawConfig;
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
+    librarySelections?: SkillSnapshot["librarySelections"];
     skillFilter?: string[];
     skillOverrides?: Record<string, boolean>;
     agentId?: string;
@@ -692,10 +697,14 @@ export function loadVisibleSkills(
     pluginMetadataSnapshot?: PluginMetadataSnapshot;
   },
 ): SkillEntry[] {
-  const entries = mergeRemoteNodeSkillEntries(loadSkillEntries(workspaceDir, opts), {
+  let entries = mergeRemoteNodeSkillEntries(loadSkillEntries(workspaceDir, opts), {
     canExec: opts?.eligibility?.nodeSkills?.canExec,
     node: opts?.eligibility?.nodeSkills?.node,
   });
+  if (opts?.librarySelections?.length) {
+    // Pins are session-owned: append before filtering without mutating the workspace cache.
+    entries = entries.concat(loadSkillLibrarySelection(opts.librarySelections));
+  }
   const effectiveSkillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
   return filterSkillEntries(
     entries,

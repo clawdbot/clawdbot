@@ -1,4 +1,3 @@
-// Config eval tests cover dynamic config loading and evaluation guards.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -230,6 +229,7 @@ describe("evaluateRuntimeEligibility", () => {
   });
 
   it("accepts entries when remote platform satisfies OS requirements", () => {
+    setPlatform("darwin");
     const result = evaluateRuntimeEligibility({
       os: ["linux"],
       remotePlatforms: ["linux"],

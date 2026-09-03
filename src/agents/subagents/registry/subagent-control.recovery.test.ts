@@ -37,11 +37,7 @@ import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-s
 import type { AgentWaitResult } from "../../run-wait.js";
 import { resolveStoredSubagentCapabilities } from "../spawn/subagent-capabilities.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
-import {
-  killAllControlledSubagentRuns,
-  killControlledSubagentRun,
-  killSubagentRunAdmin,
-} from "./subagent-control.js";
+import { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-control.js";
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { subagentRegistryDeps } from "./subagent-registry-deps.js";
@@ -151,7 +147,7 @@ it("does not promote a provisional task when replacement wins before admin admis
 });
 
 it.each(
-  (["bulk", "controlled", "admin"] as const).flatMap((boundary) =>
+  (["bulk", "admin"] as const).flatMap((boundary) =>
     (
       [
         "recovery",
@@ -277,15 +273,13 @@ it.each(
     const pending =
       boundary === "bulk"
         ? killAllControlledSubagentRuns({ cfg, controller, runs: [a, b] })
-        : boundary === "controlled"
-          ? killControlledSubagentRun({ cfg, controller, entry: parent })
-          : killSubagentRunAdmin({
-              cfg,
-              sessionKey: parentKey,
-              expectedRunId: parent.runId,
-              expectedGeneration: parent.generation,
-              expectedOwnerKey: controllerSessionKey,
-            });
+        : killSubagentRunAdmin({
+            cfg,
+            sessionKey: parentKey,
+            expectedRunId: parent.runId,
+            expectedGeneration: parent.generation,
+            expectedOwnerKey: controllerSessionKey,
+          });
     let acceptedRunId: string | undefined;
     const interruptedFresh = vi.fn();
     const abortFresh = vi.fn();
@@ -597,9 +591,7 @@ it.each(
           .toMatchObject(
             boundary === "bulk"
               ? { status: "ok", killed: 1 }
-              : boundary === "controlled"
-                ? { status: "ok", killed: true, cascadeKilled: 1 }
-                : { found: true, killed: true, cascadeKilled: 1 },
+              : { found: true, killed: true, cascadeKilled: 1 },
           );
       } else if (scenario === "reset") {
         expect.soft(interruptedFresh, JSON.stringify(result)).not.toHaveBeenCalled();
@@ -622,9 +614,7 @@ it.each(
           .toMatchObject(
             boundary === "bulk"
               ? { status: "ok", killed: abortedRecovery ? 2 : 3 }
-              : boundary === "controlled"
-                ? { status: "ok", killed: true, cascadeKilled: abortedRecovery ? 2 : 3 }
-                : { found: true, killed: true, cascadeKilled: abortedRecovery ? 2 : 3 },
+              : { found: true, killed: true, cascadeKilled: abortedRecovery ? 2 : 3 },
           );
       }
     } finally {

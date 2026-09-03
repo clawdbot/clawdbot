@@ -13,7 +13,7 @@ import type {
 } from "../../lib/sessions/index.ts";
 import type { SessionRefreshOptions } from "../../lib/sessions/session-capability.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
-import type { SessionsRouteData } from "./route.ts";
+import { sessionsPageListQuery, type SessionsRouteData } from "./route.ts";
 import type { TranscriptSearchState } from "./view.ts";
 import "./sessions-page.ts";
 
@@ -124,6 +124,11 @@ function sessionListKey(options: SessionListOptions | SessionRefreshOptions): st
   return JSON.stringify(scope);
 }
 
+const managedListPublishers = new WeakMap<
+  SessionCapability,
+  (options: SessionListOptions, snapshot: SessionListSnapshot) => void
+>();
+
 export function createManagedSessions(overrides: Partial<SessionCapability> = {}) {
   const subscribe = () => () => undefined;
   const snapshots = new Map<string, SessionListSnapshot>();
@@ -183,6 +188,7 @@ export function createManagedSessions(overrides: Partial<SessionCapability> = {}
     subscribe,
     ...overrides,
   } as unknown as SessionCapability;
+  managedListPublishers.set(sessions, publish);
   return { sessions, publish, listSnapshot, subscribeList, refreshList };
 }
 
@@ -222,15 +228,22 @@ export async function createRenderedPage(
   statusFilter: "active" | "archived" | "all" = "active",
   expandedSessionKey: string | null = null,
 ): Promise<TestSessionsPage> {
+  const query = sessionsPageListQuery(context, {
+    limit: 50,
+    includeGlobal: true,
+    includeUnknown: false,
+    statusFilter,
+    deepLinkSessionKey: expandedSessionKey,
+  });
+  const publish = managedListPublishers.get(context.sessions);
+  if (publish) {
+    publish(query, { result, agentId: query.agentId ?? null, loading: false, error: null });
+  } else {
+    await context.sessions.refreshList(query);
+  }
   const page = document.createElement("openclaw-sessions-page") as TestSessionsPage;
   page.context = context;
   page.routeData = {
-    gateway: context.gateway,
-    gatewaySnapshot: context.gateway.snapshot,
-    sessions: context.sessions,
-    result,
-    loading: false,
-    error: null,
     expandedSessionKey,
     statusFilter,
   };

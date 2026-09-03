@@ -118,6 +118,7 @@ export async function emitResetCommandHooks(params: {
         payload: { text: hookEvent.messages.join("\n\n") },
         channel,
         to,
+        agentId: hookAgentId,
         sessionKey: params.sessionKey,
         accountId: params.ctx.AccountId,
         requesterSenderId: params.command.senderId,

@@ -45,6 +45,7 @@ function sessionsList(
         kind: "direct",
         model: model.id,
         modelProvider: model.provider,
+        sessionId: "capability-menu-session",
         status: "done",
         updatedAt: Date.now(),
         ...(toolOverrides ? { toolOverrides } : {}),
@@ -391,8 +392,7 @@ suite.define(() => {
         .toBe(false);
 
       await gateway.deferNext("tools.effective");
-      await gateway.setMethodResponse(
-        "sessions.list",
+      await gateway.setSessionsListResponse(
         sessionsList(
           { mcpToolsDeny: { github: ["search_items"] } },
           { id: "gpt-5.6", provider: "openai" },
@@ -601,7 +601,11 @@ suite.define(() => {
       const docs = menu.getByRole("menuitem", { name: /^Docs/ });
       await expect.poll(() => docs.isDisabled()).toBe(true);
       await expect.poll(() => tooltipTitleText(docs)).toContain("operator.admin access");
+      // Leave disabled-row hints before the next click's hit test. Returning to
+      // the root can put Web search under the pointer that clicked Back.
+      await composer.locator("textarea").hover();
       await menu.getByRole("menuitem", { name: "Back" }).click();
+      await composer.locator("textarea").hover();
       await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
       await expect
         .poll(() => menu.getByRole("menuitem", { name: /^github/ }).isDisabled())
