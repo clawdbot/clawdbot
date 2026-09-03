@@ -197,6 +197,10 @@ export class DiscordRealtimeConsults {
       recent,
       this.runAgentTurn({ context, message: consultMessage }),
     );
+    // The consult resolved by the native route: the provider itself called the
+    // consult tool, so the takeover that gated its output must end here — the
+    // provider's own delivery of this result must not be suppressed.
+    this.params.playback.endConsultTakeover();
     if (providerEpoch !== this.params.providerEpoch()) {
       return;
     }
