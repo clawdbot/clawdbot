@@ -1,3 +1,4 @@
+import type { EnvironmentSummary, SystemInfoResult } from "@openclaw/gateway-protocol";
 // Devices page view contracts.
 import type { PresenceEntry } from "../../api/types.ts";
 import type {
@@ -12,6 +13,8 @@ export type DevicesProps = {
   nodes: Array<Record<string, unknown>>;
   presence: PresenceEntry[];
   gatewayVersion: string | null;
+  gatewaySystemInfo?: SystemInfoResult | null;
+  desktopEnvironments?: EnvironmentSummary[];
   lastError: string | null;
   devicesLoading: boolean;
   devicesError: string | null;
