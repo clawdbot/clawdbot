@@ -58,9 +58,19 @@ validate_release_suite_filters() {
     echo "cross_os_suite_filter must contain at least one suite selector." >&2
     return 1
   fi
-  if [[ -n "$cross_os_suite_filter" && "$rerun_group" != "cross-os" ]]; then
-    echo "cross_os_suite_filter requires rerun_group=cross-os; received ${rerun_group}." >&2
+  if [[ -n "$cross_os_suite_filter" && "$rerun_group" != "cross-os" && "$rerun_group" != "all" ]]; then
+    echo "cross_os_suite_filter requires rerun_group=all or cross-os; received ${rerun_group}." >&2
     return 1
+  fi
+
+  if [[ -n "$cross_os_suite_filter" && "$rerun_group" == "all" ]]; then
+    node --input-type=module - "$(dirname "${BASH_SOURCE[0]}")/../lib/cross-os-release-checks/suite-filter.mjs" "$cross_os_suite_filter" <<'NODE' || return 1
+import { pathToFileURL } from 'node:url';
+const { hasRequiredLinuxCrossOsSuites } = await import(pathToFileURL(process.argv[2]));
+if (!hasRequiredLinuxCrossOsSuites(process.argv[3])) {
+  throw new Error('all-group cross_os_suite_filter requires all Linux cross-OS suites');
+}
+NODE
   fi
 
   if [[ -n "$live_suite_filter" ]]; then

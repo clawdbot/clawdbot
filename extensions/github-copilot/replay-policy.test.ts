@@ -16,6 +16,7 @@ describe("buildGithubCopilotReplayPolicy", () => {
     // transcript ending on an assistant turn. Core only strips that trailing
     // prefill turn when validateAnthropicTurns is set.
     expect(buildPolicy("anthropic-messages", "claude-opus-5")).toMatchObject({
+      appendOnlyRuntimeContext: true,
       validateAnthropicTurns: true,
       sanitizeMode: "full",
       repairToolUseResultPairing: true,

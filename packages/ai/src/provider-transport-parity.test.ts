@@ -1,8 +1,15 @@
 import path from "node:path";
 import { APIError as AnthropicAPIError } from "@anthropic-ai/sdk/core/error.js";
-import type { AssistantMessageEventStreamLike, Context, Model } from "@openclaw/llm-core";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import type { AssistantMessageEventStreamLike, Model } from "@openclaw/llm-core";
+import { describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "./host.js";
+import {
+  anthropicModel,
+  context,
+  anthropicEvents,
+  createAnthropicResponse,
+  registerParityHostLifecycle,
+} from "./provider-transport-parity.test-support.js";
 
 type OpenAIChunk = Record<string, unknown>;
 
@@ -59,19 +66,6 @@ type ParityFixture = {
   snapshot?: string;
 };
 
-const anthropicModel = {
-  id: "claude-sonnet-4-6",
-  name: "Claude Sonnet 4.6",
-  api: "anthropic-messages",
-  provider: "anthropic",
-  baseUrl: "https://api.anthropic.com",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 200_000,
-  maxTokens: 4096,
-} satisfies Model<"anthropic-messages">;
-
 const openAiModel = {
   id: "gpt-5.5",
   name: "GPT-5.5",
@@ -97,66 +91,6 @@ const openRouterModelWithoutBaseUrl = {
   ...openRouterModel,
   baseUrl: undefined,
 } as unknown as Model<"openai-completions">;
-
-const context = {
-  systemPrompt: "Be exact.",
-  messages: [{ role: "user", content: "Find the answer.", timestamp: 1 }],
-  tools: [
-    {
-      name: "lookup",
-      description: "Look up a value.",
-      parameters: {
-        type: "object",
-        properties: { query: { type: "string" } },
-        required: ["query"],
-      },
-    },
-  ],
-} satisfies Context;
-
-const anthropicEvents = [
-  {
-    type: "message_start",
-    message: {
-      id: "msg_parity",
-      model: "claude-sonnet-4-6-response",
-      usage: { input_tokens: 7, output_tokens: 0 },
-    },
-  },
-  {
-    type: "content_block_start",
-    index: 0,
-    content_block: { type: "thinking", thinking: "seed", signature: "seed-signature" },
-  },
-  {
-    type: "content_block_delta",
-    index: 0,
-    delta: { type: "thinking_delta", thinking: " + thought" },
-  },
-  {
-    type: "content_block_delta",
-    index: 0,
-    delta: { type: "signature_delta", signature: "final-signature" },
-  },
-  { type: "content_block_stop", index: 0 },
-  {
-    type: "content_block_start",
-    index: 1,
-    content_block: { type: "text", text: "Hello" },
-  },
-  {
-    type: "content_block_delta",
-    index: 1,
-    delta: { type: "text_delta", text: " world" },
-  },
-  { type: "content_block_stop", index: 1 },
-  {
-    type: "message_delta",
-    delta: { stop_reason: "end_turn" },
-    usage: { input_tokens: 7, output_tokens: 5 },
-  },
-  { type: "message_stop" },
-] satisfies Record<string, unknown>[];
 
 const openAiChunks = [
   {
@@ -297,16 +231,6 @@ const anthropicFailure = {
   },
   headers: { "content-type": "application/json", "retry-after": "2" },
 } as const;
-
-function createAnthropicResponse(events: readonly Record<string, unknown>[]): Response {
-  const body = events
-    .map((event) => `event: ${String(event.type)}\ndata: ${JSON.stringify(event)}\n\n`)
-    .join("");
-  return new Response(body, {
-    status: 200,
-    headers: { "content-type": "text/event-stream", "x-request-id": "req-parity" },
-  });
-}
 
 function normalizeRecord(value: Record<string, unknown>, keys: readonly string[]) {
   return Object.fromEntries(
@@ -491,19 +415,7 @@ const fixtures: ParityFixture[] = [
 ];
 
 describe("provider and transport observable parity fixtures", () => {
-  let initialHost: ReturnType<typeof getAiTransportHost>;
-
-  beforeAll(() => {
-    initialHost = getAiTransportHost();
-  });
-
-  afterEach(() => {
-    configureAiTransportHost(initialHost);
-  });
-
-  afterAll(() => {
-    configureAiTransportHost(initialHost);
-  });
+  registerParityHostLifecycle();
 
   it.each(fixtures)("$name", async ({ provider, outcome, snapshot }) => {
     const run = provider === "anthropic" ? runAnthropic : runOpenAi;

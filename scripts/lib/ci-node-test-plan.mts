@@ -195,11 +195,11 @@ const COMPACT_EMBEDDED_GROUP_NAMES = [
 const MAX_BUNDLED_NODE_TEST_PATTERNS = 64;
 // Compact bundles trade a little serial work for fewer ephemeral runner registrations.
 // Keep runner classes and subprocess isolation intact while bounding each combined job.
-// Default Blacksmith plans retain 200s/276s admission caps. Expanded plans
-// share a 210s packing budget to reduce repeated checkout/setup while retaining
-// their file partitions, runner classes, and profile-specific estimates.
+// Two-slot Blacksmith jobs admit 300s of aggregate work. Serial jobs retain
+// 200s/276s caps; expanded profiles retain 210s and their existing estimates.
 const COMPACT_LARGE_NODE_TEST_JOB_SECONDS = 200;
 const COMPACT_SMALL_NODE_TEST_JOB_SECONDS = 276;
+const COMPACT_PARALLEL_NODE_TEST_JOB_SECONDS = 300;
 const COMPACT_EXPANDED_NODE_TEST_JOB_SECONDS = 210;
 const COMPACT_GITHUB_GROUP_SECONDS_SCALE = 1.6;
 const COMPACT_HYBRID_GROUP_SECONDS_SCALE = 0.87;
@@ -659,6 +659,10 @@ export function isExclusiveCompactShardName(shardName: string): boolean {
 
 function isExclusiveCompactGroup(group: NodeTestShardGroup): boolean {
   return isExclusiveCompactShardName(group.shard_name);
+}
+
+function isParallelCompactGroup(group: NodeTestShardGroup): boolean {
+  return !isExclusiveCompactGroup(group) && !group.requiresDist && !group.pretestBuildMode;
 }
 
 // Spawn/signal/PTY-timing suites also flake under high in-process worker
@@ -2594,6 +2598,7 @@ function createCompactNodeTestShardBundles(
   options: NodeTestPlanOptions,
   compactMode: CompactNodeTestPlanMode,
 ): CompactNodeTestShard[] {
+  const isBlacksmithProfile = (options.runnerBackend ?? "blacksmith") === "blacksmith";
   const shards = createNodeTestShards(options).filter(
     (shard) => compactMode !== "push" || !COMPACT_PUSH_EXCLUDED_SHARDS.has(shard.shardName),
   );
@@ -2675,19 +2680,33 @@ function createCompactNodeTestShardBundles(
           a.shard_name.localeCompare(b.shard_name),
       );
     const bins = packNodeTestGroups(sortedGroups, (candidate, group) => {
+      // Only runtime consumers share preparation; ordinary partners would inherit
+      // the slower serial runner instead of their two-slot capacity.
+      if (
+        isBlacksmithProfile &&
+        Boolean(candidate[0].pretestBuildMode) !== Boolean(group.pretestBuildMode)
+      ) {
+        return false;
+      }
       const exclusive = isExclusiveCompactGroup(group);
-      const secondsCap = exclusive
+      const serialSecondsCap = exclusive
         ? COMPACT_EXCLUSIVE_JOB_SECONDS
         : usesExpandedRunnerProfile(options.runnerBackend)
           ? COMPACT_EXPANDED_NODE_TEST_JOB_SECONDS
           : resolveCiNodeTestRunnerClass(group.runner).secondsCap;
+      const combined = [...candidate, group];
+      const parallel =
+        isBlacksmithProfile &&
+        combined.every(isParallelCompactGroup) &&
+        combined.every((entry) => estimateBinSeconds([entry]) <= serialSecondsCap);
+      const secondsCap = parallel ? COMPACT_PARALLEL_NODE_TEST_JOB_SECONDS : serialSecondsCap;
       const family = compactStripeFamily(group);
       return (
         isExclusiveCompactGroup(candidate[0]) === exclusive &&
         (family === undefined ||
           candidate.every((entry) => compactStripeFamily(entry) !== family)) &&
         candidate.length < COMPACT_NODE_TEST_JOB_GROUPS &&
-        estimateBinSeconds([...candidate, group]) <= secondsCap
+        estimateBinSeconds(combined) <= secondsCap
       );
     });
     bins.sort(
@@ -2703,22 +2722,15 @@ function createCompactNodeTestShardBundles(
       const pretestBuildMode = mergeVitestPretestBuildModes(
         bin.map((group) => group.pretestBuildMode),
       );
-      // Keep logical classes and packing stable. The runner admits overlap only
-      // after measuring capacity; exclusive and runtime-building jobs stay serial.
+      // The runner admits overlap only after measuring capacity; exclusive and
+      // runtime-building jobs stay serial regardless of the requested class.
       const planConcurrency =
-        (options.runnerBackend ?? "blacksmith") === "blacksmith" &&
-        bin.length > 1 &&
-        !isExclusiveCompactGroup(firstGroup) &&
-        !firstGroup.requiresDist &&
-        !pretestBuildMode
-          ? 2
-          : 1;
+        isBlacksmithProfile && bin.length > 1 && bin.every(isParallelCompactGroup) ? 2 : 1;
       // Tooling's nested compilers need host capacity while keeping serial isolation.
       // Promote only the emitted runner so packing, names and timing keys stay stable.
       const capacityRunner =
         planConcurrency === 2 ||
-        ((options.runnerBackend ?? "blacksmith") === "blacksmith" &&
-          bin.some((group) => group.configs.includes(TOOLING_CONFIG)))
+        (isBlacksmithProfile && bin.some((group) => group.configs.includes(TOOLING_CONFIG)))
           ? EXTRA_LARGE_NODE_TEST_RUNNER
           : runner;
       compactJobs.push({

@@ -148,7 +148,7 @@ async function restoreArchivedDispatchSession(params: {
               commitGuard: assertCommitAllowed,
             });
           }
-          return { archivedAt: undefined, archivedBy: undefined };
+          return { archivedAt: undefined, archivedBy: undefined, archiveReason: undefined };
         },
         { assertCommitAllowed: () => assertCommitAllowed?.() },
       )) ?? undefined,

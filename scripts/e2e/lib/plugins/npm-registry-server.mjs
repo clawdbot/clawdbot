@@ -65,8 +65,11 @@ const packages = new Map();
 
 function readPackageManifest(tarballPath, packageName) {
   try {
+    // GNU tar treats Windows drive letters as remote archive hosts. Keep the
+    // archive argument local, as in the prerelease artifact validator.
     const packageJson = JSON.parse(
-      execFileSync("tar", ["-xOf", tarballPath, "package/package.json"], {
+      execFileSync("tar", ["-xOf", path.basename(tarballPath), "package/package.json"], {
+        cwd: path.dirname(tarballPath),
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"],
       }),

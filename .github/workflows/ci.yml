@@ -1281,10 +1281,14 @@ jobs:
             existsSync("test/vitest/vitest.ui-e2e.config.ts") &&
             readFileSync("test/vitest/vitest.ui-e2e.config.ts", "utf8")
               .includes("ui-e2e-projects-contract-v1");
-          // Twelve combined shards reduce repeated checkout/setup while retaining
-          // the target-owned two-worker and single-worker phases. Older configs
-          // retain their existing serial width.
-          const uiE2eJobCount = supportsUiE2eProjects ? 13 : usesHostedRunnerProfile ? 14 : 4;
+          // Six shards share setup on larger Blacksmith first attempts. Failed-job
+          // reruns retain this matrix while live routing still selects hosted runners;
+          // frozen targets and fresh hosted plans retain their established widths.
+          const compactUiE2e = !frozenTarget && runnerProfile === "blacksmith" &&
+            process.env.GITHUB_RUN_ATTEMPT === "1";
+          const uiE2eJobCount = supportsUiE2eProjects
+            ? (compactUiE2e ? 7 : 13)
+            : usesHostedRunnerProfile ? 14 : 4;
           const qaSmokeCiPartCount = usesHostedRunnerProfile ? 6 : 4;
           const supportsNativeI18n =
             hasPackageScript("native:i18n:check") &&

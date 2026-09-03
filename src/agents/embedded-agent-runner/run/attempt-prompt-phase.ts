@@ -92,6 +92,7 @@ type PromptPreflightPhaseInput = Omit<
 };
 type PromptSubmissionPhaseInput = Pick<
   PromptSubmissionInput,
+  | "appendOnlyRuntimeContext"
   | "promptActiveSession"
   | "sessionPromptState"
   | "toolResultPromptProjectionState"
