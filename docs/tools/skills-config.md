@@ -415,7 +415,7 @@ is accepted after realpath resolution. `extraDirs` scans the sibling repo
 directly; `allowSymlinkTargets` preserves the symlinked path for existing
 layouts.
 
-Skill Workshop uses each agent's `<state-dir>/agents/<agentId>/workshop-skills`
+Skill Workshop uses each agent's `<state-dir>/agents/<agentId>/agent/workshop-skills`
 containment boundary. It does not use `allowSymlinkTargets`, and it rejects
 symlinked skills that resolve outside that directory.
 

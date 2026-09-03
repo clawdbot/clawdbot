@@ -142,7 +142,7 @@ Then start a new session or wait for the skills watcher to refresh. Restart the 
 Do not use broad targets such as `~`, `/`, or a whole synced project folder. Keep `allowSymlinkTargets` scoped to the real skill root that contains trusted `SKILL.md` directories.
 
 Skill Workshop does not use these trusted discovery targets. It writes only
-inside the active agent's `<state-dir>/agents/<agentId>/workshop-skills`.
+inside the active agent's `<state-dir>/agents/<agentId>/agent/workshop-skills`.
 
 Related:
 
