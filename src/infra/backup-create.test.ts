@@ -3103,9 +3103,16 @@ describe("createBackupArchive", () => {
     { label: "chained config", kind: "config" as const, hops: 2 },
     { label: "direct credentials", kind: "credentials" as const, hops: 1 },
     { label: "chained credentials", kind: "credentials" as const, hops: 2 },
+    { label: "volatile-path config", kind: "config" as const, hops: 1, volatile: true },
+    {
+      label: "volatile-path credentials",
+      kind: "credentials" as const,
+      hops: 1,
+      volatile: true,
+    },
   ])(
     "creates, verifies, and restores a $label symlink through its declared asset",
-    async ({ kind, hops }) => {
+    async ({ kind, hops, volatile }) => {
       await withOpenClawTestState(
         {
           layout: "state-only",
@@ -3115,14 +3122,37 @@ describe("createBackupArchive", () => {
         async (state) => {
           const outputPath = state.path(`declared-${kind}-symlink.tar.gz`);
           const restorePath = state.path(`restored-${kind}`);
-          const sourcePath = kind === "config" ? state.configPath : state.statePath("credentials");
+          const sourcePath = volatile
+            ? state.statePath(
+                "cache.tmp",
+                "managed",
+                kind === "config" ? "openclaw.json" : "credentials",
+              )
+            : kind === "config"
+              ? state.configPath
+              : state.statePath("credentials");
+          if (volatile) {
+            if (kind === "config") {
+              state.envVars.OPENCLAW_CONFIG_PATH = sourcePath;
+            } else {
+              state.envVars.OPENCLAW_OAUTH_DIR = sourcePath;
+            }
+            state.applyEnv();
+            await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+            await fs.writeFile(path.join(path.dirname(sourcePath), "neighbor.tmp"), "omit\n");
+            await fs.writeFile(path.join(path.dirname(sourcePath), "neighbor.json"), "omit\n");
+          }
           const externalSourcePath = state.path(
             "nix-store",
             kind === "config" ? "openclaw-default.json" : "credentials",
           );
           if (kind === "config") {
             await fs.mkdir(path.dirname(externalSourcePath), { recursive: true });
-            await fs.rename(sourcePath, externalSourcePath);
+            if (volatile) {
+              await fs.writeFile(externalSourcePath, "{}\n");
+            } else {
+              await fs.rename(sourcePath, externalSourcePath);
+            }
           } else {
             await fs.mkdir(externalSourcePath, { recursive: true });
             await fs.writeFile(path.join(externalSourcePath, "credentials.json"), "managed\n");
@@ -3147,16 +3177,18 @@ describe("createBackupArchive", () => {
             nowMs: Date.UTC(2026, 8, 2, 13, 0, 0),
           });
           const entries = await listArchiveEntryDetails(result.archivePath);
+          const sourceArchiveSuffix = path
+            .relative(state.stateDir, sourcePath)
+            .split(path.sep)
+            .join(path.posix.sep);
           const archivedLink = expectDefined(
-            entries.find((entry) =>
-              entry.path.endsWith(
-                kind === "config" ? "/state/openclaw.json" : "/state/credentials",
-              ),
-            ),
+            entries.find((entry) => entry.path.endsWith(`/state/${sourceArchiveSuffix}`)),
             `archived ${kind} symlink`,
           );
           const managedAsset = expectDefined(
-            result.assets.find((asset) => asset.kind === kind),
+            result.assets.find(
+              (asset) => asset.kind === kind && asset.sourcePath === canonicalExternalSourcePath,
+            ),
             `declared ${kind} asset`,
           );
 
@@ -3165,6 +3197,22 @@ describe("createBackupArchive", () => {
             path.posix.relative(path.posix.dirname(archivedLink.path), managedAsset.archivePath),
           );
           expect(managedAsset.sourcePath).toBe(canonicalExternalSourcePath);
+          if (volatile) {
+            expect(result.assets).toContainEqual(
+              expect.objectContaining({ kind, sourcePath: sourcePath }),
+            );
+            const neighborArchiveSuffix = path
+              .relative(state.stateDir, path.dirname(sourcePath))
+              .split(path.sep)
+              .join(path.posix.sep);
+            expect(
+              entries.some((entry) =>
+                ["neighbor.json", "neighbor.tmp"].some((neighbor) =>
+                  entry.path.endsWith(`/state/${neighborArchiveSuffix}/${neighbor}`),
+                ),
+              ),
+            ).toBe(false);
+          }
 
           const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
           await expect(

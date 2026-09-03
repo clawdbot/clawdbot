@@ -178,8 +178,6 @@ async function resolveBackupPlanFromPaths(params: {
   unresolvedOwnership?: boolean;
   includeWorkspace?: boolean;
   onlyConfig?: boolean;
-  configInsideState?: boolean;
-  oauthInsideState?: boolean;
   skillDiscoveryLimits?: ResolvedSkillDiscoveryLimits;
   nowMs?: number;
 }): Promise<BackupPlan> {
@@ -193,15 +191,13 @@ async function resolveBackupPlanFromPaths(params: {
   const workspaceDirs = includeWorkspace ? requestedWorkspaceDirs : [];
   const excludedWorkspaceDirs = includeWorkspace ? [] : requestedWorkspaceDirs;
   const agentRoots = onlyConfig ? [] : (params.agentRoots ?? []);
-  const configInsideState = params.configInsideState ?? false;
-  const oauthInsideState = params.oauthInsideState ?? false;
   const canonicalStateDir = await canonicalizePathForContainment(stateDir);
   const configSourcePath = await canonicalizePathForContainment(configPath);
   const oauthSourcePath = await canonicalizePathForContainment(oauthDir);
   const inventory = await createBackupResourceInventory({
     stateDir: canonicalStateDir,
-    configPath: configSourcePath,
-    oauthDir: oauthSourcePath,
+    configPaths: [configPath, configSourcePath],
+    oauthDirs: [oauthDir, oauthSourcePath],
     workspaceDirs: await Promise.all(
       workspaceDirs.map((workspaceDir) => canonicalizePathForContainment(workspaceDir)),
     ),
@@ -280,10 +276,10 @@ async function resolveBackupPlanFromPaths(params: {
   };
   const rawCandidates: Array<Pick<BackupAssetCandidate, "kind" | "sourcePath">> = [
     { kind: "state", sourcePath: path.resolve(stateDir) },
-    ...(configInsideState && isOwnedPathCoveredBy(configSourcePath, canonicalStateDir)
+    ...(isOwnedPathCoveredBy(configSourcePath, canonicalStateDir)
       ? []
       : [{ kind: "config" as const, sourcePath: path.resolve(configPath) }]),
-    ...(oauthInsideState && isOwnedPathCoveredBy(oauthSourcePath, canonicalStateDir)
+    ...(isOwnedPathCoveredBy(oauthSourcePath, canonicalStateDir)
       ? []
       : [{ kind: "credentials" as const, sourcePath: path.resolve(oauthDir) }]),
     ...workspaceDirs.map((workspaceDir) => ({
@@ -304,6 +300,19 @@ async function resolveBackupPlanFromPaths(params: {
       });
     }),
   );
+  for (const configuredPath of [
+    { kind: "config" as const, sourcePath: path.resolve(configPath) },
+    { kind: "credentials" as const, sourcePath: path.resolve(oauthDir) },
+  ]) {
+    if (isSymlinkPath(configuredPath.sourcePath)) {
+      // The target owns content; the lexical path owns the portable link.
+      candidates.push({
+        ...configuredPath,
+        canonicalPath: configuredPath.sourcePath,
+        exists: true,
+      });
+    }
+  }
   for (const sourcePath of resolveManagedSkillSymlinkTargetCandidates({
     stateDir,
     ownerRoots: candidates.map((candidate) => candidate.canonicalPath),
@@ -607,8 +616,6 @@ export async function resolveBackupPlanFromDisk(
     unresolvedOwnership,
     includeWorkspace,
     onlyConfig,
-    configInsideState: cleanupPlan.configInsideState,
-    oauthInsideState: cleanupPlan.oauthInsideState,
     skillDiscoveryLimits: resolveSkillDiscoveryLimits(discoverySnapshot.config),
     nowMs: params.nowMs,
   });
