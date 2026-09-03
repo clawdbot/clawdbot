@@ -173,7 +173,7 @@ describe("system systemd ownership", () => {
 
   it("shares one timeout budget across system-manager ownership probes", async () => {
     let now = 1_000;
-    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
     execFileUtf8.mockImplementation(async (_command, args) => {
       now += 20;
       return args.includes("--property=UnitPath") ? state.managerUnitPath : state.systemctl;
@@ -202,6 +202,31 @@ describe("system systemd ownership", () => {
       clock.mockRestore();
     }
   });
+
+  it.each([60_000, -60_000])(
+    "keeps the shared timeout budget through a %s ms wall-clock step",
+    async (stepMs) => {
+      const now = Date.now;
+      let offset = 0;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + offset);
+      execFileUtf8.mockImplementation(async (_command, args) => {
+        offset = stepMs;
+        return args.includes("--property=UnitPath") ? state.managerUnitPath : state.systemctl;
+      });
+      try {
+        await expect(
+          assertNoSystemSystemdOwnership("openclaw-gateway.service", 5_000),
+        ).resolves.toBeUndefined();
+        const timeouts = execFileUtf8.mock.calls.map((call) => call[2]?.timeout ?? 0);
+        expect(timeouts).toHaveLength(3);
+        // Only real elapsed time (tens of ms) may leave the budget; the clock step must
+        // neither drain it to the 1 ms floor nor inflate it past the budget.
+        expect(timeouts.every((timeout) => timeout > 4_000 && timeout <= 5_000)).toBe(true);
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
 
   it.each([
     "Failed to connect to bus: Permission denied",

@@ -1019,6 +1019,40 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     }
   });
 
+  it.each([60_000, -60_000])(
+    "keeps the mutation deadline through a %s ms wall-clock step",
+    async (stepMs) => {
+      const now = Date.now;
+      let offset = 0;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + offset);
+      busctl.mockImplementation(async (serviceEnv) => {
+        offset = stepMs;
+        return {
+          code: 1,
+          termination: "exit",
+          stdout: "",
+          stderr: `Call failed: Unit ${serviceEnv.OPENCLAW_SYSTEMD_UNIT}.service not found.`,
+        };
+      });
+      try {
+        await withSystemdDefinitionMutation(env, env, async () => undefined, {
+          timeoutMs: 5_000,
+        });
+
+        expect(busctl).toHaveBeenCalled();
+        for (const call of busctl.mock.calls) {
+          // The budget is split across the remaining manager calls; the clock step must
+          // neither drain a share to the 1 ms floor nor inflate it past the whole budget.
+          const timeoutMs = call[2];
+          expect(timeoutMs).toBeGreaterThan(1_000);
+          expect(timeoutMs).toBeLessThanOrEqual(5_000);
+        }
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
+
   it("bounds lock acquisition by the mutation deadline", async () => {
     const { promise: barrier, resolve: release } = createDeferred();
     const { promise: firstStarted, resolve: entered } = createDeferred();
