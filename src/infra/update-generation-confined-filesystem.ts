@@ -191,8 +191,8 @@ export function digestUpdateGenerationBrokerReceiptPayload(receipt: object): str
   return sha256(unsigned);
 }
 
-function assertNonEmpty(value: string, label: string): void {
-  if (!value.trim()) {
+function assertNonEmpty(value: unknown, label: string): asserts value is string {
+  if (typeof value !== "string" || !value.trim()) {
     throw new TypeError(`${label} is required`);
   }
 }
@@ -397,7 +397,11 @@ function assertReceiptMatchesRequest(
     if (receipt.revision !== receipt.previousRevision) {
       throw new Error("Read-only broker evidence must not advance the namespace revision");
     }
-  } else if (receipt.revision === null || receipt.revision === receipt.previousRevision) {
+  } else if (
+    typeof receipt.revision !== "string" ||
+    !receipt.revision.trim() ||
+    receipt.revision === receipt.previousRevision
+  ) {
     throw new Error("Broker receipt must advance the namespace revision");
   }
   if (!Number.isSafeInteger(receipt.recordedAtMs) || receipt.recordedAtMs < 0) {
@@ -522,6 +526,14 @@ export abstract class UpdateGenerationConfinedFilesystem {
 
   protected constructor() {}
 
+  /**
+   * Execute or durably replay an operation by operationId and exact request digest.
+   *
+   * A completed operation MUST return its original receipt before applying the
+   * expectedRevision check to new work. Reusing an operationId with a different
+   * request MUST fail. This is the recovery boundary for a crash after the
+   * broker mutation commits but before its receipt reaches the update ledger.
+   */
   protected abstract invokeBroker(
     request: UpdateGenerationBrokerRequest,
   ): Promise<UpdateGenerationBrokerReceipt>;

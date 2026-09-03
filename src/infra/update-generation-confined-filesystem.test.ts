@@ -308,6 +308,19 @@ describe("confined update-generation filesystem contract", () => {
     ).rejects.toThrow("signature was not authenticated");
   });
 
+  it("rejects invalid mutating revisions even when re-signed", () => {
+    for (const invalid of ["", "   ", 0, { revision: "revision-8" }]) {
+      const request = materializationRequest();
+      const receipt = signedMaterializationReceipt(request);
+      Reflect.set(receipt, "revision", invalid);
+      signReceipt(receipt);
+      expect(
+        () => assertUpdateGenerationBrokerReceiptIsValid(receipt),
+        `revision: ${typeof invalid}`,
+      ).toThrow("must advance the namespace revision");
+    }
+  });
+
   it("rejects forged non-boolean crash-durability claims even when re-signed", () => {
     const forgeries: Array<{
       label: string;

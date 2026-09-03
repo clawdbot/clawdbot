@@ -85,6 +85,101 @@ export function createTestConfinedFilesystemForAuthentication(): UpdateGeneratio
   return new TestConfinedFilesystem();
 }
 
+class TestReplayableConfinedFilesystem extends UpdateGenerationConfinedFilesystem {
+  readonly brokerId = "test-broker";
+  readonly namespaceKey = "openclaw-global-owner";
+  readonly #completed = new Map<
+    string,
+    { requestSha256: string; receipt: UpdateGenerationBrokerReceipt }
+  >();
+  #revision: string | null;
+  #mutationCount: number;
+
+  constructor() {
+    super();
+    this.#revision = null;
+    this.#mutationCount = 0;
+  }
+
+  get mutationCount(): number {
+    return this.#mutationCount;
+  }
+
+  protected async invokeBroker(
+    request: UpdateGenerationBrokerRequest,
+  ): Promise<UpdateGenerationBrokerReceipt> {
+    const requestSha256 = digestUpdateGenerationBrokerRequest(request);
+    const completed = this.#completed.get(request.operationId);
+    if (completed) {
+      if (completed.requestSha256 !== requestSha256) {
+        throw new Error("broker operation id was replayed with a different request");
+      }
+      return structuredClone(completed.receipt);
+    }
+    if (request.expectedRevision !== this.#revision) {
+      throw new Error("broker namespace revision changed before new work");
+    }
+    const nextRevision = `${request.operationId}:revision`;
+    let unsigned: ReceiptWithoutSignature;
+    if (request.kind === "materialize-generation") {
+      unsigned = {
+        formatVersion: 1,
+        kind: request.kind,
+        brokerId: request.brokerId,
+        namespaceKey: request.namespaceKey,
+        transactionId: request.transactionId,
+        operationId: request.operationId,
+        requestSha256,
+        previousRevision: request.expectedRevision,
+        revision: nextRevision,
+        recordedAtMs: 1_788_300_800_000 + this.#mutationCount,
+        role: request.role,
+        sourceArtifactId: request.sourceArtifactId,
+        manifest: request.manifest,
+        generation: request.generation,
+      };
+    } else if (request.kind === "sync-parent-directory") {
+      unsigned = {
+        formatVersion: 1,
+        kind: request.kind,
+        brokerId: request.brokerId,
+        namespaceKey: request.namespaceKey,
+        transactionId: request.transactionId,
+        operationId: request.operationId,
+        requestSha256,
+        previousRevision: request.expectedRevision,
+        revision: nextRevision,
+        recordedAtMs: 1_788_300_800_000 + this.#mutationCount,
+        parent: request.parent,
+        afterOperationId: request.afterOperationId,
+        durable: true,
+      };
+    } else {
+      throw new Error(`test replay broker does not implement ${request.kind}`);
+    }
+    const receipt = signedReceipt(unsigned);
+    this.#revision = nextRevision;
+    this.#mutationCount += 1;
+    this.#completed.set(request.operationId, { requestSha256, receipt });
+    return structuredClone(receipt);
+  }
+
+  protected async verifyBrokerSignature(): Promise<boolean> {
+    return true;
+  }
+}
+
+export function createTestReplayableConfinedFilesystem(): {
+  filesystem: UpdateGenerationConfinedFilesystem;
+  mutationCount: () => number;
+} {
+  const filesystem = new TestReplayableConfinedFilesystem();
+  return {
+    filesystem,
+    mutationCount: () => filesystem.mutationCount,
+  };
+}
+
 export type TestUpdateGenerationRecoveryState = {
   selector: UpdateGenerationSelection | null;
   selectorDurable: boolean;

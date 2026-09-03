@@ -2,11 +2,17 @@ import { describe, expect, it } from "vitest";
 import {
   attachTestBrokerEvidence,
   authenticateTestRecoveryObservation,
+  createTestReplayableConfinedFilesystem,
   type TestUpdateGenerationRecoveryState,
 } from "../../test/helpers/update-generation-broker-fixture.js";
 import {
+  buildUpdateGenerationBrokerOperationId,
+  type UpdateGenerationBrokerRequest,
+} from "./update-generation-confined-filesystem.js";
+import {
   appendUpdateGenerationReceipt,
   buildUpdateGenerationReceiptId,
+  projectUpdateGenerationTransaction,
   type UpdateGenerationManifest,
   type UpdateGenerationSelection,
   type UpdateGenerationTransactionReceipt,
@@ -14,6 +20,7 @@ import {
 } from "./update-generation-contract.js";
 import {
   adjudicateUpdateGenerationTransaction as adjudicateAuthenticatedUpdateGenerationTransaction,
+  reconcilePendingUpdateGenerationBrokerMutation,
   type UpdateGenerationRecoveryAction,
 } from "./update-generation-recovery.js";
 
@@ -578,6 +585,95 @@ describe("update generation recovery transition matrix", () => {
         }),
       ),
     ).toThrow("existing generation selection requires a verified stable binding");
+  });
+
+  it("durably replays a broker mutation lost before its ledger receipt", async () => {
+    const previous = selection("a");
+    let record = append(
+      null,
+      receipt("intent", 0, {
+        namespaceKey: "openclaw-global-owner",
+        serviceBefore: { managed: true, running: true, enabled: true },
+        previousSelection: null,
+        previousPackageVersion: null,
+        stableBindingAlreadyVerified: false,
+        brokerId: "test-broker",
+        brokerRevision: null,
+      }),
+    );
+    const materializationIntent = receipt("generation-materialization-intent", 1, {
+      role: "previous",
+      sourceArtifactId: "manager:live",
+      generationId: previous.generationId,
+      manifest: manifest("a"),
+      packageVersion: "1.0.0",
+      entrypointRelativePath: previous.entrypointRelativePath,
+    });
+    record = append(record, materializationIntent);
+    await expect(
+      reconcilePendingUpdateGenerationBrokerMutation({ record, filesystem: null }),
+    ).rejects.toThrow("requires a confined filesystem provider");
+    const broker = createTestReplayableConfinedFilesystem();
+
+    const committedBeforeCrash = await reconcilePendingUpdateGenerationBrokerMutation({
+      record,
+      filesystem: broker.filesystem,
+    });
+    expect(committedBeforeCrash?.receipt.kind).toBe("materialize-generation");
+    expect(broker.mutationCount()).toBe(1);
+
+    const recovered = await reconcilePendingUpdateGenerationBrokerMutation({
+      record,
+      filesystem: broker.filesystem,
+    });
+    expect(recovered).toEqual(committedBeforeCrash);
+    expect(broker.mutationCount()).toBe(1);
+    if (!recovered || recovered.receipt.kind !== "materialize-generation") {
+      throw new Error("expected a replayed materialization receipt");
+    }
+
+    const changedReplay = structuredClone(recovered.request);
+    if (changedReplay.kind !== "materialize-generation") {
+      throw new Error("expected a materialization request");
+    }
+    changedReplay.sourceArtifactId = "manager:different-live-root";
+    await expect(broker.filesystem.perform(changedReplay)).rejects.toThrow(
+      "replayed with a different request",
+    );
+    expect(broker.mutationCount()).toBe(1);
+
+    const syncRequest: Extract<UpdateGenerationBrokerRequest, { kind: "sync-parent-directory" }> = {
+      formatVersion: 1,
+      kind: "sync-parent-directory",
+      brokerId: "test-broker",
+      namespaceKey: "openclaw-global-owner",
+      transactionId: TRANSACTION_ID,
+      operationId: buildUpdateGenerationBrokerOperationId({
+        intentReceiptId: materializationIntent.receiptId,
+        kind: "sync-parent-directory",
+      }),
+      expectedRevision: recovered.receipt.revision,
+      parent: "generations",
+      afterOperationId: recovered.receipt.operationId,
+    };
+    const parentDirectorySync = await broker.filesystem.perform(syncRequest);
+    expect(parentDirectorySync.kind).toBe("sync-parent-directory");
+    expect(broker.mutationCount()).toBe(2);
+
+    const materialized = {
+      ...receipt("generation-materialized", 2, {
+        role: "previous",
+        generation: { ...previous, packageVersion: "1.0.0" },
+      }),
+      evidence: {
+        materialization: recovered.receipt,
+        parentDirectorySync,
+      },
+    };
+    record = appendUpdateGenerationReceipt(record, materialized);
+    expect(projectUpdateGenerationTransaction(record).brokerRevision).toBe(
+      parentDirectorySync.revision,
+    );
   });
 
   it("binds authenticated recovery observations to the exact projected broker revision", async () => {

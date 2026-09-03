@@ -1,7 +1,9 @@
 import type {
   UpdateGenerationAuthenticatedBrokerReceiptOf,
+  UpdateGenerationBrokerRequest,
   UpdateGenerationConfinedFilesystem,
 } from "./update-generation-confined-filesystem.js";
+import { buildUpdateGenerationBrokerOperationId } from "./update-generation-confined-filesystem.js";
 /** Crash recovery decisions for durable generation-addressed updates. */
 import {
   projectUpdateGenerationTransaction,
@@ -30,6 +32,103 @@ export type UpdateGenerationRuntimeObservation = Pick<
   UpdateGenerationPhysicalState,
   "bindingConverged" | "serviceState"
 >;
+
+type UpdateGenerationPendingBrokerRequest = Extract<
+  UpdateGenerationBrokerRequest,
+  { kind: "materialize-generation" | "switch-selector" | "cleanup-generations" }
+>;
+
+export type UpdateGenerationReconciledBrokerMutation = {
+  request: UpdateGenerationPendingBrokerRequest;
+  receipt: UpdateGenerationAuthenticatedBrokerReceiptOf<
+    UpdateGenerationPendingBrokerRequest["kind"]
+  >;
+};
+
+/**
+ * Rebuild the exact broker mutation owned by the latest durable intent.
+ *
+ * The request keeps the ledger-projected previous revision and deterministic
+ * operation id. A conforming broker either performs it once or returns the
+ * original receipt when the mutation committed before a process crash.
+ */
+function buildPendingUpdateGenerationBrokerRequest(
+  record: UpdateGenerationTransactionRecord,
+): UpdateGenerationPendingBrokerRequest | null {
+  const state = projectUpdateGenerationTransaction(record);
+  const latest = state.latestTransition;
+  if (state.latest.kind === "failure") {
+    return null;
+  }
+  const base = (kind: UpdateGenerationPendingBrokerRequest["kind"]) => ({
+    formatVersion: 1 as const,
+    brokerId: state.intent.brokerId,
+    namespaceKey: state.intent.namespaceKey,
+    transactionId: state.intent.transactionId,
+    operationId: buildUpdateGenerationBrokerOperationId({
+      intentReceiptId: latest.receiptId,
+      kind,
+    }),
+    expectedRevision: state.brokerRevision,
+  });
+  if (latest.kind === "generation-materialization-intent") {
+    return {
+      ...base("materialize-generation"),
+      kind: "materialize-generation",
+      role: latest.role,
+      sourceArtifactId: latest.sourceArtifactId,
+      manifest: latest.manifest,
+      generation: {
+        formatVersion: 1,
+        generationId: latest.generationId,
+        manifestSha256: latest.manifest.digest,
+        entrypointRelativePath: latest.entrypointRelativePath,
+        packageVersion: latest.packageVersion,
+      },
+    };
+  }
+  if (latest.kind === "baseline-selection-intent") {
+    return {
+      ...base("switch-selector"),
+      kind: "switch-selector",
+      expected: state.intent.previousSelection,
+      next: latest.selection,
+    };
+  }
+  if (latest.kind === "candidate-selection-intent" || latest.kind === "rollback-intent") {
+    return {
+      ...base("switch-selector"),
+      kind: "switch-selector",
+      expected: latest.from,
+      next: latest.to,
+    };
+  }
+  if (latest.kind === "cleanup-intent") {
+    return {
+      ...base("cleanup-generations"),
+      kind: "cleanup-generations",
+      generationIds: latest.generationIds,
+      protectedGenerationIds: latest.protectedGenerationIds,
+    };
+  }
+  return null;
+}
+
+export async function reconcilePendingUpdateGenerationBrokerMutation(params: {
+  record: UpdateGenerationTransactionRecord;
+  filesystem: UpdateGenerationConfinedFilesystem | null;
+}): Promise<UpdateGenerationReconciledBrokerMutation | null> {
+  if (!params.filesystem) {
+    throw new Error("Generation state machine requires a confined filesystem provider");
+  }
+  await authenticateUpdateGenerationTransactionRecord(params.filesystem, params.record);
+  const request = buildPendingUpdateGenerationBrokerRequest(params.record);
+  if (!request) {
+    return null;
+  }
+  const receipt = await params.filesystem.perform(request);
+  return { request, receipt };
+}
 
 export type UpdateGenerationRecoveryAction =
   | "resume-materialization"
