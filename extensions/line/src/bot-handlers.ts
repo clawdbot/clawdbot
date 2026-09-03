@@ -492,45 +492,28 @@ async function handleMessageEvent(
       event,
     );
 
-    const dispatchTurn = async (params: {
-      media: readonly MediaRef[];
-      mediaUnavailable: boolean;
-      /** The lifecycle this turn adopts; an image set hands over a composite one. */
-      lifecycle?: LineWebhookTurnAdoptionLifecycle;
-    }): Promise<boolean> => {
-      const messageContext = await buildLineMessageContext({
-        event: answerAs,
-        allMedia: [...params.media],
-        mediaUnavailable: params.mediaUnavailable,
-        cfg,
-        account,
-        commandAuthorized: decision.access.commandAccess.authorized,
-        resolveChannelIngress: decision.resolveBoundAccess,
-        inboundHistory: historyReservation.inboundHistory,
-        mentions: decision.mentions,
-        buildContext: context.buildContext,
-      });
-
-      if (!messageContext) {
-        logVerbose("line: skipping empty message");
-        return false;
-      }
-
+    const messageContext = await buildLineMessageContext({
+      event: answerAs,
+      allMedia: [...allMedia],
+      mediaUnavailable,
+      cfg,
+      account,
+      commandAuthorized: decision.access.commandAccess.authorized,
+      resolveChannelIngress: decision.resolveBoundAccess,
+      inboundHistory: historyReservation.inboundHistory,
+      mentions: decision.mentions,
+      buildContext: context.buildContext,
+    });
+    if (!messageContext) {
+      logVerbose("line: skipping empty message");
+    } else {
       await processMessage(messageContext, {
         // The config this event resolved to, not the one the monitor booted on.
         cfg: context.cfg,
-        ...(params.lifecycle ? { turnAdoptionLifecycle: params.lifecycle } : {}),
+        ...(context.turnAdoptionLifecycle
+          ? { turnAdoptionLifecycle: context.turnAdoptionLifecycle }
+          : {}),
       });
-      return true;
-    };
-
-    if (
-      await dispatchTurn({
-        media: allMedia,
-        mediaUnavailable,
-        ...(context.turnAdoptionLifecycle ? { lifecycle: context.turnAdoptionLifecycle } : {}),
-      })
-    ) {
       historyReservation.commit();
     }
   } finally {
@@ -637,53 +620,23 @@ function orderedLineSetMessages(
 }
 
 /**
- * Splits one delivery into its turns. A LINE callback can carry several events,
- * and the durable spool hands the parts of one multi-image send over together;
- * those parts share a turn while everything else keeps its own.
+ * Answers one delivery as one turn. The ingress spool decides which events share
+ * a turn - a multi-image send is handed over as one delivery - so the first
+ * event is the turn's own and the rest are the set parts behind it.
  */
-function groupLineDeliveryTurns(events: readonly WebhookEvent[]): WebhookEvent[][] {
-  const turns: WebhookEvent[][] = [];
-  const bySetId = new Map<string, WebhookEvent[]>();
-  for (const event of events) {
-    const setId =
-      event.type === "message" && event.message.type === "image"
-        ? event.message.imageSet?.id
-        : undefined;
-    const joined = setId === undefined ? undefined : bySetId.get(setId);
-    if (joined) {
-      // Append only. The order the parts arrive in is the order the spool's
-      // buffer already resolved; moving one to the front to pick a reply token
-      // would rewrite the media order for a set whose parts carry no index.
-      joined.push(event);
-      continue;
-    }
-    const started = [event];
-    turns.push(started);
-    if (setId !== undefined) {
-      bySetId.set(setId, started);
-    }
-  }
-  return turns;
-}
-
 export async function handleLineWebhookEvents(
   events: WebhookEvent[],
   context: LineHandlerContext,
 ): Promise<void> {
-  let firstError: unknown;
-  for (const [event, ...setParts] of groupLineDeliveryTurns(events)) {
-    if (!event) {
-      continue;
-    }
-    try {
-      await handleLineWebhookEvent(event, context, setParts);
-    } catch (err) {
-      context.runtime.error?.(danger(`line: event handler failed: ${String(err)}`));
-      firstError ??= err;
-    }
+  const [event, ...setParts] = events;
+  if (!event) {
+    return;
   }
-  if (firstError) {
-    throw toErrorObject(firstError, "Non-Error thrown");
+  try {
+    await handleLineWebhookEvent(event, context, setParts);
+  } catch (err) {
+    context.runtime.error?.(danger(`line: event handler failed: ${String(err)}`));
+    throw toErrorObject(err, "Non-Error thrown");
   }
 }
 

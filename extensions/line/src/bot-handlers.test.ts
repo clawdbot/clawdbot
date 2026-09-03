@@ -907,6 +907,7 @@ describe("handleLineWebhookEvents", () => {
       groupHistories,
     });
 
+    // One delivery is one turn, so the two sends arrive as two deliveries.
     await handleLineWebhookEvents(
       [
         createTestMessageEvent({
@@ -924,6 +925,11 @@ describe("handleLineWebhookEvents", () => {
           source: { type: "group", groupId: "group-hist-1", userId: "user-one" },
           webhookEventId: "evt-hist-1",
         }),
+      ],
+      context,
+    );
+    await handleLineWebhookEvents(
+      [
         createTestMessageEvent({
           message: { id: "m-hist-2", type: "text", text: "second", quoteToken: "q-hist-2" },
           timestamp: 1700000001000,
@@ -1782,21 +1788,6 @@ describe("handleLineWebhookEvents", () => {
     ]);
     // Answering still uses the freshest token, which is a separate fact.
     expect(built?.event?.replyToken).toBe("reply-m3");
-  });
-
-  it("keeps events that are not part of a set on their own turns", async () => {
-    const processMessage = vi.fn();
-    const context = createLineWebhookTestContext({ processMessage, dmPolicy: "open" });
-    const text = (id: string) =>
-      createTestMessageEvent({
-        message: { id, type: "text", text: id } as MessageEvent["message"],
-        source: { type: "user", userId: "U1" },
-        webhookEventId: `evt-${id}`,
-      });
-
-    await handleLineWebhookEvents([text("t1"), text("t2")], context);
-
-    expect(processMessage).toHaveBeenCalledTimes(2);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
