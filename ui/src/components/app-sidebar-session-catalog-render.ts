@@ -210,6 +210,11 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
     const loadingMore = params.loadingMoreCatalogIds.has(catalog.id);
     const hasMore = hosts.some((host) => Boolean(host.nextCursor));
     const canCreateSession = catalog.capabilities.startTerminal === true;
+    const newSessionDisabledReason =
+      params.newSessionDisabledReason ??
+      (canCreateSession
+        ? undefined
+        : t("chat.sidebar.catalogCreateUnavailable", { catalog: catalog.label }));
     const errorMessages = catalogErrorMessages(catalog);
     const hasError = errorMessages.length > 0;
     // Keep provider failures distinguishable from successful empty results.
@@ -286,7 +291,6 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
               <span class="sidebar-recent-sessions__label-text hover-marquee"
                 >${catalog.label}</span
               >
-              ${renderCatalogHeaderStatus(hasActiveRun, hasUnread)}
               ${hasError || (collapsed && rows.length > 0)
                 ? html`<span
                     class="sidebar-session-group-count ${hasError
@@ -297,6 +301,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
                     >${hasError ? icons.alertTriangle : rows.length}</span
                   >`
                 : nothing}
+              ${renderCatalogHeaderStatus(hasActiveRun, hasUnread)}
             </button>
             <button
               type="button"
@@ -315,18 +320,16 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
             >
               ${icons.listFilter}
             </button>
-            ${canCreateSession
-              ? renderNewSessionLink({
-                  basePath: params.basePath,
-                  agentId: params.newSessionAgentId,
-                  target: { catalogId: catalog.id },
-                  className:
-                    "sidebar-session-group-actions sidebar-session-new sidebar-session-catalog-new",
-                  label: `${t("chat.runControls.newSession")} — ${catalog.label}`,
-                  disabledReason: params.newSessionDisabledReason,
-                  onOpen: params.onOpenNewSession,
-                })
-              : nothing}
+            ${renderNewSessionLink({
+              basePath: params.basePath,
+              agentId: params.newSessionAgentId,
+              target: { catalogId: catalog.id },
+              className:
+                "sidebar-session-group-actions sidebar-session-new sidebar-session-catalog-new",
+              label: `${t("chat.runControls.newSession")} — ${catalog.label}`,
+              disabledReason: newSessionDisabledReason,
+              onOpen: params.onOpenNewSession,
+            })}
           `,
         })}
         ${collapsed

@@ -71,7 +71,7 @@ describe("AppSidebar new session navigation", () => {
     expect(brandLink).toBeInstanceOf(HTMLAnchorElement);
     expect(brandLink?.getAttribute("aria-disabled")).toBe("true");
     expect(brandLink?.hasAttribute("href")).toBe(false);
-    expect(brandLink?.tabIndex).toBe(-1);
+    expect(brandLink?.tabIndex).toBe(0);
     brandLink?.click();
     expect(onOpenNewSession).not.toHaveBeenCalled();
 

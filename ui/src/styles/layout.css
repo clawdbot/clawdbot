@@ -1368,7 +1368,8 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-recent-sessions__head {
   position: relative;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 22px 22px;
   align-items: center;
   gap: 8px;
   min-height: 24px;
@@ -1389,7 +1390,6 @@ openclaw-settings-save-indicator:empty {
   align-items: center;
   gap: var(--sidebar-row-gap);
   min-width: 0;
-  flex: 1 1 auto;
   padding: 2px 0;
   border: none;
   background: transparent;
@@ -1421,19 +1421,13 @@ openclaw-settings-save-indicator:empty {
   opacity: 0;
 }
 
-.sidebar-recent-sessions__head:hover
-  .sidebar-session-group-toggle__lead--branded
-  .sidebar-session-catalog-provider-icon,
-.sidebar-recent-sessions__head:has(:focus-visible)
+.sidebar-recent-sessions__head:where(:hover, :has(:focus-visible))
   .sidebar-session-group-toggle__lead--branded
   .sidebar-session-catalog-provider-icon {
   opacity: 0;
 }
 
-.sidebar-recent-sessions__head:hover
-  .sidebar-session-group-toggle__lead--branded
-  .sidebar-session-group-toggle__icon,
-.sidebar-recent-sessions__head:has(:focus-visible)
+.sidebar-recent-sessions__head:where(:hover, :has(:focus-visible))
   .sidebar-session-group-toggle__lead--branded
   .sidebar-session-group-toggle__icon {
   opacity: 0.75;
@@ -1450,7 +1444,6 @@ openclaw-settings-save-indicator:empty {
 .sidebar-session-catalog-provider-icon {
   width: 12px;
   height: 12px;
-  flex: 0 0 12px;
 }
 
 .sidebar-session-group-count {
@@ -1561,7 +1554,6 @@ openclaw-settings-save-indicator:empty {
   justify-content: center;
   width: 22px;
   height: 22px;
-  flex: 0 0 auto;
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -1574,6 +1566,10 @@ openclaw-settings-save-indicator:empty {
     color var(--duration-fast) ease;
 }
 
+.sidebar-session-group-actions[aria-disabled="true"] {
+  color: color-mix(in srgb, var(--muted) 45%, transparent);
+}
+
 .sidebar-recent-sessions__head:where(:hover, :has(:focus-visible)) .sidebar-session-group-actions,
 .sidebar-session-group-actions[aria-expanded="true"],
 .sidebar-session-group-actions.sidebar-session-sort--filtered {
@@ -1581,7 +1577,7 @@ openclaw-settings-save-indicator:empty {
   pointer-events: auto;
 }
 
-.sidebar-session-group-actions:is(:hover, :focus-visible),
+.sidebar-session-group-actions:not([aria-disabled="true"]):is(:hover, :focus-visible),
 .sidebar-session-group-actions[aria-expanded="true"] {
   background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
   color: var(--text);
@@ -1627,9 +1623,9 @@ openclaw-settings-save-indicator:empty {
   color: var(--muted);
 }
 
+/* Shrink long marquee labels, but keep counts beside the text on short labels. */
 .sidebar-session-group-toggle > .sidebar-recent-sessions__label-text {
   min-width: 0;
-  flex: 1 1 0;
 }
 
 /* Flex, not grid: WebKit does not re-run a grid flex-item's intrinsic sizing

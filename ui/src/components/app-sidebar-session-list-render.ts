@@ -197,17 +197,6 @@ function renderSessionSection(params: {
               </button>
               ${group
                 ? html`
-                    ${renderNewSessionLink({
-                      basePath: host.basePath,
-                      agentId: host.expandedAgentId(),
-                      target: { group },
-                      className: "sidebar-session-group-actions sidebar-new-session",
-                      label: t("sessionsView.newSessionInGroup", { group }),
-                      disabledReason: newSessionAccess.allowed
-                        ? undefined
-                        : newSessionAccess.reason,
-                      onOpen: (agentId, target) => host.requestOpenNewSession(agentId, target),
-                    })}
                     <button
                       type="button"
                       class="sidebar-session-group-actions"
@@ -229,6 +218,17 @@ function renderSessionSection(params: {
                     >
                       ${icons.moreHorizontal}
                     </button>
+                    ${renderNewSessionLink({
+                      basePath: host.basePath,
+                      agentId: host.expandedAgentId(),
+                      target: { group },
+                      className: "sidebar-session-group-actions sidebar-new-session",
+                      label: t("sessionsView.newSessionInGroup", { group }),
+                      disabledReason: newSessionAccess.allowed
+                        ? undefined
+                        : newSessionAccess.reason,
+                      onOpen: (agentId, target) => host.requestOpenNewSession(agentId, target),
+                    })}
                   `
                 : nothing}
             `,

@@ -16,14 +16,17 @@ export function renderNewSessionLink(params: {
 }) {
   const disabled = Boolean(params.disabledReason);
   const href = `${pathForRoute("new-session", params.basePath)}${newSessionSearch(params.agentId, params.target)}`;
-  return html`<openclaw-tooltip .content=${params.disabledReason ?? params.label}>
+  return html`<openclaw-tooltip
+    .content=${params.disabledReason ?? params.label}
+    .openOnClick=${disabled}
+  >
     <a
       class=${params.className}
       role="link"
       href=${disabled ? nothing : href}
       aria-label=${params.label}
       aria-disabled=${disabled ? "true" : nothing}
-      tabindex=${disabled ? "-1" : nothing}
+      tabindex=${disabled ? "0" : nothing}
       @contextmenu=${(event: MouseEvent) => {
         // Section menus must not replace the browser's Open Link in New Tab actions.
         event.stopPropagation();
