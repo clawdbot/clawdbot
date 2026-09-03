@@ -15,6 +15,7 @@ import { loadCliSessionHistoryMessages } from "../agents/cli-runner/session-hist
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import { shouldSkipLiveProviderDrift } from "../agents/live-test-provider-drift.js";
 import { parseModelRef } from "../agents/model-selection.js";
+import { listSubagentRunsForRequester } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { clearRuntimeConfigSnapshot, type OpenClawConfig } from "../config/config.js";
 import { resolveSessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -513,14 +514,11 @@ describeLive("gateway live (cli backend)", () => {
                 },
               }
             : cfg.models,
-        ...(useMinimalToolsProfile
-          ? {
-              tools: {
-                ...cfg.tools,
-                profile: "minimal" as const,
-              },
-            }
-          : {}),
+        tools: {
+          ...cfg.tools,
+          allow: ["sessions_spawn", "bash"],
+          ...(useMinimalToolsProfile ? { profile: "minimal" as const } : {}),
+        },
         agents: {
           ...cfg.agents,
           defaults: {
@@ -666,6 +664,78 @@ describeLive("gateway live (cli backend)", () => {
             }
           }
         }
+
+        const announceNonce = randomBytes(3).toString("hex").toUpperCase();
+        const announceSessionKey = `agent:dev:cli-announce-${announceNonce.toLowerCase()}`;
+        const announceTaskName = `cli_announce_${announceNonce.toLowerCase()}`;
+        const announceChildToken = `CLI_ANNOUNCE_CHILD_${announceNonce}`;
+        const announceParentToken = `CLI_ANNOUNCE_PARENT_${announceNonce}`;
+        let announceParentObservedAt: number | undefined;
+        let announceError: unknown;
+        const announceRequest = activeClient.request<AgentPayload>(
+          "agent",
+          {
+            sessionKey: announceSessionKey,
+            idempotencyKey: `cli-announce-order-${randomUUID()}`,
+            deliver: false,
+            timeout: 240,
+            message: [
+              "Run this exact OpenClaw CLI-backed completion announcement scenario.",
+              "Use tool calls, not prose.",
+              `Call sessions_spawn exactly once with taskName=${announceTaskName} and task=${JSON.stringify(`Reply exactly ${announceChildToken} and nothing else.`)}.`,
+              `After sessions_spawn returns status=accepted, call bash with exactly: sleep 35; printf CLI_ANNOUNCE_PARENT_TOOL_DONE_${announceNonce}.`,
+              "Do not call sessions_yield.",
+              `After the bash call completes, reply exactly ${announceParentToken}.`,
+            ].join("\n"),
+          },
+          { expectFinal: true, timeoutMs: CLI_BACKEND_REQUEST_TIMEOUT_MS },
+        );
+        announceRequest
+          .then(() => {
+            announceParentObservedAt = Date.now();
+          })
+          .catch((error: unknown) => {
+            announceError = error;
+          });
+
+        const completedAnnounceChild = await waitFor("CLI-backed announce child completion", () => {
+          if (announceError) {
+            throw toLintErrorObject(announceError, "Non-Error thrown");
+          }
+          return listSubagentRunsForRequester(announceSessionKey).find(
+            (run) =>
+              run.taskName === announceTaskName &&
+              run.completion?.resultText?.includes(announceChildToken) === true &&
+              run.execution.outcome?.status === "ok",
+          );
+        });
+        expect(completedAnnounceChild.delivery?.announcedAt).toBeUndefined();
+        expect(announceParentObservedAt).toBeUndefined();
+
+        const announceParent = await announceRequest;
+        announceParentObservedAt ??= Date.now();
+        expect(extractPayloadText(announceParent.result)).toContain(announceParentToken);
+
+        const deliveredAnnounceChild = await waitFor("ordered CLI-backed completion announce", () =>
+          listSubagentRunsForRequester(announceSessionKey).find(
+            (run) =>
+              run.runId === completedAnnounceChild.runId &&
+              typeof run.delivery?.enqueuedAt === "number" &&
+              typeof run.delivery?.deliveredAt === "number" &&
+              typeof run.delivery?.announcedAt === "number",
+          ),
+        );
+        const announceAt = deliveredAnnounceChild.delivery?.announcedAt ?? 0;
+        console.log(
+          `[cli-announce-order] ${JSON.stringify({
+            childEndedAt: deliveredAnnounceChild.execution.endedAt,
+            completionEnqueuedAt: deliveredAnnounceChild.delivery?.enqueuedAt,
+            completionDeliveredAt: deliveredAnnounceChild.delivery?.deliveredAt,
+            completionAnnouncedAt: announceAt,
+            parentObservedAt: announceParentObservedAt,
+          })}`,
+        );
+        expect(announceAt).toBeGreaterThanOrEqual(announceParentObservedAt);
 
         if (modelSwitchTarget) {
           const switchNonce = randomBytes(3).toString("hex").toUpperCase();
