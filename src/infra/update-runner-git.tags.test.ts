@@ -11,6 +11,7 @@ import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveReleaseTagRemote } from "./update-runner-git-target.js";
 
 // Force the C locale so git's porcelain ref-status and error wording are stable
 // across operator locales (CI runs C; dev machines may localize "would clobber").
@@ -256,5 +257,77 @@ describe("release-channel tag fetch tolerates upstream-recreated tags", () => {
     const auxTagFetch = git(operator, ["fetch", "zfork", "+refs/tags/*:refs/tags/*"]);
     expect(auxTagFetch.status, `${auxTagFetch.stdout}\n${auxTagFetch.stderr}`).toBe(0);
     expect(git(operator, ["rev-parse", "v1^{}"]).stdout.trim()).toBe(auxTag);
+  });
+
+  // Fork-style topology: `origin` is a fork mirror that carries the branch but
+  // never the release tags, while the authoritative release upstream survives
+  // the detached checkout as the retained `branch.main.remote` tracking config.
+  function setupTagLessForkWithRetainedUpstream() {
+    const root = tempDirs.make("openclaw-update-fork-upstream-");
+    const upstream = path.join(root, "upstream.git");
+    expect(spawnSync("git", ["init", "--bare", "-q", upstream], { encoding: "utf8" }).status).toBe(
+      0,
+    );
+
+    const seed = path.join(root, "seed");
+    expect(spawnSync("git", ["clone", "-q", upstream, seed], { encoding: "utf8" }).status).toBe(0);
+    expect(gitStatus(seed, ["config", "user.email", "t@t.t"])).toBe(0);
+    expect(gitStatus(seed, ["config", "user.name", "t"])).toBe(0);
+    writeFileSync(path.join(seed, "a.txt"), "A");
+    expect(gitStatus(seed, ["add", "-A"])).toBe(0);
+    expect(gitStatus(seed, ["commit", "-q", "-m", "A"])).toBe(0);
+    expect(gitStatus(seed, ["tag", "v1"])).toBe(0);
+    expect(
+      spawnSync("git", ["-C", seed, "push", "-q", "origin", "HEAD:main", "v1"], {
+        encoding: "utf8",
+      }).status,
+    ).toBe(0);
+    const upstreamTag = git(seed, ["rev-parse", "v1^{}"]).stdout.trim();
+
+    const fork = path.join(root, "fork.git");
+    // The fork mirrors the branch but is cloned `--no-tags`: it never carries
+    // the release tag namespace the updater must select from.
+    expect(
+      spawnSync("git", ["clone", "-q", "--no-tags", upstream, fork], { encoding: "utf8" }).status,
+    ).toBe(0);
+
+    const operator = path.join(root, "operator");
+    expect(spawnSync("git", ["clone", "-q", fork, operator], { encoding: "utf8" }).status).toBe(0);
+    expect(gitStatus(operator, ["remote", "add", "upstream", upstream])).toBe(0);
+    expect(git(operator, ["fetch", "-q", "--all", "--prune", "--no-tags"]).status).toBe(0);
+    expect(gitStatus(operator, ["config", "branch.main.remote", "upstream"])).toBe(0);
+    return { operator, upstreamTag };
+  }
+
+  it("fetches release tags from the retained update upstream when origin is a tag-less fork", () => {
+    const { operator, upstreamTag } = setupTagLessForkWithRetainedUpstream();
+
+    // Production remote selection: the retained `branch.<main>.remote` tracking
+    // config wins over the origin fallback; an origin-first choice would fetch
+    // only the fork's (empty) tag set and the release lookup would fail.
+    const remotes = git(operator, ["remote"])
+      .stdout.split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const tracked = git(operator, ["config", "--get", "branch.main.remote"]).stdout.trim();
+    const tagRemote = resolveReleaseTagRemote(remotes, tracked);
+    expect(tagRemote).toBe("upstream");
+    if (!tagRemote) {
+      throw new Error("unreachable: tagRemote asserted to be the retained upstream");
+    }
+
+    const branchFetch = git(operator, ["fetch", "--all", "--prune", "--no-tags"]);
+    expect(branchFetch.status, `${branchFetch.stdout}\n${branchFetch.stderr}`).toBe(0);
+
+    // Pre-fix contrast: an origin-first choice force-fetches only the fork's
+    // empty tag set, so the release lookup would find no v1 at all.
+    const forkTagFetch = git(operator, ["fetch", "origin", "+refs/tags/*:refs/tags/*"]);
+    expect(forkTagFetch.status, `${forkTagFetch.stdout}\n${forkTagFetch.stderr}`).toBe(0);
+    expect(git(operator, ["rev-parse", "--verify", "-q", "v1"]).status).not.toBe(0);
+
+    // The tracked update upstream feeds the release tag instead.
+    const tagFetch = git(operator, ["fetch", tagRemote, "+refs/tags/*:refs/tags/*"]);
+    expect(tagFetch.status, `${tagFetch.stdout}\n${tagFetch.stderr}`).toBe(0);
+    expect(git(operator, ["rev-parse", "v1^{}"]).stdout.trim()).toBe(upstreamTag);
   });
 });
