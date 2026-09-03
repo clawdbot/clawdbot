@@ -18,10 +18,7 @@ import {
   type PreparedModelRuntimeAuthScope,
 } from "./prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
-import {
-  PreparedModelCatalogGenerationMismatchError,
-  PreparedModelRuntimePublicationSupersededError,
-} from "./prepared-model-runtime.errors.js";
+import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import { fingerprintPreparedRuntimeFacts } from "./prepared-model-runtime.facts.js";
 import { markPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
@@ -74,6 +71,19 @@ export type PreparedModelWorkerResult =
 // discovery while bounding a wedged provider; expiry rejects and never returns partial results.
 const PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS = 180_000;
 const PREPARED_MODEL_CATALOG_WORKER_GENERATION_POLL_MS = 25;
+
+class PreparedModelCatalogGenerationMismatchError extends Error {
+  constructor(
+    readonly agentDir: string,
+    readonly generationFingerprint: string,
+    readonly reconstructedFingerprint: string,
+  ) {
+    super(
+      `prepared model catalog worker reconstructed a different runtime generation for ${agentDir} (owner=${generationFingerprint} worker=${reconstructedFingerprint})`,
+    );
+    this.name = "PreparedModelCatalogGenerationMismatchError";
+  }
+}
 
 function fingerprintPreparedModelCatalogPlugins(snapshot: PluginMetadataSnapshot): string {
   return fingerprintPreparedRuntimeFacts({
@@ -183,7 +193,6 @@ export function createPreparedModelCatalogWorker(params: {
     }
   };
   let pool: WorkerTaskPool<PreparedModelWorkerRequest, PreparedModelWorkerResult> | undefined;
-  let terminalError: Error | undefined;
   const mismatch = (
     message: Extract<PreparedModelWorkerResult, { status: "generation-mismatch" }>,
   ) =>
@@ -233,8 +242,7 @@ export function createPreparedModelCatalogWorker(params: {
   const stop = (error: Error) => {
     clearInterval(generationPoll);
     generationPoll = undefined;
-    terminalError ??= error;
-    return retire(error);
+    return pool?.close(error) ?? Promise.resolve();
   };
   const request = async (
     value: PreparedModelWorkerRequest,
@@ -242,9 +250,6 @@ export function createPreparedModelCatalogWorker(params: {
     let message: PreparedModelWorkerResult;
     try {
       assertCurrent();
-      if (terminalError) {
-        throw terminalError;
-      }
       generationPoll ??= setInterval(() => {
         if (!params.isCurrent()) {
           void stop(superseded());
