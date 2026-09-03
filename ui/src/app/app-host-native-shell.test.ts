@@ -626,8 +626,8 @@ describe("OpenClaw shell update affordance", () => {
     for (const navigationSurfaceHidden of [false, true]) {
       render(renderFloatingUpdateCard({ ...shared, navigationSurfaceHidden }), container);
       expect(
-        container.querySelector("openclaw-sidebar-attention.sidebar-attention--floating") !== null,
-      ).toBe(navigationSurfaceHidden);
+        container.querySelector("openclaw-sidebar-attention.sidebar-attention--floating"),
+      ).toBeNull();
       const cards = container.querySelectorAll<HTMLElement & { refreshRequired: boolean }>(
         "openclaw-sidebar-update-card",
       );

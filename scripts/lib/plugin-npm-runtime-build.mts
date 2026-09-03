@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { isTypeScriptPackageEntry } from "../../src/plugins/package-entrypoints.ts";
 import {
   collectPluginSourceEntries,
   collectTopLevelPublicSurfaceEntries,
@@ -60,10 +61,6 @@ function isPublishablePluginPackage(packageJson: PluginPackageJson) {
 
 function normalizePackageEntry(value: unknown) {
   return typeof value === "string" ? value.trim().replaceAll("\\", "/") : "";
-}
-
-function isTypeScriptEntry(entry: string) {
-  return /\.(?:c|m)?ts$/u.test(entry);
 }
 
 function toPackageRuntimeEntry(entry: string, runtimeFormat: RuntimeBuildFormat = "esm") {
@@ -330,7 +327,7 @@ export function resolvePluginNpmRuntimeBuildPlan(params: PluginNpmRuntimeBuildPa
 
   const runtimeFormat = resolvePluginRuntimeFormat(packageJson);
   const packageEntries = collectPluginSourceEntries(packageJson).map(normalizePackageEntry);
-  const requiresRuntimeBuild = packageEntries.some(isTypeScriptEntry);
+  const requiresRuntimeBuild = packageEntries.some(isTypeScriptPackageEntry);
   if (!requiresRuntimeBuild) {
     return null;
   }

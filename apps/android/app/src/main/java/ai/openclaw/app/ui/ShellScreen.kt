@@ -420,7 +420,8 @@ private fun OverviewScreen(
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
   val cronStatus by viewModel.cronStatus.collectAsState()
   val nodesDevicesSummary by viewModel.nodesDevicesSummary.collectAsState()
-  val channelsSummary by viewModel.channelsSummary.collectAsState()
+  val channelsState by viewModel.channelsState.collectAsState()
+  val channelsSummary = channelsState.summary
   val agents by viewModel.gatewayAgents.collectAsState()
   val defaultAgentId by viewModel.gatewayDefaultAgentId.collectAsState()
   val providerRows = providerRows(providers = providers, models = models)
@@ -1475,12 +1476,16 @@ private fun SettingsShellScreen(
   val execApprovals by viewModel.execApprovals.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
   val cronStatus by viewModel.cronStatus.collectAsState()
-  val usageSummary by viewModel.usageSummary.collectAsState()
-  val skillsSummary by viewModel.skillsSummary.collectAsState()
+  val usageState by viewModel.usageState.collectAsState()
+  val usageSummary = usageState.summary
+  val skillsState by viewModel.skillsState.collectAsState()
+  val skillsSummary = skillsState.summary
   val skillWorkshopSummary by viewModel.skillWorkshopSummary.collectAsState()
   val nodesDevicesSummary by viewModel.nodesDevicesSummary.collectAsState()
-  val channelsSummary by viewModel.channelsSummary.collectAsState()
-  val dreamingSummary by viewModel.dreamingSummary.collectAsState()
+  val channelsState by viewModel.channelsState.collectAsState()
+  val channelsSummary = channelsState.summary
+  val dreamingState by viewModel.dreamingState.collectAsState()
+  val dreamingSummary = dreamingState.summary
   val desktopObserveAvailable by viewModel.desktopObserveAvailable.collectAsState()
   val appearanceThemeMode by viewModel.appearanceThemeMode.collectAsState()
   val providerRows = providerRows(providers = providers, models = models)

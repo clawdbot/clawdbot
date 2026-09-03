@@ -371,16 +371,10 @@ export async function deliverReply(
       !turn.activeAnswerDraftIsToolProgressOnly &&
       !ownedByQueuedRotation &&
       segment.update.text.trimEnd() === turn.answerLane.lastPartialText.trimEnd();
-    const isDurableProgressCommentary =
-      turn.streamMode === "progress" &&
-      info.kind === "block" &&
-      effectivePayload.isCommentary === true;
-    // CLI finals exclude separately classified commentary, so it must outlive the progress draft.
     const suppressProgressAnswerBlock =
       turn.streamMode === "progress" &&
       info.kind === "block" &&
       segment.lane === "answer" &&
-      !isDurableProgressCommentary &&
       !reply.hasMedia &&
       !hasExecApprovalPayload(effectivePayload) &&
       telegramButtons === undefined;
@@ -429,7 +423,6 @@ export async function deliverReply(
             infoKind: info.kind,
             buttons: telegramButtons,
             ...(isAskUserPayload ? { finalizePreview: true } : {}),
-            allowStream: !isDurableProgressCommentary,
             onPlatformSendDispatch: info.onPlatformSendDispatch,
             assertPlatformSendAuthorized: info.assertPlatformSendAuthorized,
             bindPendingFinalDelivery: info.bindPendingFinalDelivery,

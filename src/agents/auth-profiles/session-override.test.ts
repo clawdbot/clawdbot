@@ -12,7 +12,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   authStoreMocks,
   clearSessionAuthProfileOverride,
-  createAuthStore,
   createAuthStoreWithProfiles,
   createAutomaticSessionEntry,
   prepareCooldownAuthState,
@@ -63,7 +62,14 @@ describe("resolveSessionAuthProfileOverride", () => {
       const agentDir = state.agentDir();
       await fs.mkdir(agentDir, { recursive: true });
       authStoreMocks.state.hasSource = true;
-      authStoreMocks.state.store = createAuthStore();
+      authStoreMocks.state.store = createAuthStoreWithProfiles({
+        profiles: {
+          "zai:work": { type: "api_key", provider: "zai", key: "sk-test" },
+        },
+        order: {
+          zai: ["zai:work"],
+        },
+      });
 
       const sessionEntry: SessionEntry = {
         sessionId: "s1",

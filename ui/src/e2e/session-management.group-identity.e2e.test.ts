@@ -98,10 +98,7 @@ suite.define(() => {
         await gateway.waitForRequest("sessions.groups.put");
 
         // Deletion/recreation changes the durable identity, unlike ordinary reset.
-        await gateway.setMethodResponse(
-          "sessions.list",
-          sessionsListResponse([replacement, survivor]),
-        );
+        await gateway.setSessionsListResponse(sessionsListResponse([replacement, survivor]));
         await gateway.emitGatewayEvent("sessions.changed", {
           ...replacement,
           sessionKey: original.key,

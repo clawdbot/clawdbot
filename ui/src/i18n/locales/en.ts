@@ -5898,12 +5898,12 @@ export const en: TranslationMap & {
     permissionControls: {
       label: "Permissions",
       help: "Choose permissions for this session.",
-      applying: "Applying permissions…",
       default: "Default",
       defaultDescription: "Follow the agent's configured policy.",
       defaultWithMode: "Default ({mode})",
       fullRequiresAdmin: "Full access requires operator.admin access.",
       updateFailed: "Failed to update permissions: {error}",
+      refreshFailed: "Permissions were saved, but refreshing the session failed: {error}",
       modes: {
         "read-only": {
           label: "Read Only",

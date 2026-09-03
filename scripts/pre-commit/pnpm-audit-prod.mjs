@@ -7,7 +7,10 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 // This zero-install hook runs on Node 22.22.3+, where native TypeScript stripping is enabled.
 import { truncateUtf16Safe } from "../../packages/normalization-core/src/utf16-slice.ts";
-import { readBoundedResponseText as readBoundedResponseTextWithLimit } from "../lib/bounded-response.mjs";
+import {
+  cancelResponseReaderSoon,
+  readBoundedResponseText as readBoundedResponseTextWithLimit,
+} from "../lib/bounded-response.mjs";
 import { pnpmLockfileDocuments } from "../lib/pnpm-lockfile-documents.mjs";
 
 const DEFAULT_REGISTRY = "https://registry.npmjs.org";
@@ -796,9 +799,7 @@ export async function readBoundedBulkAdvisoryErrorText(
             read,
             options.timeoutPromise.catch((error) => {
               canceled = true;
-              void Promise.resolve()
-                .then(() => reader.cancel())
-                .catch(() => undefined);
+              cancelResponseReaderSoon(reader);
               throw error;
             }),
           ])

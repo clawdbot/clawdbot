@@ -27,7 +27,6 @@ const repoRoot = path.resolve(scriptDir, "../..");
  */
 export async function runVitestBatch(params: VitestBatchRunParams): Promise<number> {
   return await new Promise<number>((resolve, reject) => {
-    let forwardedSignal: NodeJS.Signals | undefined;
     // Match project runs: installed tooling must not rediscover pnpm in an isolated HOME.
     const { child, completion } = spawnOwnedVitestProcess({
       homeMode:
@@ -48,16 +47,14 @@ export async function runVitestBatch(params: VitestBatchRunParams): Promise<numb
       ],
       options: { cwd: repoRoot, env: params.env, stdio: "inherit" },
     });
-    const teardownChildCleanup = installVitestProcessGroupCleanup({
+    const cleanup = installVitestProcessGroupCleanup({
       child,
       forceSignal: "SIGKILL",
       forceSignalDelayMs: 100,
-      onSignal(signal: NodeJS.Signals) {
-        forwardedSignal ??= signal;
-      },
     });
-    completion.finally(teardownChildCleanup).then((result) => {
+    completion.finally(cleanup.teardown).then((result) => {
       const { code, signal } = result;
+      const forwardedSignal = cleanup.getForwardedSignal();
       if (params.onComplete) {
         const outcome = { code: code ?? 1, signal: forwardedSignal ?? signal };
         params.onComplete(outcome);

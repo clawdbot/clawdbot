@@ -20,7 +20,7 @@ const PLUGIN_SDK_SUBPATH_SEEDS = [
     subpath: "config-runtime",
     status: "removal-pending",
     owner: "config",
-    removeAfter: "2026-09-01",
+    removeAfter: "2026-10-01",
     replacement:
       "`api.pluginConfig`, `openclaw/plugin-sdk/config-mutation`, `openclaw/plugin-sdk/runtime-config-snapshot`, and `openclaw/plugin-sdk/config-contracts`; retain until supported external plugin migration is verified",
   },
@@ -36,7 +36,7 @@ const PLUGIN_SDK_SUBPATH_SEEDS = [
     subpath: "channel-reply-pipeline",
     status: "removal-pending",
     owner: "channel",
-    removeAfter: "2026-09-01",
+    removeAfter: "2026-10-01",
     replacement:
       "`openclaw/plugin-sdk/channel-outbound`; retain until supported external plugin migration is verified",
   },
@@ -45,7 +45,7 @@ const PLUGIN_SDK_SUBPATH_SEEDS = [
     subpath: "infra-runtime",
     status: "removal-pending",
     owner: "sdk",
-    removeAfter: "2026-09-01",
+    removeAfter: "2026-10-01",
     replacement:
       "focused subpaths including `openclaw/plugin-sdk/delivery-queue-runtime`, `openclaw/plugin-sdk/diagnostic-runtime`, `openclaw/plugin-sdk/error-runtime`, `openclaw/plugin-sdk/exec-approvals-runtime`, `openclaw/plugin-sdk/fetch-runtime`, and `openclaw/plugin-sdk/ssrf-runtime`; retain until supported external plugin migration is verified and system-event snapshot inspection and consumption have a modern public replacement",
   },
@@ -101,7 +101,7 @@ const PLUGIN_SDK_SUBPATH_SEEDS = [
     subpath: "channel-lifecycle",
     status: "removal-pending",
     owner: "channel",
-    removeAfter: "2026-09-01",
+    removeAfter: "2026-10-01",
     replacement:
       "`openclaw/plugin-sdk/channel-outbound`; retain until supported external plugin migration is verified",
   },
@@ -110,7 +110,7 @@ const PLUGIN_SDK_SUBPATH_SEEDS = [
     subpath: "channel-message",
     status: "removal-pending",
     owner: "channel",
-    removeAfter: "2026-09-01",
+    removeAfter: "2026-10-01",
     replacement:
       "`openclaw/plugin-sdk/channel-outbound` and `openclaw/plugin-sdk/channel-inbound`; retain until supported external plugin migration is verified",
   },

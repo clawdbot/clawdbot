@@ -85,7 +85,6 @@ class CameraHandlerTest {
           appContext = app,
           camera = CameraCaptureManager(app),
           setCameraAudioCaptureActive = { false },
-          showCameraHud = { _, _, _ -> },
           invokeErrorFromThrowable = { "UNAVAILABLE" to (it.message ?: "camera failed") },
         )
 

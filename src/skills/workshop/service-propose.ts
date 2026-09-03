@@ -253,7 +253,7 @@ export async function proposeUpdateSkill(
 
   const now = new Date().toISOString();
   const prepared = prepareSkillProposalDraft({
-    name: targetSkill.skillKey,
+    name: targetSkill.name,
     description,
     content: draftContent,
     fallbackFrontmatterContent: currentContent,

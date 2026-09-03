@@ -61,10 +61,8 @@ import type {
   GatewayRequestOptions,
   SessionMutationAuthorization,
 } from "./server-methods/types.js";
-import {
-  resolveDirectIncognitoTargets,
-  sessionMutationTargetFields,
-} from "./session-sharing-target-input.js";
+import { sessionMutationTargetFields } from "./session-method-policy.js";
+import { resolveDirectIncognitoTargets } from "./session-sharing-target-input.js";
 import {
   resolveSessionMutationAuthorization,
   SessionMutationAuthorizationChangedError,

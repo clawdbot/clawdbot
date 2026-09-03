@@ -260,8 +260,9 @@ describe("initSessionState conflict retry wiring", () => {
     try {
       await upsertSessionEntryCore(
         { sessionKey: SESSION_KEY, storePath },
+        // No display name seeded: the derived thread label may only initialize an
+        // unnamed session, and this test tracks the init write surviving retries.
         {
-          displayName: "before reply initialization",
           sessionId: "existing-session",
           updatedAt: Date.now(),
         },

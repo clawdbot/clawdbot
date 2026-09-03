@@ -14,7 +14,6 @@ import {
   type ApplicationRouter,
   type RouteId,
 } from "../app-routes.ts";
-import { setSessionPathBuilder } from "../app-session-path-builder.ts";
 import {
   SIDEBAR_SESSION_NAV_COLLAPSE_QUERY,
   sessionRefFromPath,
@@ -34,6 +33,7 @@ import {
 } from "../pages/model-setup/first-run.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
 import { resolveControlUiDocumentMode, type ControlUiDocumentMode } from "./approval-deep-link.ts";
+import { resolveInitialApplicationLocation } from "./bootstrap-location.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
 import { createBrowserHistory, resolveControlUiPaths } from "./browser.ts";
 import { createChatAttachmentHandoff } from "./chat-attachment-handoff.ts";
@@ -66,6 +66,7 @@ import {
   saveSettings,
   type UiSettings,
 } from "./settings.ts";
+import { createSidebarAttentionStore } from "./sidebar-attention-store.ts";
 import { createStartupLifecycle, type StartupStep } from "./startup-lifecycle.ts";
 import {
   normalizeLegacyTerminalViewLocation,
@@ -133,19 +134,13 @@ export type ApplicationRuntime = {
   stop: () => void;
 };
 
-type BootstrapApplicationDependencies = {
-  sessionPathBuilderReady?: Promise<void>;
-};
-
 type PendingRouterStartNavigation = {
   routeId: RouteId;
   location: RouteLocation;
   mode: "push" | "replace";
 };
 
-export function bootstrapApplication(
-  dependencies: BootstrapApplicationDependencies = {},
-): ApplicationRuntime {
+export function bootstrapApplication(): ApplicationRuntime {
   const history = createBrowserHistory();
   const startupLocation = history.location();
   const [basePath, resourceBasePath] = resolveControlUiPaths(
@@ -204,15 +199,6 @@ export function bootstrapApplication(
   const startsApplicationRouter = documentMode === null && focusLocation === null;
   const firstRunDefaultLanding =
     startsApplicationRouter && isDefaultChatLanding(applicationLocation, basePath, routeIdFromPath);
-  const sessionPathBuilderReady =
-    dependencies.sessionPathBuilderReady ??
-    (documentMode ||
-    (focusLocation?.status === "valid" && focusLocation.target.kind !== "dashboard")
-      ? Promise.resolve()
-      : import("@openclaw/session-url-contract").then((contract) => {
-          setSessionPathBuilder(contract.buildControlUiSessionPath);
-        }));
-
   const hasPendingGateway = startup.pendingGatewayUrl !== null;
   const gateway = createApplicationGateway(
     settings,
@@ -242,21 +228,18 @@ export function bootstrapApplication(
   const initialLocationReady = (
     documentMode || focusLocation
       ? Promise.resolve(applicationLocation)
-      : Promise.all([sessionPathBuilderReady, import("./bootstrap-location.ts")]).then(
-          ([, location]) =>
-            location.resolveInitialApplicationLocation({
-              location: applicationLocation,
-              basePath,
-              sessionKey: settings.sessionKey,
-              gateway,
-              agentsList: () => agents.state.agentsList,
-              selectedAgentId: settings.selectedAgentId,
-              signal: startupLifecycle.signal,
-            }),
-        )
+      : resolveInitialApplicationLocation({
+          location: applicationLocation,
+          basePath,
+          sessionKey: settings.sessionKey,
+          gateway,
+          agentsList: () => agents.state.agentsList,
+          selectedAgentId: settings.selectedAgentId,
+          signal: startupLifecycle.signal,
+        })
   ).catch((error: unknown) => {
-    // stop() aborts an eager unscoped-session lookup even when start() returns
-    // at the lazy-chunk guard, so consume that teardown-only rejection here.
+    // stop() aborts eager session lookups even before start() reaches location
+    // resolution, so consume that teardown-only rejection here.
     if (startupLifecycle.signal.aborted) {
       return applicationLocation;
     }
@@ -295,6 +278,15 @@ export function bootstrapApplication(
     onUpdateFailure: (failure, admission) =>
       void openUpdateFailureTriage(context, failure, admission),
   });
+  const mentions = createMentionsCapability(gateway, { connectionBootstrap });
+  const sidebarAttention = createSidebarAttentionStore({
+    gateway,
+    agentSelection,
+    agents,
+    overlays,
+    scopeUpgrade,
+    mentions,
+  });
   // App-updater interlock: writing config (or restarting the gateway) while
   // the updater runs can corrupt the install; pause config writes until the
   // update settles. Wired app-lifetime so page unmounts cannot strand it.
@@ -312,13 +304,23 @@ export function bootstrapApplication(
   const theme = createApplicationTheme(settings, gateway);
   const nativeChatDrafts = createNativeChatDrafts();
   const nativeLinkRouting = startNativeLinkRouting({
+    onNativeUpdateDeclined: () => {
+      const snapshot = overlays.snapshot;
+      const campaign = snapshot.updateSchedule?.campaign;
+      const busy =
+        snapshot.updateRunning ||
+        snapshot.updateReconciliationPending ||
+        campaign?.state === "applying";
+      if ((snapshot.updateAvailable || campaign) && !busy && !snapshot.controlUiRefreshRequired) {
+        void overlays.runUpdate();
+      }
+    },
     shouldOpenInControlUiBrowser: () =>
       loadSettings().openLinksInControlUiBrowser === true &&
       isBrowserPanelAvailable(gateway.snapshot) &&
       document.querySelector("openclaw-app-shell")?.isConnected === true,
   });
   const nativeNotifications = createNativeNotificationsCapability();
-  const mentions = createMentionsCapability(gateway, { connectionBootstrap });
   const webPush = createWebPushCapability(gateway, { connectionBootstrap });
   const chatSubmissions = createChatSubmissions();
   const placementStartup = createApplicationPlacementStartup({
@@ -455,6 +457,7 @@ export function bootstrapApplication(
     channels,
     config,
     scopeUpgrade,
+    sidebarAttention,
     runtimeConfig,
     sessions,
     placementStartup,
@@ -499,7 +502,6 @@ export function bootstrapApplication(
           return () => gateway.stop();
         },
         () => startGatewayPageActivation(gateway, document, window),
-        () => sessionPathBuilderReady,
       ];
       // Resolve first-run setup before routing: the default Chat route owns the
       // workspace graph, which setup users would otherwise fetch and discard.
@@ -577,6 +579,7 @@ export function bootstrapApplication(
       agents.dispose();
       channels.dispose();
       scopeUpgrade.dispose();
+      sidebarAttention.dispose();
       placementStartup.dispose();
       sessions.dispose();
       workboard.dispose();

@@ -14,7 +14,7 @@ Matrix is a downloadable channel plugin (`@openclaw/matrix`) built on the offici
 openclaw plugins install @openclaw/matrix
 ```
 
-Bare plugin specs try ClawHub first, then npm fallback. Force a source with `openclaw plugins install clawhub:@openclaw/matrix` or `npm:@openclaw/matrix`. From a local checkout: `openclaw plugins install ./path/to/local/matrix-plugin`.
+`@openclaw/matrix` installs from npm first, then falls back to its declared ClawHub package only when the npm target is unavailable. Use `npm:` or `clawhub:` to force a source. From a local checkout: `openclaw plugins install ./path/to/local/matrix-plugin`.
 
 `plugins install` registers and enables the plugin; no separate `enable` step is needed. The channel still does nothing until configured below. See [Plugins](/tools/plugin) for general install rules.
 

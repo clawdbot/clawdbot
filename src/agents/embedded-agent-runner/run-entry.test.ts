@@ -548,6 +548,7 @@ describe("runEmbeddedAgentEntry", () => {
   });
 
   it("accepts an empty result after a committed side effect and finalizes it once", async () => {
+    const hasCommittedSideEffect = vi.fn(() => true);
     state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       const result = await params.run(params.provider, params.model, initialAttemptOptions(params));
       expect(
@@ -576,15 +577,18 @@ describe("runEmbeddedAgentEntry", () => {
         preparation: { kind: "direct" },
         resolveRuntimeOverride: () => undefined,
       },
-      behavior: { kind: "command-rpc", hasCommittedSideEffect: () => true },
+      behavior: { kind: "command-rpc", hasCommittedSideEffect },
       sessionOverride: { kind: "preserve" },
       runCandidate: async (provider, model, options) => {
         recordTurnAttempt(options.onContextEngineTurnCandidate, "candidate");
-        return makeResult({ provider, model, classification: "empty" });
+        const result = makeResult({ provider, model, classification: "empty" });
+        expect(options.classifyResult(result)).toBeUndefined();
+        return result;
       },
     });
 
     expect(state.finalizedAttempts).toEqual(["candidate"]);
+    expect(hasCommittedSideEffect).toHaveBeenCalledOnce();
   });
 
   it("does not finalize any candidate when fallback is exhausted", async () => {

@@ -78,6 +78,26 @@ export type SlackAppContextChangedEvent = {
   event_ts?: string;
 };
 
+export type SlackAgentSessionStoppedEvent = {
+  type: "agent_session_stopped";
+  channel: string;
+  thread_ts: string;
+  user: string;
+  event_ts: string;
+  streaming_message_ts: string[];
+};
+
+export type SlackAgentSessionTitleChangedEvent = {
+  type: "agent_session_title_changed";
+  channel: string;
+  thread_ts: string;
+  user: string;
+  title: string;
+  previous_title?: string;
+  team_id: string;
+  event_ts: string;
+};
+
 export type SlackPinEvent = {
   type: "pin_added" | "pin_removed";
   channel_id?: string;

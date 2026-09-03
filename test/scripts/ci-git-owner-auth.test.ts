@@ -61,8 +61,8 @@ it.skipIf(process.platform === "win32").each([
   { mode: "qa-branch", code: 0, reason: "release-branch-head" },
   { mode: "qa-mismatch", code: 1, reason: "" },
   { mode: "qa-untrusted", code: 1, reason: "" },
-  { mode: "qa-pr", code: 0, reason: "open-pr-head" },
-  { mode: "qa-api-error", code: 23, reason: "" },
+  { mode: "qa-pr", code: 1, reason: "" },
+  { mode: "qa-api-error", code: 1, reason: "" },
   { mode: "qa-foreign-origin", code: 125, reason: "" },
 ])(
   "QA selected-ref validation owns authenticated fetches without changing trust ($mode)",

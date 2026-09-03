@@ -24,7 +24,7 @@ import { retryAsync } from "../infra/retry.js";
 import { writeSiblingTempFile } from "../infra/sibling-temp-file.js";
 import { resolveConfigDir } from "../utils.js";
 import { isFsSafeError, readLocalFileSafely, type FsSafeLikeError } from "./store.runtime.js";
-import { formatMediaLimitMb, MEDIA_FILE_MODE } from "./store.shared.js";
+import { MEDIA_FILE_MODE, SaveMediaSourceError } from "./store.shared.js";
 
 const resolveMediaDir = () => path.join(resolveConfigDir(), "media");
 /** Default per-file media-store byte cap used by store and plugin SDK callers. */
@@ -481,7 +481,7 @@ async function writeMediaStreamToFile(params: {
       }
       total += buffer.byteLength;
       if (total > params.maxBytes) {
-        throw new Error(`Media exceeds ${formatMediaLimitMb(params.maxBytes)} limit`);
+        throw SaveMediaSourceError.tooLarge(params.maxBytes);
       }
       if (sniffLen < sniffBuffer.length) {
         // The next pull may reuse the chunk; retain only the prefix we own.
@@ -498,25 +498,6 @@ async function writeMediaStreamToFile(params: {
   }
 }
 
-/** Stable error categories for unsafe or failed source-file ingestion. */
-type SaveMediaSourceErrorCode =
-  | "invalid-path"
-  | "not-found"
-  | "not-file"
-  | "path-mismatch"
-  | "too-large";
-
-/** Error raised when saveMediaSource cannot safely read or persist a source path. */
-class SaveMediaSourceError extends Error {
-  code: SaveMediaSourceErrorCode;
-
-  constructor(code: SaveMediaSourceErrorCode, message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.code = code;
-    this.name = "SaveMediaSourceError";
-  }
-}
-
 function toSaveMediaSourceError(err: FsSafeLikeError, maxBytes = MAX_BYTES): SaveMediaSourceError {
   switch (err.code) {
     case "symlink":
@@ -530,11 +511,7 @@ function toSaveMediaSourceError(err: FsSafeLikeError, maxBytes = MAX_BYTES): Sav
         cause: err,
       });
     case "too-large":
-      return new SaveMediaSourceError(
-        "too-large",
-        `Media exceeds ${formatMediaLimitMb(maxBytes)} limit`,
-        { cause: err },
-      );
+      return SaveMediaSourceError.tooLarge(maxBytes, { cause: err });
     case "not-found":
       return new SaveMediaSourceError("not-found", "Media path does not exist", { cause: err });
     case "outside-workspace":
@@ -593,7 +570,7 @@ export async function saveMediaBuffer(
   detectionFilePathHint?: string,
 ): Promise<SavedMedia> {
   if (buffer.byteLength > maxBytes) {
-    throw new Error(`Media exceeds ${formatMediaLimitMb(maxBytes)} limit`);
+    throw SaveMediaSourceError.tooLarge(maxBytes);
   }
   const dir = resolveMediaScopedDir(subdir, "saveMediaBuffer");
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
