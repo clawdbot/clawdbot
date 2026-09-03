@@ -452,10 +452,10 @@ suite.define(() => {
       .poll(() =>
         sidebarNewThread.evaluate((element) => {
           const style = getComputedStyle(element);
-          return { borderColor: style.borderTopColor, boxShadow: style.boxShadow };
+          return { borderStyle: style.borderTopStyle, boxShadow: style.boxShadow };
         }),
       )
-      .toEqual({ borderColor: "rgba(0, 0, 0, 0)", boxShadow: "none" });
+      .toEqual({ borderStyle: "none", boxShadow: "none" });
     await page.keyboard.press("Tab");
     await sidebarNewThread.focus();
     await expect

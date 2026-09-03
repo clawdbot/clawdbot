@@ -7,7 +7,7 @@ import { createVoiceReceiveRecoveryState } from "./receive-recovery.js";
 import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
 import type { VoiceSessionEntry } from "./session.js";
 
-it("plays every frame of a burst through the real Opus encoder before releasing queued speech", async () => {
+function createRealtimePlaybackFixture() {
   const voiceSdk = loadDiscordVoiceSdk();
   const player = voiceSdk.createAudioPlayer({
     behaviors: { noSubscriber: voiceSdk.NoSubscriberBehavior.Play },
@@ -90,6 +90,38 @@ it("plays every frame of a burst through the real Opus encoder before releasing 
   player.on("error", onPlayerError);
   playback.attachPlayer();
 
+  return {
+    voiceSdk,
+    player,
+    playback,
+    cancel,
+    stop,
+    stopTerminally,
+    onTerminalError,
+    onPlayerError,
+    close() {
+      playback.close();
+      harness.close();
+      connection.destroy();
+      player.off("error", onPlayerError);
+      cancel.mockRestore();
+      stop.mockRestore();
+    },
+  };
+}
+
+it("plays every frame of a burst through the real Opus encoder before releasing queued speech", async () => {
+  const fixture = createRealtimePlaybackFixture();
+  const {
+    playback,
+    player,
+    voiceSdk,
+    cancel,
+    stop,
+    stopTerminally,
+    onTerminalError,
+    onPlayerError,
+  } = fixture;
   try {
     playback.enqueueExactSpeechMessage("first answer");
     // Seventeen 400 ms provider chunks exceed the PCM stream's normal backpressure threshold.
@@ -133,11 +165,37 @@ it("plays every frame of a burst through the real Opus encoder before releasing 
     expect(onTerminalError).not.toHaveBeenCalled();
     expect(onPlayerError).not.toHaveBeenCalled();
   } finally {
-    playback.close();
-    harness.close();
-    connection.destroy();
-    player.off("error", onPlayerError);
-    cancel.mockRestore();
-    stop.mockRestore();
+    fixture.close();
   }
 }, 15_000);
+
+it("keeps failed-player speech owned until the provider completes its response", async () => {
+  const fixture = createRealtimePlaybackFixture();
+  const { playback, player, voiceSdk, onPlayerError } = fixture;
+  try {
+    playback.enqueueExactSpeechMessage("first answer");
+    playback.sendOutputAudio(Buffer.alloc(24_000));
+    playback.enqueueExactSpeechMessage("second answer");
+    playback.enqueueExactSpeechMessage("third answer");
+    const state = player.state;
+    if (state.status === voiceSdk.AudioPlayerStatus.Idle) {
+      throw new Error("expected a buffered Discord resource");
+    }
+    const idle = new Promise<void>((resolve) => {
+      player.once(voiceSdk.AudioPlayerStatus.Idle, () => resolve());
+    });
+    state.resource.playStream.destroy(new Error("synthetic encoder failure"));
+    await idle;
+
+    expect(onPlayerError).toHaveBeenCalledOnce();
+    expect(playback.retainedExactSpeechTexts()).toEqual([
+      "first answer",
+      "second answer",
+      "third answer",
+    ]);
+    playback.handleResponseDone({ status: "completed" });
+    expect(playback.retainedExactSpeechTexts()).toEqual(["second answer", "third answer"]);
+  } finally {
+    fixture.close();
+  }
+});

@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { parse as parseYaml } from "yaml";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 const repoRoot = path.resolve(__dirname, "../..");
@@ -112,10 +112,11 @@ function writeQaEvidence(params: {
   );
 }
 
-function allProfileScorecardFixture(evidenceEntryCount = 1) {
-  const taxonomy = parseYaml(
-    fs.readFileSync(path.join(repoRoot, "taxonomy.yaml"), "utf8"),
-  ) as TaxonomyFixture;
+function allProfileScorecardFixture(
+  evidenceEntryCount = 1,
+  taxonomyPath = path.join(repoRoot, "taxonomy.yaml"),
+) {
+  const taxonomy = parseYaml(fs.readFileSync(taxonomyPath, "utf8")) as TaxonomyFixture;
   const activeSurfaces = (taxonomy.surfaces ?? []).filter(
     (surface) => surface.status !== "retired",
   );
@@ -198,6 +199,128 @@ function expectedMaturityScorePercent(): number {
 }
 
 describe("maturity docs renderer CLI", () => {
+  it("renders public docs redirects with destination fragments overriding source fragments", () => {
+    const fixtureDir = tempDirs.make("openclaw-maturity-docs-links-");
+    const docsRoot = path.join(fixtureDir, "docs");
+    const taxonomyPath = path.join(fixtureDir, "taxonomy.yaml");
+    const scoresPath = path.join(fixtureDir, "scores.yaml");
+    const evidenceDir = path.join(fixtureDir, "synthetic-evidence");
+    const outputDir = path.join(fixtureDir, "output");
+    const links = [
+      ["docs/legacy-fragment.md", "[Legacy Fragment](/guide#destination-section)"],
+      ["docs/legacy-page.mdx#source-section", "[Source Section](/guide#source-section)"],
+      ["docs/legacy-fragment.md#source-section", "[Source Section](/guide#destination-section)"],
+      ["docs/legacy-empty.md#source-section", "[Source Section](/guide)"],
+      ["docs/guide.md#direct-section", "[Direct Section](/guide#direct-section)"],
+      ["docs/direct.mdx#direct-section", "[Direct Section](/direct#direct-section)"],
+      ["docs/legacy-page.md", "[Legacy Page](/guide)"],
+      ["docs/unknown.md", null],
+      ["docs/legacy-missing.md", null],
+      ["docs/internal/private.md", null],
+      ["docs/legacy-private.md", null],
+      ["https://example.test/guide#external", null],
+      ["docs/legacy-external.md", null],
+      ["docs/legacy-chain.md", null],
+    ] as const;
+    fs.mkdirSync(path.join(docsRoot, "internal"), { recursive: true });
+    for (const file of ["guide.md", "direct.mdx", "internal/private.md"]) {
+      fs.writeFileSync(
+        path.join(docsRoot, file),
+        "# Fixture page\n\n## Direct section\n\n## Source section\n\n## Destination section\n",
+      );
+    }
+    fs.writeFileSync(
+      path.join(docsRoot, "docs.json"),
+      JSON.stringify({
+        redirects: [
+          ["/legacy-fragment", "/guide#destination-section"],
+          ["/legacy-page", "/guide"],
+          ["/legacy-empty", "/guide#"],
+          ["/direct", "/guide#destination-section"],
+          ["/legacy-missing", "/missing#destination-section"],
+          ["/legacy-private", "/internal/private#destination-section"],
+          ["/legacy-external", "https://example.test/guide#external"],
+          ["/legacy-chain", "/legacy-fragment"],
+        ].map(([source, destination]) => ({ source, destination })),
+      }),
+    );
+    const surface = { id: "tools", name: "Fixture tools", family: "core", level: "experimental" };
+    fs.writeFileSync(
+      taxonomyPath,
+      stringifyYaml({
+        version: 1,
+        title: "Synthetic docs link fixture",
+        levels: [{ id: "experimental", code: "M1", label: "Experimental" }],
+        surfaces: [
+          {
+            ...surface,
+            categories: [
+              {
+                id: "links",
+                name: "Docs links",
+                category_note: "Synthetic fixture for renderer links",
+                features: [{ name: "Fixture feature", coverageIds: ["tools.evidence"] }],
+                docs: links.map(([doc]) => doc),
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    const scores = {
+      quality: { score: 0, label: "Experimental" },
+      completeness: { score: 0, label: "Experimental" },
+    };
+    fs.writeFileSync(
+      scoresPath,
+      stringifyYaml({
+        version: 1,
+        process_version: 1,
+        counts: { active_surfaces: 1, category_scores: 1 },
+        rollups: { surface_average: scores, category_average: scores },
+        surfaces: [
+          {
+            ...surface,
+            scores,
+            categories: [
+              {
+                name: "Docs links",
+                ...scores,
+                lts: { supported: false, human_override: false },
+              },
+            ],
+            lts: { supported_categories: 0, total_categories: 1, status: "none" },
+          },
+        ],
+      }),
+    );
+    writeQaEvidence({
+      dir: evidenceDir,
+      entries: [{ id: "synthetic-docs-links", status: "skipped" }],
+      scorecard: allProfileScorecardFixture(1, taxonomyPath),
+    });
+
+    const result = runCli(
+      "--docs-root",
+      docsRoot,
+      "--taxonomy",
+      taxonomyPath,
+      "--scores",
+      scoresPath,
+      "--evidence-dir",
+      evidenceDir,
+      "--output-dir",
+      path.relative(repoRoot, outputDir),
+      "--strict-inputs",
+    );
+
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    const taxonomy = fs.readFileSync(path.join(outputDir, "maturity", "taxonomy.md"), "utf8");
+    const renderedLinks = taxonomy.match(/\[[^\]]+\]\([^)]+\)/g);
+    expect(renderedLinks).toEqual(links.flatMap(([, link]) => (link === null ? [] : [link])));
+  });
+
   it("checks maturity inputs without requiring QA evidence artifacts", () => {
     const result = runCli("--check");
 

@@ -229,12 +229,12 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
       agentId: options.context.agentId,
       config: runtimeConfig(),
     });
-  const currentBinding = async (session: ReturnType<typeof currentSession>) =>
-    session ? await options.bindingStore.read(currentIdentity(session.sessionId)) : undefined;
-  const requestOptions = async (pluginConfig: unknown): Promise<CodexControlRequestOptions> => {
+  const currentBinding = (session: ReturnType<typeof currentSession>) =>
+    session ? options.bindingStore.read(currentIdentity(session.sessionId)) : undefined;
+  const requestOptions = (pluginConfig: unknown): CodexControlRequestOptions => {
     const plugin = readCodexPluginConfig(pluginConfig);
     const session = currentSession();
-    const binding = await currentBinding(session);
+    const binding = currentBinding(session);
     if (binding?.connectionScope === "supervision") {
       const connection = resolveCodexBindingAppServerConnection({ binding, pluginConfig });
       return {
@@ -297,7 +297,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
             ...(cursor ? { cursor } : {}),
             ...(searchTerm ? { searchTerm } : {}),
           },
-          await requestOptions(pluginConfig),
+          requestOptions(pluginConfig),
         );
         return jsonResult(mayReadRawTranscripts ? response : redactNativeThreadResponse(response));
       }
@@ -314,7 +314,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
           pluginConfig,
           CODEX_CONTROL_METHODS.readThread,
           { threadId, includeTurns },
-          await requestOptions(pluginConfig),
+          requestOptions(pluginConfig),
         );
         return jsonResult(mayReadRawTranscripts ? response : redactNativeThreadResponse(response));
       }
@@ -331,7 +331,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
           pluginConfig,
           CODEX_CONTROL_METHODS.renameThread,
           { threadId, name },
-          await requestOptions(pluginConfig),
+          requestOptions(pluginConfig),
         );
         return jsonResult({ action, threadId, name });
       }
@@ -340,13 +340,13 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
           pluginConfig,
           CODEX_CONTROL_METHODS.unarchiveThread,
           { threadId },
-          await requestOptions(pluginConfig),
+          requestOptions(pluginConfig),
         );
         return jsonResult(mayReadRawTranscripts ? response : redactNativeThreadResponse(response));
       }
 
       const session = currentSession();
-      const binding = await currentBinding(session);
+      const binding = currentBinding(session);
       if (action === "archive") {
         if (params.confirm !== true) {
           throw new Error("confirm=true is required to archive a native Codex thread");
@@ -356,7 +356,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
         }
         const identity = currentIdentity(session.sessionId);
         await options.bindingStore.withThreadArchiveFence(async () => {
-          const archivedBinding = await currentBinding(session);
+          const archivedBinding = currentBinding(session);
           if (archivedBinding?.threadId === threadId) {
             // Clearing the binding detaches the harness-owned Codex thread. The session lock keeps
             // both that thread and App Server-selected model routing fixed.
@@ -371,7 +371,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
             pluginConfig,
             CODEX_CONTROL_METHODS.readThread,
             { threadId, includeTurns: false },
-            await requestOptions(pluginConfig),
+            requestOptions(pluginConfig),
           );
           assertThreadMayBeArchived(current, threadId);
           if (await options.bindingStore.hasOtherThreadOwner(threadId, identity)) {
@@ -387,14 +387,14 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
                 pluginConfig,
                 CODEX_CONTROL_METHODS.listThreads,
                 listParams,
-                await requestOptions(pluginConfig),
+                requestOptions(pluginConfig),
               ),
             assertDescendantIdle: async (descendantThreadId) => {
               const descendant = await request(
                 pluginConfig,
                 CODEX_CONTROL_METHODS.readThread,
                 { threadId: descendantThreadId, includeTurns: false },
-                await requestOptions(pluginConfig),
+                requestOptions(pluginConfig),
               );
               assertThreadMayBeArchived(descendant, descendantThreadId);
             },
@@ -403,7 +403,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
             pluginConfig,
             CODEX_CONTROL_METHODS.archiveThread,
             { threadId },
-            await requestOptions(pluginConfig),
+            requestOptions(pluginConfig),
           );
           if (archivedBinding?.threadId === threadId) {
             await options.bindingStore.mutate(identity, {
@@ -439,7 +439,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
           pluginConfig,
           CODEX_CONTROL_METHODS.readThread,
           { threadId, includeTurns: false },
-          await requestOptions(pluginConfig),
+          requestOptions(pluginConfig),
         );
         assertThreadMayBeForked(current, threadId);
       }
@@ -447,7 +447,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
         pluginConfig,
         CODEX_CONTROL_METHODS.forkThread,
         { threadId, threadSource: "user", excludeTurns: true },
-        await requestOptions(pluginConfig),
+        requestOptions(pluginConfig),
       );
       if (!isJsonObject(response) || !isJsonObject(response.thread)) {
         throw new Error("Codex app-server returned an invalid thread/fork response");

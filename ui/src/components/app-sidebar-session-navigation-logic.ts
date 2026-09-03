@@ -42,7 +42,7 @@ import {
 import type { SidebarWorkboardBoard } from "./app-sidebar-workboard.ts";
 import { resolveCloudWorkerStopAction } from "./cloud-worker-stop.ts";
 import type { SessionAttentionController } from "./session-attention-controller.ts";
-import { listAssignableSessionOwners, type SessionOwnerOption } from "./session-owner-chip.ts";
+import { sessionSelfOwner, type SessionOwnerOption } from "./session-owner-chip.ts";
 
 type SessionRow = SessionsListResult["sessions"][number];
 
@@ -569,11 +569,10 @@ export function applySidebarSessionOwnerFilter(input: {
 } {
   const facetOwners = input.ownerFacet ?? [];
   const selfId = input.self?.id;
-  const selfOwner = selfId
-    ? listAssignableSessionOwners({ facet: facetOwners, self: input.self }).find(
-        (owner) => owner.type === "human" && owner.id === selfId,
-      )
-    : undefined;
+  const selfOwner =
+    facetOwners.find((owner) => owner.id === selfId)?.type === "agent"
+      ? null
+      : sessionSelfOwner(input.self);
   const ownerOptions = selfOwner
     ? [selfOwner, ...facetOwners.filter((owner) => owner.id !== selfOwner.id)]
     : facetOwners;

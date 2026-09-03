@@ -100,13 +100,6 @@ function collectTextContent(content: Array<{ type?: string; text?: string }>): s
     .join("");
 }
 
-function collectThinkingContent(content: Array<{ type?: string; thinking?: string }>): string {
-  return content
-    .filter((part): part is { type: "thinking"; thinking: string } => part.type === "thinking")
-    .map((part) => part.thinking)
-    .join("");
-}
-
 function buildBtwSystemPrompt(): string {
   return [
     "You are answering an ephemeral /btw side question about the current conversation.",
@@ -1376,8 +1369,8 @@ export async function runBtwSideQuestion(
       }
 
       if (event.type === "thinking_delta") {
-        reasoningText += event.delta;
         if (params.resolvedReasoningLevel !== "off") {
+          reasoningText += event.delta;
           await params.opts?.onReasoningStream?.({ text: reasoningText, isReasoning: true });
         }
         continue;
@@ -1399,13 +1392,8 @@ export async function runBtwSideQuestion(
     }
 
     const finalMessage = finalEvent?.type === "done" ? finalEvent.message : undefined;
-    if (finalMessage) {
-      if (!sawTextEvent) {
-        answerText = collectTextContent(finalMessage.content);
-      }
-      if (!reasoningText) {
-        collectThinkingContent(finalMessage.content);
-      }
+    if (finalMessage && !sawTextEvent) {
+      answerText = collectTextContent(finalMessage.content);
     }
 
     const answer = answerText.trim();

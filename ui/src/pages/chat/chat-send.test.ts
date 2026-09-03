@@ -6923,6 +6923,47 @@ describe("handleSendChat", () => {
     expect(host.request).not.toHaveBeenCalled();
   });
 
+  it("defers a recipient-only queue replacement made during the browser input yield", async () => {
+    const text = "@Alex please review";
+    const originalMentions = [{ profileId: "profile-first", start: 0, end: 5 }];
+    const replacementMentions = [{ profileId: "profile-second", start: 0, end: 5 }];
+    const host = makeChatHost({
+      chatMessage: text,
+      chatMentions: originalMentions,
+      requestHandlers: {
+        "chat.history": () => idleChatHistory(),
+        "chat.send": (params: unknown) => ({
+          runId: requireRecord(params, "replacement recipient send").idempotencyKey,
+          status: "started",
+        }),
+      },
+    });
+    let replacement: ChatQueueItem | undefined;
+    const accepted = await submitAcrossBrowserInput(host, (queued) => {
+      expect(queued.mentions).toEqual(originalMentions);
+      replacement = { ...queued, mentions: replacementMentions };
+      expect(
+        updateStoredChatComposerQueueItem(
+          host,
+          host.sessionKey,
+          queued,
+          replacement,
+          queued.agentId,
+        ),
+      ).toBe(true);
+    });
+
+    expect(accepted).toBe(true);
+    expect(host.request).not.toHaveBeenCalled();
+    expect(listStoredChatOutboxes(host)[0]?.queue).toEqual([replacement]);
+
+    await flushChatQueueForEvent(host);
+    const sends = host.request.mock.calls.filter(([method]) => method === "chat.send");
+    expect(sends.map(([, params]) => params)).toEqual([
+      expect.objectContaining({ message: text, mentions: replacementMentions }),
+    ]);
+  });
+
   it.each(["edit hold", "reorder"])(
     "uses canonical queue arbitration after a browser input %s",
     async (change) => {

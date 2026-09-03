@@ -59,6 +59,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   private context!: ApplicationContext;
 
   @property({ attribute: false }) routeData: ModelProvidersRouteData | undefined;
+  @property({ attribute: false }) loaderPending = false;
 
   @state() private data: ModelProvidersData | null = null;
   @state() private busy: Record<string, boolean> = {};
@@ -98,19 +99,24 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     },
     onComplete: ({ client, data }) => {
       this.loadClient = null;
-      this.adoptLoadedData(client, data);
+      this.supplemental.adoptCoreData(client, data);
     },
     onError: () => {
       this.loadClient = null;
     },
   });
   private readonly refreshPolicy = new UsageRefreshPolicy({
-    isLoading: () => this.loadClient !== null || this.supplemental.usageLoading,
+    isLoading: () =>
+      this.loaderPending ||
+      !this.routeDataObserved ||
+      this.loadClient !== null ||
+      this.supplemental.usageLoading,
     // Usage convergence must not restart the independent local-cost request.
     reload: () => this.supplemental.loadUsage(),
     onIncompleteUsageExhausted: () => this.requestUpdate(),
   });
   private readonly supplemental = new ModelProviderSupplementalLoader(this, {
+    isCoreLoading: () => this.loaderPending,
     getGateway: () => this.gateway,
     getData: () => this.data,
     getDataClient: () => this.dataClient,
@@ -130,7 +136,12 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
         // Keep the last snapshot visible while the canonical reconnect load replaces it.
         this.resetConnectionState({ preserveVisibleData: true });
       }
-      if (change.becameConnected && !change.initial) {
+      if (
+        change.becameConnected &&
+        !change.initial &&
+        this.routeDataObserved &&
+        !this.loaderPending
+      ) {
         void this.refresh({ force: false });
       }
     },
@@ -167,7 +178,10 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   }
 
   override willUpdate(changed: PropertyValues) {
-    if (changed.has("routeData") && this.routeData !== undefined) {
+    if (
+      (changed.has("routeData") || changed.has("loaderPending")) &&
+      this.routeData !== undefined
+    ) {
       this.routeDataObserved = true;
       const selectedAgentId = this.resolveSelectedAgentId();
       this.setSelectedAgent(selectedAgentId);
@@ -175,7 +189,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
         (this.routeData.agentId ?? "") === selectedAgentId &&
         this.gateway.isRouteDataCurrent(this.routeData)
       ) {
-        this.adoptLoadedData(this.routeData.client, this.routeData.data);
+        this.supplemental.adoptCoreData(this.routeData.client, this.routeData.data);
       } else {
         this.data = null;
         this.dataClient = null;
@@ -193,11 +207,11 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     ) {
       void this.context.agents.ensureList();
     }
-    if (!this.routeDataObserved && this.routeData !== undefined) {
-      return;
-    }
+    // The route owns initial loading, even when its page module is already cached.
     const client = this.gateway.client;
     if (
+      !this.routeDataObserved ||
+      this.loaderPending ||
       !this.gateway.connected ||
       !client ||
       !this.selectedAgentId ||
@@ -207,10 +221,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       return;
     }
     void this.refresh({ force: false });
-  }
-
-  private adoptLoadedData(client: GatewayBrowserClient | null, data: ModelProvidersData) {
-    this.supplemental.adoptCoreData(client, data);
   }
 
   private invalidateRequests() {
@@ -615,11 +625,9 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     };
     const defaults = this.defaultsDraft ?? configuredDefaults;
     const stageDefaults = (patch: Partial<DefaultsDraft>) => {
-      const current = this.defaultsDraft ?? configuredDefaults;
-      const next = { ...current, ...patch };
-      this.defaultsDraft = next;
+      this.defaultsDraft = { ...(this.defaultsDraft ?? configuredDefaults), ...patch };
       this.setMessage("defaults", null);
-      void this.saveDefaults(next);
+      void this.saveDefaults(this.defaultsDraft);
     };
     // This keeps the pre-move General busy gate sourced from the same update state.
     const cards = buildModelProviderCards({
@@ -642,7 +650,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       refreshing: this.loadClient !== null,
       error: rosterError ?? data.error ?? data.catalogError,
       providerUsageFailed: data.providerUsage?.ok === false,
-      supplementalLoading: this.supplemental.loading,
+      supplementalLoading: this.loaderPending || this.supplemental.loading,
       updatedAt: data.updatedAt,
       costDays: MODEL_PROVIDERS_COST_DAYS,
       credentialAgentLabel: selectedAgentLabel,

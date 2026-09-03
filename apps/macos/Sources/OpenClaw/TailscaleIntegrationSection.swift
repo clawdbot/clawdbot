@@ -203,19 +203,27 @@ struct TailscaleIntegrationSection: View {
         }
     }
 
+    static func dashboardURL(host: String, localBasePath: String? = nil) -> URL? {
+        guard let gatewayURL = URL(string: "wss://\(host)") else { return nil }
+        let config: GatewayConnection.Config = (gatewayURL, nil, nil)
+        return try? GatewayEndpointStore.dashboardURL(
+            for: config,
+            mode: .local,
+            localBasePath: localBasePath)
+    }
+
     @ViewBuilder
     private var accessURLRow: some View {
         if let host = self.tailscaleService.tailscaleHostname {
-            let url = "https://\(host)/ui/"
             HStack(spacing: 8) {
                 Text("Dashboard URL:")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                if let link = URL(string: url) {
-                    Link(url, destination: link)
+                if let url = Self.dashboardURL(host: host) {
+                    Link(url.absoluteString, destination: url)
                         .font(.system(.caption, design: .monospaced))
                 } else {
-                    Text(url)
+                    Text(host)
                         .font(.system(.caption, design: .monospaced))
                 }
             }

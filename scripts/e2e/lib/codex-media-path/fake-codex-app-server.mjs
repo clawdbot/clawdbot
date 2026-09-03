@@ -5,7 +5,7 @@ import {
   runFakeCodexAppServer,
 } from "../codex-app-server-fixture.mjs";
 
-const version = "0.152.1";
+const version = "0.153.0";
 const requestLog =
   process.env.OPENCLAW_CODEX_MEDIA_PATH_APP_SERVER_LOG ??
   "/tmp/openclaw-codex-media-path-app-server.jsonl";

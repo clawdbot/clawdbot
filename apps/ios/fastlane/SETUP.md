@@ -142,6 +142,46 @@ Direct Fastlane upload is disabled. Use the package script so the release
 wrapper, App Store push mode, and exported-IPA validation gate all run in the
 same path.
 
+## Protected beta CI
+
+`iOS Beta Release` is a separate, manual workflow. Dispatch it from trusted
+`main` with a canonical `release/YYYY.M.PATCH-mobile` branch and that branch's
+exact full commit SHA. The workflow accepts only a candidate that descends from
+the workflow SHA and differs in exactly the five generated mobile release
+metadata files. Approval of the `ios-beta-release` environment gates all access
+to signing assets, App Store Connect credentials, and immutable release-ref
+mutation.
+
+Repository/environment secrets required by name:
+
+- `GH_APP_PRIVATE_KEY`
+- `MATCH_PASSWORD`
+- `APP_STORE_CONNECT_ISSUER_ID`
+- `APP_STORE_CONNECT_KEY_ID`
+- `APP_STORE_CONNECT_KEY_CONTENT`
+
+Protected `ios-beta-release` environment variable required:
+
+- `TESTFLIGHT_INTERNAL_GROUP`: immutable App Store Connect beta-group ID
+
+The CI lane must distribute the processed build to one pre-approved internal
+TestFlight group. The value is ID-only and is never matched as a display name.
+The lane fails before upload when the ID is blank, unknown, external, duplicated,
+collides with another group's display name, or any other internal group does not
+explicitly disable automatic all-build access. After processing, it freshly
+resolves the exact group and uploaded build, then requires that build ID to be
+assigned only to the approved group. External distribution and Beta App Review
+submission remain disabled.
+
+After verified internal distribution, the workflow writes a bounded signed
+intent and records `refs/openclaw/mobile-releases/ios/<app-store-version>-<build>`
+at the exact candidate SHA. A failed post-upload recording step may be recovered
+with the workflow's `record-only` operation, the original failed run ID, and the
+same release ref/SHA tuple. Recovery enters `ios-beta-release`, executes only
+trusted workflow-SHA tooling, and fails on missing artifacts, replay, moved
+refs, mismatched digests, or a conflicting immutable ref. App Review and
+production promotion remain manual.
+
 Maintainer recovery path for a fresh clone on the same Mac:
 
 1. Reuse the existing Keychain-backed App Store Connect key on that machine.
@@ -187,8 +227,8 @@ Versioning rules:
 - App Store release uploads derive the gateway from `apps/mobile/version.json` and revision/build state from App Store Connect
 - explicit `--version`, `--revision`, and `--build-number` values are checked overrides
 - `apps/ios/CHANGELOG.md` is the iOS-only changelog and release-note source
-- Gateway versions use CalVer: `YYYY.M.D`
-- Fastlane appends one unpadded revision digit: gateway `YYYY.M.D`, revision `R`, becomes `YYYY.M.DR`
+- Gateway versions use CalVer: `YYYY.M.PATCH`
+- Fastlane appends one unpadded revision digit: gateway `YYYY.M.PATCH`, revision `R`, becomes `YYYY.M.PATCHR`
 - Gateway `2026.7.2`, revision `1` sets `CFBundleShortVersionString` to `2026.7.21`
 - Fastlane resolves `CFBundleVersion` from the maximum awaiting, processing, failed, or complete build-upload record plus one
 - Run the shared mobile cutter prepare/plan/finalize flow after changing `## Unreleased`, then review and commit all five outputs

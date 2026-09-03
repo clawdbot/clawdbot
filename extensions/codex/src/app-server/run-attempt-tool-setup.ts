@@ -65,7 +65,6 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     params,
     preDynamicStartupStages,
     mutable,
-    startupAuthProfileId,
     resolvedWorkspace,
     effectiveWorkspace,
     effectiveCwd,
@@ -81,7 +80,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     agentDir,
   } = connection;
   const preDynamicSummary = preDynamicStartupStages.snapshot();
-  if (shouldWarnCodexDynamicToolBuildStageSummary(preDynamicSummary)) {
+  if (shouldWarnCodexDynamicToolBuildStageSummary(preDynamicSummary, profilerEnabled)) {
     embeddedAgentLog.warn(
       `codex app-server pre-dynamic startup timings runId=${params.runId} sessionId=${params.sessionId} totalMs=${preDynamicSummary.totalMs} stages=${formatCodexDynamicToolBuildStageSummary(preDynamicSummary)}`,
       {
@@ -90,7 +89,6 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         totalMs: preDynamicSummary.totalMs,
         stages: preDynamicSummary.stages,
         hasStartupBinding: Boolean(mutable.startupBinding?.threadId),
-        startupAuthProfileId: startupAuthProfileId ?? null,
         bundleMcpDiagnosticCount: bundleMcpThreadConfig.diagnostics.length,
         nativeToolSurfaceEnabled,
       },

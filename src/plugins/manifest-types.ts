@@ -420,8 +420,6 @@ export type PluginManifest = {
   description?: string;
   /** Optional presentation hints for plugin catalog surfaces. */
   catalog?: PluginManifestCatalog;
-  /** Optional HTTPS URL for marketplace/catalog card artwork. */
-  icon?: string;
   version?: string;
   uiHints?: Record<string, PluginConfigUiHint>;
   /**

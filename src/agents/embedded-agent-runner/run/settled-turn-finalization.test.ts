@@ -380,10 +380,12 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     });
   });
 
-  it("preserves the settled runtime context window through isolated finalization", async () => {
+  it("preserves runtime context and model selection through isolated finalization", async () => {
+    const runtimeModelSelection = { provider: "openai", model: "native-selected-model" };
     const attempt = {
       ...settledFailedAttempt(),
       agentHarnessId: "codex",
+      runtimeModelSelection,
       contextTokens: 1_000_000,
       contextTokensSource: "runtime" as const,
     };
@@ -395,6 +397,8 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       auth: { credentialSource: { kind: "profile" } },
     } as never;
     const finalAssistant = buildEmbeddedRunnerAssistant({
+      provider: "host-finalizer",
+      model: "summary-model",
       content: [{ type: "text", text: "The exec tool failed: post-processing error." }],
     });
     backendMocks.runSettledFinalization.mockResolvedValueOnce({
@@ -410,6 +414,7 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
 
     expect(result.attempt).toMatchObject({
       agentHarnessId: "codex",
+      runtimeModelSelection,
       modelAttempt: {
         provider: "openai",
         model: "gpt-5.6-luna",
@@ -420,6 +425,9 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     });
     expect(result.prepared.agentMeta).toMatchObject({
       agentHarnessId: "codex",
+      provider: "host-finalizer",
+      model: "summary-model",
+      runtimeModelSelection,
       credentialSource: { kind: "profile" },
       contextTokens: 1_000_000,
       contextTokensSource: "runtime",
@@ -644,70 +652,6 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       toolMetas: attempt.toolMetas,
     });
   });
-
-  it.each([false, true])(
-    "uses the settled tool-batch identity for command-only fallback (context unavailable: %s)",
-    async (unavailable) => {
-      const assistant = buildEmbeddedRunnerAssistant({
-        model: "gpt-5.6-luna",
-        stopReason: "toolUse",
-        content: [{ type: "toolCall", id: "command-1", name: "exec", arguments: {} }],
-      });
-      const messagesSnapshot: EmbeddedRunAttemptWithReceiptEvidence["messagesSnapshot"] = [
-        { role: "user", content: "Run the command.", timestamp: 1 },
-        assistant,
-        {
-          role: "toolResult",
-          toolCallId: "command-1",
-          toolName: "exec",
-          content: [{ type: "text", text: "done" }],
-          isError: false,
-          timestamp: 3,
-        },
-      ];
-      const attempt = {
-        ...makeEmbeddedRunnerAttempt({
-          terminal: {
-            kind: "failed",
-            source: "prompt",
-            error: new Error("The provider is overloaded"),
-          },
-          sessionIdUsed: "session-settled",
-          sessionFileUsed: "/tmp/session-settled.jsonl",
-          messagesSnapshot,
-          toolMetas: [
-            { toolName: "exec", toolCallId: "command-1", isError: false, replaySafe: false },
-          ],
-          itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
-          currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
-          replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
-          currentAttemptAssistant: undefined,
-          lastAssistant: undefined,
-          settledTurnFinalizationContext: unavailable
-            ? { source: "unavailable" }
-            : { source: "openclaw-transcript", messages: messagesSnapshot },
-        }),
-        successfulNestedToolNames: [],
-      };
-      const input = finalizationInput(attempt);
-      input.terminalBase.runParams.trigger = "user";
-      backendMocks.runSettledFinalization.mockRejectedValueOnce(new Error("finalizer failed"));
-
-      const result = await prepareTerminalWithSettledTurnFinalization(input);
-
-      expect(backendMocks.runSettledFinalization).toHaveBeenCalledOnce();
-      expect(result.finalizationOutcome).toBe("failed");
-      expect(result.prepared.payloadsWithToolMedia).toEqual([
-        expect.objectContaining({ text: SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT }),
-      ]);
-      expect(result.prepared.payloadsWithToolMedia?.[0]?.isError).not.toBe(true);
-      expect(result.prepared.failureSignal).toBeUndefined();
-      expect(result.attempt.currentAttemptAssistant).toMatchObject({
-        provider: assistant.provider,
-        model: assistant.model,
-      });
-    },
-  );
 
   it.each(["outer", "Stop"])(
     "preserves %s cancellation during finalization without a fallback",

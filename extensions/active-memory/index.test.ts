@@ -1119,7 +1119,7 @@ describe("active-memory plugin", () => {
   });
 
   it("cleans the transient workspace when SQLite recall cleanup retries are exhausted", async () => {
-    const rmSpy = vi.spyOn(fs, "rm");
+    const mkdtempSpy = vi.spyOn(fs, "mkdtemp");
     hoisted.cleanupSessionLifecycleArtifacts.mockRejectedValue(
       new Error("session store remains busy"),
     );
@@ -1128,10 +1128,12 @@ describe("active-memory plugin", () => {
 
     expect(result).toBeUndefined();
     expect(hoisted.cleanupSessionLifecycleArtifacts).toHaveBeenCalledTimes(3);
-    expect(rmSpy).toHaveBeenCalledWith(expect.stringMatching(/openclaw-active-memory-.*/), {
-      recursive: true,
-      force: true,
-    });
+    expect(mkdtempSpy).toHaveBeenCalledWith(expect.stringMatching(/openclaw-active-memory-$/));
+    const tempWorkspaceDir = expectDefined(
+      await mkdtempSpy.mock.results[0]?.value,
+      "active-memory temp workspace",
+    );
+    await expectPathMissing(tempWorkspaceDir);
     expect(api.logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("failed to clean up recall session"),
     );
@@ -5821,15 +5823,15 @@ describe("active-memory plugin", () => {
 
   it("keeps subagent transcripts off disk by default by using a temp session file", async () => {
     const mkdtempSpy = vi.spyOn(fs, "mkdtemp");
-    const rmSpy = vi.spyOn(fs, "rm");
 
     await runPromptBuild({ prompt: "what wings should i order? temp transcript path" });
 
-    expect(mkdtempSpy).toHaveBeenCalled();
-    expect(rmSpy).toHaveBeenCalledWith(expect.stringMatching(/openclaw-active-memory-.*/), {
-      recursive: true,
-      force: true,
-    });
+    expect(mkdtempSpy).toHaveBeenCalledWith(expect.stringMatching(/openclaw-active-memory-$/));
+    const tempWorkspaceDir = expectDefined(
+      await mkdtempSpy.mock.results[0]?.value,
+      "active-memory temp workspace",
+    );
+    await expectPathMissing(tempWorkspaceDir);
   });
 
   it("persists subagent transcripts in a separate directory when enabled", async () => {

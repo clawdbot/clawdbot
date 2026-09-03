@@ -168,6 +168,8 @@ export function createProcessSupervisor(): ProcessSupervisor & {
   const waitForScope = (scopeKey: string): Promise<void> => waitForRuns(scopeKey);
 
   const startRun = async (input: SpawnInput, owner: OwnedRun): Promise<ManagedRun> => {
+    // A scope fence can outlive its caller; reject before replacing the surviving process.
+    input.assertCurrent?.();
     const { runId, scopeKey } = owner;
     const startedAtMs = Date.now();
     const startingTerminationReason = owner.terminationReason;
@@ -293,6 +295,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
       const adapter =
         input.mode === "pty"
           ? await createPtyAdapter({
+              assertCurrent: input.assertCurrent,
               shell: expectDefined(input.argv[0], "spawn executable"),
               args: input.argv.slice(1),
               cwd: input.cwd,
@@ -300,11 +303,13 @@ export function createProcessSupervisor(): ProcessSupervisor & {
             })
           : input.mode === "anchored-shell"
             ? await createChildAdapter({
+                assertCurrent: input.assertCurrent,
                 anchoredShellCommand: input.command,
                 cwd: input.cwd,
                 env: input.env,
               })
             : await createChildAdapter({
+                assertCurrent: input.assertCurrent,
                 argv: input.argv,
                 argv0: input.argv0,
                 cwd: input.cwd,

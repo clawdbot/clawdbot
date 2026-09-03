@@ -209,6 +209,11 @@ existing temporary directories, Node or Vitest caches, or other global caches. S
 validators; it does not require `TSX_DISABLE_CACHE` in the invoking shell. Raw
 external `tsx` and `node --import tsx` invocations outside these launchers are unchanged.
 
+Control UI builds report size budgets without enforcing them. Run
+`pnpm ui:check-performance` after a build to enforce absolute budgets, or
+`pnpm ui:check-performance:base <base-commit-sha>` to build and compare both
+revisions with the same toolchain. See [Control UI size budgets](/ci#control-ui-size-budgets).
+
 ### Source tests and subprocess builds
 
 Non-watch runs through `pnpm test` or `scripts/run-vitest.mjs` keep Vitest tests
@@ -479,7 +484,12 @@ JSON report together. Mantis allocates an invocation directory for setup logs,
 capture attempts, and its report; the builder preserves each attempt's relative
 paths and refuses to overwrite an existing report.
 
-Separate output owners remain: real-Gateway suites, `chat-outbox-*`, and
+The real-Gateway auth transport suite also allocates one fresh directory per
+suite invocation. Its screenshots wait for meaningful content and the presentation
+owner's finite entrance or resize animations, while perpetual descendant activity
+continues.
+
+Separate output owners remain: other real-Gateway suites, `chat-outbox-*`, and
 `chat-attachment-read-lifecycle`. Do not assume those owners have the ordinary
 mocked proof retention guarantee.
 

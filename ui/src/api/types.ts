@@ -448,6 +448,8 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
   permissionMode?: GatewaySessionRow["permissionMode"];
   archivedAt?: number;
   archiveReason?: SessionEntryArchiveReason;
+  /** Present only while an explicit mark-unread marker owns the row. */
+  markedUnreadAt?: number;
   contextWindow?: string;
   thinkingLevel?: string;
   fastMode?: FastMode;

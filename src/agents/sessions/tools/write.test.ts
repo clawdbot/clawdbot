@@ -173,9 +173,9 @@ describe("write tool", () => {
         tool.execute("call-1", { path: filePath, content }, undefined),
       ).resolves.toMatchObject({ details: { changed: true, created: true } });
       await expect(fs.readFile(filePath)).resolves.toEqual(Buffer.from(content, "utf8"));
-      await expect(
-        tool.execute("call-2", { path: filePath, content }, undefined),
-      ).resolves.toMatchObject({ details: { changed: false }, terminate: true });
+      const noOpResult = await tool.execute("call-2", { path: filePath, content }, undefined);
+      expect(noOpResult).toMatchObject({ details: { changed: false } });
+      expect((noOpResult as { terminate?: boolean }).terminate).toBeUndefined();
     },
   );
 
@@ -216,7 +216,7 @@ describe("write tool", () => {
   });
 
   it.each(["hello\n", "café 🦀\r\n日本語 e\u0301\r\n", "\uFFFD\r\n"])(
-    "returns terminal no-op for identical UTF-8 content: %j",
+    "returns a non-terminal no-op for identical UTF-8 content: %j",
     async (content) => {
       const filePath = await createTempPath("identical.txt");
       await fs.writeFile(filePath, content, "utf-8");
@@ -226,7 +226,7 @@ describe("write tool", () => {
 
       const tc0 = expectDefined(result.content[0], "result.content[0] test invariant");
       expect("text" in tc0 ? tc0.text : "").toContain("No changes made");
-      expect((result as { terminate?: boolean }).terminate).toBe(true);
+      expect((result as { terminate?: boolean }).terminate).toBeUndefined();
       expect(result.details).toEqual({ changed: false });
       await expect(fs.readFile(filePath)).resolves.toEqual(Buffer.from(content, "utf8"));
     },

@@ -116,6 +116,16 @@ function functionBody(source: string, name: string): string {
   return nextFunction < 0 ? rest : rest.slice(0, nextFunction);
 }
 
+function functionDefinition(source: string, name: string): string {
+  const start = source.indexOf(`def ${name}`);
+  if (start < 0) {
+    throw new Error(`missing Fastfile function ${name}`);
+  }
+  const rest = source.slice(start);
+  const nextFunction = rest.slice(1).search(/\ndef /);
+  return nextFunction < 0 ? rest : rest.slice(0, nextFunction + 1);
+}
+
 function swiftFunctionBody(source: string, name: string): string {
   const startMarker = `func ${name}(`;
   const start = source.indexOf(startMarker);
@@ -463,15 +473,324 @@ describe("iOS Fastlane release upload gates", () => {
     expect(upload).toBeGreaterThan(planRecheck);
   });
 
-  it("waits for Apple build processing without submitting to TestFlight review", () => {
+  it("keeps local upload-only behavior but requires explicit internal distribution in CI", () => {
     const releaseUpload = laneBody(readFastfile(), "release_upload");
+    const intentContext = functionBody(readFastfile(), "mobile_release_intent_context!");
 
+    expect(releaseUpload).toContain(
+      "intent_context = mobile_release_intent_context!(gateway_version: context[:version])",
+    );
+    expect(releaseUpload).toContain(
+      "internal_group_id = intent_context ? resolve_ci_testflight_internal_group_id! : nil",
+    );
     expect(releaseUpload).toContain("skip_waiting_for_build_processing: false");
-    expect(releaseUpload).toContain("skip_submission: true");
+    expect(releaseUpload).toContain("upload_options[:skip_submission] = true");
+    expect(releaseUpload).toContain("skip_submission: false");
+    expect(releaseUpload).toContain("submit_beta_review: false");
+    expect(releaseUpload).toContain("distribute_external: false");
+    expect(releaseUpload).not.toContain("groups:");
     expect(releaseUpload).toContain(
       "wait_processing_timeout_duration: APP_STORE_BUILD_PROCESSING_TIMEOUT_SECONDS",
     );
     expect(releaseUpload).not.toContain("skip_waiting_for_build_processing: true");
+    expect(releaseUpload.indexOf("mobile_release_intent_context!")).toBeLessThan(
+      releaseUpload.indexOf("upload_to_testflight(**upload_options)"),
+    );
+    expect(releaseUpload.indexOf("resolve_ci_testflight_internal_group_id!")).toBeLessThan(
+      releaseUpload.indexOf("upload_to_testflight(**upload_options)"),
+    );
+    expect(
+      releaseUpload.indexOf("assign_and_verify_ci_testflight_internal_group!"),
+    ).toBeGreaterThan(releaseUpload.indexOf("upload_to_testflight(**upload_options)"));
+    expect(releaseUpload.indexOf("finalize_mobile_release_ref!")).toBeGreaterThan(
+      releaseUpload.indexOf("assign_and_verify_ci_testflight_internal_group!"),
+    );
+    expect(intentContext).toContain("OPENCLAW_MOBILE_RELEASE_INTENT_PATH");
+    expect(intentContext).toContain("OPENCLAW_MOBILE_RELEASE_AUTHORITY_RECEIPT_DIGEST");
+    expect(intentContext).toContain("OPENCLAW_MOBILE_RELEASE_TARGET_REF");
+  });
+
+  it("requires one immutable internal TestFlight group ID without name collisions", () => {
+    const configured = functionDefinition(
+      readFastfile(),
+      "configured_ci_testflight_internal_group_id!",
+    );
+    const selector = functionDefinition(
+      readFastfile(),
+      "select_ci_testflight_internal_group_by_id!",
+    );
+    const source = `
+module UI
+  def self.user_error!(message)
+    raise message
+  end
+end
+Group = Struct.new(:id, :name, :is_internal_group, :has_access_to_all_builds)
+${configured}
+${selector}
+base_groups = [
+  Group.new("internal-id", "Internal", true, false),
+  Group.new("external-id", "External", false, false)
+]
+cases = [
+  ["blank", "   ", base_groups],
+  ["name-only", "Internal", base_groups],
+  ["unknown", "missing-id", base_groups],
+  ["external", "external-id", base_groups],
+  [
+    "collision",
+    "internal-id",
+    base_groups + [Group.new("other-id", "internal-id", true, false)]
+  ],
+  [
+    "automatic-other",
+    "internal-id",
+    base_groups + [Group.new("automatic-id", "Automatic", true, true)]
+  ],
+  [
+    "unknown-internal",
+    "internal-id",
+    base_groups + [Group.new("unknown-id", "Unknown Internal", true, nil)]
+  ],
+  [
+    "unknown-external",
+    "internal-id",
+    [
+      Group.new("internal-id", "Internal", true, false),
+      Group.new("external-id", "External", false, nil)
+    ]
+  ],
+  [
+    "automatic-target",
+    "internal-id",
+    [
+      Group.new("internal-id", "Internal", true, true),
+      Group.new("external-id", "External", false, false)
+    ]
+  ],
+  ["valid", "internal-id", base_groups]
+]
+cases.each do |label, configured_id, groups|
+  ENV["TESTFLIGHT_INTERNAL_GROUP"] = configured_id
+  begin
+    group_id = configured_ci_testflight_internal_group_id!
+    group = select_ci_testflight_internal_group_by_id!(groups: groups, group_id: group_id)
+    puts "#{label}:ok:#{group.id}"
+  rescue => error
+    puts "#{label}:error:#{error.message}"
+  end
+end
+`;
+    const result = spawnSync("ruby", ["-e", source], { encoding: "utf8" });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim().split("\n")).toEqual([
+      "blank:error:TESTFLIGHT_INTERNAL_GROUP must be a nonblank App Store Connect beta-group ID.",
+      "name-only:error:TESTFLIGHT_INTERNAL_GROUP must match exactly one App Store Connect beta-group ID.",
+      "unknown:error:TESTFLIGHT_INTERNAL_GROUP must match exactly one App Store Connect beta-group ID.",
+      "external:error:The configured TestFlight beta group must be internal.",
+      "collision:error:TESTFLIGHT_INTERNAL_GROUP collides with another TestFlight group name.",
+      "automatic-other:error:Every non-target internal TestFlight group must explicitly disable automatic all-build access.",
+      "unknown-internal:error:Every non-target internal TestFlight group must explicitly disable automatic all-build access.",
+      "unknown-external:ok:internal-id",
+      "automatic-target:ok:internal-id",
+      "valid:ok:internal-id",
+    ]);
+  });
+
+  it("freshly resolves and directly assigns the exact internal group to the uploaded build", () => {
+    const selector = functionDefinition(
+      readFastfile(),
+      "select_ci_testflight_internal_group_by_id!",
+    );
+    const verifier = functionDefinition(
+      readFastfile(),
+      "assign_and_verify_ci_testflight_internal_group!",
+    );
+    const source = `
+module UI
+  def self.user_error!(message)
+    raise message
+  end
+end
+Group = Struct.new(:id, :name, :is_internal_group, :has_access_to_all_builds, :builds) do
+  def fetch_builds
+    builds
+  end
+end
+module Spaceship
+  class ConnectAPI
+    module Platform
+      IOS = "IOS"
+    end
+  end
+end
+Build = Struct.new(:id, :app_version, :version, :platform, :assigned_group_ids, :persist_assignment) do
+  def add_beta_groups(beta_groups:)
+    assigned_group_ids.concat(beta_groups.map(&:id))
+    beta_groups.each { |group| group.builds << self } if persist_assignment
+  end
+end
+App = Struct.new(:groups, :builds) do
+  def get_beta_groups
+    groups
+  end
+
+  def get_builds(filter:, includes:)
+    builds
+  end
+end
+def env_present?(value)
+  !value.nil? && !value.strip.empty?
+end
+def resolve_app_store_connect_app(app_identifier:, app_id:)
+  $fresh_app
+end
+${selector}
+${verifier}
+
+def run_case(label, post_groups:, app_builds:)
+  pre_group = Group.new("group-id", "Pre-upload Internal", true, false, [])
+  select_ci_testflight_internal_group_by_id!(groups: [pre_group], group_id: "group-id")
+  $fresh_app = App.new(post_groups, app_builds)
+  begin
+    result = assign_and_verify_ci_testflight_internal_group!(
+      group_id: "group-id",
+      app_store_version: "2026.9.20",
+      build_number: "8"
+    )
+    build = app_builds.first
+    relationship_ids = result.fetch(:group).fetch_builds.map(&:id)
+    puts "#{label}:ok:#{result.fetch(:group).name}:#{build.assigned_group_ids.join(",")}:#{relationship_ids.join(",")}"
+  rescue => error
+    puts "#{label}:error:#{error.message}"
+  end
+end
+
+uploaded = Build.new("build-id", "2026.9.20", "8", "IOS", [], true)
+run_case(
+  "valid",
+  post_groups: [Group.new("group-id", "Fresh Internal", true, false, [])],
+  app_builds: [uploaded]
+)
+run_case(
+  "missing-build",
+  post_groups: [Group.new("group-id", "Fresh Internal", true, false, [])],
+  app_builds: []
+)
+run_case(
+  "wrong-platform",
+  post_groups: [Group.new("group-id", "Fresh Internal", true, false, [])],
+  app_builds: [Build.new("build-id", "2026.9.20", "8", "MAC_OS", [], true)]
+)
+run_case(
+  "duplicate-builds",
+  post_groups: [Group.new("group-id", "Fresh Internal", true, false, [])],
+  app_builds: [
+    Build.new("build-id-1", "2026.9.20", "8", "IOS", [], true),
+    Build.new("build-id-2", "2026.9.20", "8", "IOS", [], true)
+  ]
+)
+run_case(
+  "missing-assignment",
+  post_groups: [Group.new("group-id", "Fresh Internal", true, false, [])],
+  app_builds: [Build.new("build-id", "2026.9.20", "8", "IOS", [], false)]
+)
+run_case(
+  "post-upload-external",
+  post_groups: [Group.new("group-id", "Fresh External", false, false, [])],
+  app_builds: [Build.new("build-id", "2026.9.20", "8", "IOS", [], true)]
+)
+run_case(
+  "post-upload-automatic-other",
+  post_groups: [
+    Group.new("group-id", "Fresh Internal", true, false, []),
+    Group.new("automatic-id", "Automatic", true, true, [])
+  ],
+  app_builds: [Build.new("build-id", "2026.9.20", "8", "IOS", [], true)]
+)
+unexpected = Build.new("build-id", "2026.9.20", "8", "IOS", [], true)
+run_case(
+  "unexpected-assignment",
+  post_groups: [
+    Group.new("group-id", "Fresh Internal", true, false, []),
+    Group.new("other-id", "Other Internal", true, false, [unexpected])
+  ],
+  app_builds: [unexpected]
+)
+`;
+    const result = spawnSync("ruby", ["-e", source], { encoding: "utf8" });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim().split("\n")).toEqual([
+      "valid:ok:Fresh Internal:group-id:build-id",
+      "missing-build:error:Uploaded TestFlight build could not be resolved after processing.",
+      "wrong-platform:error:Uploaded TestFlight build could not be resolved after processing.",
+      "duplicate-builds:error:Uploaded TestFlight build could not be resolved after processing.",
+      "missing-assignment:error:Uploaded TestFlight build is not assigned to the configured internal group.",
+      "post-upload-external:error:The configured TestFlight beta group must be internal.",
+      "post-upload-automatic-other:error:Every non-target internal TestFlight group must explicitly disable automatic all-build access.",
+      "unexpected-assignment:error:Uploaded TestFlight build is assigned outside the configured internal group.",
+    ]);
+  });
+
+  it("validates the complete iOS intent context before store mutation", () => {
+    const intentContext = functionDefinition(readFastfile(), "mobile_release_intent_context!");
+    const source = `
+module UI
+  def self.user_error!(message)
+    raise message
+  end
+end
+${intentContext}
+cases = [
+  {},
+  { "OPENCLAW_MOBILE_RELEASE_REF_MODE" => "invalid" },
+  { "OPENCLAW_MOBILE_RELEASE_REF_MODE" => "intent" },
+  {
+    "OPENCLAW_MOBILE_RELEASE_REF_MODE" => "intent",
+    "OPENCLAW_MOBILE_RELEASE_INTENT_PATH" => "/tmp/intent.json",
+    "OPENCLAW_MOBILE_RELEASE_AUTHORITY_RECEIPT_DIGEST" => "sha256:receipt",
+    "OPENCLAW_MOBILE_RELEASE_TARGET_REF" => "release/2026.9.2-mobile"
+  },
+  {
+    "OPENCLAW_MOBILE_RELEASE_REF_MODE" => "intent",
+    "OPENCLAW_MOBILE_RELEASE_INTENT_PATH" => "/tmp/intent.json",
+    "OPENCLAW_MOBILE_RELEASE_AUTHORITY_RECEIPT_DIGEST" => "sha256:#{"a" * 64}",
+    "OPENCLAW_MOBILE_RELEASE_TARGET_REF" => "release/2026.9.3-mobile"
+  },
+  {
+    "OPENCLAW_MOBILE_RELEASE_REF_MODE" => "intent",
+    "OPENCLAW_MOBILE_RELEASE_INTENT_PATH" => "/tmp/intent.json",
+    "OPENCLAW_MOBILE_RELEASE_AUTHORITY_RECEIPT_DIGEST" => "sha256:#{"a" * 64}",
+    "OPENCLAW_MOBILE_RELEASE_TARGET_REF" => "release/2026.9.2-mobile"
+  }
+]
+cases.each do |values|
+  ENV.delete("OPENCLAW_MOBILE_RELEASE_REF_MODE")
+  ENV.delete("OPENCLAW_MOBILE_RELEASE_INTENT_PATH")
+  ENV.delete("OPENCLAW_MOBILE_RELEASE_AUTHORITY_RECEIPT_DIGEST")
+  ENV.delete("OPENCLAW_MOBILE_RELEASE_TARGET_REF")
+  values.each { |key, value| ENV[key] = value }
+  begin
+    context = mobile_release_intent_context!(gateway_version: "2026.9.2")
+    puts context ? "ok:#{context.fetch(:target_ref)}" : "ok:local"
+  rescue => error
+    puts "error:#{error.message}"
+  end
+end
+`;
+    const result = spawnSync("ruby", ["-e", source], { encoding: "utf8" });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim().split("\n")).toEqual([
+      "ok:local",
+      "error:OPENCLAW_MOBILE_RELEASE_REF_MODE must be empty or intent.",
+      "error:OPENCLAW_MOBILE_RELEASE_INTENT_PATH is required in intent mode.",
+      "error:OPENCLAW_MOBILE_RELEASE_AUTHORITY_RECEIPT_DIGEST must be a canonical SHA-256 digest.",
+      "error:OPENCLAW_MOBILE_RELEASE_TARGET_REF must exactly match the mobile gateway version.",
+      "ok:release/2026.9.2-mobile",
+    ]);
   });
 
   it("finishes fallible local release work before mutating App Store metadata", () => {
@@ -708,7 +1027,7 @@ describe("iOS Fastlane release upload gates", () => {
     );
   });
 
-  it("preflights and records mobile release refs around TestFlight upload", () => {
+  it("preflights and finalizes mobile release refs only after TestFlight accepts the build", () => {
     const fastfile = readFastfile();
     const releaseUpload = laneBody(fastfile, "release_upload");
 
@@ -723,7 +1042,7 @@ describe("iOS Fastlane release upload gates", () => {
     );
     expect(releaseUpload).toContain("release_sha = context[:git_commit]");
     expect(releaseUpload).toContain("ensure_mobile_release_ref_available!");
-    expect(releaseUpload).toContain("record_mobile_release_ref!");
+    expect(releaseUpload).toContain("finalize_mobile_release_ref!");
     expect(releaseUpload).toContain("screenshots(\n          release_version: context[:version]");
     expect(fastfile).toContain("def without_xcode_xcconfig_file");
     expect(releaseUpload).toContain("without_xcode_xcconfig_file do");
@@ -737,9 +1056,32 @@ describe("iOS Fastlane release upload gates", () => {
     expect(releaseUpload.indexOf("ensure_mobile_release_ref_available!")).toBeLessThan(
       releaseUpload.indexOf("\n    metadata(\n      release_version: context[:version]"),
     );
-    expect(releaseUpload.indexOf("record_mobile_release_ref!")).toBeGreaterThan(
+    expect(releaseUpload.indexOf("finalize_mobile_release_ref!")).toBeGreaterThan(
       releaseUpload.indexOf("upload_to_testflight("),
     );
+  });
+
+  it("keeps local ref recording as the default and emits a closed intent only in CI mode", () => {
+    const finalizer = functionBody(readFastfile(), "finalize_mobile_release_ref!");
+    const intentContext = functionBody(readFastfile(), "mobile_release_intent_context!");
+
+    expect(finalizer).toContain("unless intent_context");
+    expect(finalizer).toContain("record_mobile_release_ref!(");
+    expect(intentContext).toContain('unless mode == "intent"');
+    expect(finalizer).toContain('"mobile-release-intent.mjs"');
+    expect(finalizer).toContain('"--authority-receipt-digest"');
+    expect(finalizer).toContain('"--gateway-version"');
+    expect(finalizer).toContain('"--app-store-version"');
+    expect(finalizer).toContain('"--build-number"');
+    expect(finalizer).toContain('"--internal-group-id"');
+    expect(finalizer).toContain('"--internal-group-name"');
+    expect(finalizer).toContain('"--target-ref"');
+    expect(finalizer).toContain('"--target-sha"');
+    expect(
+      functionBody(readFastfile(), "assign_and_verify_ci_testflight_internal_group!"),
+    ).toContain("build.add_beta_groups(beta_groups: [group])");
+    expect(finalizer).not.toContain('"git"');
+    expect(finalizer).not.toContain("push");
   });
 
   it("normalizes Watch screenshots as opaque RGB PNGs for App Store upload", () => {

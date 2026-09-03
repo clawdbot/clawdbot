@@ -92,6 +92,7 @@ export async function setAuthProfileOrder(params: {
   agentDir?: string;
   provider: string;
   order?: string[] | null;
+  sharedStoreWrite?: boolean;
 }): Promise<AuthProfileStore | null> {
   const providerKey = resolveProviderIdForAuth(params.provider);
   const sanitized =
@@ -100,6 +101,7 @@ export async function setAuthProfileOrder(params: {
 
   return await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
+    sharedStoreWrite: params.sharedStoreWrite,
     // Preserve requested IDs that the agent inherits (not owns) so the local
     // save path does not prune them from the order. Without this, a secondary
     // agent's `models auth order set --agent` accepts an inherited profile ID

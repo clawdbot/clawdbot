@@ -938,7 +938,7 @@ describe("openclaw.chat", () => {
     } as unknown as GatewayRequestContext;
 
     const requestResponses = makeRespond();
-    await withGatewayToolCallerIdentity(
+    const pendingChat = withGatewayToolCallerIdentity(
       {
         agentId: "main",
         sessionKey: "agent:main:main",
@@ -967,17 +967,14 @@ describe("openclaw.chat", () => {
           extraHandlers: { "openclaw.chat": systemAgentHandlers["openclaw.chat"]! },
         }),
     );
-    const first = expectDefined(requestResponses.calls[0], "delegated Gateway response invariant");
-    expect(getActiveGatewayRootWorkCount()).toBe(0);
-    const proposalId = (first.payload as { proposalId?: string }).proposalId;
-
-    expect(first.payload).toMatchObject({
-      reply:
-        "OpenClaw change pending approval: restart the Gateway. No change has been made. Expires in 10m.",
-      needsApproval: true,
-      proposalId: expect.stringMatching(/^system-agent:/),
-    });
-    expect(proposalId).toBeTruthy();
+    await vi.waitFor(() => expect(manager.listPendingRecords()).toHaveLength(1));
+    expect(requestResponses.calls).toHaveLength(0);
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
+    expect(systemAgentLane()).toMatchObject({ activeCount: 0, queuedCount: 0 });
+    const proposalId = expectDefined(
+      manager.listPendingRecords()[0],
+      "pending restart approval",
+    ).id;
     expect(manager.getSnapshot(proposalId!)).toMatchObject({
       request: { proposalHash, agentId: "main", sessionKey: "agent:main:main" },
     });
@@ -991,7 +988,7 @@ describe("openclaw.chat", () => {
     expect(handle).toHaveBeenNthCalledWith(1, "Restart Gateway.");
 
     // The follow-up chat rides the same live run authority the delegate tool carries.
-    await withGatewayToolCallerIdentity(
+    const sameOwnerChat = withGatewayToolCallerIdentity(
       { agentId: "main", sessionKey: "agent:main:main", operationalRunInstance },
       () =>
         callChat(context, {
@@ -1013,6 +1010,7 @@ describe("openclaw.chat", () => {
       "allow-once",
       proposalHash,
       expect.any(Function),
+      undefined,
     );
     expect(runGatewayRestart).toHaveBeenCalledOnce();
     await expect(resolveOperatorApproval.mock.results[0]?.value).resolves.toMatchObject({
@@ -1022,6 +1020,15 @@ describe("openclaw.chat", () => {
     expect(readLastSystemAgentAuditEntry()).toMatchObject({
       operation: "gateway.restart",
       summary: "Scheduled Gateway restart",
+    });
+    await pendingChat;
+    const sameOwnerResult = await sameOwnerChat;
+    expect(requestResponses.calls).toHaveLength(1);
+    expect(requestResponses.calls[0]?.payload).toMatchObject({
+      reply: expect.stringContaining("[openclaw] done: gateway.restart"),
+    });
+    expect(sameOwnerResult.payload).toMatchObject({
+      reply: expect.stringContaining("[openclaw] done: gateway.restart"),
     });
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });

@@ -32,7 +32,10 @@ const getUserProfileDisplay = vi.hoisted(() =>
   }),
 );
 
-vi.mock("../state/user-profiles.js", () => ({ getUserProfileDisplay }));
+vi.mock("../state/user-profiles.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/user-profiles.js")>()),
+  getUserProfileDisplay,
+}));
 
 import { listSessionsFromStoreAsync } from "./session-utils.js";
 

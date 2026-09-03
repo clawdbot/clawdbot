@@ -578,21 +578,22 @@ Hot reload and secrets reload preserve that distinction: catalog compatibility
 metadata does not become a custom request override that switches a native runtime
 back to OpenClaw.
 
-| Category                | Fields                                                                                      | Gateway restart needed?      |
-| ----------------------- | ------------------------------------------------------------------------------------------- | ---------------------------- |
-| Channels                | `channels.*`, `web` (WhatsApp) - all built-in and plugin channels                           | No (restarts that channel)   |
-| Agent & models          | `agent`, `agents`, `models`, `routing`                                                      | No                           |
-| Automation              | `hooks`, `cron`, `agent.heartbeat`                                                          | No (restarts that subsystem) |
-| Sessions & messages     | `session`, `messages`                                                                       | No                           |
-| Tools & media           | `tools`, `skills`, `mcp`, `audio`, `talk`                                                   | No                           |
-| Plugin config           | `plugins.entries.*`, `plugins.allow`, `plugins.deny`, `plugins.enabled`                     | No (reloads plugin runtime)  |
-| UI & misc               | `ui`, `logging`, `identity`, `bindings`                                                     | No                           |
-| Gateway HTTP APIs       | `gateway.http.endpoints`                                                                    | No (next request)            |
-| Gateway tools & nodes   | `gateway.tools`, `gateway.nodes.browser`                                                    | No (next operation)          |
-| Gateway client features | `gateway.cliAgents`, selected `gateway.controlUi` settings below                            | No                           |
-| Gateway push            | `gateway.push.apns.relay`                                                                   | No (next push)               |
-| Gateway server          | Other `gateway.*` settings (port, bind, auth, roles, tailscale, TLS, HTTP security headers) | **Yes**                      |
-| Infrastructure          | `discovery`, `browser`, `plugins.load`, `plugins.installs`                                  | **Yes**                      |
+| Category                | Fields                                                                           | Gateway restart needed?      |
+| ----------------------- | -------------------------------------------------------------------------------- | ---------------------------- |
+| Channels                | `channels.*`, `web` (WhatsApp) - all built-in and plugin channels                | No (restarts that channel)   |
+| Agent & models          | `agent`, `agents`, `models`, `routing`                                           | No                           |
+| Automation              | `hooks`, `cron`, `agent.heartbeat`                                               | No (restarts that subsystem) |
+| Sessions & messages     | `session`, `messages`                                                            | No                           |
+| Tools & media           | `tools`, `skills`, `mcp`, `audio`, `talk`                                        | No                           |
+| Plugin config           | `plugins.entries.*`, `plugins.allow`, `plugins.deny`, `plugins.enabled`          | No (reloads plugin runtime)  |
+| UI & misc               | `ui`, `logging`, `identity`, `bindings`                                          | No                           |
+| Gateway HTTP APIs       | `gateway.http.endpoints`, `gateway.http.securityHeaders.strictTransportSecurity` | No (next request)            |
+| Gateway tools & nodes   | `gateway.tools`, `gateway.nodes.browser`, `gateway.nodes.pairing`                | No (next operation)          |
+| Gateway client features | `gateway.cliAgents`, selected `gateway.controlUi` settings below                 | No                           |
+| Gateway push            | `gateway.push.apns.relay`                                                        | No (next push)               |
+| Gateway terminal        | `gateway.terminal.shell`                                                         | No (new terminals)           |
+| Gateway server          | Other `gateway.*` settings (port, bind, auth, roles, tailscale, TLS)             | **Yes**                      |
+| Infrastructure          | `discovery`, `browser`, `plugins.load`, `plugins.installs`                       | **Yes**                      |
 
 Under `gateway.controlUi`, the `environment`, `github`, `toolTitles`,
 `sessionObserver`, `embedSandbox`, `allowExternalEmbedUrls`, and
@@ -604,8 +605,11 @@ origin policy, and authentication still require a Gateway restart.
 Node command allowlists and node-published tools or skills still require a
 Gateway restart because they also configure services created at startup. Browser
 node routing applies to subsequent operations. Node pairing policy
-(`gateway.nodes.pairing`) still requires a restart because approvals can outlive
-the connection that started them.
+(`gateway.nodes.pairing`) also hot-applies: pending automatic approvals recheck
+the current policy before granting access, including after SSH probes. Existing
+paired devices remain paired. Terminal shell changes apply to newly opened
+terminals; active terminals keep their original shell. Terminal enablement and
+detached-session timeouts still require a restart.
 
 <Note>
 Changing `gateway.reload` or `gateway.remote` also does **not** trigger a restart. Individual plugins can override this table: a loaded plugin may declare its own restart-triggering config prefixes (for example the bundled Canvas plugin restarts the Gateway for `plugins.enabled`, `plugins.allow`, and `plugins.deny`, not just its own `plugins.entries.canvas`), so the actual behavior depends on which plugins are active.
@@ -682,12 +686,16 @@ newer config is applied. If that work needs restart recovery, the RPC returns
 the active revision.
 
 `config.patch` also accepts `replacePaths`, an array of config paths whose array
-replacement is intentional. If a patch would replace or delete an existing array
-with fewer entries, the Gateway rejects the write unless that exact path appears
-in `replacePaths`; nested arrays under array entries use `[]`, such as
-`agents.entries.*.skills`. This prevents truncated `config.get` snapshots from
-silently clobbering routing or allowlist arrays. Use `config.apply` when you
-intend to replace the full config.
+replacement or deletion is intentional. If a patch removes existing array entries
+or deletes an array, the Gateway rejects the write unless that exact array path
+appears in `replacePaths`. Deleting a containing object requires its contained
+array paths, including empty arrays. Deleting a whole array requires only its own
+path, not paths to arrays nested inside its entries. Use exact record keys, such
+as `agents.entries.main.skills`. For ID-merged entry updates, nested array paths
+use `[]`, such as `models.providers.custom.models[].input`. Parent paths and `*`
+wildcards do not authorize descendant arrays. This prevents truncated
+`config.get` snapshots from silently clobbering routing or allowlist arrays. Use
+`config.apply` when you intend to replace the full config.
 
 Arrays of objects with stable `id` fields merge by ID unless their path appears
 in `replacePaths`. These updates preserve authored fields in untouched entries;

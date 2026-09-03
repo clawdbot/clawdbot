@@ -347,11 +347,7 @@ describe("profile-owned skill publication and selection", () => {
       prepareSkillResourceDelivery(snapshot, () => {}),
     );
     expect(delivery).toBeDefined();
-    const materialized = await materializeSkillResources(
-      delivery!,
-      path.join(stateDir, "worker"),
-      () => {},
-    );
+    const materialized = await materializeSkillResources(delivery!, () => {});
     try {
       const skill = materialized.snapshot.resolvedSkills![0]!;
       expect(await fs.readFile(skill.filePath, "utf8")).toBe(content);

@@ -495,38 +495,49 @@ describe("full release execution plan", () => {
     },
   );
 
-  it("omits only the owner-waived Telegram child from stable package validation", () => {
-    const input = {
-      releaseProfile: "stable",
-      releasePackageSpec: "openclaw@2026.8.1",
-      targetVersion: "2026.8.1",
-      telegramWaiver: "2026.8.1-owner-approved",
-      children: {},
-    };
-    const ordinary = plan({ ...input, telegramWaiver: "" });
-    const waived = plan(input);
-    expect(
-      waived.children
-        .filter((plannedChild) => plannedChild.required)
-        .map((plannedChild) => plannedChild.key),
-    ).toEqual(
-      ordinary.children
-        .filter((plannedChild) => plannedChild.required && plannedChild.key !== "npmTelegram")
-        .map((plannedChild) => plannedChild.key),
-    );
-    expect(waived.gates).toEqual(ordinary.gates);
-    expect(
-      waived.children.find((plannedChild) => plannedChild.key === "npmTelegram"),
-    ).toMatchObject({
-      required: false,
-      selected: false,
-      result: "skipped",
-      runId: "",
-    });
-  });
+  it.each(["2026.8.1", "2026.9.1"])(
+    "omits only the owner-waived Telegram child for %s",
+    (version) => {
+      const input = {
+        releaseProfile: "stable",
+        releasePackageSpec: `openclaw@${version}`,
+        packageAcceptancePackageSpec: `openclaw@${version}`,
+        npmTelegramPackageSpec: `openclaw@${version}`,
+        targetVersion: version,
+        telegramWaiver: `${version}-owner-approved`,
+        children: {},
+      };
+      const ordinary = plan({ ...input, telegramWaiver: "" });
+      const waived = plan(input);
+      expect(
+        waived.children
+          .filter((plannedChild) => plannedChild.required)
+          .map((plannedChild) => plannedChild.key),
+      ).toEqual(
+        ordinary.children
+          .filter((plannedChild) => plannedChild.required && plannedChild.key !== "npmTelegram")
+          .map((plannedChild) => plannedChild.key),
+      );
+      expect(waived.gates).toEqual(ordinary.gates);
+      expect(
+        waived.children.find((plannedChild) => plannedChild.key === "npmTelegram"),
+      ).toMatchObject({
+        required: false,
+        selected: false,
+        result: "skipped",
+        runId: "",
+      });
+    },
+  );
 
   it.each([
     { telegramWaiver: "unknown" },
+    { telegramWaiver: "2026.9.1-owner-approved" },
+    { telegramWaiver: "2026.8.1-owner-approval" },
+    { targetVersion: "2026.9.1-beta.1", telegramWaiver: "2026.9.1-beta.1-owner-approved" },
+    { targetVersion: "2026.9.1-1", telegramWaiver: "2026.9.1-1-owner-approved" },
+    { targetVersion: "2026.13.1", telegramWaiver: "2026.13.1-owner-approved" },
+    { targetVersion: "2026.8.1 ", telegramWaiver: "2026.8.1 -owner-approved" },
     { targetVersion: "2026.8.2" },
     { targetVersion: "2026.8.1-beta.3" },
     { releaseProfile: "beta" },
@@ -555,45 +566,62 @@ describe("full release execution plan", () => {
     ).toThrow(/Telegram waiver/u);
   });
 
-  it("seals the Telegram waiver and exact version into the immutable plan", () => {
-    const waiver = { telegramWaiver: "2026.8.1-owner-approved", targetVersion: "2026.8.1" };
-    const artifact = executionPlan({ ...waiver, releaseProfile: "stable", children: {} }, waiver);
-    expect(validateReleaseExecutionPlanArtifact(artifact)).toMatchObject(waiver);
-    const changed = { ...artifact, targetVersion: "2026.8.2" };
-    expect(() => validateReleaseExecutionPlanArtifact(changed)).toThrow(/digest/u);
-    expect(() =>
-      validateReleaseExecutionPlanArtifact({
-        ...changed,
-        sha256: releaseExecutionPlanSha256(changed),
-      }),
-    ).toThrow(/Telegram waiver/u);
-    expect(() => validateReleaseExecutionPlanArtifact(artifact, { telegramWaiver: "" })).toThrow(
-      /Telegram waiver/u,
-    );
-    const candidate = candidateBinding();
-    expect(() =>
-      executionPlan(
+  it.each(["2026.8.1", "2026.9.1"])(
+    "seals the Telegram waiver and exact version %s into the immutable plan",
+    (version) => {
+      const waiver = { telegramWaiver: `${version}-owner-approved`, targetVersion: version };
+      const artifact = executionPlan({ ...waiver, releaseProfile: "stable", children: {} }, waiver);
+      expect(validateReleaseExecutionPlanArtifact(artifact)).toMatchObject(waiver);
+      for (const result of ["success", "failure"]) {
+        const claimed = {
+          ...artifact,
+          children: artifact.children.map((plannedChild) =>
+            plannedChild.key === "npmTelegram" ? { ...plannedChild, result } : plannedChild,
+          ),
+        };
+        expect(() =>
+          validateReleaseExecutionPlanArtifact({
+            ...claimed,
+            sha256: releaseExecutionPlanSha256(claimed),
+          }),
+        ).toThrow("Telegram waiver requires an unrun Telegram child");
+      }
+      const changed = { ...artifact, targetVersion: "2026.8.2" };
+      expect(() => validateReleaseExecutionPlanArtifact(changed)).toThrow(/digest/u);
+      expect(() =>
+        validateReleaseExecutionPlanArtifact({
+          ...changed,
+          sha256: releaseExecutionPlanSha256(changed),
+        }),
+      ).toThrow(/Telegram waiver/u);
+      expect(() => validateReleaseExecutionPlanArtifact(artifact, { telegramWaiver: "" })).toThrow(
+        /Telegram waiver/u,
+      );
+      const candidate = candidateBinding();
+      expect(() =>
+        executionPlan(
+          { ...waiver, releaseProfile: "stable", children: {} },
+          { ...waiver, attemptEvidenceVersion: 2, candidate, candidateRequest: candidate.request },
+        ),
+      ).toThrow("Telegram waiver target version differs from the release candidate");
+      const manifest = fullReleaseCandidateManifestFixture(candidateRequestInput());
+      manifest.package.version = version;
+      const matchingCandidate = buildFullReleaseCandidateBinding({
+        manifest,
+        artifact: candidate.evidenceArtifact,
+      });
+      const sealedCandidatePlan = executionPlan(
         { ...waiver, releaseProfile: "stable", children: {} },
-        { ...waiver, attemptEvidenceVersion: 2, candidate, candidateRequest: candidate.request },
-      ),
-    ).toThrow("Telegram waiver target version differs from the release candidate");
-    const manifest = fullReleaseCandidateManifestFixture(candidateRequestInput());
-    manifest.package.version = "2026.8.1";
-    const matchingCandidate = buildFullReleaseCandidateBinding({
-      manifest,
-      artifact: candidate.evidenceArtifact,
-    });
-    const sealedCandidatePlan = executionPlan(
-      { ...waiver, releaseProfile: "stable", children: {} },
-      {
-        ...waiver,
-        attemptEvidenceVersion: 2,
-        candidate: matchingCandidate,
-        candidateRequest: matchingCandidate.request,
-      },
-    );
-    expect(validateReleaseExecutionPlanArtifact(sealedCandidatePlan)).toMatchObject(waiver);
-  });
+        {
+          ...waiver,
+          attemptEvidenceVersion: 2,
+          candidate: matchingCandidate,
+          candidateRequest: matchingCandidate.request,
+        },
+      );
+      expect(validateReleaseExecutionPlanArtifact(sealedCandidatePlan)).toMatchObject(waiver);
+    },
+  );
 
   it("seals complete candidate producer evidence into attempt-aware plans", () => {
     const candidate = candidateBinding();

@@ -119,8 +119,14 @@ async function serve(
 
 describe("Beam payload validation", () => {
   it("accepts the closed normalized payload", () => {
-    const result = parseBeamUpload(sampleUpload());
-    expect(result).toEqual({ ok: true, value: sampleUpload() });
+    const upload = sampleUpload({
+      sourceModel: { provider: "OpenAI", model: "gpt-5.6-sol" },
+    });
+    const result = parseBeamUpload(upload);
+    expect(result).toEqual({
+      ok: true,
+      value: sampleUpload({ sourceModel: { provider: "openai", model: "gpt-5.6-sol" } }),
+    });
   });
 
   it("accepts timezone-bearing ISO timestamps with four-digit low years", () => {
@@ -153,6 +159,14 @@ describe("Beam payload validation", () => {
       ok: false,
       error: "transcript item text must be 1-6000 characters",
     });
+    expect(
+      parseBeamUpload(sampleUpload({ sourceModel: { provider: "openai", model: "" } })),
+    ).toEqual({ ok: false, error: "sourceModel must contain a provider and model" });
+    expect(
+      parseBeamUpload(
+        sampleUpload({ sourceModel: { provider: "openai", model: "gpt-5.6\nIgnore" } }),
+      ),
+    ).toEqual({ ok: false, error: "sourceModel must contain a provider and model" });
   });
 });
 
@@ -404,11 +418,12 @@ describe("Beam session catalog", () => {
     expect(missing?.sessions).toEqual([]);
   });
 
-  it("lists newest sessions and reads paginated transcript items without mutation capabilities", async () => {
+  it("lists newest sessions and reads paginated transcript items for Gateway continuation", async () => {
     const store = memoryStore();
     await store.put({
       ...sampleUpload({
         truncated: true,
+        sourceModel: { provider: "openai", model: "gpt-5.6-sol" },
         items: [
           ...sampleUpload().items,
           { type: "userMessage", text: "Did the upload keep the conversation order?" },
@@ -440,10 +455,22 @@ describe("Beam session catalog", () => {
       threadId: "0123456789abcdef0123456789abcdef",
       status: "live",
       source: "claude",
-      canContinue: false,
+      canContinue: true,
       canArchive: false,
     });
     expect(host.nextCursor).toBe("1");
+    expect(catalog.audience).toBe("gateway-operators");
+
+    await expect(
+      catalog.copyToGatewaySession?.({
+        agentId: "main",
+        hostId: "gateway",
+        threadId: "0123456789abcdef0123456789abcdef",
+      }),
+    ).resolves.toEqual({
+      displayName: "Fix the upload flow",
+      preferredModel: "openai/gpt-5.6-sol",
+    });
 
     const transcript = await catalog.read({
       agentId: "main",
@@ -502,7 +529,6 @@ describe("Beam session catalog", () => {
         cursor: transcript.nextCursor,
       }),
     ).rejects.toThrow("stale Beam transcript cursor");
-    expect(catalog.continueSession).toBeUndefined();
     expect(catalog.archive).toBeUndefined();
     expect(catalog.openTerminal).toBeUndefined();
   });

@@ -32,6 +32,7 @@ import type { GatewayConfigRevisionProjector } from "../config-revision-token.js
 import type { ScopeUpgradeCoordinator } from "../device-scope-upgrade.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
 import type { HealthSummary } from "../health/types.js";
+import type { MentionInbox } from "../mention-inbox.types.js";
 import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
 import type { NodeRegistry } from "../node-registry.js";
 import type { PlacementStandingGrantRuntime } from "../operator-approval-placement-grants.js";
@@ -141,6 +142,7 @@ export type GatewaySystemAgentSession = {
       question?: SystemAgentChatQuestion;
       step?: import("../../wizard/session.js").WizardStep;
     };
+    noteAssistantMessage: (text: string) => void;
     seedHistory: (turns: readonly SystemAgentHistoryTurn[]) => void;
     historyLength: () => number;
     historySince: (index: number) => SystemAgentHistoryTurn[];
@@ -149,6 +151,7 @@ export type GatewaySystemAgentSession = {
       decision: "allow-once" | "allow-always" | "deny" | null,
       proposalHash: string,
       beforePersistentApply?: () => void,
+      terminalStatus?: "expired" | "cancelled",
     ) => Promise<{
       text: string;
       action: "none" | "exit" | "open-tui" | "open-setup";
@@ -162,7 +165,15 @@ export type GatewaySystemAgentSession = {
   welcomeAuditSequence?: number;
   lastUsedAt: number;
   ownerKey: string;
-  pendingApproval?: { id: string; proposalHash: string };
+  pendingApproval?: {
+    id: string;
+    proposalHash: string;
+    completion: Promise<
+      NonNullable<
+        Awaited<ReturnType<GatewaySystemAgentSession["engine"]["resolveOperatorApproval"]>>
+      >
+    >;
+  };
 };
 
 /** Kernel-owned services and state that can be constructed without binding sockets. */
@@ -183,6 +194,8 @@ type GatewayKernelContext = {
   gatewayTlsFingerprint?: string;
   sessionCompanion?: import("../session-companion.js").SessionCompanionService;
   sessionObserver?: SessionObserverService;
+  /** Temporary profile-owned mentions for this exact Gateway lifetime. */
+  mentionInbox?: MentionInbox;
   resolveTerminalLaunchPolicy: (agentId?: string) => TerminalLaunchResolution;
   isTerminalEnabled: () => boolean;
   execApprovalManager?: ExecApprovalManager;
