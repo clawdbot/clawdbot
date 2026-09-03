@@ -70,15 +70,16 @@ export function runWithOperatorToolGatewayCleanupContext<T>(run: () => T): T {
     throw new Error("operator tool invocation authority expired");
   }
   const scope = getPluginRuntimeGatewayRequestScope();
-  // Keep verified role and scope restrictions after releasing the invocation;
-  // otherwise an inherited-only caller would become a synthetic system actor.
+  // Retain the effective actor and scopes after releasing the invocation;
+  // profile attribution alone does not establish authority.
   const client = createSyntheticPluginRuntimeClient({
     authenticatedUserProfile: authority.authenticatedUserProfile,
     scopes: [...authority.scopes],
-    operatorRoleActor: scope?.client?.internal?.operatorRoleActor ?? {
-      kind: "operator",
-      profileId: authority.authenticatedUserProfile.profileId,
-    },
+    operatorRoleActor: authority.operatorRoleActor ??
+      scope?.client?.internal?.operatorRoleActor ?? {
+        kind: "operator",
+        profileId: authority.authenticatedUserProfile.profileId,
+      },
   });
   return operatorToolGatewayAuthority.exit(() =>
     withPluginRuntimeGatewayRequestScope(

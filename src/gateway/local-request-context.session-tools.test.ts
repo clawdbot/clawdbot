@@ -14,9 +14,13 @@ import {
 } from "../plugins/runtime/gateway-request-scope.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { ensureGatewayOwnerProfile } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withLocalGatewayRequestScope } from "./local-request-context.js";
-import { withOperatorToolGatewayAuthority } from "./server-plugin-in-process-dispatch.js";
+import {
+  runWithOperatorToolGatewayCleanupContext,
+  withOperatorToolGatewayAuthority,
+} from "./server-plugin-in-process-dispatch.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugins.js";
 import { roleClient, rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-utils.js";
 
@@ -64,6 +68,71 @@ async function withSessionToolsFixture(run: (cfg: OpenClawConfig) => Promise<voi
 }
 
 describe("built-in session tool role authority", () => {
+  it.each([false, true])(
+    "retains inherited system ownership through deferred cleanup (scoped operator: %s)",
+    async (scopedOperator) => {
+      await withSessionToolsFixture(async () => {
+        const scope = getPluginRuntimeGatewayRequestScope();
+        if (!scope) {
+          throw new Error("expected local Gateway scope");
+        }
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: TARGET },
+          { visibility: "draft" },
+        );
+        const owner = ensureGatewayOwnerProfile("Owner");
+        const restricted = roleClient("none");
+        if (!restricted.authenticatedUserProfile) {
+          throw new Error("expected operator profile");
+        }
+        restricted.internal = {
+          operatorRoleActor: {
+            kind: "operator",
+            profileId: restricted.authenticatedUserProfile.profileId,
+          },
+        };
+        const released = createDeferredCore();
+        const patch = (label: string) =>
+          callAgentToolGatewayRequest({
+            method: "sessions.patch",
+            params: { key: TARGET, expectedSessionId: TARGET_ID, label },
+          });
+        const handoff = await withPluginRuntimeGatewayRequestScope(
+          { ...scope, ...(scopedOperator ? { client: restricted } : {}) },
+          () =>
+            withOperatorToolGatewayAuthority(
+              {
+                authenticatedUserProfile: {
+                  profileId: owner.id,
+                  displayName: owner.displayName,
+                  hasAvatar: false,
+                  updatedAt: owner.updatedAt,
+                },
+                operatorRoleActor: { kind: "system" },
+                scopes: ["operator.write"],
+              },
+              async () => {
+                await patch("Foreground owner");
+                return {
+                  pending: runWithOperatorToolGatewayCleanupContext(() =>
+                    released.promise.then(() => patch("Detached owner")),
+                  ),
+                };
+              },
+            ),
+        );
+        expect(loadSessionEntry({ agentId: "main", sessionKey: TARGET })?.label).toBe(
+          "Foreground owner",
+        );
+        released.resolve();
+        await handoff.pending;
+        expect(loadSessionEntry({ agentId: "main", sessionKey: TARGET })?.label).toBe(
+          "Detached owner",
+        );
+      });
+    },
+  );
+
   it.each([false, true])(
     "commits self-archive after caller closure (operator: %s)",
     async (operator) => {
