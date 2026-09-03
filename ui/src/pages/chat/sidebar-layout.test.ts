@@ -173,6 +173,46 @@ describe("sidebar layout", () => {
     });
   });
 
+  it("migrates the released dashboard slot without losing its panel state", () => {
+    expect(
+      normalizeSidebarLayout({
+        columns: [
+          {
+            id: "side-panel-column",
+            side: "right",
+            panels: [
+              { id: "chat", slot: "chat" },
+              { id: "terminal", slot: "terminal" },
+            ],
+            activePanelId: "chat",
+            height: 520,
+            width: 640,
+          },
+        ],
+        dock: "bottom",
+        open: false,
+        expanded: true,
+      }),
+    ).toEqual({
+      columns: [
+        {
+          id: "side-panel-column",
+          side: "right",
+          panels: [
+            { id: "chat", slot: "dashboard" },
+            { id: "terminal", slot: "terminal" },
+          ],
+          activePanelId: "chat",
+          height: 520,
+          width: 640,
+        },
+      ],
+      dock: "bottom",
+      open: false,
+      expanded: true,
+    });
+  });
+
   it("deduplicates slots and repairs untrusted persisted values", () => {
     expect(normalizeSidebarLayout(null)).toEqual({ columns: [], open: false, expanded: false });
     expect(normalizeSidebarLayout({ columns: [], open: true })).toEqual({
