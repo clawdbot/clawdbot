@@ -11,7 +11,6 @@ import {
   renderSettingsStatus,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import { registerDebugEnglish } from "../../i18n/locales/en-debug.ts";
 import { formatTimeMs } from "../../lib/format.ts";
 import type {
   CommandLaneDynamicSummary,
@@ -20,8 +19,6 @@ import type {
 import { formatEventPayload } from "../../lib/presenter.ts";
 import { DEBUG_OVERLAY_SHORTCUT_LABEL } from "./debug-overlay-contract.ts";
 import { renderCommandLaneRows } from "./lane-table.ts";
-
-registerDebugEnglish();
 
 type DebugProps = {
   loading: boolean;
