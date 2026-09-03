@@ -210,36 +210,6 @@ export function pruneExpiredCacheTtlToolResults(params: {
     ...message,
     content: [{ type: "text" as const, text: settings.placeholder }],
   });
-  const restoredMode = (candidate: string | undefined) =>
-    candidate === undefined ? undefined : projectionState.restoredCacheTtl.get(candidate);
-  if (projectionState.restoredCacheTtl.size > 0) {
-    // Marker keys re-derive the same bytes from canonical history; keys whose
-    // source left the branch (compaction, reset) are dropped with this pass.
-    for (const [index, source] of params.messages.entries()) {
-      const key = projection.keys[index];
-      const baseKey = getToolResultProjectionBaseKey(source);
-      const exactMode = restoredMode(key);
-      const mode = exactMode ?? restoredMode(baseKey);
-      if (
-        !key ||
-        !mode ||
-        source.role !== "toolResult" ||
-        projectionState.replacements.get(key)?.cacheTtl
-      ) {
-        continue;
-      }
-      if (!exactMode && baseKey) {
-        // A key persisted before its tool id became ambiguous belongs to the earliest occurrence.
-        projectionState.restoredCacheTtl.delete(baseKey);
-      }
-      recordProjection(
-        index,
-        mode === "hard" ? clearCacheTtlToolResult(source) : softPruneCacheTtlToolResult(source),
-        mode,
-      );
-    }
-    projectionState.restoredCacheTtl.clear();
-  }
   if (
     !params.pruneNewRounds ||
     !params.lastCacheTouchAt ||
@@ -914,7 +884,12 @@ function getToolResultProjectionKeys(
 }
 
 const cacheTtlProjectionSnapshotSchema = z.object({
-  prunedToolResults: z.array(z.object({ key: z.string(), mode: z.enum(["soft", "hard"]) })),
+  prunedToolResults: z.array(
+    z.union([
+      z.object({ key: z.string(), mode: z.literal("soft") }),
+      z.object({ key: z.string(), mode: z.literal("hard"), placeholder: z.string() }),
+    ]),
+  ),
   ambiguousToolResultBaseKeys: z.array(z.string()).optional(),
 });
 
@@ -938,9 +913,9 @@ export function restoreCacheTtlToolResultProjections(
     for (const key of parsed.data.ambiguousToolResultBaseKeys ?? []) {
       projectionState.ambiguousBaseKeys.add(key);
     }
-    for (const item of parsed.data.prunedToolResults) {
-      if (!projectionState.replacements.get(item.key)?.cacheTtl) {
-        projectionState.restoredCacheTtl.set(item.key, item.mode);
+    for (const { key, ...mark } of parsed.data.prunedToolResults) {
+      if (!projectionState.replacements.get(key)?.cacheTtl) {
+        projectionState.restoredCacheTtl.set(key, mark);
       }
     }
     return;
@@ -1028,10 +1003,9 @@ function projectToolResultBranch(params: {
     (entry): entry is ToolResultBranchEntry & { message: AgentMessage } =>
       entry.type === "message" && entry.message !== undefined,
   );
-  const keys = getToolResultProjectionKeys(
-    messageEntries.map((entry) => entry.message),
-    params.projectionState,
-  );
+  const messages = messageEntries.map((entry) => entry.message);
+  const keys = getToolResultProjectionKeys(messages, params.projectionState);
+  materializeRestoredCacheTtl(messages, keys, params.projectionState);
   let messageIndex = 0;
   return {
     keys,
@@ -1071,6 +1045,50 @@ function projectToolResultBranch(params: {
       };
     }),
   };
+}
+
+/**
+ * Restored marker keys become replacements here, at the owner every replay path
+ * uses, so the pruned bytes are sent whether or not cache-TTL pruning is still on.
+ */
+function materializeRestoredCacheTtl(
+  messages: AgentMessage[],
+  keys: Array<string | undefined>,
+  state: ToolResultPromptProjectionState,
+): void {
+  if (state.restoredCacheTtl.size === 0) {
+    return;
+  }
+  for (const [index, message] of messages.entries()) {
+    const key = keys[index];
+    if (!key || message.role !== "toolResult" || state.replacements.get(key)?.cacheTtl) {
+      continue;
+    }
+    const baseKey = getToolResultProjectionBaseKey(message);
+    const exact = state.restoredCacheTtl.get(key);
+    const mark = exact ?? (baseKey ? state.restoredCacheTtl.get(baseKey) : undefined);
+    if (!mark) {
+      continue;
+    }
+    if (!exact && baseKey) {
+      // A key persisted before its tool id became ambiguous belongs to the earliest occurrence.
+      state.restoredCacheTtl.delete(baseKey);
+    }
+    const projected =
+      mark.mode === "hard"
+        ? { ...message, content: [{ type: "text" as const, text: mark.placeholder }] }
+        : softPruneCacheTtlToolResult(message);
+    state.replacements.set(key, {
+      message: Object.assign({}, projected, { [TOOL_RESULT_PROJECTION_KEY]: key }),
+      cacheTtl: mark.mode,
+    });
+    state.frozen.add(key);
+    if (!state.sourceTextByKey.has(key)) {
+      state.sourceTextByKey.set(key, getToolResultTextBlocks(message));
+    }
+  }
+  // Marks whose source left the branch (compaction, reset) are dropped with this pass.
+  state.restoredCacheTtl.clear();
 }
 
 function getToolResultTextBlocks(message: AgentMessage): string[] {

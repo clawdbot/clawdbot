@@ -124,8 +124,9 @@ Pruning is off by default for non-Anthropic providers. To enable:
 }
 ```
 
-To stop new pruning, set `mode: "off"`. Existing client-side projections remain
-stable until compaction removes their results or the session is reset.
+To stop new pruning, set `mode: "off"`. Existing client-side projections keep
+replaying, including after a Gateway restart, until compaction removes their
+results or the session is reset.
 
 ## Pruning vs compaction
 

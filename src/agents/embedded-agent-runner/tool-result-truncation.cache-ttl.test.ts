@@ -173,7 +173,7 @@ describe("cache-TTL tool-result projection", () => {
         expect(entries.at(-1)?.data).toMatchObject({
           timestamp: NOW,
           prunedToolResults: expect.arrayContaining([
-            { key: expect.stringContaining("tool-0"), mode },
+            expect.objectContaining({ key: expect.stringContaining("tool-0"), mode }),
           ]),
         });
         // The marker carries keys only; pruned bytes never enter the transcript.
@@ -249,6 +249,39 @@ describe("cache-TTL tool-result projection", () => {
     restoreCacheTtlToolResultProjections(restarted, entries);
     const restored = project(expanded, { projectionState: restarted, lastCacheTouchAt: NOW });
     expect(JSON.stringify(restored)).toBe(JSON.stringify(continued));
+  });
+
+  it("replays restored projections through the history transform when pruning is off", () => {
+    const state = createToolResultPromptProjectionState();
+    const history = prunableHistory(
+      Array.from({ length: 18 }, (_, index) =>
+        tool({ id: `tool-${index}`, text: `${index}:` + "x".repeat(6_000) }),
+      ),
+    );
+    const first = project(history, { projectionState: state });
+    const sent = truncateOversizedToolResultsInMessages(
+      first,
+      1_000,
+      2_500,
+      100_000,
+      state,
+    ).messages;
+    expect(toolText(sent, "tool-0")).toContain("content cleared");
+    const entries = [
+      {
+        type: "custom",
+        customType: "openclaw.cache-ttl",
+        data: structuredClone(serializeCacheTtlToolResultProjections(state)),
+      },
+    ];
+    expect(JSON.stringify(entries[0]?.data)).not.toContain("x".repeat(20));
+    // Pruning is off after the restart: no prune pass runs, only the per-request history transform.
+    const restarted = createToolResultPromptProjectionState();
+    restoreCacheTtlToolResultProjections(restarted, entries);
+    expect(
+      truncateOversizedToolResultsInMessages(history, 1_000, 2_500, 100_000, restarted).messages,
+    ).toEqual(sent);
+    expect(restarted.restoredCacheTtl.size).toBe(0);
   });
 
   it("replays existing and restored projections when another owner prunes new rounds", () => {

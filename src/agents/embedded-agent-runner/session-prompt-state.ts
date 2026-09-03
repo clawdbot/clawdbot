@@ -8,9 +8,11 @@ export type ToolResultPromptProjectionState = {
   frozen: Set<string>;
   ambiguousBaseKeys: Set<string>;
   sourceTextByKey: Map<string, string[]>;
-  /** Cache-TTL prune modes read from the transcript marker; the next pruning pass materializes them. */
-  restoredCacheTtl: Map<string, "soft" | "hard">;
+  /** Cache-TTL marks read from the transcript marker; the projection owner materializes them on the next replay. */
+  restoredCacheTtl: Map<string, RestoredCacheTtlMark>;
 };
+
+type RestoredCacheTtlMark = { mode: "soft" } | { mode: "hard"; placeholder: string };
 
 type EmbeddedSessionPromptState = {
   activeProjectKeys: string[];
@@ -56,16 +58,21 @@ export function cloneToolResultPromptProjectionState(
   };
 }
 
-/** Marker payload stays key-sized: pruned bytes are recomputed from canonical history on restore. */
+/** Marker payload stays key-sized: soft trims are recomputed from canonical history, hard clears keep only their placeholder. */
 export function serializeCacheTtlToolResultProjections(state: ToolResultPromptProjectionState) {
-  const modes = new Map(state.restoredCacheTtl);
+  const marks = new Map(state.restoredCacheTtl);
   for (const [key, projection] of state.replacements) {
-    if (projection.cacheTtl) {
-      modes.set(key, projection.cacheTtl);
+    if (projection.cacheTtl === "soft") {
+      marks.set(key, { mode: "soft" });
+    } else if (projection.cacheTtl === "hard" && projection.message.role === "toolResult") {
+      const placeholder = projection.message.content
+        .flatMap((block) => (block.type === "text" ? [block.text] : []))
+        .join("\n");
+      marks.set(key, { mode: "hard", placeholder });
     }
   }
   return {
-    prunedToolResults: [...modes].map(([key, mode]) => ({ key, mode })),
+    prunedToolResults: [...marks].map(([key, mark]) => Object.assign({ key }, mark)),
     ambiguousToolResultBaseKeys: [...state.ambiguousBaseKeys],
   };
 }
