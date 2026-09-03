@@ -37,6 +37,11 @@
  * blocked-hook chip count, the detailed "Blocked plugin hooks: N" count, and
  * cross-surface agreement between compact and detailed.
  *
+ * Fixtures: every scenario creates a temp plugin root and a temp state dir.
+ * All of them are removed in a `finally` after the heartbeat worker is
+ * terminated, on the success, failure, and throw paths alike, so repeated runs
+ * do not accumulate temporary roots in the OS temp dir.
+ *
  * Run: pnpm tsx scripts/proof-136474-blocked-hook-registrations.ts
  */
 import fs from "node:fs";
@@ -69,8 +74,28 @@ function check(label: string, actual: unknown, expected: unknown): void {
   }
 }
 
+/** Every temp root this run creates, so `finally` can remove all of them. */
+const tempRoots: string[] = [];
+
 function tempDir(prefix: string): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  tempRoots.push(dir);
+  return dir;
+}
+
+/**
+ * Removes the fixture plugin roots and state dirs. Repeated proof runs would
+ * otherwise leave two temporary roots per scenario behind in the OS temp dir.
+ * Cleanup failure is reported but never changes the proof's verdict.
+ */
+function removeTempRoots(): void {
+  for (const dir of tempRoots.splice(0)) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch (error: unknown) {
+      console.log(`  cleanup WARN: could not remove ${dir}: ${String(error)}`);
+    }
+  }
 }
 
 /** Writes a real non-bundled plugin (source + manifest) and returns its entry file. */
@@ -167,7 +192,7 @@ async function runScenario(params: {
   check(`compact and /status plugins agree`, detailedCount, compactCount);
 }
 
-async function main(): Promise<void> {
+async function main(): Promise<number> {
   console.log("proof-136474: blocked typed-hook registrations must stay distinct");
 
   // Scenario 1 — the regression. Same plugin, same hook, same refusal reason, two
@@ -201,16 +226,27 @@ async function main(): Promise<void> {
   console.log(`\n${passed} passed, ${failed} failed (${passed + failed} assertions)`);
   if (failed > 0) {
     console.log("Runtime assertions FAILED.");
-    await heartbeat.terminate();
-    process.exit(1);
+    return 1;
   }
   console.log("All runtime assertions passed.");
-  await heartbeat.terminate();
-  process.exit(0);
+  return 0;
 }
 
-main().catch(async (error: unknown) => {
-  console.error(error);
-  await heartbeat.terminate();
-  process.exit(1);
+// `process.exit()` does not unwind the stack, so it cannot live inside the
+// `try`: the fixture cleanup below would never run. main() reports its verdict
+// as a return code and the single exit happens after `finally`.
+async function run(): Promise<number> {
+  try {
+    return await main();
+  } catch (error: unknown) {
+    console.error(error);
+    return 1;
+  } finally {
+    await heartbeat.terminate();
+    removeTempRoots();
+  }
+}
+
+void run().then((exitCode) => {
+  process.exit(exitCode);
 });

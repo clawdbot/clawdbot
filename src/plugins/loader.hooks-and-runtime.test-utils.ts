@@ -1184,6 +1184,67 @@ ${channelPluginSource({
     ]);
   });
 
+  it("attributes the two prompt-injection conversation hooks to allowPromptInjection when conversation access is unset", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "injection-precedence",
+      filename: "injection-precedence.cjs",
+      body: `module.exports = { id: "injection-precedence", register(api) {
+    api.on("agent_turn_prepare", () => undefined);
+    api.on("before_prompt_build", () => undefined);
+  } };`,
+    });
+
+    // `agent_turn_prepare` and `before_prompt_build` are the only two hooks that
+    // are BOTH prompt-injection hooks and conversation hooks, and the
+    // prompt-injection branch is evaluated first. So a non-bundled plugin with
+    // `allowPromptInjection: false` and no `allowConversationAccess` setting at
+    // all gets a "warn" attributed to allowPromptInjection -- not the "error"
+    // that an unset allowConversationAccess produces on its own. This is the
+    // precedence exception the config reference and plugin guide document.
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["injection-precedence"],
+        entries: {
+          "injection-precedence": {
+            hooks: { allowPromptInjection: false },
+          },
+        },
+      },
+    });
+
+    expect(registry.typedHooks).toHaveLength(0);
+    expect(
+      registry.blockedHooks
+        .map((entry) => ({
+          hookName: entry.hookName,
+          reason: entry.reason,
+          severity: entry.severity,
+          configPath: entry.configPath,
+        }))
+        .toSorted((a, b) => a.hookName.localeCompare(b.hookName)),
+    ).toStrictEqual([
+      {
+        hookName: "agent_turn_prepare",
+        reason: "prompt-injection-denied",
+        severity: "warn",
+        configPath: "plugins.entries.injection-precedence.hooks.allowPromptInjection",
+      },
+      {
+        hookName: "before_prompt_build",
+        reason: "prompt-injection-denied",
+        severity: "warn",
+        configPath: "plugins.entries.injection-precedence.hooks.allowPromptInjection",
+      },
+    ]);
+    // The implicit-deny escalation must not leak through the earlier branch.
+    expect(registry.blockedHooks.some((entry) => entry.severity === "error")).toBe(false);
+    expect(
+      registry.blockedHooks.some((entry) => entry.reason === "conversation-access-missing"),
+    ).toBe(false);
+  });
+
   it("blocks next-turn injections when prompt injection is disabled", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({

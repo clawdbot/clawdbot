@@ -300,6 +300,15 @@ never asked for — a non-bundled plugin registering a conversation hook with no
 silently disables a handler nobody chose to disable. Refusals that follow an
 explicit `false` are logged at `warn`.
 
+`allowPromptInjection` is evaluated before `allowConversationAccess`, and
+`agent_turn_prepare` and `before_prompt_build` are both prompt-injection hooks
+and conversation hooks. So with `allowPromptInjection: false`, a refused
+registration of either one is reported against
+`plugins.entries.<id>.hooks.allowPromptInjection` at `warn` — not as an
+unset-`allowConversationAccess` `error` — because the operator did ask for that
+refusal. `heartbeat_prompt_contribution` is a prompt-injection hook only, so it
+is never subject to the conversation-access rule.
+
 ## Verify the active Gateway
 
 `openclaw plugins list` and plain `openclaw plugins inspect` read cold config,
