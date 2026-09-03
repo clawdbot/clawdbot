@@ -131,8 +131,10 @@ export function startNodeHostConnection({
     gatewayHelloReceived = false;
     connectedGatewayProtocol = 0;
     gatewayCapabilities = new Set();
-    clearInterval(hostStatsTimer);
-    hostStatsTimer = undefined;
+    if (hostStatsTimer) {
+      clearInterval(hostStatsTimer);
+      hostStatsTimer = undefined;
+    }
     retireOptionalPublications();
   };
 
