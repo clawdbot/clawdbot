@@ -4660,6 +4660,16 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(workflow).toContain('"docker-e2e-prepublish-plugin-registry-" +');
   });
 
+  it.each(["package", "product"])(
+    "schedules updater first-hop compatibility in the %s acceptance profile",
+    (suiteProfile) => {
+      const { outputs, result } = runPackageAcceptanceProfile({ suiteProfile });
+
+      expect(result.status, result.stderr).toBe(0);
+      expect((outputs.docker_lanes ?? "").split(/\s+/u)).toContain("update-first-hop-compat");
+    },
+  );
+
   it("selects one normalized Telegram scenario without enabling broad acceptance lanes", () => {
     const { outputs, result } = runPackageAcceptanceProfile({
       suiteProfile: "telegram",
@@ -7549,6 +7559,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "skill-install",
       "update-corrupt-plugin",
       "upgrade-survivor",
+      "update-first-hop-compat",
       "published-upgrade-survivor",
       "root-managed-vps-upgrade",
       "update-restart-auth",
@@ -7669,15 +7680,20 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     for (const lane of ["mock_parity", "buzz", "telegram", "discord", "whatsapp", "slack"]) {
       expect(releaseJob.with?.[`run_${lane}`]).toBeUndefined();
     }
+    const manualScenarioGuard =
+      "(github.event_name != 'workflow_dispatch' || inputs.scenario == '')";
     expect(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_mock_parity").if).toBe(
-      "inputs.expected_sha == '' || inputs.run_mock_parity",
+      `(inputs.expected_sha == '' || inputs.run_mock_parity) && ${manualScenarioGuard}`,
     );
     expect(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_matrix").if).toBe(
-      "inputs.expected_sha == '' || inputs.run_matrix",
+      `(inputs.expected_sha == '' || inputs.run_matrix) && ${manualScenarioGuard}`,
     );
-    for (const channel of ["telegram", "discord", "whatsapp", "slack"]) {
+    expect(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_telegram").if).toBe(
+      "inputs.expected_sha == '' || inputs.run_telegram",
+    );
+    for (const channel of ["discord", "whatsapp", "slack"]) {
       expect(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, `run_live_${channel}`).if).toBe(
-        `inputs.expected_sha == '' || inputs.run_${channel}`,
+        `(inputs.expected_sha == '' || inputs.run_${channel}) && ${manualScenarioGuard}`,
       );
     }
     expect(releaseWorkflow).not.toContain("qa_live_matrix_release_checks");

@@ -104,6 +104,7 @@ const privateFile = "ui/src/e2e/approval-bootstrap.e2e.test.ts";
 const qaLabFiles = [
   "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
   "extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts",
+  "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
 ];
 
 type OwnershipProbe = {
@@ -519,9 +520,7 @@ describe("Control UI E2E Vitest sharding", () => {
 
   it("assigns every discovered file once with committed timings, ignoring stale keys", async () => {
     const committed = fs.readFileSync(timingPath, "utf8");
-    const discovered = fs.globSync(["ui/src/**/*.e2e.test.ts", ...qaLabFiles], {
-      cwd: repoRoot,
-    });
+    const discovered = fs.globSync(["ui/src/**/*.e2e.test.ts", ...qaLabFiles], { cwd: repoRoot });
     const { uiE2eSerialTestFiles } = await import("./vitest/vitest.ui-e2e.config.ts");
     const serial = new Set(uiE2eSerialTestFiles);
     const files = [

@@ -86,6 +86,8 @@ export function buildSlackManifest(botName = "OpenClaw") {
           "app_home_opened",
           "app_mention",
           "app_context_changed",
+          "agent_session_stopped",
+          "agent_session_title_changed",
           "channel_rename",
           "member_joined_channel",
           "member_left_channel",

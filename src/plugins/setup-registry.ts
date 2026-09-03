@@ -1,5 +1,4 @@
 // Maintains plugin setup entries discovered from manifests and light exports.
-import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
@@ -20,6 +19,7 @@ import { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-snapshot.
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 import { resolvePreferredBundledRootArtifact } from "./plugin-runtime-artifact-selection.js";
+import { resolvePluginRootArtifactPath } from "./root-artifact-path.js";
 import { listSetupCliBackendIds, listSetupProviderIds } from "./setup-descriptors.js";
 import { pluginSetupRegistryLoaderState } from "./setup-registry-loader-state.js";
 import type {
@@ -143,39 +143,24 @@ function resolveSetupApiPathUncached(
     ? SETUP_API_EXTENSIONS
     : ([...SETUP_API_EXTENSIONS.slice(3), ...SETUP_API_EXTENSIONS.slice(0, 3)] as const);
 
-  const findSetupApi = (candidateRootDir: string): string | null => {
-    for (const extension of orderedExtensions) {
-      const candidate = path.join(candidateRootDir, `setup-api${extension}`);
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
-    }
-    return null;
-  };
-
-  const direct = findSetupApi(rootDir);
-  if (direct) {
+  // Shipped implicit setup entries in the root outrank every package-local dist format.
+  const artifactPaths = ["", "dist"].flatMap((directory) =>
+    orderedExtensions.map((extension) => path.join(directory, `setup-api${extension}`)),
+  );
+  const direct = resolvePluginRootArtifactPath(rootDir, artifactPaths);
+  if (direct || options?.includeBundledSourceFallback === false) {
     return direct;
   }
-
-  if (options?.includeBundledSourceFallback === false) {
-    return null;
-  }
-
-  const bundledExtensionDir = path.basename(rootDir);
-  const repoRootCandidates = [path.resolve(path.dirname(CURRENT_MODULE_PATH), "..", "..")];
-  for (const repoRoot of repoRootCandidates) {
-    const sourceExtensionRoot = path.join(repoRoot, "extensions", bundledExtensionDir);
-    if (sourceExtensionRoot === rootDir) {
-      continue;
-    }
-    const sourceFallback = findSetupApi(sourceExtensionRoot);
-    if (sourceFallback) {
-      return sourceFallback;
-    }
-  }
-
-  return null;
+  const sourceExtensionRoot = path.resolve(
+    path.dirname(CURRENT_MODULE_PATH),
+    "..",
+    "..",
+    "extensions",
+    path.basename(rootDir),
+  );
+  return sourceExtensionRoot === rootDir
+    ? null
+    : resolvePluginRootArtifactPath(sourceExtensionRoot, artifactPaths);
 }
 
 function collectConfiguredPluginEntryIds(config: OpenClawConfig): string[] {

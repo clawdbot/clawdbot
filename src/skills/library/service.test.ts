@@ -10,7 +10,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail, linkEmail } from "../../state/user-profiles.js";
-import { withEnvAsync } from "../../test-utils/env.js";
+import { withEnv, withEnvAsync } from "../../test-utils/env.js";
 import { materializeSkillResources, prepareSkillResourceDelivery } from "../runtime/resources.js";
 import { prepareSkillLibraryBundle, skillLibraryRevisionDir } from "./bundle.js";
 import { uploadSkillLibrary } from "./import.js";
@@ -107,6 +107,51 @@ describe("profile-owned skill publication and selection", () => {
       buildWorkspaceSkillCommandSpecs(stateDir, { entries: [copied, ...entries] }),
     ).toThrow("ambiguous");
   });
+  it("discovers pinned commands through the loader without leaking them into workspace state", async () => {
+    const { alice, options, stateDir } = fixture();
+    const saved = await saveSkillLibrary(alice, draft(), options);
+    const pins = seedSkillLibrarySelection(alice, options);
+    await saveSkillLibrary(
+      alice,
+      {
+        ...draft(),
+        skillId: saved.entry.skillId,
+        expectedRevision: saved.entry.revision,
+        content: `${content}\nUpdated`,
+      },
+      options,
+    );
+    const { listSkillCommandsForWorkspace } = await import("../discovery/chat-commands.js");
+    withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
+      const cfg = { agents: { defaults: { skills: [] } } };
+      const discover = (
+        overrides: Partial<Parameters<typeof listSkillCommandsForWorkspace>[0]> = {},
+      ) =>
+        listSkillCommandsForWorkspace({
+          workspaceDir: stateDir,
+          cfg,
+          agentId: "main",
+          sessionEntry: { skillLibrarySelections: pins },
+          ...overrides,
+        });
+      const commands = discover({ skillFilter: [saved.entry.name] });
+      expect(commands).toHaveLength(1);
+      expect(commands[0]).toMatchObject({
+        name: saved.entry.name,
+        skillFile: expect.stringContaining(saved.entry.revision),
+      });
+      expect(discover()).toEqual([]);
+      expect(discover({ includeAllowlistHidden: true })).toContainEqual(commands[0]);
+      expect(
+        discover({
+          includeAllowlistHidden: true,
+          cfg: { ...cfg, skills: { entries: { [saved.entry.name]: { enabled: false } } } },
+        }).map((entry) => entry.name),
+      ).not.toContain(saved.entry.name);
+      expect(discover({ sessionEntry: undefined, skillFilter: [saved.entry.name] })).toEqual([]);
+    });
+  });
+
   it("keeps solo defaults, counts aliases once, and never creates library tables on discovery", () => {
     const { options, admin, alice, actor } = fixture();
     expect(listSkillLibrary(admin, {}, options)).toMatchObject({

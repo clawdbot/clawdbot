@@ -53,19 +53,6 @@ export function diffConfigPaths(
 
 function projectGatewayReloadBoundaries(config: OpenClawConfig) {
   return {
-    mcp: { apps: config.mcp?.apps },
-    agents: {
-      ownership: config.agents?.ownership,
-      defaults: {
-        mediaMaxMb: config.agents?.defaults?.mediaMaxMb,
-        sessionStore: config.agents?.defaults?.sessionStore,
-      },
-      entries: config.agents?.entries,
-    },
-    session: {
-      scope: config.session?.scope,
-      store: config.session?.store,
-    },
     talk: {
       provider: talk.resolveConfiguredTalkSpeechProviderId(config),
       realtime: { provider: talk.resolveConfiguredTalkRealtimeProviderId(config) },
@@ -73,7 +60,7 @@ function projectGatewayReloadBoundaries(config: OpenClawConfig) {
   };
 }
 
-/** Preserve startup-only restart boundaries hidden by whole-object config changes. */
+/** Preserve declared reload boundaries and derived capability-owner changes. */
 export function diffGatewayReloadPaths(
   prevConfig: OpenClawConfig,
   nextConfig: OpenClawConfig,
@@ -84,7 +71,7 @@ export function diffGatewayReloadPaths(
     projectGatewayReloadBoundaries(prevConfig),
     projectGatewayReloadBoundaries(nextConfig),
   );
-  // Preserve only startup/reload ownership boundaries hidden by whole-object
-  // collapse without changing ordinary diff multiplicity or ordering.
+  // Effective Talk owners can change without an authored provider key changing.
+  // Ordinary ownership boundaries are already preserved by the reload prefixes.
   return [...changedPaths, ...boundaryPaths.filter((path) => !changedPaths.includes(path))];
 }

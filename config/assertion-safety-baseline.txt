@@ -187,7 +187,6 @@ extensions/codex/src/app-server/event-projector-values.ts	2
 extensions/codex/src/app-server/event-projector.ts	1
 extensions/codex/src/app-server/explicit-skill-input.ts	1
 extensions/codex/src/app-server/image-payload-sanitizer.ts	3
-extensions/codex/src/app-server/managed-binary.ts	2
 extensions/codex/src/app-server/native-config-fence.ts	1
 extensions/codex/src/app-server/native-mcp-app.ts	9
 extensions/codex/src/app-server/native-skill-isolation.ts	1
@@ -2723,7 +2722,6 @@ src/cron/run-diagnostics-normalize.ts	2
 src/cron/run-diagnostics.ts	3
 src/cron/runtime-authority.ts	3
 src/cron/schedule-identity.ts	2
-src/cron/schedule.ts	1
 src/cron/service/active-run-cancellation.ts	1
 src/cron/service/failure-alerts.ts	1
 src/cron/service/jobs.ts	6
@@ -3164,7 +3162,6 @@ src/infra/session-cost-usage-cache.sqlite.ts	1
 src/infra/session-cost-usage-collection.ts	3
 src/infra/session-cost-usage-pricing.ts	6
 src/infra/session-cost-usage-reporting.ts	8
-src/infra/session-delivery-queue-runtime.ts	1
 src/infra/session-delivery-queue-storage.ts	6
 src/infra/shell-env.ts	1
 src/infra/sqlite-audit-record-store.ts	1
@@ -3407,7 +3404,7 @@ src/plugins/clawhub.ts	10
 src/plugins/cli-gateway-nodes-runtime.ts	2
 src/plugins/command-registration.ts	3
 src/plugins/computer-use-contract.ts	3
-src/plugins/config-normalization-shared.ts	20
+src/plugins/config-normalization-shared.ts	19
 src/plugins/config-schema.ts	6
 src/plugins/contracts/inventory/bundled-capability-metadata.ts	3
 src/plugins/contracts/registry.ts	1

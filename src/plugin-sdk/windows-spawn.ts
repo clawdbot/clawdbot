@@ -129,7 +129,8 @@ export function detectWindowsSpawnCommandInlineArgs(
   }
   const normalizedToken = parsed.token.replace(/\\/g, "/");
   const executable = normalizeLowercaseStringOrEmpty(path.posix.basename(normalizedToken));
-  if (!INLINE_ARGUMENT_EXECUTABLES.has(executable)) {
+  // Existing paths can contain spaces after a directory named node or pnpm.
+  if (!INLINE_ARGUMENT_EXECUTABLES.has(executable) || isFilePath(command)) {
     return null;
   }
   return {

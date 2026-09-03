@@ -2,6 +2,12 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { SystemAgentWizardAnswerError } from "../../system-agent/chat-engine.js";
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
@@ -406,19 +412,32 @@ describe("openclaw.chat session ownership", () => {
     });
     const handle = expectDefined(createdEngines[0], "created delegated engine").handle;
 
-    const resumed = await callChat(
-      context,
-      { sessionId: "delegated", message: "continue", delegation },
-      makeClient({
-        connId: "conn-other",
-        deviceId: "device-other",
-        authenticatedUserId: "other@example.com",
-      }),
-    );
-
-    expect(resumed.ok).toBe(true);
-    expect(handle).toHaveBeenCalledWith("continue");
-    expect(inferenceFallbackMocks.verifySystemAgentInferenceWithFallback).toHaveBeenCalledOnce();
+    const caller = {
+      ...delegation,
+      operationalRunInstance: createOperationalRunInstanceRef("delegated-ownership-run"),
+    };
+    const authority = claimAgentRunDelegatedAuthority(caller.operationalRunInstance);
+    const resume = () =>
+      withGatewayToolCallerIdentity(caller, () =>
+        callChat(
+          context,
+          { sessionId: "delegated", message: "continue", delegation },
+          makeClient({
+            connId: "conn-other",
+            deviceId: "device-other",
+            authenticatedUserId: "other@example.com",
+          }),
+        ),
+      );
+    try {
+      expect((await resume()).ok).toBe(true);
+      expect(handle).toHaveBeenCalledWith("continue");
+      expect(inferenceFallbackMocks.verifySystemAgentInferenceWithFallback).toHaveBeenCalledOnce();
+    } finally {
+      releaseAgentRunDelegatedAuthority(authority);
+    }
+    await expect(resume()).rejects.toThrow("requires an active run authority");
+    expect(handle).toHaveBeenCalledOnce();
   });
 
   it("rejects delegated reuse of a non-delegated session", async () => {

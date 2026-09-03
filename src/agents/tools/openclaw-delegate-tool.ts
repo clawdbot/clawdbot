@@ -1,9 +1,12 @@
-/** Thin regular-agent client for the OpenClaw system agent. */
+/** Regular-agent client for the OpenClaw system agent. */
 import { createHash, randomUUID } from "node:crypto";
 import { Type } from "typebox";
 import { SYSTEM_AGENT_ID } from "../../system-agent/agent-id.js";
+import { resolveExecDefaults } from "../exec-defaults.js";
+import type { OpenClawToolsOptions } from "../openclaw-tools.types.js";
 import { jsonResult, readToolStringParam, type AnyAgentTool } from "./common.js";
-import { callInProcessGatewayTool, type InProcessGatewayCaller } from "./in-process-gateway.js";
+import { wrapToolWithGatewayCallerIdentity } from "./gateway-caller-context.js";
+import { callInProcessGatewayTool } from "./in-process-gateway.js";
 
 const OpenClawDelegateSchema = Type.Object({
   message: Type.String({ description: "What system must do." }),
@@ -28,54 +31,78 @@ type OpenClawDelegateResult = {
   proposalId?: string;
 };
 
-function stableDelegationSessionId(sessionKey: string | undefined, agentId?: string): string {
+function stableDelegationSessionId(sessionKey: string | undefined, agentId: string): string {
   return sessionKey?.trim()
     ? `delegate-${createHash("sha256")
-        .update(`${agentId?.trim() ?? "unknown"}\0${sessionKey.trim()}`)
+        .update(`${agentId}\0${sessionKey.trim()}`)
         .digest("hex")
         .slice(0, 32)}`
     : `delegate-${randomUUID()}`;
 }
 
-function createOpenClawDelegateTool(options?: {
-  requesterAgentId?: string;
-  agentSessionKey?: string;
-  turnSourceChannel?: string;
-  turnSourceTo?: string;
-  turnSourceAccountId?: string;
-  turnSourceThreadId?: string | number;
-  callGateway?: InProcessGatewayCaller;
-}): AnyAgentTool {
-  const defaultSessionId = stableDelegationSessionId(
-    options?.agentSessionKey,
-    options?.requesterAgentId,
-  );
-  return {
+export function createOpenClawDelegateToolsForRun(
+  options: Pick<
+    OpenClawToolsOptions,
+    | "sandboxed"
+    | "runSessionKey"
+    | "agentSessionKey"
+    | "agentChannel"
+    | "currentMessagingTarget"
+    | "currentChannelId"
+    | "agentTo"
+    | "agentAccountId"
+    | "currentThreadTs"
+    | "agentThreadId"
+    | "config"
+    | "execSession"
+    | "execOverrides"
+    | "fsPolicy"
+  > & { sessionAgentId: string },
+): AnyAgentTool[] {
+  if (options.sandboxed || options.sessionAgentId === SYSTEM_AGENT_ID) {
+    return [];
+  }
+  const sessionKey = options.runSessionKey ?? options.agentSessionKey;
+  const defaultSessionId = stableDelegationSessionId(sessionKey, options.sessionAgentId);
+  const execPolicy = resolveExecDefaults({
+    cfg: options.config,
+    agentId: options.sessionAgentId,
+    sessionKey: options.agentSessionKey ?? sessionKey,
+    sessionEntry: options.execSession,
+    execOverrides: options.execOverrides,
+  });
+  const fullPermission =
+    options.fsPolicy?.workspaceOnly !== true &&
+    execPolicy.effectiveHost !== "sandbox" &&
+    execPolicy.security === "full" &&
+    execPolicy.ask === "off";
+  const turnSourceTo =
+    options.currentMessagingTarget ?? options.currentChannelId ?? options.agentTo;
+  const turnSourceThreadId = options.currentThreadTs ?? options.agentThreadId;
+  const tool: AnyAgentTool = {
     name: "openclaw",
     label: "OpenClaw",
     description:
-      "Ask system expert. Gateway restart, config, channels, plugins, agents, models/providers, updates. Changes need human approval.",
+      "Ask system expert. Gateway restart, config, channels, plugins, agents, models/providers, updates. " +
+      (fullPermission
+        ? "Full Access applies permitted changes without asking for approval."
+        : "Changes need human approval."),
     parameters: OpenClawDelegateSchema,
     outputSchema: OpenClawDelegateOutputSchema,
     execute: async (_toolCallId, args) => {
       const params = (args ?? {}) as Record<string, unknown>;
       const message = readToolStringParam(params, "message", { required: true });
       const sessionId = readToolStringParam(params, "sessionId") ?? defaultSessionId;
-      const callGateway = options?.callGateway ?? callInProcessGatewayTool;
-      const result = await callGateway<OpenClawDelegateResult>("openclaw.chat", {
+      const result = await callInProcessGatewayTool<OpenClawDelegateResult>("openclaw.chat", {
         sessionId,
         message,
         delegation: {
-          ...(options?.requesterAgentId ? { agentId: options.requesterAgentId } : {}),
-          ...(options?.agentSessionKey ? { sessionKey: options.agentSessionKey } : {}),
-          ...(options?.turnSourceChannel ? { turnSourceChannel: options.turnSourceChannel } : {}),
-          ...(options?.turnSourceTo ? { turnSourceTo: options.turnSourceTo } : {}),
-          ...(options?.turnSourceAccountId
-            ? { turnSourceAccountId: options.turnSourceAccountId }
-            : {}),
-          ...(options?.turnSourceThreadId !== undefined
-            ? { turnSourceThreadId: options.turnSourceThreadId }
-            : {}),
+          agentId: options.sessionAgentId,
+          ...(sessionKey ? { sessionKey } : {}),
+          ...(options.agentChannel ? { turnSourceChannel: options.agentChannel } : {}),
+          ...(turnSourceTo ? { turnSourceTo } : {}),
+          ...(options.agentAccountId ? { turnSourceAccountId: options.agentAccountId } : {}),
+          ...(turnSourceThreadId !== undefined ? { turnSourceThreadId } : {}),
         },
       });
       return jsonResult({
@@ -86,32 +113,11 @@ function createOpenClawDelegateTool(options?: {
       });
     },
   };
-}
-
-export function createOpenClawDelegateToolsForRun(options: {
-  sessionAgentId: string;
-  sandboxed?: boolean;
-  runSessionKey?: string;
-  agentSessionKey?: string;
-  agentChannel?: string;
-  currentMessagingTarget?: string;
-  currentChannelId?: string;
-  agentTo?: string;
-  agentAccountId?: string;
-  currentThreadTs?: string;
-  agentThreadId?: string | number;
-}): AnyAgentTool[] {
-  if (options.sandboxed || options.sessionAgentId === SYSTEM_AGENT_ID) {
-    return [];
-  }
+  // Keep permission authority out of model-authored RPC data and scoped to this tool call.
   return [
-    createOpenClawDelegateTool({
-      requesterAgentId: options.sessionAgentId,
-      agentSessionKey: options.runSessionKey ?? options.agentSessionKey,
-      turnSourceChannel: options.agentChannel,
-      turnSourceTo: options.currentMessagingTarget ?? options.currentChannelId ?? options.agentTo,
-      turnSourceAccountId: options.agentAccountId,
-      turnSourceThreadId: options.currentThreadTs ?? options.agentThreadId,
-    }),
+    wrapToolWithGatewayCallerIdentity(
+      tool,
+      sessionKey ? { agentId: options.sessionAgentId, sessionKey, fullPermission } : undefined,
+    ),
   ];
 }

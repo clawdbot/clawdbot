@@ -66,13 +66,9 @@ export const BOUNDARY_CHECKS = (
     ["lint:tmp:no-raw-channel-fetch", "pnpm", ["run", "lint:tmp:no-raw-channel-fetch"]],
     ["lint:tmp:no-raw-http2-imports", "pnpm", ["run", "lint:tmp:no-raw-http2-imports"]],
     ["lint:agent:ingress-owner", "pnpm", ["run", "lint:agent:ingress-owner"]],
+    // This full-root pass runs all four focused rules, including the narrower
+    // HTTP/window.open guards and both public assertion aliases.
     ["lint:no-chained-type-assertions", "pnpm", ["run", "lint:no-chained-type-assertions"]],
-    ["lint:no-widen-then-assert", "pnpm", ["run", "lint:no-widen-then-assert"]],
-    [
-      "lint:plugins:no-register-http-handler",
-      "pnpm",
-      ["run", "lint:plugins:no-register-http-handler"],
-    ],
     [
       "lint:plugins:no-monolithic-plugin-sdk-entry-imports",
       "pnpm",
@@ -115,7 +111,6 @@ export const BOUNDARY_CHECKS = (
       "pnpm",
       ["run", "lint:extensions:telegram-grammy-types"],
     ],
-    ["lint:ui:no-raw-window-open", "pnpm", ["lint:ui:no-raw-window-open"]],
     ["native-state-schema-version", "node", ["scripts/check-native-state-schema-version.mjs"]],
   ] satisfies Array<[label: string, command: string, args: string[]]>
 ).map(([label, command, args]) => ({ label, command, args }));
