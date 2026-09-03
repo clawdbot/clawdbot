@@ -49,7 +49,6 @@ import type {
 import { createScopeUpgradeCapability } from "./device-scope-upgrade.ts";
 import { startGatewayPageActivation } from "./gateway-page-activation.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
-import { createMentionsCapability } from "./mentions.ts";
 import { createNativeChatDrafts } from "./native-bridge.ts";
 import { startNativeLinkRouting } from "./native-link-routing.ts";
 import { createNativeNotificationsCapability } from "./native-notifications.ts";
@@ -278,14 +277,13 @@ export function bootstrapApplication(): ApplicationRuntime {
     onUpdateFailure: (failure, admission) =>
       void openUpdateFailureTriage(context, failure, admission),
   });
-  const mentions = createMentionsCapability(gateway, { connectionBootstrap });
   const sidebarAttention = createSidebarAttentionStore({
     gateway,
     agentSelection,
     agents,
     overlays,
     scopeUpgrade,
-    mentions,
+    connectionBootstrap,
   });
   // App-updater interlock: writing config (or restarting the gateway) while
   // the updater runs can corrupt the install; pause config writes until the
@@ -467,7 +465,6 @@ export function bootstrapApplication(): ApplicationRuntime {
     theme,
     nativeChatDrafts,
     nativeNotifications,
-    mentions,
     webPush,
     chatSubmissions,
     chatAttachmentHandoff,
@@ -590,7 +587,6 @@ export function bootstrapApplication(): ApplicationRuntime {
       nativeChatDrafts.dispose();
       nativeLinkRouting.dispose();
       nativeNotifications?.dispose();
-      mentions.dispose();
       webPush.dispose();
       chatSubmissions.clear();
       chatAttachmentHandoff.dispose();

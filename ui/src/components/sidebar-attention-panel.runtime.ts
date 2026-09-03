@@ -4,6 +4,7 @@ import { pathForRoute } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { ScopeUpgradeController } from "../app/device-scope-upgrade-controller.runtime.ts";
 import type { ExecApprovalDecision } from "../app/exec-approval.ts";
+import type { MentionsCapability } from "../app/mentions.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
 import { t } from "../i18n/index.ts";
@@ -39,6 +40,7 @@ export type SidebarAttentionPanelPosition = { left: number } & (
 
 type SidebarAttentionPanelParams = {
   context: ApplicationContext;
+  mentions: MentionsCapability;
   entries: readonly SidebarInboxEntry[];
   onApprovalDecision: (event: Event, approvalId: string, decision: ExecApprovalDecision) => void;
   onClose: (restoreFocus: boolean) => void;
@@ -66,7 +68,7 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
   const visibleDismissals = visibleEntries.flatMap((entry) =>
     entry.dismissal ? [entry.dismissal] : [],
   );
-  const mentions = params.context.mentions.snapshot;
+  const mentions = params.mentions.snapshot;
   // Mention acknowledgement belongs to the Gateway, never the browser-local
   // snooze store used by system and automation incidents.
   const visibleMentions = visibleEntries.flatMap((entry) =>
@@ -105,7 +107,7 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
           mention: entry.mention,
           context: params.context,
           dismissing: mentions.dismissing.includes(entry.mention.id),
-          onDismiss: () => void params.context.mentions.dismiss([entry.mention.id]),
+          onDismiss: () => void params.mentions.dismiss([entry.mention.id]),
           onClosePanel: () => params.onClose(false),
         });
       case "scopeUpgrade":
@@ -164,7 +166,7 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
                   params.onDismiss(dismissal);
                 }
                 if (mentionDismissals.length > 0) {
-                  void params.context.mentions.dismiss(mentionDismissals);
+                  void params.mentions.dismiss(mentionDismissals);
                 }
               }}
             >
@@ -222,7 +224,7 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
                           type="button"
                           class="sidebar-issues-panel__action"
                           ?disabled=${mentions.phase === "loading"}
-                          @click=${() => void params.context.mentions.refresh()}
+                          @click=${() => void params.mentions.refresh()}
                         >
                           ${t("attention.mentions.refresh")}
                         </button>`

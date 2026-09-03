@@ -4,17 +4,14 @@ import type { ScopeUpgradeState } from "../app/device-scope-upgrade-availability
 import type { ExecApprovalRequest } from "../app/exec-approval.ts";
 import type { CustodianAlert } from "./custodian-alert-contract.ts";
 import type { IconName } from "./icons.ts";
+import {
+  resolveScopeUpgradeDismissal,
+  type SIDEBAR_ATTENTION_DISMISSAL_KINDS,
+} from "./sidebar-attention-dismissals.ts";
 import type { IssueTab } from "./sidebar-issues-tabs.ts";
 
-const SIDEBAR_ATTENTION_ITEM_KINDS = ["cronFailed", "cronOverdue", "modelAuthExpired"] as const;
-type SidebarAttentionItemKind = (typeof SIDEBAR_ATTENTION_ITEM_KINDS)[number];
-
-export const SIDEBAR_ATTENTION_DISMISSAL_KINDS = [
-  ...SIDEBAR_ATTENTION_ITEM_KINDS,
-  "scopeUpgrade",
-  "updateAvailable",
-] as const;
 export type SidebarAttentionKind = (typeof SIDEBAR_ATTENTION_DISMISSAL_KINDS)[number];
+type SidebarAttentionItemKind = Exclude<SidebarAttentionKind, "scopeUpgrade" | "updateAvailable">;
 
 export type SidebarAttentionDismissal = { kind: SidebarAttentionKind; signature: string };
 
@@ -62,18 +59,10 @@ export function buildScopeUpgradeInboxEntry(params: {
   if (params.state.phase === "hidden") {
     return null;
   }
-  const dismissal =
-    (params.state.phase === "guidance" || params.state.phase === "available") && params.scopes
-      ? {
-          kind: "scopeUpgrade" as const,
-          // Manual repair and an actionable upgrade are distinct incidents.
-          signature: JSON.stringify([params.state.phase, ...params.scopes.toSorted()]),
-        }
-      : null;
   return {
     type: "scopeUpgrade",
     category: "system",
-    dismissal,
+    dismissal: resolveScopeUpgradeDismissal(params),
     requiresAction: true,
     severity:
       params.state.phase === "error" || params.state.phase === "rejected" ? "error" : "warning",

@@ -15,7 +15,6 @@ import type { ApplicationConfigCapability } from "./config.ts";
 import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ScopeUpgradeCapability } from "./device-scope-upgrade.ts";
 import type { ApplicationGateway } from "./gateway.ts";
-import type { MentionsCapability } from "./mentions.ts";
 import type { NativeChatDrafts } from "./native-bridge.ts";
 import type { NativeNotificationsCapability } from "./native-notifications.ts";
 import type { ApplicationOverlays } from "./overlays-types.ts";
@@ -115,7 +114,6 @@ export type ApplicationContext<TRouteId extends string = string> = {
   readonly theme: ApplicationTheme;
   readonly nativeChatDrafts: NativeChatDrafts;
   readonly nativeNotifications: NativeNotificationsCapability | null;
-  readonly mentions: MentionsCapability;
   readonly webPush: WebPushCapability;
   readonly chatSubmissions: ApplicationChatSubmissions;
   readonly chatAttachmentHandoff: ApplicationChatAttachmentHandoff;

@@ -56,17 +56,19 @@ function panelParams(
       basePath: "",
       navigate: vi.fn(),
       gateway: { snapshot: undefined },
-      mentions: {
-        snapshot: {
-          phase: "ready",
-          items: entries.flatMap((entry) => (entry.type === "mention" ? [entry.mention] : [])),
-          dismissing: [],
-          error: null,
-        },
-        refresh: vi.fn().mockResolvedValue(undefined),
-        dismiss: vi.fn().mockResolvedValue(undefined),
-      },
     } as unknown as ApplicationContext,
+    mentions: {
+      snapshot: {
+        phase: "ready",
+        items: entries.flatMap((entry) => (entry.type === "mention" ? [entry.mention] : [])),
+        dismissing: [],
+        error: null,
+      },
+      refresh: vi.fn().mockResolvedValue(undefined),
+      dismiss: vi.fn().mockResolvedValue(undefined),
+      subscribe: () => () => undefined,
+      dispose: () => undefined,
+    },
     entries,
     onApprovalDecision: () => {},
     onClose: () => {},
@@ -145,7 +147,7 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
         update: null,
       });
       const params = panelParams(entries);
-      params.context.mentions.snapshot.dismissing = ["mention-b"];
+      params.mentions.snapshot.dismissing = ["mention-b"];
       const shell = document.body.appendChild(document.createElement("div"));
       render(renderSidebarAttentionPanel({ ...params, selectedTab }), shell);
 
@@ -157,9 +159,9 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
       shell.querySelector<HTMLButtonElement>(".sidebar-issues-panel__dismiss-shown")!.click();
 
       if (selectedTab === "system") {
-        expect(params.context.mentions.dismiss).not.toHaveBeenCalled();
+        expect(params.mentions.dismiss).not.toHaveBeenCalled();
       } else {
-        expect(params.context.mentions.dismiss).toHaveBeenCalledExactlyOnceWith(["mention-a"]);
+        expect(params.mentions.dismiss).toHaveBeenCalledExactlyOnceWith(["mention-a"]);
       }
       if (selectedTab === "mentions") {
         expect(params.onDismiss).not.toHaveBeenCalled();
@@ -178,8 +180,8 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
       update: null,
     });
     const params = panelParams(entries);
-    params.context.mentions.snapshot.phase = "error";
-    params.context.mentions.snapshot.error = "Connection interrupted";
+    params.mentions.snapshot.phase = "error";
+    params.mentions.snapshot.error = "Connection interrupted";
     const shell = document.body.appendChild(document.createElement("div"));
     render(renderSidebarAttentionPanel({ ...params, selectedTab: "mentions" }), shell);
 
@@ -190,7 +192,7 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
     const refresh = error.querySelector<HTMLButtonElement>("button")!;
     expect(refresh.textContent?.trim()).toBe("Refresh mentions");
     refresh.click();
-    expect(params.context.mentions.refresh).toHaveBeenCalledOnce();
+    expect(params.mentions.refresh).toHaveBeenCalledOnce();
   });
 
   it.each(["base-first", "base-last"])(

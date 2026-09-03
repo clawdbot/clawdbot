@@ -15,7 +15,6 @@ import {
 import {
   createApplicationContextProvider,
   hiddenScopeUpgradeCapability,
-  unavailableMentionsCapability,
 } from "../test-helpers/application-context.ts";
 import { createStorageMock as createTestStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
@@ -186,9 +185,7 @@ describe("sidebar attention refresh ownership", () => {
   });
 
   async function mountAttention(
-    overrides: Partial<
-      Pick<ApplicationContext, "agentSelection" | "gateway" | "overlays" | "mentions">
-    > = {},
+    overrides: Partial<Pick<ApplicationContext, "agentSelection" | "gateway" | "overlays">> = {},
   ) {
     const sources = {
       gateway: {
@@ -206,7 +203,6 @@ describe("sidebar attention refresh ownership", () => {
         subscribe: () => () => undefined,
       },
       scopeUpgrade: hiddenScopeUpgradeCapability,
-      mentions: unavailableMentionsCapability,
       ...overrides,
       agents: {
         state: { agentsList: null },
@@ -247,36 +243,48 @@ describe("sidebar attention refresh ownership", () => {
   });
 
   it("updates the closed Inbox badge for mentions outside the selected agent", async () => {
-    let mentionSnapshot = {
-      phase: "ready" as const,
-      items: [mentionItem("first")],
-      dismissing: [],
-      error: null,
+    let result = { gatewayInstanceId: "boot-a", revision: 1, items: [mentionItem("first")] };
+    const responses: Record<string, unknown> = {
+      "cron.list": cronListResponse([]),
+      "cron.status": { enabled: true, triggersEnabled: true, jobs: 0 },
+      "models.authStatus": { ts: 1, providers: [] },
     };
-    const listeners = new Set<() => void>();
-    const { element } = await mountAttention({
-      mentions: {
-        ...unavailableMentionsCapability,
-        get snapshot() {
-          return mentionSnapshot;
-        },
-        subscribe(listener) {
-          listeners.add(listener);
-          return () => listeners.delete(listener);
-        },
+    const request = vi.fn(async (method: string) => {
+      if (method === "mentions.list") {
+        return result;
+      }
+      if (method in responses) {
+        return responses[method];
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const harness = createGatewayHarness(mockClient(request));
+    harness.update({
+      hello: {
+        type: "hello-ok",
+        protocol: 1,
+        server: { bootId: "boot-a", connId: "connection-a" },
+        auth: { role: "operator", scopes: ["operator.read"] },
+        features: { methods: ["mentions.list", "mentions.dismiss"] },
       },
+      selfUser: { id: "bob", identity: { type: "profile", id: "bob" }, name: "Bob" },
+    });
+    const { element } = await mountAttention({
+      gateway: harness.gateway,
       agentSelection: {
         state: { selectedId: "main", scopeId: "main" },
         subscribe: () => () => undefined,
       } as unknown as ApplicationContext["agentSelection"],
     });
 
-    expect(element.querySelector(".sidebar-issues-button__count")?.textContent?.trim()).toBe("1");
-    mentionSnapshot = { ...mentionSnapshot, items: [mentionItem("first"), mentionItem("second")] };
-    listeners.forEach((listener) => listener());
-    await element.updateComplete;
-
-    expect(element.querySelector(".sidebar-issues-button__count")?.textContent?.trim()).toBe("2");
+    await waitForFast(() =>
+      expect(element.querySelector(".sidebar-issues-button__count")?.textContent?.trim()).toBe("1"),
+    );
+    result = { ...result, revision: 2, items: [mentionItem("first"), mentionItem("second")] };
+    harness.emitEvent("mentions.changed", { gatewayInstanceId: "boot-a", revision: 2 });
+    await waitForFast(() =>
+      expect(element.querySelector(".sidebar-issues-button__count")?.textContent?.trim()).toBe("2"),
+    );
     expect(element.querySelector(".sidebar-issues-panel")).toBeNull();
   });
 
@@ -691,7 +699,6 @@ describe("sidebar attention refresh ownership", () => {
       overlays,
       agentSelection,
       scopeUpgrade: hiddenScopeUpgradeCapability,
-      mentions: unavailableMentionsCapability,
       agents: {
         state: { agentsList: null },
         subscribe: () => () => undefined,
@@ -703,7 +710,6 @@ describe("sidebar attention refresh ownership", () => {
       agents: context.agents,
       overlays,
       scopeUpgrade: context.scopeUpgrade,
-      mentions: context.mentions,
     });
     store.activate(SidebarAttentionStoreController);
     stores.add(store);

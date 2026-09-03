@@ -1,6 +1,7 @@
 import { ContextProvider } from "@lit/context";
 import type { RouteId } from "../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
+import type { MentionsCapability } from "../app/mentions.ts";
 
 export const hiddenScopeUpgradeCapability = {
   state: { phase: "hidden" as const },
@@ -12,17 +13,17 @@ export const hiddenScopeUpgradeCapability = {
   dispose: () => undefined,
 } satisfies ApplicationContext["scopeUpgrade"];
 
-export const unavailableMentionsCapability = {
+const unavailableMentionsCapability = {
   snapshot: { phase: "unavailable", items: [], dismissing: [], error: null },
   refresh: async () => undefined,
   dismiss: async () => undefined,
   subscribe: () => () => undefined,
   dispose: () => undefined,
-} satisfies ApplicationContext["mentions"];
+} satisfies MentionsCapability;
 
 const emptySidebarAttentionStore = {
   entries: [],
-  activate: () => undefined,
+  activate: () => unavailableMentionsCapability,
   dismiss: () => undefined,
   subscribe: () => () => undefined,
   dispose: () => undefined,
