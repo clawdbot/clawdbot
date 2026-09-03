@@ -12,6 +12,7 @@ import type { CliDeps } from "../cli/deps.types.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveSystemMainSessionTarget } from "../config/sessions.js";
 import { parseSessionThreadInfo } from "../config/sessions/thread-info.js";
+import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import {
@@ -54,7 +55,11 @@ import {
   normalizeDeliveryContext,
   sessionDeliveryOrigin,
 } from "../utils/delivery-context.shared.js";
-import { INTERNAL_MESSAGE_CHANNEL, isDeliverableMessageChannel } from "../utils/message-channel.js";
+import {
+  INTERNAL_MESSAGE_CHANNEL,
+  isDeliverableMessageChannel,
+  isInternalMessageChannel,
+} from "../utils/message-channel.js";
 import { deliverQueuedGeneratedMediaAgentTurn } from "./server-restart-sentinel-agent-delivery.js";
 import {
   deliverRestartSentinelNotice,
@@ -482,7 +487,7 @@ async function loadRestartSentinelStartupTask(params: {
     const continuation = sessionKey ? payload.continuation : undefined;
     const { baseSessionKey, threadId: sessionThreadId } = parseSessionThreadInfo(routedSessionKey);
 
-    const { cfg, entry, canonicalKey } = loadSessionEntry(routedSessionKey);
+    const { cfg, agentId, entry, storePath, canonicalKey } = loadSessionEntry(routedSessionKey);
 
     let sessionDeliveryContext = deliveryContextFromSession(entry);
     let chatType = sessionDeliveryOrigin(entry)?.chatType ?? "direct";
@@ -522,9 +527,36 @@ async function loadRestartSentinelStartupTask(params: {
     let noticeQueueCreated = false;
     const continuationRoute = continuation && route ? { ...route, chatType } : undefined;
 
+    let internalNoticeWritten = false;
+    if (!route && sessionKey && entry && isInternalMessageChannel(origin?.channel)) {
+      const notice = await appendAssistantMessageToSessionTranscript({
+        agentId,
+        sessionKey: canonicalKey,
+        expectedSessionId: entry.sessionId,
+        expectedLifecycleRevision: entry.lifecycleRevision ?? null,
+        storePath,
+        text: message,
+        idempotencyKey: `restart-sentinel-notice:${canonicalKey}:${sentinelRevision}`,
+      }).catch((error: unknown) => ({ ok: false as const, reason: formatErrorMessage(error) }));
+      internalNoticeWritten = notice.ok;
+      if (!notice.ok) {
+        log.warn(
+          `${summary}: internal restart notice append failed; falling back to wake: ${notice.reason}`,
+          {
+            sessionKey: canonicalKey,
+          },
+        );
+      }
+    }
+
     const routedAgentTurnContinuation =
       continuation?.kind === "agentTurn" && continuationRoute !== undefined;
-    if (!routedAgentTurnContinuation) {
+    // Inline transcript publication also broadcasts to Control UI. An update
+    // outcome needs no model wake unless continuation work remains; heartbeats
+    // can silently suppress the notice or contradict the recorded outcome.
+    const internalUpdateComplete =
+      internalNoticeWritten && payload.kind === "update" && !continuation;
+    if (!routedAgentTurnContinuation && !internalUpdateComplete) {
       wakeQueueId = await enqueueSessionDelivery(
         buildQueuedRestartContinuation({
           sessionKey: canonicalKey,
