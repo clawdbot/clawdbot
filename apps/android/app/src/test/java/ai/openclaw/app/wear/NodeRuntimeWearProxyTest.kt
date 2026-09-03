@@ -86,11 +86,23 @@ class NodeRuntimeWearProxyTest {
         gateway.holdOperatorHellos()
         gateway.holdNodeHellos()
         val disconnected = runtime.handleWearProxyRequest("watch-1", request(WearRpcMethod.GatewayDisconnect))
-        assertFalse(checkNotNull(disconnected.result).jsonObject.getValue("connected").jsonPrimitive.content.toBoolean())
+        assertFalse(
+          checkNotNull(disconnected.result)
+            .jsonObject
+            .getValue("connected")
+            .jsonPrimitive.content
+            .toBoolean(),
+        )
         assertUnavailable(runtime.handleWearProxyRequest("watch-1", sessionsRequest()))
 
         val reconnecting = runtime.handleWearProxyRequest("watch-1", request(WearRpcMethod.GatewayConnect))
-        assertFalse(checkNotNull(reconnecting.result).jsonObject.getValue("connected").jsonPrimitive.content.toBoolean())
+        assertFalse(
+          checkNotNull(reconnecting.result)
+            .jsonObject
+            .getValue("connected")
+            .jsonPrimitive.content
+            .toBoolean(),
+        )
         gateway.awaitHeldOperatorHello()
         assertUnavailable(runtime.handleWearProxyRequest("watch-1", sessionsRequest()))
 
@@ -124,9 +136,9 @@ class NodeRuntimeWearProxyTest {
     withTimeout(WEAR_GATEWAY_READY_TIMEOUT_MS) {
       while (
         session.captureRequestLease(endpoint.stableId)?.isCurrent() != true ||
-          !synchronized(statusLock) {
-            ReflectionHelpers.getField<Boolean>(runtime, "operatorConnected")
-          }
+        !synchronized(statusLock) {
+          ReflectionHelpers.getField<Boolean>(runtime, "operatorConnected")
+        }
       ) {
         delay(10)
       }
