@@ -169,21 +169,25 @@ describe("users gateway methods", () => {
     expect(getUserProfileListItem).toHaveBeenNthCalledWith(2, profile.id);
   });
 
+  function connectedProfileClient(kind: string) {
+    return {
+      ...(kind === "provider"
+        ? { authenticatedUserId: "ada@github", authenticatedUserIsTailscaleProvider: true }
+        : {}),
+      authenticatedUserProfile: {
+        profileId: profile.id,
+        displayName: "Ada",
+        hasAvatar: false,
+        updatedAt: 1,
+      },
+      connect: { scopes: ["operator.write"] },
+    };
+  }
+
   it.each(["provider", "owner"])(
     "uses the connect-time %s profile without recreating an email alias",
     async (kind) => {
-      const providerClient = {
-        ...(kind === "provider"
-          ? { authenticatedUserId: "ada@github", authenticatedUserIsTailscaleProvider: true }
-          : {}),
-        authenticatedUserProfile: {
-          profileId: profile.id,
-          displayName: "Ada",
-          hasAvatar: false,
-          updatedAt: 1,
-        },
-        connect: { scopes: ["operator.write"] },
-      };
+      const providerClient = connectedProfileClient(kind);
       resolveUserProfileId.mockReturnValue(profile.id);
       getUserProfileListItem.mockReturnValue({ ...profile, emails: [] });
 
@@ -620,18 +624,7 @@ describe("users gateway methods", () => {
   it.each(["provider", "owner"])(
     "authorizes %s profile edits from the connect-time profile id",
     async (kind) => {
-      const providerClient = {
-        ...(kind === "provider"
-          ? { authenticatedUserId: "ada@github", authenticatedUserIsTailscaleProvider: true }
-          : {}),
-        authenticatedUserProfile: {
-          profileId: profile.id,
-          displayName: "Ada",
-          hasAvatar: false,
-          updatedAt: 1,
-        },
-        connect: { scopes: ["operator.write"] },
-      };
+      const providerClient = connectedProfileClient(kind);
       resolveUserProfileId.mockReturnValue(profile.id);
       setDisplayName.mockReturnValue(profile);
 
