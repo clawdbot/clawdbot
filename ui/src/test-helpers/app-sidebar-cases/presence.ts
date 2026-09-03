@@ -57,6 +57,73 @@ describe("AppSidebar viewer presence", () => {
     expect(dot()?.classList.contains("sidebar-session-group-presence--idle")).toBe(false);
     expect(section("bob").querySelector(".sidebar-session-group-presence")).toBeNull();
     expect(section("self").querySelector(".sidebar-session-group-presence")).toBeNull();
+    expect(section("self").querySelector("[data-person-card]")).toBeNull();
+    expect(
+      section("self").querySelector(
+        ".sidebar-session-group-toggle .sidebar-recent-sessions__label-text",
+      )?.textContent,
+    ).toBe("self");
+
+    const personButton = section("ada").querySelector<HTMLButtonElement>("[data-person-card]")!;
+    const toggle = section("ada").querySelector<HTMLButtonElement>(
+      ".sidebar-session-group-toggle",
+    )!;
+    expect(personButton?.tagName).toBe("BUTTON");
+    expect(personButton.getAttribute("aria-haspopup")).toBe("dialog");
+    expect(personButton.getAttribute("aria-label")).toBe("Details for ada");
+    expect(personButton.previousElementSibling).toBe(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    personButton.click();
+    await vi.dynamicImportSettled();
+    await vi.waitFor(() =>
+      expect(document.querySelector(".person-activity-hovercard h2")?.textContent).toBe("Ada"),
+    );
+    const card = document.querySelector<HTMLElement>(".person-activity-hovercard")!;
+    expect(card.querySelector(".person-activity-card__status")?.textContent?.trim()).toBe("Online");
+    expect(personButton.getAttribute("aria-expanded")).toBe("true");
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    card.querySelector<HTMLAnchorElement>("a")!.focus();
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(document.querySelector(".person-activity-hovercard")).toBeNull();
+    expect(document.activeElement).toBe(personButton);
+    expect(personButton.getAttribute("aria-expanded")).toBe("false");
+    // A real chevron press lands outside the person button: it collapses the
+    // section and dismisses an open card through the outside-pointer handling.
+    personButton.click();
+    await vi.waitFor(() =>
+      expect(document.querySelector(".person-activity-hovercard")).not.toBeNull(),
+    );
+    toggle.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    toggle.click();
+    await sidebar.updateComplete;
+    expect(section("ada").querySelector("[data-session-key]")).toBeNull();
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(document.querySelector(".person-activity-hovercard")).toBeNull();
+
+    const bobButton = section("bob").querySelector<HTMLButtonElement>("[data-person-card]")!;
+    bobButton.click();
+    await vi.dynamicImportSettled();
+    await vi.waitFor(() =>
+      expect(document.querySelector(".person-activity-hovercard h2")?.textContent).toBe("bob"),
+    );
+    const offlineCard = document.querySelector<HTMLElement>(".person-activity-hovercard")!;
+    expect(
+      offlineCard.querySelector(".person-activity-card__status--offline")?.textContent?.trim(),
+    ).toBe("Offline");
+    expect(offlineCard.querySelector("dl")).toBeNull();
+    const recent = offlineCard.querySelector("section")!;
+    expect(recent.querySelector("h3")?.textContent).toBe("Recent sessions");
+    expect(recent.querySelector("a")?.getAttribute("href")).toBe("/chat/main/profile-bob");
+    expect(offlineCard.querySelector("footer a")?.getAttribute("href")).toBe(
+      "/activity?person=profile-bob",
+    );
+    bobButton.click();
+    expect(document.querySelector(".person-activity-hovercard")).toBeNull();
+    bobButton.focus();
+    await vi.waitFor(() =>
+      expect(document.querySelector(".person-activity-hovercard h2")?.textContent).toBe("bob"),
+    );
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
 
     gateway.publishEvent("presence", {
       presence: [self, { ...ada, lastInputSeconds: 600 }],

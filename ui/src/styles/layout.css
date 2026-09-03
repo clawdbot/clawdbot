@@ -1402,6 +1402,24 @@ openclaw-settings-save-indicator:empty {
   text-align: left;
 }
 
+.sidebar-session-group-toggle--lead {
+  flex: 0 0 auto;
+}
+
+.sidebar-session-group-person {
+  display: flex;
+  align-items: center;
+  gap: var(--sidebar-row-gap);
+  min-width: 0;
+  flex: 1 1 auto;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
 .sidebar-session-group-toggle__lead {
   position: relative;
   display: inline-grid;
@@ -1655,7 +1673,8 @@ openclaw-settings-save-indicator:empty {
   color: var(--muted);
 }
 
-.sidebar-session-group-toggle > .sidebar-recent-sessions__label-text {
+.sidebar-session-group-toggle > .sidebar-recent-sessions__label-text,
+.sidebar-session-group-person > .sidebar-recent-sessions__label-text {
   min-width: 0;
   flex: 1 1 0;
 }

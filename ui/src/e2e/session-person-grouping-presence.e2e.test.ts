@@ -5,6 +5,7 @@ import { it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
+  captureSessionOwnerPageProof,
   captureSessionOwnerProof,
   captureUiProofEnabled,
   openSidebarSortMenu,
@@ -164,6 +165,18 @@ suite.define(() => {
         .toBe(textColor);
       await expectBrowser(adaSection.locator(".sidebar-session-group-presence")).toHaveCount(1);
       await expectBrowser(bobSection.locator(".sidebar-session-group-presence")).toHaveCount(0);
+
+      await adaSection.locator("[data-person-card]").hover();
+      const adaCard = page.getByRole("dialog", { name: "Activity for Ada" });
+      await expectBrowser(adaCard).toBeVisible();
+      await captureSessionOwnerPageProof(suite, page, "person-grouping-header-card.png");
+      await page.mouse.move(0, 0);
+      await adaCard.waitFor({ state: "detached" });
+      await bobSection.locator("[data-person-card]").hover();
+      const bobCard = page.getByRole("dialog", { name: "Activity for Bob" });
+      await expectBrowser(bobCard).toBeVisible();
+      await expectBrowser(bobCard).toContainText("Offline");
+      await expectBrowser(bobCard.locator("dl")).toHaveCount(0);
     } finally {
       await context.close();
     }
