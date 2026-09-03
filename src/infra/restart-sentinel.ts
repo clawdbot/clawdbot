@@ -380,7 +380,9 @@ export function formatUpdateOutcomeNotice(payload: RestartSentinelPayload): stri
   let outcome = "✅ OpenClaw updated and restarted.";
   if (payload.status === "ok" && current) {
     outcome = `✅ OpenClaw updated to ${current}${previous ? ` (from ${previous})` : ""}.`;
-  } else if (payload.status !== "ok") {
+  } else if (payload.status === "skipped") {
+    outcome = `ℹ️ OpenClaw update skipped: ${payload.stats?.reason?.trim() || "unknown reason"}.`;
+  } else if (payload.status === "error") {
     const reason =
       payload.stats?.reason?.trim() ||
       payload.stats?.steps?.find((step) => step.log?.exitCode != null && step.log.exitCode !== 0)

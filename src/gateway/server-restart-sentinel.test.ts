@@ -985,6 +985,11 @@ describe("scheduleRestartSentinelWake", () => {
     { kind: "update", status: "ok", notice: "✅ OpenClaw updated and restarted." },
     {
       kind: "update",
+      status: "skipped",
+      notice: "ℹ️ OpenClaw update skipped: already-current.",
+    },
+    {
+      kind: "update",
       status: "error",
       notice:
         "⚠️ OpenClaw update failed: verification failed. The gateway is running the previous version.",
@@ -1003,7 +1008,10 @@ describe("scheduleRestartSentinelWake", () => {
         ts: 123,
         sessionKey: "agent:main:main",
         message: kind === "restart" ? "/restart" : "/update",
-        stats: { mode: "npm", reason: "verification failed" },
+        stats: {
+          mode: "npm",
+          reason: status === "skipped" ? "already-current" : "verification failed",
+        },
       };
       const { formatRestartSentinelMessage } = await vi.importActual<
         typeof import("../infra/restart-sentinel.js")

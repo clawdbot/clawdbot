@@ -525,10 +525,14 @@ describe("restart sentinel", () => {
       expected: "⚠️ OpenClaw update failed: install. The gateway is running the previous version.",
     },
     {
-      name: "other non-success status",
+      name: "skipped with a recorded reason",
+      payload: { status: "skipped", stats: { reason: "already-current" } },
+      expected: "ℹ️ OpenClaw update skipped: already-current.",
+    },
+    {
+      name: "skipped without a reason",
       payload: { status: "skipped" },
-      expected:
-        "⚠️ OpenClaw update failed: unknown reason. The gateway is running the previous version.",
+      expected: "ℹ️ OpenClaw update skipped: unknown reason.",
     },
     {
       name: "a sentence note",
