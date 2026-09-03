@@ -764,6 +764,9 @@ class ChatControllerBranchCoordinationTest {
           .getValue("content")
           .jsonPrimitive.content,
       )
+    } else {
+      assertEquals("Failed health refresh must not dispatch after branch reconciliation completes", 0, gateway.callCount("chat.send"))
+      assertEquals(admitted, outbox.load("gateway-a").single())
     }
   }
 
