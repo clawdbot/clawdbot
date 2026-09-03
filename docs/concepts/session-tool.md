@@ -179,8 +179,8 @@ Session tools are scoped to limit what the agent can see:
 Default is `all`: unsandboxed sessions, including retained cron sessions, can
 list, read, search, message, and inspect status across agents on the Gateway.
 This can include other users' transcripts. Cross-agent access is on by default
-and governed by `tools.agentToAgent`; set `enabled: false` to keep agents isolated
-or use `allow` to restrict permitted agent pairs. Set `agent` for same-agent-only
+and governed by `tools.agentToAgent`; set `enabled: false` to block ordinary
+cross-agent access or use `allow` to restrict permitted agent pairs; requester-owned native subagent and ACP child sessions stay reachable under `tree` or `all` either way. Set `agent` for same-agent-only
 access, or `tree` for current plus spawned scope; its canonical main-session
 exception still covers all same-agent sessions. Set `self` for strict
 current-session access, including main.

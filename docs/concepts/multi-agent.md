@@ -143,7 +143,7 @@ Each configured `agentId` is a distinct persona boundary for core agent state:
 
 - Different accounts per channel (per `accountId`).
 - Different personalities (per-agent `AGENTS.md`/`SOUL.md`).
-- Separate auth and sessions, with cross-agent session access on by default and governed by `tools.agentToAgent`. Narrow session visibility with `tools.sessions.visibility`, restrict agent pairs with `tools.agentToAgent.allow`, or set `tools.agentToAgent.enabled: false` to keep agents isolated.
+- Separate auth and sessions, with cross-agent session access on by default and governed by `tools.agentToAgent`. Narrow session visibility with `tools.sessions.visibility`, restrict agent pairs with `tools.agentToAgent.allow`, or set `tools.agentToAgent.enabled: false` to block ordinary cross-agent access. Requester-owned native subagent and ACP child sessions stay reachable under `tree` or `all` visibility; use separate gateways for strict separation.
 
 This lets multiple people share one Gateway while keeping core agent state separate.
 

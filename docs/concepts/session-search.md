@@ -24,8 +24,8 @@ without a running Gateway.
 Search uses the same configured session visibility rules as `sessions_history`. The default
 `tools.sessions.visibility: "all"` permits unsandboxed callers to search sessions across agents on
 the Gateway, including other users' conversations. Cross-agent access is on by default and governed
-by `tools.agentToAgent`; set `enabled: false` to keep agents isolated or use `allow` to restrict agent
-pairs. Set explicit `agent`, `tree`, or `self` when callers need narrower session visibility.
+by `tools.agentToAgent`; set `enabled: false` to block ordinary cross-agent access or use `allow` to
+restrict agent pairs (requester-owned native subagent and ACP child sessions stay reachable under `tree` or `all`). Set explicit `agent`, `tree`, or `self` when callers need narrower session visibility.
 Per-peer DM routing separates conversation context but does not restrict session-tool visibility.
 
 Results outside the caller's effective visibility scope are removed before result limits are

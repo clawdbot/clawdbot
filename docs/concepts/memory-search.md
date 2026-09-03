@@ -188,7 +188,8 @@ Session hits obey `tools.sessions.visibility`, which defaults to `"all"`.
 [`sessions_search`](/concepts/session-search) for transcript search across agents
 on the Gateway. Visible transcripts can include other users' conversations.
 Cross-agent session access is on by default and governed by
-`tools.agentToAgent`; set `enabled: false` to keep agents isolated or use `allow`
+`tools.agentToAgent`; set `enabled: false` to block ordinary cross-agent access
+(requester-owned native subagent and ACP child sessions stay reachable under `tree` or `all`) or use `allow`
 to restrict agent pairs. A per-peer `session.dmScope`
 separates DM context but does not restrict transcript access through session
 tools. Choose explicit `"agent"` for same-agent recall, `"tree"` for current plus

@@ -517,8 +517,8 @@ Ordinary model-invoked session transcript search obeys
 including other users' transcripts. `memory_search` remains scoped to the selected
 agent's indexed corpus; use [`sessions_search`](/concepts/session-search) for
 Gateway-wide transcript search. Cross-agent access is on by default and governed
-by `tools.agentToAgent`; set `enabled: false` to keep agents isolated
-or use `allow` to restrict agent pairs. Set `agent` for same-agent recall or
+by `tools.agentToAgent`; set `enabled: false` to block ordinary cross-agent access
+or use `allow` to restrict agent pairs; requester-owned native subagent and ACP child sessions stay reachable under `tree` or `all`. Set `agent` for same-agent recall or
 `tree` for current plus spawned scope (main still sees all
 same-agent sessions), or `self` for strict current-session access. A per-peer
 DM scope alone does not restrict session-tool recall. Sandbox clamps and

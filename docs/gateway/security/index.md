@@ -106,7 +106,7 @@ Each finding has a structured `checkId` (for example `gateway.bind_no_auth`, `to
 }
 ```
 
-Keeps the Gateway local-only, isolates DMs, limits session tools to the agent's own sessions, turns off cross-agent messaging, and disables control-plane/runtime tools by default. Re-enable tools selectively per trusted agent from there.
+Keeps the Gateway local-only, isolates DMs, limits session tools to the agent's own sessions, turns off ordinary cross-agent access, and disables control-plane/runtime tools by default. Re-enable tools selectively per trusted agent from there.
 
 Built-in baseline for chat-driven agent turns: non-owner senders cannot use the `cron` or `gateway` tools regardless of config.
 

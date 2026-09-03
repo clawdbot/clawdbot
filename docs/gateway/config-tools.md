@@ -466,7 +466,7 @@ already covers sessions across agents, including conversations with other users.
 A per-peer `session.dmScope` separates DM context but does not restrict session
 tools. For narrower access, explicitly choose `agent`, `tree`, or `self`, or
 restrict agent pairs with `tools.agentToAgent.allow`. Set
-`tools.agentToAgent.enabled: false` to keep agents isolated. `tree` retains the
+`tools.agentToAgent.enabled: false` to block ordinary cross-agent access; requester-owned native subagent and ACP child sessions stay reachable under `tree` or `all`. `tree` retains the
 canonical main-session exception; `self` restricts even main to its current session.
 
 ### `tools.sessions_spawn`
