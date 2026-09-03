@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { prepareGithubIssueBrowserFallback } from "../infra/github-issue.js";
 import { VERSION } from "../version.js";
 import {
   readSessionSqliteMigrationManifest,
@@ -95,12 +94,10 @@ export function createSessionSqliteMigrationFailureIssue(
     reportBody,
   ].join("\n");
   const boundedBody = truncateUtf16Safe(body, 20_000);
-  const browserFallback = prepareGithubIssueBrowserFallback(title, boundedBody);
   return {
     body: boundedBody,
     ...(bodyPath ? { bodyPath } : {}),
     title,
-    ...(browserFallback.status === "available" ? { url: browserFallback.url } : {}),
   };
 }
 

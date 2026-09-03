@@ -5086,10 +5086,10 @@ describe("runDoctorSessionSqlite", () => {
     if (process.env.HOME) {
       expect(recover.supportIssue?.body).not.toContain(process.env.HOME);
     }
-    expect(recover.supportIssue?.url).toContain("github.com/openclaw/openclaw/issues/new");
+    expect(recover.supportIssue).not.toHaveProperty("url");
   });
 
-  it("keeps bounded GitHub issue bodies on a valid UTF-16 boundary without URL truncation", () => {
+  it("keeps bounded GitHub issue bodies on a valid UTF-16 boundary", () => {
     const store = createLegacyStore();
     const manifestPath = path.join(store.tempDir, "failed-migration.json");
     const unpairedSurrogate =
@@ -5124,7 +5124,7 @@ describe("runDoctorSessionSqlite", () => {
     expect(fieldIssue?.body).toContain(`${"x".repeat(499)}\n`);
     expect(fieldIssue?.body).not.toContain("🎉tail");
     expect(fieldIssue?.body).not.toMatch(unpairedSurrogate);
-    expect(new URL(fieldIssue?.url ?? "").searchParams.get("body")).not.toContain("�");
+    expect(fieldIssue).not.toHaveProperty("url");
 
     for (const [limit, messageCount] of [
       [6_000, 20],
@@ -5154,11 +5154,7 @@ describe("runDoctorSessionSqlite", () => {
       writeManifest([...messages, `${marker}🎉tail`]);
       const issue = createSessionSqliteMigrationFailureIssue(manifestPath);
       expect(issue?.body).not.toMatch(unpairedSurrogate);
-      if (issue?.url) {
-        const urlBody = new URL(issue.url).searchParams.get("body");
-        expect(urlBody).not.toContain("�");
-        expect(urlBody).toBe(issue.body);
-      }
+      expect(issue).not.toHaveProperty("url");
       if (limit === 6_000) {
         expect(issue?.body).toContain(`${marker}🎉tail`);
       } else {

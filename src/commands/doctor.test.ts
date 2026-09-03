@@ -309,7 +309,6 @@ describe("doctorCommand", () => {
       body: "sanitized body",
       bodyPath: "/tmp/session.failure.md",
       title: "Session SQLite migration recovery report (run-1)",
-      url: "https://github.com/openclaw/openclaw/issues/new?title=run-1",
     };
     const report = {
       mode: "recover",
@@ -356,7 +355,7 @@ describe("doctorCommand", () => {
       body: supportIssue.body,
       browserFallback: {
         status: "available",
-        url: supportIssue.url,
+        url: "https://github.com/openclaw/openclaw/issues/new?title=run-1",
       },
       marker: `openclaw-report:${"a".repeat(64)}`,
       title: supportIssue.title,
@@ -373,7 +372,6 @@ describe("doctorCommand", () => {
     const supportIssue = {
       body: "private-report-text",
       title: "Session SQLite migration recovery report (run-1)",
-      url: fallbackUrl,
     };
     const report = {
       mode: "recover",
@@ -429,13 +427,12 @@ describe("doctorCommand", () => {
     });
   });
 
-  it("keeps a failed browser handoff private and available in JSON output", async () => {
+  it("keeps a failed browser handoff URL out of JSON output", async () => {
     const fallbackUrl =
       "https://github.com/openclaw/openclaw/issues/new?title=run-1&body=private-report-text";
     const supportIssue = {
       body: "private-report-text",
       title: "Session SQLite migration recovery report (run-1)",
-      url: fallbackUrl,
     };
     const report = {
       mode: "recover",
@@ -474,6 +471,7 @@ describe("doctorCommand", () => {
 
     await expect(
       doctorCommand(runtime, {
+        json: true,
         sessionSqlite: "recover",
         sessionSqliteGithubIssue: true,
         yes: true,
@@ -481,16 +479,16 @@ describe("doctorCommand", () => {
     ).rejects.toThrow("exit:0");
 
     expect(mocks.openUrl).toHaveBeenCalledWith(fallbackUrl);
-    const output = runtime.log.mock.calls.flat().join("\n");
-    expect(output).toContain(
-      "browser handoff unavailable; the sanitized report remains available in the recovery result",
-    );
-    expect(output).not.toContain("private-report-text");
-    expect(output).not.toContain("issues/new?");
+    expect(runtime.log).not.toHaveBeenCalled();
     expect((supportIssue as { github?: unknown }).github).toEqual({
       message: "GitHub issue creation is unavailable.",
       status: "failed",
     });
+    expect(runtime.writeJson).toHaveBeenCalledWith(report, 2);
+    const jsonOutput = JSON.stringify(runtime.writeJson.mock.calls);
+    expect(jsonOutput).toContain("private-report-text");
+    expect(jsonOutput).not.toContain("issues/new?");
+    expect(jsonOutput).not.toContain(fallbackUrl);
   });
 
   it("keeps an oversized fallback in the recovery result without opening a browser", async () => {
@@ -559,7 +557,6 @@ describe("doctorCommand", () => {
       supportIssue: {
         body: "sanitized body",
         title: "Session SQLite migration recovery report (run-1)",
-        url: "https://github.com/openclaw/openclaw/issues/new?title=run-1",
       },
       targets: [],
       totals: {
@@ -599,13 +596,13 @@ describe("doctorCommand", () => {
     expect((report.supportIssue as { github?: unknown }).github).toEqual({ status: "skipped" });
     expect(runtime.log).not.toHaveBeenCalled();
     expect(runtime.writeJson).toHaveBeenCalledWith(report, 2);
+    expect(JSON.stringify(runtime.writeJson.mock.calls)).not.toContain("issues/new?");
   });
 
   it("does not start issue transport when the operator declines", async () => {
     const supportIssue = {
       body: "sanitized body",
       title: "Session SQLite migration recovery report (run-1)",
-      url: "https://github.com/openclaw/openclaw/issues/new?title=run-1",
     };
     const report = {
       mode: "recover",
