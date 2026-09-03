@@ -3,23 +3,14 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { WebSocket } from "ws";
 import { afterAll, describe, expect, it } from "vitest";
 import { GatewayClient } from "../src/gateway/client.js";
-import { buildDeviceAuthPayloadV3 } from "../src/gateway/device-auth.js";
 import { connectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
-import {
-  loadOrCreateDeviceIdentity,
-  publicKeyRawBase64UrlFromPem,
-  signDevicePayload,
-} from "../src/infra/device-identity.js";
-import { rawDataToString } from "../src/infra/ws.js";
-import { PROTOCOL_VERSION } from "../packages/gateway-protocol/src/index.js";
+import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
 import {
   type GatewayInstance,
   connectNode,
   connectGatewayStatusClient,
-  connectGatewayClient,
   postJson,
   spawnGatewayInstance,
   stopGatewayInstance,
@@ -46,118 +37,6 @@ const timer = setInterval(() => {
 }, 10);
 timer.unref();
 `;
-
-async function connectRawNode(params: {
-  url: string;
-  token: string;
-  deviceIdentityPath: string;
-  onInvoke: (payload: Record<string, unknown>) => void;
-}) {
-  const ws = new WebSocket(params.url);
-  await new Promise<void>((resolve, reject) => {
-    ws.once("open", resolve);
-    ws.once("error", reject);
-  });
-  const challenge = await new Promise<string>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("node challenge timeout")), 5_000);
-    const onMessage = (data: WebSocket.RawData) => {
-      const frame = JSON.parse(rawDataToString(data)) as {
-        event?: string;
-        payload?: { nonce?: unknown };
-      };
-      if (frame.event !== "connect.challenge" || typeof frame.payload?.nonce !== "string") {
-        return;
-      }
-      clearTimeout(timer);
-      ws.off("message", onMessage);
-      resolve(frame.payload.nonce);
-    };
-    ws.on("message", onMessage);
-    ws.once("close", () => reject(new Error("node closed during challenge")));
-  });
-
-  const identity = loadOrCreateDeviceIdentity({ path: params.deviceIdentityPath });
-  const signedAtMs = Date.now();
-  const clientId = GATEWAY_CLIENT_NAMES.NODE_HOST;
-  const clientMode = GATEWAY_CLIENT_MODES.NODE;
-  const device = {
-    id: identity.deviceId,
-    publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
-    signature: signDevicePayload(
-      identity.privateKeyPem,
-      buildDeviceAuthPayloadV3({
-        deviceId: identity.deviceId,
-        clientId,
-        clientMode,
-        role: "node",
-        scopes: [],
-        signedAtMs,
-        token: params.token,
-        nonce: challenge,
-        platform: "ios",
-      }),
-    ),
-    signedAt: signedAtMs,
-    nonce: challenge,
-  };
-  ws.send(
-    JSON.stringify({
-      type: "req",
-      id: "node-connect",
-      method: "connect",
-      params: {
-        minProtocol: PROTOCOL_VERSION,
-        maxProtocol: PROTOCOL_VERSION,
-        client: {
-          id: clientId,
-          displayName: "real-node-proof",
-          version: "1.0.0",
-          platform: "ios",
-          mode: clientMode,
-        },
-        caps: ["system"],
-        commands: ["camera.capture"],
-        auth: { token: params.token },
-        role: "node",
-        scopes: [],
-        device,
-      },
-    }),
-  );
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("node connect response timeout")), 5_000);
-    const onMessage = (data: WebSocket.RawData) => {
-      const frame = JSON.parse(rawDataToString(data)) as {
-        type?: string;
-        id?: string;
-        ok?: boolean;
-        error?: { message?: string };
-      };
-      if (frame.type !== "res" || frame.id !== "node-connect") {
-        return;
-      }
-      clearTimeout(timer);
-      ws.off("message", onMessage);
-      if (!frame.ok) {
-        reject(new Error(frame.error?.message ?? "node connect failed"));
-        return;
-      }
-      resolve();
-    };
-    ws.on("message", onMessage);
-    ws.once("close", () => reject(new Error("node closed during connect")));
-  });
-  ws.on("message", (data) => {
-    const frame = JSON.parse(rawDataToString(data)) as {
-      event?: string;
-      payload?: Record<string, unknown>;
-    };
-    if (frame.event === "node.invoke.request" && frame.payload) {
-      params.onInvoke(frame.payload);
-    }
-  });
-  return { deviceId: identity.deviceId, ws };
-}
 
 describe("gateway multi-instance e2e", () => {
   const instances: GatewayInstance[] = [];
@@ -316,34 +195,43 @@ describe("gateway multi-instance e2e", () => {
       const instance = await spawnGatewayInstanceWithEnv("node-invoke-clock", {
         NODE_OPTIONS: `--import=${pathToFileURL(preloadPath).href}`,
         OPENCLAW_CLOCK_SHIFT_PATH: shiftPath,
-        OPENCLAW_CLOCK_SHIFT_MS: "-10000",
+        OPENCLAW_CLOCK_SHIFT_MS: "10000",
       });
       instances.push(instance);
-      let nodeSocket: WebSocket | undefined;
-      const node = await connectRawNode({
+      const nodeIdentity = loadOrCreateDeviceIdentity({
+        path: path.join(instance.homeDir, "proof-node-device.sqlite"),
+      });
+      let nodeClient: GatewayClient | undefined;
+      const node = await connectGatewayClient({
         url: instance.url,
         token: instance.gatewayToken,
-        deviceIdentityPath: path.join(instance.homeDir, "proof-node-device.sqlite"),
-        onInvoke: (payload) => {
+        clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+        clientDisplayName: "real-node-proof",
+        clientVersion: "1.0.0",
+        platform: "ios",
+        mode: GATEWAY_CLIENT_MODES.NODE,
+        role: "node",
+        scopes: [],
+        caps: ["system"],
+        commands: ["camera.capture"],
+        deviceIdentity: nodeIdentity,
+        onEvent: (event) => {
+          if (event.event !== "node.invoke.request") {
+            return;
+          }
+          const payload = event.payload as { id: string; nodeId: string };
           void writeFile(shiftPath, "shift\n");
           setTimeout(() => {
-            nodeSocket?.send(
-              JSON.stringify({
-                type: "req",
-                id: `late-${String(payload.id)}`,
-                method: "node.invoke.result",
-                params: {
-                  id: payload.id,
-                  nodeId: payload.nodeId,
-                  ok: true,
-                  payload: { late: true },
-                },
-              }),
-            );
-          }, 1_200).unref();
+            void nodeClient?.request("node.invoke.result", {
+              id: payload.id,
+              nodeId: payload.nodeId,
+              ok: true,
+              payloadJSON: JSON.stringify({ captured: true }),
+            });
+          }, 350).unref();
         },
       });
-      nodeSocket = node.ws;
+      nodeClient = node;
       const operator = await connectGatewayClient({
         url: instance.url,
         token: instance.gatewayToken,
@@ -356,36 +244,30 @@ describe("gateway multi-instance e2e", () => {
         }),
       });
       try {
-        await waitForNodeStatus(instance, node.deviceId);
+        await waitForNodeStatus(instance, nodeIdentity.deviceId);
         const startedAt = performance.now();
-        let error: unknown;
-        try {
-          await operator.request(
-            "node.invoke",
-            {
-              nodeId: node.deviceId,
-              command: "camera.capture",
-              params: { quality: "low" },
-              timeoutMs: 500,
-              idempotencyKey: "real-node-invoke-clock-proof",
-            },
-            { timeoutMs: 5_000 },
-          );
-        } catch (caught) {
-          error = caught;
-        }
+        const result = await operator.request<{ captured?: boolean }>(
+          "node.invoke",
+          {
+            nodeId: nodeIdentity.deviceId,
+            command: "camera.capture",
+            params: { quality: "low" },
+            timeoutMs: 500,
+            idempotencyKey: "real-node-invoke-clock-proof",
+          },
+          { timeoutMs: 5_000 },
+        );
         const elapsedMs = Math.round(performance.now() - startedAt);
-        const message = error instanceof Error ? error.message : String(error);
-        expect(message).toContain("TIMEOUT");
-        expect(elapsedMs).toBeGreaterThanOrEqual(400);
-        expect(elapsedMs).toBeLessThan(1_500);
-        expect(instance.logs()).toContain("[clock-shift] offsetMs=-10000");
+        expect(result.captured).toBe(true);
+        expect(elapsedMs).toBeGreaterThanOrEqual(250);
+        expect(elapsedMs).toBeLessThan(1_000);
+        expect(instance.logs()).toContain("[clock-shift] offsetMs=10000");
         console.log(
-          `[real-gateway-node-proof] gatewayProcess=true nodeWebSocket=true wallClockOffsetMs=-10000 result=TIMEOUT elapsedMs=${elapsedMs}`,
+          `[real-gateway-node-proof] gatewayProcess=true nodeWebSocket=true wallClockOffsetMs=10000 result=SUCCESS elapsedMs=${elapsedMs}`,
         );
       } finally {
         operator.stop();
-        node.ws.close();
+        node.stop();
         await rm(proofRoot, { recursive: true, force: true });
       }
     },
