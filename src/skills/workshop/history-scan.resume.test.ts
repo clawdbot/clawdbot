@@ -14,7 +14,6 @@ type RunSkillHistoryScanReview =
 
 const mocks = vi.hoisted(() => ({
   candidates: [] as SkillHistoryScanCandidate[],
-  getProgress: vi.fn(async () => ({ mutationCount: 0, proposalIds: [] as string[] })),
   readSession: vi.fn<ReadHistoryScanSession>(),
   review: vi.fn<RunSkillHistoryScanReview>(),
 }));
@@ -58,16 +57,13 @@ vi.mock("./history-scan-transcript.js", async (importOriginal) => ({
     mocks.readSession(...args),
 }));
 
-vi.mock("./service.js", () => ({
-  getSkillProposalRunProgress: mocks.getProgress,
-}));
-
 import {
   historyScanStateKey,
   historyScanStore,
   type SkillHistoryScanScope,
 } from "./history-scan-state.js";
 import { runSkillHistoryScan } from "./history-scan.js";
+import { proposeCreateSkill } from "./service.js";
 
 function candidate(instanceId: string, updatedAtMs: number): SkillHistoryScanCandidate {
   return {
@@ -133,7 +129,84 @@ describe("Skill Workshop history scan resume", () => {
         lastScanReviewed: 1,
       });
       expect(reviewedBatches).toEqual([["valid"], ["valid"]]);
-      expect(mocks.getProgress).toHaveBeenCalledTimes(1);
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+      await fs.rm(tempDir, { recursive: true, force: true });
+      vi.clearAllMocks();
+      mocks.candidates = [];
+    }
+  });
+
+  it("resumes only proposals owned by the active agent", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-history-scan-owner-resume-"));
+    const workspaceDir = path.join(tempDir, "workspace");
+    const storePath = path.join(tempDir, "sessions.json");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(tempDir, "state") };
+    const session = candidate("active-agent-session", Date.parse("2026-07-16T12:00:00.000Z"));
+    const params = {
+      agentId: "agent-a",
+      config: { session: { store: storePath } },
+      env,
+      workspaceDir,
+    } satisfies SkillHistoryScanScope;
+
+    await fs.mkdir(workspaceDir, { recursive: true });
+    try {
+      mocks.candidates = [session];
+      mocks.readSession.mockResolvedValue({
+        instanceId: session.instanceId,
+        sessionKey: session.sessionKey,
+        updatedAt: new Date(session.updatedAtMs).toISOString(),
+        modelIterations: 6,
+        transcript: "completed transcript",
+      });
+      const recoveredProposalIds: string[][] = [];
+      let agentBProposalId = "";
+      let agentAProposalId = "";
+      mocks.review
+        .mockImplementationOnce(async ({ runId }) => {
+          if (!runId) {
+            throw new Error("simulated history scan did not provide a run id");
+          }
+          agentAProposalId = (
+            await proposeCreateSkill({
+              agentId: "agent-a",
+              config: params.config,
+              content: "# Agent A Proposal\n",
+              description: "Agent A interrupted proposal",
+              env,
+              name: "Agent A Proposal",
+              origin: { runId },
+              workspaceDir,
+            })
+          ).record.id;
+          agentBProposalId = (
+            await proposeCreateSkill({
+              agentId: "agent-b",
+              config: params.config,
+              content: "# Agent B Proposal\n",
+              description: "Agent B interrupted proposal",
+              env,
+              name: "Agent B Proposal",
+              origin: { runId },
+              workspaceDir,
+            })
+          ).record.id;
+          throw new Error("simulated interrupted history scan");
+        })
+        .mockImplementationOnce(async ({ onComplete, progress }) => {
+          recoveredProposalIds.push(progress?.proposalIds ?? []);
+          await onComplete?.(0);
+          return 0;
+        });
+
+      await expect(runSkillHistoryScan(params)).rejects.toThrow(
+        "simulated interrupted history scan",
+      );
+      await expect(runSkillHistoryScan(params)).resolves.toMatchObject({ lastScanReviewed: 1 });
+
+      expect(recoveredProposalIds).toEqual([[agentAProposalId]]);
+      expect(recoveredProposalIds[0]).not.toContain(agentBProposalId);
     } finally {
       closeOpenClawStateDatabaseForTest();
       await fs.rm(tempDir, { recursive: true, force: true });
