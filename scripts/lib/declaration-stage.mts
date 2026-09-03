@@ -166,19 +166,9 @@ export async function publishStagedDeclarations(
 
 function sanitizePublishedDeclarationTree(root: string) {
   const queue = [root];
-  const seen = new Set<string>();
   while (queue.length > 0) {
     const dir = queue.pop()!;
-    if (seen.has(dir)) {
-      continue;
-    }
-    seen.add(dir);
-    let entries;
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      continue;
-    }
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
     for (const entry of entries) {
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
