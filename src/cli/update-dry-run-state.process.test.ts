@@ -244,6 +244,58 @@ describe("update process state", () => {
     expect(await snapshotTree(root)).toEqual(before);
   });
 
+  it("refuses configured session stores outside the copied state snapshot", async () => {
+    const root = tempDirs.make("openclaw-update-migration-plan-session-root-");
+    const configPath = path.join(root, "config", "openclaw.json");
+    const stateDir = path.join(root, "state");
+    const externalStore = path.join(root, "external", "sessions.json");
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(path.dirname(externalStore), { recursive: true });
+    await fs.writeFile(externalStore, "{}\n");
+    const runPlan = () =>
+      runUpdateProcess(root, [
+        "update",
+        "migration-plan",
+        "--snapshot-home",
+        root,
+        "--snapshot-config",
+        configPath,
+        "--snapshot-state",
+        stateDir,
+        "--json",
+      ]);
+
+    await fs.writeFile(configPath, `${JSON.stringify({ session: { store: externalStore } })}\n`);
+    const external = runPlan();
+    expect(external.error).toBeUndefined();
+    expect(external.status, external.stderr).toBe(1);
+    expect(JSON.parse(external.stdout)).toMatchObject({
+      outcome: "refused",
+      refusal: { code: "session-target-outside-snapshot" },
+      steps: [
+        {
+          id: "agent-migration-targets",
+          source: expect.arrayContaining([{ kind: "path", path: externalStore }]),
+          target: [],
+          outcome: "deferred",
+          refusal: { code: "session-target-outside-snapshot" },
+        },
+      ],
+    });
+
+    const copiedStore = path.join(stateDir, "sessions.json");
+    await fs.writeFile(copiedStore, "{}\n");
+    await fs.writeFile(configPath, `${JSON.stringify({ session: { store: copiedStore } })}\n`);
+    const copied = runPlan();
+    expect(copied.error).toBeUndefined();
+    expect(copied.status, copied.stderr).toBe(1);
+    expect(JSON.parse(copied.stdout)).toMatchObject({
+      refusal: { code: "candidate-artifact-digest-required" },
+      steps: expect.arrayContaining([expect.objectContaining({ id: "orphan-session-keys" })]),
+    });
+  });
+
   it("rejects caller-supplied snapshot identity without touching the copy", async () => {
     const root = tempDirs.make("openclaw-update-migration-plan-identity-");
     const configPath = path.join(root, "config", "openclaw.json");

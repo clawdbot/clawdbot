@@ -17,6 +17,7 @@ import { migrateLegacyMainSessionKeys } from "../config/sessions/legacy-main-ses
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { isPerAgentSessionStoreConfig } from "../config/sessions/session-store-config.js";
 import {
+  listConfiguredSessionStoreAgentIds,
   resolveAllAgentSessionStoreCandidateTargetsSync,
   resolveConfiguredAgentDatabaseTargets,
 } from "../config/sessions/targets.js";
@@ -43,6 +44,7 @@ import {
   type OpenClawStateDatabaseSchemaMigration,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { isPathInside } from "./path-guards.js";
 import {
   detectLegacyAcpReplayLedger,
   migrateLegacyAcpReplayLedger,
@@ -1024,6 +1026,22 @@ function uniqueMigrationEndpoints(
   });
 }
 
+function listMigrationEndpointsOutsideRoot(
+  endpoints: readonly LegacyStateMigrationEndpoint[],
+  root: string,
+): LegacyStateMigrationEndpoint[] {
+  const resolvedRoot = path.resolve(root);
+  return uniqueMigrationEndpoints(
+    endpoints.filter((endpoint) => {
+      if (endpoint.kind === "owner") {
+        return false;
+      }
+      const resolvedPath = path.resolve(endpoint.path);
+      return resolvedPath !== resolvedRoot && !isPathInside(resolvedRoot, resolvedPath);
+    }),
+  );
+}
+
 function createConfigMigrationSources(
   configPath: string,
   includedPaths: readonly string[],
@@ -1757,6 +1775,50 @@ export async function planLegacyStateMigrationsReadOnly(params: {
       steps: [],
       warnings: [...(params.initialWarnings ?? []), message],
       refusal: { code: "snapshot-identity-mismatch", message },
+    });
+  }
+  const configuredSessionStoreEndpoints = uniqueMigrationEndpoints(
+    [
+      ...new Set([
+        ...listConfiguredSessionStoreAgentIds(configBefore.config),
+        resolveSessionStoreCompatibilityAgentId(configBefore.config),
+      ]),
+    ].map((agentId) => ({
+      kind: "path" as const,
+      path: resolveSessionStorePathCore(configBefore.config.session?.store, { agentId, env }),
+    })),
+  );
+  const outsideSessionStoreEndpoints = listMigrationEndpointsOutsideRoot(
+    configuredSessionStoreEndpoints,
+    snapshot.stateDir,
+  );
+  if (outsideSessionStoreEndpoints.length > 0) {
+    const refusal = {
+      code: "session-target-outside-snapshot",
+      message: `Configured session migration endpoints are outside the copied state root and require a separately bound snapshot: ${outsideSessionStoreEndpoints
+        .map((endpoint) => (endpoint.kind === "owner" ? endpoint.id : path.resolve(endpoint.path)))
+        .toSorted()
+        .join(", ")}`,
+    };
+    const discoveryStep = createAgentTargetDiscoveryStep({
+      configPath: snapshot.configPath,
+      configIncludedPaths: configBefore.configIncludedPaths,
+      stateDir: snapshot.stateDir,
+      env,
+      refusal,
+      run: () => ({ changes: [], warnings: [refusal.message] }),
+    });
+    discoveryStep.source = uniqueMigrationEndpoints([
+      ...discoveryStep.source,
+      ...outsideSessionStoreEndpoints,
+    ]);
+    return createLegacyStateMigrationPlan({
+      mode: params.mode,
+      candidate: params.candidate,
+      snapshot,
+      steps: [migrationStepPlan(discoveryStep)],
+      warnings: [...(params.initialWarnings ?? []), ...configBefore.warnings],
+      refusal,
     });
   }
   const doctorOnlyStateMigrations = params.mode === "doctor";
