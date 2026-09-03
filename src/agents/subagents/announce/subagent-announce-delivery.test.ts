@@ -216,8 +216,9 @@ const slackThreadOrigin = {
 
 const sentDeliveryStatus = { status: "sent", resultCount: 1 } as const;
 
-function createGatewayMock(response: Record<string, unknown> = {}) {
+function createGatewayMock(response: Record<string, unknown> = {}, onCall?: () => void) {
   return vi.fn(async (opts: Parameters<typeof runtimeCallGateway>[0]) => {
+    onCall?.();
     opts.onAccepted?.({ status: "accepted" });
     return response;
   }) as unknown as typeof runtimeCallGateway;
@@ -319,11 +320,13 @@ function createQueueOutcomeMock(
 
 function createQueueOutcomeSequenceMock(
   queuedOutcomes: (boolean | EmbeddedAgentQueueFailureReason)[],
+  onCall?: () => void,
 ): ReturnType<typeof vi.fn<QueueEmbeddedAgentMessageWithOutcome>> {
   // Sequence mocks model retry paths where the embedded run can become
   // unavailable between announce attempts.
   let index = 0;
   return vi.fn((sessionId: string) => {
+    onCall?.();
     const outcome = queuedOutcomes[Math.min(index, queuedOutcomes.length - 1)] ?? false;
     index += 1;
     return outcome === true
@@ -2884,12 +2887,17 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       },
     },
   ])("does not credit stale thread completions after $name", async ({ deliveryStatus }) => {
-    const callGateway = createGatewayMock({ result: { payloads: [], deliveryStatus } });
+    const callOrder: string[] = [];
+    const callGateway = createGatewayMock({ result: { payloads: [], deliveryStatus } }, () => {
+      callOrder.push("gateway");
+    });
     const sendMessage = createSendMessageMock();
-    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock([
-      "transcript_commit_wait_unsupported",
-      "no_active_run",
-    ]);
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock(
+      ["transcript_commit_wait_unsupported", "no_active_run"],
+      () => {
+        callOrder.push("queue");
+      },
+    );
     const result = await deliverSlackThreadAnnouncement({
       callGateway,
       sendMessage,
@@ -2940,12 +2948,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         userTurnTranscriptRecorder: expect.any(Object),
       }),
     );
-    expect(queueEmbeddedAgentMessageWithOutcome.mock.invocationCallOrder[0]).toBeLessThan(
-      callGateway.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
-    expect(callGateway.mock.invocationCallOrder[0]).toBeLessThan(
-      queueEmbeddedAgentMessageWithOutcome.mock.invocationCallOrder[1] ?? Number.POSITIVE_INFINITY,
-    );
+    expect(callOrder).toEqual(["queue", "gateway", "queue"]);
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
