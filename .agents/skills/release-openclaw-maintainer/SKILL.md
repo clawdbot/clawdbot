@@ -331,7 +331,11 @@ This gate starts only after stable publication. It is a narrow shipped-state
 closeout, not permission to heal broader `main`. Stable publication is not
 complete until `main` carries the actual shipped release state.
 
-1. Start from fresh latest `main`. Audit `release/YYYY.M.PATCH` against it and
+1. Start from fresh latest `main`. Use a same-repository PR targeting `main`,
+   with branch `release/<version>-main-closeout` and exact title
+   `chore(release): close out <version> on main`. `<version>` is the published
+   stable `YYYY.M.PATCH` (or `YYYY.M.PATCH-N` correction), without the `v` prefix.
+   Audit `release/YYYY.M.PATCH` against it and
    forward-port real fixes that are absent from `main`. Do not blindly merge
    release-only compatibility, test, or validation adapters into newer `main`.
 2. Set `main` to the shipped stable version, not a speculative next train. Run
@@ -339,7 +343,12 @@ complete until `main` carries the actual shipped release state.
    `pnpm deps:npm-lock:check`.
 3. Make `CHANGELOG.md`'s `## YYYY.M.PATCH` section on `main` exactly match the
    tagged release branch. Include the stable `appcast.xml` update when the mac
-   release published one.
+   release published one. `scripts/pr prepare-run` permits this closeout without
+   an override when `v<version>` exists on origin and the changelog diff only adds
+   or replaces that version's section (or finalizes the existing unreleased
+   section); leave all other sections and the preamble unchanged.
+   `OPENCLAW_ALLOW_ROOT_CHANGELOG_PR=1` remains an explicit override
+   for release automation outside this convention.
 4. Do not add `YYYY.M.PATCH+1`, a beta version, or an empty future changelog
    section to `main` until the operator explicitly starts that release train.
 5. Run `pnpm release:generated:check`, `pnpm deps:npm-lock:check`, and
