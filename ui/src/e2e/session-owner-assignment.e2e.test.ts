@@ -381,17 +381,38 @@ suite.define(() => {
         const assignTo = page.getByRole("menuitem", { name: "Assign to…", exact: true });
         await assignTo.hover();
         await gateway.waitForRequest("users.list");
+        const expectCurrentOwner = async (phase: string) => {
+          await captureProof(page, `header-directory-${phase}`);
+          expect
+            .soft(
+              await assignTo.getByRole("menuitemradio", { name: "Bob", exact: true }).isVisible(),
+            )
+            .toBe(true);
+          const selectedOwners = await assignTo
+            .getByRole("menuitemradio", { checked: true })
+            .evaluateAll((owners) =>
+              owners.map((owner) => ({
+                label: owner.querySelector(".session-menu__text")?.textContent?.trim(),
+                disabled: owner.hasAttribute("disabled"),
+              })),
+            );
+          expect.soft(selectedOwners).toEqual([{ label: "Bob", disabled: true }]);
+        };
+        await expectBrowser(assignTo).toContainText("Loading");
+        await expectCurrentOwner("pending");
         const directoryError = "The team directory is temporarily unavailable.";
         await gateway.rejectDeferred("users.list", {
           code: "UNAVAILABLE",
           message: directoryError,
         });
         await expectBrowser(assignTo.getByRole("alert")).toContainText(directoryError);
+        await expectCurrentOwner("failed");
         await assignTo.getByRole("menuitem", { name: "Retry", exact: true }).click();
         await expectBrowser(menuTrigger).toHaveAttribute("aria-expanded", "true");
         await expectBrowser(
           assignTo.getByRole("menuitemradio", { name: "Carol", exact: true }),
         ).toBeVisible();
+        await expectBrowser(assignTo.getByRole("menuitemradio")).toHaveCount(4);
         await chooseMe(page);
         await expectAssignmentRequest(gateway);
 

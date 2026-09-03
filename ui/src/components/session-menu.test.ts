@@ -152,13 +152,29 @@ function selectMenuValue(menu: SessionMenuElement, value: string) {
 }
 
 describe("session menu", () => {
-  it("keeps self and agents available while the directory loads, then retries a visible failure", async () => {
+  it("keeps self, agents, and the current owner while the directory loads, then retries a visible failure", async () => {
     const pending = deferred<ReturnType<typeof sessionOwnerProfiles>>();
     const { context, request } = createSessionOwnerMenuHarness(() => pending.promise);
-    const menu = await mountMenu({ context });
+    const menu = await mountMenu({
+      context,
+      currentOwner: {
+        type: "human",
+        id: "profile-old-bob",
+        identity: { type: "profile", id: "profile-bob" },
+        label: "Bob",
+      },
+    });
+    const expectCurrentOwner = () => {
+      expect
+        .soft(menuItemLabels(menuItem(menu, "Assign to…")).slice(0, 3))
+        .toEqual(["Me", "Research", "Bob"]);
+      const selected = menu.querySelector<SessionMenuItem>('wa-dropdown-item[aria-checked="true"]');
+      expect.soft(selected?.getAttribute("value")).toBe("assign-owner:human:profile-bob");
+      expect.soft(selected?.disabled).toBe(true);
+    };
     await waitForFast(() => expect(request).toHaveBeenCalledWith("users.list", {}));
-    expect(menuItemLabels(menuItem(menu, "Assign to…")).slice(0, 2)).toEqual(["Me", "Research"]);
     expect(menu.textContent).toContain("Loading");
+    expectCurrentOwner();
 
     pending.reject(new Error("Directory is temporarily unavailable."));
     await waitForFast(() =>
@@ -166,11 +182,16 @@ describe("session menu", () => {
         "Directory is temporarily unavailable.",
       ),
     );
-    expect(menuItemLabels(menuItem(menu, "Assign to…")).slice(0, 2)).toEqual(["Me", "Research"]);
-    request.mockImplementation(() => sessionOwnerProfiles("Ada", "Carol"));
+    expectCurrentOwner();
+    request.mockImplementation(() => sessionOwnerProfiles("Ada", "Bob", "Carol"));
     selectMenuValue(menu, "reload-owners");
     await waitForFast(() =>
-      expect(menuItemLabels(menuItem(menu, "Assign to…"))).toEqual(["Me", "Research", "Carol"]),
+      expect(menuItemLabels(menuItem(menu, "Assign to…"))).toEqual([
+        "Me",
+        "Research",
+        "Bob",
+        "Carol",
+      ]),
     );
     expect(menu.querySelector('[role="alert"]')).toBeNull();
     expect(request).toHaveBeenCalledTimes(2);

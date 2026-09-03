@@ -53,21 +53,27 @@ export class SessionOwnerMenu {
   render(params: SessionOwnerMenuParams, inline = false) {
     const context = this.context.value;
     const self = sessionSelfOwner(context?.gateway.snapshot.selfUser);
-    const profiles =
-      this.profiles.status === TaskStatus.COMPLETE ? (this.profiles.value?.profiles ?? []) : [];
-    const owners: SessionOwnerOption[] = profiles
-      .filter((profile) => !profile.mergedInto && profile.id !== self?.id)
-      .map((profile) => ({
-        type: "human",
-        id: profile.id,
-        identity: { type: "profile", id: profile.id },
-        label:
-          profile.displayName?.trim() ||
-          profile.githubIdentity?.login ||
-          profile.emails[0] ||
-          profile.id,
-        avatarUrl: buildControlUiUserAvatarPath(profile.id, profile.updatedAt),
-      }));
+    const currentOwner = params.currentOwner;
+    const currentOwnerId = currentOwner?.identity?.id ?? currentOwner?.id;
+    // The session already records its owner; directory availability must not erase the checked row.
+    const owners: SessionOwnerOption[] =
+      this.profiles.status === TaskStatus.COMPLETE
+        ? (this.profiles.value?.profiles ?? [])
+            .filter((profile) => !profile.mergedInto && profile.id !== self?.id)
+            .map((profile) => ({
+              type: "human",
+              id: profile.id,
+              identity: { type: "profile", id: profile.id },
+              label:
+                profile.displayName?.trim() ||
+                profile.githubIdentity?.login ||
+                profile.emails[0] ||
+                profile.id,
+              avatarUrl: buildControlUiUserAvatarPath(profile.id, profile.updatedAt),
+            }))
+        : currentOwner?.type === "human" && currentOwnerId && currentOwnerId !== self?.id
+          ? [{ ...currentOwner, type: currentOwner.type, id: currentOwnerId }]
+          : [];
     for (const agent of context?.agents.state.agentsList?.agents ?? []) {
       const identity = context?.agentIdentity.get(agent.id);
       owners.push({
@@ -90,9 +96,7 @@ export class SessionOwnerMenu {
     const slot = inline ? nothing : "submenu";
     return html`
       ${owners.map((owner) => {
-        const checked =
-          owner.type === params.currentOwner?.type &&
-          owner.id === (params.currentOwner.identity?.id ?? params.currentOwner.id);
+        const checked = owner.type === currentOwner?.type && owner.id === currentOwnerId;
         return html`<wa-dropdown-item
           slot=${slot}
           class="session-menu__item"
