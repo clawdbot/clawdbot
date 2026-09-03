@@ -48,7 +48,7 @@ describe("mergeAttemptToolMediaPayloads", () => {
     ]);
   });
 
-  it("keeps generated media separate from an earlier tool-error warning", () => {
+  it("keeps earlier generated media separate from a later tool-error warning", () => {
     expect(
       mergeAttemptToolMediaPayloads({
         payloads: [{ text: "Bash failed", isError: true }],
