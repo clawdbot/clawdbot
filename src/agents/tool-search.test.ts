@@ -534,13 +534,16 @@ describe("Tool Search", () => {
       }),
     );
     expect(JSON.stringify(manyGroups, null, 2).length).toBeLessThanOrEqual(4_000);
+    let sawRetainedCandidate = false;
     for (const group of manyGroups.results as Array<{
       candidates: Array<{ id: string }>;
       truncated?: true;
     }>) {
       if (group.candidates.length === 0) {
+        expect(sawRetainedCandidate).toBe(false);
         expect(group.truncated).toBe(true);
       } else {
+        sawRetainedCandidate = true;
         expect(group.candidates[0]?.id).toBe(rankedIds[0]);
       }
     }
