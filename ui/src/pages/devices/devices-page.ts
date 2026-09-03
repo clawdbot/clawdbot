@@ -613,6 +613,7 @@ class DevicesPage extends OpenClawLightDomElement {
           nodes: devices.nodes,
           presence: this.presence,
           gatewayVersion,
+          basePath: this.context.basePath,
           gatewaySystemInfo: this.gatewaySystemInfo,
           desktopEnvironments: this.desktopEnvironments,
           lastError: devices.lastError,

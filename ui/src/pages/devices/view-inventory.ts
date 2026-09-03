@@ -2,11 +2,8 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 // Devices page renders the unified paired-device / node inventory sections.
 import { html, nothing, type TemplateResult } from "lit";
 import type { PresenceEntry } from "../../api/types.ts";
+import { openDesktopFocus } from "../../components/desktop/desktop-focus-window.ts";
 import { icons } from "../../components/icons.ts";
-import {
-  DESKTOP_PANEL_TOGGLE_EVENT,
-  type DesktopPanelToggleDetail,
-} from "../../components/panel-toggle-contract.ts";
 import {
   renderSettingsEmpty,
   renderSettingsLoadingSkeleton,
@@ -463,15 +460,12 @@ function renderDesktopControl(props: DevicesProps, environmentId: string, comman
       (environment) => environment.id === environmentId && environment.desktop === true,
     )
   ) {
+    // Settings routes suppress the docked Desktop panel, so the row opens the
+    // standalone desktop focus window instead of dispatching a panel toggle.
     return html`<button
       class="btn btn--sm device-entry__desktop"
-      @click=${() => {
-        window.dispatchEvent(
-          new CustomEvent<DesktopPanelToggleDetail>(DESKTOP_PANEL_TOGGLE_EVENT, {
-            detail: { open: true, environmentId },
-          }),
-        );
-      }}
+      title=${t("devices.inventory.desktopOpenWindow")}
+      @click=${() => openDesktopFocus(props.basePath, environmentId)}
     >
       ${icons.monitor} ${t("devices.inventory.desktop")}
     </button>`;

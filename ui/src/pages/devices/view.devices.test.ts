@@ -2,11 +2,15 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { DESKTOP_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
+import { openDesktopFocus } from "../../components/desktop/desktop-focus-window.ts";
 import type { InventoryRemovalRequest } from "../../lib/nodes/index.ts";
 import { createDevicesViewProps, deviceSystemInfo } from "../../test-helpers/devices-fixtures.ts";
 import { renderDevices } from "./view.ts";
 import type { DevicesProps } from "./view.types.ts";
+
+vi.mock("../../components/desktop/desktop-focus-window.ts", () => ({
+  openDesktopFocus: vi.fn(),
+}));
 
 afterEach(() => document.body.replaceChildren());
 
@@ -259,28 +263,24 @@ describe("devices inventory rendering", () => {
   });
 
   it.each(["gateway", "node:studio"])(
-    "opens the recorded %s desktop environment",
+    "opens the recorded %s desktop environment in a focus window",
     (environmentId) => {
-      const listener = vi.fn();
-      window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, listener);
-      try {
-        const container = renderDevicesContainer({
-          presence: [{ host: "Gateway", mode: "gateway", ts: 1000 }],
-          nodes: [{ nodeId: "studio", displayName: "Studio", paired: true, connected: true }],
-          desktopEnvironments: [
-            { id: environmentId, type: "host", status: "available", desktop: true },
-          ],
-        });
-        expect(container.querySelectorAll(".device-entry__desktop")).toHaveLength(1);
-        findButton(
-          getSettingsRow(container, environmentId === "gateway" ? "Gateway" : "Studio"),
-          "Desktop",
-        ).click();
-        expect(listener).toHaveBeenCalledOnce();
-        expect(listener.mock.calls[0]?.[0].detail).toEqual({ open: true, environmentId });
-      } finally {
-        window.removeEventListener(DESKTOP_PANEL_TOGGLE_EVENT, listener);
-      }
+      // Settings routes hide the docked panel, so the row must open the standalone window.
+      vi.mocked(openDesktopFocus).mockClear();
+      const container = renderDevicesContainer({
+        basePath: "/ui",
+        presence: [{ host: "Gateway", mode: "gateway", ts: 1000 }],
+        nodes: [{ nodeId: "studio", displayName: "Studio", paired: true, connected: true }],
+        desktopEnvironments: [
+          { id: environmentId, type: "host", status: "available", desktop: true },
+        ],
+      });
+      expect(container.querySelectorAll(".device-entry__desktop")).toHaveLength(1);
+      findButton(
+        getSettingsRow(container, environmentId === "gateway" ? "Gateway" : "Studio"),
+        "Desktop",
+      ).click();
+      expect(openDesktopFocus).toHaveBeenCalledExactlyOnceWith("/ui", environmentId);
     },
   );
 
@@ -510,6 +510,7 @@ describe("devices inventory rendering", () => {
   it("shows device and Gateway version drift", () => {
     const container = renderDevicesContainer({
       gatewayVersion: "2026.7.2",
+      basePath: "",
       nodes: [
         {
           nodeId: "node-old",

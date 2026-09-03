@@ -13,6 +13,7 @@ export type DevicesProps = {
   nodes: Array<Record<string, unknown>>;
   presence: PresenceEntry[];
   gatewayVersion: string | null;
+  basePath: string;
   gatewaySystemInfo?: SystemInfoResult | null;
   desktopEnvironments?: EnvironmentSummary[];
   lastError: string | null;

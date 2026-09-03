@@ -682,6 +682,7 @@ export const en: TranslationMap & {
       title: "Paired devices",
       connected: "connected",
       desktop: "Desktop",
+      desktopOpenWindow: "Open this desktop in a new window",
       desktopEnableHint:
         "Enable desktop.host.enabled: true in the node config and add desktop.stream to gateway.nodes.commands.allow, then restart the node and Gateway.",
       uptime: "up {time}",

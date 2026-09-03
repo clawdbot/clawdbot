@@ -26,6 +26,7 @@ export function createDevicesViewProps(overrides: Partial<DevicesProps> = {}): D
     nodes: [],
     presence: [],
     gatewayVersion: null,
+    basePath: "",
     lastError: null,
     devicesLoading: false,
     devicesError: null,
