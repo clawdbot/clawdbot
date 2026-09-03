@@ -63,9 +63,10 @@ verify_child_run_sha() {
 require_clawhub_dispatch_available() {
   local workflow_ref="$1"
   local run_state runs run_id run_url endpoint
-  # Query each active status separately so recent completed runs cannot hide
-  # an older environment-gated child on the same workflow ref.
-  for run_state in waiting pending queued in_progress; do
+  # Query each non-completed status separately so recent completed runs cannot
+  # hide an older environment-gated child on the same workflow ref; `requested`
+  # and `action_required` precede `queued`/`waiting` and are just as active.
+  for run_state in requested action_required waiting pending queued in_progress; do
     runs="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow plugin-clawhub-release.yml \
       --branch "$workflow_ref" --status "$run_state" --limit 1 --json databaseId,url)" || return 1
     run_id="$(jq -r '.[0].databaseId // empty' <<< "$runs")" || return 1

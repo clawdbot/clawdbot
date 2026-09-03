@@ -2508,6 +2508,8 @@ describe("package acceptance workflow", () => {
   });
 
   it.each([
+    { state: "requested", blocked: true },
+    { state: "action_required", blocked: true },
     { state: "waiting", blocked: true },
     { state: "pending", blocked: true },
     { state: "queued", blocked: true },
