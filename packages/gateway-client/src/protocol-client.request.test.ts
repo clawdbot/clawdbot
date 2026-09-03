@@ -8,6 +8,7 @@ import {
   type GatewayProtocolRequestTiming,
   type GatewayProtocolSocketHandlers,
 } from "./protocol-client.js";
+import { isGatewayProtocolResponseError } from "./protocol-request.js";
 import { MAX_SAFE_TIMEOUT_DELAY_MS } from "./timeouts.js";
 
 type RequestFrame = {
@@ -138,6 +139,7 @@ describe("GatewayProtocolClient requests", () => {
         ]);
         for (const [index, error] of errors.entries()) {
           expect(error).toBeInstanceOf(GatewayProtocolRequestError);
+          expect(isGatewayProtocolResponseError(error)).toBe(true);
           expect(error).toMatchObject({
             ...fields,
             gatewayCode: fields.code,

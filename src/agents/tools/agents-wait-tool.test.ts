@@ -193,6 +193,39 @@ describe("agents_wait", () => {
     expect(isToolResultError(result)).toBe(false);
   });
 
+  it.each([-60_000, 60_000])(
+    "keeps its elapsed deadline after a %d ms clock step",
+    async (step) => {
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+      vi.setSystemTime(100_000);
+      const controller = new AbortController();
+      records.set("clock-step", collectorRun("clock-step", "agent:main:main"));
+      const tool = createAgentsWaitTool({
+        agentSessionKey: "agent:main:main",
+        agentId: "main",
+        config: { tools: { swarm: true } },
+      });
+      let result: unknown;
+      const waiting = tool
+        .execute("clock", { ids: ["clock-step"], timeoutSeconds: 0.1 }, controller.signal)
+        .then((value) => {
+          result = value.details;
+        });
+      try {
+        await vi.advanceTimersByTimeAsync(25);
+        vi.setSystemTime(Date.now() + step);
+        await vi.advanceTimersByTimeAsync(74);
+        expect(result).toBeUndefined();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(result).toEqual({ completed: [], pending: ["clock-step"] });
+      } finally {
+        controller.abort();
+        await waiting.catch(() => {});
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("orders completions by their durable capture time instead of input order", async () => {
     const later = collectorRun("later", "agent:main:main", { status: "done" });
     later.completion = { required: false, resultText: "later", capturedAt: 10 };

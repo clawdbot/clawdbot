@@ -8,8 +8,6 @@ import type {
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { renderSessionMenuItem } from "./cloud-target.ts";
-import { renderWorktreeFields } from "./detail-chip.ts";
-import type { DraftBranches } from "./discovery.ts";
 import { folderDisplayName, parentFolderDisplayName } from "./path.ts";
 import { renderPlaceBrowser } from "./place-browser.ts";
 import { disambiguate } from "./place-labels.ts";
@@ -97,11 +95,6 @@ export function renderProjectChip(params: {
   projectSearchError: string | null;
   projectId: string;
   gatewayLabel: string;
-  remotePlacement: boolean;
-  branches: DraftBranches | null;
-  branchesLoading: boolean;
-  baseRef: string;
-  worktreeName: string;
   submitting: boolean;
   pendingPlacement: boolean;
   popoverOpen: boolean;
@@ -122,8 +115,6 @@ export function renderProjectChip(params: {
   onProjectQueryInput: (query: string) => void;
   onSelectRemoteProject: (project: DraftRemoteProject) => void;
   onApplyFolder: (folder: string) => void;
-  onBaseRefInput: (baseRef: string) => void;
-  onWorktreeNameInput: (name: string) => void;
   onBrowse: () => void;
   onBrowserPathDraftChange: (value: string) => void;
   onBrowserNavigate: (path: string | undefined) => void;
@@ -332,29 +323,6 @@ export function renderProjectChip(params: {
                     </div>`
                   : nothing}
               `}
-              ${params.remotePlacement
-                ? html`
-                    <details>
-                      <summary class="new-session-page__menu-title">
-                        ${t("configForm.advancedDivider")}
-                      </summary>
-                      ${renderWorktreeFields({
-                        branches: params.branches,
-                        branchesLoading: params.branchesLoading,
-                        baseRef: params.baseRef,
-                        worktreeName: params.worktreeName,
-                        worktreeNameLabel: t("newSession.checkoutName"),
-                        submitting: params.submitting,
-                        pendingPlacement: params.pendingPlacement,
-                        onBaseRefInput: params.onBaseRefInput,
-                        onWorktreeNameInput: params.onWorktreeNameInput,
-                      })}
-                      <div class="new-session-page__menu-note">
-                        ${t("newSession.placementSyncsFolder", { folder: params.state.label })}
-                      </div>
-                    </details>
-                  `
-                : nothing}
               ${params.state.recents.length > 0
                 ? html`
                     <div class="new-session-page__menu-title">${t("newSession.recentFolders")}</div>

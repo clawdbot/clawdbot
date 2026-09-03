@@ -1,13 +1,19 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import {
+  GATEWAY_OWNER_PROFILE_ID,
+  ensureProfileForEmail,
+  setUserProfileRole,
+} from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   authorizeGatewaySessionCreation,
   invalidateOperatorRolePolicy,
   resolveCreatorSandbox,
+  resolveGatewayOperatorRoleActor,
   resolveOperatorRolePolicy,
+  resolveOperatorRolePolicyForAssignment,
   resolveOperatorRolePolicyForProfile,
 } from "./operator-role-policy.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
@@ -112,6 +118,11 @@ describe("operator role policy", () => {
         ).toBe("required");
       }
       expect(
+        resolveCreatorSandbox(cfg, {
+          actor: { type: "human", source: "profile", id: GATEWAY_OWNER_PROFILE_ID },
+        }),
+      ).toBeUndefined();
+      expect(
         resolveCreatorSandbox(cfg, { actor: { type: "agent", id: profile.id } }),
       ).toBeUndefined();
       expect(
@@ -131,6 +142,19 @@ describe("operator role policy", () => {
         resolveCreatorSandbox(cfg, { actor: { type: "human", source: "profile", id: profile.id } }),
       ).toBeUndefined();
     });
+  });
+
+  it("keeps owner attribution out of named roles and preserves explicit authority", () => {
+    const cfg = roleConfig();
+    const owner = identifiedClient(GATEWAY_OWNER_PROFILE_ID);
+    expect(resolveGatewayOperatorRoleActor(owner)).toBeUndefined();
+    expect(resolveOperatorRolePolicyForProfile(GATEWAY_OWNER_PROFILE_ID, cfg)).toBeUndefined();
+    expect(
+      resolveOperatorRolePolicyForAssignment(GATEWAY_OWNER_PROFILE_ID, "guest", cfg),
+    ).toBeUndefined();
+    owner.internal = { operatorRoleActor: { kind: "system" } };
+    expect(resolveGatewayOperatorRoleActor(owner)).toEqual({ kind: "system" });
+    expect(resolveOperatorRolePolicy(owner, cfg)).toBeUndefined();
   });
 
   it("falls back from stale assignments to the configured default or denies access", async () => {

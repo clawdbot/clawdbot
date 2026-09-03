@@ -199,6 +199,8 @@ export type ActivateSetupInferenceParams = {
   signal?: AbortSignal;
   /** Session cancellation gate; interactive credentials must never persist after cancel. */
   isCancelled?: () => boolean;
+  /** Lock the caller's cancellation boundary before the first durable setup effect. */
+  beforePersistentEffect?: () => void | Promise<void>;
   /** Observe the authored config held by the inference writer before it commits. */
   onCommitStarted?: (sourceConfig: OpenClawConfig) => void;
   /** Gateway callers await application only after releasing the setup queue and lane. */

@@ -185,7 +185,7 @@ export async function resolveOpenAiCompatModelOverride(params: {
     ...(workspaceDir ? { workspaceDir } : {}),
   });
   const modelManifestContext = {
-    manifestPlugins: manifestMetadataSnapshot?.plugins,
+    manifestPlugins: manifestMetadataSnapshot,
   };
   const parsed = parseModelRef(raw, defaultProvider, {
     allowManifestNormalization: true,
@@ -324,9 +324,7 @@ export function authorizeOpenAiCompatibleHttpSession(params: {
     cfg,
     client: createSyntheticPluginRuntimeClient({
       ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
-      ...(params.senderIsOwner && !authenticatedUserProfile
-        ? { operatorRoleActor: { kind: "system" as const } }
-        : {}),
+      operatorRoleActor: params.requestAuth.operatorRoleActor,
       scopes: params.senderIsOwner ? [ADMIN_SCOPE] : [],
     }),
     sessionKey: params.sessionKey,

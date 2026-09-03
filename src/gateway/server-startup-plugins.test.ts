@@ -75,6 +75,7 @@ const pluginMetadataSnapshot = vi.hoisted((): PluginMetadataSnapshot => {
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      modelIdNormalizationPolicies: new Map(),
     },
     metrics: {
       registrySnapshotMs: 0,
@@ -125,6 +126,10 @@ vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: () => "default",
   tryResolveConfiguredAgentWorkspaceDir: () => "/workspace",
   tryResolveSystemAgentWorkspaceDir: () => "/workspace",
+}));
+
+vi.mock("../agents/workspace-state-dirs.js", () => ({
+  assertConfiguredWorkspaceStateReady: () => {},
 }));
 
 vi.mock("../agents/subagents/registry/subagent-registry.js", () => ({

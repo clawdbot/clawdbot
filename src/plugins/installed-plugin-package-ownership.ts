@@ -38,11 +38,24 @@ function collectDuplicateInstallRecordOwners(
 export type InstalledPluginPackageOwnership = {
   installOwner: string;
   installRecord: InstalledPluginInstallRecordInfo;
-  pluginIds: string[];
+  pluginIds: [string, ...string[]];
 };
+
+export type InstalledPluginLifecycleOwnership =
+  | ({ kind: "package" } & InstalledPluginPackageOwnership)
+  | {
+      kind: "orphan";
+      installOwner: string;
+      installRecord: InstalledPluginInstallRecordInfo;
+      pluginIds: [];
+    };
 
 type InstalledPluginPackageOwnershipResult =
   | { ok: true; value: InstalledPluginPackageOwnership }
+  | { ok: false; error: string };
+
+type InstalledPluginLifecycleOwnershipResult =
+  | { ok: true; value: InstalledPluginLifecycleOwnership }
   | { ok: false; error: string };
 
 function ownershipError(pluginId: string, detail: string): InstalledPluginPackageOwnershipResult {
@@ -84,7 +97,7 @@ export function resolveInstalledPluginPackageOwnership(
     return ownershipError(pluginId, `shares package path ownership with "${installOwner}"`);
   }
 
-  const pluginIds = index.plugins
+  const [firstPluginId, ...remainingPluginIds] = index.plugins
     .filter(
       (entry) =>
         resolveInstalledPluginIndexInstallOwner(entry) === installOwner &&
@@ -92,34 +105,75 @@ export function resolveInstalledPluginPackageOwnership(
     )
     .map((entry) => entry.pluginId)
     .toSorted();
-  if (pluginIds.length === 0) {
+  if (!firstPluginId) {
     return ownershipError(
       pluginId,
       `package owner "${installOwner}" has no authoritative runtime child list`,
     );
   }
+  const pluginIds: [string, ...string[]] = [firstPluginId, ...remainingPluginIds];
   if (target && !pluginIds.includes(target.pluginId)) {
     return ownershipError(pluginId, `does not belong to package owner "${installOwner}"`);
   }
 
+  const realpathCache = new Map<string, string>();
   const hasUnsafePackageEntry = index.plugins.some(
     (entry) =>
-      installRecordPathMatchesPluginRoot(installRecord, entry.rootDir, env) &&
+      installRecordPathMatchesPluginRoot(installRecord, entry.rootDir, env, realpathCache) &&
       (isInstalledPluginIndexInstallOwnerAmbiguous(entry) ||
         resolveInstalledPluginIndexInstallOwner(entry) !== installOwner),
   );
   if (hasUnsafePackageEntry) {
     return ownershipError(pluginId, `package owner "${installOwner}" has conflicting child rows`);
   }
-  return { ok: true, value: { installOwner, installRecord, pluginIds } };
+  return {
+    ok: true,
+    value: { installOwner, installRecord, pluginIds },
+  };
 }
 
+export function resolveInstalledPluginLifecycleOwnership(
+  index: InstalledPluginIndex,
+  pluginId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): InstalledPluginLifecycleOwnershipResult {
+  const ownership = resolveInstalledPluginPackageOwnership(index, pluginId, env);
+  if (ownership.ok) {
+    return { ok: true, value: { kind: "package", ...ownership.value } };
+  }
+  const installRecord = index.installRecords[pluginId];
+  if (
+    !Object.hasOwn(index.installRecords, pluginId) ||
+    !installRecord ||
+    collectDuplicateInstallRecordOwners(index, env).has(pluginId)
+  ) {
+    return ownership;
+  }
+  const realpathCache = new Map<string, string>();
+  const hasConflictingEntry = index.plugins.some(
+    (entry) =>
+      entry.pluginId === pluginId ||
+      installRecordPathMatchesPluginRoot(installRecord, entry.rootDir, env, realpathCache),
+  );
+  if (hasConflictingEntry) {
+    return ownership;
+  }
+  // Cleanup and pre-update planning may act on an exact durable tombstone.
+  // Replacement reconciliation keeps using the strict package resolver.
+  return {
+    ok: true,
+    value: { kind: "orphan", installOwner: pluginId, installRecord, pluginIds: [] },
+  };
+}
+
+// Share physical path facts only within one synchronous scan. A later lifecycle
+// check gets a fresh map so replaced package paths are observed again.
 function installRecordPathMatchesPluginRoot(
   record: InstalledPluginInstallRecordInfo,
   rootDir: string,
   env: NodeJS.ProcessEnv,
+  realpathCache: Map<string, string>,
 ): boolean {
-  const realpathCache = new Map<string, string>();
   const resolvedRoot =
     safeRealpathSync(path.resolve(rootDir), realpathCache) ?? path.resolve(rootDir);
   return [record.installPath, record.sourcePath].some((candidate) => {
@@ -140,20 +194,16 @@ export function hasMissingInstalledPluginOwnerMetadata(
     return true;
   }
   const installRecords = Object.entries(index.installRecords);
-  if (
-    index.plugins.some(
-      (plugin) =>
-        isInstalledPluginIndexInstallOwnerAmbiguous(plugin) ||
-        (!resolveInstalledPluginIndexInstallOwner(plugin) &&
-          installRecords.some(([, record]) =>
-            installRecordPathMatchesPluginRoot(record, plugin.rootDir, env),
-          )),
-    )
-  ) {
-    return true;
-  }
+  const realpathCache = new Map<string, string>();
   // An orphaned owner record (for example, package code removed out of band) is
   // already closed by the lifecycle resolver. It must not make every unrelated
   // config read attempt an impossible registry migration with no discoverable rows.
-  return false;
+  return index.plugins.some(
+    (plugin) =>
+      isInstalledPluginIndexInstallOwnerAmbiguous(plugin) ||
+      (!resolveInstalledPluginIndexInstallOwner(plugin) &&
+        installRecords.some(([, record]) =>
+          installRecordPathMatchesPluginRoot(record, plugin.rootDir, env, realpathCache),
+        )),
+  );
 }

@@ -8,6 +8,7 @@
  */
 
 import type * as Lark from "@larksuiteoapi/node-sdk";
+import type { FeishuDocParams } from "./doc-schema.js";
 import type { FeishuBlockTable, FeishuDocxBlock } from "./docx-types.js";
 
 // ============ Table Utilities ============
@@ -17,23 +18,6 @@ const MIN_COLUMN_WIDTH = 50; // Feishu API minimum
 const MAX_COLUMN_WIDTH = 400; // Reasonable maximum for readability
 const DEFAULT_TABLE_WIDTH = 730; // Approximate Feishu page content width
 
-/**
- * Calculate adaptive column widths based on cell content length.
- *
- * Algorithm:
- * 1. For each column, find the max content length across all rows
- * 2. Weight CJK characters as 2x width (they render wider)
- * 3. Calculate proportional widths based on content length
- * 4. Apply min/max constraints
- * 5. Redistribute remaining space to fill total table width
- *
- * Total width is derived from the original column_width values returned
- * by the Convert API, ensuring tables match Feishu's expected dimensions.
- *
- * @param blocks - Array of blocks from Convert API
- * @param tableBlockId - The block_id of the table block
- * @returns Array of column widths in pixels
- */
 function normalizeChildBlockIds(children: string[] | string | undefined): string[] {
   if (Array.isArray(children)) {
     return children;
@@ -222,99 +206,75 @@ export function cleanBlocksForDescendant(blocks: FeishuDocxBlock[]): FeishuDocxB
 
 // ============ Table Row/Column Operations ============
 
-export async function insertTableRow(
-  client: Lark.Client,
-  docToken: string,
-  blockId: string,
-  rowIndex = -1,
-) {
-  const res = await client.docx.documentBlock.patch({
-    path: { document_id: docToken, block_id: blockId },
-    data: { insert_table_row: { row_index: rowIndex } },
-  });
-  if (res.code !== 0) {
-    throw new Error(res.msg);
+type TableAction = Extract<
+  FeishuDocParams,
+  {
+    action:
+      | "insert_table_row"
+      | "insert_table_column"
+      | "delete_table_rows"
+      | "delete_table_columns"
+      | "merge_table_cells";
   }
-  return { success: true, block: res.data?.block };
-}
+>;
+type TablePatchData = NonNullable<
+  NonNullable<Parameters<Lark.Client["docx"]["documentBlock"]["patch"]>[0]>["data"]
+>;
 
-export async function insertTableColumn(
-  client: Lark.Client,
-  docToken: string,
-  blockId: string,
-  columnIndex = -1,
-) {
+export async function patchTable(client: Lark.Client, params: TableAction) {
+  const { doc_token, block_id } = params;
+  let data: TablePatchData;
+  const counts: { rows_deleted?: number; columns_deleted?: number } = {};
+  // Capture result counts before the request; defaults apply only to undefined inputs.
+  switch (params.action) {
+    case "insert_table_row": {
+      const { row_index = -1 } = params;
+      data = { insert_table_row: { row_index } };
+      break;
+    }
+    case "insert_table_column": {
+      const { column_index = -1 } = params;
+      data = { insert_table_column: { column_index } };
+      break;
+    }
+    case "delete_table_rows": {
+      const { row_start, row_count = 1 } = params;
+      data = {
+        delete_table_rows: { row_start_index: row_start, row_end_index: row_start + row_count },
+      };
+      counts.rows_deleted = row_count;
+      break;
+    }
+    case "delete_table_columns": {
+      const { column_start, column_count = 1 } = params;
+      data = {
+        delete_table_columns: {
+          column_start_index: column_start,
+          column_end_index: column_start + column_count,
+        },
+      };
+      counts.columns_deleted = column_count;
+      break;
+    }
+    case "merge_table_cells": {
+      const { row_start, row_end, column_start, column_end } = params;
+      data = {
+        merge_table_cells: {
+          row_start_index: row_start,
+          row_end_index: row_end,
+          column_start_index: column_start,
+          column_end_index: column_end,
+        },
+      };
+      break;
+    }
+  }
   const res = await client.docx.documentBlock.patch({
-    path: { document_id: docToken, block_id: blockId },
-    data: { insert_table_column: { column_index: columnIndex } },
+    path: { document_id: doc_token, block_id },
+    data,
   });
   if (res.code !== 0) {
     throw new Error(res.msg);
   }
-  return { success: true, block: res.data?.block };
-}
-
-export async function deleteTableRows(
-  client: Lark.Client,
-  docToken: string,
-  blockId: string,
-  rowStart: number,
-  rowCount = 1,
-) {
-  const res = await client.docx.documentBlock.patch({
-    path: { document_id: docToken, block_id: blockId },
-    data: { delete_table_rows: { row_start_index: rowStart, row_end_index: rowStart + rowCount } },
-  });
-  if (res.code !== 0) {
-    throw new Error(res.msg);
-  }
-  return { success: true, rows_deleted: rowCount, block: res.data?.block };
-}
-
-export async function deleteTableColumns(
-  client: Lark.Client,
-  docToken: string,
-  blockId: string,
-  columnStart: number,
-  columnCount = 1,
-) {
-  const res = await client.docx.documentBlock.patch({
-    path: { document_id: docToken, block_id: blockId },
-    data: {
-      delete_table_columns: {
-        column_start_index: columnStart,
-        column_end_index: columnStart + columnCount,
-      },
-    },
-  });
-  if (res.code !== 0) {
-    throw new Error(res.msg);
-  }
-  return { success: true, columns_deleted: columnCount, block: res.data?.block };
-}
-
-export async function mergeTableCells(
-  client: Lark.Client,
-  docToken: string,
-  blockId: string,
-  rowStart: number,
-  rowEnd: number,
-  columnStart: number,
-  columnEnd: number,
-) {
-  const res = await client.docx.documentBlock.patch({
-    path: { document_id: docToken, block_id: blockId },
-    data: {
-      merge_table_cells: {
-        row_start_index: rowStart,
-        row_end_index: rowEnd,
-        column_start_index: columnStart,
-        column_end_index: columnEnd,
-      },
-    },
-  });
-  if (res.code !== 0) {
-    throw new Error(res.msg);
-  }
-  return { success: true, block: res.data?.block };
+  return { success: true, ...counts, block: res.data?.block };
 }

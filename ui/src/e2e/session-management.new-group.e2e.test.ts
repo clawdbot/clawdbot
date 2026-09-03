@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   activateSelfRemovingControl,
   captureUiProof,
@@ -7,7 +8,6 @@ import {
   installMockGateway,
   openSessionMenuSubmenu,
   requireRecord,
-  sessionRow,
   sessionsListResponse,
   submitInputDialog,
   waitForPatch,
@@ -51,7 +51,7 @@ suite.define(() => {
       await row.hover();
       await row.getByRole("button", { name: "Open session menu" }).click();
       await openSessionMenuSubmenu(page, "Move to group");
-      await activateSelfRemovingControl(page.getByRole("menuitem", { name: "New group…" }));
+      await activateSelfRemovingControl(page.getByRole("menuitem", { name: "New group" }));
       const field = page.getByLabel("New group name");
       await field.waitFor({ state: "visible" });
       return field;
@@ -61,7 +61,7 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:move-me"));
       const field = await openNewGroupDialog();
       const create = page.getByRole("button", { name: "Create group" });
-      await captureUiProof(page, "new-group-dialog-dark.png");
+      await captureUiProof(suite, page, "new-group-dialog-dark.png");
 
       // Opening the dialog writes nothing, hands focus to the field, and holds
       // the create action closed until a non-blank name exists.
@@ -74,7 +74,7 @@ suite.define(() => {
       expect(await create.isDisabled()).toBe(true);
 
       await page.emulateMedia({ colorScheme: "light" });
-      await captureUiProof(page, "new-group-dialog-light.png");
+      await captureUiProof(suite, page, "new-group-dialog-light.png");
       await page.emulateMedia({ colorScheme: "dark" });
 
       // Compact viewports keep the whole dialog on screen.
@@ -84,7 +84,7 @@ suite.define(() => {
       expect(bounds).not.toBeNull();
       expect(bounds!.x).toBeGreaterThanOrEqual(0);
       expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(420);
-      await captureUiProof(page, "new-group-dialog-compact.png");
+      await captureUiProof(suite, page, "new-group-dialog-compact.png");
       await page.setViewportSize({ height: 900, width: 1280 });
 
       // Escape leaves the session untouched.
@@ -111,7 +111,7 @@ suite.define(() => {
       );
       expect(categoryPatches).toHaveLength(1);
       expect(nativeDialogs).toEqual([]);
-      await captureUiProof(page, "new-group-created.png");
+      await captureUiProof(suite, page, "new-group-created.png");
     } finally {
       await context.close();
     }

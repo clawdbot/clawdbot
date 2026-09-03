@@ -881,6 +881,7 @@ describe("spawnAcpDirect", () => {
     expect(accepted.runId).toBe("run-1");
     expect(accepted.mode).toBe("session");
     expect(accepted.inlineDelivery).toBe(true);
+    expect(accepted.expectsCompletionMessage).toBe(false);
     expectCreatedSessionFields({
       spawnedBy: "agent:main:main",
       completionOwnerSessionKey: "agent:main:main",
@@ -2988,6 +2989,7 @@ describe("spawnAcpDirect", () => {
 
     const accepted = expectAcceptedSpawn(result);
     expect(accepted.mode).toBe("run");
+    expect(accepted.expectsCompletionMessage).toBe(true);
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
     if (expectTranscriptPersistence) {
       expectRecordFields(
@@ -3437,36 +3439,55 @@ describe("spawnAcpDirect", () => {
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
   });
 
-  it("persists separate requester and executor agents for global cross-agent tasks", async () => {
-    replaceSpawnConfig({
-      ...hoisted.state.cfg,
-      session: {
-        ...hoisted.state.cfg.session,
-        scope: "global",
-      },
-    });
+  it.each(["off", "all"] as const)(
+    "preserves global requester ownership with sandbox mode %s",
+    async (sandboxMode) => {
+      replaceSpawnConfig({
+        ...hoisted.state.cfg,
+        agents: {
+          ...hoisted.state.cfg.agents,
+          ownership: "explicit",
+          entries: {
+            research: { sandbox: { mode: sandboxMode } },
+            ops: {},
+          },
+        },
+        session: {
+          ...hoisted.state.cfg.session,
+          scope: "global",
+        },
+      });
 
-    const result = await spawnAcpDirect(
-      {
-        task: "Investigate flaky tests",
-        agentId: "codex",
-      },
-      {
-        agentSessionKey: "global",
-        requesterAgentIdOverride: "research",
-      },
-    );
+      const result = await spawnAcpDirect(
+        {
+          task: "Investigate flaky tests",
+          agentId: "codex",
+        },
+        {
+          agentSessionKey: "global",
+          requesterAgentIdOverride: "research",
+        },
+      );
 
-    expectAcceptedSpawn(result);
-    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        requesterSessionKey: "global",
-        childSessionKey: expect.stringMatching(/^agent:codex:acp:/),
-        agentId: "codex",
-        requesterAgentId: "research",
-      }),
-    );
-  });
+      if (sandboxMode === "all") {
+        expect(expectFailedSpawn(result, "forbidden").error).toContain(
+          "Sandboxed sessions cannot spawn ACP sessions",
+        );
+        expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
+        expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
+        return;
+      }
+      expectAcceptedSpawn(result);
+      expect(hoisted.registerSubagentRunMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          requesterSessionKey: "global",
+          childSessionKey: expect.stringMatching(/^agent:codex:acp:/),
+          agentId: "codex",
+          requesterAgentId: "research",
+        }),
+      );
+    },
+  );
 
   it("does not implicitly stream for subagent requester sessions when heartbeat is disabled", async () => {
     replaceSpawnConfig({

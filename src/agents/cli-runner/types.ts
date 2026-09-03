@@ -265,6 +265,7 @@ export type RunCliAgentParams = {
   toolsAllow?: string[];
   /** Exact Skill Workshop proposal revision bound by the Gateway for this turn. */
   skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
+  skillLibraryAuthoring?: import("../../skills/library/authoring.js").SkillLibraryAuthoringCapability;
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */
   scheduledToolPolicy?: ScheduledToolPolicyContext;
   /** Server-authored origin for fresh automation mutations from this CLI run. */
@@ -276,6 +277,8 @@ export type RunCliAgentParams = {
   };
   disableTools?: boolean;
   abortSignal?: AbortSignal;
+  /** Revalidate the exact caller authority immediately before external execution. */
+  assertCurrent?: () => void;
   onPartialReply?: (payload: PartialReplyPayload) => boolean | void | Promise<boolean | void>;
   onBlockReply?: (payload: BlockReplyPayload, context?: BlockReplyContext) => void | Promise<void>;
   onExecutionStarted?: () => void;
@@ -372,13 +375,14 @@ export type PreparedCliRunContext = {
   promptContext?: CliBackendPromptContext;
   /** Logical model input retained for policy/observation hooks when transport context is separate. */
   promptForHooks?: string;
-  contextEngineDeferredTurnMaintenance?: Promise<void>;
   modelId: string;
   normalizedModel: string;
   contextWindowInfo?: ContextWindowInfo;
   systemPrompt: string;
   systemPromptReport: SessionSystemPromptReport;
   claudeSkillsPluginArgs: string[];
+  /** Host-held, policy-selected personal Workshop tool for the paired-node adapter. */
+  nodeSkillWorkshop?: import("../tools/common.js").AnyAgentTool;
   openClawHistoryPrompt?: string;
   authEpoch?: string;
   /** Strict owner fingerprint captured for live inference verification only. */

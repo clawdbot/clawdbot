@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionsResolveResult } from "../../packages/gateway-protocol/src/index.js";
 
 const spawnedChild = Object.assign(new EventEmitter(), { kill: vi.fn() });
 vi.mock("node:child_process", () => ({ spawn: vi.fn(() => spawnedChild) }));
@@ -108,6 +109,129 @@ describe("openclaw attach (action)", () => {
     exitCode = undefined;
     spawnedChild.removeAllListeners();
     spawnedChild.kill.mockClear();
+  });
+
+  it.each([
+    {
+      name: "fitting ASCII labels",
+      labels: ["Alpha", "  Beta  "],
+      expectedLines: [
+        "SESSION  ID PREFIX",
+        "Alpha    123456780aaa4000",
+        "Beta     123456780bbb4000",
+      ],
+    },
+    {
+      name: "sanitized wide labels",
+      labels: ["\u001b[31m界界界\u001b[0m", "Alpha"],
+      expectedLines: [
+        "SESSION  ID PREFIX",
+        "界界界   123456780aaa4000",
+        "Alpha    123456780bbb4000",
+      ],
+    },
+    {
+      name: "an emoji crossing the name limit",
+      labels: ["A".repeat(39) + "😀", "Alpha"],
+      expectedLines: [
+        `SESSION${" ".repeat(35)}ID PREFIX`,
+        `${"A".repeat(39)}…  123456780aaa4000`,
+        `Alpha${" ".repeat(37)}123456780bbb4000`,
+      ],
+    },
+    {
+      name: "a combining label that exactly fits",
+      labels: ["A".repeat(39) + "e\u0301", "Alpha"],
+      expectedLines: [
+        `SESSION${" ".repeat(35)}ID PREFIX`,
+        `${"A".repeat(39)}e\u0301  123456780aaa4000`,
+        `Alpha${" ".repeat(37)}123456780bbb4000`,
+      ],
+    },
+    {
+      name: "a bounded zero-width label",
+      labels: ["\u200b".repeat(512), "Alpha"],
+      expectedLines: [
+        "SESSION  ID PREFIX",
+        `${"\u200b".repeat(49)}…        123456780aaa4000`,
+        "Alpha    123456780bbb4000",
+      ],
+    },
+    {
+      name: "an oversized combining grapheme",
+      labels: ["e" + "\u0301".repeat(512), "Alpha"],
+      expectedLines: [
+        "SESSION  ID PREFIX",
+        "…        123456780aaa4000",
+        "Alpha    123456780bbb4000",
+      ],
+    },
+    {
+      name: "an oversized ZWJ grapheme",
+      labels: ["👩" + "\u200d👩".repeat(128), "Alpha"],
+      expectedLines: [
+        "SESSION  ID PREFIX",
+        "…        123456780aaa4000",
+        "Alpha    123456780bbb4000",
+      ],
+    },
+    {
+      name: "ordinary multi-person emoji",
+      labels: ["👨‍👩‍👧‍👦".repeat(5), "Alpha"],
+      expectedLines: [
+        "SESSION     ID PREFIX",
+        `${"👨‍👩‍👧‍👦".repeat(5)}  123456780aaa4000`,
+        "Alpha       123456780bbb4000",
+      ],
+    },
+  ])("renders ambiguous session candidates with $name", async ({ labels, expectedLines }) => {
+    const response = {
+      ok: false,
+      candidates: [
+        {
+          key: "agent:main:thread:12345678-0aaa-4000-8000-000000000001",
+          agentId: "main",
+          displayName: labels[0],
+        },
+        {
+          key: "agent:main:thread:12345678-0bbb-4000-8000-000000000002",
+          agentId: "main",
+          displayName: labels[1],
+        },
+      ],
+    } satisfies SessionsResolveResult;
+    const gateway = vi.mocked(callGateway);
+    const originalImplementation = gateway.getMockImplementation();
+    const { spawn } = await import("node:child_process");
+    const spawnCount = vi.mocked(spawn).mock.calls.length;
+    gateway.mockReset();
+    // Any request after resolution must fail before a grant can reach config writing or spawn.
+    gateway.mockRejectedValue(new Error("Unexpected Gateway request after session resolution"));
+    gateway.mockResolvedValueOnce(response);
+    try {
+      const error = await runAttach("12345678").catch((caught: unknown) => caught);
+      if (!(error instanceof Error)) {
+        throw new Error("Expected ambiguous session target rejection");
+      }
+      expect(error.message).toBe(
+        [
+          "Session reference is ambiguous:",
+          ...expectedLines,
+          "Pass a longer reference. Run `openclaw sessions list` to choose a full session key.",
+        ].join("\n"),
+      );
+      expect(Buffer.from(error.message, "utf8").toString("utf8")).toBe(error.message);
+      expect(gateway).toHaveBeenCalledTimes(1);
+      expect(gateway).toHaveBeenCalledWith(
+        expect.objectContaining({ method: "sessions.resolve", params: { shortId: "12345678" } }),
+      );
+      expect(vi.mocked(spawn).mock.calls.length).toBe(spawnCount);
+    } finally {
+      gateway.mockReset();
+      if (originalImplementation) {
+        gateway.mockImplementation(originalImplementation);
+      }
+    }
   });
 
   it("--print-config: mints + writes config + prints launch, does NOT revoke or name a nonexistent command", async () => {

@@ -23,8 +23,14 @@ import {
   createFakeCodexAppServerClient,
 } from "./codex-app-server.test-fixtures.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
+import * as elicitationBridge from "./elicitation-bridge.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
-import type { CodexServerNotification, JsonObject, JsonValue } from "./protocol.js";
+import {
+  isJsonObject,
+  type CodexServerNotification,
+  type JsonObject,
+  type JsonValue,
+} from "./protocol.js";
 import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
 import {
   createCodexTestBindingStore,
@@ -45,7 +51,7 @@ type SelectionRetryParams = {
   options: { timeoutMs?: number; abandonSignal?: AbortSignal };
   run: (
     client: unknown,
-    requestOptions: () => { timeoutMs: number; signal?: AbortSignal },
+    requestOptions: () => { timeoutMs: number; signal?: AbortSignal; assertCurrent: () => void },
   ) => Promise<unknown>;
   onClientChange: (client: unknown) => void;
 };
@@ -54,6 +60,7 @@ const withLeasedCodexAppServerClientStartSelectionRetryMock = vi.fn(
     await params.run(params.lease.client, () => ({
       timeoutMs: params.options.timeoutMs ?? 60_000,
       signal: params.options.abandonSignal,
+      assertCurrent: () => {},
     })),
 );
 
@@ -109,7 +116,7 @@ const { runCodexAppServerSideQuestion: runCodexAppServerSideQuestionImpl } =
 const baseBindingStore = createCodexTestBindingStore();
 const bindingStore: CodexAppServerBindingStore = {
   ...baseBindingStore,
-  read: async (...args) => await readCodexAppServerBindingMock(...args),
+  read: (...args) => readCodexAppServerBindingMock(...args),
 };
 
 function runCodexAppServerSideQuestion(
@@ -131,7 +138,14 @@ function createFakeClient(options: { completeTurn?: boolean } = {}) {
     handleRequest: (request: Parameters<typeof fixture.handleServerRequest>[0]) =>
       fixture.handleServerRequest(request),
   });
-  client.request.mockImplementation(async (method: string) => {
+  client.request.mockImplementation(async (method: string, requestParams?: unknown) => {
+    if (method === "thread/read") {
+      return threadResult(
+        isJsonObject(requestParams) && typeof requestParams.threadId === "string"
+          ? requestParams.threadId
+          : "parent-thread",
+      );
+    }
     if (method === "thread/fork") {
       return threadResult("side-thread");
     }
@@ -553,6 +567,7 @@ describe("runCodexAppServerSideQuestion", () => {
         await params.run(params.lease.client, () => ({
           timeoutMs: params.options.timeoutMs ?? 60_000,
           signal: params.options.abandonSignal,
+          assertCurrent: () => {},
         })),
     );
     resolveCodexProviderWebSearchSupportForClientMock.mockResolvedValue("supported");
@@ -575,7 +590,7 @@ describe("runCodexAppServerSideQuestion", () => {
       },
     ]);
 
-    readCodexAppServerBindingMock.mockResolvedValue({
+    readCodexAppServerBindingMock.mockReturnValue({
       schemaVersion: 1,
       threadId: "parent-thread",
       sessionFile: "/tmp/session-1.jsonl",
@@ -605,11 +620,35 @@ describe("runCodexAppServerSideQuestion", () => {
   });
 
   it("forks an ephemeral side thread and returns the completed assistant text", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-02T00:30:00.000Z"));
     const client = createFakeClient();
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
+    createOpenClawCodingToolsMock.mockReturnValue([
+      {
+        name: "wiki_status",
+        description: "Check wiki status",
+        parameters: { type: "object", properties: {}, additionalProperties: true },
+        execute: toolExecuteMock,
+      },
+      {
+        name: "web_search",
+        description: "Search the web",
+        parameters: { type: "object", properties: {}, additionalProperties: true },
+        execute: toolExecuteMock,
+      },
+      {
+        name: "session_status",
+        description: "Show session status",
+        parameters: { type: "object", properties: {}, additionalProperties: false },
+        execute: toolExecuteMock,
+      },
+    ]);
 
     const result = await runCodexAppServerSideQuestion(
       sideParams({
+        cfg: {
+          agents: { defaults: { userTimezone: "America/Los_Angeles" } },
+        } as never,
         messageChannel: "discord",
         messageProvider: "discord-voice",
         chatId: "discord-native-room",
@@ -655,6 +694,7 @@ describe("runCodexAppServerSideQuestion", () => {
       "cwd",
       "developerInstructions",
       "ephemeral",
+      "excludeTurns",
       "model",
       "sandbox",
       "threadId",
@@ -666,6 +706,7 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(forkParams?.approvalPolicy).toBe("never");
     expect(forkParams?.sandbox).toBe("danger-full-access");
     expect(forkParams?.ephemeral).toBe(true);
+    expect(forkParams?.excludeTurns).toBe(true);
     expect(forkParams?.threadSource).toBe("user");
     expect(forkParams?.approvalsReviewer).toBe("user");
     expect(forkParams?.cwd).toBe("/tmp/workspace");
@@ -682,9 +723,13 @@ describe("runCodexAppServerSideQuestion", () => {
     });
     expect(forkParams?.developerInstructions).toContain("You are in a side conversation");
     expect(forkParams?.developerInstructions).toContain(
-      "Only instructions submitted after the side-conversation boundary are active.",
+      "Only the current side question and subsequent requests in this side conversation are active.",
     );
-    expect(forkCall?.[2]).toEqual({ timeoutMs: 60_000, signal: undefined });
+    expect(forkCall?.[2]).toEqual({
+      timeoutMs: 60_000,
+      signal: undefined,
+      assertCurrent: expect.any(Function),
+    });
 
     const injectCall = mockCall(client.request, 1);
     expect(injectCall?.[0]).toBe("thread/inject_items");
@@ -694,8 +739,12 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(injectParams?.threadId).toBe("side-thread");
     expect(injectParams?.items).toHaveLength(1);
     expect(injectParams?.items?.[0]?.type).toBe("message");
-    expect(injectParams?.items?.[0]?.role).toBe("user");
-    expect(injectCall?.[2]).toEqual({ timeoutMs: 60_000, signal: expect.any(AbortSignal) });
+    expect(injectParams?.items?.[0]?.role).toBe("developer");
+    expect(injectCall?.[2]).toEqual({
+      timeoutMs: 60_000,
+      signal: expect.any(AbortSignal),
+      assertCurrent: expect.any(Function),
+    });
     const injectedItem = injectParams?.items?.[0] as
       | { content?: Array<{ text?: string }> }
       | undefined;
@@ -704,7 +753,7 @@ describe("runCodexAppServerSideQuestion", () => {
       "External tools may be available according to this thread's current permissions",
     );
     expect(injectedText).toContain(
-      "unless the user explicitly asks for that mutation after this boundary",
+      "unless the user explicitly requests that mutation in this side conversation",
     );
     const turnStartCall = client.request.mock.calls.find(([method]) => method === "turn/start");
     expect(turnStartCall).toEqual([
@@ -712,6 +761,13 @@ describe("runCodexAppServerSideQuestion", () => {
       {
         threadId: "side-thread",
         input: [{ type: "text", text: "What changed?", text_elements: [] }],
+        additionalContext: {
+          openclaw_temporal_context: {
+            kind: "application",
+            value:
+              "## Temporal Context\nCurrent date: 2026-09-01\nTime zone: America/Los_Angeles\nFor the exact current time, use `session_status`.",
+          },
+        },
         cwd: "/tmp/workspace",
         model: "codex-side-execution-model",
         personality: "none",
@@ -775,7 +831,7 @@ describe("runCodexAppServerSideQuestion", () => {
     "clamps stale binding full access to the guarded side-session $boundary",
     async ({ sessionRoot }) => {
       const root = sessionRoot ?? "/tmp/workspace";
-      readCodexAppServerBindingMock.mockResolvedValue({
+      readCodexAppServerBindingMock.mockReturnValue({
         threadId: "parent-thread",
         cwd: "/tmp/outside-session-root",
         authProfileId: "openai:work",
@@ -817,12 +873,26 @@ describe("runCodexAppServerSideQuestion", () => {
   );
 
   it("returns an explicit unsupported decline for ordinary MCP input", async () => {
+    const approvalSpy = vi.spyOn(elicitationBridge, "routeCodexAppServerElicitationRequest");
     const client = createFakeClient({ completeTurn: false });
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
     const run = runCodexAppServerSideQuestion(sideParams());
     await vi.waitFor(() =>
       expect(client.request.mock.calls.map(([method]) => method)).toContain("turn/start"),
     );
+
+    const item = {
+      type: "mcpToolCall",
+      id: "side-mcp",
+      server: "configured-server",
+      tool: "raw-tool",
+      arguments: { query: "side query" },
+      status: "inProgress",
+    };
+    client.emit({
+      method: "item/started",
+      params: { threadId: "side-thread", turnId: "turn-1", item },
+    });
 
     await expect(
       handleClientRequestWhenReady(client, {
@@ -845,9 +915,20 @@ describe("runCodexAppServerSideQuestion", () => {
       },
     });
 
-    client.emit(agentDelta("side-thread", "turn-1", "Side answer."));
-    client.emit(turnCompleted("side-thread", "turn-1", "Side answer."));
-    await expect(run).resolves.toEqual({ text: "Side answer." });
+    const correlate = approvalSpy.mock.calls[0]?.[0].getActiveMcpToolCall;
+    try {
+      expect(correlate?.(item.server)).toEqual({
+        id: item.id,
+        server: item.server,
+        tool: item.tool,
+        arguments: item.arguments,
+      });
+    } finally {
+      client.emit(agentDelta("side-thread", "turn-1", "Side answer."));
+      client.emit(turnCompleted("side-thread", "turn-1", "Side answer."));
+      await expect(run).resolves.toEqual({ text: "Side answer." });
+    }
+    expect(correlate?.(item.server)).toBeUndefined();
   });
 
   it("routes a remote-exec side question through the injected sandbox environment", async () => {
@@ -986,6 +1067,7 @@ describe("runCodexAppServerSideQuestion", () => {
         return await params.run(replacementClient, () => ({
           timeoutMs: params.options.timeoutMs ?? 60_000,
           signal: params.options.abandonSignal,
+          assertCurrent: () => {},
         }));
       },
     );
@@ -1004,29 +1086,44 @@ describe("runCodexAppServerSideQuestion", () => {
   it.each([
     {
       metadata: "Platform",
+      thinking: "off",
       supported: ["none", "low", "medium", "high", "xhigh", "max"],
       expected: "none",
     },
     {
       metadata: "subscription",
+      thinking: "off",
       supported: ["low", "medium", "high", "xhigh", "max"],
       expected: null,
     },
-    { metadata: "unknown", supported: undefined, expected: null },
+    { metadata: "unknown", thinking: "off", supported: undefined, expected: null },
+    {
+      metadata: "Platform",
+      thinking: "ultra",
+      supported: ["none", "low", "medium", "high", "xhigh", "max"],
+      expected: "ultra",
+    },
+    {
+      metadata: "subscription",
+      thinking: "ultra",
+      supported: ["low", "medium", "high", "xhigh", "max", "ultra"],
+      expected: "ultra",
+    },
+    { metadata: "unknown", thinking: "ultra", supported: undefined, expected: "ultra" },
   ] as const)(
-    "sends off with $metadata metadata to the side-question request boundary",
-    async ({ metadata, supported, expected }) => {
+    "sends $thinking with $metadata metadata to the side-question request boundary",
+    async ({ metadata, thinking, supported, expected }) => {
       const client = createFakeClient();
       getSharedCodexAppServerClientMock.mockResolvedValue(client);
       const compat: ModelCompatConfig | undefined = supported
         ? { supportedReasoningEfforts: [...supported] }
         : undefined;
       const params = sideParams({
-        model: "gpt-5.6-luna",
-        resolvedThinkLevel: "off",
+        model: "gpt-5.6-sol",
+        resolvedThinkLevel: thinking,
         runtimeModel: {
           ...createCodexTestModel(),
-          id: "gpt-5.6-luna",
+          id: "gpt-5.6-sol",
           api: metadata === "subscription" ? "openai-chatgpt-responses" : "openai-responses",
           baseUrl:
             metadata === "subscription"
@@ -1047,13 +1144,16 @@ describe("runCodexAppServerSideQuestion", () => {
         text: "Side answer.",
       });
 
+      expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
+        expect.objectContaining({ requesterThinkingLevel: thinking }),
+      );
       const turnStartCall = client.request.mock.calls.find(([method]) => method === "turn/start");
       expect(turnStartCall?.[1]).toMatchObject({
         threadId: "side-thread",
-        model: "gpt-5.6-luna",
+        model: "gpt-5.6-sol",
         effort: expected,
         collaborationMode: {
-          settings: { model: "gpt-5.6-luna", reasoning_effort: expected },
+          settings: { model: "gpt-5.6-sol", reasoning_effort: expected },
         },
       });
     },
@@ -1176,7 +1276,7 @@ describe("runCodexAppServerSideQuestion", () => {
   it("uses the default supervision runtime, native auth, and exact bound model pair", async () => {
     const client = createFakeClient();
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
-    readCodexAppServerBindingMock.mockResolvedValue({
+    readCodexAppServerBindingMock.mockReturnValue({
       threadId: "parent-thread",
       connectionScope: "supervision",
       supervisionSourceThreadId: "source-thread",
@@ -1228,7 +1328,7 @@ describe("runCodexAppServerSideQuestion", () => {
   });
 
   it("rejects an incomplete supervised model pair before selecting a client", async () => {
-    readCodexAppServerBindingMock.mockResolvedValue({
+    readCodexAppServerBindingMock.mockReturnValue({
       threadId: "parent-thread",
       connectionScope: "supervision",
       supervisionSourceThreadId: "source-thread",
@@ -1250,7 +1350,7 @@ describe("runCodexAppServerSideQuestion", () => {
   it("cleans up a supervised fork that returns a different native model pair", async () => {
     const client = createFakeClient();
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
-    readCodexAppServerBindingMock.mockResolvedValue({
+    readCodexAppServerBindingMock.mockReturnValue({
       threadId: "parent-thread",
       connectionScope: "supervision",
       supervisionSourceThreadId: "source-thread",
@@ -1269,6 +1369,7 @@ describe("runCodexAppServerSideQuestion", () => {
     ).rejects.toThrow("did not preserve its native model and provider");
 
     expect(client.request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/read",
       "thread/fork",
       "thread/unsubscribe",
     ]);
@@ -1284,10 +1385,119 @@ describe("runCodexAppServerSideQuestion", () => {
     );
   });
 
-  it("replays app-scoped reviewer policy into side-thread forks", async () => {
-    const client = createFakeClient();
+  it.each([
+    "ok",
+    "okOverridden",
+    "missing-app",
+    "binding-changed",
+    "unbound-native-app",
+    "config-unavailable",
+  ])("revalidates bound ask policy before side-thread forks: %s", async (outcome) => {
+    const approvalSpy = vi.spyOn(elicitationBridge, "routeCodexAppServerElicitationRequest");
+    const rejectsReplay = outcome === "binding-changed" || outcome === "config-unavailable";
+    const client = createFakeClient({ completeTurn: rejectsReplay });
+    const baseRequest = client.request.getMockImplementation()!;
+    client.request.mockImplementation(async (method: string, requestParams?: unknown) => {
+      if (method === "app/installed") {
+        return {
+          apps: ["ask-app", "unbound-app"].map((id) => ({
+            id,
+            runtimeName: id,
+            enabled: true,
+            callable: true,
+          })),
+        };
+      }
+      if (method === "app/read") {
+        expect(requestParams).toEqual({ appIds: ["ask-app"], includeTools: true });
+        return {
+          apps:
+            outcome === "missing-app"
+              ? []
+              : [
+                  {
+                    id: "ask-app",
+                    name: "Ask",
+                    pluginDisplayNames: [],
+                    toolSummaries: [
+                      {
+                        name: "write",
+                        title: null,
+                        description: null,
+                        isEnabled: false,
+                        disabledReason: null,
+                        isReadOnly: false,
+                      },
+                      {
+                        name: "read",
+                        title: null,
+                        description: null,
+                        isEnabled: true,
+                        disabledReason: null,
+                        isReadOnly: true,
+                      },
+                    ],
+                  },
+                ],
+          missingAppIds: outcome === "missing-app" ? ["ask-app"] : [],
+        };
+      }
+      if (method === "config/read") {
+        if (outcome === "config-unavailable") {
+          throw new Error("native config unavailable");
+        }
+        const confirming = isJsonObject(requestParams) && requestParams.includeLayers === false;
+        if (outcome === "binding-changed") {
+          readCodexAppServerBindingMock.mockReturnValue({ threadId: "replacement-thread" });
+        }
+        return {
+          config: {
+            apps: {
+              "ask-app": {
+                enabled: true,
+                links: {
+                  account: {
+                    approvals_reviewer: confirming ? null : "auto_review",
+                    default_tools_approval_mode: confirming ? null : "approve",
+                  },
+                },
+                tools: {
+                  write: { enabled: false, approval_mode: confirming ? null : "approve" },
+                  read: { approval_mode: "approve" },
+                  retired: { approval_mode: "approve" },
+                },
+              },
+            },
+          },
+          layers: [],
+        };
+      }
+      if (method === "config/batchWrite") {
+        expect(requestParams).toEqual({
+          edits: [
+            {
+              keyPath: 'apps."ask-app".links."account".approvals_reviewer',
+              value: null,
+              mergeStrategy: "replace",
+            },
+            {
+              keyPath: 'apps."ask-app".links."account".default_tools_approval_mode',
+              value: null,
+              mergeStrategy: "replace",
+            },
+            {
+              keyPath: 'apps."ask-app".tools."write".approval_mode',
+              value: null,
+              mergeStrategy: "replace",
+            },
+          ],
+        });
+        return { status: outcome === "okOverridden" ? "okOverridden" : "ok" };
+      }
+      return baseRequest(method, requestParams);
+    });
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
-    readCodexAppServerBindingMock.mockResolvedValue({
+    readCodexAppServerBindingMock.mockReturnValue({
       schemaVersion: 2,
       threadId: "parent-thread",
       sessionFile: "/tmp/session-1.jsonl",
@@ -1299,14 +1509,18 @@ describe("runCodexAppServerSideQuestion", () => {
       pluginAppPolicyContext: {
         fingerprint: "mixed-plugin-policy",
         apps: {
-          "ask-app": {
-            configKey: "ask",
-            marketplaceName: "openai",
-            pluginName: "ask",
-            allowDestructiveActions: true,
-            destructiveApprovalMode: "ask",
-            mcpServerNames: ["ask"],
-          },
+          ...(outcome === "unbound-native-app"
+            ? {}
+            : {
+                "ask-app": {
+                  configKey: "ask",
+                  marketplaceName: "openai",
+                  pluginName: "ask",
+                  allowDestructiveActions: true,
+                  destructiveApprovalMode: "ask",
+                  mcpServerNames: ["ask"],
+                },
+              }),
           "true-app": {
             configKey: "true",
             marketplaceName: "openai",
@@ -1333,7 +1547,7 @@ describe("runCodexAppServerSideQuestion", () => {
           },
         },
         pluginAppIds: {
-          ask: ["ask-app"],
+          ask: outcome === "unbound-native-app" ? [] : ["ask-app"],
           true: ["true-app"],
           false: ["false-app"],
           auto: ["auto-app"],
@@ -1343,13 +1557,64 @@ describe("runCodexAppServerSideQuestion", () => {
       updatedAt: new Date(0).toISOString(),
     });
 
-    await expect(
-      runCodexAppServerSideQuestion(sideParams(), {
-        pluginConfig: { appServer: { mode: "guardian" } },
-      }),
-    ).resolves.toEqual({ text: "Side answer." });
+    const run = runCodexAppServerSideQuestion(sideParams(), {
+      pluginConfig: { appServer: { mode: "guardian" } },
+    });
+    if (rejectsReplay) {
+      await expect(run).rejects.toThrow(
+        outcome === "binding-changed"
+          ? "binding changed before fork"
+          : "Could not verify the Codex app allowlist",
+      );
+      const methods = client.request.mock.calls.map(([method]) => method);
+      expect(methods).not.toContain("config/batchWrite");
+      expect(methods).not.toContain("thread/fork");
+      return;
+    }
+    await vi.waitFor(() =>
+      expect(client.request.mock.calls.map(([method]) => method)).toContain("turn/start"),
+    );
+    try {
+      await handleClientRequestWhenReady(client, {
+        id: "side-approval-policy",
+        method: "mcpServer/elicitation/request",
+        params: {
+          threadId: "side-thread",
+          turnId: "turn-1",
+          serverName: "forms",
+          mode: "form",
+          message: "Enter a value",
+          requestedSchema: { type: "object", properties: { value: { type: "string" } } },
+        },
+      });
+      const policy = approvalSpy.mock.calls.at(-1)?.[0].pluginAppPolicyContext;
+      expect(Object.keys(policy?.apps ?? {}).toSorted()).toEqual(
+        outcome === "ok"
+          ? ["ask-app", "auto-app", "false-app", "true-app"]
+          : ["auto-app", "false-app", "true-app"],
+      );
+      expect(policy?.pluginAppIds.ask).toEqual(outcome === "ok" ? ["ask-app"] : []);
+    } finally {
+      client.emit(agentDelta("side-thread", "turn-1", "Side answer."));
+      client.emit(turnCompleted("side-thread", "turn-1", "Side answer."));
+      await expect(run).resolves.toEqual({ text: "Side answer." });
+    }
 
-    const forkParams = mockCall(client.request)[1] as Record<string, unknown> | undefined;
+    const methods = client.request.mock.calls.map(([method]) => method);
+    if (outcome === "unbound-native-app") {
+      expect(methods).not.toContain("app/installed");
+      expect(methods).not.toContain("app/read");
+      expect(methods).not.toContain("config/batchWrite");
+    } else {
+      expect(methods.indexOf("app/read")).toBeLessThan(methods.indexOf("thread/fork"));
+    }
+    if (outcome !== "missing-app" && outcome !== "unbound-native-app") {
+      expect(methods.indexOf("config/batchWrite")).toBeGreaterThan(-1);
+      expect(methods.indexOf("config/batchWrite")).toBeLessThan(methods.indexOf("thread/fork"));
+    }
+    const forkParams = client.request.mock.calls.find(
+      ([method]) => method === "thread/fork",
+    )?.[1] as Record<string, unknown> | undefined;
     expect(forkParams?.approvalsReviewer).toBe("auto_review");
     const config = forkParams?.config as Record<string, unknown> | undefined;
     expect(config).not.toHaveProperty("approvals_reviewer");
@@ -1360,13 +1625,17 @@ describe("runCodexAppServerSideQuestion", () => {
         destructive_enabled: false,
         open_world_enabled: false,
       },
-      "ask-app": {
-        enabled: true,
-        approvals_reviewer: "user",
-        destructive_enabled: true,
-        open_world_enabled: true,
-        default_tools_approval_mode: "auto",
-      },
+      ...(outcome === "ok"
+        ? {
+            "ask-app": {
+              enabled: true,
+              approvals_reviewer: "user",
+              destructive_enabled: true,
+              open_world_enabled: true,
+              default_tools_approval_mode: "auto",
+            },
+          }
+        : { "ask-app": { enabled: false } }),
       "auto-app": {
         enabled: true,
         destructive_enabled: true,
@@ -1962,7 +2231,7 @@ describe("runCodexAppServerSideQuestion", () => {
   });
 
   it("includes permission request native hooks for side threads with yolo approval policy", async () => {
-    readCodexAppServerBindingMock.mockResolvedValue({
+    readCodexAppServerBindingMock.mockReturnValue({
       schemaVersion: 1,
       threadId: "parent-thread",
       sessionFile: "/tmp/session-1.jsonl",
@@ -2112,7 +2381,7 @@ describe("runCodexAppServerSideQuestion", () => {
   it("keeps Codex code-mode-only while disabling Guardian for provider-qualified local models", async () => {
     const client = createFakeClient();
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
-    readCodexAppServerBindingMock.mockResolvedValue({
+    readCodexAppServerBindingMock.mockReturnValue({
       schemaVersion: 1,
       threadId: "parent-thread",
       sessionFile: "/tmp/session-1.jsonl",
@@ -2161,7 +2430,7 @@ describe("runCodexAppServerSideQuestion", () => {
   it("uses bound local model providers when disabling Guardian for side-thread forks", async () => {
     const client = createFakeClient();
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
-    readCodexAppServerBindingMock.mockResolvedValue({
+    readCodexAppServerBindingMock.mockReturnValue({
       schemaVersion: 1,
       threadId: "parent-thread",
       sessionFile: "/tmp/session-1.jsonl",
@@ -2206,7 +2475,7 @@ describe("runCodexAppServerSideQuestion", () => {
   it("uses bound local providers for side-thread model ids that contain slashes", async () => {
     const client = createFakeClient();
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
-    readCodexAppServerBindingMock.mockResolvedValue({
+    readCodexAppServerBindingMock.mockReturnValue({
       schemaVersion: 1,
       threadId: "parent-thread",
       sessionFile: "/tmp/session-1.jsonl",
@@ -2246,7 +2515,7 @@ describe("runCodexAppServerSideQuestion", () => {
   it("does not apply bound local model providers to provider-qualified side-thread models", async () => {
     const client = createFakeClient();
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
-    readCodexAppServerBindingMock.mockResolvedValue({
+    readCodexAppServerBindingMock.mockReturnValue({
       schemaVersion: 1,
       threadId: "parent-thread",
       sessionFile: "/tmp/session-1.jsonl",
@@ -2286,7 +2555,7 @@ describe("runCodexAppServerSideQuestion", () => {
     const client = createFakeClient();
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
     isCodexAppServerNativeAuthProfileMock.mockReturnValue(true);
-    readCodexAppServerBindingMock.mockResolvedValue({
+    readCodexAppServerBindingMock.mockReturnValue({
       schemaVersion: 1,
       threadId: "parent-thread",
       sessionFile: "/tmp/session-1.jsonl",
@@ -2325,7 +2594,7 @@ describe("runCodexAppServerSideQuestion", () => {
   it("keeps native hook relays alive across side-thread startup and completion timeouts", async () => {
     const client = createFakeClient();
     const requestTimeoutMs = 400_000;
-    const completionTimeoutMs = 700_000;
+    const completionTimeoutMs = 10 * 60_000;
     const expectedRelayTtlMs = requestTimeoutMs * 3 + completionTimeoutMs + 5 * 60_000;
     let relayIdDuringFork: string | undefined;
     let startedAtMs = 0;
@@ -2371,7 +2640,6 @@ describe("runCodexAppServerSideQuestion", () => {
           pluginConfig: {
             appServer: {
               requestTimeoutMs,
-              turnCompletionIdleTimeoutMs: completionTimeoutMs,
             },
           },
           nativeHookRelay: { enabled: true },
@@ -2603,6 +2871,44 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(activeDiagnosticToolKeys(diagnosticEvents)).toEqual(new Set());
   });
 
+  it("hands a side thread's question tools this run's own way to show a prompt", async () => {
+    // A side thread dispatches tools through the same direct bridge as a normal Codex
+    // turn, so no tool-start handler reserves a blocking question's prompt for them.
+    // Without a sender the question is registered, waited on, and never shown.
+    const onToolResult = vi.fn();
+    let capturedQuestionPrompt:
+      | { send?: (payload: { text?: string }) => unknown; messageChannel?: string }
+      | undefined;
+    createOpenClawCodingToolsMock.mockImplementation((options) => {
+      capturedQuestionPrompt = (
+        options as {
+          questionPrompt?: {
+            send?: (payload: { text?: string }) => unknown;
+            messageChannel?: string;
+          };
+        }
+      ).questionPrompt;
+      return [
+        {
+          name: "ask_user",
+          description: "Ask the person a question",
+          parameters: { type: "object", properties: {}, additionalProperties: true },
+          execute: toolExecuteMock,
+        },
+      ];
+    });
+
+    await runSideQuestionWithManagedWebSearchCall(
+      sideParams({ messageChannel: "telegram", opts: { onToolResult } }),
+      { preserveToolFactory: true, toolName: "ask_user", toolArguments: { header: "Choice" } },
+    );
+
+    expect(toolExecuteMock).toHaveBeenCalledTimes(1);
+    expect(capturedQuestionPrompt?.messageChannel).toBe("telegram");
+    await capturedQuestionPrompt?.send?.({ text: "Question for you:" });
+    expect(onToolResult).toHaveBeenCalledWith({ text: "Question for you:" });
+  });
+
   it("bridges prepared restricted-profile tools into side threads", async () => {
     const preparedModelRuntime = {
       metadataSnapshot: {
@@ -2701,6 +3007,44 @@ describe("runCodexAppServerSideQuestion", () => {
       success: true,
       contentItems: [{ type: "inputText", text: "tool output" }],
     });
+  });
+
+  it("exposes blocking question tools to a side thread conversation", async () => {
+    const boundNames: string[][] = [];
+    const bindToolSurface = vi.fn((tools: Array<{ name: string }>) => {
+      boundNames.push(tools.map((tool) => tool.name));
+      return tools;
+    });
+    createOpenClawCodingToolsMock.mockReturnValue([
+      { name: "message", execute: vi.fn() },
+      { name: "ask_user", execute: vi.fn() },
+      { name: "secrets", execute: vi.fn() },
+    ]);
+    const client = createFakeClient();
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "thread/fork") {
+        return threadResult("side-thread");
+      }
+      if (method === "turn/start") {
+        setTimeout(() => {
+          client.emit(turnCompleted("side-thread", "turn-1", "Answered."));
+        }, 0);
+        return turnStartResult("turn-1");
+      }
+      return {};
+    });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    await runCodexAppServerSideQuestion(
+      sideParams({
+        hostCapabilities: {
+          ...TEST_HOST_CAPABILITIES,
+          bindToolSurface: bindToolSurface as never,
+        },
+      }),
+    );
+
+    expect(boundNames[0]).toEqual(["message", "ask_user", "secrets"]);
   });
 
   it("binds /btw tools and retained bound callbacks fail after capability closure", async () => {
@@ -2905,20 +3249,18 @@ describe("runCodexAppServerSideQuestion", () => {
         opts: { runId: "run-side-diagnostics" },
       }),
     );
-    await handleClientRequestWhenReady(
-      client,
-      {
-        id: 42,
-        method: "item/tool/call",
-        params: {
-          ...codexTestTurnIds("side-thread"),
-          callId: "tool-1",
-          tool: "wiki_status",
-          arguments: { topic: "AGENTS.md" },
-        },
+    const response = await handleClientRequestWhenReady(client, {
+      id: 42,
+      method: "item/tool/call",
+      params: {
+        ...codexTestTurnIds("side-thread"),
+        callId: "tool-1",
+        tool: "wiki_status",
+        arguments: { topic: "AGENTS.md" },
       },
-      () => expect(toolExecuteMock).toHaveBeenCalledTimes(1),
-    );
+    });
+    expect(response).toMatchObject({ success: true });
+    expect(toolExecuteMock).toHaveBeenCalledTimes(1);
     client.emit(agentDelta("side-thread", "turn-1", "Tool answer."));
     client.emit(turnCompleted("side-thread", "turn-1", "Tool answer."));
     await run;
@@ -3512,8 +3854,54 @@ describe("runCodexAppServerSideQuestion", () => {
     );
   });
 
+  it.each(["rejected", "lost ACK"] as const)(
+    "retires an uncertain side policy on %s without replaying the fork or interrupting an unstarted turn",
+    async (fault) => {
+      const harness = createClientHarness();
+      getSharedCodexAppServerClientMock.mockResolvedValue(harness.client);
+      const waitForRequest = async (method: string) =>
+        await vi.waitFor(() => {
+          const request = harness.writes
+            .map((write) => JSON.parse(write) as { id: number; method: string; params: unknown })
+            .find((message) => message.method === method);
+          expect(request).toBeDefined();
+          return request!;
+        });
+      const controller = new AbortController();
+      const run = runCodexAppServerSideQuestion(
+        sideParams({ opts: { abortSignal: controller.signal } }),
+      );
+      const failure = run.catch((error: unknown) => error);
+      const fork = await waitForRequest("thread/fork");
+      harness.send({ id: fork.id, result: threadResult("side-thread") });
+      const inject = await waitForRequest("thread/inject_items");
+      if (fault === "rejected") {
+        harness.send({
+          id: inject.id,
+          error: { code: -32603, message: "flush failed after append" },
+        });
+      } else {
+        controller.abort("lost policy ACK");
+      }
+      const unsubscribe = await waitForRequest("thread/unsubscribe");
+      expect(unsubscribe.params).toEqual({ threadId: "side-thread" });
+      harness.send({ id: unsubscribe.id, result: { status: "unsubscribed" } });
+      await expect(failure).resolves.toMatchObject({
+        name: "CodexThreadPolicyHandoffError",
+        outcome: "unknown",
+      });
+      expect(harness.writes.map((write) => JSON.parse(write).method)).toEqual([
+        "thread/fork",
+        "thread/inject_items",
+        "thread/unsubscribe",
+      ]);
+      expect(harness.stdinDestroyed).toBe(true);
+      harness.client.close();
+    },
+  );
+
   it("returns a clear setup error when there is no Codex parent thread", async () => {
-    readCodexAppServerBindingMock.mockResolvedValue(undefined);
+    readCodexAppServerBindingMock.mockReturnValue(undefined);
 
     await expect(runCodexAppServerSideQuestion(sideParams())).rejects.toThrow(
       "Codex /btw needs an active Codex thread. Send a normal message first, then try /btw again.",
@@ -3622,7 +4010,15 @@ describe("runCodexAppServerSideQuestion", () => {
             : { id: unsubscribe.id, result: {} },
         );
       }
-      await expect(failure).resolves.toMatchObject({ message: "turn/start aborted" });
+      await expect(failure).resolves.toMatchObject(
+        written
+          ? { message: "turn/start aborted" }
+          : {
+              name: "CodexThreadPolicyHandoffError",
+              outcome: "acknowledged",
+              cause: "side-start-cancelled",
+            },
+      );
       expect(harness.writes.map((write) => JSON.parse(write).method)).toEqual([
         "thread/fork",
         "thread/inject_items",

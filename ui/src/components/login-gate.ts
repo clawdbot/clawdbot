@@ -7,12 +7,12 @@ import { normalizeBasePath } from "../app-route-paths.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import { t } from "../i18n/index.ts";
 import {
+  redactLoginFailureError,
   resolveAuthHintKind,
   resolvePairingHint,
   shouldShowInsecureContextHint,
 } from "../lib/connection-hints.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
-import { formatUiError } from "../lib/format-error.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { renderConnectCommand } from "./connect-command.ts";
 import { icons } from "./icons.ts";
@@ -20,7 +20,10 @@ import { icons } from "./icons.ts";
 type LoginFailureKind =
   | "auth-required"
   | "auth-failed"
+  | "trusted-proxy"
   | "auth-rate-limited"
+  | "profile-unavailable"
+  | "verified-user-required"
   | "pairing-required"
   | "insecure-context"
   | "origin-not-allowed"
@@ -47,17 +50,11 @@ type LoginFailureFeedback = {
   refreshAction?: { label: string };
   steps: LoginFailureStep[];
   docsHref: string;
-  docsLabel: string;
   rawError: string;
 };
 
-type LoginGateProps = {
+type LoginGateProps = LoginFailureFeedbackParams & {
   resourceBasePath: string;
-  connected: boolean;
-  lastError: string | null;
-  lastErrorCode?: string | null;
-  hasToken: boolean;
-  hasPassword: boolean;
   gatewayUrl: string;
   token: string;
   password: string;
@@ -71,54 +68,24 @@ type LoginGateProps = {
   onConnect: () => void;
 };
 
-type LoginFailureFeedbackParams = {
-  connected: boolean;
-  lastError: string | null;
-  lastErrorCode?: string | null;
-  hasToken: boolean;
-  hasPassword: boolean;
-};
-
-function resolveDocsLabel(href: string): string {
-  if (href.includes("insecure-http")) {
-    return t("login.failure.docsInsecure");
-  }
-  if (href.includes("device-pairing")) {
-    return t("login.failure.docsPairing");
-  }
-  return t("login.failure.docsAuth");
-}
-
-// Shared with offline presentation so no disconnected surface prints credentials.
-export function redactLoginFailureError(value: string): string {
-  const redacted = value
-    .replace(
-      /([?#&])(?:access_token|auth|deviceToken|password|refresh_token|token)=([^&#\s]+)/gi,
-      "$1[redacted-credential]",
-    )
-    .replace(/\bBearer\s+([A-Za-z0-9._~+/-]+=*)/gi, "Bearer [redacted]")
-    .replace(
-      /(["']?(?:access|accessToken|deviceToken|password|refresh|refreshToken|token)["']?\s*[:=]\s*)["']?[^"',\s}]+/gi,
-      "$1[redacted]",
-    );
-  return formatUiError(redacted);
-}
+type LoginFailureFeedbackParams = Parameters<typeof resolveAuthHintKind>[0];
 
 function buildFeedback(params: {
   kind: LoginFailureKind;
   rawError: string;
   docsHref?: string;
   titleKey: string;
-  summaryKey: string;
+  summaryKey?: string;
   stepKeys: LoginFailureStepDefinition[];
   stepParams?: Record<string, string>;
   refreshAction?: { label: string };
 }): LoginFailureFeedback {
   const docsHref = params.docsHref ?? "https://docs.openclaw.ai/web/dashboard";
+  const rawError = redactLoginFailureError(params.rawError);
   return {
     kind: params.kind,
     title: t(params.titleKey, params.stepParams),
-    summary: t(params.summaryKey, params.stepParams),
+    summary: params.summaryKey ? t(params.summaryKey, params.stepParams) : rawError,
     refreshAction: params.refreshAction,
     steps: params.stepKeys.map((step) =>
       typeof step === "string"
@@ -126,8 +93,7 @@ function buildFeedback(params: {
         : { text: t(step.key, params.stepParams), commands: step.commands },
     ),
     docsHref,
-    docsLabel: resolveDocsLabel(docsHref),
-    rawError: redactLoginFailureError(params.rawError),
+    rawError,
   };
 }
 
@@ -141,6 +107,33 @@ function resolveLoginFailureFeedback(
   const rawError = params.lastError;
   const lastErrorCode = params.lastErrorCode ?? null;
   const lower = normalizeLowercaseStringOrEmpty(rawError);
+
+  if (lastErrorCode === ConnectErrorDetailCodes.AUTHENTICATED_PROFILE_UNAVAILABLE) {
+    return buildFeedback({
+      kind: "profile-unavailable",
+      rawError,
+      titleKey: "login.failure.profileUnavailable.title",
+      stepKeys: [
+        "login.failure.profileUnavailable.stepRetry",
+        "login.failure.profileUnavailable.stepAdmin",
+      ],
+      docsHref: "https://docs.openclaw.ai/concepts/user-model#gateway-profile-and-github-credit",
+    });
+  }
+
+  if (lastErrorCode === ConnectErrorDetailCodes.AUTH_VERIFIED_USER_REQUIRED) {
+    return buildFeedback({
+      kind: "verified-user-required",
+      rawError,
+      titleKey: "login.failure.verifiedUserRequired.title",
+      summaryKey: "login.failure.verifiedUserRequired.summary",
+      stepKeys: [
+        "login.failure.verifiedUserRequired.stepIdentity",
+        "login.failure.verifiedUserRequired.stepSharedSecret",
+      ],
+      docsHref: "https://docs.openclaw.ai/gateway/operator-scopes",
+    });
+  }
 
   if (lastErrorCode === ConnectErrorDetailCodes.CONTROL_UI_BUILD_MISMATCH) {
     return buildFeedback({
@@ -264,13 +257,21 @@ function resolveLoginFailureFeedback(
     });
   }
 
-  const authHintKind = resolveAuthHintKind({
-    connected: false,
-    lastError: rawError,
-    lastErrorCode,
-    hasToken: params.hasToken,
-    hasPassword: params.hasPassword,
-  });
+  const authHintKind = resolveAuthHintKind(params);
+  if (authHintKind === "trusted-proxy") {
+    return buildFeedback({
+      kind: "trusted-proxy",
+      rawError,
+      titleKey: "login.failure.trustedProxy.title",
+      summaryKey: "login.failure.trustedProxy.summary",
+      stepKeys: [
+        "login.failure.trustedProxy.stepSignIn",
+        "login.failure.trustedProxy.stepHeaders",
+        "login.failure.trustedProxy.stepNoToken",
+      ],
+      docsHref: "https://docs.openclaw.ai/gateway/trusted-proxy-auth",
+    });
+  }
   if (authHintKind === "required") {
     return buildFeedback({
       kind: "auth-required",
@@ -331,47 +332,31 @@ function refreshLoginGatePage() {
   window.location.reload();
 }
 
-type LoginFailureStepSegment = { kind: "text"; value: string } | { kind: "command"; value: string };
-
-function segmentLoginFailureStep(text: string, commands: string[]): LoginFailureStepSegment[] {
+function renderLoginFailureStep({ text, commands }: LoginFailureStep) {
   const unmatchedCommands = new Set(commands);
   const matches = [...unmatchedCommands]
-    .map((command) => ({ command, index: text.indexOf(command) }))
-    .filter((match) => match.index >= 0)
+    .map((command) => [command, text.indexOf(command)] as const)
     .toSorted(
-      (left, right) => left.index - right.index || right.command.length - left.command.length,
+      ([left, leftIndex], [right, rightIndex]) =>
+        leftIndex - rightIndex || right.length - left.length,
     );
-  const segments: LoginFailureStepSegment[] = [];
+  const segments: (string | ReturnType<typeof renderConnectCommand>)[] = [];
   let cursor = 0;
 
-  for (const match of matches) {
-    if (match.index < cursor) {
+  for (const [command, index] of matches) {
+    if (index < cursor) {
       continue;
     }
-    if (match.index > cursor) {
-      segments.push({ kind: "text", value: text.slice(cursor, match.index) });
-    }
-    segments.push({ kind: "command", value: match.command });
-    unmatchedCommands.delete(match.command);
-    cursor = match.index + match.command.length;
+    segments.push(text.slice(cursor, index), renderConnectCommand(command));
+    unmatchedCommands.delete(command);
+    cursor = index + command.length;
   }
 
-  if (cursor < text.length || !segments.length) {
-    segments.push({ kind: "text", value: text.slice(cursor) });
-  }
+  segments.push(text.slice(cursor));
   for (const command of unmatchedCommands) {
-    if (segments.length) {
-      segments.push({ kind: "text", value: " " });
-    }
-    segments.push({ kind: "command", value: command });
+    segments.push(" ", renderConnectCommand(command));
   }
   return segments;
-}
-
-function renderLoginFailureStep(step: LoginFailureStep) {
-  return segmentLoginFailureStep(step.text, step.commands).map((segment) =>
-    segment.kind === "command" ? renderConnectCommand(segment.value) : segment.value,
-  );
 }
 
 function renderLoginFailure(feedback: LoginFailureFeedback) {
@@ -407,7 +392,7 @@ function renderLoginFailure(feedback: LoginFailureFeedback) {
         href=${feedback.docsHref}
         target=${EXTERNAL_LINK_TARGET}
         rel=${buildExternalLinkRel()}
-        >${feedback.docsLabel}</a
+        >${t("common.learnMore")}</a
       >
     </div>
   `;
@@ -416,13 +401,7 @@ function renderLoginFailure(feedback: LoginFailureFeedback) {
 function renderLoginGate(props: LoginGateProps) {
   const resourceBasePath = normalizeBasePath(props.resourceBasePath);
   const faviconSrc = controlUiPublicAssetPath("favicon.svg", resourceBasePath);
-  const failure = resolveLoginFailureFeedback({
-    connected: props.connected,
-    lastError: props.lastError,
-    lastErrorCode: props.lastErrorCode,
-    hasToken: props.hasToken,
-    hasPassword: props.hasPassword,
-  });
+  const failure = resolveLoginFailureFeedback(props);
 
   return html`
     <div class="login-gate">

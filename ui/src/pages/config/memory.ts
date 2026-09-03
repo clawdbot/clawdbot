@@ -14,6 +14,7 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerMemoryImportEnglish } from "../../i18n/locales/en-memory-import.ts";
 import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
 import {
   selectedEngineId,
@@ -21,6 +22,8 @@ import {
   type MemoryEngineSelection,
   type MemoryTab,
 } from "./memory-schema.ts";
+
+registerMemoryImportEnglish();
 
 /** One installed plugin that can claim the exclusive `plugins.slots.memory` slot. */
 type MemoryEngineOption = {
@@ -390,7 +393,7 @@ function renderSettingsTab(props: MemoryViewProps) {
 export function renderMemory(props: MemoryViewProps) {
   return html`
     <section class="memory-page">
-      <section class="content-header content-header--page hub-page-header">
+      <section class="content-header content-header--settings content-header--page hub-page-header">
         <div class="hub-page-header__title">
           <div class="page-title">${t("tabs.memory")}</div>
           <div class="page-subtitle">

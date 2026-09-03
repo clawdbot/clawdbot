@@ -18,7 +18,7 @@ import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { formatErrorMessage as errorMessage } from "../infra/errors.js";
-import { resolveHeartbeatAgents } from "../infra/heartbeat-config.js";
+import { resolveHeartbeatAgents, resolveHeartbeatIntervalMs } from "../infra/heartbeat-config.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { readRegularFile } from "../infra/regular-file.js";
 import { escapeRegExp } from "../shared/regexp.js";
@@ -41,6 +41,23 @@ type HeartbeatSource = {
   content: string;
   sha256: string;
 };
+
+async function resolveHeartbeatScratchMigrationOwners(cfg: OpenClawConfig) {
+  const migrationAgents: ReturnType<typeof resolveHeartbeatAgents> = [];
+  const disabledEntryKeys = new Set<string>();
+  for (const agent of resolveHeartbeatAgents(cfg)) {
+    if (resolveHeartbeatIntervalMs(cfg, undefined, agent.heartbeat) !== null) {
+      migrationAgents.push(agent);
+      continue;
+    }
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, agent.agentId);
+    const workspaceRealPath = await fs
+      .realpath(workspaceDir)
+      .catch(() => path.resolve(workspaceDir));
+    disabledEntryKeys.add(path.join(workspaceRealPath, LEGACY_HEARTBEAT_FILENAME));
+  }
+  return { migrationAgents, disabledEntryKeys };
+}
 
 async function readHeartbeatSource(
   cfg: OpenClawConfig,
@@ -124,6 +141,7 @@ function archivePathForSource(agentId: string, sha256: string, env: NodeJS.Proce
 type HeartbeatSourceClaim = {
   claimPath: string;
   restore(cause: unknown): Promise<void>;
+  retain(): Promise<void>;
   release(params: { archivePath: string }): Promise<void>;
 };
 
@@ -236,63 +254,78 @@ async function claimHeartbeatSource(source: HeartbeatSource): Promise<HeartbeatS
     await restore(error);
     throw error;
   }
+  // Every final verification failure means "do not trust the import": restore
+  // the claim and tag the error so the caller rolls newly copied scratch back.
+  const changedError = (message: string, cause?: unknown) => {
+    const error = new Error(message, cause !== undefined ? { cause } : undefined);
+    error.name = HEARTBEAT_CLAIM_CHANGED_ERROR;
+    return error;
+  };
+  const failChanged = async (message: string, cause?: unknown): Promise<never> => {
+    const error = changedError(message, cause);
+    await restore(error).catch(() => undefined);
+    throw error;
+  };
+  const readFinalContent = async (filePath: string) => {
+    const workspaceRealPath = await fs.realpath(path.dirname(source.path));
+    const fileRealPath = await fs.realpath(filePath);
+    if (fileRealPath !== workspaceRealPath && !isPathInside(workspaceRealPath, fileRealPath)) {
+      throw new Error("HEARTBEAT.md target escapes the agent workspace");
+    }
+    const finalBytes = await readRegularFile({
+      filePath: fileRealPath,
+      maxBytes: CRON_JOB_SCRATCH_MAX_BYTES,
+    });
+    return utf8Decoder.decode(finalBytes.buffer);
+  };
+  const verifyUnchanged = async () => {
+    // A holder of an already-open descriptor can still mutate the claimed
+    // inode; re-verify the bytes before retiring it. The claim may itself be
+    // a contained symlink, so resolve and containment-check it like the
+    // initial claim did.
+    const finalContent = await readFinalContent(claimPath).catch((error: unknown) =>
+      failChanged("claimed HEARTBEAT.md could not be re-verified before finalization", error),
+    );
+    if (hashCronScratchSource(finalContent) !== source.sha256) {
+      await failChanged("HEARTBEAT.md changed while the migration claim was held");
+    }
+    // An editor atomic-save can recreate the original path while the claim is
+    // held. That recreation is the newest instruction set; treat it like a
+    // changed claim so the import rolls back instead of shadowing it.
+    let recreated: boolean;
+    try {
+      await fs.lstat(source.path);
+      recreated = true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        await failChanged("could not verify the original HEARTBEAT.md path", error);
+      }
+      recreated = false;
+    }
+    if (recreated) {
+      await failChanged("HEARTBEAT.md was recreated while the migration claim was held");
+    }
+  };
+  const verifyRestoredUnchanged = async () => {
+    let finalContent: string;
+    try {
+      finalContent = await readFinalContent(source.path);
+    } catch (error) {
+      throw changedError("restored HEARTBEAT.md could not be re-verified", error);
+    }
+    if (hashCronScratchSource(finalContent) !== source.sha256) {
+      throw changedError("HEARTBEAT.md changed after the migration claim was restored");
+    }
+  };
   return {
     claimPath,
     restore,
+    retain: async () => {
+      await restore(undefined);
+      await verifyRestoredUnchanged();
+    },
     release: async ({ archivePath }) => {
-      // Every verification failure here means "do not trust the import":
-      // restore the claim and tag the error so the caller rolls scratch back.
-      const failChanged = async (message: string, cause?: unknown): Promise<never> => {
-        const error = new Error(message, cause !== undefined ? { cause } : undefined);
-        error.name = HEARTBEAT_CLAIM_CHANGED_ERROR;
-        await restore(error).catch(() => undefined);
-        throw error;
-      };
-      // A holder of an already-open descriptor can still mutate the claimed
-      // inode; re-verify the bytes so release never deletes an unseen edit.
-      // The claim may itself be a contained symlink (renaming a symlink keeps
-      // it a symlink), so resolve and containment-check it like the claim did.
-      let finalContent: string;
-      try {
-        const workspaceRealPath = await fs.realpath(path.dirname(source.path));
-        const claimRealPath = await fs.realpath(claimPath);
-        if (
-          claimRealPath !== workspaceRealPath &&
-          !isPathInside(workspaceRealPath, claimRealPath)
-        ) {
-          throw new Error("claimed HEARTBEAT.md target escapes the agent workspace");
-        }
-        const finalBytes = await readRegularFile({
-          filePath: claimRealPath,
-          maxBytes: CRON_JOB_SCRATCH_MAX_BYTES,
-        });
-        finalContent = utf8Decoder.decode(finalBytes.buffer);
-      } catch (error) {
-        await failChanged("claimed HEARTBEAT.md could not be re-verified before removal", error);
-        throw error;
-      }
-      if (hashCronScratchSource(finalContent) !== source.sha256) {
-        await failChanged("HEARTBEAT.md changed while the migration claim was held");
-      }
-      // An editor atomic-save can recreate the original path while the claim
-      // is held. That recreation is the newest instruction set; treat it like
-      // a changed claim so the import rolls back instead of shadowing it.
-      let recreated: boolean;
-      try {
-        await fs.lstat(source.path);
-        recreated = true;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-          await failChanged(
-            "could not verify the original HEARTBEAT.md path before removal",
-            error,
-          );
-        }
-        recreated = false;
-      }
-      if (recreated) {
-        await failChanged("HEARTBEAT.md was recreated while the migration claim was held");
-      }
+      await verifyUnchanged();
       // Retire the claim by moving the inode into the archive instead of
       // unlinking it: a writer holding an open descriptor that lands a write
       // after the hash check above still writes into the preserved archive
@@ -363,7 +396,8 @@ export async function collectHeartbeatScratchMigrationFindings(
   cfg: OpenClawConfig,
 ): Promise<readonly HealthFinding[]> {
   const findings: HealthFinding[] = [];
-  for (const agent of resolveHeartbeatAgents(cfg)) {
+  const { migrationAgents, disabledEntryKeys } = await resolveHeartbeatScratchMigrationOwners(cfg);
+  for (const agent of migrationAgents) {
     const heartbeatPath = path.join(
       resolveAgentWorkspaceDir(cfg, agent.agentId),
       LEGACY_HEARTBEAT_FILENAME,
@@ -371,6 +405,9 @@ export async function collectHeartbeatScratchMigrationFindings(
     try {
       const source = await readHeartbeatSource(cfg, agent.agentId);
       if (!source) {
+        continue;
+      }
+      if (disabledEntryKeys.has(source.entryKey)) {
         continue;
       }
       findings.push(
@@ -406,13 +443,19 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
   const storePath = resolveCronJobsStorePathFromConfig(params.cfg, env);
   const changes: string[] = [];
   const warnings: string[] = [];
+  const { migrationAgents, disabledEntryKeys } = await resolveHeartbeatScratchMigrationOwners(
+    params.cfg,
+  );
   if (!params.shouldRepair) {
-    for (const agent of resolveHeartbeatAgents(params.cfg)) {
+    for (const agent of migrationAgents) {
       try {
         const source = await readHeartbeatSource(params.cfg, agent.agentId);
         if (source) {
+          const retained = disabledEntryKeys.has(source.entryKey)
+            ? " The shared legacy file will be retained because a heartbeat owner is disabled."
+            : "";
           note(
-            `${shortenHomePath(source.path)} will migrate into scratch for Heartbeat (${agent.agentId}).`,
+            `${shortenHomePath(source.path)} will migrate into scratch for Heartbeat (${agent.agentId}).${retained}`,
             "Heartbeat migration preview",
           );
         }
@@ -441,8 +484,15 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
   // Agents can share one workspace file. Group monitors by source path and
   // import into every monitor before the file is archived and removed once, so
   // the first agent's cleanup cannot starve its siblings.
-  const groups = new Map<string, { source: HeartbeatSource; agents: [string, CronJob][] }>();
+  const groups = new Map<
+    string,
+    { source: HeartbeatSource; agents: [string, CronJob][]; retainSource: boolean }
+  >();
+  const migrationAgentIds = new Set(migrationAgents.map((agent) => agent.agentId));
   for (const [agentId, monitor] of monitors) {
+    if (!migrationAgentIds.has(agentId)) {
+      continue;
+    }
     let source: HeartbeatSource | undefined;
     try {
       source = await readHeartbeatSource(params.cfg, agentId, { recoverClaims: true });
@@ -457,58 +507,69 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
     // basename), not its resolved file target: two distinct symlinks pointing
     // at one shared file are each claimed and removed, while agents reaching
     // the same workspace through path aliases dedupe onto one entry.
-    const group = groups.get(source.entryKey) ?? { source, agents: [] };
+    const group = groups.get(source.entryKey) ?? {
+      source,
+      agents: [],
+      retainSource: disabledEntryKeys.has(source.entryKey),
+    };
     group.agents.push([agentId, monitor]);
     groups.set(source.entryKey, group);
   }
 
-  for (const { source, agents } of groups.values()) {
+  for (const { source, agents, retainSource } of groups.values()) {
     // Precondition pass first: operator-owned scratch (different content or an
-    // explicit unset tombstone) blocks the whole group before the file is
-    // touched, so nothing is claimed or committed for a source that must stay.
+    // explicit unset tombstone) stays untouched while other owners can still
+    // receive the source. Any skipped owner keeps the shared file in place.
     // The revision seen here is also the CAS token for the later write, so a
     // concurrent edit in between surfaces as a conflict, never an overwrite.
-    let blocked = false;
+    let keepSource = retainSource;
+    const importAgents: [string, CronJob][] = [];
+    let scratchWriteNeeded = false;
     const plannedRevisionByJobId = new Map<string, number>();
     for (const [agentId, monitor] of agents) {
       const state = readCronJobScratchState(storePath, monitor.id, { env });
       const current = state.scratch;
       plannedRevisionByJobId.set(monitor.id, state.currentRevision);
       if (state.currentRevision > 0 && !current) {
-        warnings.push(
-          `Agent "${agentId}" scratch was explicitly unset; ${shortenHomePath(source.path)} was left unchanged.`,
-        );
-        blocked = true;
+        warnings.push(`Agent "${agentId}" scratch was explicitly unset; it was left unchanged.`);
+        keepSource = true;
       } else if (
         current &&
         current.content !== source.content &&
         current.sourceSha256 !== source.sha256
       ) {
         warnings.push(
-          `Agent "${agentId}" already has different cron scratch; ${shortenHomePath(source.path)} was left unchanged.`,
+          `Agent "${agentId}" already has different cron scratch; it was left unchanged.`,
         );
-        blocked = true;
+        keepSource = true;
+      } else {
+        importAgents.push([agentId, monitor]);
+        if (current?.sourceSha256 !== source.sha256) {
+          scratchWriteNeeded = true;
+        }
       }
     }
-    if (blocked) {
+    if (importAgents.length === 0 || (keepSource && !scratchWriteNeeded)) {
       continue;
     }
 
-    // Archive before the claim rename: if doctor dies mid-claim, the content is
-    // already durable under the state backups instead of only at a hidden
-    // .doctor-importing-* path nothing rescans.
-    try {
-      await archiveSource({ agentId: agents[0]![0], source, env });
-    } catch (error) {
-      warnings.push(
-        `${shortenHomePath(source.path)} was not migrated: ${errorMessage(error)}. Rerun doctor to retry safely.`,
-      );
-      continue;
+    if (!keepSource) {
+      // Archive before the claim rename: if doctor dies mid-claim, the content is
+      // already durable under the state backups instead of only at a hidden
+      // .doctor-importing-* path nothing rescans.
+      try {
+        await archiveSource({ agentId: importAgents[0]![0], source, env });
+      } catch (error) {
+        warnings.push(
+          `${shortenHomePath(source.path)} was not migrated: ${errorMessage(error)}. Rerun doctor to retry safely.`,
+        );
+        continue;
+      }
     }
 
     // Claim before committing: once the file is renamed aside and hash-verified,
-    // no concurrent editor can change the bytes that reach scratch, and a claim
-    // failure restores the file with nothing committed.
+    // no concurrent editor can change the bytes that reach scratch. Retained
+    // shared files are restored after the same verified import boundary.
     let claim: HeartbeatSourceClaim;
     try {
       claim = await claimHeartbeatSource(source);
@@ -527,10 +588,11 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
       previous: ReturnType<typeof readCronJobScratchState>["scratch"];
       newRevision: number;
     }> = [];
-    for (const [agentId, monitor] of agents) {
+    for (const [agentId, monitor] of importAgents) {
       try {
         const state = readCronJobScratchState(storePath, monitor.id, { env });
-        if (state.scratch?.sourceSha256 !== source.sha256) {
+        const shouldWriteScratch = state.scratch?.sourceSha256 !== source.sha256;
+        if (shouldWriteScratch) {
           const write = writeCronJobScratch({
             storePath,
             jobId: monitor.id,
@@ -550,16 +612,16 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
           });
         }
         const verified = readCronJobScratchState(storePath, monitor.id, { env }).scratch;
-        if (
-          !verified ||
-          verified.content !== source.content ||
-          verified.sourceSha256 !== source.sha256
-        ) {
+        if (!verified || verified.sourceSha256 !== source.sha256) {
           throw new Error("scratch verification failed after write");
         }
-        groupChanges.push(
-          `Migrated ${shortenHomePath(source.path)} into cron scratch for ${monitor.displayName ?? monitor.name}.`,
-        );
+        if (!keepSource || shouldWriteScratch) {
+          groupChanges.push(
+            keepSource
+              ? `Copied ${shortenHomePath(source.path)} into cron scratch for ${monitor.displayName ?? monitor.name}; retained the shared legacy file because ${retainSource ? "a heartbeat owner is disabled" : "another heartbeat owner's scratch was left unchanged"}.`
+              : `Migrated ${shortenHomePath(source.path)} into cron scratch for ${monitor.displayName ?? monitor.name}.`,
+          );
+        }
       } catch (error) {
         warnings.push(
           `Agent "${agentId}" scratch was not finalized: ${errorMessage(error)}. Rerun doctor to retry safely.`,
@@ -620,11 +682,23 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
       }
       continue;
     }
+    if (keepSource) {
+      try {
+        await claim.retain();
+        changes.push(...groupChanges);
+      } catch (error) {
+        rollbackCommitted();
+        warnings.push(
+          `${shortenHomePath(source.path)} was not migrated: ${errorMessage(error)}. Rerun doctor to retry safely.`,
+        );
+      }
+      continue;
+    }
     try {
       // release() re-verifies the claimed bytes; when they changed it restores
       // the newer file itself and reports HeartbeatClaimChangedError.
       await claim.release({
-        archivePath: archivePathForSource(agents[0]![0], source.sha256, env),
+        archivePath: archivePathForSource(importAgents[0]![0], source.sha256, env),
       });
       changes.push(...groupChanges);
     } catch (error) {

@@ -96,7 +96,7 @@ struct TerminalHubScreenTests {
         #expect(script?.contains("\"token\":\"stored-token\"") == true)
     }
 
-    @Test func `auth user script loads the active gateway scoped operator token`() throws {
+    @Test func `auth user script retains configured credentials beside a stored authorization`() throws {
         let gatewayID = "manual|terminal-\(UUID().uuidString)|443"
         let identity = DeviceIdentityStore.loadOrCreate()
         defer {
@@ -109,14 +109,52 @@ struct TerminalHubScreenTests {
             deviceId: identity.deviceId,
             role: "operator",
             token: "scoped-terminal-token",
+            scopes: ["operator.read", "operator.write"],
             gatewayID: gatewayID).token == "scoped-terminal-token")
         let config = try Self.makeConfig(
             url: #require(URL(string: "wss://gateway.example.com:8443")),
+            token: "configured-token",
+            password: "configured-password",
             deviceAuthGatewayID: gatewayID)
 
         let script = TerminalHubScreen.terminalAuthUserScript(config: config)
 
+        #expect(script?.contains("openclaw-device-identity-v1") == true)
+        #expect(script?.contains("openclaw.device.auth.v1:${scope}") == true)
+        #expect(script?.contains(identity.deviceId) == true)
         #expect(script?.contains("\"token\":\"scoped-terminal-token\"") == true)
+        #expect(script?.contains("operator.read") == true)
+        #expect(script?.contains("operator.write") == true)
+        #expect(script?.contains("configured-token") == true)
+        #expect(script?.contains("configured-password") == true)
+    }
+
+    @Test func `auth user script retains configured credentials beside an empty-scope grant`() throws {
+        let gatewayID = "manual|terminal-empty-scope-\(UUID().uuidString)|443"
+        let identity = DeviceIdentityStore.loadOrCreate()
+        defer {
+            DeviceAuthStore.clearToken(
+                deviceId: identity.deviceId,
+                role: "operator",
+                gatewayID: gatewayID)
+        }
+        #expect(DeviceAuthStore.storeToken(
+            deviceId: identity.deviceId,
+            role: "operator",
+            token: "empty-scope-token",
+            scopes: [],
+            gatewayID: gatewayID).token == "empty-scope-token")
+        let config = try Self.makeConfig(
+            url: #require(URL(string: "wss://gateway.example.com:8443")),
+            token: "configured-token",
+            password: "configured-password",
+            deviceAuthGatewayID: gatewayID)
+
+        let script = TerminalHubScreen.terminalAuthUserScript(config: config)
+
+        #expect(script?.contains("empty-scope-token") == true)
+        #expect(script?.contains("configured-token") == true)
+        #expect(script?.contains("configured-password") == true)
     }
 
     @Test func `auth user script honors stored device auth suppression`() throws {
@@ -142,6 +180,7 @@ struct TerminalHubScreenTests {
         let script = TerminalHubScreen.terminalAuthUserScript(config: config)
 
         #expect(script?.contains("stale-terminal-token") == false)
+        #expect(script?.contains("const deviceAuthSeed = null;") == true)
         #expect(script?.contains("\"password\":\"replacement-password\"") == true)
     }
 
@@ -218,6 +257,50 @@ struct TerminalHubScreenTests {
         #expect(!coordinator.allowsNavigation(to: unknownFrameURL, isMainFrame: nil))
     }
 
+    @Test func `authenticated dashboard navigation cannot leave its document scope`() throws {
+        let dashboardURL = try #require(URL(
+            string: "https://gateway.example.com/rosita/focus/dashboard/main/nightly-cleanup"))
+        let canonicalDashboardURL = try #require(URL(
+            string: "https://gateway.example.com/rosita/focus/dashboard/main/nightly-cleanup-v2"))
+        let dashboardRootURL = try #require(URL(
+            string: "https://gateway.example.com/rosita/focus/dashboard"))
+        let siblingURL = try #require(URL(
+            string: "https://gateway.example.com/rosita/focus/dashboard-archive/main/nightly-cleanup"))
+        let escapedScopeURL = try #require(URL(
+            string: "https://gateway.example.com/rosita/focus/dashboard/%2e%2e/%2e%2e/chat"))
+        let ordinaryControlUIURL = try #require(URL(
+            string: "https://gateway.example.com/rosita/chat?session=agent:main:nightly-cleanup"))
+        let alternateOriginURL = try #require(URL(
+            string: "https://replacement.example.com/rosita/focus/dashboard/main/nightly-cleanup"))
+        let embeddedURL = try #require(URL(string: "https://widgets.example.com/report"))
+        let coordinator = AuthenticatedControlUIWebViewCoordinator(
+            url: dashboardURL,
+            tls: nil,
+            allowedMainFramePathPrefix: "/rosita/focus/dashboard/")
+
+        #expect(coordinator.navigationDecision(
+            to: canonicalDashboardURL,
+            isMainFrame: true) == .allow)
+        #expect(coordinator.navigationDecision(
+            to: dashboardRootURL,
+            isMainFrame: true) == .allow)
+        #expect(coordinator.navigationDecision(
+            to: ordinaryControlUIURL,
+            isMainFrame: true) == .cancelAndExitScope)
+        #expect(coordinator.navigationDecision(
+            to: siblingURL,
+            isMainFrame: true) == .cancelAndExitScope)
+        #expect(coordinator.navigationDecision(
+            to: escapedScopeURL,
+            isMainFrame: true) == .cancelAndExitScope)
+        #expect(coordinator.navigationDecision(
+            to: alternateOriginURL,
+            isMainFrame: true) == .cancel)
+        #expect(coordinator.navigationDecision(
+            to: embeddedURL,
+            isMainFrame: false) == .allow)
+    }
+
     @Test func `authenticated Control UI TLS authority uses the normalized page authority`() throws {
         let controlURL = try #require(URL(string: "https://Gateway.Example.com/control"))
         let coordinator = try AuthenticatedControlUIWebViewCoordinator(
@@ -274,7 +357,7 @@ struct TerminalHubScreenTests {
 
     private static func webView(in window: UIWindow) async throws -> WKWebView {
         for _ in 0..<50 {
-            if let webView = self.findWebView(in: window) {
+            if let webView = findWebView(in: window) {
                 return webView
             }
             try await Task.sleep(for: .milliseconds(10))

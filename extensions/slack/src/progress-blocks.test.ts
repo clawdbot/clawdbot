@@ -1,9 +1,7 @@
-// Slack tests cover progress blocks plugin behavior.
 import type { ChannelProgressDraftLine } from "openclaw/plugin-sdk/channel-outbound";
 import { describe, expect, it } from "vitest";
 import {
   buildSlackProgressCardBlocks,
-  buildSlackProgressStreamCompletionChunks,
   buildSlackProgressStreamChunks,
   EMPTY_SLACK_NATIVE_STREAM_SNAPSHOT,
   reconcileSlackNativeTaskChunks,
@@ -216,7 +214,7 @@ describe("Slack progress presentation", () => {
         previous: EMPTY_SLACK_NATIVE_STREAM_SNAPSHOT,
         chunks: buildSlackProgressStreamChunks({ title: "Checking the workspace", lines: [] }),
       });
-      const completion = buildSlackProgressStreamCompletionChunks({
+      const completion = buildSlackProgressStreamChunks({
         title: "Checking the workspace",
         lines: [],
         finalInProgressStatus: status,
@@ -241,7 +239,7 @@ describe("Slack progress presentation", () => {
 
   it("shows terminal failure even when all authored milestones were already completed", () => {
     expect(
-      buildSlackProgressStreamCompletionChunks({
+      buildSlackProgressStreamChunks({
         title: "Checking the workspace",
         lines: [],
         finalInProgressStatus: "error",
@@ -274,9 +272,10 @@ describe("Slack progress presentation", () => {
     }
     const complete = reconcileSlackNativeTaskChunks({
       previous: snapshot,
-      chunks: buildSlackProgressStreamCompletionChunks({
+      chunks: buildSlackProgressStreamChunks({
         title: "Checking the workspace",
         lines: [progressLine(59)],
+        finalInProgressStatus: "complete",
       }),
     });
     expect(complete.chunks).toEqual([

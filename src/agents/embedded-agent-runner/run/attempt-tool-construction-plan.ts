@@ -155,8 +155,8 @@ function resolveCodingToolConstructionPlanForAllowlist(
     if (family) {
       continue;
     }
-    // Plugin ids/tool names are not known to the local factory catalog.
-    if (!isBundleMcpAllowlistName(name)) {
+    // Only bundle-mcp is unambiguous; namespaced entries can belong to plugins.
+    if (name !== "bundle-mcp") {
       includePluginTools = true;
     }
   }

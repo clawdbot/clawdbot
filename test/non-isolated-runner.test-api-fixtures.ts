@@ -49,7 +49,7 @@ const native = createRequire(import.meta.url)("./native-cron.cjs");
 expect(Reflect.get(globalThis, Symbol.for("openclaw.activeCronTaskRunTestApi"))).toBe(native.api);
 expect(nativeCron.registerActiveCronTaskRun).toBe(native.register);
 const { resetDiagnosticRunActivityForTest, getDiagnosticSessionActivitySnapshot } = await import(${sourcePath("logging/diagnostic-run-activity.ts")});
-const { markDiagnosticRunProgressForTest } = await import(${sourcePath("logging/diagnostic-run-activity.test-support.ts")});
+const { markDiagnosticToolStartedForTest } = await import(${sourcePath("logging/diagnostic-run-activity.test-support.ts")});
 const { resolveGlobalSingleton } = await import(${sourcePath("shared/global-singleton.ts")});
 const stateDir = path.join(import.meta.dirname, "test-api-state");
 const configPath = path.join(stateDir, "missing-openclaw.json");
@@ -93,7 +93,7 @@ describe("${generation} test API consumers", () => {
       changes: [],
     });
   }
-  it.each(["first test", "second test"])("keeps all three consumers usable in %s", async (phase) => {
+  it.each(["first test", "second test"])("keeps test API consumers usable in %s", async (phase) => {
     await verifyConsumers(phase);
   });
   afterAll(async () => {
@@ -108,8 +108,8 @@ describe("${generation} test API consumers", () => {
       const priorApi = Reflect.get(globalThis, key);
       resetDiagnosticRunActivityForTest();
       expect(Reflect.get(globalThis, key)).not.toBe(priorApi);
-      markDiagnosticRunProgressForTest({ sessionId: "fixture", reason: "teardown" });
-      expect(getDiagnosticSessionActivitySnapshot({ sessionId: "fixture" }).lastProgressReason).toBe("teardown");
+      markDiagnosticToolStartedForTest({ sessionId: "fixture", toolName: "teardown" });
+      expect(getDiagnosticSessionActivitySnapshot({ sessionId: "fixture" }).lastProgressReason).toBe("tool:teardown:started");
       console.info("test API lifecycle: ${generation} resource teardown passed");
     } finally {
       // Release this fixture's own lifecycle registration, including its captured consumers.
@@ -152,6 +152,8 @@ vi.mock(${sourcePath("cron/service/active-run-cancellation.ts")}, async () => ({
   ...await vi.importActual(${sourcePath("cron/service/active-run-cancellation.ts")}),
 }));
 const nativeCron = await import(${sourcePath("cron/service/active-run-cancellation.ts")});
+// The second import replaces native metadata with a manual-mock placeholder;
+// the execution record must still identify the retained native generation.
 await import(${sourcePath("cron/service/active-run-cancellation.ts")});
 const native = createRequire(import.meta.url)("./native-cron.cjs");
 const workspace = await import(${sourcePath("agents/workspace-legacy-state.ts")});

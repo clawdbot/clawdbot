@@ -1,6 +1,7 @@
 /**
  * Resolves bundled static catalog rows for embedded-agent model selection.
  */
+import { normalizeResolvedPricing } from "@openclaw/llm-core";
 import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { ModelProviderConfig } from "../../config/types.models.js";
@@ -65,17 +66,6 @@ function normalizeStaticCatalogInput(
   return normalizedInput.length > 0 ? normalizedInput : ["text"];
 }
 
-function normalizeStaticCatalogCost(
-  cost: NormalizedModelCatalogRow["cost"],
-): ProviderRuntimeModel["cost"] {
-  return {
-    input: cost?.input ?? 0,
-    output: cost?.output ?? 0,
-    cacheRead: cost?.cacheRead ?? 0,
-    cacheWrite: cost?.cacheWrite ?? 0,
-  };
-}
-
 /** Converts a normalized catalog row into the provider runtime model shape. */
 function modelFromStaticCatalogRow(row: NormalizedModelCatalogRow): ProviderRuntimeModel {
   return {
@@ -86,7 +76,7 @@ function modelFromStaticCatalogRow(row: NormalizedModelCatalogRow): ProviderRunt
     baseUrl: row.baseUrl ?? "",
     reasoning: row.reasoning,
     input: normalizeStaticCatalogInput(row.input),
-    cost: normalizeStaticCatalogCost(row.cost),
+    cost: normalizeResolvedPricing(row.cost ?? {}),
     contextWindow: row.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
     contextWindows: row.contextWindows?.map((option) => ({ ...option })),
     contextWindowDefault: row.contextWindowDefault,
@@ -110,7 +100,7 @@ function completeProviderStaticCatalogModel(
     baseUrl: model.baseUrl ?? "",
     reasoning: model.reasoning ?? false,
     input: normalizeStaticCatalogInput(model.input),
-    cost: model.cost ?? normalizeStaticCatalogCost(undefined),
+    cost: model.cost ?? normalizeResolvedPricing({}),
     contextWindow: model.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
     contextTokens: model.contextTokens,
     maxTokens: model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
@@ -212,42 +202,6 @@ function resolveBundledStaticCatalogState(
   return state;
 }
 
-/** Returns whether a bundled static catalog asks runtime discovery to augment its rows. */
-export function bundledStaticCatalogProviderUsesRuntimeAugment(params: {
-  provider: string;
-  cfg?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  metadataSnapshot?: PluginMetadataSnapshot;
-  workspaceDir?: string;
-}): boolean {
-  const provider = normalizeProviderId(params.provider);
-  if (!provider) {
-    return false;
-  }
-  const catalogParams = {
-    cfg: params.cfg,
-    env: params.env ?? process.env,
-    ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
-    workspaceDir: params.workspaceDir,
-  };
-  const metadataSnapshot = resolveBundledStaticCatalogMetadataSnapshot(catalogParams);
-  const plugins = resolveBundledStaticCatalogState(catalogParams, metadataSnapshot).plugins;
-  return plugins.some((plugin) => {
-    const catalog = plugin.modelCatalog;
-    if (catalog?.runtimeAugment !== true) {
-      return false;
-    }
-    return (
-      Object.keys(catalog.providers ?? {}).some(
-        (candidate) => normalizeProviderId(candidate) === provider,
-      ) ||
-      Object.keys(catalog.aliases ?? {}).some(
-        (candidate) => normalizeProviderId(candidate) === provider,
-      )
-    );
-  });
-}
-
 type BundledStaticCatalogLookup = {
   provider: string;
   modelId: string;
@@ -290,7 +244,7 @@ export function createBundledStaticCatalogModelResolver(params?: {
     workspaceDir: params?.workspaceDir,
   };
   const matchesStaticModelId = params?.metadataSnapshot
-    ? createStaticModelIdMatcher({ manifestPlugins: params.metadataSnapshot.plugins })
+    ? createStaticModelIdMatcher({ manifestPlugins: params.metadataSnapshot })
     : staticModelIdMatches;
   return (lookup) => {
     const provider = normalizeProviderId(lookup.provider);
@@ -559,7 +513,7 @@ function createScopedBundledProviderStaticCatalogModelResolver(
 ) => Promise<ProviderRuntimeModel | undefined> {
   const env = params.env ?? process.env;
   const matchesStaticModelId = params.metadataSnapshot
-    ? createStaticModelIdMatcher({ manifestPlugins: params.metadataSnapshot.plugins })
+    ? createStaticModelIdMatcher({ manifestPlugins: params.metadataSnapshot })
     : staticModelIdMatches;
   const pluginCatalogs = new Map<string, Promise<Map<string, ProviderRuntimeModel[]>>>();
   const providerPluginIds = new Map<string, string[]>();

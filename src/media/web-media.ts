@@ -53,6 +53,7 @@ import {
   readImageProbeFromHeader,
 } from "./media-services.js";
 import { extractOriginalFilename, getMediaDir } from "./store.js";
+import { formatMediaSize } from "./store.shared.js";
 
 export { getDefaultLocalRootsCore, LocalMediaAccessError };
 export type { LocalMediaAccessErrorCode };
@@ -207,7 +208,6 @@ const HOST_READ_DECLARED_TEXT_ERROR =
 const HOST_READ_TEXT_PLAIN_EXTENSION_BY_MIME: Record<string, readonly string[]> = {
   "text/plain": [".txt"],
 };
-const MB = 1024 * 1024;
 
 function stripLegacyMediaDirectivePrefix(mediaUrl: string): string {
   if (/^\s*media:\/\//i.test(mediaUrl)) {
@@ -499,16 +499,12 @@ function isAllowedHostReadTextAlias(mime: string | undefined, filePath?: string)
   return ext !== undefined && allowedExtensions.includes(ext);
 }
 
-function formatMb(bytes: number, digits = 2): string {
-  return (bytes / MB).toFixed(digits);
-}
-
 function formatCapLimit(label: string, cap: number, size: number): string {
-  return `${label} exceeds ${formatMb(cap, 0)}MB limit (got ${formatMb(size)}MB)`;
+  return `${label} exceeds ${formatMediaSize(cap)} limit (got ${formatMediaSize(size)})`;
 }
 
 function formatCapReduce(label: string, cap: number, size: number): string {
-  return `${label} could not be reduced below ${formatMb(cap, 0)}MB (got ${formatMb(size)}MB)`;
+  return `${label} could not be reduced below ${formatMediaSize(cap)} (got ${formatMediaSize(size)})`;
 }
 
 function isHeicSource(opts: { contentType?: string; fileName?: string }): boolean {
@@ -897,12 +893,12 @@ function logOptimizedImage(params: { originalSize: number; optimized: OptimizedI
   }
   if (params.optimized.format === "png") {
     logVerbose(
-      `Optimized PNG (preserving alpha) from ${formatMb(params.originalSize)}MB to ${formatMb(params.optimized.optimizedSize)}MB (side<=${params.optimized.resizeSide}px)`,
+      `Optimized PNG (preserving alpha) from ${formatMediaSize(params.originalSize)} to ${formatMediaSize(params.optimized.optimizedSize)} (side<=${params.optimized.resizeSide}px)`,
     );
     return;
   }
   logVerbose(
-    `Optimized media from ${formatMb(params.originalSize)}MB to ${formatMb(params.optimized.optimizedSize)}MB (side<=${params.optimized.resizeSide}px, q=${params.optimized.quality})`,
+    `Optimized media from ${formatMediaSize(params.originalSize)} to ${formatMediaSize(params.optimized.optimizedSize)} (side<=${params.optimized.resizeSide}px, q=${params.optimized.quality})`,
   );
 }
 
@@ -926,7 +922,7 @@ async function optimizeImageWithFallback(params: {
     transparency: "auto",
   });
   if (optimized.chosen.transparency === "flattened" && shouldLogVerbose()) {
-    logVerbose(`Image transparency flattened to fit ${formatMb(cap, 0)}MB optimization budget`);
+    logVerbose(`Image transparency flattened to fit ${formatMediaSize(cap)} optimization budget`);
   }
   return {
     buffer: optimized.data,
@@ -1212,7 +1208,7 @@ async function loadWebMediaInternal(
     } catch (err) {
       if (err instanceof FsSafeError) {
         if (err.code === "too-large") {
-          throw new Error(`Media exceeds ${formatMb(sourceReadCap, 0)}MB limit`, {
+          throw new Error(`Media exceeds ${formatMediaSize(sourceReadCap)} limit`, {
             cause: err,
           });
         }

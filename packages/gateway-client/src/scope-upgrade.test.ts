@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import type { GatewayProtocolRequestOptions } from "./protocol-request.js";
 import { GatewayScopeUpgrade } from "./scope-upgrade.js";
 
@@ -70,19 +71,19 @@ describe("GatewayScopeUpgrade", () => {
   );
 
   it("coalesces concurrent requests and allows a cancelled wait to restart", async () => {
-    let firstWaitSignal: AbortSignal | undefined;
+    let waitStarted = createDeferred<AbortSignal | undefined>();
     const request = vi.fn(
       async (method: string, _params?: unknown, options?: GatewayProtocolRequestOptions) => {
         if (method === "device.scopes.requestUpgrade") {
           return { requestId: "upgrade-1" };
         }
-        firstWaitSignal = options?.signal;
         return await new Promise((_resolve, reject) => {
           options?.signal?.addEventListener(
             "abort",
             () => reject(new Error("scope upgrade wait aborted")),
             { once: true },
           );
+          waitStarted.resolve(options?.signal);
         });
       },
     );
@@ -94,14 +95,22 @@ describe("GatewayScopeUpgrade", () => {
     const first = client.requestScopeUpgrade({ binding, scopes });
     const duplicate = client.requestScopeUpgrade({ binding, scopes });
     expect(duplicate).toBe(first);
-    await vi.waitFor(() => expect(firstWaitSignal).toBeDefined());
+    const firstWaitSignal = await withTestTimeout(
+      waitStarted.promise,
+      1_000,
+      "Scope upgrade wait did not start",
+    );
+    expect(firstWaitSignal).toBeDefined();
     expect(request).toHaveBeenCalledTimes(2);
 
     client.cancelScopeUpgrade();
     await expect(first).rejects.toBeDefined();
     expect(firstWaitSignal?.aborted).toBe(true);
-    void client.requestScopeUpgrade({ binding, scopes }).catch(() => {});
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(4));
+    waitStarted = createDeferred<AbortSignal | undefined>();
+    const restarted = client.requestScopeUpgrade({ binding, scopes });
+    await withTestTimeout(waitStarted.promise, 1_000, "Scope upgrade wait did not restart");
+    expect(request).toHaveBeenCalledTimes(4);
     client.cancelScopeUpgrade();
+    await expect(restarted).rejects.toBeDefined();
   });
 });

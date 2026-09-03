@@ -34,6 +34,8 @@ describeBrowserLayout("chat swarm progress browser layout", () => {
     const styles = [
       "ui/src/styles/base.css",
       "ui/src/styles/chat/layout.css",
+      "ui/src/styles/chat/message-layout.css",
+      "ui/src/styles/chat/composer.css",
       "ui/src/styles/chat/sidebar.css",
     ]
       .map((file) => readStyleSheet(file))

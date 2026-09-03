@@ -1,3 +1,4 @@
+import { normalizeUpstreamModelPricing } from "@openclaw/model-catalog-core/model-catalog-pricing";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "./provider-model-shared.js";
 
@@ -358,53 +359,6 @@ export function buildOpenAICompatibleLiveModels(
   );
 }
 
-function readUpstreamProviderCatalogCostValue(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
-}
-
-function readUpstreamProviderCatalogCost(rawCost: Record<string, unknown> | undefined) {
-  return {
-    input: readUpstreamProviderCatalogCostValue(rawCost?.input),
-    output: readUpstreamProviderCatalogCostValue(rawCost?.output),
-    cacheRead: readUpstreamProviderCatalogCostValue(rawCost?.cache_read),
-    cacheWrite: readUpstreamProviderCatalogCostValue(rawCost?.cache_write),
-  };
-}
-
-function buildUpstreamProviderCatalogCost(value: unknown): ModelDefinitionConfig["cost"] {
-  const rawCost = readLiveModelCatalogRecord(value);
-  const cost = readUpstreamProviderCatalogCost(rawCost);
-  const upstreamTiers = (Array.isArray(rawCost?.tiers) ? rawCost.tiers : [])
-    .flatMap((rawTier) => {
-      const row = readLiveModelCatalogRecord(rawTier);
-      const tier = readLiveModelCatalogRecord(row?.tier);
-      const size = readLiveModelCatalogPositiveSafeIntegerField(tier, "size");
-      return tier?.type === "context" && size
-        ? [{ size, cost: readUpstreamProviderCatalogCost(row) }]
-        : [];
-    })
-    .toSorted((left, right) => left.size - right.size);
-  const legacyCost = readLiveModelCatalogRecord(rawCost?.context_over_200k);
-  if (upstreamTiers.length === 0 && legacyCost) {
-    upstreamTiers.push({ size: 200_000, cost: readUpstreamProviderCatalogCost(legacyCost) });
-  }
-  const firstTier = upstreamTiers[0];
-  if (!firstTier) {
-    return cost;
-  }
-  const tieredPricing: NonNullable<ModelDefinitionConfig["cost"]["tieredPricing"]> = [
-    { ...cost, range: [0, firstTier.size] },
-  ];
-  for (const [index, tier] of upstreamTiers.entries()) {
-    const nextThreshold = upstreamTiers[index + 1]?.size;
-    tieredPricing.push({
-      ...tier.cost,
-      range: nextThreshold ? [tier.size, nextThreshold] : [tier.size],
-    });
-  }
-  return { ...cost, tieredPricing };
-}
-
 function parseUpstreamProviderCatalogUrl(value: string): URL | undefined {
   try {
     return new URL(value);
@@ -501,7 +455,12 @@ export function projectUpstreamProviderCatalogModel(params: {
     baseUrl,
     reasoning: readLiveModelCatalogBooleanField(model, "reasoning") ?? false,
     input,
-    cost: buildUpstreamProviderCatalogCost(model.cost),
+    cost: normalizeUpstreamModelPricing(model.cost) ?? {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
     contextWindow,
     ...(contextTokens && contextTokens <= contextWindow ? { contextTokens } : {}),
     maxTokens,

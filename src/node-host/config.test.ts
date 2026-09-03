@@ -1,14 +1,19 @@
-import { spawn } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
+import { createBoundedChildOutput } from "../../test/helpers/bounded-child-output.js";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
   readConfigMachineState,
   readConfigMachineStateWithMetadata,
   writeConfigMachineState,
 } from "../state/config-machine-state.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { nodeHostConfigRuntimeEntrypoint } from "./config-runtime.test-support.js";
 import {
   configureNodeHost,
   loadNodeHostConfig,
@@ -17,97 +22,69 @@ import {
 } from "./config.js";
 
 const fixtureDigest = ["fixture", "digest"].join("-");
+const fixture = createFixtureLifetime();
 
 async function runConcurrentImplicitConfigures(
   stateDir: string,
+  signal: AbortSignal,
 ): Promise<[NodeHostConfig, NodeHostConfig]> {
-  const startPath = path.join(stateDir, "configure-start");
-  const moduleUrl = new URL("./config.ts", import.meta.url).href;
-  const workerSource = `
-    import fs from "node:fs";
-    const { configureNodeHost } = await import(process.env.OPENCLAW_NODE_HOST_CONFIG_MODULE);
-    fs.writeFileSync(process.env.OPENCLAW_NODE_HOST_READY_PATH, "ready");
-    const deadline = Date.now() + 15_000;
-    while (!fs.existsSync(process.env.OPENCLAW_NODE_HOST_START_PATH)) {
-      if (Date.now() >= deadline) {
-        throw new Error("timed out waiting for concurrent node-host configure start");
-      }
-      await new Promise((resolve) => setTimeout(resolve, 2));
-    }
-    const config = await configureNodeHost({
-      candidateNodeId: process.env.OPENCLAW_NODE_HOST_CANDIDATE,
-      fallbackDisplayName: "node",
-      gateway: {},
-      env: { ...process.env, OPENCLAW_STATE_DIR: process.env.OPENCLAW_NODE_HOST_STATE_DIR },
-      nowMs: Number(process.env.OPENCLAW_NODE_HOST_NOW_MS),
-    });
-    console.log(JSON.stringify(config));
-  `;
+  const workerUrl = resolveRuntimeWorkerUrl(nodeHostConfigRuntimeEntrypoint);
+  const cancellation = new AbortController();
+  const childSignal = AbortSignal.any([signal, cancellation.signal]);
   const workers = ["candidate-a", "candidate-b"].map((candidate, index) => {
-    const readyPath = path.join(stateDir, `configure-ready-${index}`);
-    const child = spawn(
-      process.execPath,
-      ["--import", "tsx", "--input-type=module", "-e", workerSource],
-      {
-        env: {
-          ...process.env,
-          OPENCLAW_NODE_HOST_CANDIDATE: candidate,
-          OPENCLAW_NODE_HOST_CONFIG_MODULE: moduleUrl,
-          OPENCLAW_NODE_HOST_NOW_MS: String(index + 1),
-          OPENCLAW_NODE_HOST_READY_PATH: readyPath,
-          OPENCLAW_NODE_HOST_START_PATH: startPath,
-          OPENCLAW_NODE_HOST_STATE_DIR: stateDir,
+    const ready = createDeferred<ChildProcess>();
+    const stderr = createBoundedChildOutput();
+    let config: NodeHostConfig | undefined;
+    const outcome = fixture.track(
+      runManagedCommand({
+        bin: process.execPath,
+        args: [...resolveRuntimeWorkerArgv(workerUrl), candidate, String(index + 1)],
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+        shell: false,
+        stdio: ["ignore", "ignore", "pipe", "ipc"],
+        signal: childSignal,
+        requireProcessTreeExit: process.platform !== "win32",
+        onReady(child) {
+          child.stderr!.on("data", stderr.append);
+          child.on("message", (message: "ready" | NodeHostConfig) => {
+            if (message === "ready") {
+              ready.resolve(child);
+            } else {
+              config = message;
+            }
+          });
         },
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => (stdout += String(chunk)));
-    child.stderr.on("data", (chunk) => (stderr += String(chunk)));
-    const outcome = new Promise<NodeHostConfig>((resolve, reject) => {
-      child.once("error", reject);
-      child.once("close", (code, signal) => {
+      }).then((code) => {
         if (code !== 0) {
-          reject(new Error(`configure worker failed (${String(code ?? signal)}): ${stderr}`));
-          return;
+          throw new Error(`configure worker failed (${code}): ${stderr.text()}`);
         }
-        const resultLine = stdout.trim().split("\n").at(-1);
-        if (!resultLine) {
-          reject(new Error("configure worker produced no result"));
-          return;
+        if (!config) {
+          throw new Error("configure worker produced no result");
         }
-        resolve(JSON.parse(resultLine) as NodeHostConfig);
-      });
-    });
-    return { child, outcome, readyPath };
+        return config;
+      }),
+    );
+    return {
+      ready: Promise.race([
+        ready.promise,
+        outcome.then(() => {
+          throw new Error("configure worker exited before the start barrier");
+        }),
+      ]),
+      outcome,
+    };
   });
 
   try {
-    const deadline = Date.now() + 15_000;
-    while (true) {
-      const ready = await Promise.all(
-        workers.map(async ({ readyPath }) =>
-          fs.access(readyPath).then(
-            () => true,
-            () => false,
-          ),
-        ),
-      );
-      if (ready.every(Boolean)) {
-        break;
-      }
-      if (workers.some(({ child }) => child.exitCode !== null || child.signalCode !== null)) {
-        break;
-      }
-      if (Date.now() >= deadline) {
-        throw new Error("timed out waiting for concurrent configure workers");
-      }
-      await new Promise((resolve) => {
-        setTimeout(resolve, 2);
-      });
+    // Both real processes must finish imports before either can choose its implicit id.
+    const children = await withTestTimeout(
+      Promise.all(workers.map(({ ready }) => ready)),
+      15_000,
+      "timed out waiting for concurrent configure workers",
+    );
+    for (const child of children) {
+      child.send("start");
     }
-    await fs.writeFile(startPath, "start");
     const outcomes = await Promise.all(workers.map(({ outcome }) => outcome));
     const first = outcomes[0];
     const second = outcomes[1];
@@ -116,24 +93,19 @@ async function runConcurrentImplicitConfigures(
     }
     return [first, second];
   } finally {
-    for (const { child } of workers) {
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill();
-      }
-    }
+    cancellation.abort();
+    await Promise.allSettled(workers.map(({ outcome }) => outcome));
   }
 }
 
 describe("node-host SQLite config", () => {
-  const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-    afterEach(() => {
-      closeOpenClawStateDatabaseForTest();
-      cleanup();
-    });
+  afterEach(async () => {
+    closeOpenClawStateDatabaseForTest();
+    await fixture.cleanup();
   });
 
   function makeTestEnv(): { env: NodeJS.ProcessEnv; stateDir: string } {
-    const stateDir = tempDirs.make("openclaw-node-host-config-");
+    const stateDir = fixture.createTempDir("openclaw-node-host-config-");
     return { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir }, stateDir };
   }
 
@@ -219,9 +191,11 @@ describe("node-host SQLite config", () => {
     await expect(loadNodeHostConfig(env)).resolves.toMatchObject({ installedAppsSharing: true });
   });
 
-  it("keeps the first committed implicit node id across processes", async () => {
+  it("keeps the first committed implicit node id across processes", async ({ signal }) => {
     const { env, stateDir } = makeTestEnv();
-    const [first, second] = await runConcurrentImplicitConfigures(stateDir);
+    const [first, second] = await fixture.run(() =>
+      runConcurrentImplicitConfigures(stateDir, signal),
+    );
 
     expect(["candidate-a", "candidate-b"]).toContain(first.nodeId);
     expect(second.nodeId).toBe(first.nodeId);

@@ -142,6 +142,22 @@ describe("tokenizeQuery", () => {
 });
 
 describe("scoreLexical", () => {
+  it("includes empty documents in length normalization without creating search hits", () => {
+    const value = { id: "match" };
+    const index = buildLexicalIndex([
+      { value, terms: ["needle", "needle"] },
+      { value: { id: "empty" }, terms: [] },
+    ]);
+
+    expect(index.documentCount).toBe(2);
+    expect(index.averageLength).toBe(1);
+    const hits = scoreLexical(index, [{ term: "needle", weight: 1 }]);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.value).toBe(value);
+    expect(hits[0]?.matchedLiteral).toBe(true);
+    expect(hits[0]?.score).toBeCloseTo((Math.log(2) * 2 * 2.2) / (2 + 1.2 * 1.75));
+  });
+
   it("returns nothing for a query with no usable terms", () => {
     const index = buildLexicalIndex([{ value: "a", terms: tokenizeDocument("search the web") }]);
 

@@ -50,7 +50,7 @@ export type HandleCommandsParams = {
   rootCtx?: MsgContext;
   cfg: OpenClawConfig;
   command: CommandContext;
-  agentId?: string;
+  agentId: string;
   agentDir?: string;
   directives: InlineDirectives;
   elevated: {

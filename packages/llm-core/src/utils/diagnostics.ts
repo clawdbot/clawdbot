@@ -13,6 +13,15 @@ export interface AssistantMessageDiagnostic {
   details?: Record<string, unknown>;
 }
 
+/** True when the provider explicitly refused the request payload. */
+export function isProviderRefusalAssistantError(
+  message: { diagnostics?: AssistantMessageDiagnostic[] } | null | undefined,
+): boolean {
+  return Boolean(
+    message?.diagnostics?.some((diagnostic) => diagnostic.type === "provider_refusal"),
+  );
+}
+
 /** Formats arbitrary thrown values into diagnostic-safe text. */
 export function formatThrownValue(value: unknown): string {
   if (value instanceof Error) {

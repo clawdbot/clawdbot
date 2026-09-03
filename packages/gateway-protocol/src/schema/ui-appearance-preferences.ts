@@ -24,6 +24,9 @@ export const UI_APPEARANCE_THEME_VALUES = [
   "beacon",
   "phosphor",
   "crt",
+  "manuscript",
+  "rose",
+  "miami",
 ] as const;
 // Wire-contract list of profile-storable typefaces. The Control UI derives
 // its override normalization from this tuple so browser and profile values agree.

@@ -245,57 +245,6 @@ export async function completeEmbeddedAttemptAfterTurn(
   // rewrite callback reacquires the synchronous session write boundary.
   if (activeContextEngine && !state.beforeAgentFinalizeRevisionReason) {
     const lifecycleState = input.readLifecycleState();
-    const afterTurnRuntimeContext = buildAfterTurnRuntimeContextFromUsage({
-      attempt,
-      workspaceDir: runtime.effectiveWorkspace,
-      agentDir: runtime.agentDir,
-      tokenBudget: attempt.contextTokenBudget,
-      lastCallUsage: state.lastCallUsage,
-      promptCache: state.promptCache,
-      activeAgentId: runtime.sessionAgentId,
-      contextEnginePluginId: runtime.resolveActiveContextEnginePluginId(),
-    });
-    const finalizeTurn = async (transcript: {
-      messagesSnapshot: AgentMessage[];
-      prePromptMessageCount: number;
-      sessionManager?: SessionManager;
-      withSessionManagerRewriteLock: WithOwnedTranscriptWrite;
-    }) => {
-      await finalizeHarnessContextEngineTurn({
-        contextEngine: activeContextEngine,
-        promptError: Boolean(state.promptError),
-        aborted: lifecycleState.aborted,
-        yieldAborted: state.yieldAborted,
-        sessionIdUsed,
-        sessionKey: attempt.sessionKey,
-        sessionTarget: attempt.sessionTarget,
-        sessionFile: attempt.sessionFile,
-        messagesSnapshot: transcript.messagesSnapshot,
-        prePromptMessageCount: transcript.prePromptMessageCount,
-        tokenBudget: attempt.contextTokenBudget,
-        runtimeContext: afterTurnRuntimeContext,
-        contextEngineHostSupport: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
-        providerId: attempt.provider,
-        requestedModelId: attempt.requestedModelId,
-        modelId: attempt.modelId,
-        fallbackReason: attempt.fallbackReason,
-        degradedReason: attempt.degradedReason,
-        runMaintenance: async (contextParams) =>
-          await runContextEngineMaintenance({
-            ...contextParams,
-            contextEngine: contextParams.contextEngine as never,
-            sessionManager: contextParams.sessionManager as never,
-            withSessionManagerRewriteLock: transcript.withSessionManagerRewriteLock,
-            config: attempt.config,
-            agentId: runtime.sessionAgentId,
-            contextEngineAgentId: attempt.contextEngineAgentId,
-          }),
-        sessionManager: transcript.sessionManager,
-        config: attempt.config,
-        warn: (message) => log.warn(message),
-        isHeartbeat: isHeartbeatLifecycleRunKind(attempt.bootstrapContextRunKind),
-      });
-    };
     if (attempt.onContextEngineTurnCandidate) {
       const admission = attempt.userTurnTranscriptRecorder?.getAdmissionReceipt();
       const terminalEntryId = sessionManager.getLeafId() ?? undefined;
@@ -315,29 +264,57 @@ export async function completeEmbeddedAttemptAfterTurn(
           sessionIdUsed,
           sessionKey: attempt.sessionKey,
           sessionTarget: attempt.sessionTarget,
-          sessionFile: attempt.sessionFile,
           promptError: Boolean(state.promptError),
           aborted: lifecycleState.aborted,
           yieldAborted: state.yieldAborted,
-          tokenBudget: attempt.contextTokenBudget,
-          runtimeContext: afterTurnRuntimeContext,
-          contextEngineHostSupport: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
-          providerId: attempt.provider,
-          requestedModelId: attempt.requestedModelId,
-          modelId: attempt.modelId,
-          fallbackReason: attempt.fallbackReason,
-          degradedReason: attempt.degradedReason,
-          config: attempt.config,
           isHeartbeat: isHeartbeatLifecycleRunKind(attempt.bootstrapContextRunKind),
         });
       }
     } else {
-      await finalizeTurn({
+      const afterTurnRuntimeContext = buildAfterTurnRuntimeContextFromUsage({
+        attempt,
+        workspaceDir: runtime.effectiveWorkspace,
+        agentDir: runtime.agentDir,
+        tokenBudget: attempt.contextTokenBudget,
+        lastCallUsage: state.lastCallUsage,
+        promptCache: state.promptCache,
+        activeAgentId: runtime.sessionAgentId,
+        contextEnginePluginId: runtime.resolveActiveContextEnginePluginId(),
+      });
+      await finalizeHarnessContextEngineTurn({
+        contextEngine: activeContextEngine,
+        promptError: Boolean(state.promptError),
+        aborted: lifecycleState.aborted,
+        yieldAborted: state.yieldAborted,
+        sessionIdUsed,
+        sessionKey: attempt.sessionKey,
+        sessionTarget: attempt.sessionTarget,
+        sessionFile: attempt.sessionFile,
         messagesSnapshot: state.messagesSnapshot,
         prePromptMessageCount:
           state.contextEngineAfterTurnCheckpoint ?? state.prePromptMessageCount,
+        tokenBudget: attempt.contextTokenBudget,
+        runtimeContext: afterTurnRuntimeContext,
+        contextEngineHostSupport: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+        providerId: attempt.provider,
+        requestedModelId: attempt.requestedModelId,
+        modelId: attempt.modelId,
+        fallbackReason: attempt.fallbackReason,
+        degradedReason: attempt.degradedReason,
+        runMaintenance: async (contextParams) =>
+          await runContextEngineMaintenance({
+            ...contextParams,
+            contextEngine: contextParams.contextEngine as never,
+            sessionManager: contextParams.sessionManager as never,
+            withSessionManagerRewriteLock: input.withOwnedTranscriptWrite,
+            config: attempt.config,
+            agentId: runtime.sessionAgentId,
+            contextEngineAgentId: attempt.contextEngineAgentId,
+          }),
         sessionManager,
-        withSessionManagerRewriteLock: input.withOwnedTranscriptWrite,
+        config: attempt.config,
+        warn: (message) => log.warn(message),
+        isHeartbeat: isHeartbeatLifecycleRunKind(attempt.bootstrapContextRunKind),
       });
     }
   }

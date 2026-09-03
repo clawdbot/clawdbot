@@ -2268,34 +2268,86 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(onPluginServices).toHaveBeenLastCalledWith(null);
   });
 
-  it("forwards strict replacement cleanup through the deferred plugin service owner", async () => {
-    const serviceStop = vi.fn(async () => {});
-    const startedServices = { stop: serviceStop };
-    const publishedOwner: { current: PluginServicesHandle | null } = { current: null };
-    hoisted.startPluginServices.mockImplementationOnce(async (params) => {
-      params.onHandle?.(startedServices);
-      return startedServices;
-    });
+  it.each(["settles", "times out"] as const)(
+    "forwards strict replacement cleanup through the deferred plugin service owner when it %s",
+    async (strictOutcome) => {
+      vi.useFakeTimers();
+      const cleanup = createDeferred();
+      const strictCleanup = createDeferred();
+      const serviceStop = vi.fn<PluginServicesHandle["stop"]>((options) => {
+        if (options?.strict) {
+          return strictOutcome === "settles" ? Promise.resolve() : strictCleanup.promise;
+        }
+        return cleanup.promise;
+      });
+      const startedServices = { stop: serviceStop };
+      const publishedOwner: { current: PluginServicesHandle | null } = { current: null };
+      hoisted.startPluginServices.mockImplementationOnce(async (params) => {
+        params.onHandle?.(startedServices);
+        return startedServices;
+      });
 
-    await startGatewaySidecars({
-      cfg: { hooks: { internal: { enabled: false } } } as never,
-      pluginRegistry: createPostAttachParams().pluginRegistry,
-      defaultWorkspaceDir: "/tmp/openclaw-workspace",
-      deps: {} as never,
-      startChannels: vi.fn(async () => {}),
-      onPluginServices: (handle) => {
-        publishedOwner.current = handle;
-      },
-      log: { warn: vi.fn() },
-      logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-      logChannels: { info: vi.fn(), error: vi.fn() },
-    });
+      await startGatewaySidecars({
+        cfg: { hooks: { internal: { enabled: false } } } as never,
+        pluginRegistry: createPostAttachParams().pluginRegistry,
+        defaultWorkspaceDir: "/tmp/openclaw-workspace",
+        deps: {} as never,
+        startChannels: vi.fn(async () => {}),
+        onPluginServices: (handle) => {
+          publishedOwner.current = handle;
+        },
+        log: { warn: vi.fn() },
+        logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        logChannels: { info: vi.fn(), error: vi.fn() },
+      });
 
-    expect(publishedOwner.current).not.toBeNull();
-    const replacement = { strict: true, deadlineAtMs: Date.now() + 5_000 } as const;
-    await publishedOwner.current?.stop(replacement);
-    expect(serviceStop).toHaveBeenCalledWith(replacement);
-  });
+      const owner = publishedOwner.current;
+      if (!owner) {
+        throw new Error("deferred plugin service owner was not published");
+      }
+      const replacement = { strict: true, deadlineAtMs: Date.now() + 5_000 } as const;
+      const replacing = owner.stop(replacement);
+      const replacementResult = replacing.catch((error: unknown) => error);
+      let stopping: Promise<void> | undefined;
+
+      try {
+        if (strictOutcome === "settles") {
+          await replacing;
+          expect(serviceStop).toHaveBeenCalledWith(replacement);
+          return;
+        }
+
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(await replacementResult).toBeInstanceOf(AggregateError);
+        strictCleanup.reject(new Error("strict service cleanup timed out"));
+        await vi.advanceTimersByTimeAsync(0);
+
+        let stopped = false;
+        stopping = owner.stop();
+        void stopping.then(
+          () => {
+            stopped = true;
+          },
+          () => {
+            stopped = true;
+          },
+        );
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(stopped).toBe(false);
+        expect(serviceStop.mock.calls.map(([options]) => options)).toEqual([
+          replacement,
+          undefined,
+        ]);
+        cleanup.resolve();
+        await expect(stopping).resolves.toBeUndefined();
+      } finally {
+        strictCleanup.resolve();
+        cleanup.resolve();
+        await Promise.allSettled([replacing, stopping]);
+      }
+    },
+  );
 
   it("fences late service capabilities when deferred ownership consumes the replacement deadline", async () => {
     vi.useFakeTimers();
@@ -3512,36 +3564,40 @@ describe("startGatewayPostAttachRuntime", () => {
     }
   });
 
-  it("fences plugin publication when close begins during deferred plugin loading", async () => {
+  it("retires unadopted startup plugins when close begins during deferred loading", async () => {
     let closeStarted = false;
-    let releasePluginLoad: (() => void) | undefined;
-    const pluginLoadReady = new Promise<void>((resolve) => {
-      releasePluginLoad = resolve;
-    });
+    const pluginLoadStarted = createDeferred();
+    const pluginLoadReady = createDeferred();
+    const retireGatewayRuntimeBindings = vi.fn();
     const onStartupPluginsLoaded = vi.fn();
     const startGatewaySidecarsValue = vi.fn(async () => ({
       pluginServices: null,
       postReadySidecars: [],
     }));
     const runtime = await startGatewayPostAttachRuntime(
-      {
-        ...createPostAttachParams({
-          sidecarStartup: "defer",
-          isClosing: () => closeStarted,
-          loadStartupPlugins: async () => {
-            await pluginLoadReady;
-            return { pluginRegistry: createPostAttachParams().pluginRegistry, gatewayMethods: [] };
-          },
-          onStartupPluginsLoaded,
-        }),
-      },
+      createPostAttachParams({
+        sidecarStartup: "defer",
+        isClosing: () => closeStarted,
+        loadStartupPlugins: async () => {
+          pluginLoadStarted.resolve();
+          await pluginLoadReady.promise;
+          return {
+            pluginRegistry: createPostAttachParams().pluginRegistry,
+            gatewayMethods: [],
+            retireGatewayRuntimeBindings,
+          };
+        },
+        onStartupPluginsLoaded,
+      }),
       createPostAttachRuntimeDeps({ startGatewaySidecars: startGatewaySidecarsValue }),
     );
 
+    await pluginLoadStarted.promise;
     closeStarted = true;
-    releasePluginLoad?.();
+    pluginLoadReady.resolve();
     await expect(runtime.startupSettled).resolves.toBeUndefined();
 
+    expect(retireGatewayRuntimeBindings).toHaveBeenCalledOnce();
     expect(onStartupPluginsLoaded).not.toHaveBeenCalled();
     expect(startGatewaySidecarsValue).not.toHaveBeenCalled();
   });

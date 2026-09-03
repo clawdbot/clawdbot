@@ -1,4 +1,7 @@
-import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  buildTemporalContextText,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   asOptionalRecord,
   normalizeOptionalString,
@@ -11,11 +14,13 @@ import type {
   CodexTurnStartParams,
   CodexUserInput,
 } from "./protocol.js";
-import { readCodexSupportedReasoningEfforts } from "./reasoning-effort.js";
+import {
+  readCodexSupportedReasoningEfforts,
+  resolveCodexAppServerReasoningEffort,
+} from "./reasoning-effort.js";
 import {
   CODEX_NATIVE_PERSONALITY_NONE,
   resolveCodexAppServerRequestModelSelection,
-  resolveReasoningEffort,
 } from "./thread-model-selection.js";
 import { buildCodexUserInput } from "./user-input.js";
 
@@ -67,6 +72,7 @@ export function buildTurnStartParams(
     memoryCollaborationInstructions?: string;
     preserveNativeTurnSettings?: boolean;
     clearInheritedServiceTier?: boolean;
+    sessionStatusAvailable?: boolean;
   },
 ): CodexTurnStartParams {
   const modelSelection = options.preserveNativeTurnSettings
@@ -79,13 +85,29 @@ export function buildTurnStartParams(
         agentDir: params.agentDir,
         config: params.config,
       });
+  const collaborationMode = modelSelection
+    ? buildTurnCollaborationMode(params, {
+        model: modelSelection.model,
+        turnScopedDeveloperInstructions: options.turnScopedDeveloperInstructions,
+        skillsCollaborationInstructions: options.skillsCollaborationInstructions,
+        memoryCollaborationInstructions: options.memoryCollaborationInstructions,
+      })
+    : undefined;
   const useThreadPermissionProfile = options.appServer.networkProxy && !options.sandboxPolicy;
   const currentSenderContext =
     params.trigger === "user" ? buildCodexCurrentSenderContextValue(params) : undefined;
+  // Codex emits only changed values and cannot retract omitted fragments from model history.
+  // Always send configured-or-host context so warm threads see rollover and removed overrides.
+  let additionalContext = buildCodexTemporalAdditionalContext(params, {
+    sessionStatusAvailable: options.sessionStatusAvailable === true,
+  });
   // Untrusted context exposes authenticated attribution without promoting human-controlled labels.
-  let additionalContext: CodexTurnStartParams["additionalContext"] = currentSenderContext
-    ? { openclaw_current_sender: { kind: "untrusted", value: currentSenderContext } }
-    : undefined;
+  if (currentSenderContext) {
+    additionalContext = {
+      ...additionalContext,
+      openclaw_current_sender: { kind: "untrusted", value: currentSenderContext },
+    };
+  }
   if (params.permissionChange?.notice) {
     // Application context is a developer message in Codex 0.151.0 and also
     // reaches native-preserved threads without overriding their turn settings.
@@ -131,26 +153,28 @@ export function buildTurnStartParams(
       : options.clearInheritedServiceTier
         ? { serviceTier: null }
         : {}),
-    ...(modelSelection
+    ...(collaborationMode
       ? {
-          effort: resolveReasoningEffort(
-            params.thinkLevel,
-            modelSelection.model,
-            readCodexSupportedReasoningEfforts(params.model?.compat),
-          ),
+          effort: collaborationMode.settings.reasoning_effort,
+          collaborationMode,
         }
       : {}),
     ...(options.environmentSelection ? { environments: options.environmentSelection } : {}),
-    ...(modelSelection
-      ? {
-          collaborationMode: buildTurnCollaborationMode(params, {
-            model: modelSelection.model,
-            turnScopedDeveloperInstructions: options.turnScopedDeveloperInstructions,
-            skillsCollaborationInstructions: options.skillsCollaborationInstructions,
-            memoryCollaborationInstructions: options.memoryCollaborationInstructions,
-          }),
-        }
-      : {}),
+  };
+}
+
+export function buildCodexTemporalAdditionalContext(
+  params: Pick<EmbeddedRunAttemptParams, "config">,
+  options: { sessionStatusAvailable: boolean },
+): NonNullable<CodexTurnStartParams["additionalContext"]> {
+  return {
+    openclaw_temporal_context: {
+      kind: "application",
+      value: buildTemporalContextText({
+        configuredTimezone: params.config?.agents?.defaults?.userTimezone,
+        sessionStatusAvailable: options.sessionStatusAvailable,
+      }),
+    },
   };
 }
 
@@ -170,11 +194,11 @@ export function buildTurnCollaborationMode(
     mode: "default",
     settings: {
       model,
-      reasoning_effort: resolveReasoningEffort(
-        params.thinkLevel,
-        model,
-        readCodexSupportedReasoningEfforts(params.model?.compat),
-      ),
+      reasoning_effort: resolveCodexAppServerReasoningEffort({
+        thinkLevel: params.thinkLevel,
+        modelId: model,
+        supportedReasoningEfforts: readCodexSupportedReasoningEfforts(params.model?.compat),
+      }),
       developer_instructions: buildTurnScopedCollaborationInstructions(params, options),
     },
   };

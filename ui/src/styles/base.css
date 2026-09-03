@@ -713,12 +713,22 @@ body {
   letter-spacing: -0.01em;
   background: var(--bg);
   color: var(--text);
-  /* App chrome behaves like native controls: dragging across labels, tiles,
-     and navigation must not create accidental text selections. Text-entry
-     surfaces and document-like content opt back in below or in route CSS. */
-  user-select: none;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Keep page text and document links selectable, including anchors with button
+   roles; suppress accidental drag selections on controls and navigation. */
+button,
+select,
+summary,
+[role="button"]:not(a),
+[role="tab"],
+.btn,
+.settings-row--toggle,
+.sidebar,
+.settings-sidebar {
+  user-select: none;
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
@@ -1039,6 +1049,18 @@ wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
   }
 }
 
+/* Sweep a 200%-wide text-clipped gradient with matching end stops one full
+   period per cycle so the loop wraps seamlessly. Consumers set the gradient,
+   duration, and easing. */
+@keyframes text-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
 /* Skeleton loading primitives */
 .skeleton {
   position: relative;
@@ -1057,6 +1079,9 @@ wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
     transparent 75%
   );
   content: "";
+  /* Rest offscreen: with reduced motion the animation collapses to one instant
+     iteration, and without this the highlight band would settle over the block. */
+  transform: translateX(-100%);
   animation: shimmer var(--skeleton-duration, 1.5s) ease-in-out infinite;
   will-change: transform;
 }

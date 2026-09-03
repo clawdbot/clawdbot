@@ -1,4 +1,5 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { readSessionRuntimeOwnership } from "../agents/harness/session-runtime-ownership.js";
 import { normalizeStoredOverrideModel } from "../agents/model-selection.js";
 import {
   resolveSessionModelIdentityRef,
@@ -16,7 +17,6 @@ import type {
 } from "./session-utils-contracts.js";
 import {
   buildStoreChildSessionIndex,
-  getSingleRowChildSessionCandidates,
   resolveEstimatedSessionCostUsd,
   resolvePositiveNumber,
   resolveRuntimeChildSessionKeys,
@@ -39,7 +39,6 @@ export function buildSessionListRowMetadataContext(params: {
 
 export function buildSingleRowStoreChildSessionsByKey(params: {
   store: Record<string, SessionEntry>;
-  storePath: string;
   key: string;
   now: number;
 }): Map<string, string[]> {
@@ -47,10 +46,6 @@ export function buildSingleRowStoreChildSessionsByKey(params: {
     store: params.store,
     keys: [params.key],
     now: params.now,
-    candidates: getSingleRowChildSessionCandidates({
-      storePath: params.storePath,
-      store: params.store,
-    }),
     requireCurrentController: true,
   });
 }
@@ -59,9 +54,20 @@ export function resolveSessionSelectedModelRef(params: {
   cfg: OpenClawConfig;
   entry?: SessionEntry;
   agentId: string;
+  sessionKey?: string;
   rowContext?: SessionListRowContext;
   allowPluginNormalization?: boolean;
 }): ReturnType<typeof resolveSessionModelRef> {
+  // Ownership is session-specific; never reuse the ordinary override cache for native tuples.
+  const ownership = readSessionRuntimeOwnership({
+    config: params.cfg,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    sessionEntry: params.entry,
+  });
+  if (ownership?.modelRef) {
+    return ownership.modelRef;
+  }
   const override = normalizeStoredOverrideModel({
     providerOverride: params.entry?.providerOverride,
     modelOverride: params.entry?.modelOverride,

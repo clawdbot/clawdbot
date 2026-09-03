@@ -1,5 +1,4 @@
 // Implements trajectory export command packaging for the active session agent.
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { createExecTool } from "../../agents/bash-tools.js";
 import type { ExecToolDetails } from "../../agents/bash-tools.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -133,19 +132,13 @@ function buildTrajectoryExportApprovalRequest(
   request: TrajectoryExportExecRequest,
 ): ExecApprovalRequest {
   const now = Date.now();
-  const agentId =
-    params.agentId ??
-    resolveSessionAgentId({
-      sessionKey: params.sessionKey,
-      config: params.cfg,
-    });
   return {
     approvalKind: "exec",
     id: "trajectory-export-private-route",
     request: {
       command: request.command,
       commandArgv: request.argv,
-      agentId,
+      agentId: params.agentId,
       ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
       turnSourceChannel: params.command.channel,
       turnSourceTo: readCommandDeliveryTarget(params) ?? null,
@@ -164,12 +157,6 @@ async function requestTrajectoryExportApproval(
   options: { privateApprovalTarget?: PrivateCommandRouteTarget } = {},
 ): Promise<string> {
   const timeoutSec = params.cfg.tools?.exec?.timeoutSeconds;
-  const agentId =
-    params.agentId ??
-    resolveSessionAgentId({
-      sessionKey: params.sessionKey,
-      config: params.cfg,
-    });
   try {
     const execTool = deps.createExecTool({
       host: "gateway",
@@ -181,7 +168,7 @@ async function requestTrajectoryExportApproval(
       approvalFollowupMode: "agent",
       timeoutSec,
       cwd: params.workspaceDir,
-      agentId,
+      agentId: params.agentId,
       sessionKey: params.sessionKey,
       sessionId: params.sessionEntry?.sessionId,
       sessionStore: params.cfg.session?.store,
@@ -256,7 +243,7 @@ type TrajectoryExportCliRequest = {
   workspace: string;
   output?: string;
   store?: string;
-  agent?: string;
+  agent: string;
 };
 
 type TrajectoryExportExecRequest = {
@@ -275,15 +262,13 @@ function buildTrajectoryExportExecRequest(
   const request: TrajectoryExportCliRequest = {
     sessionKey: params.sessionKey,
     workspace: params.workspaceDir,
+    agent: params.agentId,
   };
   if (outputPath) {
     request.output = outputPath;
   }
   if (params.storePath && params.storePath !== "(multiple)") {
     request.store = params.storePath;
-  }
-  if (params.agentId) {
-    request.agent = params.agentId;
   }
   const encodedRequest = Buffer.from(JSON.stringify(request), "utf8").toString("base64url");
   if (encodedRequest.length > MAX_TRAJECTORY_EXPORT_ENCODED_REQUEST_CHARS) {
@@ -307,8 +292,6 @@ function formatTrajectoryExportRequestDetails(request: TrajectoryExportCliReques
   if (request.store) {
     lines.push(`Store: ${request.store}`);
   }
-  if (request.agent) {
-    lines.push(`Agent: ${request.agent}`);
-  }
+  lines.push(`Agent: ${request.agent}`);
   return lines.join("\n");
 }

@@ -253,6 +253,25 @@ describe("Feishu thread bindings", () => {
         conversationId: "oc_group_chat:topic:om_topic_root",
       }),
     ).toBeNull();
+
+    const restarted = createFeishuThreadBindingManager({ cfg: baseCfg, accountId: "default" });
+    const conversation = {
+      channel: "feishu",
+      accountId: "default",
+      conversationId: "oc_group_chat:topic:om_restarted",
+    };
+    const replacement = await getSessionBindingService().bind({
+      conversation,
+      targetSessionKey: "agent:codex:acp:replacement",
+      targetKind: "session",
+    });
+
+    manager.stop();
+
+    expect(createFeishuThreadBindingManager({ cfg: baseCfg, accountId: "default" })).toBe(
+      restarted,
+    );
+    expect(getSessionBindingService().resolveByConversation(conversation)).toEqual(replacement);
   });
 
   it.each(["refresh", "session", "kind"] as const)(

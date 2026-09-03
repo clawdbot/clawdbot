@@ -525,10 +525,11 @@ describe("OpenClaw performance workflow", () => {
 
     expect(baseline.if).toBeUndefined();
     expect(baseline.env?.CLAWGRIT_REPORTS_TOKEN).toBeUndefined();
+    expect(baseline.env?.GH_TOKEN).toBe("${{ github.token }}");
+    expect(run).toContain('remote = "https://github.com/openclaw/clawgrit-reports.git"');
     expect(run).toContain(
-      '"remote", "add", "origin", "https://github.com/openclaw/clawgrit-reports.git"',
+      'fetch(reports, "main", blobless=True, max_attempts=3, retry_failures=True)',
     );
-    expect(run).toContain('"fetch", "--filter=blob:none", "--depth=1", "origin", "main"');
     expect(run).toContain('"ls-tree", "--name-only", "FETCH_HEAD", "--", pointer');
     expect(run).toContain('"show", f"FETCH_HEAD:{pointer}"');
     expect(run).toContain('"sparse-checkout", "init", "--no-cone"');
@@ -761,7 +762,7 @@ describe("OpenClaw performance workflow", () => {
     );
   });
 
-  it("keeps app credentials out of artifact processing and scopes them to Git push", () => {
+  it("keeps app credentials out of artifact processing and scopes them to report Git operations", () => {
     const workflow = readWorkflow();
     const kovaJob = workflow.jobs?.kova;
     const artifact = findStep("Resolve Kova artifact", "publish");
@@ -813,10 +814,10 @@ describe("OpenClaw performance workflow", () => {
     expect(publish.if).toContain("steps.prepare.outputs.already_published != 'true'");
     expect(publish.run).not.toContain("${{ steps.kova.outputs.");
     expect(publish.run).toContain('os.environ.pop("CLAWGRIT_REPORTS_APP_TOKEN", "")');
-    expect(publish.run).toContain('"GIT_CONFIG_KEY_0": "core.hooksPath"');
-    expect(publish.run).toContain('"GIT_CONFIG_VALUE_0": "/dev/null"');
-    expect(publish.run).toContain('"GIT_CONFIG_KEY_1": "http.https://github.com/.extraheader"');
-    expect(publish.run).toContain('"GIT_CONFIG_VALUE_1": f"AUTHORIZATION: basic {auth_header}"');
+    expect(publish.run).toContain('local = ("-c", "core.hooksPath=/dev/null")');
+    expect(publish.run).toContain(
+      'git_auth_environment("https://github.com/openclaw/clawgrit-reports.git", token)',
+    );
     expect(publish.run).not.toContain("export GIT_CONFIG_");
     expect(readFileSync(WORKFLOW, "utf8")).not.toContain("https://x-access-token:");
   });

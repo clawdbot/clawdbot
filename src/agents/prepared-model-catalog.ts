@@ -31,6 +31,7 @@ import {
   prepareModelRuntimeSnapshot,
   PreparedModelRuntimeOwnerNotPublishedError,
   preparedModelRuntimeConfigsMatch,
+  refreshStalePreparedModelRuntimeCatalog,
   type PreparedModelRuntimeInput,
   type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.js";
@@ -52,8 +53,8 @@ export type LoadPreparedModelCatalogParams = {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   providerDiscoveryProviderIds?: readonly string[];
-  /** Rebuilds a completed full catalog instead of reusing this generation's cache. */
-  refreshFullCatalog?: boolean;
+  /** Refreshes auth-stale inventory; true also rebuilds a fresh full catalog on writable reads. */
+  refreshFullCatalog?: boolean | "stale";
   /** Scoped read-only loads may run live discovery for the scoped providers only. */
   scopedLiveProviderDiscovery?: boolean;
   allowGatewaySubagentBinding?: boolean;
@@ -69,15 +70,21 @@ type PreparedModelCatalogConfigPolicy = "exact" | "published";
 async function materializeRequestedModelCatalog(
   snapshot: PreparedModelRuntimeSnapshot,
   readOnly: boolean | undefined,
-  refreshFullCatalog: boolean | undefined,
+  refreshFullCatalog: LoadPreparedModelCatalogParams["refreshFullCatalog"],
 ): Promise<PreparedModelRuntimeSnapshot> {
   if (!snapshot.loadFullModelCatalog) {
     return snapshot;
   }
+  // Inventory reads repair auth-stale content without making turn-path reads start discovery.
+  const staleCatalog =
+    refreshFullCatalog === "stale" || refreshFullCatalog === true
+      ? await refreshStalePreparedModelRuntimeCatalog(snapshot)
+      : undefined;
   const modelCatalog =
-    readOnly === true
+    staleCatalog ??
+    (readOnly === true
       ? snapshot.readFullModelCatalog?.()
-      : await snapshot.loadFullModelCatalog({ refresh: refreshFullCatalog === true });
+      : await snapshot.loadFullModelCatalog({ refresh: refreshFullCatalog === true }));
   if (!modelCatalog) {
     return snapshot;
   }
@@ -319,7 +326,7 @@ async function loadScopedReadOnlyModelCatalog(
     try {
       const prepared = await prepareModelRuntimeSnapshot(candidate);
       if (!preparedModelRuntimeConfigsMatch(prepared.config, candidate.config)) {
-        throw new PreparedModelCatalogConfigReplacedError(candidate.agentDir);
+        continue;
       }
       if (isPreparedModelCatalogFull(prepared.modelCatalog)) {
         return prepared.modelCatalog;
@@ -391,7 +398,7 @@ export async function loadProviderScopedThinkingCatalog(params: {
     const entries = normalizeThinkingCatalogProviders(augmented.entries);
     return params.requiredInputRoute !== undefined && !entryResolved(entries) ? [] : entries;
   };
-  const publishedCatalog = getPreparedModelCatalogSnapshot(scopedParams);
+  const publishedCatalog = getAvailablePreparedModelCatalogSnapshot(scopedParams);
   if (publishedCatalog && entryResolved(publishedCatalog.entries)) {
     return await augmentHarnessCatalog(publishedCatalog);
   }

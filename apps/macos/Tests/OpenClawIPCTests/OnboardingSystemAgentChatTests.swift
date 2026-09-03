@@ -54,17 +54,35 @@ private actor SystemAgentMethodRecorder {
 private actor SystemAgentRequestGate {
     private var consumed = false
     private var released = false
+    private var finished = false
     private var continuation: CheckedContinuation<Void, Never>?
+    private var entryContinuation: CheckedContinuation<Bool, Never>?
 
     func waitIfFirst() async -> Bool {
         guard !self.consumed else { return false }
         self.consumed = true
+        self.entryContinuation?.resume(returning: true)
+        self.entryContinuation = nil
         if !self.released {
             await withCheckedContinuation { continuation in
                 self.continuation = continuation
             }
         }
         return true
+    }
+
+    func waitUntilStarted() async -> Bool {
+        if self.consumed { return true }
+        if self.finished { return false }
+        return await withCheckedContinuation { continuation in
+            self.entryContinuation = continuation
+        }
+    }
+
+    func finish() {
+        self.finished = true
+        self.entryContinuation?.resume(returning: self.consumed)
+        self.entryContinuation = nil
     }
 
     func release() {
@@ -827,15 +845,11 @@ struct OnboardingSystemAgentChatTests {
         chat.onReplyReceived = { replyCount += 1 }
         chat.onAgentHandoff = { _ in handoffCount += 1 }
 
-        let startTask = Task { await chat.startIfNeeded() }
-        var requestStarted = false
-        for _ in 0..<1000 {
-            if session.latestTask()?.snapshotSendCount() == 2 {
-                requestStarted = true
-                break
-            }
-            await Task.yield()
+        let startTask = Task {
+            await chat.startIfNeeded()
+            await requestGate.finish()
         }
+        let requestStarted = await requestGate.waitUntilStarted()
         try #require(requestStarted)
         await config.setToken("b")
         await requestGate.release()
@@ -866,15 +880,11 @@ struct OnboardingSystemAgentChatTests {
             sessionBox: WebSocketSessionBox(session: session))
         let chat = SystemAgentOnboardingChatModel(gateway: gateway)
 
-        let startTask = Task { await chat.startIfNeeded() }
-        var requestStarted = false
-        for _ in 0..<1000 {
-            if session.latestTask()?.snapshotSendCount() == 2 {
-                requestStarted = true
-                break
-            }
-            await Task.yield()
+        let startTask = Task {
+            await chat.startIfNeeded()
+            await requestGate.finish()
         }
+        let requestStarted = await requestGate.waitUntilStarted()
         try #require(requestStarted)
         startTask.cancel()
         await requestGate.release()

@@ -1,6 +1,6 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { FORCED_WORKER_ABANDONMENT_ERROR } from "./worker-environments/placement-force-abandon.js";
+import { FORCED_WORKER_ABANDONMENT_ERROR } from "./worker-environments/placement-record.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { recoverWorkerWorkspaceReconciliation } from "./worker-environments/workspace-reconcile.js";
 
@@ -20,28 +20,10 @@ export async function recoverGatewayWorkerPlacementWorkspaces(params: {
   for (const owner of orphanedJournals) {
     workerPlacementLog.warn(`discarded orphaned cloud workspace journal for ${owner.sessionId}`);
   }
-  const pendingBySession = new Map(
-    params.placements
-      .listPendingWorkspaceResults()
-      .map((pending) => [pending.sessionId, pending] as const),
-  );
   for (const owner of params.placements.listWorkspaceReconciliationOwners()) {
     try {
-      const placement = params.placements.get(owner.sessionId);
-      const pending = pendingBySession.get(owner.sessionId);
-      const ownsCurrentGeneration = placement?.generation === owner.placementGeneration;
-      const ownsDrainedPendingGeneration =
-        placement?.state === "draining" &&
-        placement.generation === owner.placementGeneration + 1 &&
-        pending?.environmentId === owner.environmentId &&
-        pending.ownerEpoch === owner.ownerEpoch &&
-        pending.placementGeneration === owner.placementGeneration;
-      if (
-        (placement?.state !== "active" && placement?.state !== "draining") ||
-        placement.environmentId !== owner.environmentId ||
-        placement.activeOwnerEpoch !== owner.ownerEpoch ||
-        (!ownsCurrentGeneration && !ownsDrainedPendingGeneration)
-      ) {
+      const placement = params.placements.getWorkspaceReconciliationPlacement(owner);
+      if (!placement) {
         throw new Error(`Cloud workspace journal has no matching owner: ${owner.sessionId}`);
       }
       const localPath = await params.resolveWorkspacePath({

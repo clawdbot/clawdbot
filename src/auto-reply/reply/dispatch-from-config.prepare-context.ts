@@ -19,7 +19,6 @@ import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
-import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding-metadata.js";
 import { toPluginConversationBinding } from "../../plugins/conversation-binding.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { resolveSilentReplyPolicyFromPolicies } from "../../shared/silent-reply-policy.js";
@@ -102,9 +101,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
         parentConversationId: pluginBindingConversation.parentConversationId,
       })
     : null;
-  const pluginOwnedBinding = isPluginOwnedSessionBindingRecord(pluginOwnedBindingRecord)
-    ? toPluginConversationBinding(pluginOwnedBindingRecord)
-    : null;
+  const pluginOwnedBinding = toPluginConversationBinding(pluginOwnedBindingRecord);
   const pluginBindingSessionKey = normalizeOptionalString(
     pluginOwnedBindingRecord?.targetSessionKey,
   );

@@ -62,13 +62,16 @@ vi.mock("../agent-model-discovery.js", () => ({
   discoverModels: mocks.discoverModels,
 }));
 
+vi.mock("../../plugins/provider-external-auth.js", () => ({
+  resolveExternalAuthProfilesWithPlugins: () => [],
+}));
+
 vi.mock("../../plugins/provider-runtime.js", () => ({
   applyProviderResolvedTransportWithPlugin: mocks.applyProviderResolvedTransportWithPlugin,
   buildProviderUnknownModelHintWithPlugin: mocks.buildProviderUnknownModelHintWithPlugin,
   normalizeProviderResolvedModelWithPlugin: mocks.normalizeProviderResolvedModelWithPlugin,
   normalizeProviderTransportWithPlugin: mocks.normalizeProviderTransportWithPlugin,
   prepareProviderDynamicModel: mocks.prepareProviderDynamicModel,
-  resolveExternalAuthProfilesWithPlugins: () => [],
   runProviderDynamicModel: mocks.runProviderDynamicModel,
   shouldPreferProviderRuntimeResolvedModel: mocks.shouldPreferProviderRuntimeResolvedModel,
 }));

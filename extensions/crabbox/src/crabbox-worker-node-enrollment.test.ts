@@ -7,13 +7,14 @@ import https from "node:https";
 import path from "node:path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import * as tar from "tar";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   createCrabboxNodeEnrollmentSetup,
   createCrabboxNodeRuntimeSetup,
   type CrabboxWorkerNodeEnrollment,
 } from "./crabbox-worker-node-enrollment.js";
 import { createNodeBootstrapFixture } from "./crabbox-worker-node-enrollment.test-support.js";
+import { SCRUB_WORKER_STATE } from "./crabbox-worker-warm-image-scrub.js";
 
 const cleanups: Array<() => Promise<void> | void> = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanupDirectories) => {
@@ -170,6 +171,8 @@ async function enroll(
   nodeBootstrap: CrabboxWorkerNodeEnrollment["nodeBootstrap"],
   desktop?: DesktopFixture,
   runtimeOnly = false,
+  workerBundle?: CrabboxWorkerNodeEnrollment["nodeBootstrap"] & { packageRelativePath: string },
+  options?: { credentials?: string; timeoutMs?: number },
 ) {
   const bin = path.join(home, "bin");
   const proc = path.join(home, "proc");
@@ -200,7 +203,7 @@ echo 123
     );
   }
   const setup = runtimeOnly
-    ? createCrabboxNodeRuntimeSetup({ leaseId, nodeBootstrap })
+    ? createCrabboxNodeRuntimeSetup({ leaseId, nodeBootstrap, workerBundle: workerBundle! })
     : createCrabboxNodeEnrollmentSetup({
         leaseId,
         desktop: desktop?.enabled,
@@ -228,11 +231,20 @@ echo 123
           }
         : {}),
       ...setup.forwardedEnv,
+      ...(options?.credentials ? { CRABBOX_WORKER_BOOTSTRAP_TOKEN: options.credentials } : {}),
       // Exercise the installer overriding an inherited package-manager default.
       NPM_CONFIG_IGNORE_SCRIPTS: "true",
     },
+    detached: true,
     stdio: "pipe",
   });
+  const timeout = options?.timeoutMs
+    ? setTimeout(() => {
+        if (child.pid) {
+          process.kill(-child.pid, "SIGKILL");
+        }
+      }, options.timeoutMs)
+    : undefined;
   const output: Buffer[] = [];
   child.stdout.on("data", (chunk: Buffer) => output.push(chunk));
   child.stderr.on("data", (chunk: Buffer) => output.push(chunk));
@@ -243,12 +255,29 @@ echo 123
       .replaceAll("/proc/$process_pid/environ", `${proc}/$process_pid/environ`),
   );
   const [code] = await once(child, "close");
+  clearTimeout(timeout);
   return { code, output: Buffer.concat(output).toString("utf8") };
 }
 
 async function readLaunch(stateDir: string) {
   const target = path.join(stateDir, "launch.json");
-  await vi.waitFor(() => expect(fs.existsSync(target)).toBe(true));
+  // Child startup follows the test deadline, not waitFor's shorter polling deadline.
+  const watcher = fs.watch(stateDir, { persistent: false });
+  cleanups.push(() => watcher.close());
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const inspect = () => {
+        if (fs.existsSync(target)) {
+          resolve();
+        }
+      };
+      watcher.on("change", inspect);
+      watcher.once("error", reject);
+      inspect();
+    });
+  } finally {
+    watcher.close();
+  }
   return JSON.parse(fs.readFileSync(target, "utf8")) as {
     build: string;
     cli: string;
@@ -261,10 +290,64 @@ async function readLaunch(stateDir: string) {
 }
 
 describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
+  it("rejects malformed forwarded credentials without disclosing their value", async () => {
+    const { home } = testHome();
+    const { nodeBootstrap, authorizations } = await serveArtifact(
+      await packageFixture("bad-credentials"),
+    );
+    const credentials = "synthetic-worker-secret-not-json";
+    const result = await enroll(home, nodeBootstrap, undefined, false, undefined, { credentials });
+    expect(result.code).toBe(1);
+    expect(result.output).toContain("credential format is invalid");
+    expect(result.output).not.toContain("synthetic");
+    expect(authorizations).toEqual([]);
+  });
+
+  it("rejects a FIFO prepared archive without a blocking read or another download", async () => {
+    const { home } = testHome();
+    const { nodeBootstrap } = await serveArtifact(await packageFixture("fifo"));
+    const worker = await serveArtifact(Buffer.from("synthetic worker archive"));
+    const workerBundle = {
+      ...worker.nodeBootstrap,
+      packageRelativePath: `worker-artifacts/${worker.nodeBootstrap.sha256}.tgz`,
+    };
+    await expect(enroll(home, nodeBootstrap, undefined, true, workerBundle)).resolves.toEqual({
+      code: 0,
+      output: "",
+    });
+    const archivePath = path.join(
+      home,
+      ".openclaw-worker",
+      "node-runtimes",
+      nodeBootstrap.sha256,
+      "node_modules",
+      "openclaw",
+      workerBundle.packageRelativePath,
+    );
+    fs.unlinkSync(archivePath);
+    execFileSync("mkfifo", [archivePath]);
+
+    const result = await enroll(home, nodeBootstrap, undefined, true, workerBundle, {
+      timeoutMs: 3_000,
+    });
+
+    expect(result).toMatchObject({
+      code: 1,
+      output: expect.stringContaining("archive path or length is unsafe"),
+    });
+    expect(worker.authorizations).toHaveLength(1);
+  }, 30_000);
+
   it("prepares an exact runtime without node identity, then enrolls and reuses its warm artifact", async () => {
     const { home, stateDir, stop } = testHome();
     const { nodeBootstrap, authorizations } = await serveArtifact(await packageFixture("first"));
-    await expect(enroll(home, nodeBootstrap, undefined, true)).resolves.toEqual({
+    const workerBytes = Buffer.from("synthetic standalone worker archive");
+    const worker = await serveArtifact(workerBytes);
+    const workerBundle = {
+      ...worker.nodeBootstrap,
+      packageRelativePath: `worker-artifacts/${worker.nodeBootstrap.sha256}.tgz`,
+    };
+    await expect(enroll(home, nodeBootstrap, undefined, true, workerBundle)).resolves.toEqual({
       code: 0,
       output: "",
     });
@@ -284,6 +367,30 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
       JSON.parse(fs.readFileSync(path.join(preparedPackage, "installed.json"), "utf8")),
     ).toEqual({ scriptsRan: true });
     expect(authorizations).toEqual([`Bearer ${nodeBootstrap.token}`]);
+    expect(fs.readFileSync(path.join(preparedPackage, workerBundle.packageRelativePath))).toEqual(
+      workerBytes,
+    );
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(path.join(stateDir, "setup-code"), setupCode);
+    fs.mkdirSync(path.join(home, ".crabbox", "env"), { recursive: true });
+    fs.writeFileSync(path.join(home, ".crabbox", "env", "forwarded"), workerBundle.token);
+    execFileSync("sh", ["-c", SCRUB_WORKER_STATE], {
+      cwd: home,
+      env: { HOME: home, PATH: process.env.PATH },
+    });
+    expect(fs.existsSync(stateDir)).toBe(false);
+    expect(fs.existsSync(path.join(home, ".crabbox", "env"))).toBe(false);
+    expect(fs.readdirSync(path.join(preparedPackage, "worker-artifacts"))).toEqual([
+      `${workerBundle.sha256}.tgz`,
+    ]);
+    expect(fs.readFileSync(path.join(preparedPackage, workerBundle.packageRelativePath))).toEqual(
+      workerBytes,
+    );
+    await expect(enroll(home, nodeBootstrap, undefined, true, workerBundle)).resolves.toEqual({
+      code: 0,
+      output: "",
+    });
+    expect(worker.authorizations).toEqual([`Bearer ${workerBundle.token}`]);
     await expect(enroll(home, nodeBootstrap)).resolves.toEqual({ code: 0, output: "" });
     const launch = await readLaunch(stateDir);
     expect(launch).toMatchObject({

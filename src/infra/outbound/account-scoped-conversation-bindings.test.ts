@@ -96,6 +96,8 @@ describe("account-scoped conversation binding expiry", () => {
     closeOpenClawStateDatabaseForTest();
 
     const restarted = createManager();
+    manager.stop();
+    expect(createManager()).toBe(restarted);
     expect(restarted.getByConversationId(binding.conversationId)).toEqual(binding);
     expect(getSessionBindingService().resolveByConversation(conversation)).toMatchObject({
       bindingId: "ttl-owner:chat:durable-owner",

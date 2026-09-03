@@ -1,3 +1,5 @@
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearTaskActivity } from "./task-registry-activity.js";
@@ -7,6 +9,7 @@ import { cloneTaskRecord, normalizeTaskTimestamps } from "./task-registry-record
 import {
   TASK_REGISTRY_CONTROL_RUNTIME_OVERRIDE_KEY,
   TASK_REGISTRY_DELIVERY_RUNTIME_OVERRIDE_KEY,
+  bumpTaskRegistryRevision,
   clearTaskRegistryMemory,
   compareTasksNewestFirst,
   controlRuntimeLoader,
@@ -20,6 +23,7 @@ import {
   taskRegistryLog,
   persistTaskRegistry,
   pickPreferredRunIdTask,
+  readTaskRegistryRevision,
   rebuildRunIdIndex,
   resetTaskRegistryListenerState,
   resetTaskRegistryRestoreState,
@@ -90,42 +94,151 @@ function taskUpdatedAt(task: TaskRecord): number {
   return task.lastEventAt ?? task.endedAt ?? task.startedAt ?? task.createdAt;
 }
 
-export function listTaskRecordPage(params: {
+function compareTaskPageOrder(
+  left: TaskRecord,
+  right: TaskRecord,
+  sortBy: "updatedAt" | "endedAt",
+): number {
+  const leftAt = sortBy === "endedAt" ? (left.endedAt ?? -1) : taskUpdatedAt(left);
+  const rightAt = sortBy === "endedAt" ? (right.endedAt ?? -1) : taskUpdatedAt(right);
+  if (leftAt !== rightAt) {
+    return rightAt - leftAt;
+  }
+  return left.taskId < right.taskId ? -1 : left.taskId > right.taskId ? 1 : 0;
+}
+
+function siftWorstTaskDown(
+  heap: TaskRecord[],
+  startIndex: number,
+  compare: (left: TaskRecord, right: TaskRecord) => number,
+): void {
+  let index = startIndex;
+  while (true) {
+    const leftIndex = index * 2 + 1;
+    if (leftIndex >= heap.length) {
+      return;
+    }
+    const left = heap[leftIndex];
+    const current = heap[index];
+    if (!left || !current) {
+      return;
+    }
+    const rightIndex = leftIndex + 1;
+    let worstIndex = leftIndex;
+    const right = heap[rightIndex];
+    if (right && compare(right, left) > 0) {
+      worstIndex = rightIndex;
+    }
+    const worst = heap[worstIndex];
+    if (!worst || compare(worst, current) <= 0) {
+      return;
+    }
+    heap[index] = worst;
+    heap[worstIndex] = current;
+    index = worstIndex;
+  }
+}
+
+function heapifyWorstTaskFirst(
+  heap: TaskRecord[],
+  compare: (left: TaskRecord, right: TaskRecord) => number,
+): void {
+  for (let index = Math.floor(heap.length / 2) - 1; index >= 0; index -= 1) {
+    siftWorstTaskDown(heap, index, compare);
+  }
+}
+
+const TASK_PAGE_MAX_ATTEMPTS = 3;
+
+export async function listTaskRecordPage(params: {
   offset: number;
   limit: number;
+  expectedRevision?: number;
   statuses?: readonly TaskStatus[];
   agentId?: string;
   sessionKey?: string;
   sessionAgentId?: string;
   cfg?: OpenClawConfig;
   filter?: (task: Readonly<TaskRecord>) => boolean;
-}): { tasks: TaskRecord[]; hasMore: boolean } {
+  sortBy?: "updatedAt" | "endedAt";
+}): Promise<
+  Result<
+    { tasks: TaskRecord[]; hasMore: boolean; revision: number },
+    "cursor_stale" | "registry_changed"
+  >
+> {
   ensureTaskRegistryReady();
   const statuses = params.statuses ? new Set(params.statuses) : null;
   const agentId = normalizeOptionalString(params.agentId);
   const sessionKey = normalizeOptionalString(params.sessionKey);
+  const compare = (left: TaskRecord, right: TaskRecord) =>
+    compareTaskPageOrder(left, right, params.sortBy ?? "updatedAt");
   // Filtering and ordering stay registry-owned so authoritative records never
   // cross the boundary; only the bounded selected page is defensively cloned.
-  const matching = [...tasks.values()]
-    .filter(
-      (task) =>
-        (!statuses || statuses.has(task.status)) &&
-        taskMatchesAgent(task, agentId, params.cfg) &&
-        taskMatchesRelatedSession(task, sessionKey, params.sessionAgentId, params.cfg) &&
-        (!params.filter || params.filter(task)),
-    )
-    .toSorted((left, right) => {
-      const updatedDiff = taskUpdatedAt(right) - taskUpdatedAt(left);
-      if (updatedDiff !== 0) {
-        return updatedDiff;
+  const windowSize = params.offset + params.limit;
+  for (let attempt = 0; attempt < TASK_PAGE_MAX_ATTEMPTS; attempt += 1) {
+    const revision = readTaskRegistryRevision();
+    if (params.expectedRevision !== undefined && params.expectedRevision !== revision) {
+      return err("cursor_stale");
+    }
+    const scanLimit = tasks.size;
+    const window: TaskRecord[] = [];
+    let matchingCount = 0;
+    let heapReady = false;
+    let scannedCount = 0;
+    for (const task of tasks.values()) {
+      if (scannedCount >= scanLimit) {
+        break;
       }
-      return left.taskId < right.taskId ? -1 : left.taskId > right.taskId ? 1 : 0;
+      scannedCount += 1;
+      // Yield large scans in small deterministic slices so task history cannot
+      // monopolize the Gateway event loop while other requests are waiting.
+      if (scannedCount % 32 === 0) {
+        await yieldToEventLoop();
+      }
+      if (
+        (statuses && !statuses.has(task.status)) ||
+        !taskMatchesAgent(task, agentId, params.cfg) ||
+        !taskMatchesRelatedSession(task, sessionKey, params.sessionAgentId, params.cfg) ||
+        (params.filter && !params.filter(task))
+      ) {
+        continue;
+      }
+      matchingCount += 1;
+      if (windowSize <= 0) {
+        continue;
+      }
+      if (window.length < windowSize) {
+        window.push(task);
+        continue;
+      }
+      if (!heapReady) {
+        heapifyWorstTaskFirst(window, compare);
+        heapReady = true;
+      }
+      const cutoff = window[0];
+      if (cutoff && compare(task, cutoff) < 0) {
+        window[0] = task;
+        siftWorstTaskDown(window, 0, compare);
+      }
+    }
+    if (revision !== readTaskRegistryRevision()) {
+      if (params.expectedRevision !== undefined) {
+        return err("cursor_stale");
+      }
+      continue;
+    }
+    if (params.offset >= matchingCount) {
+      return ok({ tasks: [], hasMore: false, revision });
+    }
+    const selected = window.toSorted(compare).slice(params.offset);
+    return ok({
+      tasks: selected.map((task) => cloneTaskRecord(task)),
+      hasMore: params.offset + selected.length < matchingCount,
+      revision,
     });
-  const selected = matching.slice(params.offset, params.offset + params.limit);
-  return {
-    tasks: selected.map((task) => cloneTaskRecord(task)),
-    hasMore: params.offset + selected.length < matching.length,
-  };
+  }
+  return err("registry_changed");
 }
 
 export function listTaskRecords(filter?: (task: Readonly<TaskRecord>) => boolean): TaskRecord[] {
@@ -139,6 +252,7 @@ export function listTaskRecords(filter?: (task: Readonly<TaskRecord>) => boolean
 
 export function hasActiveTaskForChildSessionKey(params: {
   sessionKey: string;
+  agentId?: string;
   excludeTaskId?: string;
 }): boolean {
   ensureTaskRegistryReady();
@@ -158,7 +272,9 @@ export function hasActiveTaskForChildSessionKey(params: {
     if (
       task &&
       isActiveTaskStatus(task.status) &&
-      normalizeOptionalString(task.childSessionKey) === sessionKey
+      normalizeOptionalString(task.childSessionKey) === sessionKey &&
+      (!params.agentId ||
+        resolveTaskSessionAgentId(task.childSessionKey, task.agentId) === params.agentId)
     ) {
       return true;
     }
@@ -197,15 +313,6 @@ function listTasksFromIndex(index: Map<string, Set<string>>, key: string): TaskR
     )
     .toSorted(compareTasksNewestFirst)
     .map(({ insertionIndex: _insertionIndex, ...task }) => task);
-}
-
-export function listTasksForSessionKey(sessionKey: string): TaskRecord[] {
-  ensureTaskRegistryReady();
-  const key = normalizeOptionalString(sessionKey);
-  if (!key) {
-    return [];
-  }
-  return listTasksFromIndex(taskIdsByRelatedSessionKey, key);
 }
 
 export function listTasksForAgentId(agentId: string): TaskRecord[] {
@@ -275,13 +382,18 @@ function findLatestTaskForRelatedSessionKey(sessionKey: string): TaskRecord | un
   return task ? cloneTaskRecord(task) : undefined;
 }
 
-export function listTasksForRelatedSessionKey(sessionKey: string): TaskRecord[] {
+export function listTasksForRelatedSessionKey(
+  sessionKey: string,
+  sessionAgentId?: string,
+): TaskRecord[] {
   ensureTaskRegistryReady();
   const key = normalizeOptionalString(sessionKey);
   if (!key) {
     return [];
   }
-  return listTasksFromIndex(taskIdsByRelatedSessionKey, key);
+  return listTasksFromIndex(taskIdsByRelatedSessionKey, key).filter((task) =>
+    taskMatchesRelatedSession(task, key, sessionAgentId),
+  );
 }
 
 export function resolveTaskForLookupToken(token: string): TaskRecord | undefined {
@@ -312,6 +424,7 @@ export function deleteTaskRecordById(taskId: string): boolean {
   deleteRelatedSessionKeyIndex(taskId, current);
   clearTaskActivity(taskId);
   tasks.delete(taskId);
+  bumpTaskRegistryRevision();
   taskDeliveryStates.delete(taskId);
   rebuildRunIdIndex();
   emitTaskRegistryObserverEvent(() => ({

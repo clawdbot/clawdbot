@@ -58,6 +58,7 @@ export function resolveSessionStoreLookup(
   ctx: FinalizedMsgContext,
   cfg: OpenClawConfig,
 ): {
+  agentId?: string;
   sessionKey?: string;
   storePath?: string;
   entry?: SessionEntry;
@@ -70,25 +71,20 @@ export function resolveSessionStoreLookup(
   }
   const agentId = resolveSessionAgentId({ sessionKey, config: cfg, fallbackAgentId: ctx.AgentId });
   const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
+  const target = { agentId, sessionKey, storePath };
   try {
     const entry = loadSessionStoreEntry({
-      agentId,
-      storePath,
-      sessionKey,
+      ...target,
       readConsistency: "latest",
       clone: false,
     });
     return {
-      sessionKey,
-      storePath,
+      ...target,
       entry,
       store: entry ? { [sessionKey]: entry } : undefined,
     };
   } catch {
-    return {
-      sessionKey,
-      storePath,
-    };
+    return target;
   }
 }
 

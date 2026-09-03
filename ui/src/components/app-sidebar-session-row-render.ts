@@ -72,6 +72,7 @@ export interface SessionListHost {
     | "retryChildSessions"
     | "sessionCatalogRefreshStatus"
     | "sessionMutationError"
+    | "visibleSessionLimits"
   >;
   readonly sessionsGrouping: SidebarSessionsGrouping;
   readonly collapsedSessionSections: ReadonlySet<string>;
@@ -111,6 +112,7 @@ export interface SessionListHost {
   isSessionChildrenFullyShown(sessionKey: string): boolean;
   startSessionDrag(session: SidebarRecentSession): void;
   finishSessionDrag(): void;
+  sidebarSessionHref(session: SidebarRecentSession): string;
   handleSessionRowClick(event: MouseEvent, session: SidebarRecentSession): void;
   toggleSessionChildren(session: SidebarRecentSession): void;
   toggleSessionPin(session: SidebarRecentSession): void;
@@ -245,7 +247,7 @@ export function renderRecentSession(params: {
       (event.currentTarget as HTMLElement).querySelector("[data-session-menu]"),
       (trigger, x, y) => host.sidebarMenus.openSessionMenu(session, x, y, trigger),
     );
-  const pinLabel = `${t(session.pinned ? "sessionsView.unpinSession" : "sessionsView.pinSession")}: ${label}`;
+  const pinLabel = t(session.pinned ? "sessionsView.unpinSession" : "sessionsView.pinSession");
   const menuTooltip = t("chat.sidebar.openSessionMenu");
   const menuLabel = `${menuTooltip}: ${label}`;
   const menuOpen =
@@ -344,7 +346,7 @@ export function renderRecentSession(params: {
       @mouseleave=${stopHoverMarqueeFromEvent}
     >
       <a
-        href=${withSidebarNavCollapseIntent(session.href)}
+        href=${withSidebarNavCollapseIntent(host.sidebarSessionHref(session))}
         class="sidebar-recent-session__link"
         draggable="false"
         aria-current=${session.visuallyActive ? "page" : nothing}

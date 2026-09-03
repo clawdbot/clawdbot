@@ -141,7 +141,7 @@ export function buildCliMemorySearchSessionKey(agentId: string): string {
     dmScope: "per-channel-peer",
   });
 }
-function resolveAgentIds(cfg: OpenClawConfig, agent?: string): string[] {
+export function resolveMemoryAgentIds(cfg: OpenClawConfig, agent?: string): string[] {
   const trimmed = agent?.trim();
   if (agent !== undefined && !trimmed) {
     throw new Error("--agent must not be blank");
@@ -210,7 +210,7 @@ export async function withMemoryCommand(params: {
   );
   emitMemorySecretResolveDiagnostics(diagnostics, { json: params.diagnosticsToStderr });
   const agentIds = params.allAgents
-    ? resolveAgentIds(cfg, params.agent)
+    ? resolveMemoryAgentIds(cfg, params.agent)
     : [resolveMemoryAgent(cfg, params.agent)];
   for (const agentId of agentIds) {
     await withMemoryManagerForAgent({

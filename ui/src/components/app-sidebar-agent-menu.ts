@@ -173,7 +173,7 @@ type AgentMenuAgent = {
 };
 
 type SidebarAgentMenuParams = {
-  position: { x: number; top: number } | null;
+  position: { x: number; top: number };
   basePath: string;
   activeId: string;
   activeName: string;
@@ -194,7 +194,7 @@ type SidebarAgentMenuParams = {
 };
 
 type SidebarIdentityMenuParams = {
-  position: { x: number; bottom: number; width: number } | null;
+  position: { x: number; bottom: number; width: number };
   canPairDevice: boolean;
   basePath: string;
   gatewayVersion: string | null;
@@ -297,14 +297,12 @@ function renderIdentityMenuHelpSubmenu() {
 
 export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
   const position = params.position;
-  if (!position) {
-    return nothing;
-  }
   const { activeId, activeName, agents } = params;
   const rows = sidebarAgentMenuRows(params);
   return html`
     <wa-dropdown
       class="sidebar-customize-menu sidebar-agent-menu"
+      data-chat-autotype-exempt
       .open=${true}
       placement="bottom-start"
       .distance=${0}
@@ -416,10 +414,13 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
 
 export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
   const position = params.position;
-  if (!position) {
-    return nothing;
-  }
-  const profileName = params.profileViewer?.name ?? params.profileViewer?.email;
+  const profileName = params.profileViewer?.name ?? params.profileViewer?.email ?? t("nav.owner");
+  const avatarUser = {
+    id: "owner",
+    watchedSessions: [],
+    ...params.profileViewer,
+    name: profileName,
+  };
   const profileEmail =
     params.profileViewer?.email && params.profileViewer.email !== profileName
       ? params.profileViewer.email
@@ -488,28 +489,23 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
         aria-label=${t("profilePage.identity.menuLabel")}
         style="position: fixed; left: ${position.x}px; bottom: ${position.bottom}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
       ></button>
-      ${profileName
-        ? html`<wa-dropdown-item
-              class="sidebar-customize-menu__item sidebar-identity-menu__header"
-              value="command:profile"
-            >
-              <span slot="icon" class="sidebar-identity-menu__avatar" aria-hidden="true">
-                <openclaw-viewer-avatar
-                  .user=${params.profileViewer}
-                  variant="footer"
-                ></openclaw-viewer-avatar>
-              </span>
-              <span class="sidebar-identity-menu__identity">
-                <span class="sidebar-identity-menu__name" title=${profileName}>${profileName}</span>
-                ${profileEmail
-                  ? html`<span class="sidebar-identity-menu__email" title=${profileEmail}
-                      >${profileEmail}</span
-                    >`
-                  : nothing}
-              </span>
-            </wa-dropdown-item>
-            <div class="sidebar-customize-menu__separator" role="separator"></div>`
-        : nothing}
+      <wa-dropdown-item
+        class="sidebar-customize-menu__item sidebar-identity-menu__header"
+        value="command:profile"
+      >
+        <span slot="icon" class="sidebar-identity-menu__avatar" aria-hidden="true">
+          <openclaw-viewer-avatar .user=${avatarUser} variant="footer"></openclaw-viewer-avatar>
+        </span>
+        <span class="sidebar-identity-menu__identity">
+          <span class="sidebar-identity-menu__name" title=${profileName}>${profileName}</span>
+          ${profileEmail
+            ? html`<span class="sidebar-identity-menu__email" title=${profileEmail}
+                >${profileEmail}</span
+              >`
+            : nothing}
+        </span>
+      </wa-dropdown-item>
+      <div class="sidebar-customize-menu__separator" role="separator"></div>
       <wa-dropdown-item class="sidebar-customize-menu__item" value="command:settings">
         <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.settings}</span>
         <span class="sidebar-customize-menu__text">${t("nav.settings")}</span>

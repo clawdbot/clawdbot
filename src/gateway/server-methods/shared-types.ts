@@ -32,13 +32,16 @@ import type { GatewayConfigRevisionProjector } from "../config-revision-token.js
 import type { ScopeUpgradeCoordinator } from "../device-scope-upgrade.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
 import type { HealthSummary } from "../health/types.js";
+import type { MentionInbox } from "../mention-inbox.types.js";
 import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
 import type { NodeRegistry } from "../node-registry.js";
+import type { PlacementStandingGrantRuntime } from "../operator-approval-placement-grants.js";
 import type { GatewayOperatorRoleActor } from "../operator-role-actor.js";
 import type { GatewayPortalService } from "../portals/portal-service.js";
 import type { QuestionManager } from "../question-manager.js";
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "../server-broadcast-types.js";
 import type {
+  ChannelAccountStartOutcome,
   ChannelRuntimeSnapshot,
   StartChannelOptions,
 } from "../server-channel-runtime.types.js";
@@ -108,7 +111,7 @@ type SystemAgentHistoryTurn = {
   text: string;
 };
 
-type GatewaySystemAgentSession = {
+export type GatewaySystemAgentSession = {
   engine: {
     handle: (
       message: string,
@@ -139,6 +142,7 @@ type GatewaySystemAgentSession = {
       question?: SystemAgentChatQuestion;
       step?: import("../../wizard/session.js").WizardStep;
     };
+    noteAssistantMessage: (text: string) => void;
     seedHistory: (turns: readonly SystemAgentHistoryTurn[]) => void;
     historyLength: () => number;
     historySince: (index: number) => SystemAgentHistoryTurn[];
@@ -146,7 +150,13 @@ type GatewaySystemAgentSession = {
     resolveOperatorApproval: (
       decision: "allow-once" | "allow-always" | "deny" | null,
       proposalHash: string,
-    ) => Promise<unknown>;
+      beforePersistentApply?: () => void,
+      terminalStatus?: "expired" | "cancelled",
+    ) => Promise<{
+      text: string;
+      action: "none" | "exit" | "open-tui" | "open-setup";
+      applied?: boolean;
+    } | null>;
     dispose: () => Promise<void>;
   };
   welcome: string;
@@ -155,7 +165,15 @@ type GatewaySystemAgentSession = {
   welcomeAuditSequence?: number;
   lastUsedAt: number;
   ownerKey: string;
-  pendingApproval?: { id: string; proposalHash: string };
+  pendingApproval?: {
+    id: string;
+    proposalHash: string;
+    completion: Promise<
+      NonNullable<
+        Awaited<ReturnType<GatewaySystemAgentSession["engine"]["resolveOperatorApproval"]>>
+      >
+    >;
+  };
 };
 
 /** Kernel-owned services and state that can be constructed without binding sockets. */
@@ -176,6 +194,8 @@ type GatewayKernelContext = {
   gatewayTlsFingerprint?: string;
   sessionCompanion?: import("../session-companion.js").SessionCompanionService;
   sessionObserver?: SessionObserverService;
+  /** Temporary profile-owned mentions for this exact Gateway lifetime. */
+  mentionInbox?: MentionInbox;
   resolveTerminalLaunchPolicy: (agentId?: string) => TerminalLaunchResolution;
   isTerminalEnabled: () => boolean;
   execApprovalManager?: ExecApprovalManager;
@@ -184,6 +204,7 @@ type GatewayKernelContext = {
   /** Exact authority cancels bound approvals; legacy run ids cancel only unbound exec requests. */
   cancelRunBoundApprovals?: (target: string | AgentRunDelegatedAuthority) => number;
   pluginApprovalManager?: ExecApprovalManager<PluginApprovalRequestPayload>;
+  placementStandingGrants?: PlacementStandingGrantRuntime;
   systemAgentApprovalManager?: ExecApprovalManager<SystemAgentApprovalRequestPayload>;
   forwardPluginApprovalRequest?: (request: PluginApprovalRequest) => Promise<boolean>;
   approvalWebPushDelivery?: {
@@ -357,7 +378,7 @@ type GatewayResidentBridgeContext = {
     channel: import("../../channels/plugins/types.public.js").ChannelId,
     accountId?: string,
     opts?: StartChannelOptions,
-  ) => Promise<void>;
+  ) => Promise<ReadonlyMap<string, ChannelAccountStartOutcome>>;
   stopChannel: (
     channel: import("../../channels/plugins/types.public.js").ChannelId,
     accountId?: string,
@@ -378,6 +399,8 @@ export type GatewayContextResolver = () => GatewayRequestContext | undefined;
 export type GatewayRequestContext = GatewayKernelContext &
   GatewayTransportContext &
   GatewayResidentBridgeContext & {
+    /** Local commands can dispatch methods without owning a Gateway server. */
+    localEmbedded?: true;
     /** Live instance routing only; never authorization or wire state. */
     resolveGatewayContext?: GatewayContextResolver;
   };
@@ -398,8 +421,14 @@ export type GatewayRequestOptions = {
 
 /** Commit-time guard captured by the pre-dispatch session participation check. */
 export type SessionMutationAuthorization = {
+  talkSessionTarget?: import("../talk-session-target.types.js").PreparedTalkSessionTarget;
   assertCurrent: () => void;
-  assertTargetCurrent: (target: { sessionKey: string; agentId?: string }) => void;
+  assertTargetCurrent: (target: {
+    sessionKey: string;
+    agentId?: string;
+    /** Internal ensure result: may materialize a previously id-less Talk target, never replace it. */
+    ensuredSessionId?: string;
+  }) => void;
 };
 
 /** Normalized method invocation options passed to registered handlers. */

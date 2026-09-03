@@ -15,6 +15,7 @@ import {
   sanitizeAssistantVisibleText,
   stripMarkdown,
 } from "openclaw/plugin-sdk/text-chunking";
+import { assertSmsCredentialOwnerAvailable } from "./credential-availability.js";
 import { recordInitialSmsDeliveryResult } from "./delivery-observations.js";
 import { getSmsRuntime } from "./runtime.js";
 import { sendSmsViaTwilio, TWILIO_MESSAGE_BODY_MAX_LENGTH } from "./twilio.js";
@@ -239,6 +240,7 @@ export async function prepareSmsMediaAttempt(params: {
   let hostedMedia: Pick<PreparedSmsMediaAttempt, "hostedMediaUrl" | "cleanupHostedMedia">;
   try {
     const { prepareHostedSmsMedia } = await import("./media.js");
+    assertSmsCredentialOwnerAvailable(params.account);
     const prepared = await prepareHostedSmsMedia({
       account: params.account,
       mediaUrl: params.mediaUrl,

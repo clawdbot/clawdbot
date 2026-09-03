@@ -228,6 +228,15 @@ function selectedChildren(plan) {
   return plan.children.filter((child) => child.selected);
 }
 
+function hasExactChildRunIdentity(child) {
+  return (
+    typeof child.runId === "string" &&
+    /^[1-9][0-9]*$/u.test(child.runId) &&
+    Number.isSafeInteger(child.runAttempt) &&
+    child.runAttempt > 0
+  );
+}
+
 function assertChildRunIdentity(child, run, repository = DEFAULT_REPOSITORY) {
   return validateReleaseChildRunProvenance(run, {
     ...child,
@@ -290,6 +299,29 @@ export async function preflightContinuation(
     throw new Error("source full release parent identity changed");
   }
   const parentJobs = await client.getParentJobs(source.sourceRunId);
+  if (
+    parentJobs.some(
+      (job) =>
+        Number(job.run_attempt) === source.sourceRunAttempt &&
+        job.conclusion !== "skipped" &&
+        /^(?:Prepare release npm artifacts|Prepare release Docker artifacts) \/ /u.test(
+          job.name ?? "",
+        ),
+    )
+  ) {
+    throw new Error(
+      "parent-owned publication artifacts do not survive parent reruns; start a fresh all-group FRV",
+    );
+  }
+  const missingChildren = selectedChildren(plan)
+    .filter((child) => !hasExactChildRunIdentity(child))
+    .map((child) => child.key)
+    .toSorted();
+  if (missingChildren.length > 0) {
+    throw new Error(
+      `selected FRV children did not record exact run IDs and attempts: ${missingChildren.join(", ")}; start a fresh all-group FRV`,
+    );
+  }
   const resolveJobs = parentJobs.filter(
     (job) =>
       job.name === "Resolve target ref" &&
@@ -321,6 +353,7 @@ export async function preflightContinuation(
     validateReleaseChildDispatchBinding({
       child,
       log: parentLog,
+      coveragePolicy: plan.coveragePolicy,
       plannedRunAttempt: child.runAttempt,
       repository,
       targetSha: plan.targetSha,
@@ -335,6 +368,19 @@ export async function preflightContinuation(
 export async function inspectContinuation(plan, client) {
   const children = await Promise.all(
     selectedChildren(plan).map(async (child) => {
+      if (!hasExactChildRunIdentity(child)) {
+        return {
+          compositeJobsSha256: "",
+          conclusion: "",
+          effectiveRunAttempt: null,
+          key: child.key,
+          passed: false,
+          plannedRunAttempt: child.runAttempt ?? null,
+          runId: String(child.runId ?? ""),
+          status: "missing",
+          url: String(child.url ?? ""),
+        };
+      }
       const run = await client.getRun(child.runId);
       assertChildRunIdentity(child, run, client.repository ?? DEFAULT_REPOSITORY);
       const effectiveRunAttempt = positiveInteger(run.run_attempt, `${child.key} run attempt`);
@@ -405,6 +451,7 @@ export async function inspectContinuation(plan, client) {
     children,
     failed: children.filter((child) => child.status === "failed"),
     active: children.filter((child) => child.status === "active"),
+    missing: children.filter((child) => child.status === "missing"),
     passed: children.filter((child) => child.status === "passed"),
   };
 }
@@ -413,7 +460,8 @@ export function createClient(repository, dependencies = {}) {
   const apiJson = dependencies.apiJson ?? ((path) => ghJson(repository, path));
   const apiText =
     dependencies.apiText ??
-    ((path, jq) => readFreshGhApi(repository, path, jq ? ["--paginate", "--jq", jq] : []));
+    ((path, jq, extraArgs = []) =>
+      readFreshGhApi(repository, path, [...(jq ? ["--paginate", "--jq", jq] : []), ...extraArgs]));
   const mutate = dependencies.mutate ?? ((args) => execGh(args));
   const rerun = (runId, action) =>
     mutate(["api", "-X", "POST", `repos/${repository}/actions/runs/${runId}/${action}`]);
@@ -478,7 +526,9 @@ export function createClient(repository, dependencies = {}) {
         : [];
     },
     getJobLog(jobId) {
-      return apiText(`actions/jobs/${jobId}/logs`);
+      // Octopool's gh shim refuses log bodies with terminal escape sequences even off a TTY;
+      // real gh ignores the flag off-TTY, so the controller works with either binary.
+      return apiText(`actions/jobs/${jobId}/logs`, undefined, ["--allow-escape-sequences"]);
     },
     rerunFailed: (runId) => rerun(runId, "rerun-failed-jobs"),
     rerunParent: (runId) => rerun(runId, "rerun"),

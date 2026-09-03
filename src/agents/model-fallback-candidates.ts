@@ -8,7 +8,6 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
 import { isPluginProvidersLoadInFlight } from "../plugins/providers.runtime.js";
@@ -294,9 +293,7 @@ function resolveFallbackCandidatesUncached(
       }),
       manifestPlugins: params.manifestPlugins,
     });
-  const allowPluginModelAliases = params.cfg
-    ? normalizePluginsConfig(params.cfg.plugins).enabled
-    : true;
+  const allowPluginModelAliases = params.cfg?.plugins?.enabled !== false;
   const normalizedPrimary = normalizeCandidateRef(providerRaw, modelRaw);
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg ?? {},

@@ -421,6 +421,11 @@ openclaw_e2e_gateway_log_port_from_text() {
 openclaw_e2e_wait_gateway_ready() {
   local pid="$1" log="$2" attempts="${3:-300}" ready_port="${4:-}" readiness_mode="${5:-strict}" _ saw_ready_log=false
   local ready_scan_offset=0 ready_scan_carry="" ready_scan_carry_chars=256
+  local ready_log_pattern='\[gateway\] ready'
+  # Published baselines logged their listener before the modern ready marker existed.
+  if [ "$readiness_mode" = "legacy-ready-log-ok" ]; then
+    ready_log_pattern='\[gateway\] (ready|listening on)'
+  fi
   for _ in $(seq 1 "$attempts"); do
     ! kill -0 "$pid" >/dev/null 2>&1 && {
       echo "Gateway exited before becoming ready"
@@ -450,7 +455,7 @@ openclaw_e2e_wait_gateway_ready() {
           ready_scan_carry="$scan_text"
         fi
         local ready_log_lines
-        ready_log_lines="$(printf "%s" "$scan_text" | grep '\[gateway\] ready' || true)"
+        ready_log_lines="$(printf "%s" "$scan_text" | grep -E "$ready_log_pattern" || true)"
         if [ -n "$ready_log_lines" ]; then
           saw_ready_log=true
           [ -n "$ready_port" ] || ready_port="$(printf "%s" "$ready_log_lines" | openclaw_e2e_gateway_log_port_from_text)"
@@ -458,14 +463,21 @@ openclaw_e2e_wait_gateway_ready() {
       fi
     fi
     if [ "$saw_ready_log" = "true" ]; then
-      [ "$readiness_mode" = "legacy-ready-log-ok" ] && return 0
       [ -n "$ready_port" ] || ready_port="${OPENCLAW_E2E_GATEWAY_READY_PORT:-18789}"
-      openclaw_e2e_probe_http "http://127.0.0.1:${ready_port}/readyz" ok 400 && return 0
+      if [ "$readiness_mode" = "legacy-ready-log-ok" ]; then
+        openclaw_e2e_probe_tcp 127.0.0.1 "$ready_port" 400 && return 0
+      else
+        openclaw_e2e_probe_http "http://127.0.0.1:${ready_port}/readyz" ok 400 && return 0
+      fi
     fi
     sleep 0.25
   done
   if [ "$saw_ready_log" = "true" ]; then
-    echo "Gateway log reported ready, but /readyz probe never succeeded"
+    if [ "$readiness_mode" = "legacy-ready-log-ok" ]; then
+      echo "Gateway startup log was found, but TCP listener probe never succeeded"
+    else
+      echo "Gateway log reported ready, but /readyz probe never succeeded"
+    fi
   else
     echo "Gateway did not become ready"
   fi

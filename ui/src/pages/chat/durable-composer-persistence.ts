@@ -2,6 +2,7 @@ import type {
   ChatAttachment,
   ChatGoalDraftMode,
   DurableComposerDraftAttachment,
+  HumanMention,
 } from "../../lib/chat/chat-types.ts";
 import type { DurableComposerDraftScope } from "../../lib/chat/composer-draft-store.runtime.ts";
 import {
@@ -19,6 +20,7 @@ export type DurableChatComposerSnapshot = {
   expectedWriteIds?: readonly string[];
   revision: number;
   text: string;
+  mentions?: readonly HumanMention[];
   goalMode?: ChatGoalDraftMode;
   storedAttachments: DurableComposerDraftAttachment[] | null;
   writeId: string;
@@ -33,6 +35,7 @@ type RestoreBaseline = {
 type RestoredDraft = {
   revision: number;
   text: string;
+  mentions?: readonly HumanMention[];
   goalMode?: ChatGoalDraftMode;
   attachments: ChatAttachment[];
 };
@@ -40,7 +43,6 @@ type RestoredDraft = {
 const reportedStorageOwners = new Set<string>();
 
 const durableComposerStore = import("../../lib/chat/composer-draft-store.runtime.ts");
-const loadDurableComposerStore = () => durableComposerStore;
 
 function durableComposerOwnerKey(scope: DurableComposerDraftScope): string {
   return JSON.stringify([scope.gatewayOwner, scope.recoveryScope]);
@@ -66,10 +68,12 @@ export function chatAttachmentDraftSignature(
   text: string,
   attachments: readonly ChatAttachment[],
   goalMode?: ChatGoalDraftMode | null,
+  mentions?: readonly HumanMention[],
 ): string {
   return JSON.stringify([
     text,
     goalMode ?? null,
+    mentions ?? [],
     attachments.map((attachment) => [
       attachment.id,
       attachment.mimeType,
@@ -188,13 +192,14 @@ export async function hydrateDurableComposerAttachments(
 }
 
 export async function writeDurableComposerSnapshot(snapshot: DurableChatComposerSnapshot) {
-  const { writeDurableComposerDraft } = await loadDurableComposerStore();
+  const { writeDurableComposerDraft } = await durableComposerStore;
   const payloadUnavailable = snapshot.storedAttachments === null;
   const result = await writeDurableComposerDraft(
     snapshot.scope,
     {
       revision: snapshot.revision,
       text: payloadUnavailable ? "" : snapshot.text,
+      ...(snapshot.mentions?.length && !payloadUnavailable ? { mentions: snapshot.mentions } : {}),
       ...(snapshot.goalMode ? { goalMode: snapshot.goalMode } : {}),
       attachments: snapshot.storedAttachments ?? [],
     },
@@ -219,13 +224,19 @@ async function blobsEqual(left: Blob, right: Blob): Promise<boolean> {
 }
 
 export async function durableComposerDraftMatches(
-  draft: { text: string; attachments: DurableComposerDraftAttachment[] },
+  draft: {
+    text: string;
+    mentions?: readonly HumanMention[];
+    attachments: DurableComposerDraftAttachment[];
+  },
   text: string,
   attachments: DurableComposerDraftAttachment[] | null,
+  mentions?: readonly HumanMention[],
 ): Promise<boolean> {
   if (
     attachments === null ||
     draft.text !== text ||
+    JSON.stringify(draft.mentions ?? []) !== JSON.stringify(mentions ?? []) ||
     draft.attachments.length !== attachments.length
   ) {
     return false;
@@ -281,7 +292,7 @@ export class DurableChatComposerPersistence {
   retire(scope: DurableComposerDraftScope, minimumRevision: number) {
     this.resetRestoreScope();
     const run = async () => {
-      const { retireDurableComposerDraft } = await loadDurableComposerStore();
+      const { retireDurableComposerDraft } = await durableComposerStore;
       const result = await retireDurableComposerDraft(scope, minimumRevision);
       if (result.status === "storage-failed") {
         reportDurableComposerStorageError(scope, this.onStorageError);
@@ -312,8 +323,7 @@ export class DurableChatComposerPersistence {
     apply: (draft: RestoredDraft) => void,
     onCurrentWins: (storedRevision: number) => void,
   ) {
-    const { readDurableComposerDraft, prepareDurableComposerRecovery } =
-      await loadDurableComposerStore();
+    const { readDurableComposerDraft, prepareDurableComposerRecovery } = await durableComposerStore;
     if (baseline.scope.scopeKey.startsWith("chat:v3:")) {
       const recovery = await prepareDurableComposerRecovery(baseline.scope);
       if (recovery.status === "storage-failed") {
@@ -350,6 +360,9 @@ export class DurableChatComposerPersistence {
     apply({
       revision,
       text: result.status === "found" ? result.draft.text : "",
+      ...(result.status === "found" && result.draft.mentions
+        ? { mentions: result.draft.mentions }
+        : {}),
       ...(result.status === "found" && result.draft.goalMode
         ? { goalMode: result.draft.goalMode }
         : {}),

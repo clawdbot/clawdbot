@@ -6,6 +6,13 @@ import {
 } from "./talk-client-gateway-control.js";
 import { cleanupTalkConnection } from "./talk-session-registry.js";
 
+const sessionTarget = {
+  agentId: "main",
+  sessionKey: "agent:main:main",
+  canonicalKey: "agent:main:main",
+  storePath: "/tmp/sessions",
+};
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((done) => {
@@ -20,6 +27,7 @@ function controlContext(
 ) {
   return {
     logGateway: { warn },
+    chatAbortControllers: new Map(),
     broadcastToConnIds: vi.fn((_name: string, payload: { talkEvent?: unknown }) => {
       if (payload.talkEvent) {
         onTalkEvent?.(payload.talkEvent as { type: string; payload: unknown });
@@ -39,7 +47,7 @@ describe("Talk client Gateway control owner", () => {
       const owner = createTalkClientGatewayControlOwner({
         voiceSessionId: `voice-${status}`,
         providerId: "openai",
-        sessionKey: "agent:main:main",
+        sessionTarget,
         connId: "conn-gateway",
         context: controlContext(warn, (event) => talkEvents.push(event)),
         runAgentConsult: vi.fn(async () => ({ text: "done" })),
@@ -107,7 +115,7 @@ describe("Talk client Gateway control owner", () => {
     } satisfies RealtimeVoiceBridge;
     const owner = createTalkClientGatewayControlOwner({
       voiceSessionId: "voice-gateway",
-      sessionKey: "agent:main:main",
+      sessionTarget,
       connId: "conn-gateway",
       context: controlContext(),
       runAgentConsult,
@@ -141,7 +149,7 @@ describe("Talk client Gateway control owner", () => {
 
     const closeParams = {
       voiceSessionId: "voice-gateway",
-      sessionKey: "agent:main:main",
+      sessionKey: sessionTarget.sessionKey,
       connId: "conn-gateway",
     };
     await expect(
@@ -166,7 +174,7 @@ describe("Talk client Gateway control owner", () => {
     const runAgentConsult = vi.fn(async () => ({ text: "unexpected" }));
     const owner = createTalkClientGatewayControlOwner({
       voiceSessionId: "voice-control",
-      sessionKey: "agent:main:main",
+      sessionTarget,
       connId: "conn-control",
       context: controlContext(),
       runAgentConsult,
@@ -203,7 +211,7 @@ describe("Talk client Gateway control owner", () => {
           : text === "status"
             ? ("status" as const)
             : ("steer" as const),
-      sessionKey: "agent:main:main",
+      sessionKey: sessionTarget.canonicalKey,
       active: true,
       ...(text === "cancel" ? { aborted: true } : { queued: text !== "status" }),
       message: `${text} accepted`,
@@ -240,7 +248,7 @@ describe("Talk client Gateway control owner", () => {
     } satisfies RealtimeVoiceBridge;
     const owner = createTalkClientGatewayControlOwner({
       voiceSessionId: "voice-spoken-control",
-      sessionKey: "agent:main:main",
+      sessionTarget,
       connId: "conn-spoken-control",
       context: controlContext(),
       runAgentConsult,
@@ -289,7 +297,7 @@ describe("Talk client Gateway control owner", () => {
     const closeLogicalSession = vi.fn(async () => undefined);
     const owner = createTalkClientGatewayControlOwner({
       voiceSessionId: "voice-disconnect",
-      sessionKey: "agent:main:main",
+      sessionTarget,
       connId: "conn-disconnect",
       context: controlContext(),
       runAgentConsult: vi.fn(async () => ({ text: "done" })),
@@ -310,7 +318,7 @@ describe("Talk client Gateway control owner", () => {
     const closeLogicalSession = vi.fn(async () => undefined);
     const owner = createTalkClientGatewayControlOwner({
       voiceSessionId: "voice-close-error",
-      sessionKey: "agent:main:main",
+      sessionTarget,
       connId: "conn-close-error",
       context: controlContext(),
       runAgentConsult: vi.fn(async () => ({ text: "done" })),
@@ -340,7 +348,7 @@ describe("Talk client Gateway control owner", () => {
     const closeLogicalSession = vi.fn(async () => undefined);
     const common = {
       voiceSessionId: "voice-replacement",
-      sessionKey: "agent:main:main",
+      sessionTarget,
       connId: "conn-replacement",
       context: controlContext(),
       runAgentConsult,

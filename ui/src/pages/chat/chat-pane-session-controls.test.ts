@@ -130,7 +130,7 @@ describe("chat pane composer controls", () => {
     ["workspace", "Default (Workspace)"],
     ["full", "Default (Full Access)"],
   ] as const)(
-    "labels inherited permissions for %s without selecting a mode",
+    "renders inherited permissions for %s without selecting a mode",
     (defaultMode, label) => {
       const container = document.createElement("div");
       const onSelect = vi.fn();
@@ -140,9 +140,18 @@ describe("chat pane composer controls", () => {
       );
       const trigger = container.querySelector('[data-chat-permission-select="true"]');
       const option = container.querySelector('[data-chat-permission-option="default"]');
+      const fullAccess = defaultMode === "full";
       expect(trigger?.textContent?.trim()).toBe(label);
       expect(trigger?.getAttribute("aria-label")).toBe(`Permissions: ${label}`);
       expect(trigger?.getAttribute("data-chat-select-value")).toBe("");
+      expect(trigger?.classList.contains("chat-controls__permission-trigger--full")).toBe(
+        fullAccess,
+      );
+      expect(
+        trigger
+          ?.querySelector(".chat-controls__inline-select-label")
+          ?.classList.contains("chat-controls__permission-label--full"),
+      ).toBe(fullAccess);
       expect(
         option?.querySelector(".chat-controls__permission-option-title")?.textContent?.trim(),
       ).toBe(label);
@@ -196,6 +205,7 @@ describe("chat pane composer controls", () => {
         key: "agent:main:permission-test",
         kind: "direct",
         permissionMode: "full",
+        sessionId: "permission-test-session",
       },
       agentDefaultModel: undefined,
       agentDefaultPermissionMode: "guarded",
@@ -247,7 +257,7 @@ describe("chat pane composer controls", () => {
     expect(patch).toHaveBeenCalledWith(
       "agent:main:permission-test",
       { permissionMode: "guarded" },
-      expect.objectContaining({ agentId: undefined }),
+      expect.objectContaining({ agentId: undefined, expectedSessionId: "permission-test-session" }),
     );
 
     dropdown?.setAttribute("open", "");
@@ -256,127 +266,53 @@ describe("chat pane composer controls", () => {
     expect(patch).toHaveBeenLastCalledWith(
       "agent:main:permission-test",
       { permissionMode: null },
-      expect.objectContaining({ agentId: undefined }),
+      expect.objectContaining({ agentId: undefined, expectedSessionId: "permission-test-session" }),
     );
   });
 
-  it("shows an applying state for a permission update from another client", () => {
-    const patch = vi.fn(async () => ({}));
+  it("patches an identity-less session while its first identity materializes", async () => {
+    const patchResult = createDeferred<Record<string, never>>();
+    const patch = vi.fn(() => patchResult.promise);
+    const key = "agent:main:first-materialization";
+    const selectedSession = { key, kind: "direct" as const, permissionMode: "guarded" as const };
     const state = {
-      chatRunId: "run-active",
-      connected: true,
-      client: {},
-      chatLoading: false,
-      chatModelCatalog: [],
-      sessions: { state: { modelOverrides: {} }, think: () => undefined, patch },
-      chatModelSwitchPromises: {},
-      sessionKey: "agent:main:permission-notice",
-      chatModelsLoading: false,
-      chatSending: false,
-      sessionsResult: null,
-      chatStream: null,
-    } as unknown as ChatPageHost;
-    const selectedSession = {
-      key: state.sessionKey,
-      kind: "direct" as const,
-      permissionMode: "full" as const,
-      permissionModePending: true,
-    };
-    const controlParams = {
-      state,
-      selectedSession,
-      agentDefaultModel: undefined,
-      modelAccess: { allowed: true, requiredScope: "operator.write" } as const,
-      effortAccess: { allowed: true, requiredScope: "operator.write" } as const,
-      permissionAccess: { allowed: true, requiredScope: "operator.write" } as const,
-      canSelectFull: true,
-      onModelSetup: vi.fn(),
-    };
-    const container = document.createElement("div");
-    const renderPicker = () =>
-      render(
-        renderChatPermissionPicker(renderChatPaneComposerControls(controlParams).permissionPicker),
-        container,
-      );
-
-    renderPicker();
-    const trigger = container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;
-    expect(trigger.textContent).toContain("Applying permissions");
-    expect(trigger.getAttribute("aria-label")).not.toContain(
-      t("chat.permissionControls.modes.full.label"),
-    );
-    expect(trigger.disabled).toBe(true);
-
-    selectedSession.permissionModePending = false;
-    renderPicker();
-    expect(trigger.textContent).toContain(t("chat.permissionControls.modes.full.label"));
-    expect(trigger.disabled).toBe(false);
-  });
-
-  it("holds permission display and the send barrier until a Full Access update is applied", async () => {
-    const pending = createDeferred<Record<string, never>>();
-    const state = {
-      chatRunId: null,
       connected: true,
       connectionEpoch: 1,
       client: {},
-      chatLoading: false,
+      sessions: { state: { modelOverrides: {} }, think: () => undefined, patch },
+      sessionKey: key,
+      sessionsResult: { defaults: {}, sessions: [selectedSession] },
       chatModelCatalog: [],
-      sessions: {
-        state: { modelOverrides: {} },
-        think: () => undefined,
-        patch: vi.fn(() => pending.promise),
-      },
       chatModelSwitchPromises: {},
-      sessionKey: "agent:main:remote-worker",
-      chatModelsLoading: false,
-      chatSending: false,
-      sessionsResult: null,
-      chatStream: null,
     } as unknown as ChatPageHost;
-    const selectedSession = {
-      key: state.sessionKey,
-      kind: "direct" as const,
-      permissionMode: "workspace" as "workspace" | "full",
-    };
-    const controlParams = {
+    const controls = renderChatPaneComposerControls({
       state,
       selectedSession,
       agentDefaultModel: undefined,
-      modelAccess: { allowed: true, requiredScope: "operator.write" } as const,
-      effortAccess: { allowed: true, requiredScope: "operator.write" } as const,
-      permissionAccess: { allowed: true, requiredScope: "operator.write" } as const,
+      modelAccess: { allowed: true, requiredScope: "operator.write" },
+      effortAccess: { allowed: true, requiredScope: "operator.write" },
+      permissionAccess: { allowed: true, requiredScope: "operator.write" },
       canSelectFull: true,
       onModelSetup: vi.fn(),
-    };
-    const controls = renderChatPaneComposerControls(controlParams);
-    const selection = controls.permissionPicker.onSelect("full");
-    const container = document.createElement("div");
-    try {
-      expect(getPendingChatPickerPatch(state, state.sessionKey)).toBeDefined();
-      selectedSession.permissionMode = "full";
-      const pendingControls = renderChatPaneComposerControls(controlParams);
-      render(renderChatPermissionPicker(pendingControls.permissionPicker), container);
-      const trigger = container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;
-      expect(trigger.textContent).toContain("Applying permissions");
-      expect(trigger.getAttribute("data-chat-select-value")).toBe("workspace");
-      expect(trigger.disabled).toBe(true);
-      void pendingControls.permissionPicker.onSelect("guarded");
-      void controls.permissionPicker.onSelect("read-only");
-      expect(state.sessions.patch).toHaveBeenCalledOnce();
-    } finally {
-      pending.resolve({});
-      await selection;
-    }
+    });
 
-    render(
-      renderChatPermissionPicker(renderChatPaneComposerControls(controlParams).permissionPicker),
-      container,
+    expect(controls.permissionPicker.disabled).toBe(false);
+    const selection = controls.permissionPicker.onSelect("workspace");
+    await vi.waitFor(() =>
+      expect(patch).toHaveBeenCalledWith(
+        key,
+        { permissionMode: "workspace" },
+        expect.objectContaining({ expectedSessionId: undefined }),
+      ),
     );
-    const trigger = container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;
-    expect(trigger.textContent).toContain(t("chat.permissionControls.modes.full.label"));
-    expect(trigger.disabled).toBe(false);
-    expect(getPendingChatPickerPatch(state, state.sessionKey)).toBeUndefined();
+    state.sessionsResult = {
+      defaults: {},
+      sessions: [{ ...selectedSession, permissionMode: "workspace", sessionId: "materialized" }],
+    } as ChatPageHost["sessionsResult"];
+    patchResult.resolve({});
+    await selection;
+
+    expect(state.chatError).toBeNull();
   });
 
   it.each([
@@ -453,7 +389,12 @@ describe("chat pane composer controls", () => {
     } as unknown as ChatPageHost;
     const controls = renderChatPaneComposerControls({
       state,
-      selectedSession: { key: state.sessionKey, kind: "direct", hasActiveRun: true },
+      selectedSession: {
+        key: state.sessionKey,
+        kind: "direct",
+        hasActiveRun: true,
+        sessionId: "lifecycle-session",
+      },
       agentDefaultModel: undefined,
       modelAccess: { allowed: true, requiredScope: "operator.write" },
       effortAccess: { allowed: true, requiredScope: "operator.write" },
@@ -474,7 +415,16 @@ describe("chat pane composer controls", () => {
     expect(state.chatError).toBeNull();
   });
 
-  it("reports an unavailable permission update on the current session", async () => {
+  it("adopts the persisted mode when permission application fails after commit", async () => {
+    const pending = createDeferred<Record<string, never> | null>();
+    let canonicalListRevision = 1;
+    const selectedSession = {
+      key: "agent:main:remote-worker",
+      kind: "direct" as const,
+      hasActiveRun: true,
+      permissionMode: "workspace" as "workspace" | "full",
+      sessionId: "remote-worker-session",
+    };
     const state = {
       chatRunId: "remote-worker-run",
       chatError: null,
@@ -484,9 +434,16 @@ describe("chat pane composer controls", () => {
       chatLoading: false,
       chatModelCatalog: [],
       sessions: {
+        get canonicalListRevision() {
+          return canonicalListRevision;
+        },
         state: { modelOverrides: {} },
         think: () => undefined,
-        patch: vi.fn(async () => null),
+        patch: vi.fn(() => pending.promise),
+        refreshReplacement: vi.fn(async () => {
+          selectedSession.permissionMode = "full";
+          canonicalListRevision += 1;
+        }),
       },
       chatModelSwitchPromises: {},
       sessionKey: "agent:main:remote-worker",
@@ -498,7 +455,7 @@ describe("chat pane composer controls", () => {
     } as unknown as ChatPageHost;
     const controlParams = {
       state,
-      selectedSession: { key: state.sessionKey, kind: "direct" as const, hasActiveRun: true },
+      selectedSession,
       agentDefaultModel: undefined,
       modelAccess: { allowed: true, requiredScope: "operator.write" } as const,
       effortAccess: { allowed: true, requiredScope: "operator.write" } as const,
@@ -507,18 +464,248 @@ describe("chat pane composer controls", () => {
       onModelSetup: vi.fn(),
     };
     const controls = renderChatPaneComposerControls(controlParams);
-
-    await controls.permissionPicker.onSelect("full");
-
-    expect(state.chatError).toContain("Failed to update permissions");
+    const selection = controls.permissionPicker.onSelect("full");
     const container = document.createElement("div");
+
     render(
       renderChatPermissionPicker(renderChatPaneComposerControls(controlParams).permissionPicker),
       container,
     );
     const trigger = container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;
+    expect(trigger.textContent).toContain(t("chat.permissionControls.modes.full.label"));
     expect(trigger.textContent).not.toContain("Applying permissions");
+    expect(trigger.disabled).toBe(true);
+    void controls.permissionPicker.onSelect("guarded");
+    expect(state.sessions.patch).toHaveBeenCalledOnce();
+    expect(state.sessions.patch).toHaveBeenCalledWith(
+      state.sessionKey,
+      { permissionMode: "full" },
+      expect.objectContaining({ expectedSessionId: "remote-worker-session" }),
+    );
+
+    pending.reject(new Error("saved mode could not be applied to the active run"));
+    await selection;
+
+    expect(state.chatError).toContain("Failed to update permissions");
+    expect(state.sessions.refreshReplacement).toHaveBeenCalledWith(undefined);
+    render(
+      renderChatPermissionPicker(renderChatPaneComposerControls(controlParams).permissionPicker),
+      container,
+    );
+    expect(trigger.textContent).toContain(t("chat.permissionControls.modes.full.label"));
     expect(trigger.disabled).toBe(false);
+  });
+
+  it("binds permission choices to the observed session incarnation", async () => {
+    const originalSessionId = "session-before-replacement";
+    const replacementSessionId = "session-after-replacement";
+    let persistedMode = "workspace";
+    let canonicalListRevision = 1;
+    const patch = vi.fn(
+      async (
+        _key: string,
+        params: {
+          permissionMode?: "workspace" | "read-only" | "guarded" | "full" | null;
+        },
+        options?: { expectedSessionId?: string },
+      ) => {
+        if (options?.expectedSessionId !== originalSessionId) {
+          persistedMode = params.permissionMode ?? "default";
+          return {};
+        }
+        return null;
+      },
+    );
+    const selectedSession = {
+      key: "agent:main:recreated",
+      kind: "direct" as const,
+      permissionMode: "workspace" as const,
+      sessionId: originalSessionId,
+    };
+    const state = {
+      chatRunId: null,
+      chatError: null,
+      connected: true,
+      connectionEpoch: 1,
+      client: {},
+      chatLoading: false,
+      chatModelCatalog: [],
+      sessions: {
+        get canonicalListRevision() {
+          return canonicalListRevision;
+        },
+        state: { modelOverrides: {} },
+        think: () => undefined,
+        patch,
+        refreshReplacement: vi.fn(async () => {
+          selectedSession.sessionId = replacementSessionId;
+          canonicalListRevision += 1;
+        }),
+      },
+      chatModelSwitchPromises: {},
+      sessionKey: selectedSession.key,
+      chatModelsLoading: false,
+      chatSending: false,
+      sessionsResult: null,
+      chatStream: null,
+      requestUpdate: vi.fn(),
+    } as unknown as ChatPageHost;
+
+    await renderChatPaneComposerControls({
+      state,
+      selectedSession,
+      agentDefaultModel: undefined,
+      modelAccess: { allowed: true, requiredScope: "operator.write" },
+      effortAccess: { allowed: true, requiredScope: "operator.write" },
+      permissionAccess: { allowed: true, requiredScope: "operator.write" },
+      canSelectFull: true,
+      onModelSetup: vi.fn(),
+    }).permissionPicker.onSelect("full");
+
+    expect(patch).toHaveBeenCalledWith(
+      selectedSession.key,
+      { permissionMode: "full" },
+      expect.objectContaining({ expectedSessionId: originalSessionId }),
+    );
+    expect(selectedSession.sessionId).toBe(replacementSessionId);
+    expect(persistedMode).toBe("workspace");
+    expect(state.chatError).toContain("Failed to update permissions");
+  });
+
+  it("does not publish an older permission error over a replacement session success", async () => {
+    const firstPatch = createDeferred<Record<string, never>>();
+    const firstRefresh = createDeferred();
+    const selectedSession = {
+      key: "agent:main:replaced-during-permission-change",
+      kind: "direct" as const,
+      permissionMode: "workspace" as "workspace" | "read-only" | "guarded" | "full",
+      sessionId: "permission-session-before-replacement",
+    };
+    const patch = vi.fn(
+      async (
+        _key: string,
+        params: {
+          permissionMode?: "workspace" | "read-only" | "guarded" | "full" | null;
+        },
+        options?: { expectedSessionId?: string; waitFor?: Promise<boolean> },
+      ) => {
+        if (options?.expectedSessionId === "permission-session-before-replacement") {
+          return await firstPatch.promise;
+        }
+        await options?.waitFor;
+        selectedSession.permissionMode = params.permissionMode ?? "workspace";
+        return {};
+      },
+    );
+    const state = {
+      chatRunId: null,
+      chatError: null,
+      lastError: null,
+      connected: true,
+      connectionEpoch: 1,
+      client: {},
+      chatLoading: false,
+      chatModelCatalog: [],
+      sessions: {
+        canonicalListRevision: 1,
+        state: { modelOverrides: {} },
+        think: () => undefined,
+        patch,
+        refreshReplacement: vi.fn(async () => await firstRefresh.promise),
+      },
+      chatModelSwitchPromises: {},
+      sessionKey: selectedSession.key,
+      chatModelsLoading: false,
+      chatSending: false,
+      sessionsResult: null,
+      chatStream: null,
+      requestUpdate: vi.fn(),
+    } as unknown as ChatPageHost;
+    const params = {
+      state,
+      selectedSession,
+      agentDefaultModel: undefined,
+      modelAccess: { allowed: true, requiredScope: "operator.write" } as const,
+      effortAccess: { allowed: true, requiredScope: "operator.write" } as const,
+      permissionAccess: { allowed: true, requiredScope: "operator.write" } as const,
+      canSelectFull: true,
+      onModelSetup: vi.fn(),
+    };
+
+    const olderSelection = renderChatPaneComposerControls(params).permissionPicker.onSelect("full");
+    await vi.waitFor(() => expect(patch).toHaveBeenCalledOnce());
+    selectedSession.sessionId = "permission-session-after-replacement";
+    selectedSession.permissionMode = "read-only";
+    firstPatch.reject(new Error("older permission change failed"));
+    await vi.waitFor(() => expect(state.sessions.refreshReplacement).toHaveBeenCalledOnce());
+    const newerSelection =
+      renderChatPaneComposerControls(params).permissionPicker.onSelect("guarded");
+    await vi.waitFor(() => expect(patch).toHaveBeenCalledTimes(2));
+
+    await newerSelection;
+    expect(selectedSession.permissionMode).toBe("guarded");
+    expect(state.chatError).toBeNull();
+    firstRefresh.resolve();
+    await olderSelection;
+    expect(state.sessions.refreshReplacement).toHaveBeenCalledOnce();
+    expect(state.chatError).toBeNull();
+    expect(state.lastError).toBeNull();
+  });
+
+  it("keeps the optimistic mode when authoritative reconciliation is unavailable", async () => {
+    const selectedSession = {
+      key: "agent:main:reconcile-unavailable",
+      kind: "direct" as const,
+      permissionMode: "workspace" as const,
+      sessionId: "reconcile-unavailable-session",
+    };
+    const state = {
+      chatRunId: null,
+      chatError: null,
+      connected: true,
+      connectionEpoch: 1,
+      client: {},
+      chatLoading: false,
+      chatModelCatalog: [],
+      sessions: {
+        canonicalListRevision: 1,
+        state: { modelOverrides: {} },
+        think: () => undefined,
+        patch: vi.fn(async () => {
+          throw new Error("permission apply failed after commit");
+        }),
+        refreshReplacement: vi.fn(async () => undefined),
+      },
+      chatModelSwitchPromises: {},
+      sessionKey: selectedSession.key,
+      chatModelsLoading: false,
+      chatSending: false,
+      sessionsResult: null,
+      chatStream: null,
+      requestUpdate: vi.fn(),
+    } as unknown as ChatPageHost;
+    const params = {
+      state,
+      selectedSession,
+      agentDefaultModel: undefined,
+      modelAccess: { allowed: true, requiredScope: "operator.write" } as const,
+      effortAccess: { allowed: true, requiredScope: "operator.write" } as const,
+      permissionAccess: { allowed: true, requiredScope: "operator.write" } as const,
+      canSelectFull: true,
+      onModelSetup: vi.fn(),
+    };
+
+    await renderChatPaneComposerControls(params).permissionPicker.onSelect("full");
+    const container = document.createElement("div");
+    render(
+      renderChatPermissionPicker(renderChatPaneComposerControls(params).permissionPicker),
+      container,
+    );
+
+    const trigger = container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;
+    expect(trigger.textContent).toContain(t("chat.permissionControls.modes.full.label"));
+    expect(trigger.disabled).toBe(false);
+    expect(state.chatError).toContain("Failed to update permissions");
   });
 
   it.each([

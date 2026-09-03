@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { UI_COMMAND_EVENT } from "../../components/panel-toggle-contract.ts";
 import { t } from "../../i18n/index.ts";
-import type { ChatHistoryResult } from "../../pages/chat/chat-history.ts";
+import type { ChatHistoryResult } from "../../pages/chat/chat-history-snapshot.ts";
 import { copyToClipboard } from "../clipboard.ts";
 import { showToast } from "../toast.ts";
 import { canSplitSessionView, runSessionNavigationAction } from "./session-menu-navigation.ts";

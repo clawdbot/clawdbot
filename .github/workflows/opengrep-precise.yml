@@ -49,10 +49,19 @@ jobs:
           persist-credentials: false
           submodules: false
 
+      - name: Resolve PR scan base
+        id: scan-base
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          # Resolve the scan's merge parent before fetching a stale event-payload base.
+          base="$(node scripts/lib/merge-head-diff-base.mjs --base "$BASE_SHA" --head HEAD --prefer-first-parent)"
+          echo "sha=$base" >> "$GITHUB_OUTPUT"
+
       - name: Ensure PR base commit
         uses: ./.github/actions/ensure-base-commit
         with:
-          base-sha: ${{ github.event.pull_request.base.sha }}
+          base-sha: ${{ steps.scan-base.outputs.sha }}
           fetch-ref: ${{ github.event.pull_request.base.ref }}
 
       - name: Install opengrep
@@ -81,8 +90,7 @@ jobs:
 
       - name: Run opengrep on PR diff
         env:
-          OPENCLAW_OPENGREP_BASE_REF: ${{ github.event.pull_request.base.sha }}...HEAD
-          OPENCLAW_OPENGREP_MERGE_HEAD_FIRST_PARENT: "1"
+          OPENCLAW_OPENGREP_BASE_REF: ${{ steps.scan-base.outputs.sha }}...HEAD
         # Findings from precise rules block this workflow. Pull requests scan
         # changed first-party source paths only so findings stay attributable to
         # the PR diff. Test/fixture/QA path exclusions live in `.semgrepignore`

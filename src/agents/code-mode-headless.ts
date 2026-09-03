@@ -17,8 +17,6 @@ import {
   codeModeFailureCode,
   codeModeFailureMessage,
   createCodeModeApiFilesForRun,
-  enforceSnapshotPayloadLimits,
-  prepareSource,
   readPositiveInteger,
   resolveCodeModeHeadlessConfig,
   toToolSearchConfig,
@@ -41,7 +39,6 @@ import {
 import {
   CodeModeHeadlessAbortError,
   CodeModeHeadlessTimeoutError,
-  normalizeCodeModeWorkerResult,
   runCodeModeWorker,
 } from "./code-mode-worker.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
@@ -107,13 +104,17 @@ async function runHeadlessWorkerLeg(params: {
   signal: AbortSignal;
 }): Promise<CodeModeWorkerResult> {
   const remainingMs = remainingHeadlessMs(params.deadline);
-  const timeoutMs = Math.max(1, Math.min(params.config.timeoutMs, remainingMs));
+  const executionTimeoutMs = Math.max(1, Math.min(params.config.timeoutMs, remainingMs));
+  // Initial source preparation uses the wall-clock allowance; the guest keeps
+  // its separate CPU budget after compilation. Resumes need no preparation.
+  const timeoutMs = params.input.kind === "exec" ? remainingMs : executionTimeoutMs;
   // Let the headless abort scope own the wall-clock deadline. Capping the host
   // watchdog to the same deadline makes its internal timeout message race the scope.
   const workerTimeoutMs = timeoutMs + CODE_MODE_WORKER_WATCHDOG_GRACE_MS;
   return await runCodeModeWorker(
     {
       ...params.input,
+      executionTimeoutMs,
       config: { ...params.config, timeoutMs },
     },
     workerTimeoutMs,
@@ -233,13 +234,6 @@ export async function runCodeModeScriptHeadless(params: {
     const bridgeDispatch = createCodeModeBridgeDispatchState();
     const namespaceCatalog = runtime.namespaceEntries();
     const namespaceRuntime = createCodeModeNamespaceRuntime(namespaceCatalog);
-    const preparedSource = await awaitCodeModeDeadline({
-      operation: () => prepareSource({ code: params.code, language: params.language, config }),
-      remainingMs: remainingHeadlessMs(deadline),
-      signal: abortScope.signal,
-      createTimeoutError: () => new CodeModeHeadlessTimeoutError(),
-      createAbortError: headlessAbortError,
-    });
     const namespaces = mergeHeadlessNamespaces(
       namespaceRuntime.descriptors,
       params.extraNamespaces ?? [],
@@ -247,23 +241,22 @@ export async function runCodeModeScriptHeadless(params: {
     const catalogProjection = createCodeModeCatalogProjection(runtime.all({ includeMcp: false }), {
       reservedNames: namespaces.map((descriptor) => descriptor.globalName),
     });
-    const source = `${headlessNamespaceFreezePrelude(namespaces)}${preparedSource}`;
     const parentToolCallId = `headless:${randomUUID()}`;
-    let result = normalizeCodeModeWorkerResult(
-      await runHeadlessWorkerLeg({
-        input: {
-          kind: "exec",
-          source,
-          catalog: catalogProjection.guestBindings,
-          apiFiles: createCodeModeApiFilesForRun(namespaceRuntime, swarmEnabled),
-          namespaces,
-          swarmEnabled,
-        },
-        config,
-        deadline,
-        signal: abortScope.signal,
-      }),
-    );
+    let result = await runHeadlessWorkerLeg({
+      input: {
+        kind: "exec",
+        source: params.code,
+        language: params.language,
+        prelude: headlessNamespaceFreezePrelude(namespaces),
+        catalog: catalogProjection.guestBindings,
+        apiFiles: createCodeModeApiFilesForRun(namespaceRuntime, swarmEnabled),
+        namespaces,
+        swarmEnabled,
+      },
+      config,
+      deadline,
+      signal: abortScope.signal,
+    });
 
     while (true) {
       output.append(result.output);
@@ -285,7 +278,6 @@ export async function runCodeModeScriptHeadless(params: {
         });
       }
 
-      enforceSnapshotPayloadLimits({ snapshotBytes: result.snapshotBytes, config });
       cancelPendingBridgeStatesById(pending, result.canceledRequestIds);
       const pendingIds = new Set(pending.map((entry) => entry.id));
       const newRequests = result.pendingRequests.filter((request) => !pendingIds.has(request.id));
@@ -343,19 +335,17 @@ export async function runCodeModeScriptHeadless(params: {
       });
       const settledRequests = settledBridgeRequestsInCompletionOrder(pending);
       pending = pending.filter((entry) => !entry.settled);
-      result = normalizeCodeModeWorkerResult(
-        await runHeadlessWorkerLeg({
-          input: {
-            kind: "resume",
-            snapshotBytes: result.snapshotBytes,
-            settledRequests,
-            pendingRequests: pending.map(({ id, method, args }) => ({ id, method, args })),
-          },
-          config,
-          deadline,
-          signal: abortScope.signal,
-        }),
-      );
+      result = await runHeadlessWorkerLeg({
+        input: {
+          kind: "resume",
+          snapshot: result.snapshot,
+          settledRequests,
+          pendingRequests: pending.map(({ id, method, args }) => ({ id, method, args })),
+        },
+        config,
+        deadline,
+        signal: abortScope.signal,
+      });
     }
   } catch (error) {
     const timedOut = error instanceof CodeModeHeadlessTimeoutError;

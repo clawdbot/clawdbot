@@ -5,6 +5,7 @@ import { repeat } from "lit/directives/repeat.js";
 import { t } from "../../i18n/index.ts";
 import {
   BOARD_GRID_COLUMNS,
+  BOARD_DOCUMENT_AUTO_MAX_ROWS,
   BOARD_GRID_GAP,
   BOARD_GRID_ROW_HEIGHT,
   boardChromeRowPx,
@@ -59,12 +60,18 @@ function orderedWidgets(snapshot: BoardSnapshot, tabId: string): BoardWidget[] {
 function itemsForWidgets(
   widgets: readonly BoardWidget[],
   contentHeights: ReadonlyMap<string, number>,
+  fitAutoContent = false,
 ): BoardGridItem[] {
   const chromeRowPx = boardChromeRowPx();
   return widgets.map((widget) => ({
     name: widget.name,
     w: widget.sizeW,
-    h: effectiveBoardWidgetRows(widget, contentHeights.get(widget.name), chromeRowPx),
+    h: effectiveBoardWidgetRows(
+      widget,
+      contentHeights.get(widget.name),
+      chromeRowPx,
+      fitAutoContent ? BOARD_DOCUMENT_AUTO_MAX_ROWS : undefined,
+    ),
     order: widget.position,
   }));
 }
@@ -77,6 +84,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
   @property({ type: Boolean }) active = true;
   @property({ type: Boolean }) canMutate = true;
   @property({ type: Boolean }) canGrant = true;
+  @property({ type: Boolean }) fitAutoContent = false;
 
   @state() private previewItems: BoardGridItem[] | null = null;
   @state() private gestureName = "";
@@ -384,11 +392,17 @@ class OpenClawBoardView extends OpenClawLightDomElement {
         1,
         (bounds.width - BOARD_GRID_GAP * (BOARD_GRID_COLUMNS - 1)) / BOARD_GRID_COLUMNS,
       );
-      const targetCell = {
+      // Resolve both the visible target and reorder against the current preview;
+      // a card moving under the pointer must not undo the drop on pointerup.
+      const items = this.previewItems ?? gesture.items;
+      const targetName = pointerElement?.closest<
+        HTMLElementTagNameMap["openclaw-board-widget-cell"]
+      >("openclaw-board-widget-cell")?.widget?.name;
+      const targetCell = layout(items).find((rect) => rect.name === targetName) ?? {
         x: Math.floor((event.clientX - bounds.left) / (columnWidth + BOARD_GRID_GAP)),
         y: Math.floor((event.clientY - bounds.top) / (BOARD_GRID_ROW_HEIGHT + BOARD_GRID_GAP)),
       };
-      this.previewItems = previewDrag(gesture.items, gesture.name, targetCell).items;
+      this.previewItems = previewDrag(items, gesture.name, targetCell).items;
       return;
     }
 
@@ -627,8 +641,9 @@ class OpenClawBoardView extends OpenClawLightDomElement {
         </div>
       `;
     }
-    const items = this.previewItems ?? itemsForWidgets(widgets, this.contentHeights);
-    const rects = layout(items);
+    const items =
+      this.previewItems ?? itemsForWidgets(widgets, this.contentHeights, this.fitAutoContent);
+    const rects = layout(items, this.fitAutoContent ? BOARD_DOCUMENT_AUTO_MAX_ROWS : undefined);
     for (const rect of rects) {
       if (!this.stableCellOrder.has(rect.name)) {
         this.stableCellOrder.set(rect.name, this.stableCellOrderSequence);
@@ -660,6 +675,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
                 .widget=${widget}
                 .rect=${rect}
                 .contentHeightPx=${this.contentHeights.get(widget.name)}
+                .fitAutoContent=${this.fitAutoContent}
                 .tabs=${tabs}
                 .sessionKey=${sessionKey}
                 .widgetFrameUrl=${this.widgetFrameUrl}

@@ -5,6 +5,7 @@ import {
   hasAcceptedSessionSpawn,
   type AcceptedSessionSpawn,
 } from "../../accepted-session-spawn.js";
+import { hasAnyNonEmptyString as hasAnyNonBlankString } from "../../delivery-evidence-values.js";
 
 type AttemptTrajectoryTerminalStatus = "success" | "error" | "interrupted";
 
@@ -69,10 +70,6 @@ export function resolveTerminalAssistantTexts(params: {
 
 function hasNonEmptyAssistantText(texts: string[]): boolean {
   return texts.some((text) => text.trim().length > 0);
-}
-
-function hasAnyNonBlankString(values: string[]): boolean {
-  return values.some((value) => value.trim().length > 0);
 }
 
 function hasCommittedMessagingDeliveryEvidence(

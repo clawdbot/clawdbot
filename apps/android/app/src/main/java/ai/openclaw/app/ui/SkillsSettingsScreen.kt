@@ -41,7 +41,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
@@ -81,19 +80,14 @@ internal fun SkillsSettingsScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
 ) {
-  val skillsSummary by viewModel.skillsSummary.collectAsState()
-  val skillsRefreshing by viewModel.skillsRefreshing.collectAsState()
-  val skillsErrorText by viewModel.skillsErrorText.collectAsState()
+  val skillsState by viewModel.skillsState.collectAsState()
   val skillMutationKeys by viewModel.skillMutationKeys.collectAsState()
   val clawHubState by viewModel.clawHubSkillSearchState.collectAsState()
   val clawHubMethodsAvailable by viewModel.clawHubSkillMethodsAvailable.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
   val operatorAdminScopeAvailable by viewModel.operatorAdminScopeAvailable.collectAsState()
   val canManageSkills = isConnected && operatorAdminScopeAvailable
-  val skills = skillsSummary.skills
-  val readyCount = skills.count { skillReady(it) }
-  val needsSetupCount = skills.count { skillNeedsSetup(it) }
-  val disabledCount = skills.count { it.disabled }
+  val skills = skillsState.summary?.skills.orEmpty()
   var selectedSkillKey by remember { mutableStateOf<String?>(null) }
   var selectedTabName by rememberSaveable { mutableStateOf(SkillsTab.Installed.name) }
   var installedSearch by rememberSaveable { mutableStateOf("") }
@@ -134,15 +128,7 @@ internal fun SkillsSettingsScreen(
     icon = Icons.Default.Settings,
     onBack = onBack,
   ) {
-    SkillsOverviewPanel(
-      installedCount = skills.size,
-      readyCount = readyCount,
-      needsSetupCount = needsSetupCount,
-      disabledCount = disabledCount,
-      refreshing = skillsRefreshing,
-      canRefresh = isConnected,
-      onRefresh = viewModel::refreshSkills,
-    )
+    SettingsRefreshControls(isConnected, skillsState.refreshing, skillsState.errorText, viewModel::refreshSkills)
     val installedTabLabel = nativeString("Installed")
     val browseTabLabel = nativeString("Browse")
     ClawSegmentedControl(
@@ -154,11 +140,6 @@ internal fun SkillsSettingsScreen(
       },
       modifier = Modifier.fillMaxWidth(),
     )
-    skillsErrorText?.let { errorText ->
-      ClawPanel {
-        Text(text = errorText, style = ClawTheme.type.body, color = ClawTheme.colors.warning)
-      }
-    }
     if (isConnected && !operatorAdminScopeAvailable) {
       ClawPanel {
         Text(
@@ -169,21 +150,30 @@ internal fun SkillsSettingsScreen(
       }
     }
     when (selectedTab) {
-      SkillsTab.Installed ->
-        InstalledSkillsPane(
-          skills = skills,
-          visibleSkills = visibleSkills,
-          query = installedSearch,
-          filter = installedFilter,
-          isConnected = isConnected,
-          canManageSkills = canManageSkills,
-          mutatingSkillKeys = skillMutationKeys,
-          onQueryChange = { installedSearch = it },
-          onFilterChange = { installedFilterName = it.name },
-          onSkillClick = { selectedSkillKey = it.skillKey },
-          onSkillEnabledChange = viewModel::setSkillEnabled,
-        )
-      SkillsTab.Browse ->
+      SkillsTab.Installed -> {
+        SettingsSummaryContent(skillsState, isConnected, nativeString("Connect the gateway to load skills.")) { summary ->
+          SkillsOverviewPanel(
+            installedCount = summary.skills.size,
+            readyCount = summary.skills.count(::skillReady),
+            needsSetupCount = summary.skills.count(::skillNeedsSetup),
+            disabledCount = summary.skills.count { it.disabled },
+          )
+          InstalledSkillsPane(
+            skills = skills,
+            visibleSkills = visibleSkills,
+            query = installedSearch,
+            filter = installedFilter,
+            canManageSkills = canManageSkills,
+            mutatingSkillKeys = skillMutationKeys,
+            onQueryChange = { installedSearch = it },
+            onFilterChange = { installedFilterName = it.name },
+            onSkillClick = { selectedSkillKey = it.skillKey },
+            onSkillEnabledChange = viewModel::setSkillEnabled,
+          )
+        }
+      }
+
+      SkillsTab.Browse -> {
         ClawHubSkillSearchPanel(
           state = clawHubState,
           installedSkills = skills,
@@ -196,6 +186,7 @@ internal fun SkillsSettingsScreen(
           onReviewInstall = viewModel::reviewClawHubSkillInstall,
           onClearMessage = viewModel::clearClawHubSkillMessage,
         )
+      }
     }
   }
   clawHubState.installReview?.let { review ->
@@ -256,27 +247,12 @@ private fun SkillsOverviewPanel(
   readyCount: Int,
   needsSetupCount: Int,
   disabledCount: Int,
-  refreshing: Boolean,
-  canRefresh: Boolean,
-  onRefresh: () -> Unit,
 ) {
   ClawPanel(contentPadding = PaddingValues(14.dp)) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-      ) {
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-          Text(text = installedCount.toString(), style = ClawTheme.type.display, color = ClawTheme.colors.text)
-          Text(text = nativeString("Installed"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
-        }
-        ClawIconButton(
-          icon = Icons.Default.Refresh,
-          contentDescription = if (refreshing) nativeString("Refreshing") else nativeString("Refresh"),
-          onClick = onRefresh,
-          enabled = canRefresh && !refreshing,
-        )
+      Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+        Text(text = installedCount.toString(), style = ClawTheme.type.display, color = ClawTheme.colors.text)
+        Text(text = nativeString("Installed"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
       }
       SkillDistributionBar(
         readyCount = readyCount,
@@ -358,7 +334,6 @@ private fun InstalledSkillsPane(
   visibleSkills: List<GatewaySkillSummary>,
   query: String,
   filter: InstalledSkillFilter,
-  isConnected: Boolean,
   canManageSkills: Boolean,
   mutatingSkillKeys: Set<String>,
   onQueryChange: (String) -> Unit,
@@ -384,22 +359,22 @@ private fun InstalledSkillsPane(
     }
   }
   when {
-    !isConnected ->
-      ClawPanel {
-        Text(text = nativeString("Connect the gateway to load skills."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-      }
-    skills.isEmpty() ->
+    skills.isEmpty() -> {
       ClawPanel {
         Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
           Text(text = nativeString("No skills installed."), style = ClawTheme.type.section, color = ClawTheme.colors.text)
           Text(text = nativeString("Skills installed on the gateway will appear here."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
         }
       }
-    visibleSkills.isEmpty() ->
+    }
+
+    visibleSkills.isEmpty() -> {
       ClawPanel {
         Text(text = nativeString("No installed skills match this search."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
       }
-    else ->
+    }
+
+    else -> {
       SkillsPanel(
         skills = visibleSkills,
         canManageSkills = canManageSkills,
@@ -407,6 +382,7 @@ private fun InstalledSkillsPane(
         onSkillClick = onSkillClick,
         onSkillEnabledChange = onSkillEnabledChange,
       )
+    }
   }
 }
 
@@ -615,10 +591,14 @@ private fun ClawHubSkillSearchPanel(
             text =
               when {
                 installed -> nativeString("Installed")
+
                 installing -> nativeString("Installing")
+
                 reviewing -> nativeString("Loading")
+
                 // The Gateway cannot answer detail for install-only sources, so no Review offer.
                 skill.canReadDetails -> nativeString("Review")
+
                 else -> nativeString("Install")
               },
             onClick = { onReviewInstall(skill) },

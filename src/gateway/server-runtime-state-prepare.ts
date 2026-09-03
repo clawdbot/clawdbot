@@ -6,7 +6,7 @@ import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
+import { loadGatewayTlsServerRuntime } from "../infra/tls/gateway.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { runtimeForLogger } from "../logging/subsystem.js";
 import { isGatewayDraining } from "../process/command-queue.js";
@@ -67,6 +67,7 @@ function listGatewayStartupChannelPlugins(): GatewayStartupChannelPlugin[] {
 
 export async function prepareGatewayKernelState(params: {
   bootstrap: GatewayBootstrap;
+  bootId: string;
   port: number;
   opts: GatewayBootstrap["opts"];
   log: GatewayLogger;
@@ -84,6 +85,7 @@ export async function prepareGatewayKernelState(params: {
 }) {
   const {
     bootstrap,
+    bootId,
     port,
     opts,
     log,
@@ -174,7 +176,6 @@ export async function prepareGatewayKernelState(params: {
     bindDeviceNodeControl,
     bindWorkerNodeDesktopControl,
     bindNodeWorkspaceBindingResolver,
-    bindGitHubPublication,
     handleNodeWorkerBundleTransferRequest,
     handleWorkerBootstrapArtifactTransferRequest,
     handleNodeWorkspaceTransferRequest,
@@ -253,9 +254,6 @@ export async function prepareGatewayKernelState(params: {
       workerPlacementRuntime.dispatchService.dispatch,
     );
   }
-  if (githubPublicationRuntime) {
-    bindGitHubPublication?.(githubPublicationRuntime.coordinator);
-  }
   const bindDeviceNodeRuntime = bindDeviceNodeControl
     ? (transport: Parameters<NonNullable<typeof bindDeviceNodeControl>>[0]) => {
         bindDeviceNodeControl(transport);
@@ -302,8 +300,6 @@ export async function prepareGatewayKernelState(params: {
       bind: opts.bind,
       host: opts.host,
       controlUiEnabled: opts.controlUiEnabled,
-      openAiChatCompletionsEnabled: opts.openAiChatCompletionsEnabled,
-      openResponsesEnabled: opts.openResponsesEnabled,
       auth: resolvedStartupAuthOverride,
       tailscale: startupTailscaleOverride,
     });
@@ -311,11 +307,6 @@ export async function prepareGatewayKernelState(params: {
   const {
     bindHost,
     controlUiEnabled,
-    openAiChatCompletionsEnabled,
-    openAiChatCompletionsConfig,
-    openResponsesEnabled,
-    openResponsesConfig,
-    strictTransportSecurityHeader,
     controlUiBasePath,
     controlUiRoot: controlUiRootOverride,
     resolvedAuth,
@@ -323,7 +314,10 @@ export async function prepareGatewayKernelState(params: {
     tailscaleMode,
   } = runtimeConfig;
   if (bootstrap.generatedStartupAuthToken && isLoopbackHost(bindHost)) {
-    const { ensureStartupLocalCliPairing } = await import("./startup-local-cli-pairing.js");
+    const { ensureStartupLocalCliPairing } = await startupTrace.measure(
+      "runtime.local-cli-pairing-import",
+      () => import("./startup-local-cli-pairing.js"),
+    );
     const pairingResult = await startupTrace.measure("runtime.local-cli-pairing", () =>
       ensureStartupLocalCliPairing(),
     );
@@ -391,11 +385,16 @@ export async function prepareGatewayKernelState(params: {
       log,
     }),
   );
-  const { createTerminalLaunchPolicy } = await import("./terminal/launch.js");
+  const { createTerminalLaunchPolicy } = await startupTrace.measure(
+    "terminal.launch-import",
+    () => import("./terminal/launch.js"),
+  );
   const terminalLaunchPolicy = createTerminalLaunchPolicy(cfgAtStart);
 
-  const { runDefaultChannelSetupWizard, runDefaultSetupWizard } =
-    await import("./server-methods/wizard.js");
+  const { runDefaultChannelSetupWizard, runDefaultSetupWizard } = await startupTrace.measure(
+    "gateway.wizard-imports",
+    () => import("./server-methods/wizard.js"),
+  );
   const wizardRunner = opts.wizardRunner ?? runDefaultSetupWizard;
   const channelWizardRunner = opts.channelWizardRunner ?? runDefaultChannelSetupWizard;
   const { wizardSessions, findRunningWizard, purgeWizardSession } = createWizardSessionTracker();
@@ -405,7 +404,7 @@ export async function prepareGatewayKernelState(params: {
   const runtimeStateRef: { current: GatewayServerLiveState | null } = { current: null };
   const cronStartState = { handled: false };
   const gatewayTls = await startupTrace.measure("tls.runtime", () =>
-    loadGatewayTlsRuntime(cfgAtStart.gateway?.tls, log.child("tls")),
+    loadGatewayTlsServerRuntime(cfgAtStart.gateway?.tls, log.child("tls")),
   );
   const serverStartedAt = Date.now();
   const readinessEventLoopHealth = createGatewayEventLoopHealthMonitor();
@@ -425,7 +424,10 @@ export async function prepareGatewayKernelState(params: {
   // Internal principals belong to this server generation and become usable only after bind.
   // Closing flips this first so delayed recovery/channel work cannot enter a retired context.
 
-  const { createChannelManager } = await import("./server-channels.js");
+  const { createChannelManager } = await startupTrace.measure(
+    "gateway.channel-manager-import",
+    () => import("./server-channels.js"),
+  );
   const channelManager = createChannelManager({
     getRuntimeConfig: () => {
       const runtimeConfigLocal = getRuntimeConfig();
@@ -444,6 +446,7 @@ export async function prepareGatewayKernelState(params: {
     ...(opts.tryRecoverChannelAutostartSuppression
       ? { tryRecoverAutostartSuppression: opts.tryRecoverChannelAutostartSuppression }
       : {}),
+    isClosing: () => lifecycle.closePreludeStarted,
   });
   channelManager.setAutostartSuppression(opts.channelAutostartSuppression ?? null);
   const sidecarStartup = opts.sidecarStartup ?? "start";
@@ -473,6 +476,7 @@ export async function prepareGatewayKernelState(params: {
   log.info("starting HTTP server...");
   const connectionState = await startupTrace.measure("runtime.state", () =>
     createGatewayConnectionState({
+      bootId,
       cfg: cfgAtStart,
       getRuntimeConfig,
     }),
@@ -486,11 +490,8 @@ export async function prepareGatewayKernelState(params: {
     controlUiEnabled,
     controlUiBasePath,
     controlUiRoot: controlUiRootLifecycle.state,
-    openAiChatCompletionsEnabled,
-    openAiChatCompletionsConfig,
-    openResponsesEnabled,
-    openResponsesConfig,
-    strictTransportSecurityHeader,
+    openAiChatCompletionsEnabled: opts.openAiChatCompletionsEnabled,
+    openResponsesEnabled: opts.openResponsesEnabled,
     resolvedAuth,
     rateLimiter: authRateLimiter,
     joinRateLimiter: browserAuthRateLimiter,
@@ -524,6 +525,7 @@ export async function prepareGatewayKernelState(params: {
   });
   const {
     clients,
+    mentionInbox,
     broadcast,
     broadcastToConnIds,
     broadcastPluginEvent,
@@ -543,6 +545,7 @@ export async function prepareGatewayKernelState(params: {
 
   return {
     ...bootstrap,
+    bootId,
     pluginRuntime,
     workerEnvironmentService,
     workerLiveEvents,
@@ -567,11 +570,6 @@ export async function prepareGatewayKernelState(params: {
     bindHost,
     controlUiEnabled,
     controlUiRootLifecycle,
-    openAiChatCompletionsEnabled,
-    openAiChatCompletionsConfig,
-    openResponsesEnabled,
-    openResponsesConfig,
-    strictTransportSecurityHeader,
     controlUiBasePath,
     resolvedAuth,
     tailscaleConfig,
@@ -610,6 +608,7 @@ export async function prepareGatewayKernelState(params: {
     createHttpTransportOptions,
     transportBridge,
     clients,
+    mentionInbox,
     broadcast,
     broadcastToConnIds,
     broadcastPluginEvent,

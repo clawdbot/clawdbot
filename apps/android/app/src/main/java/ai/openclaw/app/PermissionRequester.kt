@@ -120,54 +120,40 @@ class PermissionRequester internal constructor(
   suspend fun requestIfMissing(
     permissions: List<String>,
     timeoutMs: Long = 20_000,
-  ): Map<String, Boolean> {
-    return mutex.withLock {
-      while (true) {
-        val missing =
-          permissions.filter { perm ->
-            ContextCompat.checkSelfPermission(appContext, perm) != PackageManager.PERMISSION_GRANTED
-          }
-        if (missing.isEmpty()) {
-          return permissions.associateWith { true }
+  ): Map<String, Boolean> =
+    mutex.withLock {
+      val missing =
+        permissions.filter { perm ->
+          ContextCompat.checkSelfPermission(appContext, perm) != PackageManager.PERMISSION_GRANTED
         }
+      if (missing.isEmpty()) return@withLock permissions.associateWith { true }
 
-        if (!confirmRationaleIfNeeded(missing, timeoutMs)) {
-          return permissions.associateWith { perm ->
-            ContextCompat.checkSelfPermission(appContext, perm) == PackageManager.PERMISSION_GRANTED
-          }
+      if (!confirmRationaleIfNeeded(missing, timeoutMs)) {
+        return@withLock permissions.associateWith { perm ->
+          ContextCompat.checkSelfPermission(appContext, perm) == PackageManager.PERMISSION_GRANTED
         }
+      }
 
-        val deferred = CompletableDeferred<Map<String, Boolean>>()
-        val request = reservePermissionRequest(missing, deferred)
+      val request = reservePermissionRequest(missing)
+      val result =
         try {
           launchPermissionRequest(missing, request.requestCode, timeoutMs)
-        } catch (err: Throwable) {
+          withTimeout(timeoutMs) { request.deferred.await() }
+        } finally {
+          // Retire the code on launch failure, timeout, or cancellation before admitting another prompt.
           clearPermissionRequest(request)
-          throw err
         }
 
-        val result =
-          try {
-            withTimeout(timeoutMs) { deferred.await() }
-          } finally {
-            // Timeout and caller cancellation both retire the request code before the mutex admits another prompt.
-            clearPermissionRequest(request)
-          }
+      val merged =
+        permissions.associateWith { perm ->
+          val nowGranted =
+            ContextCompat.checkSelfPermission(appContext, perm) == PackageManager.PERMISSION_GRANTED
+          result[perm] == true || nowGranted
+        }
 
-        val merged =
-          permissions.associateWith { perm ->
-            val nowGranted =
-              ContextCompat.checkSelfPermission(appContext, perm) == PackageManager.PERMISSION_GRANTED
-            result[perm] == true || nowGranted
-          }
-
-        showSettingsForPermanentDenials(merged, timeoutMs)
-
-        return merged
-      }
-      error("unreachable")
+      showSettingsForPermanentDenials(merged, timeoutMs)
+      merged
     }
-  }
 
   internal fun onRequestPermissionsResult(
     requestCode: Int,
@@ -189,11 +175,10 @@ class PermissionRequester internal constructor(
 
   private fun reservePermissionRequest(
     permissions: List<String>,
-    deferred: CompletableDeferred<Map<String, Boolean>>,
   ): PendingPermissionRequest =
     synchronized(permissionRequestsLock) {
       val requestCode = requestCodeAllocator.allocate(pendingPermissionRequests::containsKey)
-      val request = PendingPermissionRequest(requestCode, permissions, deferred)
+      val request = PendingPermissionRequest(requestCode, permissions, CompletableDeferred())
       pendingPermissionRequests[requestCode] = request
       request
     }
@@ -317,71 +302,52 @@ class PermissionRequester internal constructor(
     active: ActiveActivityHost,
     permissions: List<String>,
   ): RationaleResult =
-    withContext(Dispatchers.Main) {
-      if (!isCurrentActiveHost(active)) {
-        return@withContext RationaleResult.HostLost
-      }
-      val activity = active.host.activity
-      suspendCancellableCoroutine { cont ->
-        val lifecycle = activity.lifecycle
-        var dialog: AlertDialog? = null
-        var observer: LifecycleEventObserver? = null
-        var hostLossJob: Job? = null
-        val finished = AtomicBoolean(false)
-        val removeObserver = {
-          observer?.let(lifecycle::removeObserver)
-          observer = null
-        }
-
-        fun finish(result: RationaleResult?) {
-          if (!finished.compareAndSet(false, true)) return
-          hostLossJob?.cancel()
-          hostLossJob = null
-          removeObserver()
-          dialog?.dismiss()
-          if (result != null) {
-            cont.resume(result)
-          }
-        }
-        val actualObserver =
-          LifecycleEventObserver { _, event ->
-            if (event != Lifecycle.Event.ON_DESTROY) return@LifecycleEventObserver
-            finish(RationaleResult.HostLost)
-          }
-        observer = actualObserver
-        lifecycle.addObserver(actualObserver)
-        hostLossJob =
-          CoroutineScope(cont.context)
-            .launch(start = CoroutineStart.LAZY) {
-              activeActivityHost.first { current -> current != active }
-              finish(RationaleResult.HostLost)
-            }.also(Job::start)
-        cont.invokeOnCancellation {
-          mainHandler.post {
-            finish(null)
-          }
-        }
-        if (finished.get()) return@suspendCancellableCoroutine
-        dialog =
-          AlertDialog
-            .Builder(activity)
-            .setTitle(nativeString("Permission required"))
-            .setMessage(buildRationaleMessage(permissions))
-            .setPositiveButton(nativeString("Continue")) { _, _ -> finish(RationaleResult.Proceed) }
-            .setNegativeButton(nativeString("Not now")) { _, _ -> finish(RationaleResult.Decline) }
-            .setOnCancelListener { finish(RationaleResult.Decline) }
-            .show()
-      }
+    showPermissionDialog(active, RationaleResult.HostLost) { activity, finish ->
+      AlertDialog
+        .Builder(activity)
+        .setTitle(nativeString("Permission required"))
+        .setMessage(buildRationaleMessage(permissions))
+        .setPositiveButton(nativeString("Continue")) { _, _ -> finish(RationaleResult.Proceed) }
+        .setNegativeButton(nativeString("Not now")) { _, _ -> finish(RationaleResult.Decline) }
+        .setOnCancelListener { finish(RationaleResult.Decline) }
+        .show()
     }
 
   private suspend fun showSettingsDialog(
     active: ActiveActivityHost,
     permissions: List<String>,
   ): SettingsResult =
+    showPermissionDialog(active, SettingsResult.HostLost) { activity, finish ->
+      AlertDialog
+        .Builder(activity)
+        .setTitle(nativeString("Enable permission in Settings"))
+        .setMessage(buildSettingsMessage(permissions))
+        .setPositiveButton(nativeString("Open Settings")) { _, _ ->
+          if (!isCurrentActiveHost(active)) {
+            finish(SettingsResult.HostLost)
+            return@setPositiveButton
+          }
+          val intent =
+            Intent(
+              Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+              Uri.fromParts("package", activity.packageName, null),
+            )
+          activity.startActivity(intent)
+          finish(SettingsResult.Shown)
+        }.setNegativeButton(nativeString("Cancel")) { _, _ ->
+          finish(SettingsResult.Shown)
+        }.setOnCancelListener { finish(SettingsResult.Shown) }
+        .setOnDismissListener { finish(SettingsResult.Shown) }
+        .show()
+    }
+
+  private suspend fun <T : Any> showPermissionDialog(
+    active: ActiveActivityHost,
+    hostLost: T,
+    buildDialog: (ComponentActivity, (T) -> Unit) -> AlertDialog,
+  ): T =
     withContext(Dispatchers.Main) {
-      if (!isCurrentActiveHost(active)) {
-        return@withContext SettingsResult.HostLost
-      }
+      if (!isCurrentActiveHost(active)) return@withContext hostLost
       val activity = active.host.activity
       suspendCancellableCoroutine { cont ->
         val lifecycle = activity.lifecycle
@@ -389,25 +355,19 @@ class PermissionRequester internal constructor(
         var observer: LifecycleEventObserver? = null
         var hostLossJob: Job? = null
         val finished = AtomicBoolean(false)
-        val removeObserver = {
-          observer?.let(lifecycle::removeObserver)
-          observer = null
-        }
 
-        fun finish(result: SettingsResult?) {
+        fun finish(result: T?) {
           if (!finished.compareAndSet(false, true)) return
           hostLossJob?.cancel()
           hostLossJob = null
-          removeObserver()
+          observer?.let(lifecycle::removeObserver)
+          observer = null
           dialog?.dismiss()
-          if (result != null) {
-            cont.resume(result)
-          }
+          if (result != null) cont.resume(result)
         }
         val actualObserver =
           LifecycleEventObserver { _, event ->
-            if (event != Lifecycle.Event.ON_DESTROY) return@LifecycleEventObserver
-            finish(SettingsResult.HostLost)
+            if (event == Lifecycle.Event.ON_DESTROY) finish(hostLost)
           }
         observer = actualObserver
         lifecycle.addObserver(actualObserver)
@@ -415,7 +375,7 @@ class PermissionRequester internal constructor(
           CoroutineScope(cont.context)
             .launch(start = CoroutineStart.LAZY) {
               activeActivityHost.first { current -> current != active }
-              finish(SettingsResult.HostLost)
+              finish(hostLost)
             }.also(Job::start)
         cont.invokeOnCancellation {
           mainHandler.post {
@@ -423,28 +383,7 @@ class PermissionRequester internal constructor(
           }
         }
         if (finished.get()) return@suspendCancellableCoroutine
-        dialog =
-          AlertDialog
-            .Builder(activity)
-            .setTitle(nativeString("Enable permission in Settings"))
-            .setMessage(buildSettingsMessage(permissions))
-            .setPositiveButton(nativeString("Open Settings")) { _, _ ->
-              if (!isCurrentActiveHost(active)) {
-                finish(SettingsResult.HostLost)
-                return@setPositiveButton
-              }
-              val intent =
-                Intent(
-                  Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                  Uri.fromParts("package", activity.packageName, null),
-                )
-              activity.startActivity(intent)
-              finish(SettingsResult.Shown)
-            }.setNegativeButton(nativeString("Cancel")) { _, _ ->
-              finish(SettingsResult.Shown)
-            }.setOnCancelListener { finish(SettingsResult.Shown) }
-            .setOnDismissListener { finish(SettingsResult.Shown) }
-            .show()
+        dialog = buildDialog(activity, ::finish)
       }
     }
 

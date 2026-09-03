@@ -1,11 +1,7 @@
 import path from "node:path";
 import type { OpenClawCrablineChannelDriverSelection } from "@openclaw/crabline";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
-import type {
-  QaLabLatestReport,
-  QaLabScenarioOutcome,
-  QaLabServerHandle,
-} from "./lab-server.types.js";
+import type { QaLabLatestReport, QaLabServerHandle } from "./lab-server.types.js";
 import type { QaProviderMode } from "./model-selection.js";
 import { sanitizeQaProgressValue as sanitizeQaSuiteProgressValue } from "./progress-format.js";
 import type { QaThinkingLevel } from "./qa-gateway-config.js";
@@ -24,6 +20,7 @@ import {
   resolveQaSuiteWorkerStartStaggerMs,
   scenarioRequiresControlUi,
 } from "./suite-planning.js";
+import { createQaSuiteProgressController } from "./suite-progress.js";
 import { buildRuntimeParityScenarioResult } from "./suite-runtime-parity-result.js";
 import { remapModelRefForForcedRuntime } from "./suite-support.js";
 import type {
@@ -95,17 +92,12 @@ export async function runQaRuntimeParitySuite(params: {
     transportId: params.transportId,
   });
   const transport = transportFactoryResult.adapter;
-  const liveScenarioOutcomes: QaLabScenarioOutcome[] = params.selectedScenarios.map((scenario) => ({
-    id: scenario.id,
-    name: scenario.title,
-    status: "pending",
-  }));
-  lab.setScenarioRun({
-    kind: "suite",
-    status: "running",
+  const progress = createQaSuiteProgressController({
+    lab,
+    scenarios: params.selectedScenarios,
     startedAt: params.startedAt.toISOString(),
-    scenarios: [...liveScenarioOutcomes],
   });
+  progress.start();
 
   let runFailed = false;
   let runError: unknown;
@@ -129,18 +121,7 @@ export async function runQaRuntimeParitySuite(params: {
           params.progressEnabled,
           `runtime pair start (${index + 1}/${params.selectedScenarios.length}): ${scenarioIdForLog}`,
         );
-        liveScenarioOutcomes[index] = {
-          id: scenario.id,
-          name: scenario.title,
-          status: "running",
-          startedAt: new Date().toISOString(),
-        };
-        lab.setScenarioRun({
-          kind: "suite",
-          status: "running",
-          startedAt: params.startedAt.toISOString(),
-          scenarios: [...liveScenarioOutcomes],
-        });
+        progress.markRunning([scenario.id]);
 
         const parity = await runRuntimeParityScenario({
           scenarioId: scenario.id,
@@ -232,21 +213,7 @@ export async function runQaRuntimeParitySuite(params: {
           scenarioName: scenario.title,
           result: parity,
         });
-        liveScenarioOutcomes[index] = {
-          id: scenario.id,
-          name: scenario.title,
-          status: parityScenarioResult.status,
-          details: parityScenarioResult.details,
-          steps: parityScenarioResult.steps,
-          startedAt: liveScenarioOutcomes[index]?.startedAt,
-          finishedAt: new Date().toISOString(),
-        };
-        lab.setScenarioRun({
-          kind: "suite",
-          status: "running",
-          startedAt: params.startedAt.toISOString(),
-          scenarios: [...liveScenarioOutcomes],
-        });
+        progress.recordScenarioResult(scenario.id, parityScenarioResult);
         writeQaSuiteProgress(
           params.progressEnabled,
           `runtime pair ${parityScenarioResult.status} (${index + 1}/${params.selectedScenarios.length}): ${scenarioIdForLog}`,
@@ -291,13 +258,7 @@ export async function runQaRuntimeParitySuite(params: {
         markdown: report,
         generatedAt: finishedAt.toISOString(),
       } satisfies QaLabLatestReport);
-      lab.setScenarioRun({
-        kind: "suite",
-        status: "completed",
-        startedAt: params.startedAt.toISOString(),
-        finishedAt: finishedAt.toISOString(),
-        scenarios: [...liveScenarioOutcomes],
-      });
+      progress.complete([], finishedAt.toISOString());
       return {
         outputDir: params.outputDir,
         evidence,

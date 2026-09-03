@@ -27,6 +27,117 @@ function expectChunksWithinLength(chunks: string[], maxLength: number) {
 }
 
 describe("EmbeddedBlockChunker", () => {
+  it.each([
+    { tail: "Tail", changed: false, expected: ["Tail"] },
+    { tail: "", changed: true, expected: [] },
+    { tail: "Fixed tail", changed: true, expected: ["Fixed tail"] },
+  ])(
+    "reconciles pending '$tail' without replaying drained source",
+    ({ tail, changed, expected }) => {
+      const chunker = new EmbeddedBlockChunker({
+        minChars: 10,
+        maxChars: 16,
+        breakPreference: "sentence",
+      });
+      for (const sentence of ["Hello world.", "Next sentence."]) {
+        chunker.append(`${sentence} `);
+        expect(drainChunks(chunker)).toEqual([sentence]);
+      }
+      chunker.append("Tail");
+      expect(chunker.consumedLength).toBe("Hello world. Next sentence. ".length);
+      const snapshot = `Hello world. Next sentence.${tail ? ` ${tail}` : ""}`;
+
+      expect(chunker.replace(snapshot)).toBe(changed);
+      expect(chunker.sourceLength).toBe(snapshot.length);
+      expect(drainChunks(chunker, true)).toEqual(expected);
+      expect(chunker.consumedLength).toBe(snapshot.length);
+      expect(chunker.replace(snapshot)).toBe(false);
+      expect(drainChunks(chunker, true)).toEqual([]);
+    },
+  );
+
+  it("buffers without chunking and replaces a native source suffix before or after a drain", () => {
+    const chunker = new EmbeddedBlockChunker();
+    chunker.append("Earlier ");
+    const sourceOffset = chunker.sourceLength;
+    chunker.append("Draft");
+    expect(drainChunks(chunker)).toEqual([]);
+    expect(chunker.replace("Fixed", sourceOffset)).toBe(true);
+    expect(drainChunks(chunker, true)).toEqual(["Earlier Fixed"]);
+    expect(chunker.consumedLength).toBe("Earlier Fixed".length);
+
+    const nextOffset = chunker.sourceLength;
+    chunker.append("Draft");
+    expect(chunker.replace("Later", nextOffset)).toBe(true);
+    expect(drainChunks(chunker, true)).toEqual(["Later"]);
+    chunker.reset();
+    expect(chunker.sourceLength).toBe(0);
+    expect(chunker.consumedLength).toBe(0);
+    chunker.append(" \n");
+    expect(drainChunks(chunker, true)).toEqual([" \n"]);
+  });
+
+  it.each(
+    [
+      {
+        name: "regular",
+        header: "```txt\n",
+        renderedHeader: "```txt\n",
+        body: "x".repeat(9),
+        tail: "xxx😀tail",
+        maxChars: 20,
+      },
+      {
+        name: "long-language",
+        header: "```very-long-language-name\n",
+        renderedHeader: "```\n",
+        body: "q".repeat(22),
+        tail: "qqqq\nold\n```",
+        maxChars: 30,
+      },
+    ].flatMap((fixture) =>
+      ["NEW", ""].map((replacement) => Object.assign({}, fixture, { replacement })),
+    ),
+  )(
+    "reconciles $name fenced source with '$replacement' pending code",
+    ({ header, renderedHeader, body, tail, maxChars, replacement }) => {
+      const chunker = new EmbeddedBlockChunker({
+        minChars: 10,
+        maxChars,
+        breakPreference: "paragraph",
+      });
+      chunker.append(`${header}${body}${tail}`);
+      expect(drainChunks(chunker)).toEqual([`${renderedHeader}${body}\n\`\`\``]);
+      expect(chunker.consumedLength).toBe(header.length + body.length);
+
+      const snapshot = `${header}${body}${replacement}\n\`\`\``;
+      expect(chunker.replace(snapshot)).toBe(true);
+      expect(chunker.sourceLength).toBe(snapshot.length);
+      expect(chunker.bufferedText).toBe(`${renderedHeader}${replacement}\n\`\`\``);
+      expect(drainChunks(chunker, true)).toEqual(
+        replacement ? [`${renderedHeader}${replacement}\n\`\`\``] : [],
+      );
+      expect(chunker.consumedLength).toBe(snapshot.length);
+    },
+  );
+
+  it("counts the source closing fence and skipped paragraph separator before replacing prose", () => {
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 1,
+      maxChars: 30,
+      breakPreference: "paragraph",
+    });
+    const prefix = `\`\`\`txt\n${"q".repeat(32)}\n\`\`\`\n\n`;
+    chunker.append(`${prefix}Tail`);
+    expect(drainChunks(chunker)).toEqual([
+      `\`\`\`txt\n${"q".repeat(19)}\n\`\`\``,
+      `\`\`\`txt\n${"q".repeat(13)}\n\`\`\``,
+    ]);
+    expect(chunker.consumedLength).toBe(prefix.length);
+    expect(chunker.replace(`${prefix}Fixed`)).toBe(true);
+    expect(drainChunks(chunker, true)).toEqual(["Fixed"]);
+  });
+
   it("breaks at paragraph boundary right after fence close", () => {
     // A closed fence is a safe boundary; splitting before it would corrupt
     // markdown rendered by downstream clients.

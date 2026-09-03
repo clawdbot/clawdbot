@@ -28,7 +28,11 @@ openclaw models set-image <model-or-alias>
 openclaw models scan
 ```
 
-`status`, `list`, and `auth` subcommands accept `--agent <id>` to target a configured agent; `fallbacks`/`image-fallbacks` always use the configured default agent, and `set`, `set-image`, `scan`, `refresh`, and `aliases` reject `--agent` outright because they are global and never agent-scoped. When omitted, `--agent`-aware commands use `OPENCLAW_AGENT_DIR` if set, otherwise the configured default agent.
+`status`, `list`, and `auth` subcommands accept `--agent <id>` to target a configured agent. Without it, model inspection uses `agents.defaults.systemAgent.agentId` when configured, otherwise the sole configured agent. Auth mutations require `--agent <id>` when multiple agents are configured.
+
+For `models status`, `OPENCLAW_AGENT_DIR` overrides the inspected auth directory when `--agent` is omitted. A matching configured `agentDir` retains that agent's ownership during credential refresh. An explicit `--agent <id>` takes precedence over the environment override.
+
+`fallbacks`/`image-fallbacks` manage global defaults. `set`, `set-image`, `scan`, `refresh`, and `aliases` also operate globally and reject `--agent`.
 
 `models set` and `models set-image` require the provider to be declared by an installed plugin or configured under `models.providers`. An unknown provider exits nonzero without changing config. If the provider is known but the model is absent from the local catalog, the command saves the selection and prints a warning because newly released and self-hosted models may not be cataloged yet. `openclaw doctor --json` reports configured unknown providers; add `--severity-min info` to also see active models that the local catalog cannot confirm.
 
@@ -37,7 +41,7 @@ openclaw models scan
 Bare `openclaw models` is equivalent to `openclaw models status`.
 `openclaw models --json` returns the same object as `openclaw models status --json`.
 
-`openclaw models status` shows the resolved default/fallbacks plus an auth overview. Active profile cooldowns appear under **Unavailable auth profiles** with the stored reason and recovery action; JSON output exposes the same data in `auth.unusableProfiles`. For plugin-owned agent runtimes such as Codex, status also checks whether the owning plugin is enabled and passed startup payload verification. A route with valid credentials but an unavailable runtime reports `status: unavailable` instead of `usable`; JSON output includes separate `authStatus`, `runtimeStatus`, and bounded runtime diagnostics. When provider usage snapshots are available, the OAuth/API-key status section includes provider usage windows and quota snapshots. Current usage-window providers: Anthropic, GitHub Copilot, OpenAI, MiniMax, Xiaomi, and z.ai. Usage auth comes from provider-specific hooks when available; otherwise OpenClaw falls back to matching OAuth/API-key credentials from auth profiles, env, or config.
+`openclaw models status` shows the resolved default/fallbacks plus an auth overview. Active profile cooldowns appear under **Unavailable auth profiles** with the stored reason and recovery action; JSON output exposes the same data in `auth.unusableProfiles`. For plugin-owned agent runtimes such as Codex, status also checks whether the owning plugin is enabled and passed startup payload verification. A route with valid credentials but an unavailable runtime reports `status: unavailable` instead of `usable`; JSON output includes separate `authStatus`, `runtimeStatus`, and bounded runtime diagnostics. When provider usage snapshots are available, the OAuth/API-key status section includes provider usage windows and quota snapshots. Current usage-window providers: Anthropic, GitHub Copilot, OpenAI, MiniMax, SuperGrok via xAI OAuth, Xiaomi, and z.ai. Usage auth comes from provider-specific hooks when available; otherwise OpenClaw falls back to matching OAuth/API-key credentials from auth profiles, env, or config.
 
 In `--json` output, `auth.providers` is the env/config/store-aware provider overview, while `auth.oauth` is auth-store profile health only.
 
@@ -151,6 +155,8 @@ Manages `agents.defaults.model.fallbacks`. `openclaw models image-fallbacks list
 
 ## Auth profiles
 
+Before a `models auth` command changes the local auth store, OpenClaw compares the selected CLI state/config paths with the local Gateway or its installed service. A proven mismatch stops before the write. A remote Gateway or an authenticated path that cannot be verified produces a warning instead.
+
 ```bash
 openclaw models auth add
 openclaw models auth list [--provider <id>] [--json]
@@ -171,6 +177,8 @@ openclaw models auth order clear --provider <id>
 `models auth list` lists saved auth profiles for the selected agent without printing token, API-key, or OAuth secret material. Active cooldown and disable entries include their reason and recovery action. Legacy Gemini CLI OAuth cooldowns direct you to the supported Google AI Studio API-key setup instead of offering an unavailable Gemini CLI login flow. Use `--provider <id>` to filter to one provider, such as `openai`, and `--json` for scripting.
 
 `models auth login` runs a provider plugin's auth flow (OAuth/API key). Use `openclaw plugins list` to see which providers are installed. `login` accepts `--profile-id <id>` for providers that support named profiles during login (use this to keep multiple logins for the same provider separate), `--method <id>` to pick a specific auth method, `--device-code` as a shortcut for `--method device-code`, `--set-default` to apply the provider's recommended default model, and `--force` to remove existing profiles for that provider first (use when a cached OAuth profile is stuck or you want to switch accounts).
+
+For the shared-main agent, `--force` clears the provider's shared credentials and main-agent local overrides, including their order and health state. For another agent it clears only that agent's local profiles, leaving shared credentials unchanged. A busy auth store stops the command before login starts; close other OpenClaw commands using the same state directory and retry. SQLite lock diagnostics can name either the shared state database or an agent database, so checking only the legacy auth file for open handles does not rule out contention.
 
 `models auth logout <profileId>` removes one saved auth profile from the selected agent auth store. Use the profile id shown by `models auth list`. It also drops that profile from `auth.profiles` and from every `auth.order` list in your config, so no stale reference is left behind, and it deletes an `auth.order.<provider>` entry that would otherwise be emptied (an authored empty order means "select no profiles" and would disable the provider). It prompts for confirmation on a TTY; pass `--yes` for scripts and agents. Logout refuses when the profile is not in the store, or when a `models.providers.<id>.apiKey` entry names it — change that config value first.
 

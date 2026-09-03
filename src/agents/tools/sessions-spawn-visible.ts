@@ -27,6 +27,7 @@ import {
   countActiveRunsForSession,
   registerSubagentRun,
 } from "../subagents/registry/subagent-registry.js";
+import { deleteSubagentSessionForCleanup } from "../subagents/registry/subagent-session-cleanup.js";
 import { getSubagentDepthFromSessionStore } from "../subagents/spawn/subagent-depth.js";
 import { resolveSubagentSpawnOwnership } from "../subagents/spawn/subagent-spawn-ownership.js";
 import { resolveConfiguredSubagentRunTimeoutSeconds } from "../subagents/spawn/subagent-spawn-plan.js";
@@ -83,21 +84,6 @@ function summarizeSessionsSpawnError(error: unknown): string {
   return error instanceof Error ? error.message : typeof error === "string" ? error : "error";
 }
 
-async function deleteVisibleSession(
-  gatewayCall: InProcessGatewayCaller,
-  childSessionKey: string,
-): Promise<void> {
-  try {
-    await gatewayCall("sessions.delete", {
-      key: childSessionKey,
-      deleteTranscript: true,
-      emitLifecycleHooks: false,
-    });
-  } catch {
-    // Best-effort rollback only.
-  }
-}
-
 export async function maybeSpawnVisibleSession(params: {
   raw: Record<string, unknown>;
   task: string;
@@ -107,6 +93,7 @@ export async function maybeSpawnVisibleSession(params: {
   requestedAgentId?: string;
   runTimeoutSeconds?: number;
   sandbox: "inherit" | "require";
+  expectsCompletionMessage: boolean;
   options?: VisibleSessionsSpawnOptions;
 }): Promise<Record<string, unknown> | undefined> {
   const promptedAt = Date.now();
@@ -250,13 +237,20 @@ export async function maybeSpawnVisibleSession(params: {
     cfg,
     runTimeoutSeconds: params.runTimeoutSeconds,
   });
-  const requesterRuntime = resolveSandboxRuntimeStatus({ cfg, sessionKey: requesterKey });
-  const childRuntime = resolveSandboxRuntimeStatus({
+  const requesterRuntime = resolveSandboxRuntimeStatus({
     cfg,
-    sessionKey: `agent:${targetAgentId}:dashboard:pending`,
+    sessionKey: requesterKey,
+    agentId: requesterAgentId,
   });
+  // Gateway creation inherits the exact parent's requirement before admitting a child run.
+  const childRuntimeSandboxed =
+    requesterRuntime.sandboxRequired ||
+    resolveSandboxRuntimeStatus({
+      cfg,
+      sessionKey: `agent:${targetAgentId}:dashboard:pending`,
+    }).sandboxed;
   const requesterSandboxed = params.options?.sandboxed === true || requesterRuntime.sandboxed;
-  if (!childRuntime.sandboxed && (requesterSandboxed || params.sandbox === "require")) {
+  if (!childRuntimeSandboxed && (requesterSandboxed || params.sandbox === "require")) {
     return {
       status: "forbidden",
       error: requesterSandboxed
@@ -273,7 +267,7 @@ export async function maybeSpawnVisibleSession(params: {
     : undefined;
   // Sandbox mounts only the target workspace; cwd must stay within that boundary.
   if (
-    childRuntime.sandboxed &&
+    childRuntimeSandboxed &&
     spawnedCwd &&
     (!spawnedWorkspaceCwd || !isPathInside(spawnedWorkspaceCwd, spawnedCwd))
   ) {
@@ -320,6 +314,8 @@ export async function maybeSpawnVisibleSession(params: {
         }));
     let response: {
       key?: string;
+      sessionId?: string;
+      entry?: { lifecycleRevision?: string };
       runStarted?: boolean;
       runId?: string;
       runError?: unknown;
@@ -373,21 +369,28 @@ export async function maybeSpawnVisibleSession(params: {
         error: runError,
       };
     }
-    if (response.runStarted !== true) {
-      await deleteVisibleSession(gatewayCall, childSessionKey);
-      return { status: "error", error: runError, childSessionKey };
-    }
-    if (!runId) {
-      // A started run with no run id is untrackable: it cannot be registered,
-      // announced, or cancelled, so never leave it as a visible orphan. Abort
-      // by key to stop whatever is running, then delete the session.
-      try {
-        await gatewayCall("sessions.abort", { key: childSessionKey, agentId: targetAgentId });
-      } catch {
-        // Best-effort stop before cleanup.
-      }
-      await deleteVisibleSession(gatewayCall, childSessionKey);
-      return { status: "error", error: runError };
+    const cleanupCreatedSession = async () => {
+      // Deletion drains active work only after checking the creation receipt.
+      // Never recapture identity from a key that a reset or replacement may own.
+      const outcome = await deleteSubagentSessionForCleanup({
+        callGateway: ({ method, params: cleanupParams }) => gatewayCall(method, cleanupParams),
+        childSessionKey,
+        expectedSessionId: response.sessionId,
+        expectedLifecycleRevision: response.entry?.lifecycleRevision,
+        emitLifecycleHooks: false,
+      });
+      return outcome === "deleted"
+        ? "Session removed."
+        : outcome === "changed"
+          ? "Session changed; newer session kept."
+          : "Session cleanup unconfirmed. Inspect the child session before retrying.";
+    };
+    if (response.runStarted !== true || !runId) {
+      return {
+        status: "error",
+        error: `${runError}. ${await cleanupCreatedSession()}`,
+        childSessionKey,
+      };
     }
     try {
       (params.options?.registerRun ?? registerSubagentRun)({
@@ -409,41 +412,17 @@ export async function maybeSpawnVisibleSession(params: {
         task: params.task,
         taskName: params.taskName,
         agentId: targetAgentId,
-        requesterAgentId: params.options?.requesterAgentIdOverride,
+        requesterAgentId,
         cleanup: "keep",
         label: params.label || undefined,
         runTimeoutSeconds,
-        expectsCompletionMessage: params.raw.expectsCompletionMessage !== false,
+        expectsCompletionMessage: params.expectsCompletionMessage,
         spawnMode: "run",
       });
     } catch (error) {
-      let abortResponse: { abortedRunId?: string | null };
-      try {
-        abortResponse = await gatewayCall<{ abortedRunId?: string | null }>("sessions.abort", {
-          key: childSessionKey,
-          runId,
-          agentId: targetAgentId,
-        });
-      } catch (abortError) {
-        return {
-          status: "error",
-          error: `Visible run registration failed: ${summarizeSessionsSpawnError(error)}. Run abort failed: ${summarizeSessionsSpawnError(abortError)}. Session kept.`,
-          childSessionKey,
-          runId,
-        };
-      }
-      if (abortResponse.abortedRunId !== runId) {
-        return {
-          status: "error",
-          error: `Visible run registration failed: ${summarizeSessionsSpawnError(error)}. Run abort unconfirmed. Session kept.`,
-          childSessionKey,
-          runId,
-        };
-      }
-      await deleteVisibleSession(gatewayCall, childSessionKey);
       return {
         status: "error",
-        error: `Visible run registration failed: ${summarizeSessionsSpawnError(error)}. Run aborted; cleanup attempted.`,
+        error: `Visible run registration failed: ${summarizeSessionsSpawnError(error)}. ${await cleanupCreatedSession()}`,
         childSessionKey,
         runId,
       };

@@ -108,6 +108,7 @@ describe("chat pane session menu boundary", () => {
         false,
         undefined,
         false,
+        null,
       ),
       container,
     );

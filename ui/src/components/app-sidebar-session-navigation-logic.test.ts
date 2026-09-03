@@ -1,13 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
-import { t } from "../i18n/index.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { collectKnownSessionRows, fetchSessionLineage } from "./app-sidebar-child-session-data.ts";
 import {
   buildSidebarSessionNavigationState,
   compareSidebarSessionRowsByMode,
-  resolveSidebarAgentChipSubtitle,
   resolveSidebarMainSessionKey,
 } from "./app-sidebar-session-navigation-logic.ts";
 import { projectSessionTree } from "./app-sidebar-session-tree.ts";
@@ -215,22 +213,6 @@ describe("sidebar session live-run projection", () => {
       expect(projected.gatewayHasActiveRun).toBe(gatewayHasActiveRun);
     },
   );
-
-  it("stops calling a completed registry-active agent Working", () => {
-    const session = {
-      key: "agent:main:main",
-      kind: "direct",
-      updatedAt: 1,
-      hasActiveRun: true,
-    } satisfies GatewaySessionRow;
-
-    expect(resolveSidebarAgentChipSubtitle({ ...session, status: "done" })).not.toBe(
-      t("agentChip.working"),
-    );
-    expect(resolveSidebarAgentChipSubtitle({ ...session, status: "running" })).toBe(
-      t("agentChip.working"),
-    );
-  });
 
   it("carries active cloud disk pressure into the existing sidebar badge model", () => {
     const projected = projectSidebarSession({

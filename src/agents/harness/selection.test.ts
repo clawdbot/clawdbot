@@ -1,5 +1,6 @@
 // Covers agent harness selection, fallback behavior, and compaction routing.
 import path from "node:path";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -8,12 +9,17 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  listSessionPendingInputs,
+  loadTranscriptEvents,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
+import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
 import { createOpenClawCodingTools } from "../../plugin-sdk/agent-harness.js";
 import { createPluginRecord } from "../../plugins/loader-records.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
@@ -24,6 +30,7 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -569,6 +576,85 @@ function registerTestCompactor(
 }
 
 describe("runAgentHarnessAttempt", () => {
+  it("binds native provenance to staged input before dispatch and preserves it on a suppressed retry", async () => {
+    const root = trajectoryTempDirs.make("openclaw-harness-staged-annotation-");
+    const target = {
+      agentId: "main",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      storePath: path.join(root, "agents", "main", "sessions", "sessions.json"),
+    };
+    await replaceSessionEntry(target, {
+      sessionId: target.sessionId,
+      updatedAt: 1,
+      activeWriterRunId: "run-1",
+    });
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text: "hello", idempotencyKey: "run-1:user", timestamp: 1 },
+      target: { ...target, sessionEntry: undefined },
+    });
+    expect(await recorder.stageApproved?.({ runId: "run-1", assertCurrent: () => {} })).toBe(true);
+    expect(recorder.getAdmissionReceipt()).toBeUndefined();
+    const annotation = {
+      mirrorIdentity: "native-turn:prompt",
+      upstreamUserText: "native prompt",
+      mirrorOrigin: "native-harness",
+      mirrorSourceFingerprint: sha256HexPrefixCore(
+        JSON.stringify({ role: "user", content: "hello", upstreamUserText: "native prompt" }),
+        32,
+      ),
+    };
+    registerAgentHarness(
+      {
+        id: "native",
+        label: "Native",
+        supports: () => ({ supported: true, priority: 100 }),
+        runAttempt: async (attempt) => {
+          if (attempt.suppressNextUserMessagePersistence) {
+            expect(attempt.hostCapabilities?.annotateCurrentUserTurn).toBeUndefined();
+          } else {
+            const annotate = attempt.hostCapabilities?.annotateCurrentUserTurn;
+            expect(annotate).toBeTypeOf("function");
+            await annotate?.(annotation);
+          }
+          return createAttemptResult(target.sessionId);
+        },
+      },
+      { ownerPluginId: "native" },
+    );
+    const params = {
+      ...createAttemptParams(providerRuntimeConfig("codex", "native")),
+      ...target,
+      sessionTarget: target,
+      userTurnTranscriptRecorder: recorder,
+    };
+    try {
+      await recorder.withPendingInput?.(() => runAgentHarnessAttempt(params));
+      const admission = recorder.getAdmissionReceipt();
+      expect(admission).toBeDefined();
+      const committed = await loadTranscriptEvents(target);
+      expect(committed.filter((event) => asOptionalRecord(event)?.type === "message")).toHaveLength(
+        1,
+      );
+      expect(committed).toContainEqual(
+        expect.objectContaining({
+          id: admission?.entryId,
+          message: expect.objectContaining({
+            role: "user",
+            content: "hello",
+            idempotencyKey: "run-1:user",
+            __openclaw: expect.objectContaining({ ...annotation, runId: "run-1" }),
+          }),
+        }),
+      );
+      expect(listSessionPendingInputs(target)).toEqual({ items: [], total: 0 });
+      await runAgentHarnessAttempt({ ...params, suppressNextUserMessagePersistence: true });
+      expect(await loadTranscriptEvents(target)).toEqual(committed);
+    } finally {
+      recorder.finishPendingInput?.("interrupted");
+    }
+  });
+
   it("uses registry ownership rather than declared harness metadata for approvals", async () => {
     let observedApprovalOwner: string | undefined;
     mockCallGatewayTool.mockImplementationOnce(async () => {
@@ -889,9 +975,9 @@ describe("runAgentHarnessAttempt", () => {
     ]);
   });
 
-  it.each(["heartbeat"] as const)(
-    "records %s classification on the host-owned turn candidate",
-    async (bootstrapContextRunKind) => {
+  it.each(["complete", "missing admission", "missing terminal"] as const)(
+    "records native terminal facts only with complete anchors: %s",
+    async (boundary) => {
       const admission = {
         ...createTranscriptAnchor("user-1", 1, 0),
         logicalTurnId: "heartbeat-turn",
@@ -906,7 +992,7 @@ describe("runAgentHarnessAttempt", () => {
           supports: () => ({ supported: true, priority: 100 }),
           runAttempt: async () => ({
             ...createAttemptResult("session-1"),
-            contextEngineTerminalAnchor: terminal,
+            contextEngineTerminalAnchor: boundary === "missing terminal" ? undefined : terminal,
           }),
         },
         { ownerPluginId: "codex" },
@@ -920,22 +1006,26 @@ describe("runAgentHarnessAttempt", () => {
         sessionKey: admission.sessionKey,
         storePath: admission.storePath,
       };
-      params.bootstrapContextRunKind = bootstrapContextRunKind;
-      params.userTurnTranscriptRecorder = createTranscriptRecorder(admission);
+      params.bootstrapContextRunKind = "heartbeat";
+      params.userTurnTranscriptRecorder =
+        boundary === "missing admission" ? undefined : createTranscriptRecorder(admission);
       params.onContextEngineTurnCandidate = onContextEngineTurnCandidate;
 
       await runAgentHarnessAttempt(params);
 
-      expect(onContextEngineTurnCandidate).toHaveBeenCalledWith(
-        expect.objectContaining({
-          boundary: { admission, terminal },
-          harnessId: "codex",
-          isHeartbeat: true,
-          promptError: false,
-          aborted: false,
-          yieldAborted: false,
-        }),
-      );
+      if (boundary === "complete") {
+        expect(onContextEngineTurnCandidate).toHaveBeenCalledWith(
+          expect.objectContaining({
+            boundary: { admission, terminal },
+            isHeartbeat: true,
+            promptError: false,
+            aborted: false,
+            yieldAborted: false,
+          }),
+        );
+      } else {
+        expect(onContextEngineTurnCandidate).not.toHaveBeenCalled();
+      }
     },
   );
 
@@ -3942,39 +4032,42 @@ describe("selectAgentHarness", () => {
     expect(compact).toHaveBeenCalledTimes(1);
   });
 
-  it("uses sandbox session key for compaction preflight runtime policy", async () => {
-    const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
-      ok: true,
-      compacted: false,
-    }));
-    registerAgentHarness(
-      {
-        id: "codex",
-        label: "Codex",
-        supports: (ctx) =>
-          ctx.provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
-        runAttempt: vi.fn(async () => createAttemptResult("codex")),
-        compact,
-      },
-      { ownerPluginId: "codex" },
-    );
+  it.each(["agent:main:main", undefined])(
+    "keeps compaction policy separate from execution key %s",
+    async (sessionKey) => {
+      const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+        ok: true,
+        compacted: false,
+      }));
+      registerAgentHarness(
+        {
+          id: "codex",
+          label: "Codex",
+          supports: (ctx) =>
+            ctx.provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
+          runAttempt: vi.fn(async () => createAttemptResult("codex")),
+          compact,
+        },
+        { ownerPluginId: "codex" },
+      );
 
-    await expect(
-      maybeCompactAgentHarnessSession({
-        sessionId: "session-1",
-        sessionKey: "agent:main:main",
-        sandboxSessionKey: "agent:strict:main",
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/tmp/workspace",
-        provider: "openai",
-        model: "gpt-5.5",
-        agentId: "main",
-        config: agentModelRuntimeConfig("openai/gpt-5.5", "codex", "strict"),
-      }),
-    ).resolves.toEqual({ ok: true, compacted: false });
-    expect(compact).toHaveBeenCalledTimes(1);
-    expect(compact.mock.calls[0]?.[0]).toMatchObject({ agentId: "main" });
-  });
+      await expect(
+        maybeCompactAgentHarnessSession({
+          sessionId: "session-1",
+          sessionKey,
+          sandboxSessionKey: "agent:strict:main",
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/tmp/workspace",
+          provider: "openai",
+          model: "gpt-5.5",
+          agentId: "main",
+          config: agentModelRuntimeConfig("openai/gpt-5.5", "codex", "strict"),
+        }),
+      ).resolves.toEqual({ ok: true, compacted: false });
+      expect(compact).toHaveBeenCalledTimes(1);
+      expect(compact.mock.calls[0]?.[0]).toMatchObject({ agentId: "main" });
+    },
+  );
 
   it("keeps explicit agent id for non-agent sandbox policy keys during compaction preflight", async () => {
     const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({

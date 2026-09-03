@@ -107,9 +107,9 @@ describe("AppSidebar viewer presence", () => {
       .querySelector<HTMLAnchorElement>(".person-activity-card footer a")!
       .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     expect(onNavigate).toHaveBeenCalledWith("activity", {
-      href: "/activity?person=alice",
-      pathname: "/activity",
-      search: "?person=alice",
+      href: "/activity/alice",
+      pathname: "/activity/alice",
+      search: "",
     });
   });
 
@@ -539,7 +539,10 @@ describe("AppSidebar viewer presence", () => {
     );
   });
 
-  it("renders an Account fallback for an unidentified connection", async () => {
+  it.each([
+    undefined,
+    { id: "owner-profile", identity: { type: "profile" as const, id: "owner-profile" } },
+  ])("renders an Owner fallback without a name or email (%j)", async (user) => {
     const client = { instanceId: "anonymous-self" } as GatewayBrowserClient;
     const gatewayHarness = createGatewayHarness(client);
     const { sidebar } = await mountSidebar(
@@ -549,7 +552,7 @@ describe("AppSidebar viewer presence", () => {
 
     gatewayHarness.publishEvent("presence", {
       presence: [
-        { instanceId: "anonymous-self", watchedSessions: ["agent:main:main"] },
+        { instanceId: "anonymous-self", user, watchedSessions: ["agent:main:main"] },
         {
           instanceId: "alice",
           user: { id: "alice", identity: { type: "profile" as const, id: "alice" }, name: "Alice" },
@@ -560,8 +563,10 @@ describe("AppSidebar viewer presence", () => {
 
     const identityCard = sidebar.querySelector(".sidebar-identity-card");
     expect(identityCard?.querySelector(".sidebar-identity-card__name")?.textContent?.trim()).toBe(
-      "Account",
+      "Owner",
     );
-    expect(identityCard?.querySelector('[data-viewer-id="account"]')?.textContent).toContain("A");
+    expect(
+      identityCard?.querySelector(`[data-viewer-id="${user?.id ?? "owner"}"]`)?.textContent,
+    ).toContain("O");
   });
 });

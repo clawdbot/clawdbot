@@ -3,6 +3,7 @@
  *
  * Applies configured and runtime conversation bindings to agent route resolution.
  */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import {
@@ -14,7 +15,10 @@ import {
 import { isPluginOwnedBindingMetadata } from "../../plugins/conversation-binding-metadata.js";
 import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
 import { deriveLastRoutePolicy } from "../../routing/resolve-route.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  isUnscopedSessionKeySentinel,
+  resolveAgentIdFromSessionKey,
+} from "../../routing/session-key.js";
 import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
 import { ensureConfiguredBindingTargetReady } from "./binding-targets.js";
 import type { ConfiguredBindingResolution } from "./binding-types.js";
@@ -98,8 +102,10 @@ export function resolveConfiguredBindingRoute(
       route: params.route,
     };
   }
-  const boundAgentId =
-    resolveAgentIdFromSessionKey(boundSessionKey) || bindingResolution.statefulTarget.agentId;
+  const boundAgentId = resolveAgentIdFromSessionKey(
+    boundSessionKey,
+    bindingResolution.statefulTarget.agentId,
+  );
   // Configured bindings own the session key, so recompute last-route policy against that target
   // before downstream delivery records the route.
   return {
@@ -182,7 +188,13 @@ export function resolveRuntimeConversationBindingRoute(
     };
   }
 
-  const boundAgentId = resolveAgentIdFromSessionKey(boundSessionKey) || params.route.agentId;
+  // Only canonical sentinels can borrow an agent owner. Opaque targets require plugin metadata.
+  const boundAgentId = resolveAgentIdFromSessionKey(
+    boundSessionKey,
+    isUnscopedSessionKeySentinel(boundSessionKey)
+      ? (normalizeOptionalString(bindingRecord.metadata?.agentId) ?? params.route.agentId)
+      : undefined,
+  );
   return {
     bindingOwnerAvailable: true,
     bindingRecord,

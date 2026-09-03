@@ -56,7 +56,7 @@ suite.define(() => {
         )
         .toBe(true);
       expect(await gateway.getRequests("talk.client.create")).toHaveLength(0);
-      await captureMicrophoneLossProof(page, "prepared-input-pending.png");
+      await captureMicrophoneLossProof(suite, page, "prepared-input-pending.png");
       const guidance = page.locator('.agent-chat__talk-status[role="status"]');
       await expect
         .poll(() => guidance.allTextContents())
@@ -76,7 +76,7 @@ suite.define(() => {
         .toBe(1);
       await expect.poll(() => guidance.count()).toBe(0);
       expect(await gateway.getRequests("talk.client.create")).toHaveLength(1);
-      await captureMicrophoneLossProof(page, "prepared-input-ready.png");
+      await captureMicrophoneLossProof(suite, page, "prepared-input-ready.png");
       await page.getByRole("button", { name: "Stop voice input" }).click();
     });
   });
@@ -120,10 +120,10 @@ suite.define(() => {
           )
           .toMatchObject({ status: "listening" });
       } catch (error) {
-        await captureMicrophoneLossProof(page, "microphone-loss-setup-failure.png");
+        await captureMicrophoneLossProof(suite, page, "microphone-loss-setup-failure.png");
         throw error;
       }
-      await captureMicrophoneLossProof(page, "microphone-loss-before-listening.png");
+      await captureMicrophoneLossProof(suite, page, "microphone-loss-before-listening.png");
 
       await page.evaluate(() => {
         (
@@ -150,7 +150,7 @@ suite.define(() => {
           }),
         )
         .toEqual({ tracksStopped: 1, peerClosed: true, trackState: "ended", audioElements: 0 });
-      await captureMicrophoneLossProof(page, "microphone-loss-after-error.png");
+      await captureMicrophoneLossProof(suite, page, "microphone-loss-after-error.png");
       await gateway.waitForRequest("talk.client.close");
       await page.getByRole("button", { name: "Dismiss voice input error" }).click();
       console.info(

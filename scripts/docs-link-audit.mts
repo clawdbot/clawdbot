@@ -110,6 +110,39 @@ function escapeHtmlAttribute(value: string) {
     .replaceAll(">", "&gt;");
 }
 
+function collectMarkdownCodeLines(tokens: MarkdownToken[]): Set<number> {
+  const lines = new Set<number>();
+  for (const token of tokens) {
+    if ((token.type === "fence" || token.type === "code_block") && token.map) {
+      for (let line = token.map[0]; line < token.map[1]; line++) {
+        lines.add(line);
+      }
+    }
+  }
+  return lines;
+}
+
+function collectCodeLines(raw: string): Set<number> {
+  try {
+    const lines = new Set<number>();
+    const visit = (node: Nodes): void => {
+      if (node.type === "code" && node.position) {
+        for (let line = node.position.start.line; line <= node.position.end.line; line++) {
+          lines.add(line - 1);
+        }
+      }
+      if ("children" in node) {
+        node.children.forEach(visit);
+      }
+    };
+    visit(MDX_PROCESSOR.parse(raw));
+    return lines;
+  } catch {
+    // Legacy malformed MDX still needs the same tolerant code ranges as external-link auditing.
+    return collectMarkdownCodeLines(MARKDOWN_PARSER.parse(raw, {}));
+  }
+}
+
 /**
  * Projects parsed Markdown links onto their source lines. MDX parsing owns the
  * normal path; markdown-it is a tolerant fallback for legacy malformed pages.
@@ -182,14 +215,7 @@ function projectExternalLinkMarkdown(raw: string) {
     const inlineVerbatimLinks = new Map<string, number>();
     const transparentEnv: Record<string, unknown> = {};
     const transparentTokens = MARKDOWN_PARSER.parse(raw, transparentEnv);
-    const fallbackCodeLines = new Set<number>();
-    for (const token of transparentTokens) {
-      if ((token.type === "fence" || token.type === "code_block") && token.map) {
-        for (let line = token.map[0]; line < token.map[1]; line += 1) {
-          fallbackCodeLines.add(line);
-        }
-      }
-    }
+    const fallbackCodeLines = collectMarkdownCodeLines(transparentTokens);
     const childUrl = (child: MarkdownToken): string | undefined => {
       const value =
         child.type === "link_open"
@@ -720,7 +746,7 @@ function auditDocsLinks(options: { docsDir?: string; allowExternalClawHubRoutes?
     const rawText = fs.readFileSync(abs, "utf8");
     const lines = rawText.split("\n");
 
-    let inCodeFence = false;
+    const codeLines = collectCodeLines(rawText);
 
     for (let lineNum = 0; lineNum < lines.length; lineNum++) {
       let line = lines[lineNum];
@@ -728,11 +754,7 @@ function auditDocsLinks(options: { docsDir?: string; allowExternalClawHubRoutes?
         continue;
       }
 
-      if (line.trim().startsWith("```")) {
-        inCodeFence = !inCodeFence;
-        continue;
-      }
-      if (inCodeFence) {
+      if (codeLines.has(lineNum)) {
         continue;
       }
 

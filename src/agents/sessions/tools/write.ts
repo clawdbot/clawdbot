@@ -25,13 +25,15 @@ import {
   withFileMutationQueueKeyResolution,
 } from "./file-mutation-queue.js";
 import { type PersistedFileStat, verifyPersistedUtf8File } from "./file-write-verification.js";
-import { resolveToCwd } from "./path-utils.js";
+import { resolveLocalPathToCwd, resolveToCwd } from "./path-utils.js";
 import {
   invalidArgText,
   normalizeDisplayText,
   replaceTabs,
+  reuseTextComponent,
   shortenPath,
   str,
+  trimTrailingEmptyLines,
 } from "./render-utils.js";
 import type { WriteToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
@@ -246,14 +248,6 @@ function updateWriteHighlightCacheIncremental(
   }
   refreshWriteHighlightPrefix(cache);
   return cache;
-}
-
-function trimTrailingEmptyLines(lines: string[]): string[] {
-  let end = lines.length;
-  while (end > 0 && lines[end - 1] === "") {
-    end--;
-  }
-  return lines.slice(0, end);
 }
 
 function formatWriteCall(
@@ -523,6 +517,7 @@ export function createWriteToolDefinition(
   options?: WriteToolOptions,
 ): ToolDefinition<typeof writeSchema, WriteToolDetails> {
   const ops = options?.operations ?? defaultWriteOperations;
+  const resolvePath = options?.operations ? resolveToCwd : resolveLocalPathToCwd;
   return {
     name: "write",
     label: "write",
@@ -541,7 +536,7 @@ export function createWriteToolDefinition(
       void toolCallId;
       void onUpdate;
       void ctx;
-      const absolutePath = resolveToCwd(path, cwd);
+      const absolutePath = resolvePath(path, cwd);
       const dir = dirname(absolutePath);
       const queueKey = resolveFileMutationQueueKey(absolutePath, ops.resolveQueueKey, signal);
       return withFileMutationQueueKeyResolution(queueKey, async () => {
@@ -549,14 +544,12 @@ export function createWriteToolDefinition(
         if (signal?.aborted) {
           throw new Error("Operation aborted");
         }
-        // Terminal no-op: file already has identical content.
+        // No-op: file already has identical content. Not terminal — the model
+        // may still be mid-task and needs a continuation, not an ended turn.
         if (precheck.state === "same") {
-          return {
-            ...textResult(`No changes made to ${path}. The file already has identical content.`, {
-              changed: false,
-            } satisfies WriteToolDetails),
-            terminate: true,
-          };
+          return textResult(`No changes made to ${path}. The file already has identical content.`, {
+            changed: false,
+          } satisfies WriteToolDetails);
         }
         const details = await resolveWriteDetails({ absolutePath, content, ops, path, precheck });
         try {
@@ -626,9 +619,7 @@ export function createWriteToolDefinition(
         component.clear();
         return component;
       }
-      const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-      text.setText(output);
-      return text;
+      return reuseTextComponent(context.lastComponent, output);
     },
   };
 }

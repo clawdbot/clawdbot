@@ -46,6 +46,13 @@ function restoreProcessEnv(): void {
   }
 }
 
+// Compare every key without printing ambient credentials in assertion failures.
+function changedEnvKeys(expected: NodeJS.ProcessEnv): string[] {
+  return [...new Set([...Object.keys(expected), ...Object.keys(process.env)])].filter(
+    (key) => expected[key] !== process.env[key],
+  );
+}
+
 function writeFile(targetPath: string, content: string): void {
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
   fs.writeFileSync(targetPath, content, "utf8");
@@ -125,6 +132,7 @@ describe("installTestEnv", () => {
           OPENCLAW_LIVE_USE_REAL_HOME: undefined,
           OPENCLAW_LIVE_TEST_QUIET: "1",
           OPENCLAW_TEST_FAST: "",
+          COREPACK_HOME: undefined,
           ACQUISITION_PROFILE_ADDED: undefined,
           ACQUISITION_PROFILE_EMPTY: "",
         },
@@ -154,10 +162,7 @@ describe("installTestEnv", () => {
             fault.mockRestore();
           }
           expect(failedHome).not.toBe("");
-          const changedKeys = [
-            ...new Set([...Object.keys(callerEnv), ...Object.keys(process.env)]),
-          ].filter((key) => callerEnv[key] !== process.env[key]);
-          expect.soft(changedKeys).toEqual([]);
+          expect.soft(changedEnvKeys(callerEnv)).toEqual([]);
           expect.soft(fs.existsSync(failedHome)).toBe(false);
           expect(fs.readdirSync(sandbox)).toEqual([]);
           expect(fs.readFileSync(configPath, "utf8")).toBe("{}\n");
@@ -508,6 +513,57 @@ describe("installTestEnv", () => {
       expect(process.env[key]).toBe(callerPath);
     },
   );
+
+  it.each([
+    {
+      name: "explicit",
+      corepack: "tool-cache",
+      xdg: "xdg",
+      local: "local",
+      expected: "tool-cache",
+    },
+    { name: "explicit empty", corepack: "", xdg: "xdg", local: "local", expected: "" },
+    { name: "explicit whitespace", corepack: " tool-cache ", expected: " tool-cache " },
+    { name: "XDG before LOCALAPPDATA", xdg: "xdg", local: "local", expected: "xdg/node/corepack" },
+    { name: "empty XDG", xdg: "", local: "local", expected: "node/corepack" },
+    { name: "LOCALAPPDATA", local: "local", expected: "local/node/corepack" },
+    { name: "empty LOCALAPPDATA", local: "", expected: "node/corepack" },
+    { name: "OS home" },
+  ])("preserves the $name Corepack cache across HOME isolation and cleanup", (testCase) => {
+    const realHome = createTempHome();
+    withEnv(
+      {
+        HOME: realHome,
+        USERPROFILE: realHome,
+        COREPACK_HOME: testCase.corepack,
+        XDG_CACHE_HOME: testCase.xdg,
+        LOCALAPPDATA: testCase.local,
+      },
+      () => {
+        const callerEnv = { ...process.env };
+        const expected =
+          testCase.expected === undefined
+            ? path.join(
+                os.homedir(),
+                process.platform === "win32" ? "AppData/Local" : ".cache",
+                "node/corepack",
+              )
+            : testCase.corepack === undefined
+              ? path.normalize(testCase.expected)
+              : testCase.expected;
+        const testEnv = installTestEnv({ mode: "hermetic" });
+        cleanupFns.push(testEnv.cleanup);
+
+        expect(process.env.HOME).toBe(testEnv.tempHome);
+        expect(process.env.XDG_CACHE_HOME).toBe(path.join(testEnv.tempHome, ".cache"));
+        expect(process.env.COREPACK_HOME).toBe(expected);
+        setTestEnvValue("COREPACK_HOME", path.join(testEnv.tempHome, "changed-tool-cache"));
+        testEnv.cleanup();
+        expect(changedEnvKeys(callerEnv)).toEqual([]);
+        expect(fs.existsSync(testEnv.tempHome)).toBe(false);
+      },
+    );
+  });
 
   it.each([
     "TWILIO_ACCOUNT_SID",

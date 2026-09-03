@@ -1,14 +1,10 @@
 // Context engine tests cover context extraction and prompt context assembly.
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createContextEngineLogicalTurnLease,
   selectContextEngineForTranscriptHost,
 } from "../agents/harness/context-engine-logical-turn.js";
-import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -24,7 +20,6 @@ import {
   withPluginRegistrationContext,
 } from "../plugins/runtime.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../sessions/user-turn-transcript.types.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 // ---------------------------------------------------------------------------
 // We dynamically import the registry so we can get a fresh module per test
 // group when needed.  For most groups we use the shared singleton directly.
@@ -45,6 +40,7 @@ import {
   registerContextEngineInRegistry,
   resolveContextEngine,
   resolveContextEngineOwnerPluginId,
+  resolveLogicalTurnContextEngines,
 } from "./registry.js";
 import {
   captureContextEngineRegistryStateForTests,
@@ -76,7 +72,7 @@ vi.mock("../agents/embedded-agent-runner/compact.runtime.js", () => ({
   compactEmbeddedAgentSessionOnDemand: compactEmbeddedAgentSessionOnDemandMock,
 }));
 
-function installCompactRuntimeSpy() {
+function installCompactRuntimeSpy(sessionTarget?: ContextEngineSessionTarget) {
   return compactEmbeddedAgentSessionOnDemandMock.mockResolvedValue({
     ok: true,
     compacted: false,
@@ -87,6 +83,7 @@ function installCompactRuntimeSpy() {
       tokensBefore: 0,
       tokensAfter: 0,
       details: undefined,
+      ...(sessionTarget ? { sessionTarget } : {}),
     },
   });
 }
@@ -144,6 +141,45 @@ let uniqueEngineIdCounter = 0;
 function uniqueEngineId(prefix: string): string {
   uniqueEngineIdCounter += 1;
   return `${prefix}-${uniqueEngineIdCounter}`;
+}
+
+async function withCompactionDelegateFixture(
+  acceptSessionKey: boolean,
+  run: (engine: ContextEngine) => Promise<void>,
+) {
+  registerLegacyContextEngine();
+  const engineId = uniqueEngineId("compaction-projection");
+  const compact = vi.fn<ContextEngine["compact"]>(delegateCompactionToRuntime);
+  registerTestContextEngine(engineId, () => ({
+    info: {
+      id: engineId,
+      name: "Compaction projection",
+      acceptedHostParams: acceptSessionKey
+        ? ["sessionKey", "runtimeContext", "sessionTarget"]
+        : ["runtimeContext", "sessionTarget"],
+    },
+    async ingest() {
+      return { ingested: false };
+    },
+    async assemble({ messages }) {
+      return { messages, estimatedTokens: 0 };
+    },
+    compact,
+  }));
+  const resolution = await resolveLogicalTurnContextEngines(configWithSlot(engineId));
+  try {
+    await run(resolution.configured.engine);
+    expect(compact).toHaveBeenCalledOnce();
+    if (!acceptSessionKey) {
+      // The registry, not an invalid typed call, owns host-field omission.
+      expect(compact.mock.calls[0]?.[0]).not.toHaveProperty("sessionKey");
+    }
+  } finally {
+    await Promise.allSettled([
+      resolution.configured.engine.dispose?.(),
+      resolution.fallback.engine.dispose?.(),
+    ]);
+  }
 }
 
 function registerPromptTrackingEngine(engineId: string) {
@@ -280,13 +316,13 @@ describe("Engine contract tests", () => {
   });
 
   it("delegateCompactionToRuntime reuses the legacy runtime bridge", async () => {
-    const compactRuntimeSpy = installCompactRuntimeSpy();
     const sessionTarget = {
       agentId: "main",
       sessionId: "s2",
       sessionKey: "agent:main:s2",
       storePath: "/tmp/openclaw-agent.sqlite",
     };
+    const compactRuntimeSpy = installCompactRuntimeSpy(sessionTarget);
     const runtimeContext = {
       workspaceDir: "/tmp/workspace",
       currentTokenCount: 12345,
@@ -324,97 +360,6 @@ describe("Engine contract tests", () => {
     });
   });
 
-  it("delegateCompactionToRuntime returns successor sessionTarget without sessionFile", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "context-successor-target-"));
-    const storePath = path.join(root, "openclaw-agent.sqlite");
-    try {
-      compactEmbeddedAgentSessionOnDemandMock.mockResolvedValueOnce({
-        ok: true,
-        compacted: true,
-        reason: undefined,
-        result: {
-          summary: "summary",
-          firstKeptEntryId: "entry-1",
-          tokensBefore: 100,
-          tokensAfter: 40,
-          details: undefined,
-          sessionId: "s3-successor",
-          sessionFile: `sqlite:main:s3-successor:${storePath}`,
-        },
-      });
-
-      const result = await delegateCompactionToRuntime({
-        sessionId: "s3",
-        sessionKey: "agent:main:s3",
-        tokenBudget: 4096,
-        runtimeContext: {
-          workspaceDir: "/tmp/workspace",
-        },
-      });
-
-      expect(result.result).toMatchObject({
-        sessionId: "s3-successor",
-        sessionTarget: {
-          agentId: "main",
-          sessionId: "s3-successor",
-          sessionKey: "agent:main:s3",
-          storePath,
-        },
-      });
-      expect(result.result).not.toHaveProperty("sessionFile");
-    } finally {
-      closeOpenClawAgentDatabasesForTest();
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("allows the caller key to rebind to a legacy successor session", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "context-successor-"));
-    const storePath = path.join(root, "agents", "main", "sessions", "sessions.json");
-    const sessionKey = "agent:main:successor";
-    try {
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey, storePath },
-        { sessionId: "before-compaction", updatedAt: 1 },
-      );
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: "agent:main:aaa-successor-alias", storePath },
-        { sessionId: "after-compaction", updatedAt: 2 },
-      );
-      compactEmbeddedAgentSessionOnDemandMock.mockResolvedValueOnce({
-        ok: true,
-        compacted: true,
-        reason: undefined,
-        result: {
-          summary: "summary",
-          firstKeptEntryId: "entry-1",
-          tokensBefore: 100,
-          tokensAfter: 40,
-          details: undefined,
-          sessionId: "after-compaction",
-          sessionFile: `sqlite:main:after-compaction:${storePath}`,
-        },
-      });
-
-      const result = await delegateCompactionToRuntime({
-        agentId: "main",
-        sessionId: "before-compaction",
-        sessionKey,
-        tokenBudget: 4096,
-      });
-
-      expect(result.result?.sessionTarget).toMatchObject({
-        agentId: "main",
-        sessionId: "after-compaction",
-        sessionKey,
-        storePath,
-      });
-    } finally {
-      closeOpenClawAgentDatabasesForTest();
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  });
-
   it("rejects a structured successor key from another agent", async () => {
     installCompactRuntimeSpy();
 
@@ -431,50 +376,7 @@ describe("Engine contract tests", () => {
         tokenBudget: 4096,
       }),
     ).rejects.toThrow("successor target conflicts with the caller session identity");
-  });
-
-  it("rejects a successor marker that changes the caller store", async () => {
-    compactEmbeddedAgentSessionOnDemandMock.mockResolvedValueOnce({
-      ok: true,
-      compacted: true,
-      result: {
-        tokensBefore: 100,
-        sessionId: "store-redirect-successor",
-        sessionFile: "sqlite:main:store-redirect-successor:/tmp/other.sqlite",
-      },
-    });
-
-    await expect(
-      delegateCompactionToRuntime({
-        sessionId: "store-redirect-source",
-        sessionKey: "agent:main:store-redirect",
-        sessionTarget: {
-          agentId: "main",
-          sessionId: "store-redirect-source",
-          sessionKey: "agent:main:store-redirect",
-          storePath: "/tmp/caller.sqlite",
-        },
-      }),
-    ).rejects.toThrow("successor target conflicts with the caller session identity");
-  });
-
-  it("rejects contradictory marker and top-level successor identities", async () => {
-    compactEmbeddedAgentSessionOnDemandMock.mockResolvedValueOnce({
-      ok: true,
-      compacted: true,
-      result: {
-        tokensBefore: 100,
-        sessionId: "top-level-successor",
-        sessionFile: "sqlite:main:marker-successor:/tmp/openclaw-agent.sqlite",
-      },
-    });
-
-    await expect(
-      delegateCompactionToRuntime({
-        sessionId: "source-session",
-        sessionKey: "agent:main:successor-conflict",
-      }),
-    ).rejects.toThrow("successor identity is inconsistent");
+    expect(compactEmbeddedAgentSessionOnDemandMock).not.toHaveBeenCalled();
   });
 
   it("rejects an internally consistent successor for another caller agent", async () => {
@@ -493,32 +395,116 @@ describe("Engine contract tests", () => {
         tokenBudget: 4096,
       }),
     ).rejects.toThrow("successor target conflicts with the caller session identity");
+    expect(compactEmbeddedAgentSessionOnDemandMock).not.toHaveBeenCalled();
   });
 
-  it("rejects a legacy successor marker for another caller agent", async () => {
-    compactEmbeddedAgentSessionOnDemandMock.mockResolvedValueOnce({
-      ok: true,
-      compacted: true,
-      reason: undefined,
-      result: {
-        summary: "summary",
-        firstKeptEntryId: "entry-1",
-        tokensBefore: 100,
-        tokensAfter: 40,
-        details: undefined,
-        sessionId: "worker-successor",
-        sessionFile: "sqlite:worker:worker-successor:/tmp/worker-sessions.json",
+  it.each([
+    { name: "caller agent", agentId: "worker" },
+    { name: "physical session", sessionId: "another-session" },
+    { name: "caller key", sessionKey: "agent:main:another-key" },
+    {
+      name: "runtime fallback agent",
+      agentId: undefined,
+      runtimeContext: { agentId: "worker" },
+    },
+    {
+      name: "runtime fallback key",
+      projectSessionKey: true,
+      runtimeContext: { sessionKey: "agent:main:another-key" },
+    },
+    {
+      name: "runtime fallback target",
+      sessionTarget: undefined,
+      runtimeContext: { sessionTarget: { sessionId: "another-session" } },
+    },
+    {
+      name: "target-only parsed key",
+      agentId: undefined,
+      projectSessionKey: true,
+      sessionTarget: { agentId: "worker", sessionKey: "agent:main:session" },
+    },
+    {
+      name: "agent and key without target",
+      agentId: "worker",
+      sessionTarget: undefined,
+    },
+  ])(
+    "rejects $name before a backend with no nested result can run",
+    async ({ name: _name, projectSessionKey, ...input }) => {
+      compactEmbeddedAgentSessionOnDemandMock.mockResolvedValue({ ok: true, compacted: true });
+      await withCompactionDelegateFixture(!projectSessionKey, async (engine) => {
+        await expect(
+          engine.compact({
+            agentId: "main",
+            sessionId: "session",
+            sessionKey: "agent:main:session",
+            sessionTarget: {
+              agentId: "main",
+              sessionId: "session",
+              sessionKey: "agent:main:session",
+            },
+            ...input,
+          }),
+        ).rejects.toThrow(/conflicts with/);
+        expect(compactEmbeddedAgentSessionOnDemandMock).not.toHaveBeenCalled();
+      });
+    },
+  );
+
+  it.each([false, true])(
+    "selects inputs before normalized comparisons (runtime fallback=%s)",
+    async (runtimeFallback) => {
+      const sessionTarget = {
+        agentId: " main ",
+        sessionId: " session ",
+        sessionKey: " agent:main:session ",
+      };
+      const runtimeContext = {
+        agentId: runtimeFallback ? "main" : "ignored",
+        sessionId: "ignored",
+        sessionKey: runtimeFallback ? "agent:main:session" : "agent:ignored:ignored",
+        sessionTarget: runtimeFallback ? sessionTarget : { agentId: "ignored" },
+      };
+      compactEmbeddedAgentSessionOnDemandMock.mockResolvedValue({ ok: true, compacted: true });
+      await withCompactionDelegateFixture(!runtimeFallback, async (engine) => {
+        const result = await engine.compact({
+          sessionId: "session",
+          sessionKey: "agent:main:session",
+          ...(runtimeFallback ? {} : { agentId: "main", sessionTarget }),
+          runtimeContext,
+        });
+        expect(result).toEqual({ ok: true, compacted: true, reason: undefined, result: undefined });
+        expect(requireCompactRuntimeParams(0)).toMatchObject({
+          agentId: "main",
+          sessionId: "session",
+          sessionKey: "agent:main:session",
+          sessionTarget,
+        });
+        expect(requireCompactRuntimeParams(0).contextEngineRuntimeContext).toBe(runtimeContext);
+      });
+    },
+  );
+
+  it("does not restore runtime identity over explicitly empty top-level inputs", async () => {
+    compactEmbeddedAgentSessionOnDemandMock.mockResolvedValue({ ok: true, compacted: false });
+    await delegateCompactionToRuntime({
+      agentId: "",
+      sessionId: "session",
+      sessionKey: "",
+      sessionTarget: {},
+      runtimeContext: {
+        agentId: "worker",
+        sessionId: "other-session",
+        sessionKey: "agent:worker:other",
+        sessionTarget: { agentId: "worker", sessionId: "other-session" },
       },
     });
-
-    await expect(
-      delegateCompactionToRuntime({
-        agentId: "main",
-        sessionId: "main-session",
-        sessionKey: "global",
-        tokenBudget: 4096,
-      }),
-    ).rejects.toThrow("successor target conflicts with the caller session identity");
+    expect(requireCompactRuntimeParams(0)).toMatchObject({
+      agentId: "",
+      sessionId: "session",
+      sessionKey: "",
+      sessionTarget: {},
+    });
   });
 
   it("delegateCompactionToRuntime forwards the caller abortSignal to the runtime (#89868)", async () => {

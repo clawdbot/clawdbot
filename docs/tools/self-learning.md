@@ -68,12 +68,16 @@ Experience review starts only when all of these conditions hold:
 - no agent or reply run is still active.
 
 A later foreground completion in the same session restarts the quiet period.
-Only one experience review runs at a time. The foreground answer is never delayed.
+Pending reviews belong to an agent and session together, so agents using `global`
+retain separate candidates. Experience, history, and collection reviews share
+one Workshop slot within the [shared background work budget](/concepts/queue#background-work).
+The foreground answer is never delayed.
 
 The reviewer continues the finished turn from the same transcript prefix, but
 runs under a private detached session identity. This keeps the foreground session
 available while the provider reuses its prompt cache. The review message and tool
-results never enter the foreground transcript or session record.
+results never enter the foreground transcript or session record. Reviews retain
+the foreground session's sandbox policy, including during compaction.
 
 The reviewer is detached and biased toward small, well-evidenced captures. It
 receives an authoritative receipt of the skills the foreground run actually
@@ -212,8 +216,10 @@ Experience review adds one bounded model run on the configured provider only
 after a substantial turn, not after every message. The review can make more
 than one provider request while it inspects or drafts its single proposal.
 
-The review forks the foreground transcript in memory and appends one small user
-message. It uses a private detached session identity while preserving the
+The review creates a detached view of the foreground model context and appends
+one small user message. Storage-only native prompt payloads stay in the original
+transcript, whose stored bytes the review does not change. It uses a private
+detached session identity while preserving the
 foreground provider, model, auth profile, bootstrap context, skills prompt, tool
 schemas, and prompt-cache affinity. The provider can reuse the finished turn's
 cached request prefix without making the review part of the foreground session.

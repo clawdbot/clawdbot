@@ -1,3 +1,4 @@
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { FollowupRun } from "../../auto-reply/reply/queue.js";
 import { recordAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
@@ -50,6 +51,41 @@ type EmbeddedAgentAttempt = Awaited<ReturnType<typeof runEmbeddedAgentAttempt>>;
 
 const log = createSubsystemLogger("agents/agent-command");
 
+export function createCompactionSessionIdReporter(
+  sessionId: string,
+  onSessionIdChanged: AgentCommandOpts["onSessionIdChanged"],
+) {
+  let notifiedSessionId = sessionId;
+  let pendingCompactionSessionId: string | undefined;
+  const notifySessionIdChanged = (nextSessionId: string) => {
+    notifiedSessionId = nextSessionId;
+    pendingCompactionSessionId = undefined;
+    onSessionIdChanged?.(nextSessionId);
+  };
+  return {
+    onSessionIdChanged: notifySessionIdChanged,
+    onCompactionCommitted: (nextSessionId: string | undefined) => {
+      if (nextSessionId !== undefined) {
+        pendingCompactionSessionId = nextSessionId;
+      }
+    },
+    reportCommitted: () => {
+      // Compaction can commit before abort or maintenance fails. The command's
+      // finally reports it outside commit bookkeeping so cleanup targets its row.
+      if (
+        pendingCompactionSessionId !== undefined &&
+        pendingCompactionSessionId !== notifiedSessionId
+      ) {
+        try {
+          notifySessionIdChanged(pendingCompactionSessionId);
+        } catch (error) {
+          log.warn(`failed to report settled session identity: ${coerceErrorMessage(error)}`);
+        }
+      }
+    },
+  };
+}
+
 export async function finalizeEmbeddedAgentCommand(params: {
   prepared: PreparedAgentCommandExecution;
   opts: AgentCommandOpts;
@@ -66,10 +102,10 @@ export async function finalizeEmbeddedAgentCommand(params: {
     sessionReboundDuringRun: boolean;
   };
   trackInternalModelRunTarget: (target: AgentRunSessionTarget | undefined) => void;
-  onSessionOwnershipChanged: (ownership: {
-    runOwnedSessionId: string;
-    sessionReboundDuringRun: boolean;
-  }) => void;
+  onSessionOwnershipChanged: (
+    ownership: { runOwnedSessionId: string; sessionReboundDuringRun: boolean },
+    committedCompactionSessionId?: string,
+  ) => void;
   onTerminalDeliveryEvidenceChanged: (
     evidence: RestartRecoveryTerminalDeliveryEvidenceResult,
   ) => void;
@@ -116,9 +152,12 @@ export async function finalizeEmbeddedAgentCommand(params: {
   let deliveryResult: Awaited<ReturnType<typeof deliverAgentCommandResult>>;
   let hasResultError: boolean;
   let { runOwnedSessionId, sessionReboundDuringRun } = params.sessionOwnership;
-  const publishSessionOwnership = () => {
+  const publishSessionOwnership = (committedCompactionSessionId?: string) => {
     // Outer restart-recovery cleanup runs even after later delivery failures.
-    params.onSessionOwnershipChanged({ runOwnedSessionId, sessionReboundDuringRun });
+    params.onSessionOwnershipChanged(
+      { runOwnedSessionId, sessionReboundDuringRun },
+      committedCompactionSessionId,
+    );
   };
 
   try {
@@ -403,7 +442,9 @@ export async function finalizeEmbeddedAgentCommand(params: {
         const onCommitted = (accepted: AcceptedCompactionSuccessor) => {
           sessionEntry = accepted.entry;
           runOwnedSessionId = accepted.sessionId;
-          publishSessionOwnership();
+          publishSessionOwnership(
+            accepted.previousSessionId === undefined ? undefined : accepted.sessionId,
+          );
         };
         const compactedSessionEntry = embeddedCompactionRun
           ? await (

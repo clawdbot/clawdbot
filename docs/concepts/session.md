@@ -28,6 +28,11 @@ DM channels, with group activity and background work flowing into it — see
 | Cron jobs       | Fresh session per run         |
 | Webhooks        | Isolated per hook             |
 
+With `session.scope: "global"`, the selected agent still owns its session.
+The shared key `global` does not merge different agents' conversations:
+commands, skills, replies, and background task notifications retain the
+agent selected by the route or explicit request.
+
 ## DM isolation
 
 By default, all DMs share one session for continuity, which is fine for
@@ -56,6 +61,11 @@ visible to Bob.
 | `per-channel-peer`         | Isolate by channel + sender (recommended)                |
 | `per-account-channel-peer` | Isolate by account + channel + sender                    |
 
+Slack Agent View and Assistant View DMs are the exception: each visible root gets
+its own `:thread:<rootTs>` session on top of the base that `dmScope` selects, so
+those conversations stay isolated even under `main`. See
+[Agent View DMs](/channels/slack#agent-view-dms).
+
 <Tip>
 If the same person contacts you from multiple channels, use
 `session.identityLinks` to map their identities to one canonical peer id so
@@ -63,6 +73,17 @@ they share a session.
 </Tip>
 
 Verify your setup with `openclaw security audit`.
+
+## Retired channel docking
+
+Channel docking and manual cross-channel reply focus have been removed. The
+`/dock-*` commands no longer move a session's reply destination to another
+channel.
+
+Use `session.identityLinks` to associate a person's identities for DM session
+routing, or [thread-bound sessions](/tools/subagents#thread-bound-sessions) to
+keep a supported conversation attached to a subagent. These are separate
+features; neither restores manual cross-channel docking.
 
 ## Group and room routing
 
@@ -241,14 +262,13 @@ Session store reads do not prune or cap entries during Gateway startup, so
 startup and isolated cron sessions do not pay for a full store cleanup.
 `openclaw sessions cleanup --enforce` applies the cap immediately.
 
-`maxEntries` counts every live session row. Archived or pinned sessions, active
-or admitted work, model-locked sessions, and durable external conversation
-pointers are protected from automatic eviction, but still consume the cap.
-Cleanup removes the oldest unprotected rows until it reaches `maxEntries` or
-runs out of eligible victims. The total can therefore remain above the cap when
-protected rows alone exceed it or active work temporarily blocks eviction.
-Cleanup does not unprotect those rows; unarchive, unpin, wait for active work to
-finish, or explicitly delete sessions you no longer want to retain.
+`maxEntries` caps unarchived session rows. Archived rows do not consume the cap.
+When pressure exceeds the cap, cleanup archives the oldest eligible ordinary
+sessions instead of deleting their transcripts. Synthetic runtime sessions such
+as cron, hooks, heartbeat, ACP, and sub-agents remain disposable and may be
+removed. Pinned sessions, active or admitted work, model-locked sessions, and
+durable external conversation pointers are protected; the unarchived total can
+therefore remain above the cap when protected rows alone exceed it.
 
 Gateway model-run probe sessions are short-lived by default. Rows matching
 `agent:*:explicit:model-run-<uuid>` use fixed `24h` retention, but cleanup is
@@ -273,10 +293,12 @@ Recent-session protection does not change managed-worktree garbage collection;
 durable dashboard sessions auto-archive after 7 days of inactivity by default,
 while other session types still require an explicit archive action.
 
-Archived and pinned sessions are user-protected and exempt from every automatic
-maintenance path, including age pruning, entry caps, model-run cleanup, and
-disk-budget eviction. They remain protected until you unarchive, unpin, or
-explicitly delete them.
+Pinned sessions and manual, legacy, stale-dashboard, or recovery archives are
+user-protected and exempt from automatic maintenance. Sessions archived because
+`maxEntries` was reached record that reason and remain searchable/restorable
+until physical usage exceeds `maxDiskBytes`; disk-budget cleanup may then delete
+the oldest cap archives after cheaper artifacts and unreferenced history are
+exhausted. Sessions without a recorded archive reason remain protected.
 
 If you previously used DM isolation and later returned `session.dmScope` to
 `main`, preview stale peer-keyed DM rows with

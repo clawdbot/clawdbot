@@ -8,8 +8,13 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DecisionReceiptV1 } from "../../../packages/gateway-protocol/src/index.js";
 import type { MediaUnderstandingSkipError } from "../../../packages/media-understanding-common/src/errors.js";
+import type { AcpSessionResolution } from "../../acp/control-plane/manager.types.js";
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import type { AcpSessionStoreEntry } from "../../acp/runtime/session-meta.js";
+import {
+  emitAcpLifecycleEnd,
+  resolveAcpLifecycleEndFields,
+} from "../../agents/command/attempt-execution.js";
 import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-identity-admission.js";
 import { configureRuntimeActionDecisionSink } from "../../audit/runtime-action-decision.js";
 import { buildChannelInboundEventContext } from "../../channels/inbound-event/context.js";
@@ -20,13 +25,16 @@ import { resolveStableChannelMessageIngress } from "../../channels/message-acces
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   listSessionParticipantsReadOnly,
+  loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import { isImageAttachment } from "../../media-understanding/attachments.normalize.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import type { ReplyDispatchRun } from "../get-reply-options.types.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import {
   resolveAgentTurnAttachments,
@@ -49,7 +57,7 @@ import {
 } from "./test-fixtures/acp-runtime.js";
 
 const managerMocks = vi.hoisted(() => ({
-  resolveSession: vi.fn(),
+  resolveSession: vi.fn<() => AcpSessionResolution>(),
   runTurn: vi.fn(),
   getObservabilitySnapshot: vi.fn(() => ({
     turns: { queueDepth: 0 },
@@ -175,6 +183,8 @@ vi.mock("../../agents/command/attempt-execution.runtime.js", () => ({
   emitAcpRuntimeEvent: auditMocks.emitAcpRuntimeEvent,
   emitAcpLifecycleEnd: auditMocks.emitAcpLifecycleEnd,
   emitAcpLifecycleError: auditMocks.emitAcpLifecycleError,
+  resolveAcpLifecycleEndFields: (...args: Parameters<typeof resolveAcpLifecycleEndFields>) =>
+    resolveAcpLifecycleEndFields(...args),
 }));
 
 vi.mock("../../acp/policy.js", () => ({
@@ -326,6 +336,7 @@ function setReadyAcpResolution() {
   managerMocks.resolveSession.mockReturnValue({
     kind: "ready",
     sessionKey,
+    agentId: "codex-acp",
     meta: createAcpSessionMeta(),
   });
 }
@@ -348,6 +359,12 @@ async function runDispatch(params: {
   bodyForAgent: string;
   runId?: string;
   onAgentRunStart?: Parameters<typeof tryDispatchAcpReplyCore>[0]["onAgentRunStart"];
+  userTurnTranscriptRecorder?: Parameters<
+    typeof tryDispatchAcpReplyCore
+  >[0]["userTurnTranscriptRecorder"];
+  prepareAssistantTranscriptMessage?: Parameters<
+    typeof tryDispatchAcpReplyCore
+  >[0]["prepareAssistantTranscriptMessage"];
   cfg?: OpenClawConfig;
   dispatcher?: ReplyDispatcher;
   shouldRouteToOriginating?: boolean;
@@ -384,6 +401,8 @@ async function runDispatch(params: {
     dispatcher: params.dispatcher ?? createDispatcher().dispatcher,
     ...(params.runId ? { runId: params.runId } : {}),
     onAgentRunStart: params.onAgentRunStart,
+    userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+    prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
     sessionKey: targetSessionKey,
     images: params.images,
     abortSignal: params.abortSignal,
@@ -514,6 +533,7 @@ describe("tryDispatchAcpReplyCore", () => {
     auditMocks.emitAcpRuntimeEvent.mockReset();
     auditMocks.emitAcpLifecycleEnd.mockReset();
     auditMocks.emitAcpLifecycleError.mockReset();
+    auditMocks.emitAcpLifecycleError.mockReturnValue({ reason: "failed", status: "error" });
     managerMocks.resolveSession.mockReset();
     managerMocks.runTurn.mockReset();
     managerMocks.runTurn.mockImplementation(
@@ -679,6 +699,7 @@ describe("tryDispatchAcpReplyCore", () => {
       managerMocks.resolveSession.mockReturnValue({
         kind: "ready",
         sessionKey: resolvedSessionKey,
+        agentId: "codex-acp",
         meta: createAcpSessionMeta({ agent: "private-agent-must-not-leak" }),
       });
       managerMocks.runTurn.mockImplementationOnce(
@@ -1031,6 +1052,7 @@ describe("tryDispatchAcpReplyCore", () => {
     expect(transcript.sessionKey).toBe(sessionKey);
     expect(transcript.promptText).toBe("reply");
     expect(transcript.finalText).toBe("hello");
+    expect(transcript.terminalOutcome).toMatchObject({ reason: "completed", status: "ok" });
     expect(routeCall().mirror).toBe(false);
   });
 
@@ -1053,6 +1075,7 @@ describe("tryDispatchAcpReplyCore", () => {
     expect(transcript.sessionKey).toBe(sessionKey);
     expect(transcript.promptText).toBe("reply");
     expect(String(transcript.finalText)).toContain("acp exploded mid-turn");
+    expect(transcript.terminalOutcome).toMatchObject({ reason: "failed", status: "error" });
   });
 
   it("keeps streamed output ahead of the error when a turn fails mid-stream", async () => {
@@ -1297,6 +1320,7 @@ describe("tryDispatchAcpReplyCore", () => {
     expect(transcript.sessionKey).toBe(sessionKey);
     expect(transcript.promptText).toBe("cancel this turn");
     expect(transcript.finalText).toBe("partial");
+    expect(transcript.terminalOutcome).toMatchObject({ reason: "cancelled", status: "error" });
     expect(recordProcessed).toHaveBeenCalledWith("completed", { reason: "acp_aborted" });
     expect(markIdle).toHaveBeenCalledWith("message_aborted");
     expect(transcriptMocks.persistAcpDispatchTranscript.mock.invocationCallOrder[0]).toBeLessThan(
@@ -1304,7 +1328,7 @@ describe("tryDispatchAcpReplyCore", () => {
     );
     expect(auditMocks.emitAcpLifecycleEnd).toHaveBeenCalledWith(
       expect.objectContaining({
-        resultStatus: "cancelled",
+        endFields: { aborted: true, stopReason: "stop", status: "cancelled" },
       }),
     );
     expect(auditMocks.emitAcpLifecycleError).not.toHaveBeenCalled();
@@ -1454,10 +1478,76 @@ describe("tryDispatchAcpReplyCore", () => {
     expect(markIdle).toHaveBeenCalledWith("message_aborted");
     expect(auditMocks.emitAcpLifecycleEnd).toHaveBeenCalledWith(
       expect.objectContaining({
-        abortSignal: abortController.signal,
-        resultStatus: "completed",
+        endFields: { aborted: true, stopReason: "aborted" },
       }),
     );
+  });
+
+  it("keeps settled ACP completion aligned with transcript persistence during caller cancellation", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const target = {
+        agentId: "codex-acp",
+        sessionId: "acp-cancel-during-transcript",
+        sessionKey,
+        storePath: path.join(state.sessionsDir("codex-acp"), "sessions.json"),
+      };
+      await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+      setReadyAcpResolution();
+      const text = "Completed output awaiting transcript persistence.";
+      mockVisibleTextTurn(text);
+      const controller = new AbortController();
+      const recorder = createUserTurnTranscriptRecorder({
+        target: { ...target, sessionEntry: undefined },
+        resolveInput: async () => {
+          controller.abort();
+          return { text: "Cancel while saving this turn." };
+        },
+      });
+      const actualTranscript = await vi.importActual<
+        typeof import("./dispatch-acp-transcript.runtime.js")
+      >("./dispatch-acp-transcript.runtime.js");
+      transcriptMocks.persistAcpDispatchTranscript.mockImplementationOnce(async (input) => {
+        await actualTranscript.persistAcpDispatchTranscript(
+          input as Parameters<typeof actualTranscript.persistAcpDispatchTranscript>[0],
+        );
+      });
+      auditMocks.emitAcpLifecycleEnd.mockImplementationOnce(emitAcpLifecycleEnd);
+      const preparedMessages: unknown[] = [];
+      let dispatchedRun: ReplyDispatchRun | undefined;
+      await runDispatch({
+        bodyForAgent: "Cancel while saving this turn.",
+        runId: "acp-cancel-during-transcript",
+        cfg: createAcpTestConfig({ session: { store: target.storePath } }),
+        abortSignal: controller.signal,
+        userTurnTranscriptRecorder: recorder,
+        prepareAssistantTranscriptMessage: (message) => {
+          preparedMessages.push(structuredClone(message));
+          return message;
+        },
+        onAgentRunStart: (_runId, _meta, run) => {
+          dispatchedRun = run;
+          return "reply-dispatch";
+        },
+      });
+      const persistedMessages = (await loadTranscriptEvents(target)).flatMap((event) => {
+        const entry = requireRecord(event, "transcript event");
+        return entry.type === "message" ? [entry.message] : [];
+      });
+      const expectedAssistant = {
+        role: "assistant",
+        content: [{ type: "text", text }],
+        stopReason: "stop",
+      };
+      expect({
+        preparedMessages,
+        persistedMessages,
+        terminalOutcome: dispatchedRun?.getResult().terminalOutcome,
+      }).toMatchObject({
+        preparedMessages: [expectedAssistant],
+        persistedMessages: [{ role: "user" }, expectedAssistant],
+        terminalOutcome: { reason: "completed", status: "ok" },
+      });
+    });
   });
 
   it("records an ACP error when output finalization fails", async () => {
@@ -1477,6 +1567,11 @@ describe("tryDispatchAcpReplyCore", () => {
     expect(auditMocks.emitAcpLifecycleError).toHaveBeenCalledWith(
       expect.objectContaining({
         error: expect.objectContaining({ message: "output settlement failed" }),
+      }),
+    );
+    expect(transcriptMocks.persistAcpDispatchTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        terminalOutcome: expect.objectContaining({ reason: "failed", status: "error" }),
       }),
     );
   });
@@ -2910,7 +3005,7 @@ describe("tryDispatchAcpReplyCore", () => {
     expect(managerMocks.runTurn).not.toHaveBeenCalled();
     expect(dispatcherCall(dispatcher.sendFinalReply).isError).toBe(true);
     expect(dispatcherCall(dispatcher.sendFinalReply).text).toContain(
-      "cannot enforce its tool policy",
+      "cannot enforce its permission or tool policy",
     );
     expect(auditMocks.emitAcpLifecycleError).toHaveBeenCalledWith(
       expect.objectContaining({ terminalOutcome: "blocked" }),
@@ -2971,6 +3066,7 @@ describe("tryDispatchAcpReplyCore", () => {
     managerMocks.resolveSession.mockReturnValue({
       kind: "stale",
       sessionKey,
+      agentId: "codex-acp",
       error: new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP metadata is missing."),
     });
     policyMocks.resolveAcpDispatchPolicyError.mockReturnValue(
@@ -2997,6 +3093,7 @@ describe("tryDispatchAcpReplyCore", () => {
     managerMocks.resolveSession.mockReturnValue({
       kind: "stale",
       sessionKey: canonicalSessionKey,
+      agentId: "main",
       error: new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP metadata is missing."),
     });
     bindingServiceMocks.unbind.mockResolvedValueOnce([
@@ -3057,6 +3154,7 @@ describe("tryDispatchAcpReplyCore", () => {
     managerMocks.resolveSession.mockReturnValue({
       kind: "ready",
       sessionKey: canonicalSessionKey,
+      agentId: "main",
       meta: createAcpSessionMeta(),
     });
     managerMocks.runTurn.mockRejectedValueOnce(
@@ -3102,6 +3200,7 @@ describe("tryDispatchAcpReplyCore", () => {
     managerMocks.resolveSession.mockReturnValue({
       kind: "ready",
       sessionKey: canonicalSessionKey,
+      agentId: "main",
       meta: createAcpSessionMeta({
         identity: {
           state: "pending",
@@ -3169,6 +3268,7 @@ describe("tryDispatchAcpReplyCore", () => {
     managerMocks.resolveSession.mockReturnValue({
       kind: "ready",
       sessionKey: canonicalSessionKey,
+      agentId: "main",
       meta: createAcpSessionMeta({
         identity: {
           state: "pending",

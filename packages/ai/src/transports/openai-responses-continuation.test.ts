@@ -122,29 +122,194 @@ describe("OpenAI Responses continuation", () => {
     });
   });
 
-  it("still continues when instructions changed between turns, and keeps the current turn's instructions on the wire", () => {
-    const priorState: ResponsesContinuationState = {
-      ...continuationState(),
-      lastRequest: {
-        ...continuationState().lastRequest,
-        instructions: "You are a helpful assistant. Active background tasks: none.",
-      },
-    };
-    const currentRequest: ResponsesContinuationRequest = {
-      ...nextRequest(),
-      // Rebuilt fresh this turn from live runtime state (per
-      // resolveOpenAIResponsesInstructions) -- deliberately different text
-      // from priorState, same as a real second turn would produce.
-      instructions: "You are a helpful assistant. Active background tasks: 1 running.",
-    };
+  it.each([
+    {
+      name: "instructions",
+      previous: { instructions: "Active background tasks: none." },
+      current: { instructions: "Active background tasks: 1 running." },
+    },
+    {
+      name: "tools",
+      previous: { tools: [{ type: "function", name: "read", parameters: { type: "object" } }] },
+      current: { tools: [{ type: "function", name: "write", parameters: { type: "object" } }] },
+    },
+  ])("keeps current $name while continuing unchanged history", ({ previous, current }) => {
+    const state = continuationState();
+    state.lastRequest = { ...state.lastRequest, ...previous };
+    const request = { ...nextRequest(), ...current };
+    const before = structuredClone({ state, request });
 
-    const resolved = resolveResponsesContinuationRequest(priorState, currentRequest);
+    const resolved = resolveResponsesContinuationRequest(state, request);
 
     expect(resolved.continuationStatus).toBe("continued");
-    expect(resolved.request.previous_response_id).toBe("resp_1");
-    expect(resolved.request.instructions).toBe(
-      "You are a helpful assistant. Active background tasks: 1 running.",
-    );
+    expect(resolved.request).toMatchObject({ ...current, previous_response_id: "resp_1" });
+    expect(resolved.request.input).toHaveLength(1);
+    expect({ state, request }).toEqual(before);
+  });
+
+  it.each([
+    [
+      "unsafe integer round-trip",
+      '{"n":9007199254740993}',
+      '{"n":"9007199254740993"}',
+      "continued",
+    ],
+    [
+      "negative unsafe round-trip",
+      '{"n":-9007199254740993}',
+      '{"n":"-9007199254740993"}',
+      "continued",
+    ],
+    [
+      "provider whitespace in nested arguments",
+      '{ "b": {"n":9007199254740993,"a":true},"a":[1] }',
+      '{"b":{"n":"9007199254740993","a":true},"a":[1]}',
+      "continued",
+    ],
+    [
+      "reordered keys remain conservative",
+      '{"b":{"n":9007199254740993,"a":true},"a":[1]}',
+      '{"a":[1],"b":{"a":true,"n":"9007199254740993"}}',
+      "history_changed",
+    ],
+    [
+      "positive binary64 collision",
+      '{"n":9007199254740992}',
+      '{"n":9007199254740993}',
+      "history_changed",
+    ],
+    [
+      "negative binary64 collision",
+      '{"n":-9007199254740992}',
+      '{"n":-9007199254740993}',
+      "history_changed",
+    ],
+    [
+      "edited preserved integer",
+      '{"n":9007199254740993}',
+      '{"n":"9007199254740992"}',
+      "history_changed",
+    ],
+    [
+      "provider string changed to bare unsafe integer",
+      '{"n":"9007199254740992"}',
+      '{"n":9007199254740992}',
+      "history_changed",
+    ],
+    [
+      "admitted integer string changed to Number",
+      '{"n":9007199254740992}',
+      '{"n":9007199254740992}',
+      "history_changed",
+    ],
+    ["safe integer versus string", '{"n":42}', '{"n":"42"}', "history_changed"],
+    [
+      "safe boundary versus string",
+      '{"n":9007199254740991}',
+      '{"n":"9007199254740991"}',
+      "history_changed",
+    ],
+    [
+      "quoted digits and escapes",
+      '{"text":"\\\"9007199254740993\\\"","n":9007199254740993}',
+      '{"text":"\\\"9007199254740993\\\"","n":"9007199254740993"}',
+      "continued",
+    ],
+    ["unchanged incomplete JSON", '{"n":', '{"n":', "continued"],
+    ["changed incomplete JSON", '{"n":', '{"n": }', "history_changed"],
+    [
+      "invalid leading zero",
+      '{"n":09007199254740993}',
+      '{"n":"9007199254740993"}',
+      "history_changed",
+    ],
+    ["non-object array", "[42]", "[42.0]", "history_changed"],
+    ["non-object null", "null", " null ", "history_changed"],
+    ["safe fraction", '{"n":4.20}', '{"n":4.2}', "continued"],
+    ["safe exponent", '{"n":4.2e1}', '{"n":42}', "continued"],
+    ["safe exponent versus string", '{"n":4.2e1}', '{"n":"42"}', "history_changed"],
+    [
+      "unsafe exponent follows terminal Number serialization",
+      '{"n":1e16}',
+      '{"n":10000000000000000}',
+      "continued",
+    ],
+    [
+      "unsafe fraction follows terminal Number serialization",
+      '{"n":10000000000000000.0}',
+      '{"n":10000000000000000}',
+      "continued",
+    ],
+  ] as const)(
+    "compares admitted provider tool arguments: %s",
+    (_name, rawArguments, replayedArguments, expectedStatus) => {
+      const state = continuationState();
+      const call = {
+        type: "function_call" as const,
+        id: "fc_1",
+        status: "completed" as const,
+        call_id: "call_1",
+        name: "record_value",
+        arguments: rawArguments,
+      };
+      state.lastResponseItems = [call];
+      const output = {
+        type: "function_call_output" as const,
+        call_id: "call_1",
+        output: "recorded",
+      };
+      const request = {
+        ...state.lastRequest,
+        input: [
+          ...(state.lastRequest.input ?? []),
+          { ...call, arguments: replayedArguments },
+          output,
+        ],
+      };
+      const before = structuredClone({ state, request });
+      const resolved = resolveResponsesContinuationRequest(state, request);
+      expect(resolved.continuationStatus).toBe(expectedStatus);
+      if (expectedStatus === "continued") {
+        expect(resolved.request).toMatchObject({ previous_response_id: "resp_1", input: [output] });
+      } else {
+        expect(resolved.request).toBe(request);
+      }
+      expect({ state, request }).toEqual(before);
+    },
+  );
+
+  it.each([
+    ['{"n":9007199254740992}', '{"n":"9007199254740992"}', "history_changed"],
+    ['{"n":"9007199254740992"}', '{"n":9007199254740992}', "history_changed"],
+    ['{"n":9007199254740992}', '{"n":9007199254740993}', "history_changed"],
+    ['{"n":9007199254740992}', '{"n":9007199254740992}', "continued"],
+  ] as const)("keeps already-sent arguments strict: %s -> %s", (sent, current, expectedStatus) => {
+    const state = continuationState();
+    const call = {
+      type: "function_call" as const,
+      call_id: "sent_call",
+      name: "record_value",
+      arguments: sent,
+    };
+    const output = {
+      type: "function_call_output" as const,
+      call_id: "sent_call",
+      output: "recorded",
+    };
+    state.lastRequest.input = [...(state.lastRequest.input ?? []), call, output];
+    const request = nextRequest();
+    const [user, ...next] = request.input ?? [];
+    if (!user) {
+      throw new Error("Expected the fixture's first user message");
+    }
+    request.input = [user, { ...call, arguments: current }, output, ...next];
+    const before = structuredClone({ state, request });
+    const resolved = resolveResponsesContinuationRequest(state, request);
+    expect(resolved.continuationStatus).toBe(expectedStatus);
+    if (expectedStatus === "history_changed") {
+      expect(resolved.request).toBe(request);
+    }
+    expect({ state, request }).toEqual(before);
   });
 
   it("ignores turn correlation headers but isolates explicit authorization", () => {

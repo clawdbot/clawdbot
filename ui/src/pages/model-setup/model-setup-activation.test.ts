@@ -39,7 +39,7 @@ describe("ModelSetupPage first-run activation ownership", () => {
       if (method === "openclaw.setup.detect") {
         return detection;
       }
-      if (method === "openclaw.setup.activate") {
+      if (method === "openclaw.setup.activate.start") {
         return response.promise;
       }
       throw new Error(`Unexpected method ${method}`);
@@ -55,7 +55,11 @@ describe("ModelSetupPage first-run activation ownership", () => {
       client,
       firstRun: true,
     });
-    const success = { ok: true, modelRef: "provider/verified", latencyMs: 31 };
+    const success = {
+      done: true,
+      status: "done",
+      modelActivation: { modelRef: "provider/verified" },
+    };
     try {
       await waitForFast(() => expect(request).toHaveBeenCalledOnce());
       const receipt = localStorage.getItem("openclaw.modelSetup.pendingActivation.v1");
@@ -79,7 +83,8 @@ describe("ModelSetupPage first-run activation ownership", () => {
       const { context, client, request, snapshot, publishGatewaySnapshot } =
         createFirstRunContext();
       let releaseActivation: ((value: unknown) => void) | undefined;
-      const activatedMethod = entry === "manual key" ? "openclaw.setup.activate" : "wizard.next";
+      const activatedMethod =
+        entry === "manual key" ? "openclaw.setup.activate.start" : "wizard.next";
       request.mockImplementation(async (method) => {
         if (method === "openclaw.setup.auth.start") {
           return { sessionId: "auth", done: false, status: "running" };
@@ -143,11 +148,11 @@ describe("ModelSetupPage first-run activation ownership", () => {
       await waitForFast(() =>
         expect(context.navigate).toHaveBeenCalledWith("custodian", { search: "?onboarding=1" }),
       );
-      releaseActivation?.(
-        entry === "manual key"
-          ? { ok: true, modelRef: "provider/late-other" }
-          : { done: true, status: "done", modelActivation: { modelRef: "provider/late-other" } },
-      );
+      releaseActivation?.({
+        done: true,
+        status: "done",
+        modelActivation: { modelRef: "provider/late-other" },
+      });
       await page.updateComplete;
       expect(request.mock.calls.filter(([method]) => method === activatedMethod)).toHaveLength(1);
       expect(context.navigate).toHaveBeenCalledOnce();
@@ -455,7 +460,8 @@ describe("ModelSetupPage first-run activation ownership", () => {
         refreshing.resolve();
         await refresh.promise;
       });
-      const activatedMethod = entry === "manual key" ? "openclaw.setup.activate" : "wizard.next";
+      const activatedMethod =
+        entry === "manual key" ? "openclaw.setup.activate.start" : "wizard.next";
       request.mockImplementation(async (method) => {
         if (method === "openclaw.setup.auth.start") {
           return { done: false, status: "running" };
@@ -498,14 +504,11 @@ describe("ModelSetupPage first-run activation ownership", () => {
       await waitForFast(() =>
         expect(request.mock.calls.some(([method]) => method === activatedMethod)).toBe(true),
       );
-      const success =
-        entry === "manual key"
-          ? { ok: true, modelRef: "provider/previous", latencyMs: 31 }
-          : {
-              done: true,
-              status: "done",
-              modelActivation: { modelRef: "provider/previous", latencyMs: 31 },
-            };
+      const success = {
+        done: true,
+        status: "done",
+        modelActivation: { modelRef: "provider/previous", latencyMs: 31 },
+      };
       if (boundary === "refresh") {
         reply.resolve(success);
         await refreshing.promise;
@@ -636,11 +639,11 @@ describe("ModelSetupPage first-run activation ownership", () => {
           }),
         );
       } else {
-        rejected.resolve({ ok: false, status: "auth", error: "Provider rejected this test key" });
+        rejected.resolve({ done: true, status: "error", error: "Provider rejected this test key" });
       }
       await waitForFast(() =>
         expect(context.runtimeConfig.runExternalMutation).toHaveResolvedWith(
-          expect.objectContaining({ ok: rejection !== "busy" }),
+          expect.objectContaining({ ok: true }),
         ),
       );
       await page.updateComplete;
@@ -656,6 +659,10 @@ describe("ModelSetupPage first-run activation ownership", () => {
       );
       expect(context.navigate).not.toHaveBeenCalled();
       if (ownership === "active" && entry === "manual") {
+        [...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")]
+          .find((button) => button.textContent?.trim() === "Close")!
+          .click();
+        await page.updateComplete;
         const retry = page.querySelector<HTMLButtonElement>(".model-setup__manual .btn.primary")!;
         expect(retry.disabled).toBe(false);
         retry.click();

@@ -6,7 +6,7 @@ import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { isAllowlistedCaller, normalizePhoneNumber } from "../allowlist.js";
 import { resolveVoiceCallEffectiveConfig, resolveVoiceCallSessionKey } from "../config.js";
-import type { CallRecord, NormalizedEvent } from "../types.js";
+import { TerminalStates, type CallRecord, type NormalizedEvent } from "../types.js";
 import type { CallManagerContext } from "./context.js";
 import { finalizeCall } from "./lifecycle.js";
 import { findCall } from "./lookup.js";
@@ -18,7 +18,7 @@ import {
   reserveRejectedProviderCall,
 } from "./replay-keys.js";
 import { addTranscriptEntry, transitionState } from "./state.js";
-import { persistCallRecord } from "./store.js";
+import { findCallInStore, persistCallRecord } from "./store.js";
 import { resolveTranscriptWaiter, startMaxDurationTimer } from "./timers.js";
 
 const log = createSubsystemLogger("voice-call/events");
@@ -170,7 +170,33 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): Process
     callIdOrProviderCallId: event.callId,
   });
 
-  const providerCallId = event.providerCallId;
+  let providerCallId = event.providerCallId;
+  let retained: CallRecord | undefined;
+  if (!call) {
+    retained = findCallInStore(ctx.storePath, event.callId);
+    if (!retained && providerCallId && providerCallId !== event.callId) {
+      retained = findCallInStore(ctx.storePath, providerCallId);
+    }
+    // A policy rejection records an attempt, not confirmed carrier termination.
+    if (retained && retained.metadata?.rejectionReason !== "inbound-policy") {
+      call = ctx.activeCalls.get(retained.callId);
+      if (!call) {
+        return TerminalStates.has(retained.state)
+          ? { kind: "ignored" }
+          : { kind: "ignored", replayable: true };
+      }
+    }
+  }
+  if (call && providerCallId && providerCallId !== call.providerCallId) {
+    const providerOwner =
+      providerCallId === event.callId && retained
+        ? retained
+        : findCallInStore(ctx.storePath, providerCallId);
+    // Known aliases cannot replace the live owner's newer provider ID.
+    if (providerOwner?.callId === call.callId) {
+      providerCallId = call.providerCallId;
+    }
+  }
   const eventDirection =
     event.direction === "inbound" || event.direction === "outbound" ? event.direction : undefined;
 
@@ -256,11 +282,11 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): Process
     }
   };
   const publishProviderCallId = (terminal = false) => {
-    if (!event.providerCallId || event.providerCallId === previousCall.providerCallId) {
+    if (!providerCallId || providerCallId === previousCall.providerCallId) {
       return;
     }
     if (!terminal) {
-      ctx.providerCallIdMap.set(event.providerCallId, activeCall.callId);
+      ctx.providerCallIdMap.set(providerCallId, activeCall.callId);
     }
     if (previousCall.providerCallId) {
       const mapped = ctx.providerCallIdMap.get(previousCall.providerCallId);
@@ -271,8 +297,8 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): Process
   };
 
   try {
-    if (event.providerCallId && event.providerCallId !== activeCall.providerCallId) {
-      activeCall.providerCallId = event.providerCallId;
+    if (providerCallId && providerCallId !== activeCall.providerCallId) {
+      activeCall.providerCallId = providerCallId;
     }
     if (shouldCommitReplayKey) {
       appendCallReplayKey(activeCall.processedEventIds, dedupeKey);

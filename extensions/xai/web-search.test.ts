@@ -2,7 +2,7 @@
 import { createTestWizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { NON_ENV_SECRETREF_MARKER } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { createNonExitingRuntime } from "openclaw/plugin-sdk/runtime-env";
-import { withEnv, withEnvAsync, withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
+import { withEnvAsync, withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildXaiCatalogModels, resolveXaiCatalogEntry } from "./model-definitions.js";
 import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
@@ -46,7 +46,6 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => {
 const {
   resolveXaiInlineCitations,
   resolveXaiToolSearchConfig,
-  resolveXaiWebSearchCredential,
   resolveXaiWebSearchModel,
   resolveXaiWebSearchTimeoutSeconds,
 } = testing;
@@ -212,40 +211,6 @@ describe("xai web search config resolution", () => {
     expect(createXaiWebSearchContractProvider().authProviderId).toBe("xai");
   });
 
-  it("prefers configured api keys and resolves grok scoped defaults", () => {
-    expect(resolveXaiWebSearchCredential({ grok: { apiKey: "xai-secret" } })).toBe("xai-secret");
-    expect(resolveXaiWebSearchModel()).toBe("grok-4.3");
-    expect(resolveXaiInlineCitations()).toBe(false);
-  });
-
-  it("uses config apiKey when provided", () => {
-    expect(resolveXaiWebSearchCredential({ grok: { apiKey: "xai-test-key" } })).toBe(
-      "xai-test-key",
-    );
-  });
-
-  it("returns undefined when no apiKey is available", () => {
-    withEnv({ XAI_API_KEY: undefined }, () => {
-      expect(resolveXaiWebSearchCredential({})).toBeUndefined();
-    });
-  });
-
-  it("resolves env SecretRefs without requiring a runtime snapshot", () => {
-    withEnv({ XAI_WEB_SEARCH_KEY: "xai-env-ref-key" }, () => {
-      expect(
-        resolveXaiWebSearchCredential({
-          grok: {
-            apiKey: {
-              source: "env",
-              provider: "default",
-              id: "XAI_WEB_SEARCH_KEY",
-            },
-          },
-        }),
-      ).toBe("xai-env-ref-key");
-    });
-  });
-
   it("merges canonical plugin config into the tool search config", () => {
     const searchConfig = resolveXaiToolSearchConfig({
       config: xaiPluginConfig({
@@ -259,7 +224,7 @@ describe("xai web search config resolution", () => {
       searchConfig: { provider: "grok" },
     });
 
-    expect(resolveXaiWebSearchCredential(searchConfig)).toBe("plugin-key");
+    expect(searchConfig?.grok).toMatchObject({ apiKey: "plugin-key" });
     expect(resolveXaiInlineCitations(searchConfig)).toBe(true);
     expect(resolveXaiWebSearchModel(searchConfig)).toBe("grok-4-fast");
   });

@@ -152,7 +152,6 @@ export async function resolveMatrixIngressContent(config: {
     isDirectMessage,
     dmSessionScope,
     threadId: thread.threadId,
-    eventTs: eventTs ?? undefined,
     resolveAgentRoute: core.channel.routing.resolveAgentRoute,
   });
   const hasExplicitSessionBinding = _configuredBinding !== null || _runtimeBindingId !== null;

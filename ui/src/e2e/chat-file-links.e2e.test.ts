@@ -2,7 +2,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { chromium, type Browser } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   controlUiE2eWaitTimeoutMs,
@@ -17,14 +18,16 @@ const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
-const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/chat-file-links");
+let artifactDir: string;
+beforeEach(() => {
+  artifactDir = createControlUiE2eArtifactDir("chat-file-links");
+});
 
 let browser: Browser;
 let server: ControlUiE2eServer;
 
 describeControlUiE2e("Control UI chat file links", () => {
   beforeAll(async () => {
-    fs.mkdirSync(artifactDir, { recursive: true });
     server = await startControlUiE2eServer();
     browser = await chromium.launch({ executablePath: chromiumExecutablePath });
   });

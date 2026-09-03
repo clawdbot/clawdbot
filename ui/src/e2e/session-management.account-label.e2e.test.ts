@@ -1,10 +1,10 @@
 import { expect, it } from "vitest";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   captureUiProof,
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
   installMockGateway,
-  sessionRow,
   sessionsListResponse,
   trimmedTextContents,
 } from "./session-management.test-support.ts";
@@ -54,7 +54,7 @@ suite.define(() => {
       await expect
         .poll(() => trimmedTextContents(cardsRow.locator(".sidebar-recent-session__name")))
         .toEqual(["Alice · cards"]);
-      await captureUiProof(page, "telegram-account-session-labels.png");
+      await captureUiProof(suite, page, "telegram-account-session-labels.png");
     } finally {
       await context.close();
     }

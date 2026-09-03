@@ -491,6 +491,8 @@ async function runCases(runtime: Runtime, repoRoot: string, artifactBase: string
       path.join(artifactBase, "channel-transcript.json"),
       `${JSON.stringify(state.getSnapshot().messages, null, 2)}\n`,
     );
+  } catch (error) {
+    failures.push(error instanceof Error ? error.message : String(error));
   } finally {
     active?.releaseSummary.resolve();
     active?.releaseAfterHook.resolve();
@@ -538,6 +540,11 @@ async function runCases(runtime: Runtime, repoRoot: string, artifactBase: string
         await provider?.stop();
       },
       () => bus.stop(),
+      async () => {
+        if (cleanupErrors.length === 0) {
+          await fs.writeFile(path.join(tmpRoot, "gateway-stopped"), "confirmed\n");
+        }
+      },
     ];
     for (const stop of cleanup) {
       try {
@@ -547,9 +554,10 @@ async function runCases(runtime: Runtime, repoRoot: string, artifactBase: string
       }
     }
     if (cleanupErrors.length) {
-      throw new AggregateError(cleanupErrors, "Gateway proof cleanup failed");
+      failures.push(
+        `Gateway proof cleanup failed: ${cleanupErrors.map((error) => (error instanceof Error ? error.message : String(error))).join("; ")}`,
+      );
     }
-    await fs.writeFile(path.join(tmpRoot, "gateway-stopped"), "confirmed\n");
   }
   return failures;
 }

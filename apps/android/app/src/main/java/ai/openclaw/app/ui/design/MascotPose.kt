@@ -78,8 +78,12 @@ data class MascotPose(
           MascotMood.Idle,
           MascotMood.Curious,
           MascotMood.Attentive,
-          -> Unit
-          MascotMood.Thinking -> gaze = MascotGaze(x = 0.3, y = -0.5)
+          -> {}
+
+          MascotMood.Thinking -> {
+            gaze = MascotGaze(x = 0.3, y = -0.5)
+          }
+
           MascotMood.Working -> {
             hardHat = 1.0
             rightClawDegrees = -28.0
@@ -87,10 +91,12 @@ data class MascotPose(
             mouthCurve = 0.15
             bodyTilt = 2.0
           }
+
           MascotMood.Happy -> {
             mouthCurve = 0.6
             happyEyes = 0.4
           }
+
           MascotMood.Celebrating -> {
             mouthCurve = 0.9
             mouthOpen = 0.4
@@ -98,12 +104,14 @@ data class MascotPose(
             leftClawDegrees = 30.0
             rightClawDegrees = -30.0
           }
+
           MascotMood.Sad -> {
             antennaDroop = 0.75
             mouthCurve = -0.55
             eyeGlowAlpha = 0.6
             gaze = MascotGaze(x = 0.0, y = 0.5)
           }
+
           MascotMood.Sleepy -> {
             leftEyeOpenness = 0.25
             rightEyeOpenness = 0.25

@@ -23,25 +23,25 @@ export {
   pauseVirtualClock,
 };
 
-export const managedImageCacheProofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "managed-image-cache",
-);
-export const channelStopProofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "channel-stop",
-);
 export const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const sessionAccessibilityProofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "session-accessibility",
-);
+
+export async function captureUiProof(
+  owner: { readonly artifactDir: string },
+  page: Page,
+  directory: string,
+  fileName: string,
+): Promise<void> {
+  if (!captureUiProofEnabled) {
+    return;
+  }
+  const artifactDir = path.join(owner.artifactDir, directory);
+  await mkdir(artifactDir, { recursive: true });
+  await page.screenshot({
+    animations: "disabled",
+    fullPage: true,
+    path: path.join(artifactDir, fileName),
+  });
+}
 
 export function createChatFlowE2eSuite() {
   return createControlUiE2eSuite({
@@ -178,11 +178,15 @@ export async function scrollChatThreadToTop(page: Page): Promise<void> {
   });
 }
 
-export async function captureSessionAccessibilityProof(page: Page, name: string): Promise<void> {
+export async function captureSessionAccessibilityProof(
+  owner: { readonly artifactDir: string },
+  page: Page,
+  name: string,
+): Promise<void> {
   if (!captureUiProofEnabled) {
     return;
   }
-  await mkdir(sessionAccessibilityProofDir, { recursive: true });
+  const sessionAccessibilityProofDir = path.join(owner.artifactDir, "session-accessibility");
   const sidebar = page.locator("openclaw-app-sidebar");
   await page.screenshot({
     fullPage: true,

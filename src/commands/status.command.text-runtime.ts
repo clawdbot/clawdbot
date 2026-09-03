@@ -1,47 +1,12 @@
 // Text-mode status runtime barrel.
-// Kept separate from command orchestration so JSON/fast status does not import table/theme helpers.
+// Command orchestration loads this owner only for text diagnostics and reports.
 
-export { formatCliCommand } from "../cli/command-format.js";
-export { info } from "../globals.js";
-export { formatTimeAgo } from "../infra/format-time/format-relative.ts";
-export { formatGitInstallLabel } from "../infra/update-check.js";
-export {
-  resolveMemoryCacheSummary,
-  resolveMemoryFtsState,
-  resolveMemoryVectorState,
-} from "../memory-host-sdk/status.js";
-export {
-  formatPluginCompatibilityNotice,
-  summarizePluginCompatibility,
-} from "../plugins/status-compatibility.js";
-export { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+export { getTerminalTableWidth } from "../../packages/terminal-core/src/table.js";
 export { theme } from "../../packages/terminal-core/src/theme.js";
-export { formatHealthChannelLines } from "./health-format.js";
-export { groupChannelIssuesByChannel } from "./status-all/channel-issues.js";
-export {
-  buildStatusChannelsTableRows,
-  statusChannelsTableColumns,
-} from "./status-all/channels-table.js";
-export {
-  buildStatusGatewaySurfaceValues,
-  buildStatusOverviewSurfaceRows,
-  buildStatusOverviewRows,
-  buildStatusUpdateSurface,
-  buildGatewayStatusSummaryParts,
-  formatStatusDashboardValue,
-  formatGatewayAuthUsed,
-  formatGatewaySelfSummary,
-  resolveStatusUpdateChannelInfo,
-  formatStatusServiceValue,
-  formatStatusTailscaleValue,
-  resolveStatusDashboardUrl,
-} from "./status-all/format.js";
-export {
-  formatDuration,
-  formatKTokens,
-  formatPromptCacheCompact,
-  formatStatusConfigDiagnosticEntries,
-  formatTokensCompact,
-  shortenText,
-} from "./status.format.js";
-export { formatUpdateAvailableHint } from "./status.update.js";
+export { info } from "../globals.js";
+export { formatUsageReportLines } from "../infra/provider-usage.format.js";
+export { formatTimeAgo } from "../infra/format-time/format-relative.ts";
+export { buildStatusUpdateSurface } from "./status-all/format.js";
+export { buildStatusCommandReportData } from "./status.command-report-data.ts";
+export { buildStatusCommandReportLines } from "./status.command-report.ts";
+export { formatStatusConfigDiagnosticEntries } from "./status.format.js";

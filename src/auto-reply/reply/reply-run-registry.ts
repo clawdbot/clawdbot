@@ -28,7 +28,6 @@ export {
   clearReplyRunForResetBySessionId,
   expireStaleReplyRunBySessionId,
   forceClearReplyRunBySessionId,
-  getActiveReplyRunCount,
   isReplyRunAbortableForCompaction,
   isReplyRunActiveForSessionId,
   isReplyRunEvidenceStaleBySessionId,

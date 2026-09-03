@@ -22,6 +22,7 @@ import {
   resultDetails,
   runUntilCompleted,
   testing,
+  waitUntilCompleted,
 } from "./code-mode.test-support.js";
 import { buildEmbeddedRunPayloads } from "./embedded-agent-runner/run/payloads.js";
 import { emitAssistantTextDeltaAndEnd } from "./embedded-agent-subscribe.e2e-harness.js";
@@ -437,12 +438,10 @@ describe("Code Mode subscribed bridge lifecycle", () => {
         );
         expect(suspended).toMatchObject({ status: "waiting", reason: "yield" });
 
-        const completed = resultDetails(
-          await expectDefined(harness.tools[1], "Code Mode wait test invariant").execute(
-            `code-wait-stage-${stage}`,
-            { runId: suspended.runId },
-          ),
-        );
+        const completed = await waitUntilCompleted({
+          details: suspended,
+          waitTool: expectDefined(harness.tools[1], "Code Mode wait test invariant"),
+        });
         expect(completed).toMatchObject({ status: "completed", value: { finished: true } });
         expect(countActiveToolExecutions(harness.runId)).toBe(0);
       }
@@ -546,7 +545,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
         );
         expect(pending.settled).toBeUndefined();
         expect(otherPending.settled).toBeUndefined();
-        expect(ownerState.snapshotBytes.byteLength).toBeGreaterThan(0);
+        expect(ownerState.snapshot.memory.byteLength).toBeGreaterThan(0);
         expect(testing.resumingRunIds.size).toBe(0);
 
         // Both exec calls have returned; no wait is in flight to perform owner cleanup.

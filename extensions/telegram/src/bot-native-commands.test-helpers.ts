@@ -94,6 +94,7 @@ const dispatchChannelInboundTurnForTest: TelegramNativeCommandDeps["dispatchChan
                 const providerInfo = {
                   ...info,
                   onPlatformSendDispatch: async () => undefined,
+                  assertPlatformSendAuthorized: () => undefined,
                 };
                 return delivery.deliverWithProviderMessageSending(payload, providerInfo);
               }

@@ -66,12 +66,15 @@ function appendBranchEntry(params: {
     );
   }
   if (entry.type === "compaction") {
+    const { __openclaw: identity } = entry;
     return sessionManager.appendCompaction(
       entry.summary,
       remapEntryId(entry.firstKeptEntryId, rewrittenEntryIds) ?? entry.firstKeptEntryId,
       entry.tokensBefore,
       entry.details,
       entry.fromHook,
+      // An unknown historical run must not inherit the rewriting run's identity.
+      { runId: identity?.runId, ...identity },
     );
   }
   if (entry.type === "reset") {

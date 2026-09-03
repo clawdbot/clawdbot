@@ -3,6 +3,7 @@ import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/
 import { resolveSandboxToolPolicyForAgent } from "../../agents/sandbox/tool-policy.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { withSessionPlacementComputer } from "../../agents/session-placement-computer.js";
+import { withSessionSkillResources } from "../../agents/session-placement-skill-resources.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { redactSensitiveText } from "../../logging/redact.js";
@@ -17,6 +18,7 @@ import type {
   WorkerSessionTurnClaim,
 } from "./placement-store.js";
 import type { WorkerEnvironmentService } from "./service.js";
+import { transferSkillResources } from "./skill-resource-transfer.js";
 import { WorkerTunnelOwnerDisconnectedError, type WorkerTunnelHandle } from "./tunnel-contract.js";
 import { latestDurableWorkspaceConflict, waitForTurnOperation } from "./worker-turn-admission.js";
 import { prepareWorkerTurnAttachments } from "./worker-turn-attachments.js";
@@ -59,6 +61,25 @@ function workspaceError(error: unknown): string {
     .replace(/\s+/gu, " ")
     .trim();
   return truncateUtf16Safe(message || "cloud worker turn failed", 1_024);
+}
+
+function remoteExecWorkspaceFailure(executionError: unknown, reconciliationError: unknown): Error {
+  const executionMessage = formatErrorMessage(executionError);
+  const reconciliationDetail =
+    reconciliationError instanceof WorkerWorkspaceReconciliationError &&
+    reconciliationError.cause !== undefined
+      ? reconciliationError.cause
+      : reconciliationError;
+  const reconciliationFailure = new WorkerWorkspaceReconciliationError(
+    workspaceError(reconciliationDetail),
+    { cause: reconciliationDetail },
+  );
+  return new Error(
+    `${executionMessage}\n\nWorkspace recovery also failed: ${reconciliationFailure.message}. ` +
+      "Remote changes may not have been applied locally. Resolve the workspace error, then retry.",
+    // Keep the typed reconciliation failure discoverable so model fallback cannot replay the turn.
+    { cause: reconciliationFailure },
+  );
 }
 
 function workspaceJournal(params: {
@@ -338,7 +359,25 @@ export async function executeRemoteExecTurn(params: {
   const originalPrompt = params.turn.prompt;
   const originalTranscriptPrompt = params.turn.transcriptPrompt;
   let computer: PreparedWorkerComputer | undefined;
+  let skillResources: Awaited<ReturnType<typeof transferSkillResources>>;
   try {
+    skillResources = await transferSkillResources({
+      snapshot: params.turn.skillsSnapshot,
+      explicitSelections: params.turn.explicitSkillSelections,
+      tunnel,
+      signal: params.turn.abortSignal,
+      assertCurrent: () => {
+        const current = params.environments.get(environment.environmentId);
+        if (
+          !params.placements.validateTurnClaim(params.turnClaim) ||
+          current?.state !== "attached" ||
+          current.ownerEpoch !== environment.ownerEpoch ||
+          current.leaseId !== environment.leaseId
+        ) {
+          throw new Error("Skill transfer lost its exact placement authority.");
+        }
+      },
+    });
     computer = await params.environments.prepareComputer?.(params.turnClaim);
     const sandboxToolPolicy = resolveSandboxToolPolicyForAgent(
       params.turn.config,
@@ -398,12 +437,16 @@ export async function executeRemoteExecTurn(params: {
             sandboxToolPolicy: computer ? sandboxToolPolicy : undefined,
             bind: (run) => (computer ? computer.bind(run) : null),
           },
-          params.runLocal,
+          () =>
+            skillResources
+              ? withSessionSkillResources(skillResources, params.runLocal)
+              : params.runLocal(),
         ),
     );
   } catch (error) {
     executionError = error;
   } finally {
+    await skillResources?.cleanup().catch(() => undefined);
     executionActive = false;
     params.turn.prompt = originalPrompt;
     params.turn.transcriptPrompt = originalTranscriptPrompt;
@@ -447,8 +490,7 @@ export async function executeRemoteExecTurn(params: {
       });
     }
     if (executionError) {
-      // Preserve the terminal execution failure while retaining the independent workspace loss.
-      throw new Error(formatErrorMessage(executionError), { cause: reconciliationError });
+      throw remoteExecWorkspaceFailure(executionError, reconciliationError);
     }
     throw reconciliationError;
   });

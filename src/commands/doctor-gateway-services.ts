@@ -66,11 +66,11 @@ import {
   EXTERNAL_SERVICE_REPAIR_NOTE,
   isServiceRepairExternallyManaged,
   resolveServiceRepairPolicy,
+  resolveUpdateParentGatewayActivation,
   shouldManageGatewayService,
 } from "./doctor-service-repair-policy.js";
 import {
   UPDATE_IN_PROGRESS_ENV,
-  UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION_ENV,
   UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR_ENV,
   UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV,
   UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART_ENV,
@@ -92,9 +92,9 @@ function shouldSkipLegacyUpdateRepairConfigWrite(env: NodeJS.ProcessEnv): boolea
 }
 
 function updateParentAllowsGatewayActivation(env: NodeJS.ProcessEnv): boolean {
-  const activationPolicy = env[UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION_ENV];
+  const activationPolicy = resolveUpdateParentGatewayActivation(env);
   if (activationPolicy !== undefined) {
-    return isTruthyEnvValue(activationPolicy);
+    return activationPolicy;
   }
   // Shipped parents predate the marker. Recover their explicit CLI policy from
   // the direct parent; unreadable ancestry stays staged rather than disrupting it.
@@ -221,6 +221,10 @@ function isOperatorOwnedEnvironmentIssue(
     case SERVICE_AUDIT_CODES.gatewayTokenMismatch:
     case SERVICE_AUDIT_CODES.gatewayTokenDrift:
       return hasGatewayServiceEnvironmentOverride(command, ["OPENCLAW_GATEWAY_TOKEN"], {
+        environmentValueSources,
+      });
+    case SERVICE_AUDIT_CODES.gatewayPasswordEmbedded:
+      return hasGatewayServiceEnvironmentOverride(command, ["OPENCLAW_GATEWAY_PASSWORD"], {
         environmentValueSources,
       });
     case SERVICE_AUDIT_CODES.gatewayManagedEnvEmbedded:
@@ -525,6 +529,21 @@ export async function maybeRepairGatewayServiceConfig(
     command = null;
   }
   if (!command) {
+    const audit = await auditGatewayServiceConfig({
+      env: process.env,
+      command: null,
+      platform: process.platform,
+    });
+    if (audit.issues.length > 0) {
+      note(
+        audit.issues
+          .map((issue) =>
+            issue.detail ? `- ${issue.message} (${issue.detail})` : `- ${issue.message}`,
+          )
+          .join("\n"),
+        "Gateway service config",
+      );
+    }
     return cfg;
   }
   const managedDefinition = resolveManagedGatewayServiceCommand(command) ?? command;

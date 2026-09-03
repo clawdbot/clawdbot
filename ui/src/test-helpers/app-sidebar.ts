@@ -10,6 +10,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult, SessionsListResult } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import type { RouteId } from "../app-route-paths.ts";
+import { createApplicationConfigCapability } from "../app/config.ts";
 import type {
   ApplicationContext,
   ApplicationGateway,
@@ -98,6 +99,8 @@ export type SidebarLifecycleState = HTMLElement & {
   refreshRequired: boolean;
   onRefresh: () => void;
   onRetryConnect?: () => void;
+  onOpenPalette?: () => void;
+  onToggleSidebar?: () => void;
   onOpenNewSession?: (agentId: string, target?: { catalogId: string }) => void;
   variant: "panel" | "drawer";
 };
@@ -535,6 +538,7 @@ export function createContext(
   sidebarSessionGatewayBindings.get(sessions)?.(gateway);
   const selectedAgentId = sessions.state.agentId ?? "main";
   return {
+    config: createApplicationConfigCapability({ resourceBasePath: "" }),
     gateway,
     sessions,
     placementStartup: { pause: vi.fn<ApplicationContext["placementStartup"]["pause"]>() },

@@ -156,6 +156,9 @@ export type PreparedModelRuntimeOwner = {
   provenance: "configured" | "standalone" | "explicit" | "run" | "ephemeral";
   generation: number;
   needsRefresh: boolean;
+  catalogStale: boolean;
+  /** Completed discovery facts; runtime capability projection belongs to each generation. */
+  catalogInventory?: { catalog: ModelCatalogSnapshot; key: string };
   refreshError?: Error;
   snapshot?: PreparedModelRuntimeSnapshot;
   pluginGeneration?: PreparedModelRuntimePluginGeneration;

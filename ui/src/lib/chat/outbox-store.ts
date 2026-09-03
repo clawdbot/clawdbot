@@ -174,7 +174,7 @@ export function resolvePendingComposerSessions(
     if (!source) {
       continue;
     }
-    const resolved = resolveStoredChatOutboxScope(state, source.sessionKey, source.agentId);
+    const resolved = resolveUiConversationIdentity(state, source.sessionKey, source.agentId);
     const nextKey = storedChatOutboxScopeKey(resolved);
     const { awaitingDefaults: _, ...session } = pending;
     const destination = store.sessions[nextKey];
@@ -211,21 +211,13 @@ export function resolvePendingComposerSessions(
   return migrated;
 }
 
-export function resolveStoredChatOutboxScope(
-  state: ChatComposerScope,
-  sessionKey: string,
-  agentIdOverride?: string,
-): StoredChatOutboxScope {
-  return resolveUiConversationIdentity(state, sessionKey, agentIdOverride);
-}
-
 export function captureChatOutboxAdmission(
   state: ChatComposerScope,
   sessionKey: string,
   agentId?: string,
 ) {
   return {
-    scope: resolveStoredChatOutboxScope(state, sessionKey, agentId),
+    scope: resolveUiConversationIdentity(state, sessionKey, agentId),
     awaitingDefaults: !hasUiSessionDefaults(state),
   };
 }
@@ -244,6 +236,21 @@ export function storedChatOutboxScopeKey(scope: StoredChatOutboxScope): string {
       ? UNRESOLVED_GLOBAL_AGENT_SCOPE
       : DEFAULT_AGENT_ID);
   return `${scope.sessionKey}\u0000agent:${agentScope}`;
+}
+
+/** Logical client ownership plus this key fences a retained delivery's display. */
+export function chatOutboxDeliveryKey(
+  host: ChatComposerScope,
+  scope: StoredChatOutboxScope,
+  runId = "",
+): string {
+  return (
+    JSON.stringify([
+      host.settings?.gatewayUrl,
+      host.client?.recoveryScope,
+      storedChatOutboxScopeKey(scope),
+    ]) + runId
+  );
 }
 
 function holdComposerRecovery(
