@@ -301,6 +301,7 @@ export function buildThreadResumeParams(
         }
       : {}),
     ...buildCodexThreadConfiguration(params, options),
+    ...resolveCodexThreadEnvironmentSelection(options),
     personality: CODEX_NATIVE_PERSONALITY_NONE,
   };
 }

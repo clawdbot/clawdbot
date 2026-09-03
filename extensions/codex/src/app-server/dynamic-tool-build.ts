@@ -783,10 +783,21 @@ export function shouldRequireCodexSandboxExecServerEnvironment(params: {
 export function resolveCodexSandboxEnvironmentSelection(
   environment: CodexSandboxExecEnvironment | undefined,
   nativeToolSurfaceEnabled: boolean,
+  localProjectInstructionCwd?: string,
 ): CodexTurnEnvironmentParams[] | undefined {
-  // Omitting this selection while a turn sets cwd restores Codex's local
-  // environment; an explicit empty selection keeps native tools disabled.
-  return nativeToolSurfaceEnabled ? (environment ? [environment] : undefined) : [];
+  if (!nativeToolSurfaceEnabled) {
+    return [];
+  }
+  if (environment) {
+    return [environment];
+  }
+  // A frozen project-instruction snapshot must name the environment that owns
+  // those bytes. Otherwise Codex may apply user-configured remote environment
+  // defaults and report same-path sources that OpenClaw read from the host.
+  if (localProjectInstructionCwd) {
+    return [{ environmentId: "local", cwd: localProjectInstructionCwd }];
+  }
+  return undefined;
 }
 /** Chooses the cwd visible to Codex native execution after sandbox exec-server setup. */
 export function resolveCodexAppServerExecutionCwd(params: {

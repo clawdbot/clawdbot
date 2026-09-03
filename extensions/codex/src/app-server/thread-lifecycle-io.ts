@@ -160,6 +160,7 @@ export async function resumeExistingCodexThread(
         nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
         nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
         webSearchAllowed: params.webSearchAllowed,
+        environmentSelection: params.environmentSelection,
         hostSystemAgentActive,
         restrictedToolSurfaceInheritedMcpServerNames,
         shellEnvironment: params.shellEnvironment,

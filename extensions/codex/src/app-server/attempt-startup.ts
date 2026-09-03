@@ -434,10 +434,6 @@ export async function startCodexAttemptThread(params: {
               await releaseStartupSandboxEnvironment();
               throw error;
             }
-            const startupEnvironmentSelection = resolveCodexSandboxEnvironmentSelection(
-              startupSandboxEnvironment,
-              params.nativeToolSurfaceEnabled,
-            );
             const startupExecutionCwd = resolveCodexAppServerExecutionCwd({
               effectiveCwd: params.effectiveCwd,
               localWorkspaceRoot: params.effectiveWorkspace,
@@ -445,6 +441,13 @@ export async function startCodexAttemptThread(params: {
               nativeToolSurfaceEnabled: params.nativeToolSurfaceEnabled,
               remoteWorkspaceRoot: params.appServer.remoteWorkspaceRoot,
             });
+            const startupEnvironmentSelection = resolveCodexSandboxEnvironmentSelection(
+              startupSandboxEnvironment,
+              params.nativeToolSurfaceEnabled,
+              params.captureNativeProjectInstructions || params.nativeProjectDocsDisabledOnResume
+                ? startupExecutionCwd
+                : undefined,
+            );
             const startupSandboxPolicy = startupSandboxEnvironment
               ? resolveCodexExternalSandboxPolicyForOpenClawSandbox(params.sandbox)
               : undefined;

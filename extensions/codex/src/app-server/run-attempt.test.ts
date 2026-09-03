@@ -4898,10 +4898,14 @@ describe("runCodexAppServerAttempt", () => {
     await firstHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await firstRun;
     const threadStart = firstHarness.requests.find((request) => request.method === "thread/start");
-    expect(
-      (threadStart?.params as { config?: { project_doc_max_bytes?: number } } | undefined)?.config
-        ?.project_doc_max_bytes,
-    ).toBe(131_072);
+    const startRequest = threadStart?.params as
+      | {
+          config?: { project_doc_max_bytes?: number };
+          environments?: Array<{ environmentId?: string; cwd?: string }>;
+        }
+      | undefined;
+    expect(startRequest?.config?.project_doc_max_bytes).toBe(131_072);
+    expect(startRequest?.environments).toEqual([{ environmentId: "local", cwd: workspaceDir }]);
     await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
       agentWorkspaceDeveloperInstructions: CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY,
     });
@@ -4918,9 +4922,14 @@ describe("runCodexAppServerAttempt", () => {
       (request) => request.method === "thread/resume",
     );
     const resumeRequest = threadResume?.params as
-      | { config?: { project_doc_max_bytes?: number }; developerInstructions?: string }
+      | {
+          config?: { project_doc_max_bytes?: number };
+          developerInstructions?: string;
+          environments?: Array<{ environmentId?: string; cwd?: string }>;
+        }
       | undefined;
     expect(resumeRequest?.config?.project_doc_max_bytes).toBe(0);
+    expect(resumeRequest?.environments).toEqual([{ environmentId: "local", cwd: workspaceDir }]);
     expect(resumeRequest?.developerInstructions).toContain("Frozen Codex Project Instructions");
     expect(resumeRequest?.developerInstructions).not.toContain(lateGuidance);
   });
