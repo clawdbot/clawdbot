@@ -226,13 +226,14 @@ function createGatewayClient(params: {
   });
 }
 
-async function readCompletionProvenance(sessionKey: string) {
-  const { entry, storePath } = loadSessionEntry(sessionKey);
+async function readCompletionProvenance(sessionKey: string, agentId: string) {
+  const { entry, storePath } = loadSessionEntry(sessionKey, agentId);
   if (!entry?.sessionId) {
     return undefined;
   }
   const messages = await readSessionMessagesAsync(
     {
+      agentId,
       sessionEntry: entry,
       sessionId: entry.sessionId,
       sessionKey,
@@ -333,7 +334,7 @@ describeLive("subagent announce live", () => {
       expect(extractPayloadText(response.result)).toContain(parentToken);
 
       const provenance = await waitFor("internal completion provenance", () =>
-        readCompletionProvenance(sessionKey),
+        readCompletionProvenance(sessionKey, "main"),
       );
       expect(provenance).toMatchObject({
         kind: "inter_session",
