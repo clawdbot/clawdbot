@@ -257,7 +257,7 @@ describe("nextcloud-talk inbound behavior", () => {
       const buildMentionRegexes = vi.fn(() => [/@openclaw/i]);
       const coreRuntime = createPluginRuntimeMock({
         channel: {
-          text: { hasControlCommand: vi.fn((body: string) => body === "/help") },
+          text: { hasControlCommand: vi.fn((body?: string) => body === "/help") },
           commands: { shouldHandleTextCommands: vi.fn(() => true) },
           mentions: { buildMentionRegexes },
         },
@@ -349,7 +349,7 @@ describe("nextcloud-talk inbound behavior", () => {
       group: true,
     },
   ])("keeps command and raw projections separate for $label", async ({ text, command, group }) => {
-    const hasControlCommand = vi.fn((body: string) => body.startsWith("/"));
+    const hasControlCommand = vi.fn((body?: string) => body?.startsWith("/") ?? false);
     const coreRuntime = createPluginRuntimeMock({
       channel: {
         text: { hasControlCommand },
