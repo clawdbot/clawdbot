@@ -220,6 +220,18 @@ export async function cleanupTimedOutCronAgentRun(
   if (!state.deps.cleanupTimedOutAgentRun) {
     return;
   }
+  // Log the timeout event with execution state for debugging #137215.
+  state.deps.log.warn(
+    {
+      jobId: job.id,
+      jobName: job.name,
+      timeoutMs,
+      executionPhase: execution?.phase,
+      executionProvider: execution?.provider,
+      executionModel: execution?.model,
+    },
+    "cron: initiating timeout cleanup; original execution may still be active",
+  );
   let settleTimer: NodeJS.Timeout | undefined;
   const cleanupPromise = state.deps.cleanupTimedOutAgentRun({ job, timeoutMs, execution });
   const settleTimeout = new Promise<void>((resolve) => {
@@ -227,9 +239,25 @@ export async function cleanupTimedOutCronAgentRun(
   });
   try {
     await Promise.race([cleanupPromise, settleTimeout]);
+    const completed = cleanupPromise.then(
+      () => true,
+      () => false,
+    );
+    const settled = await Promise.race([completed, settleTimeout.then(() => false)]);
+    if (settled) {
+      state.deps.log.info(
+        { jobId: job.id, jobName: job.name },
+        "cron: timeout cleanup completed; original execution terminated or was cancelled",
+      );
+    } else {
+      state.deps.log.warn(
+        { jobId: job.id, jobName: job.name },
+        "cron: timeout cleanup exceeded guard timeout; original execution may still be running",
+      );
+    }
   } catch (err) {
     state.deps.log.warn(
-      { jobId: job.id, err: String(err) },
+      { jobId: job.id, jobName: job.name, err: String(err) },
       "cron: timed-out agent cleanup failed",
     );
   } finally {

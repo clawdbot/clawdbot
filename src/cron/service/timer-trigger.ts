@@ -1,5 +1,6 @@
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { CronConfig } from "../../config/types.cron.js";
+import { isCronJobActive } from "../active-jobs.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { type CronRetryOn, resolveCronExecutionRetryHint } from "../retry-hint.js";
 import { createCronStreamSourceIdentity } from "../stream-schedule.js";
@@ -32,7 +33,11 @@ type TransientCronRetryDecision = {
   consecutiveErrors: number;
   retryCategory?: CronRetryOn;
   backoffMs?: number;
-  reason: "transient retry" | "max retries exhausted" | "permanent error";
+  reason:
+    | "transient retry"
+    | "max retries exhausted"
+    | "permanent error"
+    | "active execution in progress";
 };
 
 type DisabledHeartbeatOneShotRetryDecision = {
@@ -144,12 +149,23 @@ export function resolveCronNextRunWithLowerBound(params: {
 
 export function resolveTransientCronRetryDecision(params: {
   cronConfig?: CronConfig;
+  jobId?: string;
   error: string | undefined;
   errorClassification?: CronRunErrorClassification;
   lastErrorReason?: CronJob["state"]["lastErrorReason"];
   executionStarted?: boolean;
   consecutiveErrors: number | undefined;
 }): TransientCronRetryDecision {
+  // Prevent retry while an earlier execution of the same job is still active.
+  // This avoids overlapping runs when a timeout fires but the original execution
+  // continues (e.g., ignoring abort signals). See #137215.
+  if (params.jobId !== undefined && isCronJobActive(params.jobId)) {
+    return {
+      retryable: false,
+      consecutiveErrors: params.consecutiveErrors ?? 0,
+      reason: "active execution in progress",
+    };
+  }
   if (params.errorClassification?.kind === "permanent") {
     return {
       retryable: false,

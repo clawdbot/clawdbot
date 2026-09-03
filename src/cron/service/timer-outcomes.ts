@@ -291,6 +291,7 @@ export function applyJobResult(
       } else if (result.status === "error") {
         const retryDecision = resolveTransientCronRetryDecision({
           cronConfig: state.deps.cronConfig,
+          jobId: job.id,
           error: result.error,
           errorClassification: result.errorClassification,
           lastErrorReason: job.state.lastErrorReason,
@@ -370,6 +371,7 @@ export function applyJobResult(
     } else if (result.status === "error" && isJobEnabled(job)) {
       const retryDecision = resolveTransientCronRetryDecision({
         cronConfig: state.deps.cronConfig,
+        jobId: job.id,
         error: result.error,
         errorClassification: result.errorClassification,
         lastErrorReason: job.state.lastErrorReason,

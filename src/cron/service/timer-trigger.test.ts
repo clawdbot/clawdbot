@@ -1,5 +1,6 @@
 // Retry-decision tests preserve provider classifications before cron message matching.
 import { describe, expect, it, vi } from "vitest";
+import * as activeJobs from "../active-jobs.js";
 import { makeCronJob } from "../delivery.test-helpers.js";
 import { createNoopLogger } from "../service.test-harness.js";
 import { createCronServiceState } from "./state.js";
@@ -127,5 +128,45 @@ describe("resolveTransientCronRetryDecision", () => {
       retryCategory: "rate_limit",
       reason: "transient retry",
     });
+  });
+
+  it("does not retry when an active execution is in progress", () => {
+    // Simulate a job that timed out but is still running (abort ignored).
+    // The retry decision should see the active execution and decline to retry.
+    // This is the core fix for #137215.
+    const error = "cron webhook delivery timed out: the job exceeded its timeout";
+    const errorClassification = { kind: "reason" as const, reason: "timeout" };
+
+    // Without jobId, the function cannot check active state and would retry.
+    expect(
+      resolveTransientCronRetryDecision({
+        error,
+        errorClassification,
+        consecutiveErrors: 1,
+      }),
+    ).toMatchObject({
+      retryable: true,
+      reason: "transient retry",
+    });
+
+    // Mock isCronJobActive to return true for our test job
+    vi.spyOn(activeJobs, "isCronJobActive").mockReturnValue(true);
+
+    try {
+      // With a jobId that has an active execution, retry is blocked.
+      expect(
+        resolveTransientCronRetryDecision({
+          error,
+          errorClassification,
+          jobId: "test-job-with-active-execution",
+          consecutiveErrors: 1,
+        }),
+      ).toMatchObject({
+        retryable: false,
+        reason: "active execution in progress",
+      });
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });
