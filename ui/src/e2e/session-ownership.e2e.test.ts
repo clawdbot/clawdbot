@@ -705,8 +705,7 @@ suite.define(() => {
     await currentPage.getByRole("button", { name: "Session sharing" }).click();
     const dropdown = currentPage.locator(".chat-pane__sharing-menu");
     await expect.poll(() => dropdown.getAttribute("open")).not.toBeNull();
-    await dropdown.locator(".chat-pane__sharing-visibility-title").waitFor();
-    await dropdown.locator(".chat-pane__sharing-owner-title").waitFor();
+    await expectBrowser(dropdown.locator(".chat-pane__sharing-title")).toHaveCount(2);
     await currentPage.getByText("Publish draft", { exact: true }).click();
     await gateway.waitForRequest("session.visibility.set");
     await expect.poll(() => dropdown.getAttribute("open")).toBeNull();
