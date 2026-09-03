@@ -116,34 +116,32 @@ function stripWindowsShellWrapper(command: string): string {
   return result;
 }
 
+const POWERSHELL_FLAGS =
+  /(?:-(?!c(?:ommand)?\b|-command\b)\w+(?:\s+(?!-)(?:"[^"]*(?:""[^"]*)*"|'[^']*(?:''[^']*)*'|\S+))?\s+)*/i
+    .source;
+const POWERSHELL_INVOKE_PREFIX = `^(?:powershell|pwsh)(?:\\.exe)?\\s+${POWERSHELL_FLAGS}(?:-command|-c|--command)\\s+`;
+const POWERSHELL_DOUBLE_QUOTED = new RegExp(`${POWERSHELL_INVOKE_PREFIX}"(.+)"$`, "is");
+const POWERSHELL_SINGLE_QUOTED = new RegExp(`${POWERSHELL_INVOKE_PREFIX}'(.+)'$`, "is");
+const POWERSHELL_UNQUOTED = new RegExp(`${POWERSHELL_INVOKE_PREFIX}(.+)$`, "is");
+
 function stripWindowsShellWrapperOnce(command: string): string {
   const psCallMatch = command.match(/^&\s+(.+)$/s);
   if (psCallMatch) {
     return expectDefined(psCallMatch[1], "ps call match capture group 1");
   }
 
-  const psFlags =
-    /(?:-(?!c(?:ommand)?\b|-command\b)\w+(?:\s+(?!-)(?:"[^"]*(?:""[^"]*)*"|'[^']*(?:''[^']*)*'|\S+))?\s+)*/i
-      .source;
-  const psCommandFlag = `(?:-command|-c|--command)`;
-  const psInvokeMatch = command.match(
-    new RegExp(`^(?:powershell|pwsh)(?:\\.exe)?\\s+${psFlags}${psCommandFlag}\\s+"(.+)"$`, "is"),
-  );
+  const psInvokeMatch = command.match(POWERSHELL_DOUBLE_QUOTED);
   if (psInvokeMatch) {
     return expectDefined(psInvokeMatch[1], "ps invoke match capture group 1").replace(/""/g, '"');
   }
-  const psInvokeSingleQuote = command.match(
-    new RegExp(`^(?:powershell|pwsh)(?:\\.exe)?\\s+${psFlags}${psCommandFlag}\\s+'(.+)'$`, "is"),
-  );
+  const psInvokeSingleQuote = command.match(POWERSHELL_SINGLE_QUOTED);
   if (psInvokeSingleQuote) {
     return expectDefined(psInvokeSingleQuote[1], "ps invoke single quote capture group 1").replace(
       /''/g,
       "'",
     );
   }
-  const psInvokeNoQuote = command.match(
-    new RegExp(`^(?:powershell|pwsh)(?:\\.exe)?\\s+${psFlags}${psCommandFlag}\\s+(.+)$`, "is"),
-  );
+  const psInvokeNoQuote = command.match(POWERSHELL_UNQUOTED);
   if (psInvokeNoQuote) {
     return expectDefined(psInvokeNoQuote[1], "ps invoke no quote capture group 1");
   }
