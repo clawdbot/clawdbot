@@ -198,6 +198,7 @@ describe("channels controller WhatsApp wait", () => {
       },
     } as never);
     channels.state.whatsappLoginQrDataUrl = "data:image/png;base64,existing";
+    channels.state.whatsappLoginSessionKey = "existing-session";
 
     const wait = channels.waitWhatsApp();
     await vi.waitFor(() => expect(channels.state.whatsappBusy).toBe(true));
@@ -210,6 +211,7 @@ describe("channels controller WhatsApp wait", () => {
     }
     expect(channels.state.whatsappBusy).toBe(false);
     expect(channels.state.whatsappLoginQrDataUrl).toBeNull();
+    expect(channels.state.whatsappLoginSessionKey).toBeNull();
 
     pending.resolve({
       message: "stale login",
