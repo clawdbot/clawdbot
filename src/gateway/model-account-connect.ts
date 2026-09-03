@@ -3,9 +3,14 @@ import type {
   UsersAuthConnectCatalogResult,
   UsersAuthConnectStartResult,
   UsersAuthConnectStatusResult,
+  UsersListAuthLinksResult,
+  UsersLinkAuthProfileResult,
   UsersListModelAccountsResult,
   UsersSelectModelAccountResult,
+  UsersUnlinkAuthProfileResult,
 } from "../../packages/gateway-protocol/src/schema/users.js";
+import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
+import { ensureAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
@@ -14,7 +19,9 @@ import {
   resolvePersonalAccountAuthMethod,
 } from "../plugins/personal-account-auth.js";
 import { runProviderPluginAuthMethodUnpersisted } from "../plugins/provider-auth-choice.js";
+import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import {
+  clearUserProfileAuthLink,
   connectUserModelAccount,
   listUserModelAccounts,
   listUserProfileAuthLinks,
@@ -63,6 +70,32 @@ function matchesLiteralCredential(
     : credential.type === "token" &&
         existing.type === "token" &&
         credential.token === existing.token;
+}
+
+function resolveOwnedAccountProvider(owner: string, authProfileId: string): string {
+  const account = readUserModelAccountSummary({ profileId: owner, authProfileId });
+  if (!account) {
+    throw new ModelAccountConnectInputError(
+      "Select an account from your personal account list, or add it first.",
+    );
+  }
+  return account.provider;
+}
+
+function resolveLinkableAuthProfileProvider(
+  cfg: OpenClawConfig,
+  owner: string,
+  authProfileId: string,
+): string | undefined {
+  if (isUserModelAuthProfileId(authProfileId)) {
+    return resolveOwnedAccountProvider(owner, authProfileId);
+  }
+  // Stored credentials and config-only routes (e.g. aws-sdk) remain linkable;
+  // the caller cannot claim a provider the selected profile does not satisfy.
+  const store = ensureAuthProfileStoreWithoutExternalProfiles(resolveSharedMainAuthAgentDir(), {
+    readOnly: true,
+  });
+  return store.profiles[authProfileId]?.provider ?? cfg.auth?.profiles?.[authProfileId]?.provider;
 }
 
 /** One Gateway lifetime owns sign-in steps and authority; provider methods only stage credentials. */
@@ -138,8 +171,48 @@ export function createModelAccountConnectService(options: {
       }
     }
   };
+  const setLink = (action: ModelAccountConnectAction, provider: string, authProfileId: string) => {
+    const links = setUserProfileAuthLink({
+      profileId: action.owner,
+      provider,
+      authProfileId,
+      assertCurrent: () => assertRunning(action),
+    });
+    supersede(action.owner, provider);
+    options.onChanged?.();
+    return { links };
+  };
 
   return {
+    listLinks(action: ModelAccountConnectAction): UsersListAuthLinksResult {
+      assertRunning(action);
+      return { links: listUserProfileAuthLinks(action.owner) };
+    },
+    link(action: ModelAccountConnectAction, authProfileId: string): UsersLinkAuthProfileResult {
+      assertRunning(action);
+      const provider = resolveLinkableAuthProfileProvider(
+        options.getConfig(),
+        action.owner,
+        authProfileId,
+      );
+      if (!provider) {
+        throw new ModelAccountConnectInputError(
+          `unknown auth profile "${authProfileId}"; sign the account in first with "openclaw models auth login --provider <id> --profile-id ${authProfileId}", then link it`,
+        );
+      }
+      return setLink(action, provider, authProfileId);
+    },
+    unlink(action: ModelAccountConnectAction, provider: string): UsersUnlinkAuthProfileResult {
+      assertRunning(action);
+      const links = clearUserProfileAuthLink({
+        profileId: action.owner,
+        provider,
+        assertCurrent: () => assertRunning(action),
+      });
+      supersede(action.owner, provider);
+      options.onChanged?.();
+      return { links };
+    },
     list(action: ModelAccountConnectAction, cursor?: string): UsersListModelAccountsResult {
       assertRunning(action);
       return {
@@ -177,21 +250,11 @@ export function createModelAccountConnectService(options: {
       authProfileId: string,
     ): UsersSelectModelAccountResult {
       assertRunning(action);
-      const account = readUserModelAccountSummary({ profileId: action.owner, authProfileId });
-      if (!account) {
-        throw new ModelAccountConnectInputError(
-          "Select an account from your personal account list, or add it first.",
-        );
-      }
-      const links = setUserProfileAuthLink({
-        profileId: action.owner,
-        provider: account.provider,
+      return setLink(
+        action,
+        resolveOwnedAccountProvider(action.owner, authProfileId),
         authProfileId,
-        assertCurrent: () => assertRunning(action),
-      });
-      supersede(action.owner, account.provider);
-      options.onChanged?.();
-      return { links };
+      );
     },
     async start(
       action: ModelAccountConnectAction,

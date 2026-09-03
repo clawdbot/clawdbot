@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type { Duplex, Readable } from "node:stream";
 import { toErrorObject } from "../../infra/errors.js";
@@ -27,7 +27,6 @@ type ServiceChildRelayAdapter = SpawnProcessAdapter<NodeJS.Signals | null> & {
 type AuthorityState = "starting" | "active" | "closing" | "closed" | "identity-lost";
 type StdioEntry = "ignore" | "inherit" | "ipc" | "pipe" | number;
 
-const retainedChildren = new Map<string, ChildProcess>();
 const PUSHED_OUTPUT_BUFFER_LIMIT_BYTES = 256 * 1024;
 
 function readChildMessage(raw: unknown): ServiceChildRelayMessage | ServiceChildAnchorMessage {
@@ -157,19 +156,17 @@ export async function createServiceChildRelayAdapter(params: {
   params.assertCurrent?.();
   const child = spawn(process.execPath, resolveRuntimeWorkerArgv(workerUrl), {
     stdio,
-    // Windows must keep its exact Job owner alive long enough to observe host IPC loss.
+    // A detached Windows Job owner survives host loss long enough to clean up.
+    // Keep its child handle referenced so an idle host can finish admission and lineage cleanup.
     detached: useWindowsJobAnchor,
     windowsHide: true,
     env: process.env,
   });
-  retainedChildren.set(generation, child);
-  child.unref();
   const assertCurrent = () => {
     try {
       params.assertCurrent?.();
     } catch (error) {
       child.kill("SIGKILL");
-      retainedChildren.delete(generation);
       throw error;
     }
   };
@@ -178,7 +175,6 @@ export async function createServiceChildRelayAdapter(params: {
   const control = controlFd === undefined ? null : (child.stdio[controlFd] as Duplex | null);
   if (!child.connected || (!useWindowsJobAnchor && (!control || !child.stdout || !child.stderr))) {
     child.kill("SIGKILL");
-    retainedChildren.delete(generation);
     throw new Error("service child lifecycle channels were not created");
   }
   const stdoutRelay = createOutputRelay(child.stdout ?? undefined);
@@ -413,7 +409,6 @@ export async function createServiceChildRelayAdapter(params: {
     finishAuthorityClose(
       childError?.message ?? "Windows service child anchor exited without a closing receipt",
     );
-    retainedChildren.delete(generation);
   };
   child.once("disconnect", () => {
     childDisconnected = true;
@@ -423,8 +418,6 @@ export async function createServiceChildRelayAdapter(params: {
     childExited = true;
     if (useWindowsJobAnchor) {
       finishWindowsAuthority();
-    } else {
-      retainedChildren.delete(generation);
     }
   });
 
@@ -446,7 +439,6 @@ export async function createServiceChildRelayAdapter(params: {
     await sendChildMessage(start);
   } catch (error) {
     child.kill("SIGKILL");
-    retainedChildren.delete(generation);
     throw error;
   }
 
@@ -464,7 +456,6 @@ export async function createServiceChildRelayAdapter(params: {
       await extinctionCompletion.promise;
     } else {
       child.kill("SIGKILL");
-      retainedChildren.delete(generation);
     }
     // Startup owns command admission, so its exact failure wins over a concurrent
     // backpressured secret pipe closing as a consequence of that failed admission.

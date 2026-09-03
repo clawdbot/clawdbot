@@ -1,14 +1,25 @@
 import type { ChatAccountSelection } from "../../../packages/gateway-protocol/src/schema/users.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { UserModelAccountSelection } from "../model-account-authority.js";
 
-export type ChatMetadataSessionEntry = {
-  authProfileOverride?: string;
-  authProfileOverrideSource?: "auto" | "user" | "user-link";
-  authProfileOverrideCompactionCount?: number;
-};
+export type ChatMetadataSessionEntry = Partial<
+  Pick<
+    SessionEntry,
+    | "sessionId"
+    | "agentHarnessId"
+    | "modelSelectionLocked"
+    | "pluginOwnerId"
+    | "providerOverride"
+    | "modelOverride"
+    | "authProfileOverride"
+    | "authProfileOverrideSource"
+    | "authProfileOverrideCompactionCount"
+  >
+>;
 
 export type ChatMetadataReadParams = {
   agentId: string;
+  sessionKey?: string;
   requesterProfileId?: string;
   sessionEntry?: ChatMetadataSessionEntry;
   draftAccountSelection?: UserModelAccountSelection;

@@ -233,46 +233,54 @@ it("refreshes translated copy when the locale changes while mounted", async () =
   expect(note?.textContent?.trim()).not.toBe(englishNote);
 });
 
-it("renders identity before a Usage statistics link without requesting usage data", async () => {
-  const profile = { ...modelAccountProfile };
-  const request = vi.fn(async (method: string) => {
-    if (method === "users.self") {
-      return { profile };
-    }
-    if (method === "users.listModelAccounts") {
-      return { profileId: "profile-1", accounts: [], links: [] };
-    }
-    throw new Error(`unexpected method: ${method}`);
-  });
-  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
-    id: profile.id,
-    email: profile.emails[0],
-    name: profile.displayName ?? undefined,
-  });
-  const provider = createApplicationContextProvider(harness.context);
-  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
-  provider.append(page);
-  document.body.append(provider);
-  await waitForFast(() => expect(page.querySelector("#settings-profile-identity")).not.toBeNull());
+it.each([{ emails: ["ada@example.test"] }, { emails: [] }])(
+  "renders identity before Usage statistics with emails $emails",
+  async ({ emails }) => {
+    const profile: UserProfile = {
+      ...modelAccountProfile,
+      emails,
+    };
+    const request = vi.fn(async (method: string) => {
+      if (method === "users.self") {
+        return { profile };
+      }
+      if (method === "users.listModelAccounts") {
+        return { profileId: profile.id, accounts: [], links: [] };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
+      id: profile.id,
+      email: profile.emails[0],
+      name: profile.displayName ?? undefined,
+    });
+    const provider = createApplicationContextProvider(harness.context);
+    const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
+    provider.append(page);
+    document.body.append(provider);
+    await waitForFast(() =>
+      expect(page.querySelector("#settings-profile-identity")).not.toBeNull(),
+    );
 
-  expect(request.mock.calls.map(([method]) => method)).toEqual([
-    "users.self",
-    "users.listModelAccounts",
-  ]);
-  const docsLink = page.querySelector<HTMLAnchorElement>(".page-subtitle a");
-  expect(docsLink?.textContent?.trim()).toBe("Learn more");
-  expect(docsLink?.href).toBe("https://docs.openclaw.ai/concepts/user-model");
-  expect(page.querySelector(".profile-stats")).toBeNull();
-  expect(page.querySelector(".profile-heatmap")).toBeNull();
-  const usageRow = page.querySelector<HTMLButtonElement>(".settings-row--nav");
-  expect(usageRow?.textContent).toContain("Usage statistics");
-  expect(page.querySelector("#settings-profile-identity")?.compareDocumentPosition(usageRow!)).toBe(
-    Node.DOCUMENT_POSITION_FOLLOWING,
-  );
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "users.self",
+      "users.listModelAccounts",
+    ]);
+    const docsLink = page.querySelector<HTMLAnchorElement>(".page-subtitle a");
+    expect(docsLink?.textContent?.trim()).toBe("Learn more");
+    expect(docsLink?.href).toBe("https://docs.openclaw.ai/concepts/user-model");
+    expect(page.querySelector(".profile-stats")).toBeNull();
+    expect(page.querySelector(".profile-heatmap")).toBeNull();
+    const usageRow = page.querySelector<HTMLButtonElement>(".settings-row--nav");
+    expect(usageRow?.textContent).toContain("Usage statistics");
+    expect(
+      page.querySelector("#settings-profile-identity")?.compareDocumentPosition(usageRow!),
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
 
-  usageRow?.click();
-  expect(harness.context.navigate).toHaveBeenCalledWith("usage");
-});
+    usageRow?.click();
+    expect(harness.context.navigate).toHaveBeenCalledWith("usage");
+  },
+);
 
 it("loads and updates co-author consent separately from verified GitHub identity", async () => {
   const profile: UserProfile = {
@@ -474,7 +482,14 @@ it("offers identity connection setup without profile RPCs or secret inputs for u
         method.startsWith("users.authConnect."),
     ),
   ).toBe(false);
-  expect(page.querySelector("#settings-profile-identity")).toBeNull();
+  const identity = page.querySelector("#settings-profile-identity");
+  expect(identity?.textContent).toContain("This connection has no personal profile");
+  expect(identity?.textContent).toContain("Cloudflare Access, Tailscale Serve, or a trusted proxy");
+  expect(
+    page.querySelector('a[href="https://docs.openclaw.ai/concepts/user-model"]'),
+  ).not.toBeNull();
+  expect(page.querySelector(".identity-name-control")).toBeNull();
+  expect(page.querySelector('input[type="file"]')).toBeNull();
   expect(page.querySelector(".profile-refresh")).toBeNull();
   expect(page.querySelector('.profile-auth-add-account, input[type="password"]')).toBeNull();
   expect(page.textContent).toContain("ws://test.invalid");

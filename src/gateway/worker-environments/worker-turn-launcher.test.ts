@@ -8,7 +8,10 @@ import {
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
-import { resolveSessionPlacementForcedTerminalSettlement } from "../../agents/session-placement-forced-terminal-settlement.js";
+import {
+  resolveSessionPlacementForcedTerminalSettlement,
+  resolveSessionPlacementTurnSettlementAssertion,
+} from "../../agents/session-placement-forced-terminal-settlement.js";
 import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import {
   loadSessionEntry,
@@ -218,10 +221,13 @@ describe("worker turn launcher local placement", () => {
   it("holds a local placement claim around CLI execution", async () => {
     const environments = unusedEnvironments();
     const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
+    let assertSettlementCurrent: (() => void) | undefined;
 
     const result = await provider.executeLocalTurn(
       { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId: "run-cli" },
       async () => {
+        assertSettlementCurrent = resolveSessionPlacementTurnSettlementAssertion();
+        assertSettlementCurrent?.();
         expect(placements.get(SESSION_ID)?.turnClaim).toMatchObject({
           owner: "local",
           runId: "run-cli",
@@ -232,6 +238,8 @@ describe("worker turn launcher local placement", () => {
 
     expect(result).toEqual({ kind: "cli" });
     expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+    expect(assertSettlementCurrent).toBeDefined();
+    expect(() => assertSettlementCurrent?.()).toThrow("settlement is closed");
   });
 
   it("mints a fresh claim token when a later turn reuses the run id", async () => {
@@ -329,6 +337,7 @@ describe("worker turn launcher local placement", () => {
     const finishOldRun = createDeferred();
     const replacementStarted = createDeferred();
     const finishReplacement = createDeferred();
+    let assertOldSettlementCurrent: (() => void) | undefined;
     const handle = {
       queueMessage: async () => {},
       isStreaming: () => true,
@@ -344,6 +353,8 @@ describe("worker turn launcher local placement", () => {
         runId: "run-force-cleared",
       },
       async () => {
+        assertOldSettlementCurrent = resolveSessionPlacementTurnSettlementAssertion();
+        assertOldSettlementCurrent?.();
         setActiveEmbeddedRun(SESSION_ID, handle, SESSION_KEY);
         oldRunStarted.resolve();
         await finishOldRun.promise;
@@ -362,6 +373,8 @@ describe("worker turn launcher local placement", () => {
         reason: "stuck_recovery",
       }),
     ).resolves.toMatchObject({ forceCleared: true });
+    expect(assertOldSettlementCurrent).toBeDefined();
+    expect(() => assertOldSettlementCurrent?.()).toThrow("settlement is closed");
     const killedEntry = loadSessionEntry(sessionTarget);
     expect(killedEntry).toMatchObject({
       sessionId: SESSION_ID,

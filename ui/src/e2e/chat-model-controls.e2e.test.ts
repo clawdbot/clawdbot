@@ -75,7 +75,8 @@ suite.define(() => {
             },
             "users.listModelAccounts": {
               profileId: "test-person",
-              accounts: [personal, work],
+              accounts: [personal],
+              nextCursor: "accounts-page-2",
               links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 1 }],
             },
           },
@@ -106,16 +107,19 @@ suite.define(() => {
           }
         }
         await trigger.click();
-        const workOption = picker.getByRole("menuitemradio", { name: work.label, exact: true });
-        await expect.poll(() => workOption.isVisible()).toBe(true);
+        const more = picker.getByRole("menuitem", {
+          name: "Load more saved accounts",
+          exact: true,
+        });
+        await expect.poll(() => more.isVisible()).toBe(true);
         await page.keyboard.press("Escape");
-        await expect.poll(() => workOption.isVisible()).toBe(false);
+        await expect.poll(() => more.isVisible()).toBe(false);
         await expect.poll(() => account.isVisible()).toBe(true);
         await expect
           .poll(() => trigger.evaluate((element) => element === document.activeElement))
           .toBe(true);
         await trigger.press("Enter");
-        await expect.poll(() => workOption.isVisible()).toBe(true);
+        await expect.poll(() => more.isVisible()).toBe(true);
         await expect
           .poll(() =>
             picker
@@ -123,6 +127,28 @@ suite.define(() => {
               .evaluate((element) => element === document.activeElement),
           )
           .toBe(true);
+        const inventoryRequests = await gateway.getRequests("users.listModelAccounts");
+        await gateway.deferNext("users.listModelAccounts", { cursor: "accounts-page-2" });
+        await more.click();
+        const nextPage = await gateway.waitForRequest("users.listModelAccounts", {
+          after: inventoryRequests.length,
+        });
+        expect(nextPage.params).toEqual({ cursor: "accounts-page-2" });
+        await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
+        await gateway.resolveDeferred("users.listModelAccounts", {
+          profileId: "test-person",
+          accounts: [work],
+          links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 1 }],
+        });
+        const workOption = picker.getByRole("menuitemradio", { name: work.label, exact: true });
+        await expect.poll(() => workOption.isVisible()).toBe(true);
+        if (artifactDir) {
+          await page.screenshot({
+            animations: "disabled",
+            path: `${artifactDir}/chat-account-page-2.png`,
+          });
+        }
+        await page.keyboard.press("Home");
         await page.keyboard.press("ArrowDown");
         await expect
           .poll(() => workOption.evaluate((element) => element === document.activeElement))

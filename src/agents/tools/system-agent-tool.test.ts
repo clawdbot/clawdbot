@@ -53,7 +53,8 @@ describe("openclaw tool", () => {
   it("stays directly callable instead of entering tool catalogs", () => {
     const tool = createSystemAgentTool({ surface: "cli" });
     expect(tool.catalogMode).toBe("direct-only");
-    expect(tool.description).toContain("Exact user approval required; then approved=true.");
+    expect(tool.description).toContain("Direct chat: exact user approval, then approved=true.");
+    expect(tool.description).toContain("host applies session permission policy");
   });
 
   it("runs read actions immediately", async () => {
@@ -120,8 +121,9 @@ describe("openclaw tool", () => {
     const text = toolText(result);
 
     expect(text).toContain("needs-approval:");
-    expect(text).toContain("OpenClaw operator UI");
-    expect(text).toContain("cannot be applied from this chat");
+    expect(text).toContain("requesting session's permission policy");
+    expect(text).toContain("returns the final outcome");
+    expect(text).not.toContain("OpenClaw operator UI");
     expect(text).not.toContain("ask the user to reply yes");
     expect(proposalRef.current).toBe(
       hashSystemAgentOperation({
@@ -131,7 +133,7 @@ describe("openclaw tool", () => {
       }),
     );
     expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
-    // Out-of-process CLI hosts still mirror the refusal from the marker line.
+    // Out-of-process CLI hosts still mirror the proposal from the marker line.
     expect(resolveSystemAgentProposalTransition({ args, resultText: text })).toEqual({
       proposal: proposalRef.current,
       operation: {

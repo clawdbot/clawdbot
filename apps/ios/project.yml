@@ -164,6 +164,7 @@ targets:
           UIApplicationSupportsMultipleScenes: false
         UIBackgroundModes:
           - audio
+          - fetch
           - location
           - remote-notification
         BGTaskSchedulerPermittedIdentifiers:

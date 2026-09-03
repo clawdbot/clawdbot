@@ -54,7 +54,7 @@ suite.define(() => {
       });
       await gateway.resolveDeferred("taskSuggestions.list", { suggestions: [] });
 
-      const startButton = page.getByRole("button", { name: "Start with worktree" });
+      const startButton = page.getByRole("button", { name: "Start in a worktree" });
       await startButton.waitFor({ state: "visible", timeout: 10_000 });
       const moreActions = page.getByRole("button", { name: "More ways to start this task" });
       expect(await moreActions.count()).toBe(1);
@@ -71,7 +71,7 @@ suite.define(() => {
       await page
         .getByText("Copy prompt", { exact: true })
         .waitFor({ state: "visible", timeout: 10_000 });
-      expect(await page.getByText("Start locally", { exact: true }).count()).toBe(0);
+      expect(await page.getByText("Start in current checkout", { exact: true }).count()).toBe(0);
       expect(await page.getByText("Fix in this session", { exact: true }).count()).toBe(0);
       expect(await page.getByText("Send to cloud", { exact: true }).count()).toBe(0);
       await page.keyboard.press("Escape");
@@ -183,7 +183,7 @@ suite.define(() => {
 
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
-      const startButton = page.getByRole("button", { name: "Start with worktree" });
+      const startButton = page.getByRole("button", { name: "Start in a worktree" });
       await startButton.waitFor({ state: "visible", timeout: 10_000 });
       await gateway.deferNext("taskSuggestions.list");
       await page
@@ -247,7 +247,7 @@ suite.define(() => {
         .waitFor({ state: "visible", timeout: 10_000 });
       const card = page.locator('.task-suggestion[data-task-id="task_list_only"]');
       await card.waitFor({ state: "visible", timeout: 10_000 });
-      expect(await card.getByRole("button", { name: "Start with worktree" }).isDisabled()).toBe(
+      expect(await card.getByRole("button", { name: "Start in a worktree" }).isDisabled()).toBe(
         true,
       );
       await card.getByRole("button", { name: "More ways to start this task" }).click();

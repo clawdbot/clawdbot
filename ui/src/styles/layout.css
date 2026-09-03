@@ -220,15 +220,6 @@ html.openclaw-native-web-chrome .sidebar-brand__desktop-control {
   display: none;
 }
 
-html.openclaw-native-web-chrome .sidebar-brand__new-thread {
-  border-color: transparent;
-  box-shadow: none;
-}
-
-html.openclaw-native-web-chrome .sidebar-brand__new-thread:focus-visible {
-  box-shadow: var(--focus-ring);
-}
-
 html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrome) .sidebar-brand {
   --sidebar-agent-avatar-size: 32px;
 }
@@ -1062,25 +1053,23 @@ openclaw-settings-save-indicator:empty {
   flex: 0 0 auto;
 }
 
-.sidebar-brand__desktop-control svg {
+.sidebar-brand__header-control svg {
   opacity: 0.72;
   stroke-width: 1.6px;
   transition: opacity var(--duration-fast) ease;
 }
 
-.sidebar-brand__icon.sidebar-brand__desktop-control {
+.sidebar-brand__icon.sidebar-brand__header-control {
   width: var(--shell-chrome-control-size);
   height: var(--shell-chrome-control-size);
 }
 
-.sidebar-brand__desktop-control:hover:not(:disabled) svg {
+.sidebar-brand__header-control:hover:not(:disabled, [aria-disabled="true"]) svg {
   opacity: 1;
 }
 
 .sidebar-brand__new-thread {
   margin-inline-start: 5px;
-  color: var(--text);
-  box-shadow: none;
 }
 
 .sidebar-brand__icon {
@@ -1125,6 +1114,12 @@ openclaw-settings-save-indicator:empty {
   stroke-linejoin: round;
 }
 
+.sidebar-brand__new-thread svg {
+  /* The plus path occupies less of its viewBox than the panel/search artwork. */
+  width: 20px;
+  height: 20px;
+}
+
 .sidebar-shell__content {
   display: flex;
   flex: 1;
@@ -1152,6 +1147,8 @@ openclaw-settings-save-indicator:empty {
    bottom one puts the divider on the settings takeover's line and lets the
    symmetric block padding center the row in the band it leaves. */
 .sidebar-shell__footer {
+  /* Positioned ledge for resident sidebar surfaces such as the lobster pet. */
+  position: relative;
   flex-shrink: 0;
   min-height: var(--shell-sidebar-footer-height);
   margin-inline: calc(-1 * var(--sidebar-pad-x));
@@ -2565,8 +2562,9 @@ wa-dropdown.session-menu::part(menu) {
   background: var(--wa-color-surface-raised);
 }
 
-.session-menu--compact .session-menu__chevron {
-  display: inline-flex;
+html[dir="rtl"] .session-menu__chevron,
+html[dir="rtl"] .session-menu__back > .session-menu__icon {
+  transform: scaleX(-1);
 }
 
 wa-dropdown.session-menu--compact::part(menu) {
@@ -3739,7 +3737,11 @@ openclaw-tooltip.sidebar-hover-tooltip {
 }
 
 .sidebar-footer-bar__status--restarting,
-.sidebar-footer-bar__status--restarting:hover {
+.sidebar-footer-bar__status--restarting:hover,
+.sidebar-footer-bar__status--suspending,
+.sidebar-footer-bar__status--suspending:hover,
+.sidebar-footer-bar__status--suspended,
+.sidebar-footer-bar__status--suspended:hover {
   background: color-mix(in srgb, var(--warn) 12%, transparent);
   color: var(--warn);
   cursor: default;
@@ -3763,12 +3765,15 @@ openclaw-tooltip.sidebar-hover-tooltip {
   background: var(--danger);
 }
 
-.sidebar-footer-bar__status--restarting .sidebar-footer-bar__status-dot {
+.sidebar-footer-bar__status--restarting .sidebar-footer-bar__status-dot,
+.sidebar-footer-bar__status--suspending .sidebar-footer-bar__status-dot,
+.sidebar-footer-bar__status--suspended .sidebar-footer-bar__status-dot {
   background: var(--warn);
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  .sidebar-footer-bar__status--restarting .sidebar-footer-bar__status-dot {
+  .sidebar-footer-bar__status--restarting .sidebar-footer-bar__status-dot,
+  .sidebar-footer-bar__status--suspending .sidebar-footer-bar__status-dot {
     animation: pulse-subtle 1.2s ease-in-out infinite;
   }
 }

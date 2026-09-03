@@ -47,7 +47,7 @@ import {
   isCronJobRunning,
   resolveCronJobLastRunStatus,
 } from "../../lib/cron-status.ts";
-import { parseCronEveryMs } from "../../lib/cron/decimal.ts";
+import { parseCronDurationMs } from "../../lib/cron/decimal.ts";
 import type {
   CronFieldErrors,
   CronFieldKey,
@@ -1518,7 +1518,7 @@ function renderGeneralSection(props: CronProps) {
 function describeFormSchedule(form: CronFormState): string | null {
   if (form.scheduleKind === "every") {
     const amount = form.everyAmount.trim();
-    if (parseCronEveryMs(amount, form.everyUnit) === undefined) {
+    if (parseCronDurationMs(amount, form.everyUnit) === undefined) {
       return null;
     }
     if (Number(amount) === 1) {

@@ -85,9 +85,8 @@ suite.define(() => {
 
       const request = await gateway.waitForRequest("projects.register");
       expect(request.params).toEqual({ path: repoRoot });
-      await expect.poll(async () => (await gateway.getRequests("projects.list")).length).toBe(2);
       await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("openclaw");
-      expect(await trigger.getAttribute("data-project-id")).toBe("recorded-openclaw");
+      await expect.poll(() => trigger.getAttribute("data-project-id")).toBe("recorded-openclaw");
     } finally {
       await context.close();
     }
@@ -351,7 +350,7 @@ suite.define(() => {
         .toEqual({ repoRoot: "/home", includeRepositoryStatus: true });
       await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("home");
 
-      expect(await page.locator("#new-session-detail-trigger").count()).toBe(0);
+      expect(await page.locator("#new-session-checkout-trigger").count()).toBe(0);
       await page.locator("#new-session-where-trigger").click();
       const where = page.locator("wa-popover.new-session-page__where-popover");
       await where.getByText("Cloud", { exact: true }).waitFor();

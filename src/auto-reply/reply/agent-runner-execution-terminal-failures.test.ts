@@ -3,8 +3,12 @@ import { FailoverError } from "../../agents/failover-error.js";
 import {
   formatBillingErrorMessage,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
+  renderHeartbeatRunFailureCopy,
 } from "../../agents/failover/user-copy.js";
-import { AgentHarnessSessionSupersededError } from "../../agents/harness/errors.js";
+import {
+  AgentHarnessPreflightError,
+  AgentHarnessSessionSupersededError,
+} from "../../agents/harness/errors.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
@@ -616,6 +620,26 @@ describe("executeAgentTurn: terminal failures", () => {
     }
     expect(result.payload.text).toBe(HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT);
     expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
+    expect(result.payload.text).not.toContain("/new");
+  });
+
+  it("includes heartbeat preflight reasons in terminal failure replies", async () => {
+    const message =
+      "Codex session became active in another runner; wait for it to finish before continuing";
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(new AgentHarnessPreflightError(message));
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
+      ...createMinimalRunAgentTurnParams(),
+      isHeartbeat: true,
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind !== "final") {
+      throw new Error("expected final reply");
+    }
+    expect(result.payload.text).toBe(renderHeartbeatRunFailureCopy(message));
+    expect(result.payload.isError).toBe(true);
     expect(result.payload.text).not.toContain("/new");
   });
 

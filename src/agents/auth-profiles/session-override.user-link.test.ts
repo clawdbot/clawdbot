@@ -115,10 +115,15 @@ describe("person-linked session auth", () => {
     },
   );
 
-  it("selects a personal account even when no shared auth store exists", async () => {
+  it("applies a personal default only to new sessions when no shared auth store exists", async () => {
     await withAuthState(async (state) => {
       const alice = ensureProfileForEmail("alice@example.test");
+      const existing: SessionEntry = { sessionId: "existing-session", updatedAt: 1 };
+      await expect(selectForRequester(state, existing, alice.id, false)).resolves.toBeUndefined();
+
       const personalId = connectAccount(alice.id, "alice");
+      await expect(selectForRequester(state, existing, alice.id, false)).resolves.toBeUndefined();
+      expect(existing.authProfileOverride).toBeUndefined();
       const sessionEntry: SessionEntry = { sessionId: "alice-session", updatedAt: 1 };
 
       await expect(selectForRequester(state, sessionEntry, alice.id)).resolves.toEqual({

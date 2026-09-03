@@ -61,8 +61,10 @@ export async function createPersonalChatMetadataFixture() {
   };
 }
 
-export function createDraftChatMetadataScope() {
-  const owner = randomUUID();
+export function createDraftChatMetadataScope(
+  owner: string = randomUUID(),
+  authProfileId = `personal:${owner}:${randomUUID()}`,
+) {
   const error = new ModelAccountConnectAuthorityError();
   let current = true;
   return {
@@ -71,7 +73,7 @@ export function createDraftChatMetadataScope() {
       requesterProfileId: owner,
       draftAccountSelection: {
         owner,
-        authProfileId: `personal:${owner}:${randomUUID()}`,
+        authProfileId,
         assertCurrent() {
           if (!current) {
             throw error;

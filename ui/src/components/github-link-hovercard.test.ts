@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { i18n } from "../i18n/index.ts";
 import { GitHubLinkHovercardProvider } from "./github-link-hovercard.runtime.ts";
@@ -17,6 +18,7 @@ customElements.define(
 
 type GitHubLinkHovercardProviderElement = HTMLElement & {
   client: GatewayBrowserClient | null;
+  agentId?: string;
 };
 
 function createLink(href: string, label = "GitHub item") {
@@ -51,10 +53,9 @@ function issuePreviewResponse(overrides: Record<string, unknown> = {}) {
 
 function createIssueLink(response: Record<string, unknown> = issuePreviewResponse()) {
   const link = createLink(ISSUE_HREF, "#99815");
-  link.provider.client = {
-    request: vi.fn().mockResolvedValue(response),
-  } as unknown as GatewayBrowserClient;
-  return link;
+  const request = vi.fn().mockResolvedValue(response);
+  link.provider.client = { request } as unknown as GatewayBrowserClient;
+  return { ...link, request };
 }
 
 function titleLinkInCard(): HTMLAnchorElement | null {
@@ -289,6 +290,115 @@ describe("openclaw-github-link-hovercard-provider", () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
+  it.each(
+    ["pull", "issue"].flatMap((kind) => ["base", "comment"].map((first) => ({ kind, first }))),
+  )(
+    "keeps cached $kind preview links on the current anchor ($first first)",
+    async ({ kind, first }) => {
+      const surface = kind === "pull" ? "pull" : "issues";
+      const baseHref = `https://github.com/openclaw/openclaw/${surface}/99815`;
+      const commentHref = `${baseHref}#issuecomment-123`;
+      const variantHref = `https://github.com/OpenClaw/OpenClaw/${surface}/99815/?view=activity#issuecomment-456`;
+      const { anchor, provider } = createLink(baseHref);
+      const request = vi.fn().mockResolvedValue(issuePreviewResponse({ kind }));
+      provider.client = { request } as unknown as GatewayBrowserClient;
+      const comment = document.createElement("a");
+      comment.href = commentHref;
+      comment.textContent = "Comment permalink";
+      const variant = document.createElement("a");
+      variant.href = variantHref;
+      variant.textContent = "Alternate permalink";
+      provider.append(comment, variant);
+      const sequence =
+        first === "base" ? [anchor, comment, variant, anchor] : [comment, anchor, variant, anchor];
+
+      for (const current of sequence) {
+        await hover(current);
+        expect(titleLinkInCard()?.href).toBe(current.href);
+        expect(
+          hovercard()?.querySelector<HTMLAnchorElement>(".github-link-hovercard__repo")?.href,
+        ).toBe(current.href);
+        expect(
+          hovercard()?.querySelector<HTMLAnchorElement>(".github-link-hovercard__author")?.href,
+        ).toBe("https://github.com/octocat");
+        expect(request).toHaveBeenCalledTimes(1);
+        leave(current);
+        await vi.advanceTimersByTimeAsync(GITHUB_HOVERCARD_CLOSE_DELAY_MS);
+      }
+    },
+  );
+
+  it.each(["immediate rejection", "late rejection", "late success"])(
+    "reopens an abandoned request without poisoning its replacement cache: %s",
+    async (settlement) => {
+      const abandoned = createDeferred<ReturnType<typeof issuePreviewResponse>>();
+      let requestSignal: AbortSignal | undefined;
+      const request = vi
+        .fn()
+        .mockImplementationOnce(
+          (_method: string, _params: unknown, options: { signal: AbortSignal }) => {
+            requestSignal = options.signal;
+            if (settlement === "immediate rejection") {
+              options.signal.addEventListener(
+                "abort",
+                () => abandoned.reject(new Error("gateway request aborted")),
+                { once: true },
+              );
+            }
+            return abandoned.promise;
+          },
+        )
+        .mockResolvedValue(issuePreviewResponse());
+      const { anchor, provider } = createLink(ISSUE_HREF);
+      provider.client = { request } as unknown as GatewayBrowserClient;
+
+      await hover(anchor);
+      expect(hovercard()?.dataset.loading).toBe("true");
+      leave(anchor);
+      await vi.advanceTimersByTimeAsync(GITHUB_HOVERCARD_CLOSE_DELAY_MS);
+      expect(requestSignal?.aborted).toBe(true);
+      await hover(anchor);
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(hovercard()?.textContent).toContain("Keep hover previews reachable");
+
+      if (settlement === "late success") {
+        abandoned.resolve(issuePreviewResponse({ title: "Abandoned preview" }));
+      } else {
+        abandoned.reject(new Error("gateway request aborted"));
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      expect(hovercard()?.textContent).toContain("Keep hover previews reachable");
+      leave(anchor);
+      await vi.advanceTimersByTimeAsync(GITHUB_HOVERCARD_CLOSE_DELAY_MS);
+      await hover(anchor);
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(hovercard()?.textContent).toContain("Keep hover previews reachable");
+    },
+  );
+
+  it("keeps genuine request failures cached for 30 seconds before retrying on hover", async () => {
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("GitHub preview unavailable"))
+      .mockResolvedValue(issuePreviewResponse());
+    const { anchor, provider } = createLink(ISSUE_HREF);
+    provider.client = { request } as unknown as GatewayBrowserClient;
+
+    await hover(anchor);
+    expect(hovercard()?.dataset.state).toBe("unavailable");
+    leave(anchor);
+    await vi.advanceTimersByTimeAsync(29_000);
+    await hover(anchor);
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(hovercard()?.dataset.state).toBe("unavailable");
+
+    leave(anchor);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await hover(anchor);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(hovercard()?.textContent).toContain("Keep hover previews reachable");
+  });
+
   it("stays open while the pointer travels from the link onto the card", async () => {
     const { anchor } = createIssueLink();
 
@@ -429,6 +539,39 @@ describe("openclaw-github-link-hovercard-provider", () => {
     expect(document.querySelector(".github-link-hovercard")?.textContent).toContain(
       "GitHub preview unavailable",
     );
+    expect(hovercard()?.querySelector(".github-link-hovercard__error")?.textContent).toBe(
+      "Not Found",
+    );
+  });
+
+  it("discards cached and pending previews when the selected agent changes", async () => {
+    const { anchor, provider } = createIssueLink();
+    const request = vi.fn().mockResolvedValue(issuePreviewResponse());
+    provider.client = { request } as unknown as GatewayBrowserClient;
+    provider.agentId = "first-agent";
+    await hover(anchor);
+
+    expect(request.mock.calls[0]?.[1]).toMatchObject({ agentId: "first-agent" });
+    provider.agentId = "second-agent";
+    expect(hovercard()).toBeNull();
+    await hover(anchor);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls[1]?.[1]).toMatchObject({ agentId: "second-agent" });
+
+    let resolvePending!: (value: unknown) => void;
+    const nextRequest = vi.fn().mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvePending = resolve;
+        }),
+    );
+    provider.client = { request: nextRequest } as unknown as GatewayBrowserClient;
+    expect(hovercard()).toBeNull();
+    await hover(anchor);
+    provider.agentId = "third-agent";
+    resolvePending(issuePreviewResponse());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(hovercard()).toBeNull();
   });
 
   it.each([
@@ -489,8 +632,14 @@ describe("openclaw-github-link-hovercard-provider", () => {
   });
 
   it("rerenders an open preview when the locale changes", async () => {
-    const { anchor } = createIssueLink(issuePreviewResponse({ comments: 1 }));
+    const { anchor, provider, request } = createIssueLink(issuePreviewResponse({ comments: 1 }));
     await hover(anchor);
+    leave(anchor);
+    await vi.advanceTimersByTimeAsync(GITHUB_HOVERCARD_CLOSE_DELAY_MS);
+    const comment = document.createElement("a");
+    comment.href = `${ISSUE_HREF}#issuecomment-123`;
+    provider.append(comment);
+    await hover(comment);
 
     i18n.registerTranslation("pt-BR", {
       githubPreview: {
@@ -518,5 +667,10 @@ describe("openclaw-github-link-hovercard-provider", () => {
     expect(card?.textContent).toContain("Aberto");
     expect(card?.textContent).toContain("1 comentário");
     expect(card?.getAttribute("aria-label")).toContain("por octocat");
+    expect(titleLinkInCard()?.href).toBe(comment.href);
+    expect(card?.querySelector<HTMLAnchorElement>(".github-link-hovercard__repo")?.href).toBe(
+      comment.href,
+    );
+    expect(request).toHaveBeenCalledTimes(1);
   });
 });

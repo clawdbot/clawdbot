@@ -283,6 +283,7 @@ describe("anthropic-vertex provider plugin", () => {
       sanitizeToolCallIds: true,
       toolCallIdMode: "strict",
       preserveNativeAnthropicToolUseIds: true,
+      appendOnlyRuntimeContext: true,
       preserveSignatures: true,
       repairToolUseResultPairing: true,
       validateAnthropicTurns: true,

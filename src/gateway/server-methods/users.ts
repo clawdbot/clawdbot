@@ -3,9 +3,7 @@ import {
   ErrorCodes,
   GatewayErrorDetailCodes,
   errorShape,
-  validateUsersLinkAuthProfileParams,
   validateUsersLinkEmailParams,
-  validateUsersListAuthLinksParams,
   validateUsersListParams,
   validateUsersPrefsGetParams,
   validateUsersPrefsSetParams,
@@ -13,19 +11,8 @@ import {
   validateUsersSetAvatarParams,
   validateUsersSetDisplayNameParams,
   validateUsersSetRoleParams,
-  validateUsersUnlinkAuthProfileParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveSharedMainAuthAgentDir } from "../../agents/auth-profiles/shared-main-dir.js";
-import { ensureAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles/store.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
-import {
-  clearUserProfileAuthLink,
-  listUserProfileAuthLinks,
-  readUserModelAuthProfile,
-  setUserProfileAuthLink,
-} from "../../state/user-model-accounts.js";
 import { getUserPreferences, setUserPreferences } from "../../state/user-preferences.js";
 import {
   getUserProfileDisplay,
@@ -48,7 +35,6 @@ import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./typ
 import { usersAuthConnectHandlers } from "./users-auth-connect.js";
 import { usersGitHubHandlers } from "./users-github.js";
 import {
-  requireAdminProfileAccess,
   requireProfileMutationAccess,
   resolveAuthenticatedProfileId,
 } from "./users-profile-access.js";
@@ -85,113 +71,9 @@ function profileError(error: unknown) {
   return errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error));
 }
 
-// A link may target a stored credential or a config-declared auth route
-// (e.g. aws-sdk); the provider is derived server-side so clients cannot
-// claim a provider the profile does not satisfy.
-function resolveLinkableAuthProfileProvider(
-  cfg: OpenClawConfig,
-  authProfileId: string,
-): string | undefined {
-  if (isUserModelAuthProfileId(authProfileId)) {
-    return readUserModelAuthProfile(authProfileId)?.credential.provider;
-  }
-  const store = ensureAuthProfileStoreWithoutExternalProfiles(resolveSharedMainAuthAgentDir(), {
-    readOnly: true,
-  });
-  const storedProvider = store.profiles[authProfileId]?.provider;
-  return storedProvider ?? cfg.auth?.profiles?.[authProfileId]?.provider;
-}
-
 export const usersHandlers: GatewayRequestHandlers = {
   ...usersAuthConnectHandlers,
   ...usersGitHubHandlers,
-  "users.listAuthLinks": ({ client, params, respond }) => {
-    if (
-      !assertValidParams(params, validateUsersListAuthLinksParams, "users.listAuthLinks", respond)
-    ) {
-      return;
-    }
-    try {
-      // The provider/auth-profile association is owner-private: reads share the
-      // self-or-admin boundary of the link mutations they mirror.
-      if (!requireProfileMutationAccess(client, params.profileId, respond)) {
-        return;
-      }
-      respond(true, { links: listUserProfileAuthLinks(params.profileId) });
-    } catch (error) {
-      respond(false, undefined, profileError(error));
-    }
-  },
-  "users.linkAuthProfile": ({ client, context, params, respond }) => {
-    if (
-      !assertValidParams(
-        params,
-        validateUsersLinkAuthProfileParams,
-        "users.linkAuthProfile",
-        respond,
-      )
-    ) {
-      return;
-    }
-    try {
-      if (!requireAdminProfileAccess(client, respond)) {
-        return;
-      }
-      const provider = resolveLinkableAuthProfileProvider(
-        context.getRuntimeConfig(),
-        params.authProfileId,
-      );
-      if (!provider) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `unknown auth profile "${params.authProfileId}"; sign the account in first with "openclaw models auth login --provider <id> --profile-id ${params.authProfileId}", then link it`,
-          ),
-        );
-        return;
-      }
-      const owner = getUserProfileListItem(params.profileId).id;
-      const links = setUserProfileAuthLink({
-        profileId: owner,
-        provider,
-        authProfileId: params.authProfileId,
-      });
-      context.modelAccountConnectService?.supersede(owner, provider);
-      broadcastChatMetadataChanged(context);
-      respond(true, { links });
-    } catch (error) {
-      respond(false, undefined, profileError(error));
-    }
-  },
-  "users.unlinkAuthProfile": ({ client, context, params, respond }) => {
-    if (
-      !assertValidParams(
-        params,
-        validateUsersUnlinkAuthProfileParams,
-        "users.unlinkAuthProfile",
-        respond,
-      )
-    ) {
-      return;
-    }
-    try {
-      if (!requireProfileMutationAccess(client, params.profileId, respond)) {
-        return;
-      }
-      const owner = getUserProfileListItem(params.profileId).id;
-      const links = clearUserProfileAuthLink({
-        profileId: owner,
-        provider: params.provider,
-      });
-      context.modelAccountConnectService?.supersede(owner, params.provider);
-      broadcastChatMetadataChanged(context);
-      respond(true, { links });
-    } catch (error) {
-      respond(false, undefined, profileError(error));
-    }
-  },
   "users.list": ({ params, respond }) => {
     if (!assertValidParams(params, validateUsersListParams, "users.list", respond)) {
       return;
@@ -202,7 +84,7 @@ export const usersHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateUsersSelfParams, "users.self", respond)) {
       return;
     }
-    if (!client?.authenticatedUserId) {
+    if (!client?.authenticatedUserId && !client?.authenticatedUserProfile) {
       respond(
         false,
         undefined,

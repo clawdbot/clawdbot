@@ -3533,6 +3533,7 @@ describe("handleControlUiHttpRequest", () => {
                 headers: { "accept-encoding": "br, identity;q=0" },
               } as IncomingMessage,
               sourceFile: { path: filePath, fd, size: fsSync.fstatSync(fd).size },
+              contentPath: filePath,
               precompressed: true,
               openPrecompressedFile: () => {
                 throw openError;

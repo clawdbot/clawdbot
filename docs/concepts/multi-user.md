@@ -30,7 +30,7 @@ Gateway profile display names and avatars are resolved from the current profile 
 In the Control UI, the session context menu (kebab or right-click on a sidebar row, and the same menu on the chat header) offers:
 
 - **Assign to me**: take responsibility for the session yourself.
-- **Assign to…**: pick from a submenu of known people and configured agents.
+- **Assign to…**: pick any registered person or configured agent, including offline teammates and people who have not owned a session. Choices refresh when you open the menu and do not depend on session filters or archive status.
 
 Agents can reassign ownership with the [`sessions` tool](/concepts/session-tool#managing-session-settings-and-groups) using `action: "assign_owner"` with `ownerType` (`"human"` or `"agent"`) and `ownerId`, targeting the current session by default or another visible session via `sessionKey`.
 
@@ -63,7 +63,7 @@ Open **Settings → Profile → Connected accounts**, select **Add account**, th
 
 The chooser shows only provider methods enabled for personal accounts on that Gateway. Follow its instructions and use the protected input for credentials or authorization codes. A browser callback can finish while an input is open; keep the Profile connection open until it reports the result. Saving credentials is separate from verifying a successful model request.
 
-Before adding an account, check the **Gateway**, **Person**, and **Scope: Personal** rows. The person is your saved verified profile, not an unsaved display-name edit. If the connection has no personal identity, the section explains what is missing and links to **Connection settings** instead of showing credential inputs. Use the Gateway's identity-bearing endpoint; a shared token, local connection, or paired device alone does not identify you. Browser identity does not transfer to the CLI. See [personal-account CLI setup](/cli/models#personal-model-accounts).
+Before adding an account, check the **Gateway**, **Person**, and **Scope: Personal** rows. Account ownership follows the Gateway-assigned profile, not an unsaved display-name edit. Single-user connections can use the durable **Owner** profile; every device using that profile shares its accounts. To distinguish people on a shared server, use the Gateway's identity-bearing endpoint. If no profile is assigned, the section explains what is missing and links to **Connection settings** instead of showing credential inputs. Browser identity does not transfer to the CLI. See [personal-account CLI setup](/cli/models#personal-model-accounts).
 
 The page lists saved accounts with friendly labels and marks the new-chat default. Select another saved account to change that default without signing in again. **Load more** continues through larger account lists. **Use Gateway defaults for new chats** clears the personal default; the saved accounts stay available.
 
@@ -81,9 +81,9 @@ Credentials and the selected link are saved together in private, identity-scoped
 
 Administrators can still create shared profiles through the CLI (`openclaw models auth login --provider openai --profile-id openai:alice`, see [OAuth](/concepts/oauth)) and link them with `users.linkAuthProfile`. Attaching an existing shared credential is an admin decision; `users.unlinkAuthProfile` remains self-or-admin and `users.listAuthLinks` returns link metadata without secrets. A personal credential cannot be linked to another person's profile.
 
-When a linked person starts a session, OpenClaw pins their profile as that session's auth selection with the same strength as a `/model ...@profile` pin. The pin is **session-sticky**: teammates steering into that session use its selected account, and forks inherit it. An explicit `/model ...@profile -s` pin outranks the link. A fresh personal selection must belong to the authenticated human making it; knowing another person's account id is not permission to select it. Agent- and channel-originated turns do not create personal links. The ordered shared profiles for the same provider remain failover candidates if the pinned account fails, just as with an explicit pin.
+When a linked person creates a session, OpenClaw captures their default as that session's auth selection with the same strength as a `/model ...@profile` pin. This happens before an initial message is dispatched, including when creation and the first message are separate requests. Sessions first created by turn admission capture the default at that admission. The pin is **session-sticky**: teammates steering into that session use its selected account, and forks inherit it. An explicit `/model ...@profile -s` pin outranks the link. A fresh personal selection must belong to the authenticated human making it; knowing another person's account id is not permission to select it. Agent- and channel-originated turns do not create personal links. The ordered shared profiles for the same provider remain failover candidates if the pinned account fails, just as with an explicit pin.
 
-**Use Gateway defaults for new chats**, CLI `clear-default`, and API `users.unlinkAuthProfile` affect future sessions only; existing pinned sessions keep their exact credential until reset or repinned. Changing providers can select the current requester's link for the new provider. Clearing a default neither deletes the saved credential nor revokes a provider token; revoke it with the provider if existing sessions must stop using it. Links and existing session credentials follow verified profile merges, but an explicit unlink on the surviving profile is not reversed by a merge.
+**Use Gateway defaults for new chats**, CLI `clear-default`, and API `users.unlinkAuthProfile` affect future sessions only. Changing a default does not repin existing chats, including unpinned chats using shared credentials. Adopting or forking an existing chat does not apply the current participant's default, and changing providers does not silently select their personal account. Use **Account for this chat** to make that explicit choice. Clearing a default neither deletes the saved credential nor revokes a provider token; revoke it with the provider if existing sessions must stop using it. Links and existing session credentials follow verified profile merges, but an explicit unlink on the surviving profile is not reversed by a merge.
 
 This is account-selection convenience inside one trust domain, not isolation from administrators or code running as the Gateway OS user. On a compatible downgrade, older builds do not discover personal credentials as shared defaults; personal account selection is unavailable until a supporting version is restored.
 
@@ -130,6 +130,8 @@ The accepted spawn result doubles as a receipt: it includes the child session ke
 ## Identity-scoped convenience state
 
 When a connection has a durable Gateway profile, new-session preferences and picker recents follow that person across browsers. Preferences remain per agent, while recents are derived only from sessions that person created. Connections without a durable identity keep browser-local preferences and derive recents from the loaded session roster.
+
+Single-user Gateways give unidentified operators one shared owner profile, including device-token reconnects. With `gateway.roles` configured, this applies only to token/password connections. Devices using that profile share its identity and preferences; use per-person sign-in to distinguish teammates. See [Gateway profiles](/concepts/user-model#gateway-profile-and-github-credit).
 
 This state improves continuity; it is not an authorization or isolation boundary. Operator scopes still control actions, and a shared Gateway remains one trust domain for sessions, tools, credentials, and files.
 

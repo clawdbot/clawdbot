@@ -2,10 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UserModelAccount } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ChatMetadataResult } from "../../lib/chat/chat-metadata-store.ts";
-import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
-import { NewSessionTitleController } from "./draft-title.ts";
+import { createDraftTitleFixture } from "./draft-title.test-support.ts";
 import { renderControl } from "./model-control.test-support.ts";
-import { TestReactiveControllerHost } from "./reactive-controller-host.test-support.ts";
 
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => {
@@ -13,38 +11,6 @@ afterEach(() => {
   sessionStorage.clear();
   localStorage.clear();
 });
-
-function titleFixture(
-  request = async (method: string, _params?: unknown): Promise<unknown> =>
-    method === "sessions.title.prepare" ? { title: "Repair naming" } : {},
-) {
-  const fixture = createDraftFixture({
-    methods: ["sessions.create", "sessions.title.prepare", "worktrees.branches"],
-    scopes: ["operator.read", "operator.write", "operator.admin"],
-    agents: [
-      {
-        id: "main",
-        workspace: "/workspace",
-        workspaceGit: true,
-        model: { primary: "test/primary" },
-      },
-    ],
-    request: async (method, params) =>
-      method === "worktrees.branches"
-        ? { repositoryStatus: "git", branches: [], defaultBranch: "main" }
-        : request(method, params),
-    takePreparedTitle: () => titles.takePreparedTitle(),
-  });
-  const titles = new NewSessionTitleController(new TestReactiveControllerHost(), () => ({
-    context: fixture.context,
-    data: undefined,
-    place: fixture.place,
-    submission: fixture.flow,
-    dictating: false,
-  }));
-  titles.hostConnected();
-  return { ...fixture, titles };
-}
 
 function accountTitleFixture(preview?: Promise<ChatMetadataResult>) {
   const makeAccount = (id: string): UserModelAccount => ({
@@ -65,38 +31,39 @@ function accountTitleFixture(preview?: Promise<ChatMetadataResult>) {
     },
   };
   const titleRequest = vi.fn(async (_params?: unknown) => ({ title: "Prepared title" }));
-  const fixture = titleFixture(async (method, params) => {
-    if (method === "sessions.title.prepare") {
-      return titleRequest(params);
-    }
-    if (method === "users.listModelAccounts") {
-      return { profileId: "person-a", accounts, links: [] };
-    }
-    if (method === "chat.metadata") {
-      const account =
-        params && typeof params === "object" && "authProfileId" in params
-          ? accounts.find((candidate) => candidate.authProfileId === params.authProfileId)
-          : undefined;
-      return account
-        ? (preview ?? {
-            ...confirmed,
-            accountSelection: {
-              kind: "personal",
-              authProfileId: account.authProfileId,
-              label: account.label,
-            },
-          })
-        : {
-            commands: [],
-            models: confirmed.models?.map((model) =>
-              Object.assign({}, model, { available: false, unavailableReason: "missing-auth" }),
-            ),
-            accountSelection: { kind: "automatic", label: "Automatic" },
-          };
-    }
-    return {};
-  });
-  const { context, place, flow, titles } = fixture;
+  const fixture = createDraftTitleFixture(
+    async (_method, params) => titleRequest(params),
+    undefined,
+    async (method, params) => {
+      if (method === "users.listModelAccounts") {
+        return { profileId: "person-a", accounts, links: [] };
+      }
+      if (method === "chat.metadata") {
+        const account =
+          params && typeof params === "object" && "authProfileId" in params
+            ? accounts.find((candidate) => candidate.authProfileId === params.authProfileId)
+            : undefined;
+        return account
+          ? (preview ?? {
+              ...confirmed,
+              accountSelection: {
+                kind: "personal",
+                authProfileId: account.authProfileId,
+                label: account.label,
+              },
+            })
+          : {
+              commands: [],
+              models: confirmed.models?.map((model) =>
+                Object.assign({}, model, { available: false, unavailableReason: "missing-auth" }),
+              ),
+              accountSelection: { kind: "automatic", label: "Automatic" },
+            };
+      }
+      return {};
+    },
+  );
+  const { context, place } = fixture;
   Object.assign(context.gateway.snapshot, { selfUser: { id: "person-a", name: "Person A" } });
   place.modelControl.load(context, "main", true, { agent: place.selectedAgent() });
   const draw = () => renderControl(place.modelControl, context, "main", place.selectedAgent());
@@ -117,55 +84,58 @@ function accountTitleFixture(preview?: Promise<ChatMetadataResult>) {
       select(`account:${account.authProfileId}`);
       await vi.advanceTimersByTimeAsync(0);
     },
-    dispose: () => {
-      titles.hostDisconnected();
-      place.modelControl.reset();
-      flow.disconnect();
-    },
+    dispose: () => place.modelControl.reset(),
   };
 }
 
 describe("prepared title creation handoff", () => {
-  it("keeps title preparation and creation on the selected draft account", async () => {
-    const fixture = accountTitleFixture();
-    const { accounts, context, flow, place, titles, titleRequest, chooseAccount } = fixture;
-    try {
-      titleRequest
-        .mockResolvedValueOnce({ title: "Automatic title" })
-        .mockResolvedValueOnce({ title: "First account title" })
-        .mockResolvedValueOnce({ title: "Second account title" });
-      flow.setMessage("repair the sidebar naming");
-      titles.hostUpdated();
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(titles.preparedTitle()).toBe("Automatic title");
-
-      for (const [index, account] of accounts.entries()) {
-        await chooseAccount(account);
-        expect(titles.preparedTitle()).toBeUndefined();
+  it.each(["ready", "before update"])(
+    "keeps a %s title handoff on the selected draft account",
+    async (handoff) => {
+      const fixture = accountTitleFixture();
+      const { accounts, context, flow, place, titles, titleRequest, chooseAccount } = fixture;
+      try {
+        titleRequest
+          .mockResolvedValueOnce({ title: "Automatic title" })
+          .mockResolvedValueOnce({ title: "First account title" })
+          .mockResolvedValueOnce({ title: "Second account title" });
+        flow.setMessage("repair the sidebar naming");
         titles.hostUpdated();
         await vi.advanceTimersByTimeAsync(1_000);
-        expect(titleRequest).toHaveBeenLastCalledWith({
-          agentId: "main",
-          message: flow.message,
-          model: `test/primary@${account.authProfileId}`,
-        });
-        expect(titles.preparedTitle()).toBe(
-          index === 0 ? "First account title" : "Second account title",
+        expect(titleRequest).toHaveBeenCalledOnce();
+
+        for (const [index, account] of accounts.entries()) {
+          await chooseAccount(account);
+          if (index === 1 && handoff === "before update") {
+            break;
+          }
+          titles.hostUpdated();
+          await vi.advanceTimersByTimeAsync(1_000);
+          expect(titleRequest).toHaveBeenLastCalledWith({
+            agentId: "main",
+            message: flow.message,
+            model: `test/primary@${account.authProfileId}`,
+          });
+        }
+        expect(place.modelControl.selected).toBe("");
+        await flow.submit();
+        expect(context.sessions.createResult).toHaveBeenCalledWith(
+          expect.objectContaining({
+            model: `test/primary@${accounts[1].authProfileId}`,
+          }),
+          { reconciliation: "background" },
         );
+        const createParams = vi.mocked(context.sessions.createResult).mock.calls[0]?.[0];
+        if (handoff === "ready") {
+          expect(createParams).toHaveProperty("displayName", "Second account title");
+        } else {
+          expect(createParams).not.toHaveProperty("displayName");
+        }
+      } finally {
+        fixture.dispose();
       }
-      expect(place.modelControl.selected).toBe("");
-      await flow.submit();
-      expect(context.sessions.createResult).toHaveBeenCalledWith(
-        expect.objectContaining({
-          displayName: "Second account title",
-          model: `test/primary@${accounts[1].authProfileId}`,
-        }),
-        { reconciliation: "background" },
-      );
-    } finally {
-      fixture.dispose();
-    }
-  });
+    },
+  );
 
   it.each(["pending", "unconfirmed", "different provider"])(
     "pauses personal title inference for a %s preview without disabling ordinary naming",
@@ -200,14 +170,14 @@ describe("prepared title creation handoff", () => {
         }
         titles.hostUpdated();
         await vi.advanceTimersByTimeAsync(1_000);
-        expect(titles.preparedTitle()).toBeUndefined();
+        expect(titles.takePreparedTitle()).toBeUndefined();
         expect(titleRequest).toHaveBeenCalledOnce();
 
         select("automatic");
         titles.hostUpdated();
         await vi.advanceTimersByTimeAsync(1_000);
         expect(titleRequest).toHaveBeenCalledTimes(2);
-        expect(titles.preparedTitle()).toBe("Prepared title");
+        expect(titles.takePreparedTitle()).toBe("Prepared title");
       } finally {
         preview.resolve(confirmed);
         fixture.dispose();
@@ -215,9 +185,29 @@ describe("prepared title creation handoff", () => {
     },
   );
 
+  it.each(["codex", "claude"])(
+    "does not send a native %s draft to title inference",
+    async (catalogId) => {
+      const { flow, request, titles } = createDraftTitleFixture(undefined, {
+        agentId: "main",
+        requestedAgentId: "main",
+        catalogId,
+        catalogLabel: catalogId,
+        model: "",
+        startTerminal: true,
+      });
+      flow.setMessage("inspect this native-only workspace");
+      titles.hostUpdated();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(
+        request.mock.calls.filter(([method]) => method === "sessions.title.prepare"),
+      ).toHaveLength(0);
+    },
+  );
+
   it("uses a ready title at creation without changing an explicit worktree name", async () => {
-    const { flow, context, place, titles } = titleFixture();
-    place.toggleWorktree();
+    const { flow, context, place, titles } = createDraftTitleFixture();
+    place.selectWorktree(true);
     place.setWorktreeName("my-explicit-branch");
     flow.setMessage("repair the sidebar naming");
     titles.hostUpdated();
@@ -228,8 +218,6 @@ describe("prepared title creation handoff", () => {
       expect.objectContaining({ displayName: "Repair naming", worktreeName: "my-explicit-branch" }),
       { reconciliation: "background" },
     );
-    titles.hostDisconnected();
-    flow.disconnect();
   });
 
   it("sends immediately while preparation is pending and ignores its late result", async () => {
@@ -237,9 +225,7 @@ describe("prepared title creation handoff", () => {
     const pending = new Promise((resolve) => {
       finish = resolve;
     });
-    const { flow, context, titles } = titleFixture(async (method) =>
-      method === "sessions.title.prepare" ? pending : {},
-    );
+    const { flow, context, titles } = createDraftTitleFixture(async () => pending);
     flow.setMessage("repair the sidebar naming");
     titles.hostUpdated();
     await vi.advanceTimersByTimeAsync(1_000);
@@ -251,13 +237,11 @@ describe("prepared title creation handoff", () => {
     );
     finish({ title: "Too late" });
     await vi.advanceTimersByTimeAsync(0);
-    expect(titles.preparedTitle()).toBeUndefined();
-    titles.hostDisconnected();
-    flow.disconnect();
+    expect(titles.takePreparedTitle()).toBeUndefined();
   });
 
   it("never sends an incognito draft and discards an earlier normal suggestion", async () => {
-    const { flow, request, context, titles } = titleFixture();
+    const { flow, request, context, titles } = createDraftTitleFixture();
     flow.setMessage("repair the sidebar naming");
     titles.hostUpdated();
     await vi.advanceTimersByTimeAsync(1_000);
@@ -275,12 +259,10 @@ describe("prepared title creation handoff", () => {
     expect(vi.mocked(context.sessions.createResult).mock.calls[0]?.[0]).not.toHaveProperty(
       "displayName",
     );
-    titles.hostDisconnected();
-    flow.disconnect();
   });
 
   it("does not restart speculation when a submitted draft is retried", async () => {
-    const { flow, request, titles } = titleFixture();
+    const { flow, request, titles } = createDraftTitleFixture();
     flow.setMessage("repair the sidebar naming");
     titles.hostUpdated();
     await vi.advanceTimersByTimeAsync(1_000);
@@ -291,12 +273,10 @@ describe("prepared title creation handoff", () => {
     expect(
       request.mock.calls.filter(([method]) => method === "sessions.title.prepare"),
     ).toHaveLength(1);
-    titles.hostDisconnected();
-    flow.disconnect();
   });
 
   it("rejects a stale title even when Send beats the next UI update", async () => {
-    const { flow, context, titles } = titleFixture();
+    const { flow, context, titles } = createDraftTitleFixture();
     flow.setMessage("repair the sidebar naming");
     titles.hostUpdated();
     await vi.advanceTimersByTimeAsync(1_000);
@@ -306,7 +286,5 @@ describe("prepared title creation handoff", () => {
     expect(vi.mocked(context.sessions.createResult).mock.calls[0]?.[0]).not.toHaveProperty(
       "displayName",
     );
-    titles.hostDisconnected();
-    flow.disconnect();
   });
 });

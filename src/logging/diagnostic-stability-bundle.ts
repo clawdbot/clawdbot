@@ -999,7 +999,4 @@ export function uninstallDiagnosticStabilityFatalHook(): void {
   fatalHookUnsubscribe = null;
 }
 
-export function resetDiagnosticStabilityBundleForTest(): void {
-  uninstallDiagnosticStabilityFatalHook();
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

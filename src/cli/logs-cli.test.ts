@@ -3,7 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayTransportError } from "../gateway/call.js";
 import type { RuntimeExitOptions } from "../runtime.js";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
-import { formatLogTimestamp, registerLogsCli } from "./logs-cli.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { registerLogsCli } from "./logs-cli.js";
 
 const { MockGatewayTransportError } = vi.hoisted(() => ({
   MockGatewayTransportError: class extends Error {
@@ -162,20 +163,6 @@ function captureStderrWrites() {
   return writes;
 }
 
-async function withTimeZone<T>(timeZone: string, run: () => Promise<T> | T): Promise<T> {
-  const previous = process.env.TZ;
-  process.env.TZ = timeZone;
-  try {
-    return await run();
-  } finally {
-    if (previous === undefined) {
-      delete process.env.TZ;
-    } else {
-      process.env.TZ = previous;
-    }
-  }
-}
-
 describe("logs cli", () => {
   beforeEach(() => {
     readSystemdServiceRuntime.mockResolvedValue({ status: "stopped" });
@@ -290,74 +277,63 @@ describe("logs cli", () => {
     );
   });
 
-  it("emits local timestamps by default", async () => {
-    await withTimeZone("America/New_York", async () => {
-      callGatewayFromCli.mockResolvedValueOnce({
-        file: "/tmp/openclaw.log",
-        lines: [
-          JSON.stringify({
-            time: "2025-01-01T12:00:00.000Z",
-            _meta: { logLevelName: "INFO", name: JSON.stringify({ subsystem: "gateway" }) },
-            0: "line one",
-          }),
-        ],
+  it.each([
+    { mode: "plain local", tty: true, args: ["--plain"], time: "2025-01-01T07:00:00.000-05:00" },
+    {
+      mode: "plain --local-time",
+      tty: true,
+      args: ["--local-time", "--plain"],
+      time: "2025-01-01T07:00:00.000-05:00",
+    },
+    { mode: "plain UTC", tty: true, args: ["--utc", "--plain"], time: "2025-01-01T12:00:00.000Z" },
+    { mode: "pretty local", tty: true, args: [], time: "07:00:00-05:00" },
+    { mode: "pretty UTC", tty: true, args: ["--utc"], time: "12:00:00+00:00" },
+    { mode: "non-TTY local", tty: false, args: [], time: "2025-01-01T07:00:00.000-05:00" },
+  ])(
+    "renders $mode timestamps and preserves missing or malformed values",
+    async ({ tty, args, time }) => {
+      await withEnvAsync({ TZ: "America/New_York" }, async () => {
+        const stdoutTty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+        Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: tty });
+        try {
+          callGatewayFromCli.mockResolvedValueOnce({
+            file: "/tmp/openclaw.log",
+            lines: [
+              { time: "2025-01-01T12:00:00.000Z", message: "valid timestamp" },
+              { message: "missing timestamp" },
+              { time: "", message: "empty timestamp" },
+              { time: "invalid-date", message: "invalid timestamp" },
+              { time: "not-a-date", message: "other invalid timestamp" },
+            ].map((entry) =>
+              JSON.stringify({
+                time: entry.time,
+                _meta: { logLevelName: "INFO", name: JSON.stringify({ subsystem: "gateway" }) },
+                0: entry.message,
+              }),
+            ),
+          });
+          const stdoutWrites = captureStdoutWrites();
+
+          await runLogsCli(["logs", "--no-color", ...args]);
+
+          expect(stdoutWrites.join("").trim().split("\n")).toEqual([
+            "Log file: /tmp/openclaw.log",
+            `${time} info gateway valid timestamp`,
+            "info gateway missing timestamp",
+            "info gateway empty timestamp",
+            "invalid-date info gateway invalid timestamp",
+            "not-a-date info gateway other invalid timestamp",
+          ]);
+        } finally {
+          if (stdoutTty) {
+            Object.defineProperty(process.stdout, "isTTY", stdoutTty);
+          } else {
+            Reflect.deleteProperty(process.stdout, "isTTY");
+          }
+        }
       });
-
-      const stdoutWrites = captureStdoutWrites();
-
-      await runLogsCli(["logs", "--plain"]);
-
-      const output = stdoutWrites.join("");
-      expect(output).toContain("line one");
-      expect(output).toContain("2025-01-01T07:00:00.000-05:00");
-    });
-  });
-
-  it("keeps --local-time accepted as the compatibility spelling", async () => {
-    await withTimeZone("America/New_York", async () => {
-      callGatewayFromCli.mockResolvedValueOnce({
-        file: "/tmp/openclaw.log",
-        lines: [
-          JSON.stringify({
-            time: "2025-01-01T12:00:00.000Z",
-            _meta: { logLevelName: "INFO", name: JSON.stringify({ subsystem: "gateway" }) },
-            0: "line one",
-          }),
-        ],
-      });
-
-      const stdoutWrites = captureStdoutWrites();
-
-      await runLogsCli(["logs", "--local-time", "--plain"]);
-
-      const output = stdoutWrites.join("");
-      expect(output).toContain("line one");
-      expect(output).toContain("2025-01-01T07:00:00.000-05:00");
-    });
-  });
-
-  it("wires --utc through CLI parsing and emits UTC timestamps", async () => {
-    await withTimeZone("America/New_York", async () => {
-      callGatewayFromCli.mockResolvedValueOnce({
-        file: "/tmp/openclaw.log",
-        lines: [
-          JSON.stringify({
-            time: "2025-01-01T12:00:00.000Z",
-            _meta: { logLevelName: "INFO", name: JSON.stringify({ subsystem: "gateway" }) },
-            0: "line one",
-          }),
-        ],
-      });
-
-      const stdoutWrites = captureStdoutWrites();
-
-      await runLogsCli(["logs", "--utc", "--plain"]);
-
-      const output = stdoutWrites.join("");
-      expect(output).toContain("line one");
-      expect(output).toContain("2025-01-01T12:00:00.000Z");
-    });
-  });
+    },
+  );
 
   it("warns when the output pipe closes", async () => {
     callGatewayFromCli.mockResolvedValueOnce({
@@ -586,7 +562,7 @@ describe("logs cli", () => {
 
       // Pin UTC: the recovered-line assertion below checks a rendered
       // timestamp, which otherwise follows the host time zone.
-      await withTimeZone("UTC", () =>
+      await withEnvAsync({ TZ: "UTC" }, () =>
         runLogsCli(["logs", "--follow", "--plain", "--interval", "1", "--timeout", "250"]),
       );
 
@@ -1165,55 +1141,6 @@ describe("logs cli", () => {
       "gateway closed (1000 normal closure): no close reason",
     );
     expect(exitSpy).toHaveBeenCalledWith(1);
-  });
-
-  describe("formatLogTimestamp", () => {
-    it("formats local timestamp in plain mode by default", async () => {
-      await withTimeZone("America/New_York", () => {
-        const result = formatLogTimestamp("2025-01-01T12:00:00.000Z");
-        expect(result).toBe("2025-01-01T07:00:00.000-05:00");
-      });
-    });
-
-    it("formats local timestamp in pretty mode by default", async () => {
-      await withTimeZone("America/New_York", () => {
-        const result = formatLogTimestamp("2025-01-01T12:00:00.000Z", "pretty");
-        expect(result).toBe("07:00:00-05:00");
-      });
-    });
-
-    it("formats UTC timestamp in plain mode when localTime is false", () => {
-      const result = formatLogTimestamp("2025-01-01T12:00:00.000Z", "plain", false);
-      expect(result).toBe("2025-01-01T12:00:00.000Z");
-    });
-
-    it("formats UTC timestamp in pretty mode when localTime is false", () => {
-      const result = formatLogTimestamp("2025-01-01T12:00:00.000Z", "pretty", false);
-      expect(result).toBe("12:00:00+00:00");
-    });
-
-    it("formats local time in plain mode when localTime is true", async () => {
-      await withTimeZone("America/New_York", () => {
-        const result = formatLogTimestamp("2025-01-01T12:00:00.000Z", "plain", true);
-        expect(result).toBe("2025-01-01T07:00:00.000-05:00");
-      });
-    });
-
-    it("formats local time in pretty mode when localTime is true", async () => {
-      await withTimeZone("America/New_York", () => {
-        const result = formatLogTimestamp("2025-01-01T12:00:00.000Z", "pretty", true);
-        expect(result).toBe("07:00:00-05:00");
-      });
-    });
-
-    it.each([
-      { input: undefined, expected: "" },
-      { input: "", expected: "" },
-      { input: "invalid-date", expected: "invalid-date" },
-      { input: "not-a-date", expected: "not-a-date" },
-    ])("preserves timestamp fallback for $input", ({ input, expected }) => {
-      expect(formatLogTimestamp(input)).toBe(expected);
-    });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

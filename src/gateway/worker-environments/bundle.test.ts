@@ -33,6 +33,11 @@ async function writeFixture(
     mode: 0o755,
   });
   await fs.writeFile(
+    path.join(packageRoot, "dist", "worker", "github-exec-launcher.mjs"),
+    "export const launcher = true;\n",
+    { encoding: "utf8", mode: 0o755 },
+  );
+  await fs.writeFile(
     path.join(packageRoot, "dist", "worker", "workspace-rsync-receiver.mjs"),
     "export const receiver = true;\n",
     { encoding: "utf8", mode: 0o755 },
@@ -118,6 +123,7 @@ describe("worker bundle producer", () => {
       expect(first.bundleHash).toMatch(/^[a-f0-9]{64}$/u);
       expect(second.bundleHash).toBe(first.bundleHash);
       await expect(listTarball(first.tarballPath)).resolves.toEqual([
+        "github-exec-launcher.mjs",
         "worker.mjs",
         "workspace-rsync-receiver.mjs",
       ]);
@@ -162,6 +168,13 @@ describe("worker bundle producer", () => {
       );
       const receiverChanged = await createWorkerBundleProducer({ packageRoot, cacheDir }).prepare();
       expect(receiverChanged.bundleHash).not.toBe(changed.bundleHash);
+
+      await fs.writeFile(
+        path.join(packageRoot, "dist", "worker", "github-exec-launcher.mjs"),
+        "export const launcher = false;\n",
+      );
+      const launcherChanged = await createWorkerBundleProducer({ packageRoot, cacheDir }).prepare();
+      expect(launcherChanged.bundleHash).not.toBe(receiverChanged.bundleHash);
     });
   });
 
@@ -317,6 +330,7 @@ describe("worker bundle producer", () => {
 
       expect(repaired.bundleHash).toBe(first.bundleHash);
       await expect(listTarball(repaired.tarballPath)).resolves.toEqual([
+        "github-exec-launcher.mjs",
         "worker.mjs",
         "workspace-rsync-receiver.mjs",
       ]);
@@ -324,7 +338,11 @@ describe("worker bundle producer", () => {
   });
 
   it.skipIf(process.platform === "win32")("rejects symlinked deploy artifacts", async () => {
-    for (const artifactName of ["worker.mjs", "workspace-rsync-receiver.mjs"]) {
+    for (const artifactName of [
+      "github-exec-launcher.mjs",
+      "worker.mjs",
+      "workspace-rsync-receiver.mjs",
+    ]) {
       await withTestDir({ prefix: "openclaw-worker-bundle-symlink-" }, async (root) => {
         const packageRoot = path.join(root, "package");
         await writeFixture(packageRoot);

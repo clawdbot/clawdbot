@@ -3,6 +3,7 @@ import type { Command } from "commander";
 
 export const COLD_READ_COMMAND_PATHS: string[][] = [
   ["audit"],
+  ["node", "identity"],
   ["skills", "info"],
   ["skills", "search"],
   ["hooks"],
@@ -29,6 +30,11 @@ export function registerColdReadCommandFixtures(program: Command, skills: Comman
       .option("--json")
       .action(() => {});
   }
+  program
+    .command("node")
+    .command("identity")
+    .option("--json")
+    .action(() => {});
   program
     .command("audit")
     .option("--json")

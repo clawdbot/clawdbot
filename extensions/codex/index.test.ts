@@ -721,7 +721,7 @@ describe("codex plugin", () => {
         { sessionId: "session-1", sessionKey: "agent:worker:session-1", reason },
         { agentId: "worker", sessionId: "session-1" },
       );
-      await expect(bindingStore.read(identity)).resolves.toMatchObject({ threadId: "thread-1" });
+      expect(bindingStore.read(identity)).toMatchObject({ threadId: "thread-1" });
     }
     for (const reason of ["new", "reset", "idle", "daily", "deleted"] as const) {
       await setBinding();
@@ -729,7 +729,7 @@ describe("codex plugin", () => {
         { sessionId: "session-1", sessionKey: "agent:worker:session-1", reason },
         { agentId: "worker", sessionId: "session-1" },
       );
-      await expect(bindingStore.read(identity)).resolves.toBeUndefined();
+      expect(bindingStore.read(identity)).toBeUndefined();
     }
 
     // Cross-key handoff (e.g. dashboard "New Chat"/fork): the parent's still-live
@@ -755,7 +755,7 @@ describe("codex plugin", () => {
       },
       { agentId: "worker", sessionId: "parent-1" },
     );
-    await expect(bindingStore.read(parent)).resolves.toMatchObject({ threadId: "thread-parent" });
+    expect(bindingStore.read(parent)).toMatchObject({ threadId: "thread-parent" });
 
     // In-place reset cleanup is awaited before the replacement starts. Its
     // delayed session_end event must not retire that same-id replacement.
@@ -777,7 +777,7 @@ describe("codex plugin", () => {
       },
       { agentId: "worker", sessionId: "in-place-1" },
     );
-    await expect(bindingStore.read(inPlace)).resolves.toMatchObject({
+    expect(bindingStore.read(inPlace)).toMatchObject({
       threadId: "thread-in-place-replacement",
     });
 
@@ -792,7 +792,7 @@ describe("codex plugin", () => {
       },
       { agentId: "worker", sessionId: "parent-1" },
     );
-    await expect(bindingStore.read(parent)).resolves.toBeUndefined();
+    expect(bindingStore.read(parent)).toBeUndefined();
 
     // Unknown current key: a handoff cannot be proven, so a successor key alone
     // must not skip cleanup — the conservative path retires as before #106778.
@@ -810,7 +810,7 @@ describe("codex plugin", () => {
       },
       { agentId: "worker", sessionId: "keyless-1" },
     );
-    await expect(bindingStore.read(keyless)).resolves.toBeUndefined();
+    expect(bindingStore.read(keyless)).toBeUndefined();
   });
 
   it("adopts compaction successors before delayed lifecycle cleanup", async () => {
@@ -873,8 +873,8 @@ describe("codex plugin", () => {
       { previousSessionId: "session-1" },
       { agentId: "worker", sessionId: "session-2", sessionKey },
     );
-    await expect(bindingStore.read(previous)).resolves.toBeUndefined();
-    await expect(bindingStore.read(successor)).resolves.toMatchObject({ threadId: "thread-1" });
+    expect(bindingStore.read(previous)).toBeUndefined();
+    expect(bindingStore.read(successor)).toMatchObject({ threadId: "thread-1" });
 
     await afterCompaction(
       { previousSessionId: "session-2" },
@@ -884,8 +884,8 @@ describe("codex plugin", () => {
       { previousSessionId: "session-1" },
       { agentId: "worker", sessionId: "session-2", sessionKey },
     );
-    await expect(bindingStore.read(successor)).resolves.toBeUndefined();
-    await expect(bindingStore.read(newest)).resolves.toMatchObject({ threadId: "thread-1" });
+    expect(bindingStore.read(successor)).toBeUndefined();
+    expect(bindingStore.read(newest)).toMatchObject({ threadId: "thread-1" });
 
     await sessionEnd(
       { sessionId: "session-1", sessionKey, reason: "reset" },
@@ -895,7 +895,7 @@ describe("codex plugin", () => {
       { sessionId: "session-2", sessionKey, reason: "compaction" },
       { agentId: "worker", sessionId: "session-2", sessionKey },
     );
-    await expect(bindingStore.read(newest)).resolves.toMatchObject({ threadId: "thread-1" });
+    expect(bindingStore.read(newest)).toMatchObject({ threadId: "thread-1" });
     expect(stateStore.entries()).toHaveLength(1);
   });
 

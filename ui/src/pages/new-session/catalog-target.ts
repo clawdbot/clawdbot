@@ -37,7 +37,7 @@ export function isTarget(data?: NewSessionRouteData): boolean {
 }
 
 function isResolvedTarget(data?: NewSessionRouteData): boolean {
-  return Boolean(data?.catalogId && data.model && data.catalogLabel);
+  return Boolean(data?.catalogId && data.startTerminal && data.catalogLabel);
 }
 
 function isPendingRouteTarget(data?: NewSessionRouteData): boolean {
@@ -180,7 +180,10 @@ export async function resolveCreateTarget(
   client: GatewayBrowserClient,
   catalogId: string,
   agentId?: string,
-): Promise<Pick<NewSessionRouteData, "model" | "catalogLabel" | "startTerminal"> | undefined> {
+): Promise<
+  | Pick<NewSessionRouteData, "model" | "catalogLabel" | "startTerminal" | "terminalHosts">
+  | undefined
+> {
   try {
     const result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
       ...(agentId ? { agentId } : {}),
@@ -188,12 +191,15 @@ export async function resolveCreateTarget(
       limitPerHost: 1,
     });
     const catalog = result.catalogs.find((candidate) => candidate.id === catalogId);
-    const model = catalog?.capabilities.createSession?.model.trim();
-    return catalog && model
+    const terminal = catalog?.capabilities.startTerminal;
+    return catalog && terminal === true
       ? {
-          model,
+          model: "",
           catalogLabel: catalog.label,
-          startTerminal: catalog.capabilities.createSession?.startTerminal === true,
+          startTerminal: true,
+          terminalHosts: catalog.hosts
+            .filter((host) => host.canStartTerminal === true)
+            .map(({ hostId, label }) => ({ hostId, label })),
         }
       : undefined;
   } catch {
@@ -253,7 +259,7 @@ export class CatalogTargetDiscovery {
             status: "ready",
             owner,
             targets: result.catalogs
-              .filter((catalog) => catalog.capabilities.createSession !== undefined)
+              .filter((catalog) => catalog.capabilities.startTerminal === true)
               .map(({ id, label }) => ({ id, label })),
           };
           this.notify();
@@ -339,7 +345,7 @@ function renderTarget(data?: NewSessionRouteData) {
   const label = data?.catalogLabel || data?.catalogId || "";
   return html`<span
     class="new-session-page__trigger new-session-page__runtime"
-    title=${ready ? data?.model : t("newSession.catalogUnavailable")}
+    title=${ready ? t("newSession.nativeTerminalHint") : t("newSession.catalogUnavailable")}
   >
     <span class="new-session-page__target-icon" aria-hidden="true">${icons.terminal}</span>
     <span>${label}</span>

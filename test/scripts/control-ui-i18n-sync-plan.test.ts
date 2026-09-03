@@ -60,9 +60,14 @@ describe("createControlUiLocaleSyncPlan", () => {
     const startup = {
       updates: { before: "Before", page: {}, after: "After" },
       settings: {},
+      debug: { snapshotsTitle: {}, overlay: { title: "System busyness" } },
       common: { ok: "OK" },
     };
-    const fragment = { settings: { title: "Settings" }, updates: { page: { title: "Updates" } } };
+    const fragment = {
+      settings: { title: "Settings" },
+      updates: { page: { title: "Updates" } },
+      debug: { snapshotsTitle: "Snapshots", overlay: { unavailable: "Unavailable" } },
+    };
     const merged = mergeControlUiTranslationMaps(startup, fragment);
 
     expect([...flattenTranslations(merged)]).toEqual([
@@ -70,10 +75,14 @@ describe("createControlUiLocaleSyncPlan", () => {
       ["updates.page.title", "Updates"],
       ["updates.after", "After"],
       ["settings.title", "Settings"],
+      ["debug.snapshotsTitle", "Snapshots"],
+      ["debug.overlay.title", "System busyness"],
+      ["debug.overlay.unavailable", "Unavailable"],
       ["common.ok", "OK"],
     ]);
     expect(startup.settings).toEqual({});
     expect(startup.updates.page).toEqual({});
+    expect(startup.debug).toEqual({ snapshotsTitle: {}, overlay: { title: "System busyness" } });
     expect(merged.updates).not.toBe(startup.updates);
     expect(merged.settings).not.toBe(fragment.settings);
   });

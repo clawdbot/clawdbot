@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { assertPathInside, findPackageJson, readJson } from "./codex-install-utils.mjs";
 
-const EXPECTED_CODEX_VERSION = "0.152.1";
+const EXPECTED_CODEX_VERSION = "0.153.0";
 const CODEX_PLATFORM_TARGETS = new Map([
   ["linux:x64", { alias: "@openai/codex-linux-x64", os: "linux", cpu: "x64" }],
   ["linux:arm64", { alias: "@openai/codex-linux-arm64", os: "linux", cpu: "arm64" }],

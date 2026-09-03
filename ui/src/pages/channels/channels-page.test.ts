@@ -72,7 +72,9 @@ function createGateway(): TestGateway {
               channelAccounts: {},
               channelDefaultAccountId: {},
             }
-          : {},
+          : method === "plugins.list"
+            ? { plugins: [], diagnostics: [], mutationAllowed: true }
+            : {},
     ),
   } as unknown as GatewayBrowserClient;
   const snapshot: ApplicationGatewaySnapshot = {
@@ -118,6 +120,7 @@ function createContext(gateway: ApplicationContext["gateway"]) {
   const ensureSchemaLoaded = vi.spyOn(runtimeConfig, "ensureSchemaLoaded").mockResolvedValue();
   const context = {
     basePath: "",
+    resourceBasePath: "",
     gateway,
     channels,
     runtimeConfig,
@@ -135,6 +138,164 @@ afterEach(() => {
 });
 
 describe("ChannelsPage lifecycle", () => {
+  it("loads plugin metadata and package icons for channel presentation", async () => {
+    const gateway = createGateway();
+    gateway.emit({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.admin", "operator.read"] },
+      } as unknown as ApplicationGatewaySnapshot["hello"],
+    });
+    const source = createContext(gateway);
+    source.channels.state.channelsSnapshot = {
+      ts: 0,
+      channelOrder: ["slack"],
+      channelLabels: { slack: "slack" },
+      channelDetailLabels: { slack: "Legacy channel subtitle" },
+      channels: { slack: { configured: false } },
+      channelAccounts: {},
+      channelDefaultAccountId: {},
+    };
+    const request = vi.spyOn(gateway.snapshot.client!, "request");
+    const baseRequest = request.getMockImplementation();
+    request.mockImplementation(async (method: string, params?: unknown) => {
+      if (method === "plugins.list") {
+        return {
+          plugins: [
+            {
+              id: "slack",
+              name: "Slack",
+              description: "OpenClaw Slack channel plugin.",
+              origin: "bundled",
+              installed: true,
+              enabled: false,
+              state: "disabled",
+              hasIcon: true,
+            },
+            {
+              id: "firecrawl",
+              name: "FireCrawl",
+              description: "Crawl websites.",
+              origin: "global",
+              installed: false,
+              enabled: false,
+              state: "available",
+              hasIcon: true,
+            },
+          ],
+          diagnostics: [],
+          mutationAllowed: true,
+        };
+      }
+      return await baseRequest?.(method, params);
+    });
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL) =>
+        new Response(new Uint8Array([137, 80, 78, 71]), {
+          status: 200,
+          headers: { "Content-Type": "image/png" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:slack-plugin-icon");
+    const page = document.createElement("openclaw-channels-page") as ChannelsPageTestElement;
+    page.context = source.context;
+    document.body.append(page);
+
+    await vi.waitFor(() => {
+      expect(page.querySelector(".settings-row__title")?.textContent).toBe("Slack");
+      expect(page.querySelector(".settings-row__desc")?.textContent).toBe(
+        "OpenClaw Slack channel plugin.",
+      );
+      expect(page.querySelector(".channels-item img")?.getAttribute("src")).toBe(
+        "blob:slack-plugin-icon",
+      );
+    });
+    expect(request).toHaveBeenCalledWith("plugins.list", {}, expect.any(Object));
+    expect(
+      fetchMock.mock.calls
+        .map(([input]) =>
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+        )
+        .filter((url) => url.includes("/__openclaw__/plugin-icon/")),
+    ).toEqual(["/__openclaw__/plugin-icon/slack"]);
+    source.runtimeConfig.dispose();
+    source.channels.dispose();
+  });
+
+  it("loads an icon when channel status arrives after plugin metadata", async () => {
+    const gateway = createGateway();
+    gateway.emit({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.admin", "operator.read"] },
+      } as unknown as ApplicationGatewaySnapshot["hello"],
+    });
+    const source = createContext(gateway);
+    const request = vi.spyOn(gateway.snapshot.client!, "request");
+    const baseRequest = request.getMockImplementation();
+    let includeMattermost = false;
+    request.mockImplementation(async (method: string, params?: unknown) => {
+      if (method === "plugins.list") {
+        return {
+          plugins: [
+            {
+              id: "mattermost",
+              name: "Mattermost",
+              description: "OpenClaw Mattermost channel plugin.",
+              origin: "bundled",
+              installed: true,
+              enabled: true,
+              state: "loaded",
+              hasIcon: true,
+            },
+          ],
+          diagnostics: [],
+          mutationAllowed: true,
+        };
+      }
+      if (method === "channels.status" && includeMattermost) {
+        return {
+          ts: 1,
+          channelOrder: ["mattermost"],
+          channelLabels: { mattermost: "Mattermost" },
+          channels: { mattermost: { configured: true } },
+          channelAccounts: {},
+          channelDefaultAccountId: {},
+        };
+      }
+      return await baseRequest?.(method, params);
+    });
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(new Uint8Array([137, 80, 78, 71]), {
+          status: 200,
+          headers: { "Content-Type": "image/png" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:mattermost-plugin-icon");
+    const page = document.createElement("openclaw-channels-page") as ChannelsPageTestElement;
+    page.context = source.context;
+    document.body.append(page);
+
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("plugins.list", {}, expect.any(Object)),
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    includeMattermost = true;
+    await source.channels.refresh(false);
+
+    await vi.waitFor(() => {
+      expect(page.querySelector(".settings-row__title")?.textContent).toBe("Mattermost");
+      expect(page.querySelector(".channels-item img")?.getAttribute("src")).toBe(
+        "blob:mattermost-plugin-icon",
+      );
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    source.runtimeConfig.dispose();
+    source.channels.dispose();
+  });
+
   it("loads schema again when the runtime-config source changes", async () => {
     const gateway = createGateway();
     const first = createContext(gateway);
@@ -250,13 +411,17 @@ describe("ChannelsPage lifecycle", () => {
     const refreshConfig = vi.spyOn(source.runtimeConfig, "refresh");
     const refreshChannels = vi.spyOn(source.channels, "refresh");
     const request = vi.spyOn(gateway.snapshot.client!, "request");
-    request.mockRejectedValueOnce(
-      new GatewayRequestError({
-        code: "INVALID_REQUEST",
-        message:
-          "channel rejected: OPENAI_API_KEY=sk-1234567890abcdef <img src=x onerror=alert(1)>",
-      }),
-    );
+    const baseRequest = request.getMockImplementation();
+    request.mockImplementation(async (method: string, params?: unknown) => {
+      if (method === "config.set") {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message:
+            "channel rejected: OPENAI_API_KEY=sk-1234567890abcdef <img src=x onerror=alert(1)>",
+        });
+      }
+      return await baseRequest?.(method, params);
+    });
     const page = document.createElement("openclaw-channels-page") as ChannelsPageTestElement;
     page.context = source.context;
     document.body.append(page);

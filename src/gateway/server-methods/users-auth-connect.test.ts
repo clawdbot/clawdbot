@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -18,7 +19,7 @@ import type { UserProfileAuthLink } from "../../state/user-model-accounts.js";
 import { createModelAccountConnectService } from "../model-account-connect.js";
 import { broadcastChatMetadataChanged } from "../server-chat-metadata-lifecycle.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
-import { usersAuthConnectHandlers } from "./users-auth-connect.js";
+import { usersHandlers } from "./users.js";
 
 const getUserProfileListItem = vi.hoisted(() => vi.fn());
 const resolveUserProfileId = vi.hoisted(() => vi.fn());
@@ -28,6 +29,8 @@ const listUserProfileAuthLinks = vi.hoisted(() => vi.fn());
 const listUserModelAccounts = vi.hoisted(() => vi.fn());
 const readUserModelAccountSummary = vi.hoisted(() => vi.fn());
 const setUserProfileAuthLink = vi.hoisted(() => vi.fn());
+const clearUserProfileAuthLink = vi.hoisted(() => vi.fn());
+const ensureAuthProfileStoreWithoutExternalProfiles = vi.hoisted(() => vi.fn());
 const registerSecretValueForRedaction = vi.hoisted(() => vi.fn());
 const listPersonalAccountAuthChoices = vi.hoisted(() => vi.fn());
 const resolvePersonalAccountAuthMethod = vi.hoisted(() => vi.fn());
@@ -49,6 +52,14 @@ vi.mock("../../state/user-model-accounts.js", () => ({
   listUserModelAccounts,
   readUserModelAccountSummary,
   setUserProfileAuthLink,
+  clearUserProfileAuthLink,
+}));
+vi.mock("../../agents/auth-profiles/shared-main-dir.js", () => ({
+  resolveSharedMainAuthAgentDir: () => "/tmp/shared-main-agent",
+}));
+vi.mock("../../agents/auth-profiles/store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/auth-profiles/store.js")>()),
+  ensureAuthProfileStoreWithoutExternalProfiles,
 }));
 vi.mock("../../logging/secret-redaction-registry.js", () => ({ registerSecretValueForRedaction }));
 vi.mock("../../plugins/personal-account-auth.js", () => ({
@@ -124,7 +135,7 @@ async function rpc(
 ) {
   const respond = vi.fn();
   await expectDefined(
-    usersAuthConnectHandlers[requestMethod],
+    usersHandlers[requestMethod],
     `${requestMethod} test invariant`,
   )({
     req: { type: "req", id: "connect-test", method: requestMethod, params },
@@ -139,10 +150,11 @@ async function rpc(
 async function startFlow(
   profileId = "profile-1",
   client = self,
+  provider = "openai",
 ): Promise<UsersAuthConnectStartResult> {
   const respond = await rpc(
     "users.authConnect.start",
-    { profileId, provider: "openai", method: "oauth" },
+    { profileId, provider, method: "oauth" },
     client,
   );
   expect(respond).toHaveBeenCalledWith(
@@ -203,6 +215,21 @@ beforeEach(async () => {
   listUserProfileAuthLinks.mockImplementation((owner: string) => linksByOwner.get(owner) ?? []);
   listUserModelAccounts.mockReset().mockReturnValue({ accounts: [] });
   readUserModelAccountSummary.mockReset();
+  ensureAuthProfileStoreWithoutExternalProfiles
+    .mockReset()
+    .mockReturnValue({ version: 1, profiles: { "openai:shared": credential } });
+  clearUserProfileAuthLink
+    .mockReset()
+    .mockImplementation(
+      (params: { profileId: string; provider: string; assertCurrent?: () => void }) => {
+        params.assertCurrent?.();
+        const links = (linksByOwner.get(params.profileId) ?? []).filter(
+          (link) => link.provider !== params.provider,
+        );
+        linksByOwner.set(params.profileId, links);
+        return links;
+      },
+    );
   setUserProfileAuthLink
     .mockReset()
     .mockImplementation(
@@ -210,9 +237,9 @@ beforeEach(async () => {
         profileId: string;
         provider: string;
         authProfileId: string;
-        assertCurrent: () => void;
+        assertCurrent?: () => void;
       }) => {
-        params.assertCurrent();
+        params.assertCurrent?.();
         const links = [
           { provider: params.provider, authProfileId: params.authProfileId, updatedAt: 2 },
         ];
@@ -280,7 +307,7 @@ afterEach(async () => {
 });
 
 describe("users model-account connection lifecycle", () => {
-  it("lists the authenticated person's account page without accepting an implicit different owner", async () => {
+  it("lists account pages for their owner or an identified administrator", async () => {
     const accounts = [
       {
         authProfileId: "personal:profile-1:saved",
@@ -303,15 +330,74 @@ describe("users model-account connection lifecycle", () => {
       profileId: "profile-1",
       cursor: "personal:profile-1:before",
     });
+    expect(await rpc("users.listAuthLinks", { profileId: "profile-1" })).toHaveBeenCalledWith(
+      true,
+      { links: [] },
+    );
     listUserModelAccounts.mockClear();
+    listUserProfileAuthLinks.mockClear();
     expect(
       await rpc("users.listModelAccounts", { profileId: "profile-other" }),
     ).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ code: "FORBIDDEN" }));
     expect(listUserModelAccounts).not.toHaveBeenCalled();
+    expect(await rpc("users.listAuthLinks", { profileId: "profile-other" })).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "FORBIDDEN" }),
+    );
+    expect(listUserProfileAuthLinks).not.toHaveBeenCalled();
+
+    const admin = createClient("profile-admin", ["operator.admin"]);
+    listUserModelAccounts.mockReturnValue({ accounts: [] });
+    expect(
+      await rpc("users.listModelAccounts", { profileId: "profile-other" }, admin),
+    ).toHaveBeenCalledWith(true, {
+      profileId: "profile-other",
+      accounts: [],
+      links: [],
+    });
+    expect(listUserModelAccounts).toHaveBeenCalledWith({
+      profileId: "profile-other",
+      cursor: undefined,
+    });
   });
+
+  it.each([
+    ["users.listModelAccounts", {}],
+    ["users.authConnect.catalog", {}],
+    ["users.authConnect.start", { provider: "openai", method: "oauth" }],
+    ["users.selectModelAccount", { authProfileId: "personal:profile-other:saved" }],
+    ["users.listAuthLinks", {}],
+    ["users.linkAuthProfile", { authProfileId: "openai:shared" }],
+    ["users.unlinkAuthProfile", { provider: "openai" }],
+  ] as const)(
+    "requires an identified administrator for %s with an explicit owner",
+    async (method, params) => {
+      delete self.authenticatedUserProfile;
+      self.connect.scopes = ["operator.admin"];
+      readUserModelAccountSummary.mockReturnValue({
+        provider: "openai",
+        authProfileId: "personal:profile-other:saved",
+      });
+
+      expect(await rpc(method, { ...params, profileId: "profile-other" })).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: "FORBIDDEN" }),
+      );
+      expect(getUserProfileListItem).not.toHaveBeenCalled();
+      expect(runAuth).not.toHaveBeenCalled();
+      expect(writes).toEqual([]);
+      expect(linksByOwner.size).toBe(0);
+    },
+  );
 
   it("selects a retained owned account and cancels an older sign-in without rewriting credentials", async () => {
     const flow = await startFlow();
+    expect(
+      await rpc("users.selectModelAccount", { authProfileId: "personal:profile-other:missing" }),
+    ).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ code: "INVALID_REQUEST" }));
+    expect(await status(flow)).toMatchObject({ status: "pending" });
     readUserModelAccountSummary.mockReturnValue({
       provider: "openai",
       authProfileId: "personal:profile-1:saved",
@@ -333,84 +419,210 @@ describe("users model-account connection lifecycle", () => {
       {},
       { dropIfSlow: true },
     );
+    expect(
+      await rpc("users.unlinkAuthProfile", { profileId: "profile-1", provider: "openai" }),
+    ).toHaveBeenCalledWith(true, { links: [] });
+    expect(linksByOwner.get("profile-1")).toEqual([]);
+    expect(broadcast).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["unavailable account", "disconnected", "agent caller"] as const)(
-    "refuses personal selection for %s without changing the default",
+  it.each([
+    "disconnected",
+    "agent caller",
+    "synthetic system actor",
+    "delegated operator actor",
+    "system actor without a profile",
+    "copied client",
+    "agent tool caller",
+  ] as const)(
+    "refuses account links and selection for %s without changing the default",
     async (reason) => {
+      const flow = await startFlow();
+      const links = [{ provider: "openai", authProfileId: "openai:saved", updatedAt: 1 }];
+      linksByOwner.set("profile-1", links);
+      const admin = createClient("profile-admin", ["operator.admin"]);
+      let caller = admin;
       if (reason === "disconnected") {
-        clients.delete(self);
+        clients.delete(admin);
       } else if (reason === "agent caller") {
-        self.internal = { ...self.internal, syntheticClient: true };
+        admin.internal = { syntheticClient: true };
+      } else if (reason === "synthetic system actor") {
+        admin.internal = { syntheticClient: true, operatorRoleActor: { kind: "system" } };
+      } else if (reason === "delegated operator actor") {
+        admin.internal = { operatorRoleActor: { kind: "operator", profileId: "profile-admin" } };
+      } else if (reason === "system actor without a profile") {
+        delete admin.authenticatedUserProfile;
+        admin.internal = { operatorRoleActor: { kind: "system" } };
+      } else if (reason === "copied client") {
+        caller = { ...admin };
+      } else if (reason === "agent tool caller") {
+        admin.internal = { agentToolCaller: { agentId: "main", sessionKey: "agent:main:test" } };
       }
-      expect(
-        await rpc("users.selectModelAccount", { authProfileId: "personal:profile-other:account" }),
-      ).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: reason === "unavailable account" ? "INVALID_REQUEST" : "FORBIDDEN",
-        }),
+      const results = [];
+      for (const [method, params] of [
+        ["users.selectModelAccount", { authProfileId: "personal:profile-1:saved" }],
+        ["users.listAuthLinks", {}],
+        ["users.linkAuthProfile", { authProfileId: "openai:shared" }],
+        ["users.unlinkAuthProfile", { provider: "openai" }],
+      ] as const) {
+        results.push((await rpc(method, { ...params, profileId: "profile-1" }, caller)).mock.calls);
+      }
+      expect(results).toEqual(
+        Array.from({ length: 4 }, () => [
+          [false, undefined, expect.objectContaining({ code: "FORBIDDEN" })],
+        ]),
       );
+      expect(linksByOwner.get("profile-1")).toEqual(links);
+      expect(await status(flow)).toMatchObject({ status: "pending" });
       expect(setUserProfileAuthLink).not.toHaveBeenCalled();
+      expect(clearUserProfileAuthLink).not.toHaveBeenCalled();
+      expect(broadcast).not.toHaveBeenCalled();
       expect(writes).toEqual([]);
     },
   );
 
-  it("uses the catalog and exact sensitive step without consuming a rejected answer", async () => {
-    expect(await rpc("users.authConnect.catalog", { profileId: "profile-1" })).toHaveBeenCalledWith(
-      true,
-      {
+  it.each(["shared", "personal", "config-declared"] as const)(
+    "lets an identified administrator attach a %s credential and retire the old sign-in",
+    async (source) => {
+      const owner = randomUUID();
+      const admin = createClient("profile-admin", ["operator.admin"]);
+      const provider = source === "config-declared" ? "amazon-bedrock" : "openai";
+      const authProfileId =
+        source === "personal" ? `personal:${owner}:${randomUUID()}` : `${provider}:shared`;
+      if (source === "config-declared") {
+        ensureAuthProfileStoreWithoutExternalProfiles.mockReturnValue({ version: 1, profiles: {} });
+        config = { auth: { profiles: { [authProfileId]: { provider, mode: "aws-sdk" } } } };
+      }
+      const flow = await startFlow(owner, admin, provider);
+      readUserModelAccountSummary.mockReturnValue({ provider, authProfileId });
+      expect(
+        await rpc("users.linkAuthProfile", { profileId: owner, authProfileId }, admin),
+      ).toHaveBeenCalledWith(true, {
+        links: [{ provider, authProfileId, updatedAt: 2 }],
+      });
+      expect(await status(flow, owner, admin)).toEqual({ status: "cancelled" });
+      expect(await rpc("users.listAuthLinks", { profileId: owner }, admin)).toHaveBeenCalledWith(
+        true,
+        { links: linksByOwner.get(owner) },
+      );
+      expect(
+        await rpc("users.unlinkAuthProfile", { profileId: owner, provider }, admin),
+      ).toHaveBeenCalledWith(true, { links: [] });
+      expect(linksByOwner.get(owner)).toEqual([]);
+      expect(broadcast).toHaveBeenCalledTimes(2);
+      expect(writes).toEqual([]);
+      if (source === "personal") {
+        expect(readUserModelAccountSummary).toHaveBeenCalledWith({
+          profileId: owner,
+          authProfileId,
+        });
+        expect(ensureAuthProfileStoreWithoutExternalProfiles).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("keeps failed manual attachments from changing a default or cancelling its sign-in", async () => {
+    const flow = await startFlow();
+    const params = { profileId: "profile-1", authProfileId: "openai:shared" };
+    expect(await rpc("users.linkAuthProfile", params)).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "FORBIDDEN" }),
+    );
+    const admin = createClient("profile-admin", ["operator.admin"]);
+    expect(
+      await rpc("users.linkAuthProfile", { ...params, authProfileId: "missing" }, admin),
+    ).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("openclaw models auth login"),
+      }),
+    );
+    expect(
+      await rpc(
+        "users.linkAuthProfile",
+        {
+          ...params,
+          authProfileId: `personal:${randomUUID()}:${randomUUID()}`,
+        },
+        admin,
+      ),
+    ).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("your personal account list"),
+      }),
+    );
+    expect(setUserProfileAuthLink).not.toHaveBeenCalled();
+    expect(await status(flow)).toMatchObject({ status: "pending" });
+    expect(broadcast).not.toHaveBeenCalled();
+  });
+
+  it.each(["direct", "shared-secret"] as const)(
+    "uses the catalog and exact sensitive step for a %s caller without consuming a rejected answer",
+    async (caller) => {
+      if (caller === "shared-secret") {
+        self.internal = { operatorRoleActor: { kind: "system" } };
+      }
+      expect(
+        await rpc("users.authConnect.catalog", { profileId: "profile-1" }),
+      ).toHaveBeenCalledWith(true, {
         providers: [
           { id: "openai", label: "OpenAI", methods: [{ id: "oauth", label: "Browser sign-in" }] },
         ],
-      },
-    );
-    const flow = await startFlow();
-    const pending = await status(flow);
-    const invalid = await rpc("users.authConnect.answer", {
-      profileId: "profile-1",
-      connectId: flow.connectId,
-      stepId: pending.step.id,
-      value: "secret-invalid",
-    });
-    expect(invalid).toHaveBeenCalledWith(true, {
-      status: "pending",
-      step: pending.step,
-      error: expect.any(String),
-    });
-    expect(JSON.stringify(invalid.mock.calls)).not.toContain("secret-invalid");
-    expect(registerSecretValueForRedaction).toHaveBeenCalledWith("secret-invalid");
-    expect(exchange).not.toHaveBeenCalled();
-    expect(
-      await rpc("users.authConnect.answer", {
+      });
+      const flow = await startFlow();
+      const pending = await status(flow);
+      const invalid = await rpc("users.authConnect.answer", {
         profileId: "profile-1",
         connectId: flow.connectId,
-        stepId: "stale",
-        value: "synthetic-code",
-      }),
-    ).toHaveBeenCalledWith(true, {
-      status: "pending",
-      step: pending.step,
-      error: expect.any(String),
-    });
-    await complete(flow);
-    const result = await terminal(flow, "connected");
-    expect(result).toEqual({
-      status: "connected",
-      authProfileId: "personal:profile-1:account-1",
-      links: [{ provider: "openai", authProfileId: "personal:profile-1:account-1", updatedAt: 1 }],
-    });
-    expect(await complete(flow)).toHaveBeenCalledWith(true, result);
-    expect(writes).toEqual([credential]);
-    expect(exchange).toHaveBeenCalledOnce();
-    expect(registerSecretValueForRedaction).toHaveBeenCalledWith("synthetic-code");
-    expect(broadcast).toHaveBeenCalledExactlyOnceWith(
-      "chat.metadata.changed",
-      {},
-      { dropIfSlow: true },
-    );
-  });
+        stepId: pending.step.id,
+        value: "secret-invalid",
+      });
+      expect(invalid).toHaveBeenCalledWith(true, {
+        status: "pending",
+        step: pending.step,
+        error: expect.any(String),
+      });
+      expect(JSON.stringify(invalid.mock.calls)).not.toContain("secret-invalid");
+      expect(registerSecretValueForRedaction).toHaveBeenCalledWith("secret-invalid");
+      expect(exchange).not.toHaveBeenCalled();
+      expect(
+        await rpc("users.authConnect.answer", {
+          profileId: "profile-1",
+          connectId: flow.connectId,
+          stepId: "stale",
+          value: "synthetic-code",
+        }),
+      ).toHaveBeenCalledWith(true, {
+        status: "pending",
+        step: pending.step,
+        error: expect.any(String),
+      });
+      await complete(flow);
+      const result = await terminal(flow, "connected");
+      expect(result).toEqual({
+        status: "connected",
+        authProfileId: "personal:profile-1:account-1",
+        links: [
+          { provider: "openai", authProfileId: "personal:profile-1:account-1", updatedAt: 1 },
+        ],
+      });
+      expect(await complete(flow)).toHaveBeenCalledWith(true, result);
+      expect(writes).toEqual([credential]);
+      expect(exchange).toHaveBeenCalledOnce();
+      expect(registerSecretValueForRedaction).toHaveBeenCalledWith("synthetic-code");
+      expect(broadcast).toHaveBeenCalledExactlyOnceWith(
+        "chat.metadata.changed",
+        {},
+        { dropIfSlow: true },
+      );
+    },
+  );
 
   it("keeps server credentials and model defaults outside personal provider execution", async () => {
     config = {
@@ -768,16 +980,30 @@ describe("users model-account connection lifecycle", () => {
     expect(runAuth).not.toHaveBeenCalled();
   });
 
-  it("validates params before consulting identity, state, or provider code", async () => {
-    expect(
-      await rpc("users.authConnect.start", {
-        profileId: "profile-1",
-        provider: "openai",
-        method: "oauth",
-        unexpected: true,
-      }),
-    ).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ code: "INVALID_REQUEST" }));
-    expect(getUserProfileListItem).not.toHaveBeenCalled();
-    expect(resolvePersonalAccountAuthMethod).not.toHaveBeenCalled();
-  });
+  it.each([
+    ["users.authConnect.start", { provider: "openai", method: "oauth" }],
+    ["users.listAuthLinks", {}],
+    ["users.linkAuthProfile", { authProfileId: "openai:shared" }],
+    ["users.unlinkAuthProfile", { provider: "openai" }],
+  ] as const)(
+    "validates %s before consulting identity, state, or provider code",
+    async (method, params) => {
+      expect(
+        await rpc(method, {
+          ...params,
+          profileId: "profile-1",
+          unexpected: true,
+        }),
+      ).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: "INVALID_REQUEST" }),
+      );
+      expect(getUserProfileListItem).not.toHaveBeenCalled();
+      expect(resolvePersonalAccountAuthMethod).not.toHaveBeenCalled();
+      expect(listUserProfileAuthLinks).not.toHaveBeenCalled();
+      expect(setUserProfileAuthLink).not.toHaveBeenCalled();
+      expect(clearUserProfileAuthLink).not.toHaveBeenCalled();
+    },
+  );
 });

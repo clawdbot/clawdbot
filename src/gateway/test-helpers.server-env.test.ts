@@ -14,7 +14,9 @@ import {
 } from "./test-helpers.e2e.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
+  connectWebchatClient,
   installGatewayTestHooks,
+  rpcReq,
   waitForSystemEvent,
   withGatewayServer,
   writeSessionStore,
@@ -126,6 +128,30 @@ describe("Gateway test environment lifecycle", () => {
       }
     },
   );
+
+  it("keeps the fixture roster visible to real runtime readers while an RPC is pending", async () => {
+    const actual = await vi.importActual<typeof import("../config/io.js")>("../config/io.js");
+    await withGatewayServer(async ({ port }) => {
+      const ws = await connectWebchatClient({ port, scopes: ["operator.admin"] });
+      try {
+        for (const agentId of ["first", "second"]) {
+          const workspace = path.join(process.env.OPENCLAW_STATE_DIR!, agentId);
+          testState.agentsConfig = { ownership: "explicit", entries: { [agentId]: { workspace } } };
+          const request = rpcReq(ws, "health");
+          try {
+            // A retained real-IO reader can run before the request is dispatched.
+            // It must see this case's roster, not pin the suite's on-disk default.
+            expect(actual.getRuntimeConfig().agents?.entries).toEqual({ [agentId]: { workspace } });
+            expect((await request).ok).toBe(true);
+          } finally {
+            await request;
+          }
+        }
+      } finally {
+        ws.close();
+      }
+    });
+  });
 
   it.each(["session store", "config mock"])(
     "keeps config readable while the %s fixture publishes an update",

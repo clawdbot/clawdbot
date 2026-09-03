@@ -5,7 +5,7 @@ import { clearNodeSqliteKyselyCacheForDatabase } from "../../src/infra/kysely-sy
 /**
  * Count SQLite query executions per caller-defined bucket. Prepared-statement
  * caching (src/infra/kysely-sync.ts) reuses statements across calls, so
- * counting `prepare` invocations undercounts; this wraps `iterate` on matching
+ * counting `prepare` invocations undercounts; this wraps `iterate` and `run` on matching
  * statements and clears the statement cache at attach so statements cached
  * before the spy cannot bypass it.
  */
@@ -21,6 +21,13 @@ export function trackSqliteStatementExecutions<Key extends string>(
     const statement = originalPrepare(sqlText);
     const key = classify(sqlText);
     if (key !== null) {
+      // Preserve both positional and named-binding overloads at the native call boundary.
+      statement.run = new Proxy(statement.run.bind(statement), {
+        apply(run, receiver, args) {
+          counts[key] += 1;
+          return Reflect.apply(run, receiver, args);
+        },
+      });
       const originalIterate = statement.iterate.bind(statement) as (
         ...args: unknown[]
       ) => ReturnType<StatementSync["iterate"]>;

@@ -62,15 +62,15 @@ export function registerSlackHomeEvents(params: {
         if (!payload.channel) {
           return;
         }
-        const promptsSet = await ctx.setSlackSuggestedPrompts({
+        const outcome = await ctx.setSlackSuggestedPrompts({
           channelId: payload.channel,
           title: "Try asking",
           prompts: DEFAULT_SLACK_SUGGESTED_PROMPTS,
         });
-        // Both experiences can subscribe to App Home events. Assistant View
-        // requires thread_ts here, so only Slack accepting this threadless
-        // call proves Agent View and makes the durable mode write safe.
-        if (promptsSet) {
+        // Slack gates threadless calls before work: non-Agent apps get not_agent_app/missing_scope.
+        // Thus internal_error also proves Agent View; transport failures stay inconclusive
+        // so a network blip cannot durably mark a plain bot as Agent View.
+        if (outcome === "accepted" || outcome === "internal_error") {
           await ctx.recordSlackAgentView();
         }
         return;

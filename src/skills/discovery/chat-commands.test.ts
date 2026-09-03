@@ -8,7 +8,9 @@ let listSkillCommandsForAgents: typeof import("./chat-commands.js").listSkillCom
 let listSkillCommandsForWorkspace: typeof import("./chat-commands.js").listSkillCommandsForWorkspace;
 let expandExplicitSkillReferences: typeof import("./chat-commands.js").expandExplicitSkillReferences;
 let resolveSkillCommandInvocation: typeof import("./chat-commands.js").resolveSkillCommandInvocation;
-let lastPluginMetadataSnapshot: unknown;
+let lastCommandBuildOptions:
+  | { pluginMetadataSnapshot?: unknown; librarySelections?: unknown }
+  | undefined;
 
 function resolveSkillReferenceInvocations(
   params: Parameters<typeof expandExplicitSkillReferences>[0],
@@ -97,6 +99,7 @@ function buildWorkspaceSkillCommandSpecs(
     skillFilter?: string[];
     agentId?: string;
     pluginMetadataSnapshot?: unknown;
+    librarySelections?: unknown;
     config?: {
       agents?: {
         defaults?: { skills?: string[] };
@@ -105,7 +108,7 @@ function buildWorkspaceSkillCommandSpecs(
     };
   },
 ) {
-  lastPluginMetadataSnapshot = opts?.pluginMetadataSnapshot;
+  lastCommandBuildOptions = opts;
   const used = new Set<string>();
   for (const reserved of opts?.reservedNames ?? []) {
     used.add(reserved.toLowerCase());
@@ -179,7 +182,7 @@ afterAll(() => {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  lastPluginMetadataSnapshot = undefined;
+  lastCommandBuildOptions = undefined;
   resolveNodeExecEligibilityMock.mockReturnValue({ canExec: false });
 });
 
@@ -661,6 +664,22 @@ describe("listSkillCommandsForWorkspace", () => {
       pluginMetadataSnapshot,
     });
 
-    expect(lastPluginMetadataSnapshot).toBe(pluginMetadataSnapshot);
+    expect(lastCommandBuildOptions?.pluginMetadataSnapshot).toBe(pluginMetadataSnapshot);
+  });
+
+  it("delegates pinned library loading to the command entry provider", async () => {
+    const baseDir = tempDirs.make("openclaw-skills-workspace-library-");
+    const workspaceDir = await createWorkspace(baseDir, "main");
+    const librarySelections = [
+      { skillId: "library-guide", revision: "revision", name: "guide", ownerProfileId: "profile" },
+    ];
+
+    listSkillCommandsForWorkspace({
+      workspaceDir,
+      cfg: {},
+      sessionEntry: { skillLibrarySelections: librarySelections },
+    });
+
+    expect(lastCommandBuildOptions?.librarySelections).toBe(librarySelections);
   });
 });

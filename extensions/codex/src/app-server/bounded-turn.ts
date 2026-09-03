@@ -83,6 +83,7 @@ type CodexBoundedTurnResult = {
   text: string;
   items: CodexThreadItem[];
   model: string;
+  nativeSelection: { model: string; modelProvider?: string | null };
   usage?: ReturnType<typeof normalizeCodexResponseTokenUsage>;
 };
 
@@ -315,14 +316,14 @@ async function runBoundedCodexAppServerTurnInWorkspace(
     );
     try {
       const turn = assertCodexTurnStartResponse(
-        // Inherit the empty thread environment; a cwd override recreates native tools.
+        // Inherit the admitted model and empty environment; another model/cwd
+        // override would replace the native selection or recreate native tools.
         await client.request<unknown>(
           "turn/start",
           {
             threadId: thread.thread.id,
             input: params.input,
             approvalPolicy: "on-request",
-            model: modelSelection.runtimeModelId,
             effort: "low",
           } satisfies CodexTurnStartParams,
           requestOptions,
@@ -337,7 +338,11 @@ async function runBoundedCodexAppServerTurnInWorkspace(
         timeoutError,
       });
       params.assertCurrent?.();
-      return { ...result, model: modelSelection.catalogId };
+      return {
+        ...result,
+        model: modelSelection.catalogId,
+        nativeSelection: { model: thread.model, modelProvider: thread.modelProvider },
+      };
     } finally {
       await interruptPromise;
       requestCleanup();
@@ -594,7 +599,7 @@ function createCodexBoundedTurnCollector(
     async collect(
       startedTurn: CodexTurn,
       options: { signal: AbortSignal; timeoutError: CodexBoundedTurnTimeoutError },
-    ): Promise<Omit<CodexBoundedTurnResult, "model">> {
+    ): Promise<Omit<CodexBoundedTurnResult, "model" | "nativeSelection">> {
       turnId = startedTurn.id;
       if (isTerminalTurnStatus(startedTurn.status)) {
         completedTurn = startedTurn;

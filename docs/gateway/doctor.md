@@ -367,6 +367,12 @@ That stages grounded durable candidates into the short-term dreaming store while
     - If two or more `channels.<channel>.accounts` entries are configured without `channels.<channel>.defaultAccount` or `accounts.default`, doctor warns that fallback routing can pick an unexpected account.
     - If `channels.<channel>.defaultAccount` is set to an unknown account ID, doctor warns and lists configured account IDs.
 
+    In multi-agent configs, `doctor --fix` adds a missing account-scoped routing
+    binding when all matchable narrower bindings for that channel/account explicitly
+    name one configured agent. Existing routes remain unchanged. Accounts with no
+    owner evidence or conflicting owners need an explicit binding; Doctor does
+    not infer their owner from roster order or another channel/account.
+
   </Accordion>
   <Accordion title="2b. OpenCode provider overrides">
     If you have added `models.providers.opencode`, `opencode-zen`, or `opencode-go` manually while the matching official external plugin is installed and enabled, it overrides that plugin-provided catalog. That can force models onto the wrong API or zero out costs. Doctor warns so you can remove the override and restore per-model API routing + costs. Without the matching plugin, the entry remains a valid standalone custom provider.
@@ -546,6 +552,13 @@ That stages grounded durable candidates into the short-term dreaming store while
   </Accordion>
   <Accordion title="9. Security warnings">
     Doctor emits a Security note only when it finds a warning, such as a provider open to DMs without an allowlist or a dangerously configured policy. Use `openclaw security audit` for the full security inventory.
+
+    Missing multi-agent DM routing ownership is reported as a finding. It does
+    not stop the remaining channel security checks or pending state migrations.
+    Configure the reported account binding before expecting that route to work.
+    Telegram account discovery preserves the legacy default-agent account choice
+    during upgrade previews without requiring an ambient agent.
+
   </Accordion>
   <Accordion title="10. systemd linger (Linux)">
     If running as a systemd user service, doctor ensures lingering is enabled so the gateway stays alive after logout.

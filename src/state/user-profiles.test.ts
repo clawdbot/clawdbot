@@ -727,27 +727,33 @@ describe("user profiles", () => {
     ]);
   });
 
-  it("adopts a Tailscale name only while the display-name slot is empty", () => {
-    const options = stateOptions();
-    const profile = ensureProfileForTailscaleIdentity(
-      { login: "ada@github", name: "Ada Provider" },
-      options,
-    );
+  it.each([null, "", " \t "])(
+    "adopts a Tailscale name only into an empty slot: %s",
+    (emptyName) => {
+      const options = stateOptions();
+      const profile = ensureProfileForTailscaleIdentity(
+        { login: "ada@github", name: "Ada Provider" },
+        options,
+      );
 
-    setDisplayName(profile.id, null, options);
-    const beforeAdoption = readUserProfileVersion();
-    expect(
-      ensureProfileForTailscaleIdentity({ login: "ada@github", name: "Ada Adopted" }, options),
-    ).toMatchObject({ displayName: "Ada Adopted" });
-    expect(readUserProfileVersion()).toBe(beforeAdoption + 1);
+      setDisplayName(profile.id, emptyName, options);
+      const beforeAdoption = readUserProfileVersion();
+      expect(
+        ensureProfileForTailscaleIdentity({ login: "ada@github", name: "Ada Adopted" }, options),
+      ).toMatchObject({ displayName: "Ada Adopted" });
+      expect(readUserProfileVersion()).toBe(beforeAdoption + 1);
 
-    setDisplayName(profile.id, "User Chosen", options);
-    const beforeRefresh = readUserProfileVersion();
-    expect(
-      ensureProfileForTailscaleIdentity({ login: "ada@github", name: "Provider Changed" }, options),
-    ).toMatchObject({ displayName: "User Chosen" });
-    expect(readUserProfileVersion()).toBe(beforeRefresh);
-  });
+      setDisplayName(profile.id, "User Chosen", options);
+      const beforeRefresh = readUserProfileVersion();
+      expect(
+        ensureProfileForTailscaleIdentity(
+          { login: "ada@github", name: "Provider Changed" },
+          options,
+        ),
+      ).toMatchObject({ displayName: "User Chosen" });
+      expect(readUserProfileVersion()).toBe(beforeRefresh);
+    },
+  );
 
   it("moves aliases and leaves an aliasless source profile as a one-hop tombstone", () => {
     const options = stateOptions();

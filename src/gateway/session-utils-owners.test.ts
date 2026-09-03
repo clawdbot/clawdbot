@@ -32,7 +32,10 @@ const getUserProfileDisplay = vi.hoisted(() =>
   }),
 );
 
-vi.mock("../state/user-profiles.js", () => ({ getUserProfileDisplay }));
+vi.mock("../state/user-profiles.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/user-profiles.js")>()),
+  getUserProfileDisplay,
+}));
 
 import { listSessionsFromStoreAsync } from "./session-utils.js";
 
@@ -498,6 +501,13 @@ it("deduplicates participants in order, excludes the owner, and filters sessions
       { identity: { type: "profile", id: "profile-carol" }, label: "Bob" },
       { identity: { type: "profile", id: "profile-dana" }, label: "Bob" },
       { identity: { type: "profile", id: "profile-erin" }, label: "Bob" },
+    ],
+    expandedParticipants: [
+      { identity: { type: "agent", id: "research" }, label: "Research" },
+      { identity: { type: "profile", id: "profile-carol" }, label: "Bob" },
+      { identity: { type: "profile", id: "profile-dana" }, label: "Bob" },
+      { identity: { type: "profile", id: "profile-erin" }, label: "Bob" },
+      { identity: { type: "profile", id: "profile-ada" }, label: "Ada" },
     ],
     participantCount: 5,
   });

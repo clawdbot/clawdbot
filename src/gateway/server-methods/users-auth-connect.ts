@@ -6,6 +6,9 @@ import {
   validateUsersAuthConnectStartParams,
   validateUsersAuthConnectStatusParams,
   validateUsersAuthConnectCatalogParams,
+  validateUsersListAuthLinksParams,
+  validateUsersLinkAuthProfileParams,
+  validateUsersUnlinkAuthProfileParams,
   validateUsersListModelAccountsParams,
   validateUsersSelectModelAccountParams,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -35,7 +38,7 @@ function runConnectRequest(
     service: NonNullable<GatewayRequestContext["modelAccountConnectService"]>,
     action: ModelAccountConnectAction,
   ) => unknown,
-  requiredScope: "operator.read" | "operator.write" = "operator.write",
+  requiredScope: "operator.read" | "operator.write" | "operator.admin" = "operator.write",
 ): void | Promise<void> {
   const fail = (error: unknown) => {
     const responseError =
@@ -67,6 +70,37 @@ function runConnectRequest(
 }
 
 export const usersAuthConnectHandlers: GatewayRequestHandlers = {
+  "users.listAuthLinks": defineValidatedGatewayMethod(
+    "users.listAuthLinks",
+    validateUsersListAuthLinksParams,
+    (options) =>
+      runConnectRequest(
+        options,
+        options.params.profileId,
+        (service, action) => service.listLinks(action),
+        "operator.read",
+      ),
+  ),
+  "users.linkAuthProfile": defineValidatedGatewayMethod(
+    "users.linkAuthProfile",
+    validateUsersLinkAuthProfileParams,
+    (options) =>
+      runConnectRequest(
+        options,
+        options.params.profileId,
+        (service, action) => service.link(action, options.params.authProfileId),
+        // Choosing an existing shared credential remains an explicit admin decision.
+        "operator.admin",
+      ),
+  ),
+  "users.unlinkAuthProfile": defineValidatedGatewayMethod(
+    "users.unlinkAuthProfile",
+    validateUsersUnlinkAuthProfileParams,
+    (options) =>
+      runConnectRequest(options, options.params.profileId, (service, action) =>
+        service.unlink(action, options.params.provider),
+      ),
+  ),
   "users.listModelAccounts": defineValidatedGatewayMethod(
     "users.listModelAccounts",
     validateUsersListModelAccountsParams,

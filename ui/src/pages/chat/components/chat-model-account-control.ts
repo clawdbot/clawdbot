@@ -134,15 +134,17 @@ export function renderChatModelAccountControl(params: {
         : []),
       ...(params.onManage ? [{ value: "manage", label: t("chat.modelAccounts.manage") }] : []),
     ];
-  const selectAccount = (value: string) => {
+  const selectAccount = (event: CustomEvent<{ item: { value: string } }>) => {
     if (!ownsInventory() || params.disabled) {
       return;
     }
+    const value = event.detail.item.value;
     if (value === "manage") {
       params.onManage?.();
     } else if (value === "automatic") {
       params.onAutomatic?.();
     } else if (value === "more") {
+      event.preventDefault();
       void loadAccounts(currentInventory.nextCursor);
     } else {
       const account = currentInventory.accounts.find(
@@ -165,8 +167,7 @@ export function renderChatModelAccountControl(params: {
         placement="top-start"
         aria-label=${t("chat.modelAccounts.label")}
         @wa-show=${() => void loadAccounts()}
-        @wa-select=${(event: CustomEvent<{ item: { value: string } }>) =>
-          selectAccount(event.detail.item.value)}
+        @wa-select=${selectAccount}
       >
         <button
           slot="trigger"

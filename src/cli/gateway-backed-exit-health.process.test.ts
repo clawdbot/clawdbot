@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { getFreePort } from "../test-utils/ports.js";
 import {
+  prepareGatewayCliFixture,
   prepareUnreachableGatewayCliFixture,
   runIsolatedGatewayCli,
   snapshotSharedStateArtifacts,
@@ -120,19 +121,11 @@ describe("gateway-backed CLI process exit", () => {
 
   it("preserves pre-hello rate-limit details through the real health entry point", async () => {
     const root = tempDirs.make("openclaw-gateway-rate-limit-json-");
-    const stateDir = path.join(root, "state");
-    const configPath = path.join(stateDir, "openclaw.json");
     const gateway = await startRateLimitedGateway();
-    await fs.mkdir(stateDir, { recursive: true });
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({
-        gateway: {
-          mode: "remote",
-          remote: { url: gateway.url, token: "test-token" },
-        },
-      }),
-    );
+    const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
+      mode: "remote",
+      remote: { url: gateway.url, token: "test-token" },
+    });
 
     const result = await runIsolatedGatewayCli({
       args: ["health", "--json", "--timeout", "2000"],

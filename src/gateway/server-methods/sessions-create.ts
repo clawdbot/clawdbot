@@ -30,7 +30,10 @@ import {
   resolveExplicitSessionName,
 } from "../dashboard-session-title.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
-import type { UserModelAccountSelection } from "../model-account-authority.js";
+import type {
+  ModelAccountConnectAction,
+  UserModelAccountSelection,
+} from "../model-account-authority.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
 import { buildDashboardSessionKey, createGatewaySession } from "../session-create-service.js";
 import type { PreparedGatewaySessionLifecycle } from "../session-lifecycle-preparation.js";
@@ -43,6 +46,7 @@ import { prepareSessionWorktree } from "../session-worktree-preparation.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
 import { chatHandlers } from "./chat.js";
+import { isIneligiblePersonalGatewayCaller } from "./gateway-personal-caller.js";
 import { resolveRegisteredCatalogCreateTarget } from "./session-catalog.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { registerCreatedSessionCategory } from "./session-create-category.js";
@@ -59,7 +63,10 @@ import { prepareSessionCreateFilesystemRoot } from "./session-create-root.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import { sessionLog } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
-import { preparePersonalModelSelection } from "./users-model-account-access.js";
+import {
+  preparePersonalModelSelection,
+  prepareUserModelAccountAction,
+} from "./users-model-account-access.js";
 import { assertValidParams } from "./validation.js";
 import { resolveWorkspacePathContainment } from "./workspace-path-containment.js";
 
@@ -137,11 +144,20 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     }
     const requestedModel = normalizeOptionalString(p.model);
     let personalModelSelection: UserModelAccountSelection | undefined;
+    let personalAccountDefaults: ModelAccountConnectAction | undefined;
     try {
       personalModelSelection = preparePersonalModelSelection(
         { client, context, signal },
         requestedModel,
       );
+      if (
+        !personalModelSelection &&
+        client?.connId &&
+        client.authenticatedUserProfile &&
+        !isIneligiblePersonalGatewayCaller(client)
+      ) {
+        personalAccountDefaults = prepareUserModelAccountAction({ client, context, signal });
+      }
     } catch (error) {
       if (!(error instanceof ModelAccountConnectAuthorityError)) {
         throw error;
@@ -158,6 +174,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       sessionMutationAuthorization?.assertCurrent();
       assertPreparedSkillLibrarySelection(sessionCreation.skillLibrarySelections);
       personalModelSelection?.assertCurrent();
+      personalAccountDefaults?.assertCurrent();
     };
     const catalogId = normalizeOptionalString(p.catalogId);
     const catalogConflict = p.model ? "model" : p.key ? "key" : undefined;
@@ -520,6 +537,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       category: p.category,
       ...(catalogTarget ? { catalogTarget: catalogTarget.target } : { model: requestedModel }),
       personalModelSelection,
+      personalAccountDefaults,
       contextWindow: p.contextWindow,
       thinkingLevel: p.thinkingLevel,
       fastMode: p.fastMode,

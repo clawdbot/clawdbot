@@ -27,9 +27,9 @@ import {
 import { WITHOUT_OPENAI_ENV_AUTH } from "./models-list-result.openai-routes.test-support.js";
 
 describe("gateway chat metadata runtime", () => {
-  test.each(["requester", "session pin", "draft"] as const)(
-    "keeps personal %s availability isolated through unlink",
-    async (projection) => {
+  test.each(["metadata", "startup"] as const)(
+    "keeps persisted-session %s separate from personal defaults and draft previews",
+    async (surface) => {
       await withOpenClawTestState(
         { layout: "state-only", prefix: "personal-chat-metadata-", env: WITHOUT_OPENAI_ENV_AUTH },
         async () => {
@@ -43,24 +43,18 @@ describe("gateway chat metadata runtime", () => {
               expect.objectContaining({ id: "gpt-5.6-luna", available: true }),
             ]),
           };
-          if (projection === "requester") {
-            await expect(harness.runtime.read(aliceScope)).resolves.toMatchObject(available);
-          }
-          if (projection === "draft") {
-            clearUserProfileAuthLink({ profileId: alice.id, provider: "openai" });
-            const draftScope = {
-              ...aliceScope,
-              draftAccountSelection: {
-                owner: alice.id,
-                authProfileId: aliceAuthId,
-                assertCurrent() {},
-              },
-            };
-            await expect(harness.runtime.read(draftScope)).resolves.toMatchObject({
-              ...available,
-              accountSelection: { kind: "personal", authProfileId: aliceAuthId, source: "user" },
-            });
-            expect(listUserProfileAuthLinks(alice.id)).toEqual([]);
+          await expect(harness.runtime.read(aliceScope)).resolves.toMatchObject(available);
+          for (const selector of [
+            { sessionKey: "agent:main:existing", sessionEntry: { sessionId: randomUUID() } },
+            { sessionKey: "agent:main:missing" },
+            { sessionEntry: { sessionId: randomUUID() } },
+          ]) {
+            const request = { ...aliceScope, ...selector };
+            const metadata =
+              surface === "metadata"
+                ? await harness.runtime.read(request)
+                : (await harness.runtime.readStartup(request))?.metadata;
+            expect(metadata).toEqual(shared);
           }
           expect(await harness.runtime.read(bobScope)).toEqual(shared);
           expect(await harness.runtime.read({ agentId: "main" })).toEqual(shared);
@@ -90,11 +84,15 @@ describe("gateway chat metadata runtime", () => {
             authProfileId: aliceAuthId,
             source: "user-link",
           });
-          expect((await harness.runtime.read(pinned)).accountSelection).not.toHaveProperty(
-            "authProfileId",
-          );
           clearUserProfileAuthLink({ profileId: alice.id, provider: "openai" });
           expect(await harness.runtime.read(aliceScope)).toEqual(shared);
+          await expect(
+            harness.runtime.read(createDraftChatMetadataScope(alice.id, aliceAuthId).params),
+          ).resolves.toMatchObject({
+            ...available,
+            accountSelection: { kind: "personal", authProfileId: aliceAuthId, source: "user" },
+          });
+          expect(listUserProfileAuthLinks(alice.id)).toEqual([]);
           await expect(harness.runtime.readStartup(pinned)).resolves.toMatchObject({
             metadata: available,
           });

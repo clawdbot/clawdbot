@@ -15,7 +15,7 @@ import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { loadSqliteTrajectoryRuntimeEventRowsSync } from "../trajectory/runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "../trajectory/types.js";
-import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
+import { resolveCommandSessionStoreTargets } from "./session-store-targets.js";
 import { formatTextCell } from "./text-format.js";
 
 type SessionsTailOptions = {
@@ -258,7 +258,8 @@ async function followSelections(
 }
 
 function resolveTailTargetAgent(opts: SessionsTailOptions): string | undefined {
-  if (opts.agent?.trim() || opts.store?.trim() || opts.allAgents === true) {
+  // Keep explicit blanks for the selector to reject instead of inferring a different owner.
+  if (opts.agent !== undefined || opts.store !== undefined || opts.allAgents === true) {
     return opts.agent;
   }
   return opts.sessionKey?.trim() ? resolveAgentIdFromSessionKey(opts.sessionKey) : undefined;
@@ -277,18 +278,14 @@ export async function sessionsTailCommand(
   }
 
   const cfg = getRuntimeConfig();
-  const targets = resolveSessionStoreTargetsOrExit({
+  const targets = resolveCommandSessionStoreTargets({
     cfg,
     opts: {
       store: opts.store,
       agent: resolveTailTargetAgent(opts),
       allAgents: opts.allAgents,
     },
-    runtime,
   });
-  if (!targets) {
-    return;
-  }
 
   const selections: TailSelection[] = [];
   for (const target of targets) {

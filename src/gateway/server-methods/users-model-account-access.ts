@@ -1,5 +1,4 @@
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
-import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { isUserModelAuthProfileOwner } from "../../state/user-model-accounts.js";
@@ -11,6 +10,7 @@ import type {
 import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
 import { resolveOperatorRolePolicyForProfile } from "../operator-role-policy.js";
 import { isGatewayClientProfilePending } from "./gateway-client-identity.js";
+import { isIneligiblePersonalGatewayCaller } from "./gateway-personal-caller.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 import { resolveAuthenticatedProfileId } from "./users-profile-access.js";
 
@@ -18,26 +18,21 @@ import { resolveAuthenticatedProfileId } from "./users-profile-access.js";
 export function prepareUserModelAccountAction(
   options: Pick<GatewayRequestHandlerOptions, "client" | "context" | "signal">,
   profileId?: string,
-  requiredScope: "operator.read" | "operator.write" = "operator.write",
+  requiredScope: "operator.read" | "operator.write" | "operator.admin" = "operator.write",
 ): ModelAccountConnectAction {
   const { client, context } = options;
   const actor = resolveAuthenticatedProfileId(client);
-  const target = profileId ?? actor;
-  if (!target) {
+  if (!actor) {
     throw new ModelAccountConnectAuthorityError();
   }
-  const owner = getUserProfileListItem(target).id;
+  const owner = getUserProfileListItem(profileId ?? actor).id;
   const assertCurrent = () => {
     // A copied identity, retained scopes, or a replacement socket cannot keep
     // the original action alive after disconnect or role invalidation.
     if (
       !client?.connId ||
       client.connect.role !== "operator" ||
-      client.internal?.syntheticClient ||
-      client.internal?.agentToolCaller ||
-      client.internal?.agentRuntimeIdentity ||
-      client.internal?.operatorRoleActor ||
-      getGatewayToolCallerIdentity() ||
+      isIneligiblePersonalGatewayCaller(client) ||
       options.signal?.aborted ||
       isGatewayClientProfilePending(client) ||
       !context.getClientConnIds?.((current) => current === client).has(client.connId) ||

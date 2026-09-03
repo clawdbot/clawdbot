@@ -281,9 +281,11 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     }
 
     private func registerBackgroundWakeRefreshTask() {
+        // The launch handler inherits this delegate's main-actor isolation, so it must run on
+        // the main queue; a nil queue would invoke it on the scheduler's background queue.
         BGTaskScheduler.shared.register(
             forTaskWithIdentifier: Self.wakeRefreshTaskIdentifier,
-            using: nil)
+            using: .main)
         { [weak self] task in
             guard let refreshTask = task as? BGAppRefreshTask else {
                 task.setTaskCompleted(success: false)

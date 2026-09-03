@@ -310,14 +310,16 @@ suite.define(() => {
     await captureUiProof(suite, currentPage, "00-people-controls-from-session-owners.png");
     await expectBrowser(ownerMenu.locator('[value="grouping:person"]')).toBeVisible();
     await expectBrowser(ownerMenu.locator('[value="sort:people"]')).toBeVisible();
-    const ownerRows = ownerMenu.locator('wa-dropdown-item[value^="owner:"]:not([value="owner:"])');
+    const ownerSubmenu = ownerMenu.getByRole("menuitem", { name: /Specific owner/ });
+    await ownerSubmenu.hover();
+    const ownerRows = ownerSubmenu.locator('[slot="submenu"][value^="owner:"]');
     await expectBrowser(ownerRows).toHaveCount(3);
+    await expectBrowser(ownerRows.first()).toBeVisible();
     await expectBrowser(ownerRows.first()).toHaveAttribute("value", "owner:profile-patrick");
     await expectBrowser(ownerRows.first()).toContainText("Patrick (You)");
     await expectBrowser(ownerRows.locator("openclaw-session-owner-chip img")).toHaveCount(3);
-    const firstOwnerCenterDelta = await avatarLabelCenterDelta(ownerRows.first());
     await captureUiProof(suite, currentPage, "00-people-sort-available.png");
-    expect(firstOwnerCenterDelta).toBeLessThanOrEqual(0.5);
+    expect(await avatarLabelCenterDelta(ownerRows.first())).toBeLessThanOrEqual(0.5);
     await selectMenuValue(ownerMenu, "grouping:person");
     await expectBrowser(
       currentPage.locator('[data-session-section="person:profile:profile-ada"]'),
@@ -365,8 +367,8 @@ suite.define(() => {
         );
     };
     const beforeSelection = (await gateway.getRequests("sessions.list")).length;
-    await peopleMenu.locator('[value="owner:profile-ada"]').waitFor();
-    await selectMenuValue(peopleMenu, "owner:profile-ada");
+    await peopleMenu.getByRole("menuitem", { name: /Specific owner/ }).hover();
+    await peopleMenu.locator('[slot="submenu"][value="owner:profile-ada"]').click();
     await expectOwnerFilter(beforeSelection);
     await captureSessionOwnerProof(suite, currentPage, "04-owner-filter-selected.png");
 

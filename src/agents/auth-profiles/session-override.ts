@@ -202,6 +202,32 @@ function uniqueProviders(provider: string, acceptedProviderIds?: readonly string
   return [...providers];
 }
 
+/** Resolve a person's new-session default through the canonical credential store. */
+export function resolveUserLinkedAuthProfile(params: {
+  cfg: OpenClawConfig;
+  agentDir: string;
+  provider: string;
+  requesterProfileId: string;
+  acceptedProviderIds?: readonly string[];
+  store?: ReturnType<typeof ensureAuthProfileStore>;
+}): { profileId: string; store: ReturnType<typeof ensureAuthProfileStore> } | undefined {
+  const providers = uniqueProviders(params.provider, params.acceptedProviderIds);
+  const profileId = resolveUserProfileAuthLink({
+    profileId: params.requesterProfileId,
+    providers,
+  });
+  if (!profileId) {
+    return undefined;
+  }
+  const store =
+    !params.store || isUserModelAuthProfileId(profileId)
+      ? ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false, profileId })
+      : params.store;
+  return isProfileForProvider({ cfg: params.cfg, providers, profileId, store })
+    ? { profileId, store }
+    : undefined;
+}
+
 function isProfileGloballyInCooldown(
   store: ReturnType<typeof ensureAuthProfileStore>,
   profileId: string,
@@ -331,30 +357,30 @@ async function resolveSessionAuthProfileOverride(params: {
     return { profileId: current, store };
   }
 
-  // A person-linked account is sticky across participants and unlinking.
-  // Existing ordered shared-provider fallback still owns failure recovery.
-  if (params.requesterProfileId && (isNewSession || !current)) {
-    const linked = resolveUserProfileAuthLink({
-      profileId: params.requesterProfileId,
-      providers,
+  // New-session defaults must not repin an existing unpinned/shared session.
+  // Person-linked pins stay sticky across participants and unlinking.
+  if (params.requesterProfileId && isNewSession) {
+    const linked = resolveUserLinkedAuthProfile({
+      cfg,
+      agentDir,
+      provider,
+      requesterProfileId: params.requesterProfileId,
+      acceptedProviderIds: providers,
+      store,
     });
-    const linkedStore =
-      linked && isUserModelAuthProfileId(linked)
-        ? ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false, profileId: linked })
-        : store;
-    if (linked && isProfileForProvider({ cfg, providers, profileId: linked, store: linkedStore })) {
+    if (linked) {
       await persistSessionAuthProfileOverrideState({
         sessionEntry,
         sessionStore,
         sessionKey,
         state: {
-          authProfileOverride: linked,
+          authProfileOverride: linked.profileId,
           authProfileOverrideSource: "user-link",
           authProfileOverrideCompactionCount: undefined,
         },
         storePath,
       });
-      return { profileId: linked, store: linkedStore };
+      return linked;
     }
   }
 

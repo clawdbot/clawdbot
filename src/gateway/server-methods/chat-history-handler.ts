@@ -148,6 +148,7 @@ async function handleChatMetadataRequest({
           config: session.cfg,
           agentId: requested.agentId,
         }),
+        sessionKey: session.canonicalKey,
         sessionEntry: session.entry,
         requesterProfileId: resolveAuthenticatedProfileId(client),
       }),
@@ -324,6 +325,7 @@ async function handleChatHistoryRequest({
         try {
           return await context.readChatStartupProjection?.({
             agentId: sessionAgentId,
+            sessionKey: canonicalKey,
             sessionEntry: entry,
             requesterProfileId: resolveAuthenticatedProfileId(client),
             readPolicy: method === "chat.history" ? "ready" : "current",
@@ -422,13 +424,13 @@ async function handleChatHistoryRequest({
     maxSingleMessageBytes: perMessageHardCap,
   });
   const capped = messageId
-    ? (capChatHistoryAroundMessage({
+    ? capChatHistoryAroundMessage({
         messages: replaced.messages,
         messageId,
         // A nonempty JSON array costs one framing byte plus each message and its separator.
         maxCost: maxHistoryBytes - 1,
         messageCost: (message) => byteCounter.messageBytes(message) + 1,
-      }) ?? capArrayByJsonBytes(replaced.messages, maxHistoryBytes, byteCounter.messageBytes).items)
+      })
     : capArrayByJsonBytes(replaced.messages, maxHistoryBytes, byteCounter.messageBytes).items;
   const historyBudgetPreserved =
     replaced.replacedCount === 0 &&

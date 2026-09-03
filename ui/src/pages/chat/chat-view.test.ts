@@ -6901,6 +6901,31 @@ describe("chat model controls", () => {
     expect(effort?.hasAttribute("inert")).toBe(true);
   });
 
+  it.each([
+    { name: "session selection", overrides: {}, expected: "openai/gpt-5.6-sol" },
+    {
+      name: "pending local selection",
+      overrides: { main: "openai/gpt-5.6-luna" },
+      expected: "openai/gpt-5.6-luna",
+    },
+    { name: "explicit default reset", overrides: { main: null }, expected: "gpt-5 · openai" },
+  ])("keeps the $name visible while its catalog loads", ({ overrides, expected }) => {
+    const { state } = createChatHeaderState({ model: "gpt-5.6-sol", models: [] });
+    const container = renderModelControls(state, {
+      modelCatalogState: { hasSnapshot: false, status: "loading" },
+      modelOverrides: overrides,
+      modelsLoading: true,
+    });
+    const trigger = getChatModelSelect(container);
+
+    expect(trigger.textContent).toContain(expected);
+    expect(trigger.getAttribute("aria-label")).toBe(`Chat model: ${expected}`);
+    expect(trigger.getAttribute("aria-busy")).toBe("false");
+    expect(trigger.querySelector(".chat-controls__model-trigger-skeleton")).toBeNull();
+    expect(container.querySelector('[data-chat-model-catalog-state="loading"]')).not.toBeNull();
+    expect(container.querySelector("[data-chat-model-option]")).toBeNull();
+  });
+
   it("shows disabled configured models and model setup when no model has authentication", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.6-sol",

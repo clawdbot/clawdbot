@@ -68,7 +68,11 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { connectUserModelAccount } from "../state/user-model-accounts.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import {
+  ensureGatewayOwnerProfile,
+  ensureProfileForEmail,
+  setUserProfileRole,
+} from "../state/user-profiles.js";
 import {
   createOpenClawTestState,
   withOpenClawTestState,
@@ -261,9 +265,9 @@ function describeSessionStoreForensics(storePath: string): string {
 async function createPersonalAccountSessionFixture() {
   const { storePath } = await createSessionStoreDir();
   const owner = ensureProfileForEmail("session-account-owner@example.test");
-  const connectAccount = (email: string) =>
+  const connectAccount = (email: string, profileId = owner.id) =>
     connectUserModelAccount({
-      ownerProfileId: owner.id,
+      ownerProfileId: profileId,
       credential: {
         type: "oauth",
         provider: "openai",
@@ -369,44 +373,131 @@ test("session creation provenance cannot authorize a fresh personal account", as
   });
 });
 
-test("sessions.create commits a human-owned personal account and preserves it in a collaborator fork", async () => {
+test.each([
+  { selection: "explicit", source: "user" },
+  { selection: "default", source: "user-link" },
+] as const)(
+  "sessions.create preserves a personal $selection across adoption and a collaborator fork",
+  async ({ selection, source }) => {
+    await withOpenClawTestState({ layout: "state-only" }, async () => {
+      const { storePath, authProfileId, connectAccount, client, context } =
+        await createPersonalAccountSessionFixture();
+      const key = "agent:main:dashboard:personal-owner";
+
+      const created = await directSessionReq(
+        "sessions.create",
+        {
+          key,
+          model: `openai/gpt-5.6-sol${selection === "explicit" ? `@${authProfileId}` : ""}`,
+        },
+        { client, context },
+      );
+
+      expect(created.ok, JSON.stringify(created.error)).toBe(true);
+      expect(loadSessionEntry({ sessionKey: key, storePath })).toMatchObject({
+        authProfileOverride: authProfileId,
+        authProfileOverrideSource: source,
+      });
+
+      expect(connectAccount("next-account@example.test")).not.toBe(authProfileId);
+      const adopted = await directSessionReq("sessions.create", { key }, { client, context });
+      expect(adopted.ok, JSON.stringify(adopted.error)).toBe(true);
+      expect(loadSessionEntry({ sessionKey: key, storePath })).toMatchObject({
+        authProfileOverride: authProfileId,
+        authProfileOverrideSource: source,
+      });
+
+      const collaborator = ensureProfileForEmail("session-collaborator@example.test");
+      connectAccount("collaborator-account@example.test", collaborator.id);
+      client.authenticatedUserProfile = {
+        profileId: collaborator.id,
+        displayName: collaborator.displayName,
+        hasAvatar: false,
+        updatedAt: collaborator.updatedAt,
+      };
+      const forkKey = "agent:main:dashboard:personal-collaborator-fork";
+      const forked = await directSessionReq(
+        "sessions.create",
+        { key: forkKey, parentSessionKey: key, fork: true },
+        { client, context },
+      );
+
+      expect(forked.ok, JSON.stringify(forked.error)).toBe(true);
+      expect(loadSessionEntry({ sessionKey: forkKey, storePath })).toMatchObject({
+        authProfileOverride: authProfileId,
+        authProfileOverrideSource: source,
+        parentSessionKey: key,
+      });
+    });
+  },
+);
+
+test("sessions.create commits the personal default before dispatching its initial turn", async () => {
   await withOpenClawTestState({ layout: "state-only" }, async () => {
     const { storePath, authProfileId, client, context } =
       await createPersonalAccountSessionFixture();
-    const key = "agent:main:dashboard:personal-owner";
-
-    const created = await directSessionReq(
-      "sessions.create",
-      { key, model: `openai/gpt-5.6-sol@${authProfileId}` },
-      { client, context },
-    );
-
-    expect(created.ok, JSON.stringify(created.error)).toBe(true);
-    expect(loadSessionEntry({ sessionKey: key, storePath })).toMatchObject({
-      authProfileOverride: authProfileId,
-      authProfileOverrideSource: "user",
+    const key = "agent:main:dashboard:personal-default-initial-turn";
+    const observedProfiles: Array<string | undefined> = [];
+    const { chatHandlers } = await import("./server-methods/chat.js");
+    const chatSend = vi.spyOn(chatHandlers, "chat.send").mockImplementation(({ respond }) => {
+      observedProfiles.push(loadSessionEntry({ sessionKey: key, storePath })?.authProfileOverride);
+      respond(true, { runId: "personal-default-first-turn", status: "started" });
     });
+    try {
+      const created = await directSessionReq<{ runStarted: boolean }>(
+        "sessions.create",
+        { key, model: "openai/gpt-5.6-sol", message: "Start the first turn" },
+        { client, context },
+      );
 
-    const collaborator = ensureProfileForEmail("session-collaborator@example.test");
-    client.authenticatedUserProfile = {
-      profileId: collaborator.id,
-      displayName: collaborator.displayName,
-      hasAvatar: false,
-      updatedAt: collaborator.updatedAt,
-    };
-    const forkKey = "agent:main:dashboard:personal-collaborator-fork";
-    const forked = await directSessionReq(
-      "sessions.create",
-      { key: forkKey, parentSessionKey: key, fork: true },
-      { client, context },
-    );
+      expect(created.ok, JSON.stringify(created.error)).toBe(true);
+      expect(created.payload?.runStarted).toBe(true);
+      expect(observedProfiles).toEqual([authProfileId]);
+      expect(loadSessionEntry({ sessionKey: key, storePath })).toMatchObject({
+        authProfileOverride: authProfileId,
+        authProfileOverrideSource: "user-link",
+      });
+    } finally {
+      chatSend.mockRestore();
+    }
+  });
+});
 
-    expect(forked.ok, JSON.stringify(forked.error)).toBe(true);
-    expect(loadSessionEntry({ sessionKey: forkKey, storePath })).toMatchObject({
-      authProfileOverride: authProfileId,
-      authProfileOverrideSource: "user",
-      parentSessionKey: key,
+test("sessions.create does not donate a personal default to an unpinned adoption or fork", async () => {
+  await withOpenClawTestState({ layout: "state-only" }, async () => {
+    const { storePath, client, context } = await createPersonalAccountSessionFixture();
+    const key = "agent:main:dashboard:unpinned-existing";
+    const sessionId = "unpinned-existing-session";
+    await writeSessionStore({
+      entries: {
+        [key]: sessionStoreEntry(sessionId, {
+          providerOverride: "openai",
+          modelOverride: "gpt-5.6-sol",
+        }),
+      },
     });
+    await seedSessionTranscript({
+      sessionId,
+      sessionKey: key,
+      storePath,
+      messages: [{ role: "user", content: "An existing shared-auth conversation" }],
+    });
+    for (const fork of [false, true]) {
+      const target = fork ? `${key}-fork` : key;
+      const result = await directSessionReq(
+        "sessions.create",
+        { key: target, ...(fork ? { parentSessionKey: key, fork: true } : {}) },
+        { client, context },
+      );
+      expect(result.ok, JSON.stringify(result.error)).toBe(true);
+      expect(loadSessionEntry({ sessionKey: target, storePath })).toMatchObject({
+        providerOverride: "openai",
+        modelOverride: "gpt-5.6-sol",
+      });
+      expect(
+        loadSessionEntry({ sessionKey: target, storePath })?.authProfileOverride,
+      ).toBeUndefined();
+    }
   });
 });
 
@@ -473,9 +564,14 @@ test.each(["foreign admin", "unidentified admin", "synthetic owner"] as const)(
   },
 );
 
-test.each(["disconnected", "role revoked"] as const)(
-  "sessions.create rejects a personal account %s while the model catalog is loading",
-  async (loss) => {
+test.each([
+  { loss: "disconnected", selection: "explicit" },
+  { loss: "role revoked", selection: "explicit" },
+  { loss: "disconnected", selection: "default" },
+  { loss: "role revoked", selection: "default" },
+] as const)(
+  "sessions.create rejects a personal $selection when $loss while the model catalog is loading",
+  async ({ loss, selection }) => {
     await withOpenClawTestState({ layout: "state-only" }, async () => {
       const { storePath, authProfileId, client, clients, catalog, context } =
         await createPersonalAccountSessionFixture();
@@ -496,7 +592,10 @@ test.each(["disconnected", "role revoked"] as const)(
       const key = "agent:main:dashboard:personal-revoked";
       const creating = directSessionReq(
         "sessions.create",
-        { key, model: `openai/gpt-5.6-sol@${authProfileId}` },
+        {
+          key,
+          model: `openai/gpt-5.6-sol${selection === "explicit" ? `@${authProfileId}` : ""}`,
+        },
         { client, context: { ...context, getRuntimeConfig: () => cfg } },
       );
       try {
@@ -518,15 +617,22 @@ test.each(["disconnected", "role revoked"] as const)(
 );
 
 test.each([
-  ["sessions.create", "create"],
-  ["sessions.patch", "patch"],
-  ["sessions.patchMany", "patch-many"],
+  ["sessions.create", "create", false],
+  ["sessions.patch", "patch", false],
+  ["sessions.patchMany", "patch-many", false],
+  ["sessions.create", "owner-create", true],
+  ["sessions.patch", "owner-patch", true],
+  ["sessions.patchMany", "owner-patch-many", true],
 ] as const)(
-  "required operator sandbox follows new %s session ownership",
-  async (method, suffix) => {
+  "required operator sandbox follows new %s session ownership (%s)",
+  async (method, suffix, systemActor) => {
     const { storePath } = await createSessionStoreDir();
-    const profile = ensureProfileForEmail(`sandboxed-session-${suffix}@example.com`);
-    setUserProfileRole(profile.id, "guest");
+    const profile = systemActor
+      ? ensureGatewayOwnerProfile("Gateway Owner")
+      : ensureProfileForEmail(`sandboxed-session-${suffix}@example.com`);
+    if (!systemActor) {
+      setUserProfileRole(profile.id, "guest");
+    }
     const cfg = {
       ...getRuntimeConfig(),
       session: { ...getRuntimeConfig().session, store: storePath },
@@ -546,6 +652,7 @@ test.each([
       },
     };
     const client = {
+      ...(systemActor ? { internal: { operatorRoleActor: { kind: "system" } } } : {}),
       connect: { role: "operator", scopes: ["operator.read", "operator.write"] },
       authenticatedUserProfile: {
         profileId: profile.id,
@@ -571,10 +678,11 @@ test.each([
     if (method === "sessions.patchMany") {
       expect(created.payload?.outcomes).toEqual([{ ok: true, key }]);
     }
-    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
+    const createdEntry = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
+    expect(createdEntry).toMatchObject({
       createdActor: { type: "human", source: "profile", id: profile.id },
-      sandbox: "required",
     });
+    expect(createdEntry?.sandbox).toBe(systemActor ? undefined : "required");
 
     for (const forgedSandbox of [null, "inherit"] as const) {
       const forged = await directSessionReq(
@@ -585,9 +693,9 @@ test.each([
 
       expect(forged).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
     }
-    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
-      sandbox: "required",
-    });
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.sandbox).toBe(
+      systemActor ? undefined : "required",
+    );
   },
 );
 
@@ -3935,6 +4043,7 @@ test.each([false, true])(
           connect: { scopes: ["operator.write"] },
           internal: {
             syntheticClient: true,
+            operatorRoleActor: { kind: "system" },
             sessionCreation: {
               via: "spawn",
               actor: { type: "agent", id: "main" },

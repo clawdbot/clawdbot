@@ -196,9 +196,10 @@ async function resolveBackupPlanFromPaths(params: {
   const configInsideState = params.configInsideState ?? false;
   const oauthInsideState = params.oauthInsideState ?? false;
   const canonicalStateDir = await canonicalizePathForContainment(stateDir);
+  const configSourcePath = await canonicalizePathForContainment(configPath);
   const inventory = await createBackupResourceInventory({
     stateDir: canonicalStateDir,
-    configPath: await canonicalizePathForContainment(configPath),
+    configPath: configSourcePath,
     oauthDir: await canonicalizePathForContainment(oauthDir),
     workspaceDirs: await Promise.all(
       workspaceDirs.map((workspaceDir) => canonicalizePathForContainment(workspaceDir)),
@@ -263,9 +264,22 @@ async function resolveBackupPlanFromPaths(params: {
     };
   }
 
+  const isConfigCoveredBy = (sourceRoot: string): boolean => {
+    let ancestor = configSourcePath;
+    while (isPathWithin(ancestor, sourceRoot)) {
+      if (inventory.isVolatile(ancestor)) {
+        return false;
+      }
+      if (ancestor === sourceRoot) {
+        return true;
+      }
+      ancestor = path.dirname(ancestor);
+    }
+    return false;
+  };
   const rawCandidates: Array<Pick<BackupAssetCandidate, "kind" | "sourcePath">> = [
     { kind: "state", sourcePath: path.resolve(stateDir) },
-    ...(configInsideState
+    ...(configInsideState && isConfigCoveredBy(canonicalStateDir)
       ? []
       : [{ kind: "config" as const, sourcePath: path.resolve(configPath) }]),
     ...(oauthInsideState
@@ -336,7 +350,9 @@ async function resolveBackupPlanFromPaths(params: {
     }
 
     const coveredBy = included.find((asset) =>
-      isPathWithin(candidate.canonicalPath, asset.sourcePath),
+      candidate.kind === "config"
+        ? isConfigCoveredBy(asset.sourcePath)
+        : isPathWithin(candidate.canonicalPath, asset.sourcePath),
     );
     if (coveredBy) {
       skipped.push({

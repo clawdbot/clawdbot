@@ -155,6 +155,14 @@ Light and REM phase hits recorded in SQLite-backed plugin state add a small rece
 
 When enabled, `memory-core` auto-manages one cron job for a full dreaming sweep, deduped across the primary runtime workspace and any configured agent workspaces so subagent workspace fan-out does not exclude the main agent's `DREAMS.md` and memory state.
 
+An explicit multi-agent fleet needs an [ambient system owner](/gateway/config-agents#agentsdefaultssystemagent) for this job. If logs report `Agent-less cron job has no resolvable owner`, choose an existing agent to own the sweep. For example, if that agent is `ops`:
+
+```bash
+openclaw config set agents.defaults.systemAgent.agentId ops
+```
+
+This selects the execution owner; it does not change any agent's workspace or limit the sweep to that agent's memory. A sole-agent installation resolves its owner automatically.
+
 | Setting              | Default       |
 | -------------------- | ------------- |
 | `dreaming.frequency` | `0 3 * * *`   |

@@ -15,6 +15,7 @@ import ai.openclaw.app.GatewayCronJobSummary
 import ai.openclaw.app.GatewayCronRunHistoryState
 import ai.openclaw.app.GatewayExecApprovalNotice
 import ai.openclaw.app.GatewayExecApprovalSummary
+import ai.openclaw.app.GatewaySummaryState
 import ai.openclaw.app.GatewayTalkSetupReadiness
 import ai.openclaw.app.GatewayTalkSetupState
 import ai.openclaw.app.GatewayUsageProviderSummary
@@ -35,6 +36,7 @@ import ai.openclaw.app.gatewayExecApprovalTextForDisplay
 import ai.openclaw.app.gatewayTalkSetupDescription
 import ai.openclaw.app.gatewayTalkSetupStatusText
 import ai.openclaw.app.hasPhotoReadPermission
+import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.i18n.resolveNativeTextResource
@@ -246,13 +248,9 @@ private fun UsageSettingsScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
 ) {
-  val usageSummary by viewModel.usageSummary.collectAsState()
-  val usageRefreshing by viewModel.usageRefreshing.collectAsState()
-  val usageErrorText by viewModel.usageErrorText.collectAsState()
+  val usageState by viewModel.usageState.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
-  val providerCount = usageSummary.providers.size
-  val issueCount = usageSummary.providers.count { it.error != null }
-  val usageConverging = usageRefreshVisible(usageRefreshing, usageSummary.refreshing)
+  val usageConverging = usageRefreshVisible(usageState.refreshing, usageState.summary?.refreshing == true)
 
   LaunchedEffect(isConnected) {
     if (isConnected) {
@@ -261,38 +259,19 @@ private fun UsageSettingsScreen(
   }
 
   SettingsDetailFrame(title = nativeString("Usage"), subtitle = nativeString("Provider limits and quota health."), icon = Icons.Default.Storage, onBack = onBack) {
-    SettingsMetricPanel(
-      rows =
-        listOf(
-          SettingsMetric(nativeString("Providers"), providerCount.toString()),
-          SettingsMetric(nativeString("Issues"), issueCount.toString()),
-          SettingsMetric(nativeString("Updated"), formatUsageUpdated(usageSummary.updatedAtMs)),
-        ),
-    )
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-      ClawSecondaryButton(text = if (usageConverging) nativeString("Refreshing") else nativeString("Refresh"), onClick = viewModel::refreshUsage, enabled = isConnected && !usageConverging, modifier = Modifier.weight(1f))
-    }
-    usageErrorText?.let { errorText ->
-      ClawPanel {
-        Text(text = errorText, style = ClawTheme.type.body, color = ClawTheme.colors.warning)
-      }
-    }
-    when {
-      !isConnected -> {
-        ClawPanel {
-          Text(text = nativeString("Connect the gateway to load usage."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-        }
-      }
-
-      usageSummary.providers.isNotEmpty() -> {
+    SettingsRefreshControls(isConnected, usageConverging, usageState.errorText, viewModel::refreshUsage)
+    SettingsSummaryContent(usageState, isConnected, nativeString("Connect the gateway to load usage.")) { usageSummary ->
+      SettingsMetricPanel(
+        rows =
+          listOf(
+            SettingsMetric(nativeString("Providers"), usageSummary.providers.size.toString()),
+            SettingsMetric(nativeString("Issues"), usageSummary.providers.count { it.error != null }.toString()),
+            SettingsMetric(nativeString("Updated"), formatUsageUpdated(usageSummary.updatedAtMs)),
+          ),
+      )
+      if (usageSummary.providers.isNotEmpty()) {
         UsageProvidersPanel(providers = usageSummary.providers)
-      }
-
-      // The warning panel above already reports a failed load; adding
-      // "No usage data yet." beside it claims the operator has no providers.
-      usageErrorText != null -> {}
-
-      else -> {
+      } else if (usageState.errorText == null) {
         ClawPanel {
           Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(text = if (usageConverging) nativeString("Refreshing") else nativeString("No usage data yet."), style = ClawTheme.type.section, color = ClawTheme.colors.text)
@@ -2529,9 +2508,54 @@ private fun aboutUpdateText(latestVersion: String?): String =
     nativeString("A Gateway update is available. Run the update from the Web UI or CLI when you are ready.")
   }
 
-/**
- * Shared settings detail shell with back navigation, title, subtitle, and section content.
- */
+@Composable
+internal fun SettingsRefreshControls(
+  connected: Boolean,
+  refreshing: Boolean,
+  errorText: NativeText?,
+  onRefresh: () -> Unit,
+  label: String = nativeString("Refresh"),
+) {
+  ClawSecondaryButton(
+    text = if (refreshing) nativeString("Refreshing") else label,
+    onClick = onRefresh,
+    enabled = connected && !refreshing,
+    modifier = Modifier.fillMaxWidth(),
+  )
+  errorText?.let { error ->
+    ClawPanel {
+      Text(text = error.resolveNativeTextResource(), style = ClawTheme.type.body, color = ClawTheme.colors.warning)
+    }
+  }
+}
+
+@Composable
+internal fun <T> SettingsSummaryContent(
+  state: GatewaySummaryState<T>,
+  connected: Boolean,
+  disconnectedText: String,
+  content: @Composable (T) -> Unit,
+) {
+  val summary = state.summary
+  when {
+    !connected -> {
+      ClawPanel {
+        Text(text = disconnectedText, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+      }
+    }
+
+    summary != null -> {
+      content(summary)
+    }
+
+    !state.refreshing && state.errorText == null -> {
+      ClawPanel {
+        Text(text = nativeString("Load from gateway"), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+      }
+    }
+  }
+}
+
 @Composable
 internal fun SettingsDetailFrame(
   title: String,

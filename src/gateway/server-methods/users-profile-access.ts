@@ -39,26 +39,6 @@ function canMutateProfile(
   );
 }
 
-// Attaching existing credentials is admin-only: profile ownership is not credential ownership.
-// Personal reconnects prove account control without replacing shared credentials.
-export function requireAdminProfileAccess(
-  client: GatewayRequestHandlerOptions["client"],
-  respond: GatewayRequestHandlerOptions["respond"],
-): boolean {
-  if (client?.connect.scopes?.includes(ADMIN_SCOPE)) {
-    return true;
-  }
-  respond(
-    false,
-    undefined,
-    errorShape(
-      ErrorCodes.FORBIDDEN,
-      "linking an existing auth profile requires operator.admin; connect your own account from the profile page instead",
-    ),
-  );
-  return false;
-}
-
 export function requireProfileMutationAccess(
   client: GatewayRequestHandlerOptions["client"],
   profileId: string,

@@ -472,6 +472,9 @@ export function createSlackProgressRuntime(runtimeParams: {
         logVerbose(`slack-stream: failed to rotate native progress stream (${error})`);
       }
     }
+    if (session?.stoppedBySlack) {
+      delivery.acknowledgeStoppedStreamedDeliveries(session);
+    }
     delivery.streamSession = null;
     delivery.nativeProgressStreamStartPromise = null;
     delivery.nativeProgressStreamThreadTs = undefined;
