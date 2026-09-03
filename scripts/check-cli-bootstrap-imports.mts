@@ -38,6 +38,7 @@ const STATIC_IMPORT_RE =
 type CliBootstrapCheckParams = {
   rootDir?: string;
   entrypoints?: string[];
+  workerDeployEntrypoints?: readonly string[];
   distDir?: string;
   gatewayRunChunkMaxBytes?: number;
   fs?: typeof fs;
@@ -354,8 +355,8 @@ export function collectGatewayRunChunkBudgetErrors(params: CliBootstrapCheckPara
 export function collectWorkerDeployArtifactErrors(params: CliBootstrapCheckParams = {}) {
   const rootDir = params.rootDir ?? process.cwd();
   const fsImpl = params.fs ?? fs;
-  const entrypoints = WORKER_DEPLOY_ENTRYPOINTS.map((entrypoint) =>
-    path.resolve(rootDir, entrypoint),
+  const entrypoints = (params.workerDeployEntrypoints ?? WORKER_DEPLOY_ENTRYPOINTS).map(
+    (entrypoint) => path.resolve(rootDir, entrypoint),
   );
   const artifactDir = path.dirname(entrypoints[0]!);
   const artifactNames = new Set(
