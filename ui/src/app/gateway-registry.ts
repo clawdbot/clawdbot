@@ -24,6 +24,13 @@ type PersistedGatewayRegistry = {
 const MAX_GATEWAY_NAME_LENGTH = 80;
 export const GATEWAY_REGISTRY_MAX_PROFILES = 20;
 
+export class GatewayRegistryPersistenceError extends Error {
+  constructor() {
+    super("Gateway registry could not be persisted");
+    this.name = "GatewayRegistryPersistenceError";
+  }
+}
+
 function defaultGatewayName(url: string): string {
   try {
     return new URL(url).hostname || "Gateway";
@@ -167,10 +174,18 @@ export function loadGatewayRegistryForGateway(url: string): GatewayRegistry {
 
 export function saveGatewayRegistry(registry: GatewayRegistry): GatewayRegistry {
   const normalized = normalizedRegistry(registry);
+  const serialized = JSON.stringify(normalized);
   try {
-    getSafeLocalStorage()?.setItem(GATEWAY_REGISTRY_STORAGE_KEY, JSON.stringify(normalized));
+    const storage = getSafeLocalStorage();
+    if (!storage) {
+      throw new GatewayRegistryPersistenceError();
+    }
+    storage.setItem(GATEWAY_REGISTRY_STORAGE_KEY, serialized);
+    if (storage.getItem(GATEWAY_REGISTRY_STORAGE_KEY) !== serialized) {
+      throw new GatewayRegistryPersistenceError();
+    }
   } catch {
-    // best-effort; the in-memory return value still lets the current view proceed.
+    throw new GatewayRegistryPersistenceError();
   }
   return normalized;
 }

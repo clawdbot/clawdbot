@@ -140,6 +140,30 @@ describe("connection view rendering", () => {
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("registry is full");
   });
 
+  it("gives saved gateway actions distinct accessible names", async () => {
+    const container = document.createElement("div");
+    const personal = createGatewayProfile({ name: "Personal", url: "ws://personal.example" });
+    const team = createGatewayProfile({ name: "Team", url: "ws://team.example" });
+    if (!personal || !team) {
+      throw new Error("test fixtures must produce gateway profiles");
+    }
+    render(
+      renderConnection(
+        createConnectionProps({
+          gatewayRegistry: { gateways: [personal, team], activeGatewayId: personal.id },
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(
+      [...container.querySelectorAll<HTMLButtonElement>(".gateway-registry__actions button")].map(
+        (button) => button.getAttribute("aria-label"),
+      ),
+    ).toEqual(["Personal is active", "Remove Personal", "Switch to Team", "Remove Team"]);
+  });
+
   it.each(["token", "password"] as const)(
     "keeps the secret labeled when revealed in %s mode",
     (authMode) => {

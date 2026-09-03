@@ -36,7 +36,11 @@ import { canGoBackInNativeEmbed } from "./browser.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
 import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
-import { loadGatewayRegistryForGateway, selectGatewayProfile } from "./gateway-registry.ts";
+import {
+  GatewayRegistryPersistenceError,
+  loadGatewayRegistryForGateway,
+  selectGatewayProfile,
+} from "./gateway-registry.ts";
 import {
   DEBUG_OVERLAY_ELEMENT,
   isOptionalElementDefined,
@@ -288,9 +292,17 @@ export function renderApplicationShell(host: ShellViewHost) {
       onRetryConnect: () => context.gateway.connect(),
       onToggleSidebar: () => host.toggleNavigationSurface(),
       onSelectGateway: (id: string) => {
-        const registry = selectGatewayProfile(id, {
-          url: context.gateway.connection.gatewayUrl,
-        });
+        let registry;
+        try {
+          registry = selectGatewayProfile(id, {
+            url: context.gateway.connection.gatewayUrl,
+          });
+        } catch (error) {
+          if (error instanceof GatewayRegistryPersistenceError) {
+            return;
+          }
+          throw error;
+        }
         const profile = registry.gateways.find((gateway) => gateway.id === id);
         if (!profile || profile.url === context.gateway.connection.gatewayUrl) {
           return;

@@ -141,12 +141,18 @@ function renderGatewayRegistrySection(props: ConnectionProps) {
             </div>
             <div class="settings-row__control gateway-registry__actions">
               ${gateway.id === registry.activeGatewayId
-                ? html`<button class="btn btn--sm" type="button" disabled>
+                ? html`<button
+                    class="btn btn--sm"
+                    type="button"
+                    aria-label=${t("connection.registry.activeAria", { name: gateway.name })}
+                    disabled
+                  >
                     ${t("connection.registry.active")}
                   </button>`
                 : html`<button
                     class="btn btn--sm"
                     type="button"
+                    aria-label=${t("connection.registry.switchAria", { name: gateway.name })}
                     @click=${() => props.onSelectGateway?.(gateway.id)}
                   >
                     ${t("connection.registry.switch")}
@@ -154,6 +160,7 @@ function renderGatewayRegistrySection(props: ConnectionProps) {
               <button
                 class="btn btn--sm btn--ghost"
                 type="button"
+                aria-label=${t("connection.registry.removeAria", { name: gateway.name })}
                 ?disabled=${registry.gateways.length <= 1}
                 title=${registry.gateways.length <= 1
                   ? t("connection.registry.lastGateway")

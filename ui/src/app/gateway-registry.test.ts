@@ -1,10 +1,11 @@
 // @vitest-environment node
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { installSettingsStorageLifecycle, setTestLocation } from "../test-helpers/settings-node.ts";
 import {
   createGatewayProfile,
   GATEWAY_REGISTRY_MAX_PROFILES,
   GATEWAY_REGISTRY_STORAGE_KEY,
+  GatewayRegistryPersistenceError,
   gatewayProfileId,
   loadGatewayRegistry,
   loadGatewayRegistryForGateway,
@@ -123,6 +124,23 @@ describe("gateway registry", () => {
 
     expect(loadGatewayRegistryForGateway(team.url).activeGatewayId).toBe(team.id);
     expect(loadGatewayRegistry().activeGatewayId).toBe(personal.id);
+  });
+
+  it("surfaces registry persistence failures to callers", () => {
+    const profile = createGatewayProfile({ name: "Personal", url: "wss://personal.example/" });
+    expect(profile).not.toBeNull();
+    if (!profile) {
+      throw new Error("test fixture must produce a gateway profile");
+    }
+
+    const setItem = vi.spyOn(localStorage, "setItem").mockImplementation(() => {
+      throw new Error("quota exceeded");
+    });
+    try {
+      expect(() => upsertGatewayProfile(profile)).toThrow(GatewayRegistryPersistenceError);
+    } finally {
+      setItem.mockRestore();
+    }
   });
 
   it("migrates the legacy selected gateway into the registry on the next settings save", () => {
