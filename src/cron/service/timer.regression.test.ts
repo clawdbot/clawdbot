@@ -45,8 +45,9 @@ import { computeJobNextRunAtMs, recomputeNextRunsForMaintenance } from "./jobs-s
 import { stop } from "./ops-lifecycle.js";
 import { run as runManualCronJob } from "./ops-run.js";
 import { createCronServiceState as createBaseCronServiceState, type CronEvent } from "./state.js";
+import { executeJobCore } from "./timer-execution.js";
 import { applyJobResult, executeJobCoreWithTimeout, runMissedJobs } from "./timer.js";
-import { executeJobCore, onTimer } from "./timer.test-support.js";
+import { onTimer } from "./timer.test-support.js";
 
 const FAST_TIMEOUT_SECONDS = 1;
 const timerRegressionFixtures = setupCronRegressionFixtures({
