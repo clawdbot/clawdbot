@@ -36,9 +36,13 @@ case "$LIVE_OPENAI" in
     ;;
 esac
 export GATEWAY_AUTH_TOKEN_REF="upgrade-survivor-token"
-export OPENAI_API_KEY="sk-openclaw-upgrade-survivor"
-export DISCORD_BOT_TOKEN="upgrade-survivor-discord-token"
-export TELEGRAM_BOT_TOKEN="123456:upgrade-survivor-telegram-token"
+if [ "$SCENARIO" = "watchos-direct-node" ]; then
+  unset OPENAI_API_KEY DISCORD_BOT_TOKEN TELEGRAM_BOT_TOKEN
+else
+  export OPENAI_API_KEY="sk-openclaw-upgrade-survivor"
+  export DISCORD_BOT_TOKEN="upgrade-survivor-discord-token"
+  export TELEGRAM_BOT_TOKEN="123456:upgrade-survivor-telegram-token"
+fi
 if [ "$SCENARIO" = "feishu-channel" ]; then
   export FEISHU_APP_SECRET="upgrade-survivor-feishu-secret"
 fi

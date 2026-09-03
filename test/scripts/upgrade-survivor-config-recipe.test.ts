@@ -203,12 +203,7 @@ esac
     const steps = resolveUpgradeSurvivorConfigSteps("watchos-direct-node");
     const intents = steps.map((step) => step.intent);
 
-    expect(intents).toContain("gateway");
-    expect(intents).toContain("agents");
-    expect(intents).not.toContain("plugins");
-    expect(intents).not.toContain("discord-channel");
-    expect(intents).not.toContain("telegram-channel");
-    expect(intents).not.toContain("whatsapp-channel");
+    expect(intents).toEqual(["update", "gateway", "validate"]);
     expect(steps.at(-1)?.id).toBe("validate");
   });
 

@@ -249,12 +249,7 @@ const sharedRecipe: ConfigStep[] = [
   },
 ];
 
-const watchDirectNodeOmittedIntents = new Set([
-  "plugins",
-  "discord-channel",
-  "telegram-channel",
-  "whatsapp-channel",
-]);
+const watchDirectNodeSharedIntents = new Set(["gateway"]);
 
 export function resolveUpgradeSurvivorConfigSteps(
   scenario = "base",
@@ -269,8 +264,7 @@ export function resolveUpgradeSurvivorConfigSteps(
   const sharedSteps = sharedRecipe
     .slice(0, -1)
     .filter(
-      (step) =>
-        scenario !== "watchos-direct-node" || !watchDirectNodeOmittedIntents.has(step.intent),
+      (step) => scenario !== "watchos-direct-node" || watchDirectNodeSharedIntents.has(step.intent),
     )
     .map((step) => {
       if (scenario !== "recovery-cleanup" || step.id !== "agents") {

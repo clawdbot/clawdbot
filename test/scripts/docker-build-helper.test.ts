@@ -2790,6 +2790,17 @@ docker_e2e_docker_run_cmd run demo
         "fi",
       ].join("\n"),
     );
+    expect(publishedRunner).toContain(
+      [
+        'if [ "$SCENARIO" = "watchos-direct-node" ]; then',
+        "  unset OPENAI_API_KEY DISCORD_BOT_TOKEN TELEGRAM_BOT_TOKEN",
+        "else",
+        '  export OPENAI_API_KEY="sk-openclaw-upgrade-survivor"',
+        '  export DISCORD_BOT_TOKEN="upgrade-survivor-discord-token"',
+        '  export TELEGRAM_BOT_TOKEN="123456:upgrade-survivor-telegram-token"',
+        "fi",
+      ].join("\n"),
+    );
     expect(runner).toContain(
       [
         'if [ "$SCENARIO" = "configured-plugin-installs" ] || [ "$SCENARIO" = "sqlite-volume" ]; then',
