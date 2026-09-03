@@ -45,12 +45,16 @@ function attachStderrLogging(serverName: string, transport: OpenClawStdioClientT
   }
   const decoder = new StringDecoder("utf8");
   let pending = "";
-  let truncated = false;
+  let pendingDroppedBytes = 0;
   let progressTimer: ReturnType<typeof setTimeout> | undefined;
-  const emit = (text: string) => {
+  const emit = (text: string, droppedBytes: number) => {
     const tail = truncateUtf8Suffix(text, MAX_MCP_STDERR_LINE_BYTES);
-    const message = `${truncated || tail !== text ? "[stderr line truncated] " : ""}${tail}`.trim();
-    truncated = false;
+    const lineDroppedBytes = droppedBytes + Buffer.byteLength(text) - Buffer.byteLength(tail);
+    const note =
+      lineDroppedBytes > 0
+        ? `[${lineDroppedBytes} UTF-8 bytes of earlier stderr line discarded at the ${MAX_MCP_STDERR_LINE_BYTES}-byte cap] `
+        : "";
+    const message = `${note}${tail}`.trim();
     if (message) {
       logDebug(`bundle-mcp:${serverName}: ${message}`);
     }
@@ -58,18 +62,25 @@ function attachStderrLogging(serverName: string, transport: OpenClawStdioClientT
   const flushProgress = () => {
     progressTimer = undefined;
     const text = pending;
+    const droppedBytes = pendingDroppedBytes;
     pending = "";
-    emit(text);
+    pendingDroppedBytes = 0;
+    emit(text, droppedBytes);
   };
   const onData = (chunk: Buffer | string) => {
     const decoded = decoder.write(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
     const lines = (pending + decoded).split(/[\r\n]/);
     pending = lines.pop() ?? "";
-    for (const line of lines) {
-      emit(line);
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
+      if (line === undefined) {
+        continue;
+      }
+      emit(line, index === 0 ? pendingDroppedBytes : 0);
     }
+    pendingDroppedBytes = 0;
     const tail = truncateUtf8Suffix(pending, MAX_MCP_STDERR_LINE_BYTES);
-    truncated ||= tail !== pending;
+    pendingDroppedBytes += Buffer.byteLength(pending) - Buffer.byteLength(tail);
     pending = tail;
     // No-newline progress must stay visible even under continuous writes. Flush
     // complete characters within 250ms; only finalization ends the UTF-8 decoder.

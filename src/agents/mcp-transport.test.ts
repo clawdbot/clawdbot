@@ -1,7 +1,9 @@
 // Covers MCP HTTP transport redirects, SSRF guardrails, and auth/TLS handoff.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { logDebug } from "../logger.js";
 import { partitionMcpServersByConnectionScope } from "./mcp-connection-resolver.js";
 import type { McpOAuthIdentity } from "./mcp-oauth-identity.js";
+import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
 import { resolveMcpTransport } from "./mcp-transport.js";
 
 type StreamableTransportOptions = {
@@ -66,6 +68,44 @@ vi.mock("@modelcontextprotocol/sdk/client/sse.js", () => ({
     sseTransportConstructorMock(url, options);
   },
 }));
+
+vi.mock("../logger.js", () => ({
+  logDebug: vi.fn(),
+  logWarn: vi.fn(),
+}));
+
+vi.mock("./mcp-stdio-transport.js", () => {
+  function createMockStderr() {
+    const listeners: Record<string, Array<(data?: unknown) => void>> = {};
+    return {
+      on(event: string, handler: (data?: unknown) => void) {
+        (listeners[event] ??= []).push(handler);
+        return this;
+      },
+      off(event: string, handler: (data?: unknown) => void) {
+        const list = listeners[event];
+        if (list) {
+          const index = list.indexOf(handler);
+          if (index >= 0) {
+            list.splice(index, 1);
+          }
+        }
+        return this;
+      },
+      push(data: string) {
+        listeners.data?.forEach((handler) => handler(Buffer.from(data)));
+      },
+      end() {
+        listeners.end?.forEach((handler) => handler());
+      },
+    };
+  }
+  return {
+    OpenClawStdioClientTransport: vi.fn(function Mock(this: unknown, _options: { stderr: "pipe" }) {
+      return { stderr: createMockStderr() };
+    }),
+  };
+});
 
 function redirectResponse(location: string, status = 302): Response {
   return new Response(null, {
@@ -434,5 +474,46 @@ describe("resolveMcpTransport", () => {
     );
     expect(authKeys).toEqual(["authorization"]);
     expect(sentHeaders.authorization).toBe("Bearer operator");
+  });
+});
+
+describe("attachStderrLogging", () => {
+  function latestStdioStderr(): { push(data: string): void; end(): void } {
+    const result = vi.mocked(OpenClawStdioClientTransport).mock.results.at(-1);
+    if (!result || result.type === "throw") {
+      throw new Error("Expected stdio transport to be constructed");
+    }
+    return (result.value as { stderr: { push(data: string): void; end(): void } }).stderr;
+  }
+
+  beforeEach(() => {
+    vi.mocked(logDebug).mockClear();
+    vi.mocked(OpenClawStdioClientTransport).mockClear();
+  });
+
+  it("reports discarded bytes when a pending stderr line exceeds the 8 KiB cap", () => {
+    const result = resolveMcpTransport("probe", { command: "true" });
+    const stderr = latestStdioStderr();
+    const longLine = "x".repeat(9000);
+    const tail = "x".repeat(8192);
+    stderr.push(`${longLine}\n${longLine}`);
+    result?.detachStderr?.();
+
+    const discardMessage = `bundle-mcp:probe: [808 UTF-8 bytes of earlier stderr line discarded at the 8192-byte cap] ${tail}`;
+    expect(logDebug).toHaveBeenCalledTimes(2);
+    expect(logDebug).toHaveBeenNthCalledWith(1, discardMessage);
+    expect(logDebug).toHaveBeenNthCalledWith(2, discardMessage);
+  });
+
+  it("does not add a discard note when stderr lines fit within the cap", () => {
+    const result = resolveMcpTransport("probe", { command: "true" });
+    expect(result).not.toBeNull();
+    expect(result?.detachStderr).toBeTypeOf("function");
+    const stderr = latestStdioStderr();
+    stderr.push("hello\nworld");
+    result?.detachStderr?.();
+
+    expect(logDebug).toHaveBeenCalledWith("bundle-mcp:probe: hello");
+    expect(logDebug).toHaveBeenLastCalledWith("bundle-mcp:probe: world");
   });
 });
