@@ -508,6 +508,14 @@ describe("update generation ledger hook", () => {
       { ...nextIntent, previousPackageVersion: "9.9.9" },
       {
         ...nextIntent,
+        serviceBefore: { ...nextIntent.serviceBefore, running: false },
+      },
+      {
+        ...nextIntent,
+        serviceBefore: { ...nextIntent.serviceBefore, enabled: false },
+      },
+      {
+        ...nextIntent,
         previousSelection: null,
         previousPackageVersion: null,
         stableBindingAlreadyVerified: false,

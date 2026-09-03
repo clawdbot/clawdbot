@@ -79,14 +79,12 @@ function selection(character: string): UpdateGenerationSelection {
   };
 }
 
-function manifest(character: string): UpdateGenerationManifest {
-  return {
-    algorithm: "sha256",
-    digest: character.repeat(64),
-    entryCount: 2,
-    totalBytes: 100,
-  };
-}
+const manifest = (character: string): UpdateGenerationManifest => ({
+  algorithm: "sha256",
+  digest: character.repeat(64),
+  entryCount: 2,
+  totalBytes: 100,
+});
 
 function append(
   record: UpdateGenerationTransactionRecord | null,
@@ -497,6 +495,7 @@ describe("update generation recovery transition matrix", () => {
         selector: previous,
         generations: [previous, candidate],
         bindingConverged: true,
+        serviceState: { running: true },
       }),
       action: "record-rolled-back",
       nextReceipt: rolledBack,

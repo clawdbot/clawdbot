@@ -177,10 +177,14 @@ export async function persistUpdateGenerationReceipt(params: {
       throw new Error("A new generation transaction must continue its broker revision chain");
     }
     const terminal = terminalGenerationBeforeRollover(priorRecord);
+    const terminalServiceState = priorProjection.terminalServiceState;
     if (
       !receipt.stableBindingAlreadyVerified ||
       !isDeepStrictEqual(receipt.previousSelection, terminal.selection) ||
-      receipt.previousPackageVersion !== terminal.packageVersion
+      receipt.previousPackageVersion !== terminal.packageVersion ||
+      !terminalServiceState ||
+      receipt.serviceBefore.running !== terminalServiceState.running ||
+      receipt.serviceBefore.enabled !== terminalServiceState.enabled
     ) {
       throw new Error("A new generation transaction must continue the terminal runtime");
     }

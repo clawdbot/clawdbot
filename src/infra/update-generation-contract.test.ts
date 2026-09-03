@@ -64,14 +64,12 @@ function receipt<Kind extends ReceiptKind>(
   } as ReceiptOf<Kind>;
 }
 
-function manifest(character: string): UpdateGenerationManifest {
-  return {
-    algorithm: "sha256",
-    digest: character.repeat(64),
-    entryCount: 2,
-    totalBytes: 100,
-  };
-}
+const manifest = (character: string): UpdateGenerationManifest => ({
+  algorithm: "sha256",
+  digest: character.repeat(64),
+  entryCount: 2,
+  totalBytes: 100,
+});
 
 function selection(character: string): UpdateGenerationSelection {
   return {
@@ -667,6 +665,7 @@ describe("durable update generation transaction contract", () => {
           { generationId: candidate.generationId, manifestSha256: candidate.manifestSha256 },
         ],
         bindingConverged: true,
+        serviceState: { running: true, enabled: true },
       }),
     ).toMatchObject({ action: "record-rolled-back" });
     expect(() =>

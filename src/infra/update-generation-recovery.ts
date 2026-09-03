@@ -1,3 +1,4 @@
+import { isProxy } from "node:util/types";
 import type {
   UpdateGenerationAuthenticatedBrokerReceiptOf,
   UpdateGenerationBrokerRequest,
@@ -35,6 +36,81 @@ export type UpdateGenerationRuntimeObservation = Pick<
   UpdateGenerationPhysicalState,
   "bindingConverged" | "serviceState"
 >;
+
+function decodeRuntimeDataObject(params: {
+  value: unknown;
+  label: string;
+  requiredKeys: readonly string[];
+  optionalKeys?: readonly string[];
+}): Readonly<Record<string, unknown>> {
+  const { value, label, requiredKeys, optionalKeys = [] } = params;
+  if (!value || typeof value !== "object" || Array.isArray(value) || isProxy(value)) {
+    throw new TypeError(`${label} must be an ordinary data object`);
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError(`${label} has an unsupported prototype`);
+  }
+  const allowedKeys = new Set([...requiredKeys, ...optionalKeys]);
+  const keys = Reflect.ownKeys(value);
+  if (
+    keys.some((key) => typeof key !== "string" || !allowedKeys.has(key)) ||
+    requiredKeys.some((key) => !Object.hasOwn(value, key))
+  ) {
+    throw new TypeError(`${label} must contain exactly its declared own keys`);
+  }
+  const decoded: Record<string, unknown> = {};
+  for (const key of keys) {
+    if (typeof key !== "string") {
+      throw new TypeError(`${label} contains an unsupported key`);
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor || !("value" in descriptor) || descriptor.value === undefined) {
+      throw new TypeError(`${label}.${key} must be a defined data property`);
+    }
+    decoded[key] = descriptor.value;
+  }
+  return Object.freeze(decoded);
+}
+
+function decodeRuntimeObservation(value: unknown): UpdateGenerationRuntimeObservation {
+  const runtime = decodeRuntimeDataObject({
+    value,
+    label: "Update generation runtime observation",
+    requiredKeys: ["bindingConverged"],
+    optionalKeys: ["serviceState"],
+  });
+  if (typeof runtime.bindingConverged !== "boolean") {
+    throw new TypeError("Update generation runtime observation binding must be boolean");
+  }
+  if (!Object.hasOwn(runtime, "serviceState") || runtime.serviceState === null) {
+    return Object.freeze({ bindingConverged: runtime.bindingConverged, serviceState: null });
+  }
+  const serviceState = decodeRuntimeDataObject({
+    value: runtime.serviceState,
+    label: "Update generation runtime service state",
+    requiredKeys: ["running"],
+    optionalKeys: ["enabled"],
+  });
+  const running = serviceState.running;
+  if (typeof running !== "boolean") {
+    throw new TypeError("Update generation runtime service state must contain booleans");
+  }
+  let decodedServiceState: { running: boolean; enabled?: boolean };
+  if (Object.hasOwn(serviceState, "enabled")) {
+    const enabled = serviceState.enabled;
+    if (typeof enabled !== "boolean") {
+      throw new TypeError("Update generation runtime service state must contain booleans");
+    }
+    decodedServiceState = Object.freeze({ running, enabled });
+  } else {
+    decodedServiceState = Object.freeze({ running });
+  }
+  return Object.freeze({
+    bindingConverged: runtime.bindingConverged,
+    serviceState: decodedServiceState,
+  });
+}
 
 type UpdateGenerationPendingBrokerRequest = Extract<
   UpdateGenerationBrokerRequest,
@@ -251,6 +327,17 @@ function terminalGenerationStateMatches(params: {
   );
 }
 
+function serviceStateMatchesIntent(
+  state: UpdateGenerationProjection,
+  physical: UpdateGenerationPhysicalState,
+): boolean {
+  return Boolean(
+    physical.serviceState &&
+    physical.serviceState.running === state.intent.serviceBefore.running &&
+    physical.serviceState.enabled === state.intent.serviceBefore.enabled,
+  );
+}
+
 export async function adjudicateUpdateGenerationTransaction(
   record: UpdateGenerationTransactionRecord,
   filesystem: UpdateGenerationConfinedFilesystem | null,
@@ -260,15 +347,7 @@ export async function adjudicateUpdateGenerationTransaction(
   if (!filesystem) {
     throw new Error("Generation state machine requires a confined filesystem provider");
   }
-  const runtimeObservation: UpdateGenerationRuntimeObservation = Object.freeze({
-    bindingConverged: runtime.bindingConverged,
-    serviceState: runtime.serviceState
-      ? Object.freeze({
-          running: runtime.serviceState.running,
-          enabled: runtime.serviceState.enabled,
-        })
-      : null,
-  });
+  const runtimeObservation = decodeRuntimeObservation(runtime);
   const [authenticatedRecord, authenticatedObservation] = await Promise.all([
     authenticateUpdateGenerationTransactionRecord(filesystem, record),
     filesystem.authenticate(observation),
@@ -359,6 +438,12 @@ export async function adjudicateUpdateGenerationTransaction(
           action: "stabilize-selector",
           selection: latest.to,
           reason: "rollback selector replacement is visible but not proven durable",
+        };
+      }
+      if (!serviceStateMatchesIntent(state, physical)) {
+        return {
+          action: "inconsistent",
+          reason: "rollback selector converged without the restored service state",
         };
       }
       return {
