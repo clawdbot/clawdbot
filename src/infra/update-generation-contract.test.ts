@@ -1022,14 +1022,14 @@ describe("durable update generation transaction contract", () => {
       throw new Error("expected unsafe intent receipt");
     }
     const previous = (unsafeIntent.previousSelection as Record<string, unknown>) ?? {};
-    previous.entrypointRelativePath = "../outside.mjs";
+    previous.entrypointRelativePath = "CoNiN$.js";
     expect(() => parseUpdateGenerationTransactionRecord(unsafeEntrypoint)).toThrow();
     expect(() =>
       append(null, {
         ...intent(selection("a"), true),
         previousSelection: {
           ...selection("a"),
-          entrypointRelativePath: "../outside.mjs",
+          entrypointRelativePath: "CoNiN$.js",
         },
       }),
     ).toThrow();

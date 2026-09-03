@@ -3,11 +3,13 @@ import type {
   UpdateGenerationBrokerReceipt,
   UpdateGenerationBrokerRequest,
 } from "./update-generation-confined-filesystem.js";
+import { isSafeUpdateGenerationEntrypointPath } from "./update-generation-entrypoint-path.js";
 
 type Literal = boolean | number | string;
 type DecodeShape =
   | { kind: "array"; element: DecodeShape }
   | { kind: "boolean" }
+  | { kind: "entrypoint-path" }
   | { kind: "literal"; value: Literal }
   | { kind: "nullable"; value: DecodeShape }
   | { kind: "number" }
@@ -16,6 +18,7 @@ type DecodeShape =
 
 export const UPDATE_GENERATION_BROKER_MAX_ARRAY_LENGTH = 10_000;
 const stringShape = { kind: "string" } as const;
+const entrypointPathShape = { kind: "entrypoint-path" } as const;
 const numberShape = { kind: "number" } as const;
 const booleanShape = { kind: "boolean" } as const;
 const literal = (value: Literal): DecodeShape => ({ kind: "literal", value });
@@ -30,7 +33,7 @@ const selectionFields = {
   formatVersion: literal(1),
   generationId: stringShape,
   manifestSha256: stringShape,
-  entrypointRelativePath: stringShape,
+  entrypointRelativePath: entrypointPathShape,
 } satisfies Record<string, DecodeShape>;
 const selectionShape = object(selectionFields);
 const descriptorShape = object({ ...selectionFields, packageVersion: stringShape });
@@ -275,6 +278,12 @@ function decodeValue(value: unknown, shape: DecodeShape, path: string): unknown 
   if (shape.kind === "literal") {
     if (value !== shape.value) {
       throw new TypeError(`${path} must be the literal ${JSON.stringify(shape.value)}`);
+    }
+    return value;
+  }
+  if (shape.kind === "entrypoint-path") {
+    if (typeof value !== "string" || !isSafeUpdateGenerationEntrypointPath(value)) {
+      throw new TypeError(`${path} must be a safe cross-platform entrypoint path`);
     }
     return value;
   }

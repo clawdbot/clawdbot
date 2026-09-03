@@ -156,6 +156,14 @@ const OPERATION_KINDS = new Set<UpdateGenerationBrokerOperationKind>([
   "observe-recovery",
 ]);
 
+function isCanonicalEd25519Signature(value: string): boolean {
+  if (!BASE64.test(value)) {
+    return false;
+  }
+  const decoded = Buffer.from(value, "base64");
+  return decoded.byteLength === 64 && decoded.toString("base64") === value;
+}
+
 function canonicalJson(value: unknown): string {
   if (value === null || typeof value === "boolean" || typeof value === "string") {
     return JSON.stringify(value);
@@ -448,8 +456,7 @@ function assertReceiptMatchesRequest(
     signature.algorithm !== "ed25519" ||
     !signature.keyId ||
     !SHA256.test(signature.signedPayloadSha256) ||
-    !BASE64.test(signature.valueBase64) ||
-    Buffer.from(signature.valueBase64, "base64").byteLength !== 64 ||
+    !isCanonicalEd25519Signature(signature.valueBase64) ||
     signature.signedPayloadSha256 !== digestDecodedReceiptPayload(receipt)
   ) {
     throw new Error("Broker receipt signature envelope is invalid");

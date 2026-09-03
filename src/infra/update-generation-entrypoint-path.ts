@@ -26,11 +26,10 @@ function isWindowsReservedDeviceName(value: string): boolean {
 
 /** Entry points must name the same ordinary file on POSIX and Windows. */
 export function isSafeUpdateGenerationEntrypointPath(value: string): boolean {
-  const normalized = value.replaceAll("\\", "/");
-  if (!normalized || normalized.startsWith("/") || /^[A-Za-z]:\//u.test(normalized)) {
+  if (!value || value.includes("\\") || value.startsWith("/") || /^[A-Za-z]:\//u.test(value)) {
     return false;
   }
-  return normalized.split("/").every((part) => {
+  return value.split("/").every((part) => {
     return (
       part !== "" &&
       part !== "." &&

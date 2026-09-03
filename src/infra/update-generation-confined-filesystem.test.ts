@@ -337,6 +337,21 @@ describe("confined update-generation filesystem contract", () => {
         request,
       }),
     ).rejects.toThrow("signature was not authenticated");
+
+    const noncanonicalSignature = signedMaterializationReceipt(request);
+    expect(noncanonicalSignature.signature.valueBase64.endsWith("Aw==")).toBe(true);
+    noncanonicalSignature.signature.valueBase64 = `${noncanonicalSignature.signature.valueBase64.slice(0, -3)}x==`;
+    expect(
+      Buffer.from(noncanonicalSignature.signature.valueBase64, "base64").equals(
+        Buffer.from(SIGNATURE, "base64"),
+      ),
+    ).toBe(true);
+    await expect(
+      performUpdateGenerationBrokerOperation({
+        filesystem: new FixtureConfinedFilesystem(noncanonicalSignature),
+        request,
+      }),
+    ).rejects.toThrow("signature envelope is invalid");
   });
 
   it("rejects malformed operation literals before invoking the broker", async () => {
@@ -390,6 +405,16 @@ describe("confined update-generation filesystem contract", () => {
       "dir/CONOUT$",
       "dir/CON .mjs",
       "dir/aux.mjs",
+      "CONIN$",
+      "conout$",
+      "CoNiN$.js",
+      "CONOUT$.txt",
+      "dir/CONIN$/index.js",
+      "dir\\conout$.mjs",
+      "NUL.mjs",
+      "COM1.txt",
+      "dir/LPT9/index.js",
+      "dir\\entry.mjs",
       "dir/entry.",
       "dir/entry ",
       "dir/entry*.mjs",
@@ -401,11 +426,24 @@ describe("confined update-generation filesystem contract", () => {
         signedMaterializationReceipt(materializationRequest()),
       );
       await expect(provider.perform(invalidEntrypoint)).rejects.toThrow(
-        "Invalid generation selection",
+        "safe cross-platform entrypoint path",
       );
       expect(provider.invokeCount).toBe(0);
     }
   });
+
+  it.each(["CLOCK$", "Clock$.js", "dir/CLOCK$/index.js", "normal$.js"])(
+    "accepts the ordinary dollar-sign broker entrypoint %s",
+    async (entrypointRelativePath) => {
+      const request = materializationRequest();
+      request.generation.entrypointRelativePath = entrypointRelativePath;
+      const receipt = signedMaterializationReceipt(request);
+      const provider = new FixtureConfinedFilesystem(receipt);
+
+      await expect(provider.perform(request)).resolves.toEqual(receipt);
+      expect(provider.invokeCount).toBe(1);
+    },
+  );
 
   it("rejects invalid mutating revisions even when re-signed", () => {
     for (const invalid of ["", "   ", 0, { revision: "revision-8" }]) {

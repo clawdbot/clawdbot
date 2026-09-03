@@ -144,6 +144,16 @@ describe("update generation durable admission", () => {
       "dir/CONOUT$",
       "dir/CON .mjs",
       "dir/aux.mjs",
+      "CONIN$",
+      "conout$",
+      "CoNiN$.js",
+      "CONOUT$.txt",
+      "dir/CONIN$/index.js",
+      "dir\\conout$.mjs",
+      "NUL.mjs",
+      "COM1.txt",
+      "dir/LPT9/index.js",
+      "dir\\entry.mjs",
       "dir/entry.",
       "dir/entry ",
       "dir/entry?.mjs",
@@ -168,6 +178,18 @@ describe("update generation durable admission", () => {
       await expect(ledger.read(NAMESPACE_KEY)).resolves.toEqual(snapshot);
     }
   });
+
+  it.each(["CLOCK$", "Clock$.js", "dir/CLOCK$/index.js", "normal$.js"])(
+    "accepts the ordinary dollar-sign durable entrypoint %s",
+    (entrypointRelativePath) => {
+      expect(() =>
+        parseUpdateGenerationTransactionReceipt({
+          ...candidateIntent(),
+          entrypointRelativePath,
+        }),
+      ).not.toThrow();
+    },
+  );
 
   it("rejects a candidate generation that aliases the retained generation", () => {
     const previous = selection("a");

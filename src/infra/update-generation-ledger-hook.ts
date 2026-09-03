@@ -71,6 +71,19 @@ export async function authenticateUpdateGenerationTransactionRecord(
   return authenticated;
 }
 
+async function authenticateLedgerSnapshot(
+  filesystem: UpdateGenerationConfinedFilesystem,
+  snapshot: UpdateGenerationTransactionSnapshot,
+): Promise<UpdateGenerationTransactionSnapshot> {
+  if (typeof snapshot.revision !== "string" || !snapshot.revision.trim()) {
+    throw new Error("Authoritative update ledger returned an invalid revision");
+  }
+  return Object.freeze({
+    revision: snapshot.revision,
+    record: await authenticateUpdateGenerationTransactionRecord(filesystem, snapshot.record),
+  });
+}
+
 function terminalGenerationBeforeRollover(record: UpdateGenerationTransactionRecord): {
   selection: UpdateGenerationSelection;
   packageVersion: string;
@@ -98,15 +111,8 @@ export async function persistUpdateGenerationReceipt(params: {
     throw new Error("Generation state machine requires a confined filesystem provider");
   }
   const receipt = parseUpdateGenerationTransactionReceipt(params.receipt);
-  const expectedLedgerRevision = params.snapshot?.revision ?? null;
   const snapshot = params.snapshot
-    ? Object.freeze({
-        revision: params.snapshot.revision,
-        record: await authenticateUpdateGenerationTransactionRecord(
-          params.filesystem,
-          params.snapshot.record,
-        ),
-      })
+    ? await authenticateLedgerSnapshot(params.filesystem, params.snapshot)
     : null;
   if (
     snapshot &&
@@ -130,22 +136,32 @@ export async function persistUpdateGenerationReceipt(params: {
     throw new Error("Update generation receipt replay is missing from the authoritative ledger");
   }
   if (authoritative) {
-    if (!authoritative.revision.trim()) {
-      throw new Error("Update generation receipt replay is missing from the authoritative ledger");
-    }
-    const authoritativeRecord = await authenticateUpdateGenerationTransactionRecord(
+    const authenticatedAuthoritative = await authenticateLedgerSnapshot(
       params.filesystem,
-      authoritative.record,
+      authoritative,
     );
-    const authoritativeReceipt = authoritativeRecord.receipts.find(
+    const authoritativeReceipt = authenticatedAuthoritative.record.receipts.find(
       (persisted) => persisted.receiptId === receipt.receiptId,
     );
     if (!authoritativeReceipt || !isDeepStrictEqual(authoritativeReceipt, receipt)) {
       throw new Error("Authoritative update ledger replayed different receipt content");
     }
-    return Object.freeze({ revision: authoritative.revision, record: authoritativeRecord });
+    return authenticatedAuthoritative;
   }
-  let priorRecord: UpdateGenerationTransactionRecord | null = snapshot?.record ?? null;
+  const stored = await params.ledger.read(replayNamespace);
+  const authoritativeSnapshot = stored
+    ? await authenticateLedgerSnapshot(params.filesystem, stored)
+    : null;
+  if (
+    Boolean(snapshot) !== Boolean(authoritativeSnapshot) ||
+    (snapshot &&
+      authoritativeSnapshot &&
+      (snapshot.revision !== authoritativeSnapshot.revision ||
+        !isDeepStrictEqual(snapshot.record, authoritativeSnapshot.record)))
+  ) {
+    throw new Error("Authoritative update ledger revision changed or snapshot changed");
+  }
+  let priorRecord: UpdateGenerationTransactionRecord | null = authoritativeSnapshot?.record ?? null;
   if (receipt.kind === "intent" && priorRecord) {
     const priorProjection = projectUpdateGenerationTransaction(priorRecord);
     if (priorProjection.latest.kind !== "cleanup-completed") {
@@ -180,7 +196,7 @@ export async function persistUpdateGenerationReceipt(params: {
   }
   const result = await params.ledger.compareAndSwap({
     namespaceKey: nextRecord.namespaceKey,
-    expectedRevision: expectedLedgerRevision,
+    expectedRevision: authoritativeSnapshot?.revision ?? null,
     receipt: canonicalReceipt,
     nextRecord,
   });
@@ -188,15 +204,8 @@ export async function persistUpdateGenerationReceipt(params: {
     throw new Error("Authoritative update ledger revision changed during generation transaction");
   }
   const resultStatus = result.status;
-  const resultRevision = result.snapshot.revision;
-  if (!resultRevision.trim()) {
-    throw new Error("Authoritative update ledger returned an invalid revision");
-  }
-  const resultRecord = await authenticateUpdateGenerationTransactionRecord(
-    params.filesystem,
-    result.snapshot.record,
-  );
-  const authenticatedResult = Object.freeze({ revision: resultRevision, record: resultRecord });
+  const authenticatedResult = await authenticateLedgerSnapshot(params.filesystem, result.snapshot);
+  const resultRecord = authenticatedResult.record;
   if (
     resultRecord.namespaceKey !== nextRecord.namespaceKey ||
     resultRecord.transactionId !== nextRecord.transactionId

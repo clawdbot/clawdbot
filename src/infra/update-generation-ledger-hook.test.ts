@@ -467,6 +467,19 @@ describe("update generation ledger hook", () => {
     );
     const priorSnapshot = { revision: "8", record: priorRecord };
     const ledger = new MemoryLedger(priorSnapshot);
+    await expect(
+      persistUpdateGenerationReceipt({
+        filesystem: AUTHENTICATION_FILESYSTEM,
+        ledger,
+        snapshot: { revision: priorSnapshot.revision, record: selectedRecord },
+        receipt: receipt("rollback-intent", 5, {
+          from: candidate,
+          to: previous,
+          reason: "caller supplied an authenticated record prefix",
+        }),
+      }),
+    ).rejects.toThrow("snapshot changed");
+    await expect(ledger.read(NAMESPACE_KEY)).resolves.toEqual(priorSnapshot);
     const nextTransactionId = "update-transaction-2";
     const nextIntent = {
       ...intent(candidate, true),
@@ -632,16 +645,25 @@ describe("update generation ledger hook", () => {
         },
       }),
     ).rejects.toThrow("snapshot belongs to a different namespace");
+    const incompleteRecord = {
+      ...priorRecord,
+      receipts: priorRecord.receipts.slice(0, -2),
+    };
+    await expect(
+      persistUpdateGenerationReceipt({
+        filesystem: AUTHENTICATION_FILESYSTEM,
+        ledger: new MemoryLedger({ revision: "5", record: incompleteRecord }),
+        snapshot: { revision: "5", record: incompleteRecord },
+        receipt: nextIntent,
+      }),
+    ).rejects.toThrow("requires completed prior cleanup");
     await expect(
       persistUpdateGenerationReceipt({
         filesystem: AUTHENTICATION_FILESYSTEM,
         ledger: new MemoryLedger({ revision: "5", record: priorRecord }),
-        snapshot: {
-          revision: "5",
-          record: { ...priorRecord, receipts: priorRecord.receipts.slice(0, -2) },
-        },
+        snapshot: { revision: "5", record: incompleteRecord },
         receipt: nextIntent,
       }),
-    ).rejects.toThrow("requires completed prior cleanup");
+    ).rejects.toThrow("snapshot changed");
   });
 });

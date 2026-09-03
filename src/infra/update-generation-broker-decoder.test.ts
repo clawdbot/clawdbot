@@ -13,6 +13,33 @@ import {
 } from "./update-generation-confined-filesystem.js";
 
 const SIGNATURE = Buffer.alloc(64, 5).toString("base64");
+const WINDOWS_DEVICE_PATHS = [
+  "CON",
+  "con.txt",
+  "NUL.mjs",
+  "PrN.js",
+  "AUX",
+  "CONIN$",
+  "conout$",
+  "CoNiN$.js",
+  "CONOUT$.txt",
+  "dir/CONIN$/index.js",
+  "dir\\conout$.mjs",
+  "COM1.txt",
+  "com9",
+  "LPT1.js",
+  "dir/lpt9/index.js",
+];
+const ORDINARY_DOLLAR_PATHS = [
+  "CLOCK$",
+  "clock$",
+  "Clock$.js",
+  "CLOCK$.txt",
+  "dir/CLOCK$/index.js",
+  "normal$.js",
+  "dir/price$.mjs",
+];
+const NONCANONICAL_ENTRYPOINT_PATHS = ["dir\\entry.mjs", "dir\\clock$.mjs", "dir\\price$.mjs"];
 
 function selection(character: string) {
   return {
@@ -457,5 +484,73 @@ describe("update-generation broker trust-boundary decoder", () => {
     });
     expect(() => decodeUpdateGenerationBrokerRequest(request)).toThrow("data property");
     expect(reads).toBe(0);
+  });
+
+  it("rejects every official Windows device form in request and receipt selections", () => {
+    for (const entrypointRelativePath of WINDOWS_DEVICE_PATHS) {
+      const request = structuredClone(
+        requestFixtures().find((entry) => entry.kind === "switch-selector")!,
+      );
+      if (request.kind !== "switch-selector") {
+        throw new Error("switch-selector fixture is missing");
+      }
+      request.next.entrypointRelativePath = entrypointRelativePath;
+      expect(
+        () => decodeUpdateGenerationBrokerRequest(request),
+        `request: ${entrypointRelativePath}`,
+      ).toThrow("safe cross-platform entrypoint path");
+
+      const receipt = structuredClone(
+        receiptFixtures().find((entry) => entry.kind === "switch-selector")!,
+      );
+      if (receipt.kind !== "switch-selector") {
+        throw new Error("switch-selector receipt fixture is missing");
+      }
+      receipt.selected.entrypointRelativePath = entrypointRelativePath;
+      expect(
+        () => decodeUpdateGenerationBrokerReceipt(receipt),
+        `receipt: ${entrypointRelativePath}`,
+      ).toThrow("safe cross-platform entrypoint path");
+    }
+  });
+
+  it("accepts ordinary dollar-sign paths in request and receipt selections", () => {
+    for (const entrypointRelativePath of ORDINARY_DOLLAR_PATHS) {
+      const request = structuredClone(
+        requestFixtures().find((entry) => entry.kind === "switch-selector")!,
+      );
+      if (request.kind !== "switch-selector") {
+        throw new Error("switch-selector fixture is missing");
+      }
+      request.next.entrypointRelativePath = entrypointRelativePath;
+      expect(decodeUpdateGenerationBrokerRequest(request)).toEqual(request);
+
+      const receipt = receiptFor(request);
+      expect(decodeUpdateGenerationBrokerReceipt(receipt)).toEqual(receipt);
+    }
+  });
+
+  it("rejects backslash paths before request or receipt admission", () => {
+    for (const entrypointRelativePath of NONCANONICAL_ENTRYPOINT_PATHS) {
+      const request = structuredClone(
+        requestFixtures().find((entry) => entry.kind === "switch-selector")!,
+      );
+      if (request.kind !== "switch-selector") {
+        throw new Error("switch-selector fixture is missing");
+      }
+      request.next.entrypointRelativePath = entrypointRelativePath;
+      expect(() => decodeUpdateGenerationBrokerRequest(request)).toThrow(
+        "safe cross-platform entrypoint path",
+      );
+
+      const receipt = receiptFor({ ...request, next: selection("b") });
+      if (receipt.kind !== "switch-selector") {
+        throw new Error("switch-selector receipt fixture is missing");
+      }
+      receipt.selected.entrypointRelativePath = entrypointRelativePath;
+      expect(() => decodeUpdateGenerationBrokerReceipt(receipt)).toThrow(
+        "safe cross-platform entrypoint path",
+      );
+    }
   });
 });
