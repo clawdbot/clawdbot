@@ -702,9 +702,10 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       if (isStreamJsonDialect(params)) {
         // A stream that ended without a result event but also without any turn
         // content (assistant text or tool activity) is the orphaned-process
-        // signature of a mid-turn session rebuild. Marking it terminal keeps it
-        // eligible for the fresh-session retry a zero-line exit already gets;
-        // unmarked, the unknown reason silently fails the turn.
+        // signature of a mid-turn session rebuild. Marking it terminal records
+        // the empty-failure fact instead of a bare unknown reason; whether that
+        // clears the binding for a fresh retry stays with the backend's
+        // freshSessionRecovery policy.
         const producedContent =
           texts.length > 0 ||
           toolTracker.pendingByIndex.size > 0 ||

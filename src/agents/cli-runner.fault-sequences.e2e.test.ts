@@ -199,13 +199,18 @@ function buildProcessContext(params: CliBoundaryParams): PreparedCliRunContext {
   );
 }
 
-function buildReusableProcessContext(params: CliBoundaryParams): PreparedCliRunContext {
+function buildReusableProcessContext(
+  params: CliBoundaryParams & {
+    freshSessionRecovery?: "replace-binding" | "invalidated-only";
+  },
+): PreparedCliRunContext {
   const context = buildProcessContext(params);
   context.reusableCliSession = { mode: "reuse", sessionId: "source-cli-session" };
   context.openClawHistoryPrompt = RESEED_PROMPT;
   context.preparedBackend.backend = {
     ...context.preparedBackend.backend,
     resumeArgs: ["-p", "--resume", "{sessionId}", "--output-format", "stream-json"],
+    ...(params.freshSessionRecovery ? { freshSessionRecovery: params.freshSessionRecovery } : {}),
   };
   context.backendResolved.config = context.preparedBackend.backend;
   context.params.onBeforeFreshCliSessionRetry = vi.fn(async () => true);
@@ -517,6 +522,81 @@ describe("CLI runner fault sequences", () => {
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
     expectCounts({
       childProcesses: 2,
+      nativeRunBudgetAttempts: 0,
+      outerCandidates: 1,
+      runCliAgentCalls: 1,
+      wholeTurnRetries: 0,
+    });
+  });
+
+  it("fresh-retries a reused-session missing-result exit when the backend replaces bindings", async () => {
+    const clearBinding = vi.fn(async () => true);
+    harness.contextFor = (params) => {
+      const context = buildReusableProcessContext(params);
+      context.params.onBeforeFreshCliSessionRetry = clearBinding;
+      return context;
+    };
+    supervisorSpawnMock
+      .mockResolvedValueOnce(
+        managedRun({
+          stdout: claudeJsonl([{ type: "system", subtype: "init", session_id: "cli-orphan" }]),
+        }),
+      )
+      .mockResolvedValueOnce(managedRun(successExit("recovered after orphaned resume")));
+
+    const outcome = await runOuter();
+
+    expect(outcome.model).toBe(PRIMARY_MODEL);
+    expect(clearBinding).toHaveBeenCalledTimes(1);
+    expect(clearBinding).toHaveBeenCalledWith({
+      provider: "claude-cli",
+      reason: "unknown",
+      sessionId: "source-cli-session",
+    });
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
+    expectCounts({
+      childProcesses: 2,
+      nativeRunBudgetAttempts: 0,
+      outerCandidates: 1,
+      runCliAgentCalls: 1,
+      wholeTurnRetries: 0,
+    });
+  });
+
+  it("keeps the stored binding and fails the turn for an invalidated-only missing-result exit", async () => {
+    const clearBinding = vi.fn(async () => true);
+    harness.contextFor = (params) => {
+      const context = buildReusableProcessContext({
+        ...params,
+        freshSessionRecovery: "invalidated-only",
+      });
+      context.params.onBeforeFreshCliSessionRetry = clearBinding;
+      return context;
+    };
+    supervisorSpawnMock.mockResolvedValueOnce(
+      managedRun({
+        stdout: claudeJsonl([{ type: "system", subtype: "init", session_id: "cli-orphan" }]),
+      }),
+    );
+
+    let error: unknown;
+    try {
+      await runOuter();
+    } catch (caught) {
+      error = caught;
+    }
+
+    // The invalidated-only contract is a backend-owned compatibility promise:
+    // a protocol-only exit proves nothing about the stored conversation, so
+    // the binding survives and the failure surfaces as a terminal outcome.
+    expect(error).toMatchObject({
+      reason: "unknown",
+      code: "cli_unknown_empty_failure",
+    });
+    expect(clearBinding).not.toHaveBeenCalled();
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+    expectCounts({
+      childProcesses: 1,
       nativeRunBudgetAttempts: 0,
       outerCandidates: 1,
       runCliAgentCalls: 1,

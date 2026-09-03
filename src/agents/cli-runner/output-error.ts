@@ -27,8 +27,10 @@ export function createCliOutputFailoverError(params: {
       : "unknown"
     : (classifyFailoverReason(message, { provider: params.provider }) ?? "unknown");
   const code = terminalReason
-    ? // Same class as a zero-line exit: the CLI produced nothing to keep, so
-      // a fresh-session retry (not a provider failover) is the recovery.
+    ? // Same empty-failure class as a zero-line exit: the CLI kept nothing.
+      // Fresh-session retry eligibility stays with the backend's
+      // freshSessionRecovery policy; invalidated-only backends keep the
+      // binding and surface this as a terminal failure.
       terminalReason === "missing_result"
       ? "cli_unknown_empty_failure"
       : `cli_${terminalReason}`
