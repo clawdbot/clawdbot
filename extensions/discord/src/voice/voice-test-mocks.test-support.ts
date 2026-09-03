@@ -21,6 +21,7 @@ const {
   resolveConfiguredRealtimeVoiceProviderMock,
   createRealtimeVoiceBridgeSessionMock,
   controlRealtimeVoiceAgentRunMock,
+  createRealtimeSessionMock,
   realtimeSessionMock,
   decodeOpusStreamMock,
   decodeOpusStreamChunksMock,
@@ -106,10 +107,11 @@ const {
 
   const getVoiceConnectionMockLocal = vi.fn((): MockConnection | undefined => undefined);
 
-  const realtimeSessionMockLocal = {
+  const createRealtimeSessionMockLocal = () => ({
     bridge: {
       supportsToolResultContinuation: true,
       supportsToolResultSuppression: true as boolean | undefined,
+      handleBargeIn: vi.fn() as Mock | undefined,
     },
     acknowledgeMark: vi.fn() as Mock,
     close: vi.fn() as Mock,
@@ -120,7 +122,8 @@ const {
     setMediaTimestamp: vi.fn() as Mock,
     submitToolResult: vi.fn() as Mock,
     triggerGreeting: vi.fn() as Mock,
-  };
+  });
+  const realtimeSessionMockLocal = createRealtimeSessionMockLocal();
 
   return {
     createConnectionMock: createConnectionMockLocal,
@@ -198,6 +201,7 @@ const {
         suppress: false,
       }),
     ),
+    createRealtimeSessionMock: createRealtimeSessionMockLocal,
     realtimeSessionMock: realtimeSessionMockLocal,
     decodeOpusStreamMock: vi.fn() as Mock,
     decodeOpusStreamChunksMock: vi.fn() as Mock,
@@ -232,6 +236,7 @@ export const voiceTestMocks = {
   resolveConfiguredRealtimeVoiceProviderMock,
   createRealtimeVoiceBridgeSessionMock,
   controlRealtimeVoiceAgentRunMock,
+  createRealtimeSessionMock,
   realtimeSessionMock,
   decodeOpusStreamMock,
   decodeOpusStreamChunksMock,
@@ -340,6 +345,7 @@ vi.mock("openclaw/plugin-sdk/realtime-voice", async () => {
       params: Parameters<typeof actual.createRealtimeVoiceSessionHarness>[0],
     ) => {
       const harness = actual.createRealtimeVoiceSessionHarness(params);
+      let providerSession: typeof realtimeSessionMock | undefined;
       return {
         ...harness,
         createBridge: (bridgeParams: Parameters<typeof harness.createBridge>[0]) =>
@@ -350,7 +356,7 @@ vi.mock("openclaw/plugin-sdk/realtime-voice", async () => {
               label: bridgeParams.provider.label ?? "Test realtime provider",
               isConfigured: bridgeParams.provider.isConfigured ?? (() => true),
               createBridge: (request) => {
-                createRealtimeVoiceBridgeSessionMock({
+                const session = createRealtimeVoiceBridgeSessionMock({
                   ...bridgeParams,
                   audioSink: {
                     ...bridgeParams.audioSink,
@@ -364,24 +370,23 @@ vi.mock("openclaw/plugin-sdk/realtime-voice", async () => {
                   onToolCall: bridgeParams.onToolCall,
                   onTranscript: request.onTranscript,
                 });
+                providerSession = session;
                 return {
-                  supportsToolResultContinuation:
-                    realtimeSessionMock.bridge.supportsToolResultContinuation,
-                  supportsToolResultSuppression:
-                    realtimeSessionMock.bridge.supportsToolResultSuppression,
-                  acknowledgeMark: realtimeSessionMock.acknowledgeMark,
-                  close: realtimeSessionMock.close,
-                  connect: realtimeSessionMock.connect,
-                  handleBargeIn: realtimeSessionMock.handleBargeIn,
+                  supportsToolResultContinuation: session.bridge.supportsToolResultContinuation,
+                  supportsToolResultSuppression: session.bridge.supportsToolResultSuppression,
+                  acknowledgeMark: session.acknowledgeMark,
+                  close: session.close,
+                  connect: session.connect,
+                  ...(session.bridge.handleBargeIn ? { handleBargeIn: session.handleBargeIn } : {}),
                   isConnected: () => true,
-                  sendAudio: realtimeSessionMock.sendAudio,
-                  sendUserMessage: realtimeSessionMock.sendUserMessage,
-                  setMediaTimestamp: realtimeSessionMock.setMediaTimestamp,
+                  sendAudio: session.sendAudio,
+                  sendUserMessage: session.sendUserMessage,
+                  setMediaTimestamp: session.setMediaTimestamp,
                   submitToolResult: (callId, result, options) =>
                     options === undefined
-                      ? realtimeSessionMock.submitToolResult(callId, result)
-                      : realtimeSessionMock.submitToolResult(callId, result, options),
-                  triggerGreeting: realtimeSessionMock.triggerGreeting,
+                      ? session.submitToolResult(callId, result)
+                      : session.submitToolResult(callId, result, options),
+                  triggerGreeting: session.triggerGreeting,
                 };
               },
             },
@@ -391,7 +396,7 @@ vi.mock("openclaw/plugin-sdk/realtime-voice", async () => {
           options: Parameters<typeof harness.handleBargeIn>[0],
           fallbackFlush: () => void,
         ) => {
-          realtimeSessionMock.handleBargeIn(options);
+          providerSession?.handleBargeIn(options);
           // The mock provider never clears audio, so exercise the harness fallback directly.
           // Discord passes a no-op for normal truncation and a real clear for forced paths.
           fallbackFlush();
