@@ -170,7 +170,6 @@ extensions/codex/src/app-server/client-runtime.ts	1
 extensions/codex/src/app-server/client.ts	4
 extensions/codex/src/app-server/compact.ts	1
 extensions/codex/src/app-server/computer-use-cache.ts	1
-extensions/codex/src/app-server/computer-use-health.ts	1
 extensions/codex/src/app-server/config-reviewer.ts	2
 extensions/codex/src/app-server/config-utils.ts	1
 extensions/codex/src/app-server/context-engine-projection.ts	4
@@ -233,7 +232,6 @@ extensions/codex/src/app-server/usage-limit-error.ts	2
 extensions/codex/src/app-server/user-prompt-message.ts	1
 extensions/codex/src/command-handlers.ts	3
 extensions/codex/src/command-rpc.ts	1
-extensions/codex/src/conversation-binding.ts	1
 extensions/codex/src/conversation-control.ts	1
 extensions/codex/src/migration/apply.ts	4
 extensions/codex/src/migration/auth.ts	3
