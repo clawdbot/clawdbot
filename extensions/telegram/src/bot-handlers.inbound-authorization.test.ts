@@ -13,6 +13,35 @@ import { defaultTelegramBotDeps } from "./bot-deps.js";
 import { createTelegramHandlerAuthorization } from "./bot-handlers.inbound-authorization.js";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 
+function createTestParams(
+  overrides?: Partial<RegisterTelegramHandlerParams>,
+): RegisterTelegramHandlerParams {
+  const cfg = { channels: { telegram: { enabled: true } } } as OpenClawConfig;
+  return {
+    accountId: "default",
+    ownerAgentId: "main",
+    bot: {} as RegisterTelegramHandlerParams["bot"],
+    cfg,
+    mediaMaxBytes: 1,
+    opts: { token: "test-token" },
+    runtime: { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
+    telegramCfg: cfg.channels?.telegram ?? {},
+    telegramDeps: {
+      ...defaultTelegramBotDeps,
+      getRuntimeConfig: () => cfg,
+      readChannelAllowFromStore: async () => [],
+    },
+    logger: getChildLogger({ module: "telegram/admission-test" }),
+    resolveGroupPolicy: () => ({ allowlistEnabled: true, allowed: true }),
+    resolveGroupActivation: () => undefined,
+    resolveGroupRequireMention: () => false,
+    resolveTelegramGroupConfig: () => ({ groupConfig: undefined, topicConfig: undefined }),
+    shouldSkipUpdate: () => false,
+    processMessage: async () => ({ kind: "completed" as const }),
+    ...overrides,
+  } as RegisterTelegramHandlerParams;
+}
+
 describe("Telegram inbound admission authorization", () => {
   it("binds a forum admission to the finalized parent and topic scope", async () => {
     const chatId = -1001234567890;
@@ -120,5 +149,138 @@ describe("Telegram inbound admission authorization", () => {
       clearOwner();
       clearCollection();
     }
+  });
+});
+
+describe("Telegram inbound preparation rejection records", () => {
+  it("records channel-disabled rejections", async () => {
+    const params = createTestParams();
+    const info = vi.spyOn(params.logger, "info").mockImplementation(() => undefined);
+    const gate = await createTelegramHandlerAuthorization(params).authorizeInboundMessage({
+      msg: {
+        message_id: 1,
+        date: 1_700_000_000,
+        chat: { id: -100, type: "supergroup", title: "X" },
+        from: { id: 1, is_bot: false, first_name: "U" },
+        text: "hi",
+      } as import("grammy/types").Message,
+      chatId: -100,
+      isGroup: true,
+      isForum: false,
+      senderId: "1",
+      senderUsername: "",
+      requireConfiguredGroup: true,
+      dmAccess: "silent",
+    });
+    expect(gate.allowed).toBe(false);
+    expect(info).toHaveBeenCalledExactlyOnceWith(
+      {
+        provider: "telegram",
+        accountId: "default",
+        chatId: -100,
+        senderId: "1",
+        reason: "channel-disabled",
+      },
+      "Telegram inbound event rejected during preparation",
+    );
+  });
+
+  it("records group-disabled rejections", async () => {
+    const params = createTestParams({
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: { enabled: false } as TelegramGroupConfig,
+        topicConfig: undefined,
+      }),
+    });
+    const info = vi.spyOn(params.logger, "info").mockImplementation(() => undefined);
+    const gate = await createTelegramHandlerAuthorization(params).authorizeInboundMessage({
+      msg: {
+        message_id: 2,
+        date: 1_700_000_000,
+        chat: { id: -100, type: "supergroup", title: "X" },
+        from: { id: 1, is_bot: false, first_name: "U" },
+        text: "hi",
+      } as import("grammy/types").Message,
+      chatId: -100,
+      isGroup: true,
+      isForum: false,
+      senderId: "1",
+      senderUsername: "",
+      requireConfiguredGroup: false,
+      dmAccess: "silent",
+    });
+    expect(gate.allowed).toBe(false);
+    expect(info).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ reason: "group-disabled" }),
+      "Telegram inbound event rejected during preparation",
+    );
+  });
+
+  it("records dm-disabled rejections", async () => {
+    const cfg = { channels: { telegram: { enabled: true, dmPolicy: "disabled" as const } } };
+    const params = createTestParams({
+      cfg: cfg as unknown as OpenClawConfig,
+      telegramDeps: {
+        ...defaultTelegramBotDeps,
+        getRuntimeConfig: () => cfg as unknown as OpenClawConfig,
+        readChannelAllowFromStore: async () => [],
+      },
+    });
+    const info = vi.spyOn(params.logger, "info").mockImplementation(() => undefined);
+    const gate = await createTelegramHandlerAuthorization(params).authorizeInboundMessage({
+      msg: {
+        message_id: 3,
+        date: 1_700_000_000,
+        chat: { id: 1, type: "private" },
+        from: { id: 1, is_bot: false, first_name: "U" },
+        text: "hi",
+      } as import("grammy/types").Message,
+      chatId: 1,
+      isGroup: false,
+      isForum: false,
+      senderId: "1",
+      senderUsername: "",
+      requireConfiguredGroup: false,
+      dmAccess: "silent",
+    });
+    expect(gate.allowed).toBe(false);
+    expect(info).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ reason: "dm-disabled" }),
+      "Telegram inbound event rejected during preparation",
+    );
+  });
+
+  it("records dm-unauthorized rejections", async () => {
+    const cfg = { channels: { telegram: { enabled: true, dmPolicy: "closed" as const } } };
+    const params = createTestParams({
+      cfg: cfg as unknown as OpenClawConfig,
+      telegramDeps: {
+        ...defaultTelegramBotDeps,
+        getRuntimeConfig: () => cfg as unknown as OpenClawConfig,
+        readChannelAllowFromStore: async () => [],
+      },
+    });
+    const info = vi.spyOn(params.logger, "info").mockImplementation(() => undefined);
+    const gate = await createTelegramHandlerAuthorization(params).authorizeInboundMessage({
+      msg: {
+        message_id: 4,
+        date: 1_700_000_000,
+        chat: { id: 1, type: "private" },
+        from: { id: 1, is_bot: false, first_name: "U" },
+        text: "hi",
+      } as import("grammy/types").Message,
+      chatId: 1,
+      isGroup: false,
+      isForum: false,
+      senderId: "1",
+      senderUsername: "",
+      requireConfiguredGroup: false,
+      dmAccess: "silent",
+    });
+    expect(gate.allowed).toBe(false);
+    expect(info).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ reason: "dm-unauthorized" }),
+      "Telegram inbound event rejected during preparation",
+    );
   });
 });

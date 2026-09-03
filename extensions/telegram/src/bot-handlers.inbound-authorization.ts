@@ -45,6 +45,37 @@ export type TelegramEventAuthorizationMode =
   | "callback-allowlist"
   | "callback-runtime-allowlist";
 
+type TelegramInboundDropReason =
+  | "channel-disabled"
+  | "group-disabled"
+  | "topic-disabled"
+  | "group-allowFrom-override"
+  | "dm-requireTopic-missing"
+  | "dm-disabled"
+  | "dm-unauthorized"
+  | "group-policy-disabled"
+  | "group-policy-allowlist-no-sender"
+  | "group-policy-allowlist-empty"
+  | "group-policy-allowlist-unauthorized"
+  | "not-allowed";
+
+function recordTelegramInboundDrop(
+  logger: RegisterTelegramHandlerParams["logger"],
+  accountId: string,
+  params: { chatId: number; senderId?: string; reason: TelegramInboundDropReason },
+) {
+  logger.info(
+    {
+      provider: "telegram",
+      accountId,
+      chatId: params.chatId,
+      senderId: params.senderId,
+      reason: params.reason,
+    },
+    "Telegram inbound event rejected during preparation",
+  );
+}
+
 export interface TelegramHandlerAuthorization {
   resolveTelegramEventAuthorizationContext: (params: {
     cfg: OpenClawConfig;
@@ -385,25 +416,34 @@ export function createTelegramHandlerAuthorization({
 
     if (params.requireConfiguredGroup && (!groupConfig || groupConfig.enabled === false)) {
       logVerbose(`Blocked telegram channel ${params.chatId} (channel disabled)`);
+      recordTelegramInboundDrop(logger, accountId, {
+        chatId: params.chatId,
+        senderId: params.senderId,
+        reason: "channel-disabled",
+      });
       return { allowed: false };
     }
 
-    if (
-      shouldSkipGroupMessage({
-        isGroup: params.isGroup,
+    const groupSkipReason = shouldSkipGroupMessage({
+      isGroup: params.isGroup,
+      chatId: params.chatId,
+      chatTitle: params.msg.chat.title,
+      resolvedThreadId,
+      senderId: params.senderId,
+      senderUsername: params.senderUsername,
+      effectiveGroupAllow,
+      hasGroupAllowOverride,
+      groupConfig,
+      topicConfig,
+      cfg: authorizationCfg,
+      telegramCfg: authorizationTelegramCfg,
+    });
+    if (groupSkipReason) {
+      recordTelegramInboundDrop(logger, accountId, {
         chatId: params.chatId,
-        chatTitle: params.msg.chat.title,
-        resolvedThreadId,
         senderId: params.senderId,
-        senderUsername: params.senderUsername,
-        effectiveGroupAllow,
-        hasGroupAllowOverride,
-        groupConfig,
-        topicConfig,
-        cfg: authorizationCfg,
-        telegramCfg: authorizationTelegramCfg,
-      })
-    ) {
+        reason: groupSkipReason,
+      });
       return { allowed: false };
     }
 
@@ -412,6 +452,11 @@ export function createTelegramHandlerAuthorization({
         groupConfig && "requireTopic" in groupConfig ? groupConfig.requireTopic : undefined;
       if (requireTopic === true && dmThreadId == null) {
         logVerbose(`Blocked telegram DM ${params.chatId}: requireTopic=true but no topic present`);
+        recordTelegramInboundDrop(logger, accountId, {
+          chatId: params.chatId,
+          senderId: params.senderId,
+          reason: "dm-requireTopic-missing",
+        });
         return { allowed: false };
       }
       const dmAuthorized =
@@ -435,6 +480,11 @@ export function createTelegramHandlerAuthorization({
               accountId,
             });
       if (!dmAuthorized) {
+        recordTelegramInboundDrop(logger, accountId, {
+          chatId: params.chatId,
+          senderId: params.senderId,
+          reason: dmPolicy === "disabled" ? "dm-disabled" : "dm-unauthorized",
+        });
         return { allowed: false };
       }
     }
@@ -523,7 +573,7 @@ function shouldSkipTelegramGroupMessage(
     telegramCfg: TelegramAccountConfig;
   },
   runtime: Pick<RegisterTelegramHandlerParams, "logger" | "resolveGroupPolicy">,
-): boolean {
+): TelegramInboundDropReason | undefined {
   const {
     isGroup,
     chatId,
@@ -552,19 +602,19 @@ function shouldSkipTelegramGroupMessage(
   if (!baseAccess.allowed) {
     if (baseAccess.reason === "group-disabled") {
       logVerbose(`Blocked telegram group ${chatId} (group disabled)`);
-      return true;
+      return "group-disabled";
     }
     if (baseAccess.reason === "topic-disabled") {
       logVerbose(
         `Blocked telegram topic ${chatId} (${resolvedThreadId ?? "unknown"}) (topic disabled)`,
       );
-      return true;
+      return "topic-disabled";
     }
     logVerbose(`Blocked telegram group sender ${senderId || "unknown"} (group allowFrom override)`);
-    return true;
+    return "group-allowFrom-override";
   }
   if (!isGroup) {
-    return false;
+    return undefined;
   }
   const policyAccess = evaluateTelegramGroupPolicyAccess({
     isGroup,
@@ -584,29 +634,29 @@ function shouldSkipTelegramGroupMessage(
     checkChatAllowlist: true,
   });
   if (policyAccess.allowed) {
-    return false;
+    return undefined;
   }
   if (policyAccess.reason === "group-policy-disabled") {
     logVerbose("Blocked telegram group message (groupPolicy: disabled)");
-    return true;
+    return "group-policy-disabled";
   }
   if (policyAccess.reason === "group-policy-allowlist-no-sender") {
     logVerbose("Blocked telegram group message (no sender ID, groupPolicy: allowlist)");
-    return true;
+    return "group-policy-allowlist-no-sender";
   }
   if (policyAccess.reason === "group-policy-allowlist-empty") {
     logVerbose(
       "Blocked telegram group message (groupPolicy: allowlist, no group allowlist entries)",
     );
-    return true;
+    return "group-policy-allowlist-empty";
   }
   if (policyAccess.reason === "group-policy-allowlist-unauthorized") {
     logVerbose(`Blocked telegram group message from ${senderId} (groupPolicy: allowlist)`);
-    return true;
+    return "group-policy-allowlist-unauthorized";
   }
   runtime.logger.info(
     { chatId, title: chatTitle, reason: "not-allowed" },
     "skipping group message",
   );
-  return true;
+  return "not-allowed";
 }
