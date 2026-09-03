@@ -386,6 +386,32 @@ describe("webHandlers web.login.start", () => {
       expect.objectContaining({ code: "INVALID_REQUEST" }),
     );
   });
+
+  it("keeps the legacy first-provider fallback when channel is omitted", async () => {
+    const whatsappLogin = vi.fn().mockResolvedValue({ message: "whatsapp" });
+    const weixinLogin = vi.fn();
+    mocks.listChannelPlugins.mockReturnValue([
+      {
+        id: "whatsapp",
+        gatewayMethods: ["web.login.start"],
+        gateway: { loginWithQrStart: whatsappLogin },
+      },
+      {
+        id: "openclaw-weixin",
+        gatewayMethods: ["web.login.start"],
+        gateway: { loginWithQrStart: weixinLogin },
+      },
+    ]);
+    const respond = vi.fn();
+
+    await expectDefined(
+      webHandlers["web.login.start"],
+      'webHandlers["web.login.start"] test invariant',
+    )(createOptions({}, { respond }));
+
+    expect(whatsappLogin).toHaveBeenCalled();
+    expect(weixinLogin).not.toHaveBeenCalled();
+  });
 });
 
 describe("webHandlers web.login.wait", () => {
