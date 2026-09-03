@@ -171,6 +171,123 @@ describe("LINE rich-message boundaries", () => {
     );
   });
 
+  it("falls back to text when two options truncate to the same control label", () => {
+    const prepared = prepareLineReplyPayload({
+      text: "Which environment? 1. Deploy the release candidate to the shared staging cluster 2. Deploy the release candidate to the shared production cluster",
+      presentationTextMode: "fallback",
+      channelData: {
+        askUser: {
+          questionId: "ask_3d8dbe55be452a9a39add7c909beb119",
+          optionValues: [
+            "Deploy the release candidate to the shared staging cluster",
+            "Deploy the release candidate to the shared production cluster",
+          ],
+        },
+      },
+      presentation: {
+        blocks: [
+          { type: "text", text: "Which environment?" },
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Deploy the release candidate to the shared staging cluster",
+                action: {
+                  type: "question",
+                  questionId: "ask_3d8dbe55be452a9a39add7c909beb119",
+                  optionValue: "Deploy the release candidate to the shared staging cluster",
+                },
+              },
+              {
+                label: "Deploy the release candidate to the shared production cluster",
+                action: {
+                  type: "question",
+                  questionId: "ask_3d8dbe55be452a9a39add7c909beb119",
+                  optionValue: "Deploy the release candidate to the shared production cluster",
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    // Both labels truncate to the same 40 characters, so two taps would read
+    // identically; the prose still names them in full.
+    expect((prepared.channelData?.line as { flexMessage?: unknown } | undefined)?.flexMessage).toBe(
+      undefined,
+    );
+    expect(prepared.text).toContain("Deploy the release candidate to the shared staging cluster");
+  });
+
+  it("gives the free-text control a tap that opens the composer", () => {
+    const prepared = prepareLineReplyPayload({
+      text: "Agent needs input: Which environment?",
+      presentationTextMode: "fallback",
+      channelData: {
+        askUser: {
+          questionId: "ask_3d8dbe55be452a9a39add7c909beb119",
+          optionValues: ["Staging", "Production"],
+        },
+      },
+      presentation: {
+        blocks: [
+          { type: "text", text: "Which environment?" },
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Staging",
+                action: {
+                  type: "question",
+                  questionId: "ask_3d8dbe55be452a9a39add7c909beb119",
+                  optionValue: "Staging",
+                },
+              },
+              {
+                label: "Production",
+                action: {
+                  type: "question",
+                  questionId: "ask_3d8dbe55be452a9a39add7c909beb119",
+                  optionValue: "Production",
+                },
+              },
+              {
+                label: "Other…",
+                action: {
+                  type: "question",
+                  questionId: "ask_3d8dbe55be452a9a39add7c909beb119",
+                  intent: "custom-input",
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const line = prepared.channelData?.line as {
+      flexMessage?: {
+        contents?: { footer?: { contents?: Array<{ action?: { data?: string } }> } };
+      };
+    };
+    const footer = line.flexMessage?.contents?.footer?.contents as
+      | Array<{ action?: { data?: string; inputOption?: string } }>
+      | undefined;
+    expect(footer?.map((button) => button.action?.data)).toEqual([
+      "line.question=ask_3d8dbe55be452a9a39add7c909beb119&line.option=0",
+      "line.question=ask_3d8dbe55be452a9a39add7c909beb119&line.option=1",
+      "line.question=ask_3d8dbe55be452a9a39add7c909beb119&line.custom=1",
+    ]);
+    // The tap records nothing, so opening the composer is the whole point of it
+    // and the only feedback a card LINE will not let us edit can give.
+    expect(footer?.map((button) => button.action?.inputOption)).toEqual([
+      undefined,
+      undefined,
+      "openKeyboard",
+    ]);
+  });
+
   it.each([
     { name: "exact byte limit", character: "x", extraBytes: 0, fits: true },
     { name: "one byte over", character: "x", extraBytes: 1, fits: false },
