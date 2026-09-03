@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, realpath, stat } from "node:fs/promises";
+import { chmod, mkdtemp, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -8,7 +8,6 @@ import {
 import { waitForExecScope } from "../agents/bash-process-registry.js";
 import type { ComputerContextEpoch } from "../agents/tools/computer-tool.js";
 import { isPathInside } from "../infra/path-guards.js";
-import { removeTemporaryArtifacts } from "../infra/temp-artifact-cleanup.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
@@ -98,7 +97,7 @@ export async function createWorkerRuntimeEnvironment(sessionId: string) {
         } else {
           process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
         }
-        await removeTemporaryArtifacts(stateDir, "Worker environment");
+        await rm(stateDir, { recursive: true, force: true });
       })()),
   };
 }

@@ -111,9 +111,7 @@ const WORKER_TOOL_CONFIG = { plugins: { enabled: false } } satisfies OpenClawCon
 
 export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams): Promise<void> {
   const resources = params.skillResources
-    ? await materializeSkillResources(params.skillResources, params.stateDir, () =>
-        params.signal?.throwIfAborted(),
-      )
+    ? await materializeSkillResources(params.skillResources, () => params.signal?.throwIfAborted())
     : undefined;
   try {
     await runWorkerEmbeddedTurnWithResources(

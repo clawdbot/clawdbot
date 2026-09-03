@@ -12,7 +12,82 @@ import { prepareNodeClaudeSkillSession } from "./claude-skill-session.js";
 const temps = useAutoCleanupTempDirTracker(afterEach);
 
 describe("node Claude skill artifact cleanup", () => {
-  it("preserves the exact frozen setup error when enclosing skill cleanup fails", async () => {
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0).each([false, true])(
+    "grants only the artifact root and cleans independent inputs after close (Workshop: %s)",
+    async (workshop) => {
+      const workspace = temps.make("node-skill-session-");
+      const skillDir = path.join(workspace, "skills", "guide");
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.writeFile(
+        path.join(skillDir, "SKILL.md"),
+        "---\ndescription: Guide\n---\n# Guide\n",
+      );
+      const resources = await prepareSkillResourceDelivery(
+        buildSkillSnapshot(workspace, {
+          entries: loadWorkspaceSkills(workspace, { workspaceOnly: true }),
+        }),
+        () => {},
+      );
+      const session = await prepareNodeClaudeSkillSession({
+        signal: new AbortController().signal,
+        emitChunk: vi.fn(),
+        onInput: vi.fn(),
+        frames: {
+          send: vi.fn(),
+          onMessage: (listener) => {
+            void listener(
+              Buffer.from(
+                JSON.stringify({
+                  type: "init",
+                  resources,
+                  ...(workshop ? { workshop: { description: "Fixture", inputSchema: {} } } : {}),
+                }),
+              ),
+            );
+            return vi.fn();
+          },
+        },
+      });
+      const artifactRoot = session.argv[session.argv.indexOf("--add-dir") + 1]!;
+      const skillPath = session.rewriteReferences(path.join(skillDir, "SKILL.md"));
+      const configPath = workshop
+        ? session.argv[session.argv.indexOf("--mcp-config") + 1]!
+        : undefined;
+      const warn = vi.fn();
+      const previousConsole = loggingState.rawConsole;
+      setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+      loggingState.rawConsole = { log: vi.fn(), info: vi.fn(), warn, error: vi.fn() };
+      try {
+        expect(session.argv.filter((arg) => arg === "--add-dir")).toHaveLength(1);
+        expect(path.dirname(path.dirname(skillPath))).toBe(artifactRoot);
+        expect((await fs.stat(artifactRoot)).mode & 0o777).toBe(0o700);
+        expect(session.catalog).toContain(skillPath);
+        if (configPath) {
+          expect(path.relative(artifactRoot, configPath).startsWith(`..${path.sep}`)).toBe(true);
+          expect((await fs.stat(path.dirname(configPath))).mode & 0o777).toBe(0o700);
+        }
+        await fs.chmod(path.dirname(skillPath), 0o500);
+        await session.close();
+        await expect(session.writeStdout("late output")).rejects.toThrow("invocation closed");
+        await expect(session.cleanup()).resolves.toBeUndefined();
+        expect(await fs.readFile(skillPath, "utf8")).toContain("# Guide");
+        if (configPath) {
+          await expect(fs.stat(path.dirname(configPath))).rejects.toMatchObject({ code: "ENOENT" });
+        }
+        expect(warn).toHaveBeenCalledOnce();
+        expect(warn.mock.calls.flat().join("\n")).toContain(artifactRoot);
+      } finally {
+        await session.close();
+        await fs.chmod(path.dirname(skillPath), 0o700);
+        await session.cleanup();
+        loggingState.rawConsole = previousConsole;
+        setLoggerOverride(null);
+        resetLogger();
+      }
+    },
+  );
+
+  it("preserves the exact frozen setup error when partial skill cleanup fails", async () => {
     const workspace = temps.make("node-skill-rollback-");
     const skillDir = path.join(workspace, "skills", "partial");
     await fs.mkdir(skillDir, { recursive: true });
@@ -38,7 +113,7 @@ describe("node Claude skill artifact cleanup", () => {
         await originalWriteFile(target, data, options);
         if (typeof target === "string" && path.basename(target) === "SKILL.md") {
           retainedFile = target;
-          directory = path.resolve(path.dirname(target), "../../..");
+          directory = path.dirname(path.dirname(target));
           controller.abort(primary);
         }
       });
@@ -80,7 +155,7 @@ describe("node Claude skill artifact cleanup", () => {
       ).rejects.toMatchObject({ code: "ENOENT" });
       const warning = warn.mock.calls.flat().map(String).join("\n");
       expect(warning).toContain("Materialized skill cleanup failed");
-      expect.soft(warning).toContain("Node Claude skill session cleanup failed");
+      expect(warn).toHaveBeenCalledOnce();
       expect(warning).toContain(directory);
       expect(warning).toContain("EACCES");
       expect(warning).not.toContain(markdown);

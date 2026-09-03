@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -30,8 +30,18 @@ describe("prepared workspace skill resources", () => {
       const directory = await writeSkill(workspace, "partial");
       await fs.writeFile(path.join(directory, "reference.md"), "supporting resource");
       const delivery = await prepareSkillResourceDelivery(loadSnapshot(workspace), () => {});
-      const stateDir = temps.make("skill-rollback-worker-");
-      const parent = path.join(stateDir, "skill-resources");
+      let artifactRoot: string | undefined;
+      let retainedFile: string | undefined;
+      const originalWriteFile = fs.writeFile;
+      const writeFile = vi
+        .spyOn(fs, "writeFile")
+        .mockImplementation(async (target, data, options) => {
+          await originalWriteFile(target, data, options);
+          if (typeof target === "string" && path.basename(target) === "SKILL.md") {
+            retainedFile = target;
+            artifactRoot = path.dirname(path.dirname(target));
+          }
+        });
       const primary = new Error("Prepared turn closed");
       primary.name = name;
       Object.freeze(primary);
@@ -39,7 +49,7 @@ describe("prepared workspace skill resources", () => {
       const deletionError = new Error(`EACCES: token=${secret} ${"🦞".repeat(2_000)}`);
       const originalRm = fs.rm;
       const rm = vi.spyOn(fs, "rm").mockImplementation((target, options) => {
-        if (String(target).startsWith(`${parent}${path.sep}`)) {
+        if (target === artifactRoot) {
           return Promise.reject(deletionError);
         }
         return originalRm(target, options);
@@ -48,16 +58,9 @@ describe("prepared workspace skill resources", () => {
       const previousConsole = loggingState.rawConsole;
       setLoggerOverride({ level: "silent", consoleLevel: "warn" });
       loggingState.rawConsole = { log: vi.fn(), info: vi.fn(), warn, error: vi.fn() };
-      let retainedFile: string | undefined;
       try {
-        const result = await materializeSkillResources(delivery!, stateDir, () => {
-          if (!existsSync(parent)) {
-            return;
-          }
-          const turn = readdirSync(parent)[0];
-          const candidate = turn && path.join(parent, turn, "0", "SKILL.md");
-          if (candidate && existsSync(candidate)) {
-            retainedFile = candidate;
+        const result = await materializeSkillResources(delivery!, () => {
+          if (retainedFile) {
             throw primary;
           }
         }).catch((error: unknown) => error);
@@ -74,10 +77,14 @@ describe("prepared workspace skill resources", () => {
         expect.soft(warning.length).toBeLessThanOrEqual(1_200);
         expect.soft(Buffer.from(warning, "utf8").toString("utf8")).toBe(warning);
       } finally {
+        writeFile.mockRestore();
         rm.mockRestore();
         loggingState.rawConsole = previousConsole;
         setLoggerOverride(null);
         resetLogger();
+        if (artifactRoot) {
+          await fs.rm(artifactRoot, { recursive: true, force: true });
+        }
       }
     },
   );
@@ -101,7 +108,7 @@ describe("prepared workspace skill resources", () => {
         reuse === "rehydrated" ? structuredClone(snapshot) : snapshot,
         () => {},
       );
-      const worker = await materializeSkillResources(next!, temps.make("fresh-worker-"), () => {});
+      const worker = await materializeSkillResources(next!, () => {});
       try {
         const skill = worker.snapshot.resolvedSkills![0]!;
         expect(await fs.readFile(path.join(skill.baseDir, "scripts/check.sh"), "utf8")).toBe(
@@ -157,7 +164,7 @@ describe("prepared workspace skill resources", () => {
     ]);
     const delivery = await prepareSkillResourceDelivery(snapshot, () => {});
     expect(delivery?.skills).toMatchObject([{ name: "directory-name" }]);
-    const materialized = await materializeSkillResources(delivery!, workspace, () => {});
+    const materialized = await materializeSkillResources(delivery!, () => {});
     try {
       const skill = materialized.snapshot.resolvedSkills![0]!;
       expect(skill.name).toBe("directory-name");
@@ -165,6 +172,8 @@ describe("prepared workspace skill resources", () => {
       expect(await fs.readFile(skill.filePath, "utf8")).toBe(markdown);
       expect(await fs.readFile(path.join(skill.baseDir, "scripts/check.sh"), "utf8")).toBe(script);
       if (process.platform !== "win32") {
+        expect((await fs.stat(materialized.directory)).mode & 0o777).toBe(0o700);
+        expect((await fs.stat(skill.filePath)).mode & 0o777).toBe(0o400);
         expect((await fs.stat(path.join(skill.baseDir, "scripts/check.sh"))).mode & 0o777).toBe(
           0o500,
         );
@@ -203,7 +212,7 @@ describe("prepared workspace skill resources", () => {
     expect(snapshot.prompt.match(/<name>/g)).toHaveLength(65);
     const delivery = await prepareSkillResourceDelivery(snapshot, () => {});
     expect(delivery?.skills).toHaveLength(65);
-    const materialized = await materializeSkillResources(delivery!, workspace, () => {});
+    const materialized = await materializeSkillResources(delivery!, () => {});
     try {
       expect(materialized.snapshot.skills.map((skill) => skill.name)).toEqual(
         snapshot.resolvedSkills!.map((skill) => skill.name),
