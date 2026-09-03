@@ -1,0 +1,23 @@
+.chat-attachment-file-icon {
+  position: relative;
+  display: inline-block;
+  flex: none;
+  color: var(--file-icon-glyph);
+  background: var(--chat-file-icon-dark) center / contain no-repeat;
+}
+
+:root[data-theme-mode="light"] .chat-attachment-file-icon {
+  background-image: var(--chat-file-icon-light);
+}
+
+.chat-attachment-file-icon__overlay {
+  position: absolute;
+  inset: 15px;
+  background-color: var(--chat-file-icon-accent);
+  -webkit-mask: var(--chat-file-icon-overlay) center / 14px 14px no-repeat;
+  mask: var(--chat-file-icon-overlay) center / 14px 14px no-repeat;
+}
+
+.chat-attachment-file-icon--unavailable {
+  opacity: 0.42;
+}

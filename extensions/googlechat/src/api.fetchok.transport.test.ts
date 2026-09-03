@@ -1,4 +1,4 @@
-// Exercise Google Chat status-only requests through a real guarded HTTP transport.
+// Exercise Google Chat requests through a real guarded HTTP transport.
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -23,6 +23,9 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
     fetchWithSsrFGuard: async (...args: Parameters<typeof actual.fetchWithSsrFGuard>) => {
       fetchWithSsrFGuardMock(...args);
       const [params] = args;
+      if (!loopback.baseUrl || new URL(params.url).origin !== "https://chat.googleapis.com") {
+        throw new Error("Unexpected request in Google Chat transport fixture");
+      }
       const guarded = await actual.fetchWithSsrFGuard({
         ...params,
         url: params.url.replace("https://chat.googleapis.com", loopback.baseUrl),
@@ -59,7 +62,8 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("./auth.js", () => ({
+vi.mock("./auth.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./auth.js")>()),
   getGoogleChatAccessToken: vi.fn(async () => proofToken),
 }));
 
@@ -116,7 +120,7 @@ async function withinDeadline<T>(promise: Promise<T>, timeoutMs = 2_000): Promis
   }
 }
 
-describe("deleteGoogleChatMessage real guarded transport", () => {
+describe("Google Chat real guarded transport", () => {
   beforeAll(async () => {
     ({ deleteGoogleChatMessage, sendGoogleChatMessage } = await import("./api.js"));
   });
@@ -132,6 +136,86 @@ describe("deleteGoogleChatMessage real guarded transport", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("delivers task-list fallback at the default chunk limit through the SDK", async () => {
+    const { withOpenClawTestState } = await import("openclaw/plugin-sdk/test-state");
+    await withOpenClawTestState(
+      { label: "googlechat-markdown-delivery", layout: "state-only" },
+      async () => {
+        const [
+          { sendDurableMessageBatch },
+          { createTestRegistry, withPluginRuntimeRegistryScope },
+          { googlechatPlugin },
+        ] = await Promise.all([
+          import("openclaw/plugin-sdk/channel-outbound"),
+          import("openclaw/plugin-sdk/channel-test-helpers"),
+          import("../api.js"),
+        ]);
+        const requests: Array<{
+          method: string | undefined;
+          path: string | undefined;
+          body: string;
+        }> = [];
+        const server = createServer((request, response) => {
+          let body = "";
+          request.setEncoding("utf8");
+          request.on("data", (chunk: string) => {
+            body += chunk;
+          });
+          request.on("end", () => {
+            requests.push({ method: request.method, path: request.url, body });
+            response.writeHead(200, { "Content-Type": "application/json" });
+            response.end(JSON.stringify({ name: `spaces/AAA/messages/${requests.length}` }));
+          });
+        });
+
+        try {
+          loopback.baseUrl = await listen(server);
+          const paragraph = "A".repeat(31_998);
+          const result = await withPluginRuntimeRegistryScope(
+            createTestRegistry([
+              { pluginId: "googlechat", plugin: googlechatPlugin, source: "test" },
+            ]),
+            () =>
+              sendDurableMessageBatch({
+                cfg: {
+                  channels: {
+                    googlechat: {
+                      serviceAccount: {
+                        client_email: "transport@example.test",
+                        private_key: "not-a-real-key",
+                      },
+                    },
+                  },
+                },
+                channel: "googlechat",
+                accountId: "default",
+                to: "spaces/AAA",
+                payloads: [{ text: `**${paragraph}**\n\n- [x] done` }],
+              }),
+          );
+          expect(result).toMatchObject({
+            status: "sent",
+            deliveryIntent: { queuePolicy: "required" },
+            receipt: {
+              platformMessageIds: ["spaces/AAA/messages/1", "spaces/AAA/messages/2"],
+            },
+          });
+          expect(requests.map(({ method, path }) => ({ method, path }))).toEqual([
+            { method: "POST", path: "/v1/spaces/AAA/messages" },
+            { method: "POST", path: "/v1/spaces/AAA/messages" },
+          ]);
+          const messages: Array<{ text: string }> = requests.map(({ body }) => JSON.parse(body));
+          expect(messages).toEqual([{ text: `*${paragraph}*` }, { text: "\n\n[x] done" }]);
+          expect(messages.every(({ text }) => Buffer.byteLength(text, "utf8") <= 32_000)).toBe(
+            true,
+          );
+        } finally {
+          await closeServer(server);
+        }
+      },
+    );
   });
 
   it("rejects malformed UTF-8 JSON through the real guarded transport", async () => {

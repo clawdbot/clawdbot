@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import { CronService, type CronEvent } from "../../cron/service.js";
@@ -40,6 +41,7 @@ const loadGatewaySessionEntry = vi.hoisted(() =>
       canonicalKey: string;
       entry?: {
         agentHarnessId?: unknown;
+        createdActor?: SessionCreatedActor;
         modelSelectionLocked?: unknown;
         sessionId?: unknown;
       };
@@ -47,6 +49,16 @@ const loadGatewaySessionEntry = vi.hoisted(() =>
   ),
 );
 const cronTaskRunHistoryPageOverride = vi.hoisted(() => vi.fn());
+const resolveCronDeliveryPreview = vi.hoisted(() =>
+  vi.fn(async () => ({ label: "not requested", detail: "not requested" })),
+);
+const resolveCronDeliveryPreviews = vi.hoisted(() =>
+  vi.fn(async ({ jobs }: { jobs: Array<{ id: string }> }) =>
+    Object.fromEntries(
+      jobs.map((job) => [job.id, { label: "not requested", detail: "not requested" }]),
+    ),
+  ),
+);
 
 vi.mock("../../cron/task-run-history.js", async () => {
   const actual = await vi.importActual<typeof import("../../cron/task-run-history.js")>(
@@ -71,6 +83,11 @@ vi.mock("../../config/config.js", async () => {
 vi.mock("../session-utils.js", () => ({
   loadSessionEntry: loadGatewaySessionEntry,
   loadGatewaySessionEntryReadOnly: loadGatewaySessionEntry,
+}));
+
+vi.mock("../../cron/delivery-preview.js", () => ({
+  resolveCronDeliveryPreview,
+  resolveCronDeliveryPreviews,
 }));
 
 import { cronHandlers } from "./cron.js";
@@ -607,6 +624,16 @@ describe("cron method validation", () => {
   beforeEach(() => {
     getRuntimeConfig.mockReset().mockReturnValue({} as OpenClawConfig);
     cronTaskRunHistoryPageOverride.mockReset().mockReturnValue(undefined);
+    resolveCronDeliveryPreview
+      .mockReset()
+      .mockResolvedValue({ label: "not requested", detail: "not requested" });
+    resolveCronDeliveryPreviews
+      .mockReset()
+      .mockImplementation(async ({ jobs }: { jobs: Array<{ id: string }> }) =>
+        Object.fromEntries(
+          jobs.map((job) => [job.id, { label: "not requested", detail: "not requested" }]),
+        ),
+      );
     loadGatewaySessionEntry
       .mockReset()
       .mockImplementation((sessionKey: string) => ({ canonicalKey: sessionKey, entry: undefined }));
@@ -1366,6 +1393,68 @@ describe("cron method validation", () => {
       accountId: "work",
     });
     expectCronSuccess(respond);
+  });
+
+  it("stamps the authenticated profile as private cron creator provenance", async () => {
+    const client: GatewayClient = {
+      connect: {} as GatewayClient["connect"],
+      authenticatedUserProfile: {
+        profileId: "profile-ada",
+        displayName: "Ada",
+        hasAvatar: false,
+        updatedAt: 1,
+      },
+    };
+
+    const { context, respond } = await invokeCronAdd(agentTurnCronParams(), { client });
+
+    const options = requireRecord(context.cron.add.mock.calls[0]?.[1], "cron.add options");
+    expect(options.createdActor).toEqual({ type: "human", source: "profile", id: "profile-ada" });
+    expect(requireCronAddPayload(context)).not.toHaveProperty("createdActor");
+    expectCronSuccess(respond);
+  });
+
+  it.each(["profile", "channel", "unknown"] as const)(
+    "retains %s creator provenance through agent-created cron jobs",
+    async (source) => {
+      loadGatewaySessionEntry.mockReturnValue({
+        canonicalKey: "agent:ops:main",
+        entry: {
+          sessionId: "session-ops-main",
+          createdActor: { type: "human", source, id: "profile-ada", label: "Ada" },
+        },
+      });
+      const client = callerClient("ops");
+      client.internal!.agentRuntimeIdentity!.sessionSpawnContext = {
+        inheritedToolPolicy: { version: 1, allow: ["*"], deny: [] },
+      };
+
+      const { context, respond } = await invokeCronAdd(agentTurnCronParams(), {
+        client,
+      });
+
+      const options = requireRecord(context.cron.add.mock.calls[0]?.[1], "cron.add options");
+      expect(options.createdActor).toEqual({
+        type: "human",
+        source,
+        id: "profile-ada",
+        label: "Ada",
+      });
+      expect(loadGatewaySessionEntry).toHaveBeenCalledWith("agent:ops:main", { agentId: "ops" });
+      expect(requireCronAddPayload(context)).not.toHaveProperty("createdActor");
+      expectCronSuccess(respond);
+    },
+  );
+
+  it("rejects caller-supplied cron creator provenance", async () => {
+    const { context, respond } = await invokeCronAdd(
+      agentTurnCronParams({
+        createdActor: { type: "human", source: "profile", id: "spoofed-profile" },
+      }),
+    );
+
+    expect(context.cron.add).not.toHaveBeenCalled();
+    expectResponseError(respond, { code: "INVALID_REQUEST" });
   });
 
   it("consumes an exact live configured-MCP grant once at cron.add commit", async () => {
@@ -2181,6 +2270,7 @@ describe("cron method validation", () => {
         created: false,
         updated: false,
         job: expect.objectContaining({ id: "cron-1", declarationKey: "daily-report" }),
+        deliveryPreview: { label: "not requested", detail: "not requested" },
       },
       undefined,
     );

@@ -1,4 +1,3 @@
-// Amazon Bedrock tests cover memory embedding adapter plugin behavior.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hasAwsCredentialsMock = vi.hoisted(() => vi.fn());
@@ -33,7 +32,7 @@ function stubCreate(client: {
     provider: {
       id: "bedrock",
       model: client.model,
-      embedQuery: async () => [],
+      embed: async () => [],
       embedBatch: async () => [],
     },
     client,
@@ -64,17 +63,25 @@ describe("bedrockMemoryEmbeddingProviderAdapter", () => {
     expect(bedrockMemoryEmbeddingProviderAdapter.allowExplicitWhenConfiguredAuto).toBe(true);
   });
 
-  it("throws a missing-api-key sentinel error when AWS credentials are unavailable", async () => {
+  it("reports missing credentials to automatic provider selection", async () => {
     hasAwsCredentialsMock.mockResolvedValue(false);
 
-    await expect(
-      bedrockMemoryEmbeddingProviderAdapter.create(defaultCreateOptions()),
-    ).rejects.toThrow(/No API key found for provider "bedrock"/);
-    await expect(
-      bedrockMemoryEmbeddingProviderAdapter.create(defaultCreateOptions()),
-    ).rejects.toThrow(/AWS credentials are not available/);
+    const error = await bedrockMemoryEmbeddingProviderAdapter.create(defaultCreateOptions()).then(
+      () => undefined,
+      (cause: unknown) => cause,
+    );
 
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toHaveProperty(
+      "message",
+      expect.stringContaining('No API key found for provider "bedrock"'),
+    );
+    expect(error).toHaveProperty(
+      "message",
+      expect.stringContaining("AWS credentials are not available"),
+    );
     expect(createBedrockEmbeddingProviderMock).not.toHaveBeenCalled();
+    expect(bedrockMemoryEmbeddingProviderAdapter.shouldContinueAutoSelection?.(error)).toBe(true);
   });
 
   it("creates the provider when AWS credentials are available", async () => {
@@ -152,19 +159,5 @@ describe("bedrockMemoryEmbeddingProviderAdapter", () => {
       model: "amazon.titan-embed-text-v2:0",
       dimensions: 1024,
     });
-  });
-
-  it("lets the auto-select loop skip bedrock when credentials are unavailable", async () => {
-    hasAwsCredentialsMock.mockResolvedValue(false);
-
-    let thrown: unknown;
-    try {
-      await bedrockMemoryEmbeddingProviderAdapter.create(defaultCreateOptions());
-    } catch (err) {
-      thrown = err;
-    }
-
-    expect(thrown).toBeInstanceOf(Error);
-    expect(bedrockMemoryEmbeddingProviderAdapter.shouldContinueAutoSelection?.(thrown)).toBe(true);
   });
 });

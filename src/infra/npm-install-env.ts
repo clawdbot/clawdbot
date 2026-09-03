@@ -39,7 +39,7 @@ const NPM_FRESHNESS_BYPASS_KEYS = [
 
 type NpmFreshnessBypassMode = "before" | "min-release-age";
 
-type NpmFreshnessConfigScope = {
+export type NpmConfigScope = {
   npmConfigCwd?: string;
   npmConfigPrefix?: string | null;
 };
@@ -59,8 +59,12 @@ const NPM_GLOBAL_CONFIG_PATH_CACHE_ENV_KEYS = [
   "USERPROFILE",
 ] as const;
 
-function resolveEnvPath(env: NodeJS.ProcessEnv, upperKey: string, lowerKey: string): string | null {
-  const raw = env[upperKey]?.trim() || env[lowerKey]?.trim();
+function resolveEnvPath(
+  env: NodeJS.ProcessEnv,
+  primaryKey: string,
+  fallbackKey: string,
+): string | null {
+  const raw = env[primaryKey]?.trim() || env[fallbackKey]?.trim();
   return raw ? resolveNpmConfigPath(raw, env) : null;
 }
 
@@ -105,10 +109,7 @@ function createNpmConfigPathProbeEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv 
   return probeEnv;
 }
 
-function readNpmGlobalConfigPath(
-  env: NodeJS.ProcessEnv,
-  scope: NpmFreshnessConfigScope,
-): string | null {
+function readNpmGlobalConfigPath(env: NodeJS.ProcessEnv, scope: NpmConfigScope): string | null {
   const scopedGlobalConfig = resolveScopedGlobalNpmrc(scope);
   if (scopedGlobalConfig) {
     return scopedGlobalConfig;
@@ -148,10 +149,7 @@ function readNpmGlobalConfigPath(
   }
 }
 
-function buildNpmGlobalConfigPathCacheKey(
-  env: NodeJS.ProcessEnv,
-  scope: NpmFreshnessConfigScope,
-): string {
+function buildNpmGlobalConfigPathCacheKey(env: NodeJS.ProcessEnv, scope: NpmConfigScope): string {
   const configFiles = uniqueStrings(
     [
       resolveScopedProjectNpmrc(scope),
@@ -191,7 +189,7 @@ function safeCwd(): string {
   }
 }
 
-function resolveScopedProjectNpmrc(scope: NpmFreshnessConfigScope): string | null {
+function resolveScopedProjectNpmrc(scope: NpmConfigScope): string | null {
   const scopedCwd = scope.npmConfigCwd?.trim();
   if (scopedCwd) {
     return path.join(scopedCwd, ".npmrc");
@@ -204,18 +202,20 @@ function resolveScopedProjectNpmrc(scope: NpmFreshnessConfigScope): string | nul
   }
 }
 
-function resolveScopedGlobalNpmrc(scope: NpmFreshnessConfigScope): string | null {
+function resolveScopedGlobalNpmrc(scope: NpmConfigScope): string | null {
   const prefix = scope.npmConfigPrefix?.trim();
   return prefix ? path.join(prefix, "etc", "npmrc") : null;
 }
 
 function resolveNpmConfigFiles(
   env: NodeJS.ProcessEnv,
-  scope: NpmFreshnessConfigScope = {},
+  scope: NpmConfigScope = {},
+  userNpmrc = resolveEnvPath(env, "NPM_CONFIG_USERCONFIG", "npm_config_userconfig") ??
+    resolveHomeNpmrc(env),
 ): string[] {
   const files = [
     resolveScopedProjectNpmrc(scope),
-    resolveEnvPath(env, "NPM_CONFIG_USERCONFIG", "npm_config_userconfig") ?? resolveHomeNpmrc(env),
+    userNpmrc,
     resolveEnvPath(env, "NPM_CONFIG_GLOBALCONFIG", "npm_config_globalconfig"),
     resolveScopedGlobalNpmrc(scope),
     readNpmGlobalConfigPath(env, scope),
@@ -236,15 +236,15 @@ function hasNpmrcConfigKey(filePath: string, key: string): boolean {
 
 function hasRawNpmConfigKey(
   env: NodeJS.ProcessEnv,
-  key: "before" | "min-release-age",
-  scope: NpmFreshnessConfigScope,
+  key: string,
+  scope: NpmConfigScope = {},
 ): boolean {
   return resolveNpmConfigFiles(env, scope).some((file) => hasNpmrcConfigKey(file, key));
 }
 
 function resolveNpmFreshnessBypassMode(
   env: NodeJS.ProcessEnv,
-  scope: NpmFreshnessConfigScope,
+  scope: NpmConfigScope,
 ): NpmFreshnessBypassMode {
   if (process.platform === "win32") {
     return "before";
@@ -262,7 +262,7 @@ function resolveNpmFreshnessBypassMode(
 export function createNpmFreshnessBypassArgs(
   env: NodeJS.ProcessEnv = process.env,
   now = new Date(),
-  scope: NpmFreshnessConfigScope = {},
+  scope: NpmConfigScope = {},
 ): string[] {
   if (resolveNpmFreshnessBypassMode(env, scope) === "min-release-age") {
     return ["--min-release-age=0"];
@@ -274,7 +274,7 @@ export function createNpmFreshnessBypassArgs(
 export function applyNpmFreshnessBypassEnv(
   env: NodeJS.ProcessEnv,
   now = new Date(),
-  scope: NpmFreshnessConfigScope = {},
+  scope: NpmConfigScope = {},
 ): void {
   const [arg] = createNpmFreshnessBypassArgs(env, now, scope);
   for (const key of NPM_FRESHNESS_BYPASS_KEYS) {

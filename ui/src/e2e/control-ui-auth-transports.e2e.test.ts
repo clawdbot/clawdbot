@@ -1,20 +1,24 @@
 // Control UI tests prove trusted-proxy and browser-origin auth through real transports.
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage } from "node:http";
 import net from "node:net";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import type { GatewayServer } from "../../../src/gateway/server.js";
-import { getActiveGatewayRootWorkCount } from "../../../src/process/gateway-work-admission.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../src/test-utils/openclaw-test-state.js";
+import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
+import type { ApplicationRuntime } from "../app/bootstrap.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   canRunPlaywrightChromium,
   controlUiE2eWaitTimeoutMs,
@@ -22,17 +26,14 @@ import {
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import { closeControlUiE2eBrowserContext } from "./control-ui-e2e-suite.test-support.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const artifactDir = path.resolve(
-  process.cwd(),
-  process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim() ||
-    ".artifacts/control-ui-e2e/control-ui-auth-transports",
-);
+let artifactDir: string;
 const viewport = { height: 900, width: 1280 };
 const trustedProxyUser = "qa-operator";
 const configProofIdentifier = "9223372036854775807";
@@ -70,6 +71,7 @@ type ProxyConnectionEvidence = {
   browserOrigin: string | null;
   gatewayResult?: GatewayResultEvidence;
   identityInjected: boolean;
+  requestTarget: string;
   requestMethods: string[];
   requiredHeaderInjected: boolean;
   route: ProxyRoute;
@@ -79,6 +81,7 @@ type ProxyConnectionEvidence = {
 type RealTransportProxy = {
   close: () => Promise<void>;
   evidence: ProxyConnectionEvidence[];
+  ipv4TrustedUrl: string;
   port: number;
   trustedUrl: string;
   untrustedUrl: string;
@@ -171,6 +174,7 @@ function sanitizeProxyEvidence(evidence: ProxyConnectionEvidence) {
     browserOriginPresent: Boolean(evidence.browserOrigin),
     gatewayResult: evidence.gatewayResult,
     identityInjected: evidence.identityInjected,
+    requestTarget: evidence.requestTarget,
     requestMethods: evidence.requestMethods,
     requiredHeaderInjected: evidence.requiredHeaderInjected,
     route: evidence.route,
@@ -291,6 +295,7 @@ async function startRealTransportProxy(gatewayUrl: string): Promise<RealTranspor
       const connectionEvidence: ProxyConnectionEvidence = {
         browserOrigin: stringValue(request.headers.origin),
         identityInjected: route === "trusted",
+        requestTarget: request.url ?? "",
         requestMethods: [],
         requiredHeaderInjected: route === "trusted",
         route,
@@ -322,6 +327,7 @@ async function startRealTransportProxy(gatewayUrl: string): Promise<RealTranspor
       });
     },
     evidence,
+    ipv4TrustedUrl: `ws://127.0.0.1:${address.port}/trusted`,
     port: address.port,
     trustedUrl: `${baseUrl}/trusted`,
     untrustedUrl: `${baseUrl}/untrusted`,
@@ -487,7 +493,6 @@ async function createBrowserPage(
   errors: string[];
   page: Page;
 }> {
-  await mkdir(artifactDir, { recursive: true });
   const context = await browser.newContext({
     locale: "en-US",
     recordVideo: captureUiProofEnabled ? { dir: artifactDir, size: viewport } : undefined,
@@ -521,34 +526,45 @@ async function createBrowserPage(
 }
 
 async function closeContext(context: BrowserContext): Promise<void> {
+  await closeControlUiE2eBrowserContext(context);
   openContexts.delete(context);
-  await context.close();
 }
 
-async function closeConnectedContext(context: BrowserContext): Promise<void> {
-  await closeContext(context);
-  // UI requests intentionally outlive socket teardown. Drain their admitted work
-  // before another browser interaction so lazy handler imports cannot starve it.
-  await expect.poll(() => getActiveGatewayRootWorkCount()).toBe(0);
+async function closeOpenContexts(): Promise<void> {
+  const [first, ...remaining] = openContexts;
+  if (!first) {
+    return;
+  }
+  await runQaGatewayFixture(
+    () => closeContext(first),
+    ...remaining.map((context) => () => closeContext(context)),
+  );
 }
 
-async function captureChromiumScreenshot(page: Page, fileName: string): Promise<void> {
+async function captureChromiumScreenshot(
+  fileName: string,
+  surface: Locator,
+  content: readonly Locator[],
+): Promise<void> {
   if (!captureUiProofEnabled) {
     return;
   }
-  const session = await page.context().newCDPSession(page);
-  try {
-    // The live dashboard keeps rendering while RPCs settle. Capture the current
-    // Chromium surface directly so proof does not wait on unrelated UI activity.
-    const result = await session.send("Page.captureScreenshot", {
-      captureBeyondViewport: false,
-      format: "png",
-      fromSurface: true,
-    });
-    await writeFile(path.join(artifactDir, fileName), Buffer.from(result.data, "base64"));
-  } finally {
-    await session.detach();
-  }
+  const image = await takeControlUiViewportScreenshot(surface.page(), surface, content);
+  await writeFile(path.join(artifactDir, fileName), image);
+}
+
+async function captureConnectedAuth(fileName: string, page: Page): Promise<void> {
+  await captureChromiumScreenshot(fileName, page.locator(".shell"), [
+    page.getByRole("textbox", { name: "WebSocket URL", exact: true }),
+    page.getByText("Authenticated via trusted proxy.", { exact: true }),
+  ]);
+}
+
+async function captureRejectedAuth(fileName: string, failure: Locator): Promise<void> {
+  await captureChromiumScreenshot(fileName, failure.page().locator(".login-gate__card"), [
+    failure.locator(".login-gate__failure-title"),
+    failure.locator(".login-gate__failure-steps"),
+  ]);
 }
 
 async function verifyGatewayServedControlUiBundle(httpUrl: string): Promise<{
@@ -585,6 +601,69 @@ async function readConfigProofSnapshot(): Promise<{ identifier: unknown; prefix:
     identifier: discord[0],
     prefix: stringValue(messages?.responsePrefix),
   };
+}
+
+async function captureConfigReadbackFailure(page: Page): Promise<void> {
+  const deadline = new AbortController();
+  try {
+    // Capture fixed name/connection facts, never label text or auth/config state.
+    // The separate deadline must not hide the original click failure.
+    const snapshot = await Promise.race([
+      Promise.all([
+        page.evaluate(() => {
+          const app = document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
+            "openclaw-app",
+          );
+          const phase = app?.runtime?.context.gateway.snapshot.phase;
+          const phases = [
+            "stopped",
+            "connecting",
+            "starting",
+            "connected",
+            "reconnecting",
+            "reload-required",
+            "offline",
+          ];
+          return {
+            pathname: location.pathname.slice(0, 160),
+            navigationAgeMs: Math.round(performance.now()),
+            gatewayPhase: phases.includes(phase ?? "") ? phase : "unknown",
+            mainInert: document.querySelector("main")?.inert ?? null,
+            outletInert:
+              document.querySelector<HTMLElement>("openclaw-router-outlet")?.inert ?? null,
+            rawButtons: [
+              ...document.querySelectorAll<HTMLButtonElement>(".config-mode-toggle button"),
+            ]
+              .filter((button) => button.textContent?.trim() === "Raw")
+              .slice(0, 3)
+              .map((button) => ({
+                disabled: button.disabled,
+                hasLayout: button.getClientRects().length > 0,
+                inertAncestor: button.closest("[inert]") !== null,
+                label: !button.hasAttribute("aria-label")
+                  ? "absent"
+                  : button.getAttribute("aria-label") === "Raw"
+                    ? "raw"
+                    : "other",
+                labelledBy: button.hasAttribute("aria-labelledby"),
+              })),
+          };
+        }),
+        page.getByRole("button", { name: "Raw", exact: true }).count(),
+        page.getByRole("button", { name: "Raw", exact: true, includeHidden: true }).count(),
+      ])
+        .then(([state, roleMatches, roleMatchesIncludingHidden]) => ({
+          ...state,
+          roleMatches,
+          roleMatchesIncludingHidden,
+        }))
+        .catch(() => "unavailable"),
+      delay(1_000, "timed-out", { signal: deadline.signal }),
+    ]);
+    console.error(`[real-config-readback-failure] ${JSON.stringify(snapshot)}`);
+  } finally {
+    deadline.abort();
+  }
 }
 
 async function waitForConnectionEvidence(
@@ -632,7 +711,11 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
         `Playwright Chromium is not installed or cannot start at ${chromiumExecutablePath}.`,
       );
     }
-    await mkdir(artifactDir, { recursive: true });
+    artifactDir = createControlUiE2eArtifactDir(
+      "control-ui-auth-transports",
+      process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim() ||
+        ".artifacts/control-ui-e2e/control-ui-auth-transports",
+    );
     allowedUi = await startControlUiE2eServer();
     // A lightweight proxy supplies the distinct rejected Origin without starting
     // a second Vite compiler in the already resource-intensive browser shard.
@@ -644,40 +727,34 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
   }, 120_000);
 
   afterAll(async () => {
-    await Promise.all([...openContexts].map((context) => context.close().catch(() => {})));
-    openContexts.clear();
-    const cleanupResults = await Promise.allSettled([
-      browser?.close(),
-      proxy?.close(),
-      gateway?.cleanup(),
-      allowedUi?.close(),
-      rejectedUi?.close(),
-    ]);
-    expect(
-      cleanupResults
-        .filter((result) => result.status === "rejected")
-        .map((result) => String(result.reason)),
-    ).toEqual([]);
+    await runQaGatewayFixture(
+      closeOpenContexts,
+      () => browser?.close(),
+      () => proxy?.close(),
+      () => gateway?.cleanup(),
+      () => allowedUi?.close(),
+      () => rejectedUi?.close(),
+    );
 
     const cleanup = {
       gatewayPortClosed: gateway ? await isPortClosed("127.0.0.1", gateway.port) : true,
       proxyPortClosed: proxy ? await isPortClosed("127.0.0.1", proxy.port) : true,
     };
-    await writeFile(
-      path.join(artifactDir, "cleanup-summary.json"),
-      `${JSON.stringify(cleanup, null, 2)}\n`,
-      "utf8",
-    );
+    // Setup can reject before this invocation allocates retained evidence.
+    if (artifactDir) {
+      await writeFile(
+        path.join(artifactDir, "cleanup-summary.json"),
+        `${JSON.stringify(cleanup, null, 2)}\n`,
+        "utf8",
+      );
+    }
     expect(cleanup).toEqual({
       gatewayPortClosed: true,
       proxyPortClosed: true,
     });
   }, 30_000);
 
-  afterEach(async () => {
-    await Promise.all([...openContexts].map((context) => context.close().catch(() => {})));
-    openContexts.clear();
-  });
+  afterEach(closeOpenContexts);
 
   it("preserves a 64-bit identifier through a real Gateway form save", async () => {
     const servedBundle = await verifyGatewayServedControlUiBundle(gateway.httpUrl);
@@ -703,7 +780,11 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
     await expect.poll(() => rawEditorBefore.inputValue()).toContain(`"${configProofIdentifier}"`);
     await expect.poll(() => rawEditorBefore.inputValue()).toContain(configProofPrefixBefore);
     await rawEditorBefore.scrollIntoViewIfNeeded();
-    await captureChromiumScreenshot(connected.page, "01-real-config-id-before.png");
+    await captureChromiumScreenshot(
+      "01-real-config-id-before.png",
+      connected.page.locator(".shell"),
+      [rawEditorBefore],
+    );
 
     const settingsUrl = new URL("settings/communications", gateway.httpUrl);
     settingsUrl.searchParams.set("section", "messages");
@@ -734,7 +815,12 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
       .locator("openclaw-app-shell")
       .waitFor({ timeout: controlUiSettleTimeoutMs });
     expect((await connected.page.goto(rawSettingsUrl.toString()))?.status()).toBe(200);
-    await connected.page.getByRole("button", { name: "Raw", exact: true }).click();
+    try {
+      await connected.page.getByRole("button", { name: "Raw", exact: true }).click();
+    } catch (error) {
+      await captureConfigReadbackFailure(connected.page).catch(() => {});
+      throw error;
+    }
     const rawEditor = connected.page.locator(".config-raw-field textarea");
     await rawEditor.waitFor();
     await expect.poll(() => rawEditor.inputValue()).toContain(`"${configProofIdentifier}"`);
@@ -759,14 +845,16 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
       "utf8",
     );
     console.info(`[real-config-id-proof] ${JSON.stringify(proof)}`);
-    await captureChromiumScreenshot(connected.page, "02-real-config-id-after.png");
+    await captureChromiumScreenshot(
+      "02-real-config-id-after.png",
+      connected.page.locator(".shell"),
+      [rawEditor],
+    );
     expect(connected.errors).toEqual([]);
-    await closeConnectedContext(connected.context);
+    await closeContext(connected.context);
   });
 
   it("connects through the trusted path and rejects the untrusted proxy path", async () => {
-    // A connected shell starts bootstrap RPCs that can outlive context teardown.
-    // Keep it last so those requests cannot starve the next browser interaction.
     const rejected = await createBrowserPage(allowedUi.baseUrl, proxy.untrustedUrl);
     const expectedReason = "trusted_proxy_missing_header_x-forwarded-proto";
     await waitForVisibleFailure(rejected.page, "unauthorized");
@@ -776,9 +864,19 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
     );
     expect(untrustedEvidence.gatewayResult?.message).toContain("unauthorized");
     expect(untrustedEvidence.gatewayResult?.errorReason).toBe(expectedReason);
+    expect(untrustedEvidence.gatewayResult?.errorCode).toBe(
+      ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED,
+    );
+    const failure = rejected.page.locator(".login-gate__failure");
+    expect(await failure.getAttribute("data-kind")).toBe("trusted-proxy");
+    expect(await failure.locator(".login-gate__failure-steps").textContent()).toContain("SSO");
+    expect(await failure.locator(".login-gate__failure-steps").textContent()).toContain(
+      "WebSocket upgrade",
+    );
+    expect(await failure.locator(".login-gate__command").count()).toBe(0);
     expect(untrustedEvidence.identityInjected).toBe(false);
     expect(untrustedEvidence.requiredHeaderInjected).toBe(false);
-    await captureChromiumScreenshot(rejected.page, "02-untrusted-proxy-rejected.png");
+    await captureRejectedAuth("02-untrusted-proxy-rejected.png", failure);
     expect(rejected.errors).toEqual([]);
     await closeContext(rejected.context);
 
@@ -803,9 +901,9 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
     expect(trustedEvidence.requiredHeaderInjected).toBe(true);
     expect(trustedEvidence.gatewayResult?.recoveryScope).toMatch(/^[A-Za-z0-9_-]+$/u);
     expect(trustedEvidence.gatewayResult?.recoveryScope).not.toContain(trustedProxyUser);
-    await captureChromiumScreenshot(connected.page, "01-trusted-proxy-connected.png");
+    await captureConnectedAuth("01-trusted-proxy-connected.png", connected.page);
     expect(connected.errors).toEqual([]);
-    await closeConnectedContext(connected.context);
+    await closeContext(connected.context);
 
     await writeFile(
       path.join(artifactDir, "trusted-proxy-behavior.json"),
@@ -825,9 +923,99 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
     );
   });
 
+  it("does not forward prior Gateway credentials across URL scopes", async () => {
+    const connected = await createBrowserPage(gateway.httpUrl, proxy.trustedUrl);
+    await connected.page
+      .locator("openclaw-app-shell")
+      .waitFor({ timeout: controlUiSettleTimeoutMs });
+
+    const seededEvidenceStart = proxy.evidence.length;
+    await connected.page.evaluate((gatewayUrl) => {
+      const app = document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
+        "openclaw-app",
+      );
+      if (!app?.runtime) {
+        throw new Error("Control UI runtime is unavailable");
+      }
+      app.runtime.context.gateway.connect({
+        gatewayUrl,
+        token: "prior-gateway-token",
+        password: "prior-gateway-password",
+        bootstrapToken: "prior-gateway-bootstrap",
+      });
+    }, proxy.trustedUrl);
+    await waitForConnectionEvidence(
+      (entry) =>
+        entry.requestTarget === "/trusted" &&
+        entry.browserConnect?.authFields.includes("bootstrapToken") === true,
+      seededEvidenceStart,
+    );
+
+    const queryScopedUrl = `${proxy.trustedUrl}?credential-scope=next`;
+    const queryEvidenceStart = proxy.evidence.length;
+    await connected.page.evaluate((gatewayUrl) => {
+      const app = document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
+        "openclaw-app",
+      );
+      if (!app?.runtime) {
+        throw new Error("Control UI runtime is unavailable");
+      }
+      app.runtime.context.gateway.connect({ gatewayUrl });
+    }, queryScopedUrl);
+    const queryEvidence = await waitForConnectionEvidence(
+      (entry) =>
+        entry.requestTarget === "/trusted?credential-scope=next" &&
+        entry.browserConnect !== undefined,
+      queryEvidenceStart,
+    );
+    expect(queryEvidence.browserConnect?.authFields).toEqual(["token"]);
+
+    const originEvidenceStart = proxy.evidence.length;
+    await connected.page.evaluate((gatewayUrl) => {
+      const app = document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
+        "openclaw-app",
+      );
+      if (!app?.runtime) {
+        throw new Error("Control UI runtime is unavailable");
+      }
+      app.runtime.context.gateway.connect({ gatewayUrl });
+    }, proxy.ipv4TrustedUrl);
+    const originEvidence = await waitForConnectionEvidence(
+      (entry) => entry.requestTarget === "/trusted" && entry.gatewayResult?.ok === true,
+      originEvidenceStart,
+    );
+    expect(originEvidence.browserConnect?.authFields).toEqual([]);
+
+    const proof = {
+      differentOrigin: {
+        emittedAuthFields: originEvidence.browserConnect?.authFields ?? [],
+        priorApplicationCredentialsAbsent: true,
+        requestTarget: originEvidence.requestTarget,
+      },
+      queryOnly: {
+        emittedAuthFields: queryEvidence.browserConnect?.authFields ?? [],
+        passwordBootstrapAndDeviceTokenAbsent: true,
+        requestTarget: queryEvidence.requestTarget,
+        tokenOriginScopePreserved: true,
+      },
+      source: "built-control-ui-browser-to-real-gateway-proxy",
+    };
+    await writeFile(
+      path.join(artifactDir, "gateway-credential-rescope-proof.json"),
+      `${JSON.stringify(proof, null, 2)}\n`,
+      "utf8",
+    );
+    console.info(`[gateway-credential-rescope-proof] ${JSON.stringify(proof)}`);
+    expect(connected.errors).toEqual([]);
+    await closeContext(connected.context);
+  });
+
   it("confirms gatewayUrl, accepts the allowed origin, and rejects an unlisted origin", async () => {
     const rejected = await createBrowserPage(rejectedUi.baseUrl, proxy.trustedUrl);
     await waitForVisibleFailure(rejected.page, "origin not allowed");
+    const originFailure = rejected.page.locator(".login-gate__failure");
+    expect(await originFailure.getAttribute("data-kind")).toBe("origin-not-allowed");
+    expect(await originFailure.locator(".login-gate__command").count()).toBe(0);
     const rejectedOrigin = new URL(rejectedUi.baseUrl).origin;
     const rejectedEvidence = await waitForConnectionEvidence(
       (entry) =>
@@ -837,7 +1025,7 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
           entry.upstreamHandshakeStatus === 403),
       rejected.evidenceStartIndex,
     );
-    await captureChromiumScreenshot(rejected.page, "04-rejected-origin-recovery.png");
+    await captureRejectedAuth("04-rejected-origin-recovery.png", originFailure);
     expect(rejected.errors).toEqual([]);
     await closeContext(rejected.context);
 
@@ -851,9 +1039,9 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
         entry.gatewayResult?.ok === true,
       allowed.evidenceStartIndex,
     );
-    await captureChromiumScreenshot(allowed.page, "03-allowed-origin-connected.png");
+    await captureConnectedAuth("03-allowed-origin-connected.png", allowed.page);
     expect(allowed.errors).toEqual([]);
-    await closeConnectedContext(allowed.context);
+    await closeContext(allowed.context);
 
     await writeFile(
       path.join(artifactDir, "allowed-origins-behavior.json"),

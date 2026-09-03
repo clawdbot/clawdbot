@@ -68,6 +68,12 @@ const staleAuthOrderState = vi.hoisted(() => ({
   warnings: [] as string[],
 }));
 
+const repairMergedGatewayOwnerProfile = vi.hoisted(() => vi.fn());
+
+vi.mock("../../../state/user-profiles-owner-migration.js", () => ({
+  repairMergedGatewayOwnerProfile,
+}));
+
 const activeToolSchemaState = vi.hoisted(() => ({
   warnings: [] as string[],
   params: undefined as { runWithPluginMetadataSnapshot?: unknown } | undefined,
@@ -394,6 +400,11 @@ describe("doctor preview warnings", () => {
     manifestState.diagnostics = [];
     staleOAuthShadowState.warnings = [];
     staleAuthOrderState.warnings = [];
+    repairMergedGatewayOwnerProfile.mockReset().mockReturnValue({
+      repaired: false,
+      changes: [],
+      warnings: [],
+    });
     activeToolSchemaState.warnings = [];
     activeToolSchemaState.params = undefined;
     commandSecretState.targetIds = new Set<string>();
@@ -410,6 +421,26 @@ describe("doctor preview warnings", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
     tempRoots.clear();
+  });
+
+  it("reports merged gateway owner profiles without applying the repair", async () => {
+    const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw-doctor-preview" };
+    const warning = 'Gateway owner profile is merged. Run "openclaw doctor --fix" to repair it.';
+    repairMergedGatewayOwnerProfile.mockReturnValue({
+      repaired: false,
+      changes: [],
+      warnings: [warning],
+    });
+
+    const notes = await collectDoctorPreviewNotes({
+      cfg: {},
+      doctorFixCommand: "openclaw doctor --fix",
+      env,
+    });
+
+    expect(repairMergedGatewayOwnerProfile).toHaveBeenCalledWith({ env, shouldRepair: false });
+    expect(notes.warningNotes).toContain(warning);
+    expect(notes.infoNotes).toEqual([]);
   });
 
   it("routes personal Codex asset notices to info instead of warnings", async () => {

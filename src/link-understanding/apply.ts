@@ -14,26 +14,24 @@ type ApplyLinkUnderstandingResult = {
 export async function applyLinkUnderstanding(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
+  signal?: AbortSignal;
 }): Promise<ApplyLinkUnderstandingResult> {
   const result = await runLinkUnderstanding({
     cfg: params.cfg,
     ctx: params.ctx,
+    signal: params.signal,
   });
 
-  if (result.outputs.length === 0) {
+  if (result.outputs.length === 0 || params.signal?.aborted) {
     return result;
   }
 
   params.ctx.LinkUnderstanding = [...(params.ctx.LinkUnderstanding ?? []), ...result.outputs];
-  params.ctx.Body = formatLinkUnderstandingBody({
-    body: params.ctx.Body,
-    outputs: result.outputs,
-  });
-
-  finalizeInboundContext(params.ctx, {
-    forceBodyForAgent: true,
-    forceBodyForCommands: true,
-  });
+  const enrich = (body?: string) => formatLinkUnderstandingBody({ body, outputs: result.outputs });
+  // Preserve channel/media preparation independently from the transport body.
+  params.ctx.agentText = enrich(params.ctx.agentText ?? params.ctx.BodyForAgent ?? params.ctx.Body);
+  params.ctx.Body = enrich(params.ctx.Body);
+  finalizeInboundContext(params.ctx, { forceBodyForCommands: true });
 
   return result;
 }

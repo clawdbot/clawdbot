@@ -18,6 +18,7 @@ const { GatewayIntents, GatewayPlugin } = vi.hoisted(() => {
     GuildPresences: 1 << 6,
     GuildMembers: 1 << 7,
     GuildVoiceStates: 1 << 8,
+    GuildExpressions: 1 << 9,
   } as const;
 
   class TestEmitter {
@@ -106,8 +107,11 @@ describe("createDiscordGatewayPlugin", () => {
     });
   }
 
-  it("omits GuildVoiceStates by default for text-only Discord configs", () => {
-    expect(resolveDiscordGatewayIntents() & GatewayIntents.GuildVoiceStates).toBe(0);
+  it("subscribes to guild emoji changes without enabling voice by default", () => {
+    const intents = resolveDiscordGatewayIntents();
+
+    expect(intents & GatewayIntents.GuildExpressions).toBe(GatewayIntents.GuildExpressions);
+    expect(intents & GatewayIntents.GuildVoiceStates).toBe(0);
   });
 
   it("includes GuildVoiceStates when voice is enabled", () => {
@@ -255,6 +259,7 @@ describe("createDiscordGatewayPlugin", () => {
       autoInteractions: false,
       intents:
         GatewayIntents.Guilds |
+        GatewayIntents.GuildExpressions |
         GatewayIntents.GuildMessages |
         GatewayIntents.MessageContent |
         GatewayIntents.DirectMessages |

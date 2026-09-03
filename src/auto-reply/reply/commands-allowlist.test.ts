@@ -329,6 +329,37 @@ describe("handleAllowlistCommand", () => {
     expect(result?.reply?.text).toContain("Paired allowFrom (store): 456");
   });
 
+  it("surfaces pairing-store read failures instead of an empty store list", async () => {
+    readChannelAllowFromStoreMock.mockRejectedValueOnce(new Error("pairing db locked"));
+
+    const cfg = {
+      commands: { text: true },
+      channels: { telegram: { allowFrom: ["123"] } },
+    } as OpenClawConfig;
+    const result = await handleAllowlistCommand(
+      buildAllowlistParams("/allowlist list dm", cfg),
+      true,
+    );
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain(
+      "Paired allowFrom (store): unavailable (read failed). Retry this command; if it still fails, run openclaw doctor.",
+    );
+  });
+
+  it("omits the pairing-store line when the store is empty", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { telegram: { allowFrom: ["123"] } },
+    } as OpenClawConfig;
+    const result = await handleAllowlistCommand(
+      buildAllowlistParams("/allowlist list dm", cfg),
+      true,
+    );
+
+    expect(result?.reply?.text).not.toContain("Paired allowFrom (store):");
+  });
+
   it("adds allowlist entries to config and pairing stores", async () => {
     const cases = [
       {

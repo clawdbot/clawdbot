@@ -28,7 +28,7 @@ import {
   buildSetupMigrationPlanSourceSnapshot,
   buildSetupMigrationTargetSnapshot,
   inspectSetupMigrationFreshness,
-  preserveSetupMigrationSecurityAcknowledgement,
+  preserveSetupMigrationOnboardingConsents,
   prepareSetupMigrationAttemptBoundary,
   SetupMigrationTargetChangedError,
   withSetupMigrationTargetLock,
@@ -396,7 +396,7 @@ export async function runSetupMigrationImport(params: {
         formatMigrationResult,
       });
     }
-    const lockedBaseConfig = preserveSetupMigrationSecurityAcknowledgement(
+    const lockedBaseConfig = preserveSetupMigrationOnboardingConsents(
       await params.readConfigFile(),
       params.baseConfig,
     );

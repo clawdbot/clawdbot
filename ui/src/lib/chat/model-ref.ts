@@ -3,16 +3,6 @@ import type { ModelCatalogEntry } from "../../api/types.ts";
 
 const LEGACY_OPENAI_PROVIDER_IDS = new Set(["codex", "openai-codex"]);
 
-export type ChatModelOverride =
-  | {
-      kind: "qualified";
-      value: string;
-    }
-  | {
-      kind: "raw";
-      value: string;
-    };
-
 export function normalizeChatModelProviderId(provider: string): string {
   const normalized = provider.trim().toLowerCase();
   return LEGACY_OPENAI_PROVIDER_IDS.has(normalized) ? "openai" : normalized;
@@ -33,55 +23,17 @@ export function buildQualifiedChatModelValue(model: string, provider?: string | 
     : `${trimmedProvider}/${trimmedModel}`;
 }
 
-export function createChatModelOverride(value: string): ChatModelOverride | null {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-  if (trimmed.includes("/")) {
-    return { kind: "qualified", value: trimmed };
-  }
-  return { kind: "raw", value: trimmed };
-}
-
 export function normalizeChatModelOverrideValue(
-  override: ChatModelOverride | null | undefined,
+  value: string | null | undefined,
   catalog: ModelCatalogEntry[],
 ): string {
-  if (!override) {
-    return "";
-  }
-  const trimmed = override?.value.trim();
+  const trimmed = value?.trim();
   if (!trimmed) {
     return "";
   }
-  if (override.kind === "qualified") {
-    return trimmed;
-  }
-
-  return resolveUniqueCatalogValueById(trimmed, catalog) || trimmed;
-}
-
-function resolveServerChatModelValue(model?: string | null, provider?: string | null): string {
-  if (typeof model !== "string") {
-    return "";
-  }
-  const trimmedModel = model.trim();
-  if (!trimmedModel) {
-    return "";
-  }
-  const trimmedProvider = provider?.trim();
-  if (!trimmedProvider) {
-    return trimmedModel;
-  }
-  const providerPrefix = `${trimmedProvider.toLowerCase()}/`;
-  if (trimmedModel.toLowerCase().startsWith(providerPrefix)) {
-    return trimmedModel;
-  }
-  if (trimmedModel.includes("/")) {
-    return trimmedModel;
-  }
-  return buildQualifiedChatModelValue(trimmedModel, trimmedProvider);
+  return trimmed.includes("/")
+    ? trimmed
+    : resolveUniqueCatalogValueById(trimmed, catalog) || trimmed;
 }
 
 function hasCatalogQualifiedValue(catalog: ModelCatalogEntry[], value: string): boolean {
@@ -132,17 +84,14 @@ export function resolvePreferredServerChatModelValue(
   const trimmedProvider = provider?.trim();
 
   if (!trimmedProvider) {
-    return normalizeChatModelOverrideValue(createChatModelOverride(trimmedModel), catalog);
+    return normalizeChatModelOverrideValue(trimmedModel, catalog);
   }
 
   if (!trimmedModel.includes("/")) {
-    const normalized = normalizeChatModelOverrideValue(
-      createChatModelOverride(trimmedModel),
-      catalog,
-    );
+    const normalized = normalizeChatModelOverrideValue(trimmedModel, catalog);
     return normalized !== trimmedModel
       ? normalized
-      : resolveServerChatModelValue(trimmedModel, trimmedProvider);
+      : buildQualifiedChatModelValue(trimmedModel, trimmedProvider);
   }
 
   const qualifiedServerValue = buildQualifiedChatModelValue(trimmedModel, trimmedProvider);
@@ -176,7 +125,7 @@ export function resolvePreferredServerChatModelValue(
   // Without catalog confirmation, preserve slash-containing server values as-is.
   // Re-qualifying them here can turn an already-qualified ref under a stale
   // provider into a nonsense double-prefix like "zai/openai/gpt-5-mini".
-  return resolveServerChatModelValue(trimmedModel, trimmedProvider);
+  return trimmedModel;
 }
 
 function formatChatModelDisplay(value: string): string {
@@ -270,13 +219,6 @@ export function buildCatalogDisplayLookup(catalog: ModelCatalogEntry[]): Map<str
   return displayLookup;
 }
 
-function formatCatalogEntryDisplay(
-  entry: ModelCatalogEntry,
-  displayLookup: ChatModelDisplayLookup,
-): string {
-  return displayLookup.get(createQualifiedCatalogKey(entry)) ?? formatRawCatalogLabel(entry);
-}
-
 export function formatCatalogChatModelDisplayFromLookup(
   value: string,
   displayLookup: ChatModelDisplayLookup,
@@ -293,9 +235,9 @@ export function buildChatModelOptionFromLookup(
   entry: ModelCatalogEntry,
   displayLookup: ChatModelDisplayLookup,
 ): { value: string; label: string } {
-  const provider = entry.provider?.trim();
+  const value = buildQualifiedChatModelValue(entry.id, entry.provider);
   return {
-    value: buildQualifiedChatModelValue(entry.id, provider),
-    label: formatCatalogEntryDisplay(entry, displayLookup),
+    value,
+    label: displayLookup.get(value.toLowerCase()) ?? formatRawCatalogLabel(entry),
   };
 }

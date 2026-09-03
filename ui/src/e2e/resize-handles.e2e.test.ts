@@ -1,4 +1,3 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
@@ -72,8 +71,7 @@ async function captureResizeState(page: Page, name: string) {
   if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
     return;
   }
-  const output = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "resize-handles");
-  await mkdir(output, { recursive: true });
+  const output = path.join(suite.artifactDir, "resize-handles");
   await page.screenshot({
     animations: "disabled",
     path: path.join(output, `${name}.png`),

@@ -4,7 +4,10 @@
  * Sends annotated inter-session messages through in-process or Gateway execution and reads the assistant reply.
  */
 import crypto from "node:crypto";
+import { getRuntimeConfig } from "../../config/config.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
+import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { retireSessionMcpRuntimeForSessionKey } from "../agent-bundle-mcp-tools.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
@@ -66,11 +69,13 @@ export async function runAgentStep(params: {
   channel?: string;
   lane?: string;
   transcriptMessage?: string;
+  sourceAgentId?: string;
   sourceSessionKey?: string;
   sourceChannel?: string;
   sourceTool?: string;
   callGateway?: GatewayCaller;
 }): Promise<string | undefined> {
+  const promptedAt = Date.now();
   const stepIdem = crypto.randomUUID();
   const inputProvenance = {
     kind: "inter_session" as const,
@@ -122,6 +127,18 @@ export async function runAgentStep(params: {
     },
     timeoutMs: 10_000,
   });
+
+  if (params.sourceAgentId && params.agentId) {
+    recordSessionParticipantBestEffort({
+      identity: { type: "agent", id: params.sourceAgentId },
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      storePath: resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
+        agentId: params.agentId,
+      }),
+      promptedAt,
+    });
+  }
 
   const stepRunId = typeof response?.runId === "string" && response.runId ? response.runId : "";
   const resolvedRunId = stepRunId || stepIdem;

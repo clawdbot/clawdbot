@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -8,11 +9,57 @@ import type { WorkerNodeDesktopCarrier } from "./node-desktop-carrier.js";
 import * as support from "./service.test-support.js";
 import { createWorkerEnvironmentStore } from "./store.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
+import { measureLaunchTurn } from "./worker-turn-launcher.test-support.js";
 
 type WorkerEnvironmentServiceError = support.WorkerEnvironmentServiceError;
 
 describe("worker environment service", () => {
   support.setupWorkerEnvironmentServiceSuite();
+
+  it("drains all tunnel owners before reporting an independent shutdown failure", async () => {
+    const shutdownError = new Error("SSH tunnel shutdown failed");
+    const nodeShutdown = createDeferred();
+    const tunnelManager = {
+      stopAll: vi.fn().mockRejectedValueOnce(shutdownError).mockResolvedValue(undefined),
+    } as unknown as WorkerTunnelManager;
+    const nodeTunnelManager = {
+      bindWorkspaceBindingResolver: vi.fn(),
+      status: () => "stopped" as const,
+      start: vi.fn(),
+      stop: vi.fn(async () => {}),
+      stopAll: vi.fn(async () => await nodeShutdown.promise),
+    };
+    const nodeDesktopCarrier = {
+      bindRuntime: vi.fn(),
+      observe: vi.fn(),
+      launchApp: vi.fn(),
+      stop: vi.fn(async () => {}),
+      stopAll: vi.fn(async () => {}),
+    } as unknown as WorkerNodeDesktopCarrier;
+    const workerService = support.createService(support.createProvider(), {
+      tunnelManager,
+      nodeTunnelManager,
+      nodeDesktopCarrier,
+    });
+    const stopping = workerService.stop();
+    const settled = vi.fn();
+    void stopping.then(settled, settled);
+
+    try {
+      await support.waitForFast(() => expect(nodeTunnelManager.stopAll).toHaveBeenCalledOnce());
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(settled).not.toHaveBeenCalled();
+      expect(nodeDesktopCarrier.stopAll).toHaveBeenCalledOnce();
+
+      nodeShutdown.resolve();
+      await expect(stopping).rejects.toBe(shutdownError);
+    } finally {
+      nodeShutdown.resolve();
+      await stopping.catch(() => undefined);
+    }
+  });
 
   it("projects live workspace transport status and fences it before provider teardown", async () => {
     support.seedReady("worker-tunnel", undefined, true);
@@ -60,6 +107,12 @@ describe("worker environment service", () => {
     );
     expect(workerService.get("worker-tunnel")).toMatchObject({ tunnelStatus: "connected" });
 
+    support.testState.nowMs += 20_000;
+    await expect(
+      workerService.startTunnel({ environmentId: "worker-tunnel", ownerEpoch: 1 }),
+    ).rejects.toThrow("owner credential is not current");
+    expect(tunnelManager.start).toHaveBeenCalledOnce();
+
     await workerService.destroy("worker-tunnel");
     expect(order).toEqual(["tunnel-stop", "provider-destroy"]);
     expect(workerService.get("worker-tunnel")).toMatchObject({
@@ -104,75 +157,122 @@ describe("worker environment service", () => {
     expect(tunnelManager.start).not.toHaveBeenCalled();
   });
 
-  it("selects a node tunnel from the persisted transport instead of provider id", async () => {
-    const tunnelManager = {
-      status: () => "stopped" as const,
-      start: vi.fn(),
-      stop: vi.fn(async () => {}),
-      stopAll: vi.fn(async () => {}),
-    } as unknown as WorkerTunnelManager;
-    support.testState.config.cloudWorkers!.profiles!.development!.provider = "crabbox";
-    const nodeHandle = {
-      environmentId: "pending",
-      ownerEpoch: 0,
-      launchTurn: vi.fn(),
-      runWorkspaceCommand: vi.fn(),
-      quiesceWorkspace: vi.fn(),
-      syncWorkspace: vi.fn(),
-      reconcileWorkspace: vi.fn(),
-      stop: vi.fn(async () => {}),
-    };
-    const nodeTunnelManager = {
-      bindWorkspaceBindingResolver: vi.fn(),
-      status: () => "stopped" as const,
-      start: vi.fn(async (request) => ({
-        ...nodeHandle,
-        environmentId: request.environmentId,
-        ownerEpoch: request.ownerEpoch,
-      })),
-      stop: vi.fn(async () => {}),
-      stopAll: vi.fn(async () => {}),
-    };
-    const workerService = support.createService(
-      support.createProvider({
-        supportedExecutionModes: ["worker-turn"],
-        id: "crabbox",
-        provision: async () => ({
-          leaseId: "cloud-lease",
-          node: { deviceId: "device-1" },
+  it.each([
+    { executionMode: "worker-turn", revokeDuringPreparation: false },
+    { executionMode: "remote-exec", revokeDuringPreparation: false },
+    { executionMode: "remote-exec", revokeDuringPreparation: true },
+  ] as const)(
+    "checks $executionMode node ownership beyond worker credential expiry (revoke during preparation: $revokeDuringPreparation)",
+    async ({ executionMode, revokeDuringPreparation }) => {
+      const tunnelManager = {
+        status: () => "stopped" as const,
+        start: vi.fn(),
+        stop: vi.fn(async () => {}),
+        stopAll: vi.fn(async () => {}),
+      } as unknown as WorkerTunnelManager;
+      support.testState.config.cloudWorkers!.profiles!.development!.provider = "crabbox";
+      const nodeHandle = {
+        environmentId: "pending",
+        ownerEpoch: 0,
+        measureLaunchTurn,
+        launchTurn: vi.fn(),
+        runWorkspaceCommand: vi.fn(),
+        quiesceWorkspace: vi.fn(),
+        syncWorkspace: vi.fn(),
+        reconcileWorkspace: vi.fn(),
+        stop: vi.fn(async () => {}),
+      };
+      const nodeTunnelManager = {
+        bindWorkspaceBindingResolver: vi.fn(),
+        status: () => "stopped" as const,
+        start: vi.fn(async (request) => ({
+          ...nodeHandle,
+          environmentId: request.environmentId,
+          ownerEpoch: request.ownerEpoch,
+        })),
+        stop: vi.fn(async () => {}),
+        stopAll: vi.fn(async () => {}),
+      };
+      const workerService = support.createService(
+        support.createProvider({
+          supportedExecutionModes: ["worker-turn", "remote-exec"],
+          id: "crabbox",
+          provision: async () => ({
+            leaseId: "cloud-lease",
+            node: { deviceId: "device-1" },
+          }),
         }),
-      }),
-      {
-        tunnelManager,
-        nodeTunnelManager,
-        ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT),
-      },
-    );
-    const environment = await workerService.create("development", "cloud-node-tunnel-gate");
-    const credential = await workerService.attachSession({
-      environmentId: environment.environmentId,
-      ownerEpoch: environment.ownerEpoch,
-      sessionId: "session-device",
-    });
-    const prepareInstallation = vi.mocked(support.testState.prepareInstallation);
-    const prepareCallsBeforeTunnel = prepareInstallation.mock.calls.length;
-
-    await expect(
-      workerService.startTunnel({
+        {
+          tunnelManager,
+          nodeTunnelManager,
+          ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT),
+        },
+      );
+      const environment = await workerService.create(
+        "development",
+        "cloud-node-tunnel-gate",
+        undefined,
+        executionMode,
+      );
+      const credential = await workerService.attachSession({
         environmentId: environment.environmentId,
-        ownerEpoch: credential.ownerEpoch,
-      }),
-    ).resolves.toMatchObject({ environmentId: environment.environmentId });
-    expect(tunnelManager.start).not.toHaveBeenCalled();
-    expect(prepareInstallation).toHaveBeenCalledTimes(prepareCallsBeforeTunnel + 1);
-    expect(nodeTunnelManager.start).toHaveBeenCalledWith(
-      expect.objectContaining({
-        deviceId: "device-1",
+        ownerEpoch: environment.ownerEpoch,
         sessionId: "session-device",
-        expectedBuild: expect.objectContaining({ bundleHash: support.BUNDLE_HASH }),
-      }),
-    );
-  });
+      });
+      const prepareInstallation = vi.mocked(support.testState.prepareInstallation);
+      const prepareCallsBeforeTunnel = prepareInstallation.mock.calls.length;
+      if (revokeDuringPreparation) {
+        const preparing = createDeferred();
+        const release = createDeferred<typeof support.BUNDLE_ARTIFACT>();
+        prepareInstallation.mockImplementationOnce(async () => {
+          preparing.resolve();
+          return await release.promise;
+        });
+        const starting = workerService.startTunnel({
+          environmentId: environment.environmentId,
+          ownerEpoch: credential.ownerEpoch,
+        });
+        await preparing.promise;
+        support.testState.store.revokeEnvironmentCredential(environment.environmentId);
+        release.resolve(support.BUNDLE_ARTIFACT);
+        await expect(starting).rejects.toThrow("owner credential is not current");
+        expect(nodeTunnelManager.start).not.toHaveBeenCalled();
+        return;
+      }
+      support.testState.nowMs = credential.expiresAtMs + 1;
+
+      await expect(
+        workerService.startTunnel({
+          environmentId: environment.environmentId,
+          ownerEpoch: credential.ownerEpoch,
+        }),
+      ).resolves.toMatchObject({ environmentId: environment.environmentId });
+      expect(tunnelManager.start).not.toHaveBeenCalled();
+      expect(prepareInstallation).toHaveBeenCalledTimes(prepareCallsBeforeTunnel + 1);
+      expect(nodeTunnelManager.start).toHaveBeenCalledWith(
+        expect.objectContaining({
+          executionMode,
+          deviceId: "device-1",
+          sessionId: "session-device",
+          expectedBuild: expect.objectContaining({ bundleHash: support.BUNDLE_HASH }),
+        }),
+      );
+      await expect(
+        workerService.startTunnel({
+          environmentId: environment.environmentId,
+          ownerEpoch: credential.ownerEpoch - 1,
+        }),
+      ).rejects.toThrow("owner credential is not current");
+      support.testState.store.revokeEnvironmentCredential(environment.environmentId);
+      await expect(
+        workerService.startTunnel({
+          environmentId: environment.environmentId,
+          ownerEpoch: credential.ownerEpoch,
+        }),
+      ).rejects.toThrow("owner credential is not current");
+      expect(nodeTunnelManager.start).toHaveBeenCalledOnce();
+    },
+  );
 
   it("stops the node transport that owns a timed-out start", async () => {
     support.testState.config.cloudWorkers!.profiles!.development!.provider = "device";
@@ -262,6 +362,7 @@ describe("worker environment service", () => {
       start: vi.fn(async (request: Parameters<WorkerTunnelManager["start"]>[0]) => ({
         environmentId: request.environmentId,
         ownerEpoch: request.ownerEpoch,
+        measureLaunchTurn,
         launchTurn: vi.fn(),
         runWorkspaceCommand: vi.fn(),
         syncWorkspace: vi.fn(),

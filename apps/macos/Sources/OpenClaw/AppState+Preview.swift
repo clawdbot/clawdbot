@@ -20,6 +20,7 @@ extension AppState {
         state.voiceWakeAdditionalLocaleIDs = ["en-US", "de-DE"]
         state.voicePushToTalkEnabled = false
         state.talkEnabled = false
+        state.talkRealtimeRelayEnabled = false
         state.talkPhaseSoundsEnabled = true
         state.talkShiftToStopEnabled = true
         state.iconOverride = .system

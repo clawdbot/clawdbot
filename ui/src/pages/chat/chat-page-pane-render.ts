@@ -36,7 +36,12 @@ type ChatPagePaneRenderOptions = {
     sessionKey: string,
     options?: PaneSessionChangeOptions,
   ) => boolean;
-  onSessionDeleted: (paneId: string, sessionKey: string, replacementSessionKey: string) => void;
+  onSessionDeleted: (
+    paneId: string,
+    sessionKey: string,
+    replacementSessionKey: string,
+    preserveDraft?: boolean,
+  ) => void;
   onSplitDown?: (paneId: string) => void;
   onSplitRight?: (paneId: string) => void;
   ownerKey: string;
@@ -104,6 +109,7 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
                 sessionKey,
                 options.data,
               )}
+              .dashboardExpanded=${options.data?.dashboardExpanded === true}
               .routeFace=${options.data?.face ?? "chat"}
               .paneTitle=${title}
               .narrow=${options.narrow}

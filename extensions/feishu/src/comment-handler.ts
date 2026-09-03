@@ -1,16 +1,14 @@
 // Feishu plugin module implements comment handler behavior.
 import { resolveInboundReplyDispatchCounts } from "openclaw/plugin-sdk/channel-inbound";
 import { bindIngressLifecycleToReplyOptions } from "openclaw/plugin-sdk/channel-outbound";
+import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
+import type { OpenClawConfig as ClawdbotConfig } from "openclaw/plugin-sdk/config-contracts";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { createFeishuCommentReplyDispatcher } from "./comment-dispatcher.js";
-import {
-  createChannelPairingController,
-  type ClawdbotConfig,
-  type RuntimeEnv,
-} from "./comment-handler-runtime-api.js";
 import { buildFeishuCommentTarget } from "./comment-target.js";
 import { deliverCommentThreadText } from "./drive.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";

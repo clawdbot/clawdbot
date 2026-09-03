@@ -1,5 +1,6 @@
 // Inference backend detection tests cover the documented ladder and login-awareness.
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as facadeRuntime from "../plugin-sdk/facade-runtime.js";
 import type { LocalCommandProbe } from "../system-agent/probes.js";
 import {
   ANTHROPIC_API_DEFAULT_MODEL_REF,
@@ -36,6 +37,7 @@ const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
     setupProviders: new Map(),
     commandAliases: new Map(),
     contracts: new Map(),
+    modelIdNormalizationPolicies: new Map(),
   },
   metrics: {
     registrySnapshotMs: 0,
@@ -47,13 +49,24 @@ const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
   getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
 }));
 
 afterAll(() => {
   vi.doUnmock("../plugins/current-plugin-metadata-snapshot.js");
   vi.resetModules();
+});
+
+beforeEach(() => {
+  vi.spyOn(facadeRuntime, "tryLoadActivatedBundledPluginPublicSurfaceModule").mockResolvedValue(
+    null,
+  );
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 function probeDeps(found: Record<string, boolean>) {
@@ -64,13 +77,99 @@ function probeDeps(found: Record<string, boolean>) {
 }
 
 describe("detectInferenceBackends", () => {
+  it.each([
+    {
+      account: { type: "chatgpt", email: "alex@example.com" },
+      detail: "logged in · ChatGPT account · alex@example.com",
+      credentials: true,
+    },
+    {
+      account: { type: "chatgpt" },
+      detail: "logged in · ChatGPT account · email unavailable",
+      credentials: true,
+    },
+    {
+      account: { type: "apiKey", email: "stale@example.com" },
+      detail: "logged in · API key (usage-billed)",
+      credentials: true,
+    },
+    {
+      account: { type: "none", requiresOpenaiAuth: true },
+      detail: "installed, not logged in — run `codex login`, then check again",
+      credentials: false,
+    },
+    {
+      account: { type: "none", requiresOpenaiAuth: false },
+      detail: "installed",
+      credentials: undefined,
+    },
+    { account: { type: "unknown" }, detail: "installed", credentials: undefined },
+  ])(
+    "shows native Codex authentication before installing its runtime: $detail",
+    async ({ account, detail, credentials }) => {
+      vi.mocked(facadeRuntime.tryLoadActivatedBundledPluginPublicSurfaceModule).mockImplementation(
+        async ({ dirName }) =>
+          dirName === "openai" ? { readCodexCliAccount: async () => account } : null,
+      );
+      const candidates = await detectInferenceBackends({
+        env: {},
+        platform: "linux",
+        deps: {
+          probeLocalCommand: probeDeps({ codex: true }),
+          readCodexCliCredentials: () => ({ type: "oauth", email: "saved@example.com" }),
+        },
+      });
+
+      expect(candidates).toMatchObject([{ kind: "codex-cli", detail }]);
+      expect(candidates[0]?.credentials).toBe(credentials);
+      expect(JSON.stringify(candidates)).not.toContain("saved@example.com");
+    },
+  );
+
+  it("does not promote native API-key access using an unrelated saved OAuth token", async () => {
+    vi.mocked(facadeRuntime.tryLoadActivatedBundledPluginPublicSurfaceModule).mockResolvedValue({
+      readCodexCliAccount: async () => ({ type: "apiKey" }),
+    });
+    const candidates = await detectInferenceBackends({
+      env: { OPENAI_API_KEY: "synthetic-environment-key" },
+      platform: "linux",
+      deps: {
+        probeLocalCommand: probeDeps({ codex: true }),
+        readCodexCliCredentials: () => ({ type: "oauth" }),
+      },
+    });
+
+    expect(candidates.map((candidate) => candidate.kind)).toEqual(["openai-api-key", "codex-cli"]);
+  });
+
+  it.each([
+    ["claude.ai", "logged in · Claude account · alex@example.com"],
+    ["api_key", "logged in · API key (usage-billed)"],
+    ["unknown", "logged in · authentication method unavailable"],
+  ])("shows the native Claude authentication method: %s", async (authMethod, detail) => {
+    vi.mocked(facadeRuntime.tryLoadActivatedBundledPluginPublicSurfaceModule).mockResolvedValue({
+      probeClaudeCliAuthStatus: () => ({
+        status: "available",
+        authMethod,
+        email: "alex@example.com",
+      }),
+    });
+    const candidates = await detectInferenceBackends({
+      env: {},
+      platform: "linux",
+      deps: { probeLocalCommand: probeDeps({ claude: true }) },
+    });
+
+    expect(candidates).toMatchObject([{ kind: "claude-cli", credentials: true, detail }]);
+  });
+
   it("returns nothing when no backend exists", async () => {
     const candidates = await detectInferenceBackends({
       env: {},
       platform: "linux",
       deps: {
         probeLocalCommand: probeDeps({}),
-        readClaudeCliCredentials: () => null,
+        detectClaudeLoginState: async () => ({ credentials: false }),
         readCodexCliCredentials: () => null,
       },
     });
@@ -88,7 +187,10 @@ describe("detectInferenceBackends", () => {
           timedOut: true,
           error: "timed out after 1500ms",
         }),
-        readClaudeCliCredentials: () => ({ type: "oauth" }),
+        detectClaudeLoginState: async () => ({
+          credentials: true,
+          authKind: "claude-subscription",
+        }),
         readCodexCliCredentials: () => ({ type: "oauth" }),
         readGeminiCliCredentials: () => ({ type: "oauth" }),
       },
@@ -109,7 +211,10 @@ describe("detectInferenceBackends", () => {
       platform: "linux",
       deps: {
         probeLocalCommand: probeDeps({ claude: true, codex: true, gemini: true }),
-        readClaudeCliCredentials: () => ({ type: "oauth" }),
+        detectClaudeLoginState: async () => ({
+          credentials: true,
+          authKind: "claude-subscription",
+        }),
         readCodexCliCredentials: () => ({ type: "oauth" }),
         readGeminiCliCredentials: () => ({ type: "oauth" }),
         randomInt: () => 0,
@@ -156,7 +261,10 @@ describe("detectInferenceBackends", () => {
     });
 
     expect(candidates.map((candidate) => candidate.kind)).toEqual(["openai-api-key", "codex-cli"]);
-    expect(candidates[1]).toMatchObject({ credentials: true, detail: "logged in" });
+    expect(candidates[1]).toMatchObject({
+      credentials: true,
+      detail: "logged in · authentication method unavailable",
+    });
   });
 
   it("keeps API-key-helper-backed Claude after environment keys", async () => {
@@ -165,7 +273,7 @@ describe("detectInferenceBackends", () => {
       platform: "linux",
       deps: {
         probeLocalCommand: probeDeps({ claude: true }),
-        readClaudeCliCredentials: () => ({ type: "api_key_helper" }),
+        detectClaudeLoginState: async () => ({ credentials: true, authKind: "api-key" }),
       },
     });
 
@@ -185,7 +293,7 @@ describe("detectInferenceBackends", () => {
       platform: "linux",
       deps: {
         probeLocalCommand: probeDeps({ claude: true }),
-        readClaudeCliCredentials: () => null,
+        detectClaudeLoginState: async () => ({ credentials: true, authKind: "api-key" }),
       },
     });
 
@@ -194,61 +302,15 @@ describe("detectInferenceBackends", () => {
     );
   });
 
-  it.each(["oauth", "token"])(
-    "labels parsed Claude CLI %s credentials as a subscription",
-    async (type) => {
-      const candidates = await detectInferenceBackends({
-        env: {},
-        platform: "linux",
-        deps: {
-          probeLocalCommand: probeDeps({ claude: true }),
-          readClaudeCliCredentials: () => ({ type }),
-        },
-      });
-
-      expect(candidates).toMatchObject([
-        {
-          kind: "claude-cli",
-          credentials: true,
-          detail: "logged in · Claude subscription",
-        },
-      ]);
-    },
-  );
-
-  it("keeps an Anthropic environment key ahead of unknown Claude credentials", async () => {
-    const candidates = await detectInferenceBackends({
-      env: { ANTHROPIC_API_KEY: "sk-y" },
-      platform: "darwin",
-      deps: {
-        probeLocalCommand: probeDeps({ claude: true }),
-        readClaudeCliCredentials: () => null,
-      },
-    });
-
-    expect(candidates.map((candidate) => candidate.kind)).toEqual([
-      "anthropic-api-key",
-      "claude-cli",
-    ]);
-    expect(candidates[1]?.credentials).toBeUndefined();
-  });
-
-  it("keeps a lower-version Claude wrapper selectable with capability guidance", async () => {
+  it("labels a Claude CLI subscription reported by its status command", async () => {
     const candidates = await detectInferenceBackends({
       env: {},
       platform: "linux",
       deps: {
-        probeLocalCommand: async (command) => ({
-          command,
-          found: command === "claude",
-          ...(command === "claude" ? { version: "2.1.205 (Claude Code)" } : {}),
-        }),
-        readClaudeCliCredentials: () => ({ type: "oauth" }),
-        resolveClaudeLiveSessionRequirement: () => ({
-          capability: "msg_lifecycle_v1",
-          minimumVersion: "2.1.206",
-          versionArgs: ["--version"],
-          updateCommand: "claude update",
+        probeLocalCommand: probeDeps({ claude: true }),
+        detectClaudeLoginState: async () => ({
+          credentials: true,
+          authKind: "claude-subscription",
         }),
       },
     });
@@ -257,10 +319,26 @@ describe("detectInferenceBackends", () => {
       {
         kind: "claude-cli",
         credentials: true,
-        detail:
-          "logged in · Claude subscription; Claude Code 2.1.206 is the first published build known to advertise msg_lifecycle_v1; found 2.1.205. OpenClaw verifies this capability at runtime. If this build is rejected, run `claude update`, restart OpenClaw, and retry.",
+        detail: "logged in · Claude account · email unavailable",
       },
     ]);
+  });
+
+  it("keeps an Anthropic environment key ahead of unknown Claude status", async () => {
+    const candidates = await detectInferenceBackends({
+      env: { ANTHROPIC_API_KEY: "sk-y" },
+      platform: "darwin",
+      deps: {
+        probeLocalCommand: probeDeps({ claude: true }),
+        detectClaudeLoginState: async () => ({ credentials: undefined }),
+      },
+    });
+
+    expect(candidates.map((candidate) => candidate.kind)).toEqual([
+      "anthropic-api-key",
+      "claude-cli",
+    ]);
+    expect(candidates[1]?.credentials).toBeUndefined();
   });
 
   it("keeps a logged-in Gemini CLI after environment keys", async () => {
@@ -288,7 +366,7 @@ describe("detectInferenceBackends", () => {
       platform: "linux",
       deps: {
         probeLocalCommand: probeDeps({ claude: true, codex: true, gemini: true }),
-        readClaudeCliCredentials: () => null,
+        detectClaudeLoginState: async () => ({ credentials: false }),
         readCodexCliCredentials: () => ({ type: "oauth" }),
         readGeminiCliCredentials: () => null,
       },
@@ -318,7 +396,7 @@ describe("detectInferenceBackends", () => {
       platform: "linux",
       deps: {
         probeLocalCommand: probeDeps({}),
-        readClaudeCliCredentials: () => null,
+        detectClaudeLoginState: async () => ({ credentials: false }),
         readCodexCliCredentials: () => null,
       },
     });
@@ -343,7 +421,7 @@ describe("detectInferenceBackends", () => {
       platform: "linux",
       deps: {
         probeLocalCommand: probeDeps({}),
-        readClaudeCliCredentials: () => null,
+        detectClaudeLoginState: async () => ({ credentials: false }),
         readCodexCliCredentials: () => null,
       },
     });
@@ -359,7 +437,7 @@ describe("detectInferenceBackends", () => {
       platform: "linux",
       deps: {
         probeLocalCommand: probeDeps({ claude: true, codex: true }),
-        readClaudeCliCredentials: () => null,
+        detectClaudeLoginState: async () => ({ credentials: false }),
         readCodexCliCredentials: () => ({ type: "oauth" }),
       },
     });
@@ -377,7 +455,7 @@ describe("detectInferenceBackends", () => {
       platform: "linux",
       deps: {
         probeLocalCommand: probeDeps({ claude: true, codex: true, gemini: true }),
-        readClaudeCliCredentials: () => null,
+        detectClaudeLoginState: async () => ({ credentials: false }),
         readCodexCliCredentials: () => null,
         readGeminiCliCredentials: () => null,
       },
@@ -403,13 +481,17 @@ describe("detectInferenceBackends", () => {
   });
 
   it.each([
-    ["ChatGPT", "Logged in using ChatGPT", "logged in · ChatGPT subscription"],
+    ["ChatGPT", "Logged in using ChatGPT", "logged in · ChatGPT account · email unavailable"],
     [
       "API key",
       "Logged in using an API key - sk-proj-1***23456",
       "logged in · API key (usage-billed)",
     ],
-    ["unrecognized auth", "Logged in using access token", "logged in"],
+    [
+      "unrecognized auth",
+      "Logged in using access token",
+      "logged in · authentication method unavailable",
+    ],
   ])("classifies Codex %s login status", async (_auth, loginOutput, expectedDetail) => {
     const probe = async (command: string, args: string[] = ["--version"]) => ({
       command,
@@ -472,7 +554,10 @@ describe("detectInferenceBackends", () => {
         platform: "linux",
         deps: {
           probeLocalCommand: probeDeps({ claude: true, codex: true }),
-          readClaudeCliCredentials: () => ({ type: "oauth" }),
+          detectClaudeLoginState: async () => ({
+            credentials: true,
+            authKind: "claude-subscription",
+          }),
           readCodexCliCredentials: () => ({ type: "oauth" }),
           randomInt: () => pick,
         },
@@ -488,13 +573,13 @@ describe("detectInferenceBackends", () => {
     ]);
   });
 
-  it("treats missing file credentials as unknown on macOS (keychain may hold the login)", async () => {
+  it("keeps an unverified Claude status unknown", async () => {
     const candidates = await detectInferenceBackends({
       env: {},
       platform: "darwin",
       deps: {
         probeLocalCommand: probeDeps({ claude: true }),
-        readClaudeCliCredentials: () => null,
+        detectClaudeLoginState: async () => ({ credentials: undefined }),
         readCodexCliCredentials: () => null,
       },
     });
@@ -506,13 +591,13 @@ describe("detectInferenceBackends", () => {
 
   it("checks login status with the Codex executable discovered in a macOS app", async () => {
     const command = "/Applications/ChatGPT.app/Contents/Resources/codex";
-    const probed: Array<{ command: string; args: string[] }> = [];
+    const probed: Array<{ command: string; args: string[]; timeoutMs?: number }> = [];
     const candidates = await detectInferenceBackends({
       env: { HOME: "/Users/tester" },
       platform: "darwin",
       deps: {
-        probeLocalCommand: async (probedCommand, args = ["--version"]) => {
-          probed.push({ command: probedCommand, args });
+        probeLocalCommand: async (probedCommand, args = ["--version"], opts = {}) => {
+          probed.push({ command: probedCommand, args, timeoutMs: opts.timeoutMs });
           return {
             command: probedCommand,
             found: probedCommand === command,
@@ -524,7 +609,42 @@ describe("detectInferenceBackends", () => {
 
     expect(candidates).toMatchObject([{ kind: "codex-cli", detail: "installed" }]);
     expect(candidates[0]?.credentials).toBeUndefined();
-    expect(probed).toContainEqual({ command, args: ["login", "status"] });
+    expect(probed).toContainEqual({ command, args: ["--version"], timeoutMs: 3_000 });
+    expect(probed).toContainEqual({ command, args: ["login", "status"], timeoutMs: 3_000 });
+  });
+
+  it("allows a cold ChatGPT app probe more time than generic CLI discovery", async () => {
+    const command = "/Applications/ChatGPT.app/Contents/Resources/codex";
+    const candidates = await detectInferenceBackends({
+      env: { HOME: "/Users/tester" },
+      platform: "darwin",
+      deps: {
+        probeLocalCommand: async (probedCommand, args = ["--version"], opts = {}) => {
+          if (probedCommand !== command) {
+            return { command: probedCommand, found: false };
+          }
+          if (args[0] === "login") {
+            return { command: probedCommand, found: true, version: "Logged in using ChatGPT" };
+          }
+          return opts.timeoutMs === 3_000
+            ? { command: probedCommand, found: true, version: "codex-cli 0.149.0" }
+            : {
+                command: probedCommand,
+                found: true,
+                timedOut: true,
+                error: "timed out after 1500ms",
+              };
+        },
+      },
+    });
+
+    expect(candidates).toMatchObject([
+      {
+        kind: "codex-cli",
+        credentials: true,
+        detail: "logged in · ChatGPT account · email unavailable",
+      },
+    ]);
   });
 
   it.each([
@@ -548,7 +668,7 @@ describe("detectInferenceBackends", () => {
       platform: "darwin",
       deps: {
         probeLocalCommand: probeDeps({ [appCli]: true }),
-        readClaudeCliCredentials: () => null,
+        detectClaudeLoginState: async () => ({ credentials: false }),
         readCodexCliCredentials: () => null,
       },
     });
@@ -575,7 +695,7 @@ describe("detectInferenceBackends", () => {
             found: command === chatGPTCli || command === legacyCodexCli,
           };
         },
-        readClaudeCliCredentials: () => null,
+        detectClaudeLoginState: async () => ({ credentials: false }),
         readCodexCliCredentials: () => null,
       },
     });
@@ -591,7 +711,7 @@ describe("detectInferenceBackends", () => {
       platform: "linux",
       deps: {
         probeLocalCommand: probeDeps({}),
-        readClaudeCliCredentials: () => null,
+        detectClaudeLoginState: async () => ({ credentials: false }),
         readCodexCliCredentials: () => null,
       },
     });

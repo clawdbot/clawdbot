@@ -5,7 +5,7 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { ConnectParams } from "../../packages/gateway-protocol/src/index.js";
-import { getActivePluginGatewayNodePolicyRegistry } from "../plugins/runtime.js";
+import { getActivePluginGatewayNodePolicyRegistry } from "../plugins/runtime-state.js";
 import {
   DEFAULT_DANGEROUS_NODE_COMMANDS,
   IOS_WATCH_RELAY_COMMANDS,

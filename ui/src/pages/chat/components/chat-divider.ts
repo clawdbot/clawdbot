@@ -1,7 +1,9 @@
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { toolIcons } from "../../../components/icons-tools.ts";
+import { icons } from "../../../components/icons.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
+import { t } from "../../../i18n/index.ts";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 
@@ -9,20 +11,31 @@ function renderSystemLine(params: {
   icon?: keyof typeof toolIcons;
   label: string;
   metric?: string;
+  compaction?: "active" | "complete";
 }) {
   return html`
     <div
       class="chat-divider__rule"
-      role="separator"
+      role=${params.compaction ? "status" : "separator"}
+      aria-live=${params.compaction ? "polite" : nothing}
       aria-label=${params.metric ? `${params.label}, ${params.metric}` : params.label}
     >
       <span class="chat-divider__line"></span>
       <span class="chat-divider__label">
-        ${params.icon
-          ? html`<span class="chat-divider__icon" aria-hidden="true"
-              >${toolIcons[params.icon]}</span
-            >`
-          : nothing}
+        ${params.compaction
+          ? html`<span class="chat-compaction__glyph" aria-hidden="true">
+              <span class="chat-compaction__line"></span>
+              <span class="chat-compaction__line"></span>
+              <span class="chat-compaction__line"></span>
+              <span class="chat-compaction__line"></span>
+              <span class="chat-compaction__line"></span>
+              ${icons.check}
+            </span>`
+          : params.icon
+            ? html`<span class="chat-divider__icon" aria-hidden="true"
+                >${toolIcons[params.icon]}</span
+              >`
+            : nothing}
         <span class="chat-divider__title">${params.label}</span>
         ${params.metric
           ? html`
@@ -45,7 +58,13 @@ export function renderChatDivider(
       ? item.action
       : undefined;
   return html`
-    <div class="chat-divider" data-chat-row-key=${item.key} data-ts=${String(item.timestamp)}>
+    <div
+      class="chat-divider ${item.compaction
+        ? `chat-compaction chat-compaction--${item.compaction}`
+        : ""}"
+      data-chat-row-key=${item.key}
+      data-ts=${String(item.timestamp)}
+    >
       ${renderSystemLine(item)}
       ${item.description || action
         ? html`
@@ -75,6 +94,13 @@ export function renderChatDivider(
 }
 
 export function renderChatNotice(item: Extract<ChatItem, { kind: "notice" }>) {
+  const body = item.text
+    ? html`
+        <div class="chat-text chat-notice__body" dir=${detectTextDirection(item.text)}>
+          ${unsafeHTML(toSanitizedMarkdownHtml(item.text, { codeBlockChrome: "none" }))}
+        </div>
+      `
+    : nothing;
   return html`
     <div
       class="chat-notice ${item.tone === "danger" ? "chat-notice--danger callout danger" : ""}"
@@ -83,13 +109,14 @@ export function renderChatNotice(item: Extract<ChatItem, { kind: "notice" }>) {
       role=${item.tone === "danger" ? "alert" : nothing}
     >
       ${item.label ? renderSystemLine({ icon: item.icon, label: item.label }) : nothing}
-      ${item.text
+      ${item.collapsedBody && item.text
         ? html`
-            <div class="chat-text chat-notice__body" dir=${detectTextDirection(item.text)}>
-              ${unsafeHTML(toSanitizedMarkdownHtml(item.text, { codeBlockChrome: "none" }))}
-            </div>
+            <details class="chat-notice__collapse">
+              <summary class="chat-notice__toggle">${t("chat.systemNotice.showContent")}</summary>
+              ${body}
+            </details>
           `
-        : nothing}
+        : body}
     </div>
   `;
 }

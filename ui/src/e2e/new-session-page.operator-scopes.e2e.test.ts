@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import {
   SESSION_LIST_DEFAULTS,
   createNewSessionPageE2eSuite,
@@ -78,7 +79,7 @@ suite.define(() => {
     }
   });
 
-  it("allows write-scoped normal creation while keeping incognito admin-only", async () => {
+  it("allows write-scoped Fast Mode creation while keeping incognito admin-only", async () => {
     const { context, gateway, page } = await openDraft(["operator.read", "operator.write"]);
     try {
       await expect(gateway.waitForRequest("projects.list")).resolves.toMatchObject({
@@ -86,6 +87,7 @@ suite.define(() => {
       });
       const submit = page.getByRole("button", { name: "Start session" });
       const incognito = page.getByRole("switch", { name: "Incognito" });
+      const effort = page.locator('[data-chat-thinking-select="true"]');
 
       await expect.poll(() => page.locator(".sidebar-brand__new-thread").isEnabled()).toBe(true);
       await expect.poll(() => submit.isEnabled()).toBe(true);
@@ -96,11 +98,79 @@ suite.define(() => {
       expect(await where.locator('[data-value="cloud:aws"]').count()).toBe(0);
       expect(await where.locator('[data-value="connect-machine"]').count()).toBe(0);
       await page.keyboard.press("Escape");
+      await effort.click();
+      const fastMode = page.locator("[data-chat-speed-toggle]");
+      await expect.poll(() => fastMode.isEnabled()).toBe(true);
+      await expect.poll(() => fastMode.getAttribute("data-chat-speed-toggle")).toBe("on");
+      await expect.poll(() => fastMode.getAttribute("aria-checked")).toBe("false");
+      await fastMode.click();
+      await expect.poll(() => fastMode.getAttribute("data-chat-speed-toggle")).toBe("off");
+      await expect.poll(() => fastMode.getAttribute("aria-checked")).toBe("true");
       await submit.click();
 
       await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
-        params: { agentId: "main", message: "scope proof" },
+        params: { agentId: "main", fastMode: true, message: "scope proof" },
       });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("creates a Full-access session when the connected operator has admin scope", async () => {
+    const { context, gateway, page } = await openDraft([
+      "operator.admin",
+      "operator.read",
+      "operator.write",
+    ]);
+    try {
+      const permission = page.locator('[data-chat-permission-select="true"]');
+      await permission.click();
+      await page.locator('[data-chat-permission-option="full"]').click();
+      await expect.poll(() => permission.getAttribute("data-chat-select-value")).toBe("full");
+      await page.getByRole("button", { name: "Start session" }).click();
+
+      await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
+        params: { agentId: "main", message: "scope proof", permissionMode: "full" },
+      });
+      await expect.poll(() => page.url()).toContain("/chat/");
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("rejects a retained Full-access selection after reconnecting without admin scope", async () => {
+    const { context, gateway, page } = await openDraft([
+      "operator.admin",
+      "operator.read",
+      "operator.write",
+    ]);
+    try {
+      const permission = page.locator('[data-chat-permission-select="true"]');
+      await permission.click();
+      await page.locator('[data-chat-permission-option="full"]').click();
+      await expect.poll(() => permission.getAttribute("data-chat-select-value")).toBe("full");
+
+      await gateway.setOperatorScopes(["operator.read", "operator.write"]);
+      await gateway.closeLatest(1001, "permission scope downgraded");
+      await expect.poll(async () => (await gateway.getRequests("connect")).length).toBe(2);
+
+      const submit = page.getByRole("button", { name: "Start session" });
+      await expect.poll(() => submit.isDisabled()).toBe(true);
+      expect(await permission.getAttribute("data-chat-select-value")).toBe("full");
+      await permission.click();
+      const fullAccess = page.locator('[data-chat-permission-option="full"]');
+      await expect.poll(() => fullAccess.getAttribute("disabled")).not.toBeNull();
+      await expect
+        .poll(() => tooltipTitleText(fullAccess))
+        .toBe("Full access requires operator.admin access.");
+      await page.keyboard.press("Escape");
+      await page.locator(".new-session-page__message").press("Enter");
+
+      await pollLocatorText(
+        page.locator('.new-session-page__blocked-submit[role="status"]'),
+      ).toContain("This action requires operator.admin access.");
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
     } finally {
       await context.close();
     }
@@ -267,7 +337,7 @@ suite.define(() => {
       await pollLocatorText(
         page.locator(".new-session-page__browser .new-session-page__error"),
       ).toContain(
-        "To browse outside agent workspaces, open the access status, request admin, then approve in Devices.",
+        "To browse outside agent workspaces, open Inbox, select Limited access, request admin, then approve in Devices.",
       );
     } finally {
       await context.close();

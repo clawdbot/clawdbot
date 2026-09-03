@@ -3,13 +3,13 @@ import fs from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import type { SnapshotDatabaseIdentity } from "../../src/snapshot/snapshot-provider.js";
-import type { ReliabilityReport, ReliabilityStateProof } from "./sqlite-reliability-contract.js";
-
-type CompactionPayloadProof = {
-  bytes: number;
-  idSum: number;
-  rows: number;
-};
+import {
+  assertSameCompactionPayload,
+  formatReliabilityStderr,
+  type CompactionPayloadProof,
+  type ReliabilityReport,
+  type ReliabilityStateProof,
+} from "./sqlite-reliability-contract.js";
 
 type CompactionTarget = {
   identity: SnapshotDatabaseIdentity;
@@ -51,22 +51,6 @@ function assertSameState(
   }
 }
 
-function assertSamePayload(
-  actual: CompactionPayloadProof,
-  expected: CompactionPayloadProof,
-  label: string,
-): void {
-  if (
-    actual.bytes !== expected.bytes ||
-    actual.idSum !== expected.idSum ||
-    actual.rows !== expected.rows
-  ) {
-    throw new Error(
-      `${label} changed compaction payload: expected rows=${expected.rows} bytes=${expected.bytes} idSum=${expected.idSum}, got rows=${actual.rows} bytes=${actual.bytes} idSum=${actual.idSum}`,
-    );
-  }
-}
-
 function workerArgs(target: CompactionTarget): string[] {
   if (target.identity.role === "global") {
     return ["global", target.path, ""];
@@ -75,11 +59,6 @@ function workerArgs(target: CompactionTarget): string[] {
     return ["agent", target.path, target.identity.agentId];
   }
   throw new Error(`unsupported reliability target role: ${target.identity.role}`);
-}
-
-function formatWorkerStderr(stderr: string): string {
-  const text = stderr.trim();
-  return text ? ` stderr=${JSON.stringify(text)}` : "";
 }
 
 async function waitForWorkerReady(params: {
@@ -91,7 +70,7 @@ async function waitForWorkerReady(params: {
       cleanup();
       reject(
         new Error(
-          `SQLite compaction worker did not become ready.${formatWorkerStderr(params.readStderr())}`,
+          `SQLite compaction worker did not become ready.${formatReliabilityStderr(params.readStderr())}`,
         ),
       );
     }, 30_000);
@@ -113,7 +92,7 @@ async function waitForWorkerReady(params: {
       cleanup();
       reject(
         new Error(
-          `SQLite compaction worker exited before ready: code=${String(code)} signal=${String(signal)}.${formatWorkerStderr(params.readStderr())}`,
+          `SQLite compaction worker exited before ready: code=${String(code)} signal=${String(signal)}.${formatReliabilityStderr(params.readStderr())}`,
         ),
       );
     };
@@ -170,7 +149,7 @@ async function waitForActiveVacuum(params: {
     }
     if (params.child.exitCode !== null || params.child.signalCode !== null) {
       throw new Error(
-        `SQLite compaction completed before interruption evidence was observed.${formatWorkerStderr(params.readStderr())}`,
+        `SQLite compaction completed before interruption evidence was observed.${formatReliabilityStderr(params.readStderr())}`,
       );
     }
     await delay(2);
@@ -241,7 +220,11 @@ export async function runVacuumInterruptionProof(params: {
       );
     }
     const payloadAfterRecovery = params.readPayload();
-    assertSamePayload(payloadAfterRecovery, params.expectedPayload, "vacuum crash recovery");
+    assertSameCompactionPayload(
+      payloadAfterRecovery,
+      params.expectedPayload,
+      "vacuum crash recovery",
+    );
     const journalBytesAfterRecovery = fileSize(`${params.target.path}-journal`);
     const walBytesAfterRecovery = fileSize(`${params.target.path}-wal`);
     if (journalBytesAfterRecovery !== 0 || walBytesAfterRecovery !== 0) {

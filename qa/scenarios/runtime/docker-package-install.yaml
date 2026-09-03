@@ -14,8 +14,9 @@ scenario:
   successCriteria:
     - The canonical Docker package helper builds and validates the real npm tarball.
     - The scheduler prepares the package and bare target image through the shared planner and catalog.
-    - Clean target containers install the same tarball globally with npm, pnpm, and Bun.
+    - Clean target containers install the same tarball globally with npm (as root), pnpm, and Bun.
     - Each package manager creates a PATH-resolved OpenClaw executable that serves help and the candidate version.
+    - A non-root user executes the root-installed npm global CLI, proving every packaged entry is world-readable.
     - Every installed package version matches the tarball metadata.
     - Evidence records the package digest and version, bare image ID, manager container IDs, package roots, executable paths, and CLI versions.
   docsRefs:
@@ -30,6 +31,7 @@ scenario:
   execution:
     kind: script
     path: test/e2e/qa-lab/runtime/docker-artifact-proof.ts
+    dockerLane: docker-package-install
     summary: Builds one real package artifact, installs and executes it through npm, pnpm, and Bun PATH entrypoints in clean containers, and records artifact identities.
     timeoutMs: 1800000
     args:

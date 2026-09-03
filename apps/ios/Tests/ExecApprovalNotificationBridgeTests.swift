@@ -3,6 +3,7 @@ import OpenClawProtocol
 import Testing
 import UserNotifications
 @testable import OpenClaw
+@testable import OpenClawKit
 
 private final class MockNotificationCenter: NotificationCentering, @unchecked Sendable {
     var authorization: NotificationAuthorizationStatus = .authorized

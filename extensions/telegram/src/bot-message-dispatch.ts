@@ -426,22 +426,23 @@ export const dispatchTelegramMessage = async (
 
   const deliverySummary = turn.deliveryState.snapshot();
   let sentFallback = false;
+  const terminalFailure = turn.dispatchError || turn.agentRunFailed;
   const shouldSendFailureFallback =
     !isRoomEvent &&
-    !suppressFailureFallback &&
+    (!suppressFailureFallback || turn.agentRunFailed) &&
     !turn.finalAnswerDelivered &&
-    (turn.dispatchError ||
+    (terminalFailure ||
       deliverySummary.failedNonSilent > 0 ||
       (deliverySummary.skippedNonSilent > 0 && !turn.suppressSilentReplyFallback));
   if (shouldSendFailureFallback) {
-    const fallbackText = turn.dispatchError
+    const fallbackText = terminalFailure
       ? "Something went wrong while processing your request. Please try again."
       : EMPTY_RESPONSE_FALLBACK;
     const result = await deliverFallback(
       turn,
       [{ text: fallbackText }],
       telegramCfg.silentErrorReplies === true &&
-        (turn.dispatchError != null || turn.hadErrorReplyFailureOrSkip),
+        Boolean(terminalFailure || turn.hadErrorReplyFailureOrSkip),
     );
     sentFallback = result.delivered;
   }

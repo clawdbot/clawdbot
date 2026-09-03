@@ -85,8 +85,8 @@ export function collectGatewayConfigFindings(
         : explicitAuthMode === "none" || explicitAuthMode === "trusted-proxy"
           ? false
           : tokenConfigured || passwordConfigured;
-  const hasTailscaleAuth = auth.allowTailscale && tailscaleMode === "serve";
-  const hasGatewayAuth = hasSharedSecret || hasTailscaleAuth;
+  const hasGatewayAuth = hasSharedSecret || auth.mode === "trusted-proxy";
+  const hasLoopbackAuth = hasGatewayAuth || (auth.allowTailscale && tailscaleMode === "serve");
   const allowRealIpFallback = cfg.gateway?.allowRealIpFallback === true;
   const mdnsMode = cfg.discovery?.mdns?.mode ?? "minimal";
 
@@ -115,7 +115,7 @@ export function collectGatewayConfigFindings(
         "If you keep them enabled, keep gateway.bind loopback-only (or tailnet-only), restrict network exposure, and treat the gateway token/password as full-admin.",
     });
   }
-  if (bind !== "loopback" && !hasSharedSecret && auth.mode !== "trusted-proxy") {
+  if (bind !== "loopback" && !hasGatewayAuth) {
     findings.push({
       checkId: "gateway.bind_no_auth",
       severity: "critical",
@@ -150,7 +150,7 @@ export function collectGatewayConfigFindings(
     });
   }
 
-  if (bind === "loopback" && controlUiEnabled && !hasGatewayAuth) {
+  if (bind === "loopback" && controlUiEnabled && !hasLoopbackAuth) {
     findings.push({
       checkId: "gateway.loopback_no_auth",
       severity: "critical",
@@ -293,7 +293,6 @@ export function collectGatewayConfigFindings(
   }
 
   if (auth.mode === "trusted-proxy") {
-    const trustedProxiesLocal = cfg.gateway?.trustedProxies ?? [];
     const trustedProxyConfig = cfg.gateway?.auth?.trustedProxy;
 
     findings.push({
@@ -308,10 +307,11 @@ export function collectGatewayConfigFindings(
         "Verify: (1) Your proxy terminates TLS and authenticates users. " +
         "(2) gateway.trustedProxies is restricted to proxy IPs only. " +
         "(3) Direct access to the Gateway port is blocked by firewall. " +
+        "Same-host proxy requests are rejected unless gateway.auth.trustedProxy.allowLoopback=true and gateway.trustedProxies includes their loopback source; enable only for a deliberate same-host trust boundary. " +
         "See /gateway/trusted-proxy-auth for setup guidance.",
     });
 
-    if (trustedProxiesLocal.length === 0) {
+    if (trustedProxies.length === 0) {
       findings.push({
         checkId: "gateway.trusted_proxy_no_proxies",
         severity: "critical",
@@ -373,7 +373,7 @@ export function collectGatewayConfigFindings(
           detail:
             "gateway.auth.trustedProxy.deviceAutoApprove.scopes includes operator.admin, so every proxy-authenticated user can auto-approve a new browser device with full admin; requests without scopes receive full admin automatically.",
           remediation:
-            "Remove operator.admin and approve admin access manually, or use per-identity roles when they become available.",
+            "Remove operator.admin and approve admin access manually, or grant admin per identity via gateway.auth.identityScopes.",
         });
       }
     }

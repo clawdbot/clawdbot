@@ -6,22 +6,8 @@ import { vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import { deleteTestEnvValue } from "../test-utils/env.js";
 import * as backupShared from "./backup-shared.js";
-import type { BackupAsset } from "./backup-shared.js";
 
-type BackupPlan = {
-  stateDir: string;
-  configPath: string;
-  oauthDir: string;
-  workspaceDirs: string[];
-  included: BackupAsset[];
-  skipped: Array<{
-    kind: "state" | "config" | "credentials" | "workspace";
-    sourcePath: string;
-    displayPath: string;
-    reason: "covered" | "missing";
-    coveredBy?: string;
-  }>;
-};
+type BackupPlan = Awaited<ReturnType<typeof backupShared.resolveBackupPlanFromDisk>>;
 
 type ResolveBackupPlanFromPathsParams = {
   stateDir: string;

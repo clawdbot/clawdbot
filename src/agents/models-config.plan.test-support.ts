@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import "./models-config.plan.js";
+import type { SourceModelFields } from "./models-config.merge.js";
 import type { PreparedModelsConfigContext } from "./models-config.plan.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
@@ -15,6 +16,7 @@ type ResolveImplicitProvidersForModelsJson = (params: {
   providerDiscoveryProviderIds?: readonly string[];
   providerDiscoveryTimeoutMs?: number;
   providerDiscoveryEntriesOnly?: boolean;
+  sourceModelFields?: SourceModelFields;
 }) => Promise<Record<string, ProviderConfig>>;
 
 type PreparedPlanParams = Parameters<

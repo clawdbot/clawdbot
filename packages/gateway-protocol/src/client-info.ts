@@ -71,6 +71,8 @@ export type GatewayClientInfo = {
   deviceFamily?: string;
   /** Native hardware/model identifier when available. */
   modelIdentifier?: string;
+  /** Self-reported IANA time zone, such as `Europe/Vienna`, for presence display. */
+  timeZone?: string;
   /** Coarse category from `GATEWAY_CLIENT_MODES` for policy and diagnostics. */
   mode: GatewayClientMode;
   /** Per-installation or per-process id used to distinguish same-product clients. */
@@ -88,8 +90,10 @@ export const GATEWAY_CLIENT_CAPS = {
   PLUGIN_APPROVALS: "plugin-approvals",
   TASK_SUGGESTIONS: "task-suggestions",
   TERMINAL_OFFSET_SEQ: "terminal-offset-seq",
+  TERMINAL_SESSION_METADATA: "terminal-session-metadata",
   TOOL_EVENTS: "tool-events",
   UI_COMMANDS: "ui-commands",
+  USAGE_REFRESHING: "usage-refreshing",
 } as const;
 
 /** Optional capability advertised by clients during gateway handshake. */

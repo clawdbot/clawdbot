@@ -441,16 +441,21 @@ it("renders the agent picker as a Web Awesome dropdown", async () => {
   try {
     const dropdown = element.querySelector<HTMLElement & { open: boolean }>("wa-dropdown");
     const items = Array.from(
-      element.querySelectorAll<HTMLElement & { checked: boolean; value: string }>(
+      element.querySelectorAll<HTMLElement & { value: string }>(
         "wa-dropdown-item[data-agent-option]",
       ),
     );
     expect(dropdown).not.toBeNull();
     expect(items).toHaveLength(2);
-    expect(items[0]?.checked).toBe(true);
-    expect(items[1]?.checked).toBe(false);
+    await waitForFast(() => {
+      expect(items[0]?.getAttribute("role")).toBe("menuitemradio");
+      expect(items[0]?.getAttribute("aria-checked")).toBe("true");
+      expect(items[1]?.getAttribute("aria-checked")).toBe("false");
+    });
     expect(items[0]?.value).toBe("alpha");
     expect(items[1]?.value).toBe("beta");
+    expect(items[0]?.querySelector(".agent-select__option-check")).not.toBeNull();
+    expect(items[1]?.querySelector(".agent-select__option-check")).toBeNull();
     expect(items[1]?.querySelector(".agent-select__badge")?.textContent?.trim()).toBe("default");
     expect(dropdown?.shadowRoot?.querySelector('[role="menu"]')).not.toBeNull();
   } finally {
@@ -495,11 +500,13 @@ it("shows an unmatched selected value instead of the first option", async () => 
     expect(element.querySelector(".agent-select__avatar--text")?.getAttribute("data-avatar")).toBe(
       "S",
     );
-    expect(
-      Array.from(
-        element.querySelectorAll<HTMLElement & { checked: boolean }>("[data-agent-option]"),
-      ).some((item) => item.checked),
-    ).toBe(false);
+    await waitForFast(() => {
+      expect(
+        Array.from(element.querySelectorAll<HTMLElement>("[data-agent-option]")).map((item) =>
+          item.getAttribute("aria-checked"),
+        ),
+      ).toEqual(["false", "false"]);
+    });
   } finally {
     element.remove();
   }
@@ -588,9 +595,7 @@ it("selects a different agent and ignores the already-selected agent", async () 
 
   try {
     const items = Array.from(
-      element.querySelectorAll<HTMLElement & { checked: boolean; value: string }>(
-        "[data-agent-option]",
-      ),
+      element.querySelectorAll<HTMLElement & { value: string }>("[data-agent-option]"),
     );
     const beta = items.find((item) => item.value === "beta");
     const alpha = items.find((item) => item.value === "alpha");
@@ -615,7 +620,8 @@ it("selects a different agent and ignores the already-selected agent", async () 
 
     expect(onSelect).toHaveBeenCalledOnce();
     expect(repeatedSelection.defaultPrevented).toBe(true);
-    expect(alpha.checked).toBe(true);
+    expect(alpha.getAttribute("aria-checked")).toBe("true");
+    expect(alpha.querySelector(".agent-select__option-check")).not.toBeNull();
     expect(document.activeElement).toBe(element.querySelector(".agent-select__trigger"));
   } finally {
     element.remove();
@@ -632,9 +638,7 @@ it("selects an empty-string special option and exposes radio semantics", async (
 
   try {
     const items = Array.from(
-      element.querySelectorAll<HTMLElement & { checked: boolean; value: string }>(
-        "[data-agent-option]",
-      ),
+      element.querySelectorAll<HTMLElement & { value: string }>("[data-agent-option]"),
     );
     const allAgents = items.find((item) => item.value === "");
     if (!allAgents) {

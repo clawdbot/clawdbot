@@ -82,12 +82,6 @@ export type MessageReceivedHookContext = {
   metadata?: Record<string, unknown>;
 };
 
-export type MessageReceivedHookEvent = InternalHookEvent & {
-  type: "message";
-  action: "received";
-  context: MessageReceivedHookContext;
-};
-
 export type MessageSentHookContext = {
   /** Recipient identifier */
   to: string;
@@ -109,12 +103,6 @@ export type MessageSentHookContext = {
   isGroup?: boolean;
   /** Group or channel identifier, if applicable */
   groupId?: string;
-};
-
-export type MessageSentHookEvent = InternalHookEvent & {
-  type: "message";
-  action: "sent";
-  context: MessageSentHookContext;
 };
 
 type MessageEnrichedBodyHookContext = {
@@ -161,12 +149,6 @@ export type MessageTranscribedHookContext = MessageEnrichedBodyHookContext & {
   transcript: string;
 };
 
-export type MessageTranscribedHookEvent = InternalHookEvent & {
-  type: "message";
-  action: "transcribed";
-  context: MessageTranscribedHookContext;
-};
-
 export type MessagePreprocessedHookContext = MessageEnrichedBodyHookContext & {
   /** Transcribed audio text, if the message contained audio */
   transcript?: string;
@@ -174,12 +156,6 @@ export type MessagePreprocessedHookContext = MessageEnrichedBodyHookContext & {
   isGroup?: boolean;
   /** Group or channel identifier, if applicable */
   groupId?: string;
-};
-
-export type MessagePreprocessedHookEvent = InternalHookEvent & {
-  type: "message";
-  action: "preprocessed";
-  context: MessagePreprocessedHookContext;
 };
 
 export type SessionPatchHookContext = {
@@ -383,13 +359,6 @@ function hasStringContextField<T extends Record<string, unknown>>(
   return typeof context[key] === "string";
 }
 
-function hasBooleanContextField<T extends Record<string, unknown>>(
-  context: Partial<T>,
-  key: keyof T,
-): boolean {
-  return typeof context[key] === "boolean";
-}
-
 export function isAgentBootstrapEvent(event: InternalHookEvent): event is AgentBootstrapHookEvent {
   if (!isHookEventTypeAndAction(event, "agent", "bootstrap")) {
     return false;
@@ -409,67 +378,6 @@ export function isGatewayStartupEvent(event: InternalHookEvent): event is Gatewa
     return false;
   }
   return Boolean(getHookContext<GatewayStartupHookContext>(event));
-}
-
-export function isMessageReceivedEvent(
-  event: InternalHookEvent,
-): event is MessageReceivedHookEvent {
-  if (!isHookEventTypeAndAction(event, "message", "received")) {
-    return false;
-  }
-  const context = getHookContext<MessageReceivedHookContext>(event);
-  if (!context) {
-    return false;
-  }
-  return (
-    hasStringContextField(context, "from") &&
-    hasStringContextField(context, "content") &&
-    hasStringContextField(context, "channelId")
-  );
-}
-
-export function isMessageSentEvent(event: InternalHookEvent): event is MessageSentHookEvent {
-  if (!isHookEventTypeAndAction(event, "message", "sent")) {
-    return false;
-  }
-  const context = getHookContext<MessageSentHookContext>(event);
-  if (!context) {
-    return false;
-  }
-  return (
-    hasStringContextField(context, "to") &&
-    hasStringContextField(context, "content") &&
-    hasStringContextField(context, "channelId") &&
-    hasBooleanContextField(context, "success")
-  );
-}
-
-export function isMessageTranscribedEvent(
-  event: InternalHookEvent,
-): event is MessageTranscribedHookEvent {
-  if (!isHookEventTypeAndAction(event, "message", "transcribed")) {
-    return false;
-  }
-  const context = getHookContext<MessageTranscribedHookContext>(event);
-  if (!context) {
-    return false;
-  }
-  return (
-    hasStringContextField(context, "transcript") && hasStringContextField(context, "channelId")
-  );
-}
-
-export function isMessagePreprocessedEvent(
-  event: InternalHookEvent,
-): event is MessagePreprocessedHookEvent {
-  if (!isHookEventTypeAndAction(event, "message", "preprocessed")) {
-    return false;
-  }
-  const context = getHookContext<MessagePreprocessedHookContext>(event);
-  if (!context) {
-    return false;
-  }
-  return hasStringContextField(context, "channelId");
 }
 
 export function isSessionPatchEvent(event: InternalHookEvent): event is SessionPatchHookEvent {

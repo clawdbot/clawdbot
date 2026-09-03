@@ -1,0 +1,176 @@
+/* CRT palette; selected by index.html and app/theme.ts. */
+
+/* Terminal shape: the whole console is near-square. Radius tokens flatten the
+   var(--radius-*) chain and the scale factor flattens the fixed px * scale
+   corner rules; --radius-full is untouched so avatars and pills stay round.
+   The attribute selector outscores the :root capability flip to 1.25. */
+:root[data-theme="crt"],
+:root[data-theme="crt-light"] {
+  --radius-sm: 2px;
+  --radius-md: 3px;
+  --radius-lg: 4px;
+  --radius-xl: 6px;
+  --radius: 3px;
+  --openclaw-corner-radius-scale: 0.25;
+}
+
+:root[data-theme="crt"] {
+  /*
+   * Accent — monochrome white phosphor on tube black, amber as the cursor
+   * accent. Phosphor owns the green tube; CRT is the white one (the third
+   * classic phosphor, amber, stays in --accent-2).
+   *
+   * WCAG 2.1 AA audit (bg = #090a09, relative luminance ≈ 0.0030):
+   *   --accent #e8e8e8  contrast ≈ 16.2:1 AAA ✓
+   *   --primary-foreground / --accent-foreground #111111 on #e8e8e8: 15.5:1 ✓
+   *   --destructive-foreground (base #fafafa) on #d0342d button: 4.7:1 AA ✓
+   *   body text --text #c6c6c6: 11.6:1 ✓
+   *   worst text pairing --muted on --bg-muted: 6.3:1 ✓
+   */
+  --ring: #e8e8e8;
+  --accent: #e8e8e8;
+  --accent-hover: #ffffff;
+  --accent-muted: #e8e8e8;
+  --accent-subtle: rgba(232, 232, 232, 0.1);
+  --accent-glow: rgba(232, 232, 232, 0.16);
+  --primary: #e8e8e8;
+  --primary-hover: #ffffff;
+  --primary-foreground: #111111;
+  /* Base :root inherits #fafafa ink for accent fills, which vanishes on the
+     white accent (1.17:1) — e.g. the selected default-accent swatch check.
+     First built-in theme to override; light mode keeps base white ink over
+     its near-black accent. */
+  --accent-foreground: #111111;
+
+  --destructive: #d0342d;
+  --destructive-hover: #b92d27;
+
+  --focus: rgba(232, 232, 232, 0.18);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 75%, transparent);
+  --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 16px var(--accent-glow);
+
+  --bg: #090a09;
+  --bg-accent: #0e0e0e;
+  --bg-elevated: #131313;
+  --bg-hover: #191919;
+  --bg-muted: #171717;
+
+  --card: #0e0e0e;
+  --card-foreground: #ececec;
+  --card-highlight: rgba(235, 235, 235, 0.04);
+  --popover: #131313;
+  --popover-foreground: #ececec;
+
+  --panel: #090a09;
+  --panel-strong: #131313;
+  --panel-hover: #191919;
+  --chrome: rgba(9, 10, 9, 0.96);
+  --chrome-strong: rgba(9, 10, 9, 0.98);
+
+  --text: #c6c6c6;
+  --text-strong: #ececec;
+  --chat-text: #c6c6c6;
+  --muted: #999999;
+  --muted-strong: #ababab;
+  --muted-foreground: #999999;
+
+  --border: #232323;
+  --border-strong: #343434;
+  --border-hover: #4a4a4a;
+  --input: #232323;
+
+  --secondary: #0e0e0e;
+  --secondary-foreground: #ececec;
+  --accent-2: #ffcf5c;
+  --accent-2-muted: rgba(255, 207, 92, 0.7);
+  --accent-2-subtle: rgba(255, 207, 92, 0.12);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.55);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.65);
+  --overlay-shadow: var(--shadow-md);
+
+  --grid-line: rgba(235, 235, 235, 0.04);
+
+  /* One face for the whole console, prose included — same opt-in character
+     decision as Phosphor; the mono choice is why this theme is not a default. */
+  --mono:
+    "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
+  --font-body: var(--mono);
+  --font-chat: var(--mono);
+}
+
+:root[data-theme="crt-light"] {
+  /*
+   * Accent — printed ink on neutral paper: the monochrome console in daylight.
+   *
+   * WCAG 2.1 AA audit (bg = #f5f5f4, relative luminance ≈ 0.911):
+   *   --accent #1f1f1f  contrast ≈ 15.1:1 AAA ✓
+   *   --primary-foreground #ffffff on #1f1f1f button: 16.5:1 ✓
+   *   body text --text #373737: 10.4:1 ✓
+   *   worst text pairing --muted on --bg-muted: 5.3:1 ✓
+   */
+  --ring: #1f1f1f;
+  --accent: #1f1f1f;
+  --accent-hover: #000000;
+  --accent-muted: #1f1f1f;
+  --accent-subtle: rgba(31, 31, 31, 0.07);
+  --accent-glow: rgba(31, 31, 31, 0.12);
+  --primary: #1f1f1f;
+  --primary-foreground: #ffffff;
+
+  --bg: #f5f5f4;
+  --bg-accent: #ededed;
+  --bg-elevated: #ffffff;
+  --bg-hover: #e4e4e4;
+  --bg-muted: #eaeaea;
+  --bg-content: #f0f0f0;
+
+  --card: #ffffff;
+  --card-foreground: #1b1b1b;
+  --card-highlight: rgba(20, 20, 20, 0.02);
+  --popover: #ffffff;
+  --popover-foreground: #1b1b1b;
+  --session-hovercard-surface: var(--card);
+  --session-hovercard-progress-surface: color-mix(
+    in srgb,
+    var(--card) 52%,
+    var(--panel-strong) 48%
+  );
+
+  --panel: #f5f5f4;
+  --panel-strong: #ededed;
+  --panel-hover: #dedede;
+  --chrome: rgba(245, 245, 244, 0.96);
+  --chrome-strong: rgba(245, 245, 244, 0.98);
+
+  --text: #373737;
+  --text-strong: #1b1b1b;
+  --chat-text: #373737;
+  --muted: #5f5f5f;
+  --muted-strong: #4d4d4d;
+  --muted-foreground: #5f5f5f;
+
+  --border: #dddddd;
+  --border-strong: #c2c2c2;
+  --border-hover: #9c9c9c;
+  --input: #dddddd;
+
+  --secondary: #ededed;
+  --secondary-foreground: #373737;
+  --accent-2: #7a5d10;
+  --accent-2-muted: rgba(122, 93, 16, 0.75);
+  --accent-2-subtle: rgba(122, 93, 16, 0.08);
+
+  --shadow-sm: 0 1px 2px rgba(20, 20, 20, 0.05);
+  --shadow-md: 0 4px 12px rgba(20, 20, 20, 0.07);
+  --shadow-lg: 0 12px 28px rgba(20, 20, 20, 0.09);
+  --overlay-shadow: var(--shadow-md);
+
+  --grid-line: rgba(20, 20, 20, 0.04);
+
+  --mono:
+    "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
+  --font-body: var(--mono);
+  --font-chat: var(--mono);
+}

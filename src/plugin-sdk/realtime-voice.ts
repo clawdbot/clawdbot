@@ -8,6 +8,8 @@ export type {
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCallbacks,
   RealtimeVoiceBridgeEvent,
+  RealtimeVoiceCloseDisposition,
+  RealtimeVoiceCloseOptions,
   RealtimeVoiceBrowserSession,
   RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceGatewayControl,
@@ -155,6 +157,7 @@ export {
 export {
   buildRealtimeVoiceAgentCancelProviderResult,
   buildRealtimeVoiceAgentControlSpeechMessage,
+  buildRealtimeVoiceAgentErrorProviderResult,
   classifyRealtimeVoiceAgentControlText,
   controlRealtimeVoiceAgentRun,
   normalizeRealtimeVoiceAgentControlMode,

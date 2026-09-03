@@ -8,6 +8,7 @@ describe("buildForkedGatewaySessionEntry", () => {
       sessionId: "adopted-generation",
       updatedAt: 1,
       lifecycleRunId: "adopted-run",
+      lastRunId: "settled-adopted-run",
       forkSource: { sessionKey: "agent:main:original", sessionId: "original-generation" },
     };
 
@@ -24,6 +25,7 @@ describe("buildForkedGatewaySessionEntry", () => {
       forkSource: { sessionKey: "agent:main:original", sessionId: "original-generation" },
     });
     expect(forked.lifecycleRunId).toBeUndefined();
+    expect(forked.lastRunId).toBeUndefined();
   });
 
   it("uses the requested ancestry for a genuinely new node", () => {

@@ -2,35 +2,17 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentMessage } from "./runtime/index.js";
 import type { ExtensionContext } from "./sessions/index.js";
+import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 
-const compactionMocks = vi.hoisted(() => {
-  function readText(value: unknown): string {
-    if (typeof value === "string") {
-      return value;
-    }
-    if (Array.isArray(value)) {
-      return value.map(readText).join("");
-    }
-    if (value && typeof value === "object") {
-      const record = value as { text?: unknown; content?: unknown; arguments?: unknown };
-      return `${readText(record.text)}${readText(record.content)}${readText(record.arguments)}`;
-    }
-    return "";
-  }
-  return {
-    estimateTokens: vi.fn((message: unknown) =>
-      Math.max(1, Math.ceil(readText(message).length / 4)),
-    ),
-    generateSummary: vi.fn(),
-    logWarn: vi.fn(),
-  };
-});
+const compactionMocks = vi.hoisted(() => ({
+  generateSummary: vi.fn(),
+  logWarn: vi.fn(),
+}));
 
 vi.mock("./sessions/index.js", async () => {
   const actual = await vi.importActual<typeof import("./sessions/index.js")>("./sessions/index.js");
   return {
     ...actual,
-    estimateTokens: compactionMocks.estimateTokens,
     generateSummary: compactionMocks.generateSummary,
   };
 });
@@ -210,7 +192,10 @@ describe("summarizeChunks partial summary preservation (#82952)", () => {
       // Small message (chunk 1)
       { role: "user", content: "Short question about code", timestamp: 1 },
       // Oversized message (will be in chunk 2, triggers the oversized retry)
-      { role: "assistant", content: "x".repeat(500_000), timestamp: 2 } as unknown as AgentMessage,
+      makeAgentAssistantMessage({
+        content: [{ type: "text", text: "x".repeat(500_000) }],
+        timestamp: 2,
+      }),
       // Small message after oversized (should be recovered by oversized retry)
       { role: "user", content: "Follow-up question", timestamp: 3 },
     ];
@@ -241,7 +226,10 @@ describe("summarizeChunks partial summary preservation (#82952)", () => {
     const mixedMessages: AgentMessage[] = [
       { role: "user", content: "Short question", timestamp: 1 },
       // Oversized message that will be filtered in the retry
-      { role: "assistant", content: "x".repeat(500_000), timestamp: 2 } as unknown as AgentMessage,
+      makeAgentAssistantMessage({
+        content: [{ type: "text", text: "x".repeat(500_000) }],
+        timestamp: 2,
+      }),
       { role: "user", content: "a".repeat(400), timestamp: 3 },
       { role: "user", content: "b".repeat(400), timestamp: 4 },
     ];

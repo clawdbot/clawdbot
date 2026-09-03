@@ -49,7 +49,7 @@ enum CameraPTZError: LocalizedError, Equatable {
         case let .invalidRequest(message):
             "INVALID_REQUEST: \(message)"
         case let .deviceNotFound(deviceId):
-            "CAMERA_DEVICE_NOT_FOUND: \(deviceId)"
+            "CAMERA_DEVICE_NOT_FOUND: \(deviceId); run camera.list for current device IDs"
         case let .unsupported(message):
             "CAMERA_PTZ_UNSUPPORTED: \(message)"
         case let .axisUnsupported(axis):
@@ -136,6 +136,7 @@ protocol CameraPTZControlling: AnyObject {
 
 protocol CameraPTZBackend: Sendable {
     func open(deviceId: String) throws -> any CameraPTZControlling
+    func withCaptureSession<T>(deviceId: String, body: () throws -> T) throws -> T
 }
 
 actor CameraPTZService: CameraPTZServicing {
@@ -160,28 +161,32 @@ actor CameraPTZService: CameraPTZServicing {
 
     func status(deviceId: String) throws -> CameraPTZStatusResponse {
         let deviceId = try self.resolveDeviceId(deviceId)
-        return try self.withController(deviceId: deviceId) { controller in
-            try Self.makeStatusResponse(deviceId: deviceId, raw: controller.status())
+        return try self.backend.withCaptureSession(deviceId: deviceId) {
+            try self.withController(deviceId: deviceId) { controller in
+                try Self.makeStatusResponse(deviceId: deviceId, raw: controller.status())
+            }
         }
     }
 
     func control(_ params: OpenClawCameraPTZControlParams) throws -> CameraPTZControlResponse {
         let deviceId = try self.resolveDeviceId(params.deviceId)
         let axes = try Self.validateControl(params)
-        return try self.withController(deviceId: deviceId) { controller in
-            let status = try Self.executableStatus(controller.status())
-            let plan = switch params.operation {
-            case .home: try Self.planHome(status: status)
-            case .set, .move: try Self.planMotion(
-                    status: status,
-                    operation: params.operation,
-                    axes: axes)
+        return try self.backend.withCaptureSession(deviceId: deviceId) {
+            try self.withController(deviceId: deviceId) { controller in
+                let status = try Self.executableStatus(controller.status())
+                let plan = switch params.operation {
+                case .home: try Self.planHome(status: status)
+                case .set, .move: try Self.planMotion(
+                        status: status,
+                        operation: params.operation,
+                        axes: axes)
+                }
+                return try self.execute(
+                    plan: plan,
+                    controller: controller,
+                    deviceId: deviceId,
+                    operation: params.operation)
             }
-            return try Self.execute(
-                plan: plan,
-                controller: controller,
-                deviceId: deviceId,
-                operation: params.operation)
         }
     }
 
@@ -340,7 +345,7 @@ actor CameraPTZService: CameraPTZServicing {
         operation == .move ? current + value : value
     }
 
-    private static func execute(
+    private func execute(
         plan: WritePlan,
         controller: any CameraPTZControlling,
         deviceId: String,
@@ -361,28 +366,72 @@ actor CameraPTZService: CameraPTZServicing {
             }
         } catch {
             guard !applied.isEmpty else { throw error }
-            throw self.partialError(applied: applied, controller: controller, failure: error)
+            controller.close()
+            throw self.partialError(applied: applied, deviceId: deviceId, failure: error)
         }
 
+        // A writing UVC connection can echo its pending setpoint instead of the committed camera position.
+        controller.close()
         let finalStatus: CameraPTZRawStatus
+        var statusFailure: Error?
         do {
-            finalStatus = try self.executableStatus(controller.status())
+            finalStatus = try self.withController(deviceId: deviceId) {
+                do {
+                    return try Self.executableStatus($0.status())
+                } catch {
+                    statusFailure = error
+                    throw error
+                }
+            }
         } catch {
-            throw self.partialError(applied: applied, controller: controller, failure: error)
+            throw self.partialError(applied: applied, deviceId: deviceId, failure: statusFailure ?? error)
+        }
+
+        let requestedAxes: [(String, Int32?, CameraPTZRawAxisStatus?)] = [
+            ("panDegrees", plan.panTilt?.pan, finalStatus.pan),
+            ("tiltDegrees", plan.panTilt?.tilt, finalStatus.tilt),
+            ("zoomPercent", plan.zoom, finalStatus.zoom),
+        ]
+        var mismatches: [String] = []
+        for (name, target, axis) in requestedAxes {
+            guard let target else { continue }
+            guard let axis else {
+                mismatches.append("\(name) requested=\(target) observed=unavailable")
+                continue
+            }
+            guard abs(Int64(axis.current) - Int64(target)) > Int64(max(0, axis.range.step)) else {
+                continue
+            }
+            let requested = name == "zoomPercent"
+                ? axis.range.percent(of: target)
+                : Self.arcsecondsToDegrees(target)
+            let observed = name == "zoomPercent"
+                ? axis.range.percent(of: axis.current)
+                : Self.arcsecondsToDegrees(axis.current)
+            mismatches.append("\(name) requested=\(requested) observed=\(observed)")
+        }
+        guard mismatches.isEmpty else {
+            throw CameraPTZError.partial(
+                applied: applied,
+                state: Self.makeState(finalStatus),
+                failure: mismatches.joined(separator: "; ") +
+                    "; confirm a video stream reaches the camera and disable on-camera AI framing/tracking")
         }
         return CameraPTZControlResponse(
             deviceId: deviceId,
             operation: operation,
-            state: self.makeState(finalStatus),
+            state: Self.makeState(finalStatus),
             adjusted: plan.adjusted)
     }
 
-    private static func partialError(
+    private func partialError(
         applied: [String],
-        controller: any CameraPTZControlling,
+        deviceId: String,
         failure: Error) -> CameraPTZError
     {
-        let state = try? self.makeState(self.executableStatus(controller.status()))
+        let state = try? self.withController(deviceId: deviceId) {
+            try Self.makeState(Self.executableStatus($0.status()))
+        }
         return .partial(
             applied: applied,
             state: state,

@@ -3,6 +3,7 @@
 // matching the current registry, so they need a fresh graph in the isolated lane.
 export const uiIsolatedTestFiles = [
   "ui/src/app/app-host.server-prefs.test.ts",
+  "ui/src/app/bootstrap.gateway-credentials.test.ts",
   "ui/src/app/bootstrap.test.ts",
   "ui/src/app/router-outlet.test.ts",
   "ui/src/components/markdown-tables.test.ts",
@@ -16,6 +17,7 @@ export const uiIsolatedTestFiles = [
   "ui/src/pages/chat/chat-pane-catalog.test.ts",
   "ui/src/pages/chat/chat-pane-history.test.ts",
   "ui/src/pages/chat/chat-pane-identity.test.ts",
+  "ui/src/pages/chat/chat-pane-keyboard-focus.test.ts",
   "ui/src/pages/chat/chat-pane-lifecycle.test.ts",
   "ui/src/pages/chat/chat-pane-pull-requests.test.ts",
   "ui/src/pages/chat/chat-pane-retained-presentation.test.ts",
@@ -23,6 +25,7 @@ export const uiIsolatedTestFiles = [
   "ui/src/pages/chat/chat-pane.read-marker.test.ts",
   "ui/src/pages/chat/chat-pane.session-discussion.test.ts",
   "ui/src/pages/chat/chat-pane.test.ts",
+  "ui/src/pages/chat/components/chat-picker-overlay.test.ts",
   "ui/src/pages/chat/components/chat-transcript-controller.test.ts",
   "ui/src/pages/chat/components/chat-transcript-invalidation.test.ts",
   "ui/src/pages/chat/components/chat-transcript-render.test.ts",

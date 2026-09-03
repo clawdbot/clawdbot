@@ -60,6 +60,27 @@ export const NodePresenceActivityPayloadSchema = Type.Union([
   }),
 ]);
 
+const NodeLoadAverageSchema = Type.Number({ minimum: 0, maximum: 100_000 });
+
+export const NodeHostStatsPayloadSchema = Type.Refine(
+  closedObject({
+    cpuCount: Type.Integer({ minimum: 1, maximum: 4_096 }),
+    loadAverage: Type.Optional(
+      Type.Tuple([NodeLoadAverageSchema, NodeLoadAverageSchema, NodeLoadAverageSchema]),
+    ),
+    memoryTotalBytes: Type.Integer({ minimum: 0 }),
+    memoryFreeBytes: Type.Integer({ minimum: 0 }),
+    diskTotalBytes: Type.Optional(Type.Integer({ minimum: 0 })),
+    diskAvailableBytes: Type.Optional(Type.Integer({ minimum: 0 })),
+  }),
+  (stats) =>
+    stats.memoryFreeBytes <= stats.memoryTotalBytes &&
+    (stats.diskTotalBytes === undefined
+      ? stats.diskAvailableBytes === undefined
+      : stats.diskAvailableBytes !== undefined && stats.diskAvailableBytes <= stats.diskTotalBytes),
+  () => "free resources must not exceed totals and disk values must be paired",
+);
+
 /** Normalized result for node-originated events after gateway dispatch. */
 export const NodeEventResultSchema = closedObject({
   ok: Type.Boolean(),
@@ -261,6 +282,7 @@ export type NodeEventResult = Static<typeof NodeEventResultSchema>;
 export type NodePresenceAlivePayload = Static<typeof NodePresenceAlivePayloadSchema>;
 export type NodePresenceAliveReason = Static<typeof NodePresenceAliveReasonSchema>;
 export type NodePresenceActivityPayload = Static<typeof NodePresenceActivityPayloadSchema>;
+export type NodeHostStatsPayload = Static<typeof NodeHostStatsPayloadSchema>;
 export type NodePendingDrainParams = Static<typeof NodePendingDrainParamsSchema>;
 export type NodePendingDrainResult = Static<typeof NodePendingDrainResultSchema>;
 export type NodePendingEnqueueParams = Static<typeof NodePendingEnqueueParamsSchema>;

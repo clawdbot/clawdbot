@@ -21,7 +21,7 @@ Experimental features are preview surfaces behind explicit flags. They need more
 | Local model runtime | `agents.defaults.experimental.localModelLean`, `agents.entries.*.experimental.localModelLean` | A smaller or stricter local backend chokes on OpenClaw's full default tool surface                                                | [Local Models](/gateway/local-models)                                                  |
 | Codex harness       | `plugins.entries.codex.config.appServer.experimental.sandboxExecServer`                       | You want native Codex app-server 0.143.0 or newer to target an OpenClaw sandbox-backed exec-server instead of disabling Code Mode | [Codex harness reference](/plugins/codex-harness-reference#sandboxed-native-execution) |
 | Code Mode           | `tools.codeMode.enabled`                                                                      | You want compact code-orchestrated access to a hidden OpenClaw tool catalog                                                       | [Code Mode](/tools/code-mode)                                                          |
-| Cloud workers       | `cloudWorkers.desktop`                                                                        | You want to watch or control desktop-capable cloud worker environments from the Control UI                                        | [Cloud Worker Desktop](/gateway/cloud-workers#desktop)                                 |
+| Cloud workers       | `cloudWorkers.desktop`                                                                        | You want to watch or control desktop-capable cloud worker environments from the Control UI                                        | [Cloud Worker Desktop](/gateway/cloud-workers#desktop-interactive)                     |
 | Swarm               | `tools.swarm.enabled`                                                                         | You want Code Mode scripts to orchestrate bounded groups of sub-agents in parallel                                                | [Swarm](/tools/swarm)                                                                  |
 
 ## Control UI Labs
@@ -36,6 +36,11 @@ Tool-loop detection, Lean tools for local models, Message audit metadata, and
 Cloud Worker Desktop. Message audit metadata and Cloud Worker Desktop require a
 Gateway restart; the other switches normally take effect for future agent runs
 without restarting.
+
+Code Mode remains disabled until you turn on its Labs switch or explicitly set
+`tools.codeMode` to `true` or `"auto"`. The Labs switch writes `"auto"`, so it
+engages only for models marked as preferred Code Mode performers; it does not
+force Code Mode on for every model.
 
 ## Local model lean mode
 

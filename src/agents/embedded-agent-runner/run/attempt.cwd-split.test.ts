@@ -63,6 +63,10 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
       | { cwd?: string }
       | undefined;
     expect(resourceLoaderInit?.cwd).toBe(taskRepo);
+    expect(hoisted.embeddedSystemPromptInputs[0]).toMatchObject({
+      workspaceDir: bootstrapCall?.workspaceDir,
+      runtimeCwd: taskRepo,
+    });
   });
 
   it.each([
@@ -94,6 +98,31 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
       | undefined;
     expect(toolsCall?.sessionPermissionPolicy).toEqual({ root, mode });
     expect(toolsCall?.exec?.mode).toBe(execMode);
+  });
+
+  it("defaults rootless session permission boundaries to the canonical agent workspace", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rootless-permission-"));
+    tempPaths.push(workspaceDir);
+    const canonicalWorkspace = await fs.realpath(workspaceDir);
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey: "agent:main:discord:direct:rootless-permission",
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+        permissionMode: "workspace",
+        workspaceDir,
+      },
+    });
+
+    const toolsCall = hoisted.createOpenClawCodingToolsMock.mock.calls.at(-1)?.[0] as
+      | { sessionPermissionPolicy?: { root: string; mode: string } }
+      | undefined;
+    expect(toolsCall?.sessionPermissionPolicy).toEqual({
+      root: canonicalWorkspace,
+      mode: "workspace",
+    });
   });
 
   it("forwards native and routable channel targets into runtime tools", async () => {

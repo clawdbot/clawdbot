@@ -16,6 +16,7 @@ function envRef(id: string) {
 const explicitMainRoster: NonNullable<OpenClawConfig["agents"]> = {
   list: [{ id: "main", default: true }],
 };
+const isolatedEnv: NodeJS.ProcessEnv = { OPENCLAW_STATE_DIR: process.env.OPENCLAW_TEST_HOME };
 
 describe("collectPluginConfigAssignments bundled plugin manifests", () => {
   it("assigns each webhooks route SecretRef to its exact runtime owner", () => {
@@ -43,7 +44,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
         },
       },
     } as OpenClawConfig;
-    const context = createResolverContext({ sourceConfig: config, env: {} });
+    const context = createResolverContext({ sourceConfig: config, env: isolatedEnv });
 
     collectPluginConfigAssignments({
       config,
@@ -61,6 +62,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
         disposition: "isolate",
       },
     ]);
+    expect(context.assignments[0]?.ownerContractDigest).toBeTruthy();
   });
 
   it("collects Codex app-server SecretRefs from bundled manifest contracts", () => {
@@ -98,7 +100,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
       resolvePluginConfigContractsById({
         config,
         workspaceDir: resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config)),
-        env: {},
+        env: isolatedEnv,
         fallbackToBundledMetadata: true,
         fallbackToBundledMetadataForResolvedBundled: true,
         pluginIds: ["codex"],
@@ -110,7 +112,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
     ]);
     const context = createResolverContext({
       sourceConfig: config,
-      env: {},
+      env: isolatedEnv,
     });
 
     collectPluginConfigAssignments({
@@ -169,7 +171,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
         },
       },
     } as OpenClawConfig;
-    const env = { GEMINI_GATEWAY_TOKEN: "resolved-gateway-token" };
+    const env = { ...isolatedEnv, GEMINI_GATEWAY_TOKEN: "resolved-gateway-token" };
     const context = createResolverContext({ sourceConfig: config, env });
 
     collectPluginConfigAssignments({
@@ -194,6 +196,64 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
           "X-Gateway-Token": "resolved-gateway-token",
         },
       },
+    });
+  });
+
+  it("materializes Tavily tool credentials from the plugin secret contract", async () => {
+    expect(
+      findBundledPluginMetadataById("tavily", {
+        includeChannelConfigs: false,
+        includeSyntheticChannelConfigs: false,
+      })?.manifest.configContracts?.secretInputs?.paths,
+    ).toEqual([{ path: "webSearch.apiKey", expected: "string", ownerKind: "capability" }]);
+    const sourceConfig = {
+      agents: explicitMainRoster,
+      plugins: {
+        entries: {
+          tavily: {
+            enabled: true,
+            config: {
+              webSearch: {
+                apiKey: envRef("TAVILY_API_KEY"),
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const runtimeConfig = structuredClone(sourceConfig);
+    const env = { ...isolatedEnv, TAVILY_API_KEY: "resolved-tavily-key" };
+    const context = createResolverContext({ sourceConfig, env });
+
+    collectPluginConfigAssignments({
+      config: runtimeConfig,
+      defaults: undefined,
+      context,
+      loadablePluginOrigins: new Map([["tavily", "bundled"]]),
+    });
+
+    expect(context.assignments.map((assignment) => assignment.path)).toEqual([
+      "plugins.entries.tavily.config.webSearch.apiKey",
+    ]);
+    expect(context.assignments).toMatchObject([
+      {
+        ownerKind: "capability",
+        ownerId: "plugins.entries.tavily.config.webSearch.apiKey",
+        requiredForGateway: false,
+        disposition: "isolate",
+      },
+    ]);
+    expect(context.assignments[0]?.ownerContractDigest).toBeUndefined();
+    const resolved = await resolveSecretRefValues(
+      context.assignments.map((assignment) => assignment.ref),
+      { config: sourceConfig, env, cache: context.cache },
+    );
+    applyResolvedAssignments({ assignments: context.assignments, resolved });
+    expect(sourceConfig.plugins?.entries?.tavily?.config).toMatchObject({
+      webSearch: { apiKey: envRef("TAVILY_API_KEY") },
+    });
+    expect(runtimeConfig.plugins?.entries?.tavily?.config).toMatchObject({
+      webSearch: { apiKey: "resolved-tavily-key" },
     });
   });
 
@@ -252,7 +312,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
       resolvePluginConfigContractsById({
         config,
         workspaceDir: resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config)),
-        env: {},
+        env: isolatedEnv,
         fallbackToBundledMetadata: true,
         fallbackToBundledMetadataForResolvedBundled: true,
         pluginIds: ["voice-call"],
@@ -266,7 +326,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
     ]);
     const context = createResolverContext({
       sourceConfig: config,
-      env: {},
+      env: isolatedEnv,
     });
 
     collectPluginConfigAssignments({
@@ -321,13 +381,13 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
     expect(
       resolvePluginConfigContractsById({
         config,
-        env: {},
+        env: isolatedEnv,
         pluginIds: ["google-meet"],
       }).get("google-meet")?.configContracts.secretInputs?.paths,
     ).toEqual([{ path: "realtime.providers.*.apiKey", expected: "string" }]);
     const context = createResolverContext({
       sourceConfig: config,
-      env: {},
+      env: isolatedEnv,
     });
 
     collectPluginConfigAssignments({

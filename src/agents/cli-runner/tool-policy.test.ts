@@ -1,21 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  buildCliBackendToolAvailability,
-  resolveCliRuntimeToolsAllow,
-  stripOpenClawMcpToolPrefix,
-} from "./tool-policy.js";
-
-describe("buildCliBackendToolAvailability", () => {
-  it("keeps canonical names and projects the shipped beta MCP transport names", () => {
-    expect(
-      buildCliBackendToolAvailability({ native: ["Read"], openClaw: ["message", "write"] }),
-    ).toEqual({
-      native: ["Read"],
-      openClaw: ["message", "write"],
-      mcp: ["mcp__openclaw__message", "mcp__openclaw__write"],
-    });
-  });
-});
+import { resolveCliRuntimeToolsAllow, stripOpenClawMcpToolPrefix } from "./tool-policy.js";
 
 describe("stripOpenClawMcpToolPrefix", () => {
   it("strips only the loopback transport prefix", () => {

@@ -135,7 +135,7 @@ const providerMonitorTestMocks: ProviderMonitorTestMocks = vi.hoisted(() => {
     monitorLifecycleMock: vi.fn(async (params: { threadBindings: { stop: () => void } }) => {
       params.threadBindings.stop();
     }),
-    resolveDiscordAccountMock: vi.fn((_) => ({
+    resolveDiscordAccountMock: vi.fn((_params) => ({
       accountId: "default",
       token: "cfg-token",
       config: baseDiscordAccountConfig(),

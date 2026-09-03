@@ -16,6 +16,7 @@ function createOwner(params: {
   needsRefresh?: boolean;
 }): PreparedModelRuntimeOwner {
   const snapshot = {
+    catalogOwner: undefined,
     agentId: params.agentId,
     agentDir: params.agentDir,
     config: {},
@@ -29,12 +30,14 @@ function createOwner(params: {
     createStores: () => ({ authStorage: { getAll: () => ({}) }, modelRegistry: {} }),
   } as unknown as PreparedModelRuntimeSnapshot;
   return {
+    catalogOwner: undefined,
     input: { agentId: params.agentId, agentDir: params.agentDir, config: {} },
     environmentFingerprint: "test-env",
     catalogMode: "static",
     provenance: "configured",
     generation: 1,
     needsRefresh: params.needsRefresh === true,
+    catalogStale: false,
     snapshot,
   };
 }

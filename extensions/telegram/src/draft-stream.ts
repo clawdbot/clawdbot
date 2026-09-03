@@ -19,11 +19,7 @@ import {
 } from "./network-errors.js";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 import { normalizeTelegramReplyToMessageId } from "./outbound-params.js";
-import {
-  getTelegramRichRawApi,
-  TELEGRAM_RICH_TEXT_LIMIT,
-  type TelegramInputRichMessage,
-} from "./rich-message.js";
+import { TELEGRAM_RICH_TEXT_LIMIT, type TelegramInputRichMessage } from "./rich-message.js";
 import {
   withTelegramPlainFallback,
   warnTelegramRichBlocksDegradations,
@@ -50,7 +46,13 @@ const MAX_PREVIEW_FLOOD_SUSPEND_MS = 60_000;
 const MIN_PREVIEW_DWELL_MS = 4_000;
 
 export type TelegramDraftStream = {
-  update: (text: string, options?: { onPlatformSendDispatch?: () => Promise<void> }) => void;
+  update: (
+    text: string,
+    options?: {
+      onPlatformSendDispatch?: () => Promise<void>;
+      assertPlatformSendAuthorized?: () => void;
+    },
+  ) => void;
   updateLazy: (resolveText: () => string | undefined) => void;
   updatePreview: (preview: TelegramDraftPreview) => void;
   flush: () => Promise<void>;
@@ -220,6 +222,7 @@ export function createTelegramDraftStream(params: {
   let lastRequestedText = "";
   let lastRequestedPreview: TelegramDraftPreview | undefined;
   let pendingPlatformSendDispatch: (() => Promise<void>) | undefined;
+  let pendingPlatformSendAuthorization: (() => void) | undefined;
   let generation = 0;
   let finalPagePlan: { pages: PlannedTelegramDraftPage[]; nextPageIndex: number } | undefined;
   // Generations whose in-flight FIRST send was superseded by a reposition
@@ -289,7 +292,7 @@ export function createTelegramDraftStream(params: {
         plainText: page.plainText,
         warn: (message) => params.warn?.(message),
         sendFormatted: async () => ({
-          message: await getTelegramRichRawApi(params.api).sendRichMessage({
+          message: await params.api.raw.sendRichMessage({
             chat_id: chatId,
             rich_message: richMessage,
             ...sendMessageParams,
@@ -347,6 +350,8 @@ export function createTelegramDraftStream(params: {
       await pendingPlatformSendDispatch();
       pendingPlatformSendDispatch = undefined;
     }
+    pendingPlatformSendAuthorization?.();
+    pendingPlatformSendAuthorization = undefined;
     const targetMessageId = streamMessageId;
     if (typeof targetMessageId === "number") {
       streamVisibleSinceMs ??= Date.now();
@@ -364,7 +369,7 @@ export function createTelegramDraftStream(params: {
           plainText: page.plainText,
           warn: (message) => params.warn?.(message),
           sendFormatted: async () => {
-            await getTelegramRichRawApi(params.api).editMessageText({
+            await params.api.raw.editMessageText({
               chat_id: chatId,
               message_id: targetMessageId,
               rich_message: richMessage,
@@ -689,6 +694,7 @@ export function createTelegramDraftStream(params: {
     text: string,
     preview?: TelegramDraftPreview,
     onPlatformSendDispatch?: () => Promise<void>,
+    assertPlatformSendAuthorized?: () => void,
   ) => {
     if (streamState.stopped || streamState.final) {
       return;
@@ -696,6 +702,7 @@ export function createTelegramDraftStream(params: {
     lastRequestedPreview = preview;
     lastRequestedText = text;
     pendingPlatformSendDispatch = onPlatformSendDispatch;
+    pendingPlatformSendAuthorization = assertPlatformSendAuthorized;
     updateDraft(text);
   };
 
@@ -769,6 +776,7 @@ export function createTelegramDraftStream(params: {
     observeCurrentProviderMessage();
     await drainProviderMessageObservations();
     pendingPlatformSendDispatch = undefined;
+    pendingPlatformSendAuthorization = undefined;
   };
 
   const remainingFinalContent = (): TelegramDraftMessageSnapshot | undefined => {
@@ -914,7 +922,13 @@ export function createTelegramDraftStream(params: {
   params.log?.(`telegram stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);
 
   return {
-    update: (text, options) => requestDraftUpdate(text, undefined, options?.onPlatformSendDispatch),
+    update: (text, options) =>
+      requestDraftUpdate(
+        text,
+        undefined,
+        options?.onPlatformSendDispatch,
+        options?.assertPlatformSendAuthorized,
+      ),
     updateLazy: requestLazyDraftUpdate,
     updatePreview,
     flush,

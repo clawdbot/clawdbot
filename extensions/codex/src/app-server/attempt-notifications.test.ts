@@ -1,9 +1,6 @@
-// Attempt-notification tests cover Codex app-server envelope parsing and diagnostics.
+// Attempt-notification tests cover Codex app-server abort marker parsing.
 import { describe, expect, it } from "vitest";
-import {
-  describeNotificationActivity,
-  isCodexTurnAbortMarkerNotification,
-} from "./attempt-notifications.js";
+import { isCodexTurnAbortMarkerNotification } from "./attempt-notifications.js";
 import type { CodexServerNotification } from "./protocol.js";
 
 function abortMarkerNotification(params: {
@@ -22,23 +19,6 @@ function abortMarkerNotification(params: {
     },
   };
 }
-
-describe("describeNotificationActivity", () => {
-  it("does not split surrogate pairs in assistant text previews", () => {
-    const details = describeNotificationActivity({
-      method: "rawResponseItem/completed",
-      params: {
-        item: {
-          type: "message",
-          role: "assistant",
-          content: [{ type: "output_text", text: `${"x".repeat(236)}🚀tail` }],
-        },
-      },
-    });
-
-    expect(details?.lastAssistantTextPreview).toBe(`${"x".repeat(236)}...`);
-  });
-});
 
 describe("isCodexTurnAbortMarkerNotification", () => {
   it("accepts a wrapped user marker", () => {

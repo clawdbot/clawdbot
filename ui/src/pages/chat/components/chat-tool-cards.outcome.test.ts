@@ -2,11 +2,60 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import { renderToolCard } from "./chat-tool-cards.ts";
 
 // Outcome presentation for tool cards: neutral collapsed rows, the expanded
 // outcome line, and the compact progress_card receipt.
 describe("tool-card outcomes", () => {
+  it.each(["exec", "lookup"])(
+    "keeps %s progress neutral across the row, expanded body, and sidebar until completion",
+    (name) => {
+      const container = document.createElement("div");
+      const onOpenSidebar = vi.fn();
+      const card: ToolCard = {
+        id: "progress",
+        name,
+        args: { command: "diagnostic" },
+        outputText: '{"error":"progress sample"}',
+        live: true,
+        completed: false,
+      };
+      const show = () =>
+        render(
+          renderToolCard(card, {
+            messageKey: "test-message",
+            expanded: true,
+            onToggleExpanded: vi.fn(),
+            runActive: true,
+            onOpenSidebar,
+          }),
+          container,
+        );
+      show();
+      expect(container.querySelector(".chat-tool-row--running")).not.toBeNull();
+      expect(container.querySelector(".chat-tool-card--error")).toBeNull();
+      expect(container.querySelector(".chat-tool-card__outcome")?.textContent).toBe("Running");
+      expect(container.textContent).toContain(card.outputText);
+      container.querySelector<HTMLButtonElement>(".chat-tool-card__action-btn")?.click();
+      expect(onOpenSidebar).toHaveBeenCalledWith(
+        expect.objectContaining({ content: expect.stringContaining("### Tool output") }),
+      );
+      expect(onOpenSidebar.mock.calls[0]?.[0].content).not.toContain("### Tool error");
+
+      card.completed = true;
+      card.isError = false;
+      show();
+      expect(container.querySelector(".chat-tool-row--running")).toBeNull();
+      expect(container.querySelector(".chat-tool-card--error")).toBeNull();
+      expect(container.querySelector(".chat-tool-card__outcome")?.textContent).toBe("Completed");
+      card.isError = true;
+      show();
+      expect(container.querySelector(".chat-tool-card--error")).not.toBeNull();
+      expect(container.querySelector(".chat-tool-card__outcome")?.textContent).toBe("failed");
+    },
+  );
+
   it("renders error details with the failure outcome in the expanded body", () => {
     const container = document.createElement("div");
     render(
@@ -21,7 +70,7 @@ describe("tool-card outcomes", () => {
             message: "BRAVE_API_KEY is not configured",
           }),
         },
-        { expanded: true, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: true, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -51,7 +100,7 @@ describe("tool-card outcomes", () => {
           name: "sessions_spawn",
           outputText: JSON.stringify({ status: "error" }),
         },
-        { expanded: true, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: true, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -72,7 +121,7 @@ describe("tool-card outcomes", () => {
           name: "Unknown",
           outputText: "Tool not found",
         },
-        { expanded: false, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: false, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -95,7 +144,7 @@ describe("tool-card outcomes", () => {
           outputText: "lookup failed",
           isError: true,
         },
-        { expanded: true, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: true, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -116,7 +165,7 @@ describe("tool-card outcomes", () => {
           name: "lookup",
           isError: true,
         },
-        { expanded: true, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: true, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -140,7 +189,7 @@ describe("tool-card outcomes", () => {
           }),
           isError: false,
         },
-        { expanded: false, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: false, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -160,7 +209,7 @@ describe("tool-card outcomes", () => {
           name: "browser.open",
           outputText: "Opened page",
         },
-        { expanded: true, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: true, onToggleExpanded: vi.fn() },
       ),
       container,
     );
@@ -196,7 +245,7 @@ describe("tool-card outcomes", () => {
           outputText: "Progress card updated",
           completed: true,
         },
-        { expanded: true, onToggleExpanded: vi.fn() },
+        { messageKey: "test-message", expanded: true, onToggleExpanded: vi.fn() },
       ),
       container,
     );

@@ -1,6 +1,5 @@
 {
   "id": "huggingface",
-  "icon": "https://cdn.simpleicons.org/huggingface",
   "activation": {
     "onStartup": false
   },

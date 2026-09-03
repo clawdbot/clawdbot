@@ -1,7 +1,10 @@
 // Configures SQLite WAL and related pragmas for local stores.
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs, { type BigIntStats } from "node:fs";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
+import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import type { Result } from "@openclaw/normalization-core/result";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -24,15 +27,25 @@ const LINUX_NFS_SUPER_MAGIC = 0x6969;
 const LINUX_SMB_SUPER_MAGIC = 0x517b;
 const LINUX_CIFS_SUPER_MAGIC = 0xff534d42;
 const LINUX_SMB2_SUPER_MAGIC = 0xfe534d42;
+const LINUX_V9FS_SUPER_MAGIC = 0x01021997; // Linux 9p (V9FS)
 const PROC_MOUNTINFO_PATH = "/proc/self/mountinfo";
 // Filesystem classification runs during database open, so never let the fallback probe stall it.
 const MOUNT_COMMAND_TIMEOUT_MS = 1_000;
 const NETWORK_FILESYSTEM_TYPES = new Set(["cifs", "smbfs", "smb2", "smb3"]);
+// Cross-VM filesystems (virtiofs, 9p) cannot provide the shared-memory
+// coherence SQLite WAL requires; fall back to rollback journaling.
+const CROSS_VM_FILESYSTEM_TYPES = new Set(["virtiofs", "fuse.virtiofs", "9p", "9p2000.l"]);
 const JOURNAL_MODE_RETRY_INTERVAL_MS = 10;
 const JOURNAL_MODE_RETRY_SLEEP = new Int32Array(new SharedArrayBuffer(4));
 const PROC_SELF_FD_PATH = "/proc/self/fd";
+const SQLITE_WAL_SPLIT_BRAIN_FATAL_MESSAGE =
+  "SQLite WAL sidecar identity mismatch; terminating without SQLite cleanup";
 
 const log = createSubsystemLogger("infra/sqlite-wal");
+
+// Gateway bootstrap loads the database owner before admitting turns. Long-lived
+// maintenance timers must not retain the context of a turn that opens a database.
+const runInSqliteMaintenanceContext = AsyncLocalStorage.snapshot();
 
 type IntervalHandle = ReturnType<typeof setInterval> & {
   unref?: () => void;
@@ -66,7 +79,6 @@ export type SqliteWalMaintenanceOptions = {
   databaseLabel?: string;
   databasePath?: string;
   onCheckpointError?: (error: unknown) => void;
-  onWalSplitBrain?: (event: SqliteWalSplitBrainEvent) => void;
 };
 
 export type SqliteConnectionPragmaOptions = SqliteWalMaintenanceOptions & {
@@ -127,12 +139,6 @@ function findExistingVolumePaths(
   }
 }
 
-function decodeMountPath(value: string): string {
-  return value.replace(/\\([0-7]{3})/g, (_match, octal: string) =>
-    String.fromCharCode(Number.parseInt(octal, 8)),
-  );
-}
-
 function parseProcMountInfoEntries(contents: string): MountEntry[] {
   const entries: MountEntry[] = [];
   for (const line of contents.split("\n")) {
@@ -146,9 +152,9 @@ function parseProcMountInfoEntries(contents: string): MountEntry[] {
     const fsType = suffixFields[0];
     if (mountPoint && fsType) {
       entries.push({
-        mountPoint: decodeMountPath(mountPoint),
+        mountPoint: decodeMountInfoPath(mountPoint),
         fsType,
-        ...(suffixFields[1] ? { source: decodeMountPath(suffixFields[1]) } : {}),
+        ...(suffixFields[1] ? { source: decodeMountInfoPath(suffixFields[1]) } : {}),
       });
     }
   }
@@ -242,6 +248,9 @@ function resolveMountTypeJournalPolicy(entry: MountEntry): SqliteFilesystemJourn
   if (normalized.startsWith("nfs") || NETWORK_FILESYSTEM_TYPES.has(normalized)) {
     return "rollback";
   }
+  if (CROSS_VM_FILESYSTEM_TYPES.has(normalized) || normalized.startsWith("9p")) {
+    return "rollback";
+  }
   if (normalized === "fuse.sshfs") {
     return "unsupported";
   }
@@ -320,7 +329,8 @@ function resolvePathJournalPolicy(targetPath: string): SqliteFilesystemJournalPo
       filesystemType === LINUX_NFS_SUPER_MAGIC ||
       filesystemType === LINUX_SMB_SUPER_MAGIC ||
       filesystemType === LINUX_CIFS_SUPER_MAGIC ||
-      filesystemType === LINUX_SMB2_SUPER_MAGIC
+      filesystemType === LINUX_SMB2_SUPER_MAGIC ||
+      filesystemType === LINUX_V9FS_SUPER_MAGIC
     ) {
       return "rollback";
     }
@@ -448,6 +458,34 @@ function detectSqliteWalSplitBrain(databasePath: string): SqliteWalSplitBrainEve
   return undefined;
 }
 
+function terminateForSqliteWalSplitBrain(
+  splitBrain: SqliteWalSplitBrainEvent,
+  databaseLabel: string | undefined,
+): never {
+  try {
+    fs.writeSync(
+      process.stderr.fd,
+      `${JSON.stringify({
+        level: "fatal",
+        subsystem: "infra/sqlite-wal",
+        message: SQLITE_WAL_SPLIT_BRAIN_FATAL_MESSAGE,
+        ...splitBrain,
+        databaseLabel,
+        pid: process.pid,
+      })}\n`,
+    );
+  } catch {
+    // Containment must proceed even when the diagnostic sink is unavailable.
+  }
+  // SIGKILL bypasses Node exit hooks that close SQLite caches. process.exit()
+  // would re-enter the exact stale-handle cleanup this containment prevents.
+  try {
+    process.kill(process.pid, "SIGKILL");
+  } finally {
+    process.abort();
+  }
+}
+
 function requireRollbackJournalMode(db: DatabaseSync, options: SqliteWalMaintenanceOptions): void {
   const row = db.prepare("PRAGMA journal_mode = DELETE;").get();
   const journalMode = readJournalModeResult(row);
@@ -466,7 +504,7 @@ function enableWalJournalMode(
   retryTimeoutMs: number,
   options: SqliteWalMaintenanceOptions,
 ): boolean {
-  const deadline = Date.now() + retryTimeoutMs;
+  const deadline = performance.now() + retryTimeoutMs;
   let restoreBusyTimeout = false;
   try {
     while (true) {
@@ -487,7 +525,7 @@ function enableWalJournalMode(
           `${label}${location} could not enable WAL; SQLite kept journal_mode=${journalMode ?? "unknown"}.`,
         );
       } catch (error) {
-        const remainingMs = deadline - Date.now();
+        const remainingMs = Math.max(0, deadline - performance.now());
         if (!isSqliteLockError(error) || remainingMs <= 0) {
           throw error;
         }
@@ -612,57 +650,37 @@ export function configureSqliteWalMaintenance(
 
   let timer: IntervalHandle | null = null;
   if (timerIntervalMs > 0) {
-    timer = setInterval(() => {
-      if (tripwireDatabasePath && splitBrainDetectionEnabled) {
-        try {
-          const splitBrain = detectSqliteWalSplitBrain(tripwireDatabasePath);
-          if (splitBrain) {
-            invalidated = true;
-            if (timer) {
-              clearInterval(timer);
-              timer = null;
-            }
-            log.error("SQLite WAL sidecar identity mismatch", {
-              ...splitBrain,
-              databaseLabel: options.databaseLabel,
-            });
+    timer = runInSqliteMaintenanceContext(
+      () =>
+        setInterval(() => {
+          if (tripwireDatabasePath && splitBrainDetectionEnabled) {
+            let splitBrain: SqliteWalSplitBrainEvent | undefined;
             try {
-              options.onWalSplitBrain?.(splitBrain);
+              splitBrain = detectSqliteWalSplitBrain(tripwireDatabasePath);
             } catch (error) {
-              log.error("SQLite WAL split-brain hook failed", {
-                databaseLabel: options.databaseLabel,
-                databasePath: tripwireDatabasePath,
-                error: error instanceof Error ? error.message : String(error),
-              });
-            }
-            try {
-              if (db.isOpen) {
-                db.close();
+              splitBrainDetectionEnabled = false;
+              if (!splitBrainDetectionWarningLogged) {
+                splitBrainDetectionWarningLogged = true;
+                log.warn("SQLite WAL split-brain detection disabled", {
+                  databaseLabel: options.databaseLabel,
+                  databasePath: tripwireDatabasePath,
+                  error: error instanceof Error ? error.message : String(error),
+                });
               }
-            } catch (error) {
-              log.error("SQLite WAL split-brain close failed", {
-                databaseLabel: options.databaseLabel,
-                databasePath: tripwireDatabasePath,
-                error: error instanceof Error ? error.message : String(error),
-              });
             }
-            return;
+            if (splitBrain) {
+              invalidated = true;
+              if (timer) {
+                clearInterval(timer);
+                timer = null;
+              }
+              terminateForSqliteWalSplitBrain(splitBrain, options.databaseLabel);
+            }
           }
-        } catch (error) {
-          splitBrainDetectionEnabled = false;
-          if (!splitBrainDetectionWarningLogged) {
-            splitBrainDetectionWarningLogged = true;
-            log.warn("SQLite WAL split-brain detection disabled", {
-              databaseLabel: options.databaseLabel,
-              databasePath: tripwireDatabasePath,
-              error: error instanceof Error ? error.message : String(error),
-            });
-          }
-        }
-      }
-      runCheckpoint(periodicCheckpointMode);
-      runIncrementalVacuum();
-    }, timerIntervalMs) as IntervalHandle;
+          runCheckpoint(periodicCheckpointMode);
+          runIncrementalVacuum();
+        }, timerIntervalMs) as IntervalHandle,
+    );
     timer.unref?.();
   }
 

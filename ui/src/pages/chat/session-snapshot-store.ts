@@ -167,24 +167,26 @@ async function readSnapshotRecord(sessionKey: string): Promise<SessionSnapshotRe
   }
 }
 
-async function readSnapshotRecords(): Promise<SessionSnapshotRecord[] | null> {
+async function readSnapshotMetadata(): Promise<SessionSnapshotMetadata[] | null> {
   const database = await openSessionSnapshotDatabase();
   if (!database) {
     return [];
   }
   try {
-    const transaction = database.transaction(CHAT_SNAPSHOT_STORE_NAME, "readonly");
-    const values = await requestResult(transaction.objectStore(CHAT_SNAPSHOT_STORE_NAME).getAll());
+    const transaction = database.transaction(CHAT_SNAPSHOT_METADATA_STORE_NAME, "readonly");
+    const values = await requestResult(
+      transaction.objectStore(CHAT_SNAPSHOT_METADATA_STORE_NAME).getAll(),
+    );
     await transactionDone(transaction);
-    const records: SessionSnapshotRecord[] = [];
+    const records: SessionSnapshotMetadata[] = [];
     for (const value of values) {
-      const record = parseSnapshotRecord(value);
-      if (!record) {
-        debugSnapshotStore("resetting cache after record shape mismatch");
+      const record = metadataSchema.safeParse(value);
+      if (!record.success) {
+        debugSnapshotStore("resetting cache after metadata shape mismatch");
         await resetSessionSnapshotDatabase(database);
         return null;
       }
-      records.push(record);
+      records.push(record.data);
     }
     return records;
   } catch (error) {
@@ -277,7 +279,9 @@ async function writeSnapshotRecords(
 export class SessionSnapshotStore implements ChatCacheObserver {
   private connected = false;
   private readonly pending = new Map<string, PendingSessionState>();
-  private readonly hydratedSnapshots = new Map<string, ChatSessionSnapshot>();
+  // Hydration identity suppresses unchanged writes; the bounded message cache
+  // owns transcript retention, so eviction must leave no second strong owner.
+  private readonly hydratedSnapshots = new Map<string, WeakRef<ChatSessionSnapshot>>();
   private readonly revisions = new Map<string, number>();
   // Cross-tab writes may leave this index stale until reload; the 30s prefetch
   // cooldown bounds the resulting redundant fetches without per-row IDB reads.
@@ -313,7 +317,7 @@ export class SessionSnapshotStore implements ChatCacheObserver {
     ) {
       return null;
     }
-    setSessionCacheValue(this.hydratedSnapshots, sessionKey, record.snapshot);
+    setSessionCacheValue(this.hydratedSnapshots, sessionKey, new WeakRef(record.snapshot));
     return record.snapshot;
   }
 
@@ -328,7 +332,7 @@ export class SessionSnapshotStore implements ChatCacheObserver {
 
   write(sessionKey: string, snapshot: ChatSessionSnapshot): void {
     this.revisions.set(sessionKey, (this.revisions.get(sessionKey) ?? 0) + 1);
-    if (getSessionCacheValue(this.hydratedSnapshots, sessionKey) === snapshot) {
+    if (getSessionCacheValue(this.hydratedSnapshots, sessionKey)?.deref() === snapshot) {
       return;
     }
     this.hydratedSnapshots.delete(sessionKey);
@@ -338,8 +342,7 @@ export class SessionSnapshotStore implements ChatCacheObserver {
   }
 
   async delete(sessionKey: string): Promise<void> {
-    this.pending.delete(sessionKey);
-    this.savedAtBySession.delete(sessionKey);
+    this.forget(sessionKey);
     await deleteStoredChatSnapshot(sessionKey);
   }
 
@@ -348,6 +351,7 @@ export class SessionSnapshotStore implements ChatCacheObserver {
     this.pending.delete(sessionKey);
     this.hydratedSnapshots.delete(sessionKey);
     this.savedAtBySession.delete(sessionKey);
+    this.memoryCache?.delete(sessionKey);
   }
 
   async flush(): Promise<void> {
@@ -356,6 +360,9 @@ export class SessionSnapshotStore implements ChatCacheObserver {
       this.writeTimer = null;
     }
     const pending = [...this.pending.entries()];
+    const pendingRevisions = new Map(
+      pending.map(([sessionKey]) => [sessionKey, this.revisions.get(sessionKey) ?? 0]),
+    );
     this.pending.clear();
     const records: SessionSnapshotRecord[] = [];
     for (const [sessionKey, state] of pending) {
@@ -368,7 +375,11 @@ export class SessionSnapshotStore implements ChatCacheObserver {
     }
     const generation = snapshotStoreGeneration;
     this.writeChain = this.writeChain.then(async () => {
-      const evicted = await writeSnapshotRecords(records, generation);
+      const currentRecords = records.filter(
+        ({ sessionKey }) =>
+          pendingRevisions.get(sessionKey) === (this.revisions.get(sessionKey) ?? 0),
+      );
+      const evicted = await writeSnapshotRecords(currentRecords, generation);
       if (evicted === null) {
         this.resetSavedAtIndex();
         return;
@@ -416,7 +427,8 @@ export class SessionSnapshotStore implements ChatCacheObserver {
 
   private async seedSavedAtIndex(): Promise<void> {
     const generation = snapshotStoreGeneration;
-    const records = await readSnapshotRecords();
+    const revisions = new Map(this.revisions);
+    const records = await readSnapshotMetadata();
     if (generation !== snapshotStoreGeneration) {
       return;
     }
@@ -425,6 +437,11 @@ export class SessionSnapshotStore implements ChatCacheObserver {
       return;
     }
     for (const record of records) {
+      if (
+        (revisions.get(record.sessionKey) ?? 0) !== (this.revisions.get(record.sessionKey) ?? 0)
+      ) {
+        continue;
+      }
       const current = this.savedAtBySession.get(record.sessionKey) ?? 0;
       this.savedAtBySession.set(record.sessionKey, Math.max(current, record.savedAt));
     }
@@ -439,7 +456,10 @@ export class SessionSnapshotStore implements ChatCacheObserver {
 }
 
 subscribeSnapshotInvalidation(async ({ sessionKey }) => {
-  snapshotStoreGeneration += 1;
+  // Scoped deletes fence only their session; whole-cache clears retire every pending operation.
+  if (!sessionKey) {
+    snapshotStoreGeneration += 1;
+  }
   for (const store of activeStores) {
     if (sessionKey) {
       store.forget(sessionKey);

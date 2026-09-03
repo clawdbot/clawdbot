@@ -50,6 +50,17 @@ describe("hasInboundAudio", () => {
 
   it("does not rederive audio from a media filename", () => {
     expect(hasInboundAudio({ media: [{ path: "/tmp/voice.ogg" }] })).toBe(false);
+    expect(
+      hasInboundAudio({
+        media: [
+          {
+            url: "https://cdn.example.test/download/opaque",
+            fileName: "voice.ogg",
+            contentType: "application/octet-stream",
+          },
+        ],
+      }),
+    ).toBe(false);
   });
 
   it("does not treat non-audio media as audio", () => {

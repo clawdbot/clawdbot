@@ -8,7 +8,6 @@ import type {
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { renderSessionMenuItem } from "../pages/new-session/cloud-target.ts";
-import type { BrowserTarget } from "../pages/new-session/discovery.ts";
 import { folderDisplayName, isAbsolutePath } from "../pages/new-session/path.ts";
 import { renderPlaceBrowser } from "../pages/new-session/place-browser.ts";
 import "../styles/new-session.css";
@@ -49,7 +48,6 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
     let browserListing: FsListDirResult | null = null;
     let browserPathDraft = "";
     let browserRequestToken = 0;
-    const browserTarget: BrowserTarget = { nodeId: "", label: t("newSession.gateway") };
 
     const finish = () => {
       browserRequestToken += 1;
@@ -233,7 +231,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
         {
           value: "local",
           label: t("sessionsView.groupDefaultsLocal"),
-          description: t("newSession.runsDirectlyNote"),
+          description: t("newSession.checkoutCurrentNote"),
           icon: icons.monitor,
         },
         {
@@ -299,7 +297,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                     ${browserVisible
                       ? renderPlaceBrowser({
                           listing: browserListing,
-                          target: browserTarget,
+                          label: t("newSession.gateway"),
                           loading: browserLoading,
                           error: browserError,
                           pathDraft: browserPathDraft,
@@ -433,7 +431,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                                 : html`<small
                                     >${repositoryStatus === "unavailable"
                                       ? t("newSession.gitCheckUnavailable")
-                                      : t("newSession.runsDirectlyNote")}</small
+                                      : t("newSession.checkoutCurrentNote")}</small
                                   >`}
                             </span>
                           </div>

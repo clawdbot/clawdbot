@@ -6,6 +6,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   closePluginStateDatabase,
   createPluginStateKeyedStore,
+  createPluginStateSyncKeyedStore,
   resetPluginStateStoreForTests,
   sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.js";
@@ -149,31 +150,41 @@ describe("isolation", () => {
 // Limits
 // ---------------------------------------------------------------------------
 describe("limits", () => {
-  it("accepts a value at the 64 KB boundary", async () => {
-    await withOpenClawTestState({ label: "e2e-limit-accept" }, async () => {
-      const store = createPluginStateKeyedStore<string>("fixture-plugin", {
+  it.each(["async", "sync"])("enforces the 1 MiB boundary across %s writes", async (mode) => {
+    await withOpenClawTestState({ label: "e2e-limit" }, async () => {
+      const createStore =
+        mode === "async"
+          ? createPluginStateKeyedStore<string>
+          : createPluginStateSyncKeyedStore<string>;
+      const store = createStore("fixture-plugin", {
         namespace: "size",
         maxEntries: 10,
       });
       // JSON.stringify wraps a string in quotes (+2 bytes).
-      // 65 534 chars → 65 536 bytes of JSON → exactly at limit.
-      const boundary = "x".repeat(65_534);
-      await expect(store.register("big", boundary)).resolves.toBeUndefined();
-      await expect(store.lookup("big")).resolves.toBe(boundary);
-    });
-  });
+      const boundary = "x".repeat(1_048_574);
+      const oversize = `${boundary}x`;
+      const update = expectDefined(store.update, "keyed store update support");
+      await store.register("registered", boundary);
+      expect(await store.registerIfAbsent("claimed", boundary)).toBe(true);
+      await store.register("updated", "before");
+      expect(await update("updated", () => boundary)).toBe(true);
 
-  it("rejects a value one byte over 64 KB", async () => {
-    await withOpenClawTestState({ label: "e2e-limit-reject" }, async () => {
-      const store = createPluginStateKeyedStore<string>("fixture-plugin", {
-        namespace: "size",
-        maxEntries: 10,
-      });
-      // 65 535 chars → 65 537 bytes of JSON → over limit.
-      const oversize = "x".repeat(65_535);
-      await expect(store.register("big", oversize)).rejects.toMatchObject({
-        code: "PLUGIN_STATE_LIMIT_EXCEEDED",
-      });
+      for (const write of [
+        () => store.register("registered", oversize),
+        () => store.registerIfAbsent("rejected", oversize),
+        () => update("updated", () => oversize),
+      ]) {
+        await expect(async () => {
+          await write();
+        }).rejects.toMatchObject({
+          code: "PLUGIN_STATE_LIMIT_EXCEEDED",
+        });
+      }
+      resetPluginStateStoreForTests();
+      for (const key of ["registered", "claimed", "updated"]) {
+        expect(await store.lookup(key)).toBe(boundary);
+      }
+      expect(await store.lookup("rejected")).toBeUndefined();
     });
   });
 });

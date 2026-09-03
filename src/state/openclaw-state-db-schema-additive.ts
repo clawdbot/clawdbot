@@ -11,12 +11,12 @@ import {
   backfillCronRunLogEntryJson,
   backfillDeliveryQueueEntriesFromEntryJson,
   ensureOperatorApprovalResolutionRefs,
-  migrateLegacyCronDeliveryThreadIds,
   repairLegacyTaskAgentAttribution,
   repairLegacyTaskDeliveryStatuses,
   repairLegacySubagentExecutionPayloads,
   repairLegacySubagentRetainedResults,
   repairLegacySubagentSuspensionReasons,
+  repairLegacySubagentTaskBindings,
 } from "./openclaw-state-db-legacy-backfills.js";
 import { ensureColumn } from "./openclaw-state-db-schema-helpers.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
@@ -314,6 +314,19 @@ export function ensureGitHubPublicationSchema(db: DatabaseSync): void {
   `);
 }
 
+/** First personal publication write only; status and old readers leave this surface dormant. */
+export function ensurePersonalGitHubPublicationSchema(db: DatabaseSync): void {
+  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
+    "CREATE TABLE IF NOT EXISTS github_personal_publication_requests (",
+  );
+  const marker = "ON github_personal_publication_requests(status, updated_at_ms, request_id);";
+  const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf(marker, start);
+  if (start < 0 || end < start) {
+    throw new Error("Personal GitHub publication schema marker is missing.");
+  }
+  db.exec(OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + marker.length)); // sqlite-allow-raw -- Canonical lazy additive DDL only.
+}
+
 /**
  * Add the feature-owned first-use columns that a STRICT rebuild cannot skip.
  *
@@ -380,9 +393,6 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
   }
   db.exec("DROP INDEX IF EXISTS idx_diagnostic_events_scope_created;");
   ensureColumn(db, "worktrees", "provisioned_paths_json TEXT");
-  ensureColumn(db, "node_host_config", "gateway_context_path TEXT");
-  ensureColumn(db, "node_host_config", "gateway_cloudflare_access_json TEXT");
-  ensureColumn(db, "node_host_config", "installed_apps_sharing INTEGER NOT NULL DEFAULT 0");
   ensureColumn(db, "apns_registrations", "relay_origin TEXT");
   ensureColumn(db, "device_pairing_pending", "refreshed_at_ms INTEGER");
   ensureColumn(db, "device_pairing_pending", "browser_origin TEXT");
@@ -415,79 +425,16 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
   backfillAcpReplayEstimatedBytes(db);
   ensureColumn(db, "cron_jobs", "description TEXT");
   ensureColumn(db, "cron_jobs", "declaration_key TEXT");
-  ensureColumn(db, "cron_jobs", "display_name TEXT");
   ensureColumn(db, "cron_jobs", "owner_agent_id TEXT");
-  ensureColumn(db, "cron_jobs", "owner_session_key TEXT");
   ensureColumn(db, "cron_jobs", "name TEXT NOT NULL DEFAULT ''");
   ensureColumn(db, "cron_jobs", "enabled INTEGER NOT NULL DEFAULT 1");
-  ensureColumn(db, "cron_jobs", "delete_after_run INTEGER");
-  ensureColumn(db, "cron_jobs", "created_at_ms INTEGER NOT NULL DEFAULT 0");
   ensureColumn(db, "cron_jobs", "agent_id TEXT");
-  ensureColumn(db, "cron_jobs", "session_key TEXT");
-  ensureColumn(db, "cron_jobs", "schedule_kind TEXT NOT NULL DEFAULT 'manual'");
-  ensureColumn(db, "cron_jobs", "schedule_expr TEXT");
-  ensureColumn(db, "cron_jobs", "schedule_tz TEXT");
-  ensureColumn(db, "cron_jobs", "every_ms INTEGER");
-  ensureColumn(db, "cron_jobs", "anchor_ms INTEGER");
-  ensureColumn(db, "cron_jobs", "at TEXT");
-  ensureColumn(db, "cron_jobs", "stagger_ms INTEGER");
-  ensureColumn(db, "cron_jobs", "session_target TEXT NOT NULL DEFAULT 'main'");
-  ensureColumn(db, "cron_jobs", "wake_mode TEXT NOT NULL DEFAULT 'auto'");
-  ensureColumn(db, "cron_jobs", "trigger_script TEXT");
-  ensureColumn(db, "cron_jobs", "trigger_once INTEGER");
   ensureColumn(db, "cron_jobs", "payload_kind TEXT NOT NULL DEFAULT 'message'");
-  ensureColumn(db, "cron_jobs", "payload_message TEXT");
-  ensureColumn(db, "cron_jobs", "payload_model TEXT");
-  ensureColumn(db, "cron_jobs", "payload_fallbacks_json TEXT");
-  ensureColumn(db, "cron_jobs", "payload_thinking TEXT");
-  ensureColumn(db, "cron_jobs", "payload_timeout_seconds INTEGER");
-  ensureColumn(db, "cron_jobs", "payload_allow_unsafe_external_content INTEGER");
-  ensureColumn(db, "cron_jobs", "payload_external_content_source_json TEXT");
-  ensureColumn(db, "cron_jobs", "payload_light_context INTEGER");
-  ensureColumn(db, "cron_jobs", "payload_tools_allow_json TEXT");
-  ensureColumn(db, "cron_jobs", "payload_tools_allow_is_default INTEGER");
-  ensureColumn(db, "cron_jobs", "delivery_mode TEXT");
-  ensureColumn(db, "cron_jobs", "delivery_channel TEXT");
-  ensureColumn(db, "cron_jobs", "delivery_to TEXT");
-  ensureColumn(db, "cron_jobs", "delivery_thread_id TEXT");
-  ensureColumn(db, "cron_jobs", "delivery_account_id TEXT");
-  ensureColumn(db, "cron_jobs", "delivery_best_effort INTEGER");
-  ensureColumn(db, "cron_jobs", "delivery_completion_mode TEXT");
-  ensureColumn(db, "cron_jobs", "delivery_completion_to TEXT");
-  ensureColumn(db, "cron_jobs", "failure_delivery_mode TEXT");
-  ensureColumn(db, "cron_jobs", "failure_delivery_channel TEXT");
-  ensureColumn(db, "cron_jobs", "failure_delivery_to TEXT");
-  ensureColumn(db, "cron_jobs", "failure_delivery_account_id TEXT");
-  ensureColumn(db, "cron_jobs", "failure_alert_disabled INTEGER");
-  ensureColumn(db, "cron_jobs", "failure_alert_after INTEGER");
-  ensureColumn(db, "cron_jobs", "failure_alert_channel TEXT");
-  ensureColumn(db, "cron_jobs", "failure_alert_to TEXT");
-  ensureColumn(db, "cron_jobs", "failure_alert_cooldown_ms INTEGER");
-  ensureColumn(db, "cron_jobs", "failure_alert_include_skipped INTEGER");
-  ensureColumn(db, "cron_jobs", "failure_alert_mode TEXT");
-  ensureColumn(db, "cron_jobs", "failure_alert_account_id TEXT");
-  ensureColumn(db, "cron_jobs", "next_run_at_ms INTEGER");
-  ensureColumn(db, "cron_jobs", "running_at_ms INTEGER");
-  ensureColumn(db, "cron_jobs", "last_run_at_ms INTEGER");
-  ensureColumn(db, "cron_jobs", "last_run_status TEXT");
-  ensureColumn(db, "cron_jobs", "last_error TEXT");
-  ensureColumn(db, "cron_jobs", "last_duration_ms INTEGER");
-  ensureColumn(db, "cron_jobs", "consecutive_errors INTEGER");
-  ensureColumn(db, "cron_jobs", "consecutive_skipped INTEGER");
-  ensureColumn(db, "cron_jobs", "schedule_error_count INTEGER");
-  ensureColumn(db, "cron_jobs", "last_delivery_status TEXT");
-  ensureColumn(db, "cron_jobs", "last_delivery_error TEXT");
-  ensureColumn(db, "cron_jobs", "last_delivered INTEGER");
-  ensureColumn(db, "cron_jobs", "last_failure_alert_at_ms INTEGER");
   ensureColumn(db, "cron_jobs", "state_json TEXT NOT NULL DEFAULT '{}'");
   ensureColumn(db, "cron_jobs", "runtime_updated_at_ms INTEGER");
   ensureColumn(db, "cron_jobs", "schedule_identity TEXT");
   ensureColumn(db, "cron_jobs", "sort_order INTEGER NOT NULL DEFAULT 0");
   backfillCronJobsFromJobJson(db);
-  const addedDeliveryThreadIdType = ensureColumn(db, "cron_jobs", "delivery_thread_id_type TEXT");
-  if (addedDeliveryThreadIdType) {
-    migrateLegacyCronDeliveryThreadIds(db);
-  }
   ensureColumn(db, "sandbox_registry_entries", "session_key TEXT");
   ensureColumn(db, "sandbox_registry_entries", "backend_id TEXT");
   ensureColumn(db, "sandbox_registry_entries", "runtime_label TEXT");
@@ -526,8 +473,6 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
     "managed_outgoing_image_records",
     "cleanup_pending INTEGER NOT NULL DEFAULT 0 CHECK (cleanup_pending IN (0, 1))",
   );
-  ensureColumn(db, "current_conversation_bindings", "target_agent_id TEXT NOT NULL DEFAULT 'main'");
-  ensureColumn(db, "current_conversation_bindings", "target_session_id TEXT");
   ensureColumn(
     db,
     "current_conversation_bindings",
@@ -558,23 +503,9 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "task_runs", "tool_use_count INTEGER");
   ensureColumn(db, "task_runs", "last_tool_name TEXT");
   ensureColumn(db, "task_runs", "detail_json TEXT");
-  ensureColumn(db, "subagent_runs", "task_name TEXT");
-  ensureColumn(db, "subagent_runs", "requester_settle_wake_status TEXT");
-  ensureColumn(db, "subagent_runs", "requester_settle_wake_attempt_count INTEGER");
-  ensureColumn(db, "subagent_runs", "requester_settle_wake_replay_count INTEGER");
-  ensureColumn(db, "subagent_runs", "requester_settle_wake_next_attempt_at INTEGER");
-  ensureColumn(db, "subagent_runs", "requester_settle_wake_batch_run_ids_json TEXT");
-  ensureColumn(db, "subagent_runs", "requester_settle_wake_last_error TEXT");
-  ensureColumn(db, "subagent_runs", "requester_settle_wake_retire_after INTEGER");
-  ensureColumn(db, "subagent_runs", "swarm_group_id TEXT");
-  ensureColumn(db, "subagent_runs", "swarm_collector INTEGER");
-  ensureColumn(db, "subagent_runs", "swarm_output_schema_json TEXT");
-  ensureColumn(db, "subagent_runs", "swarm_completion_status TEXT");
-  ensureColumn(db, "subagent_runs", "swarm_structured_json TEXT");
-  ensureColumn(db, "subagent_runs", "swarm_schema_error TEXT");
-  ensureColumn(db, "subagent_runs", "swarm_usage_json TEXT");
   repairLegacySubagentSuspensionReasons(db);
   repairLegacySubagentExecutionPayloads(db);
+  repairLegacySubagentTaskBindings(db);
   repairLegacySubagentRetainedResults(db);
   ensureColumn(db, "worker_environments", "bootstrap_bundle_hash TEXT");
   ensureColumn(db, "worker_environments", "bootstrap_openclaw_version TEXT");

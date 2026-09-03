@@ -1,4 +1,4 @@
-import { runWithGatewayIndependentRootWorkAdmission } from "../../../process/gateway-work-admission.js";
+import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/gateway-work-admission.js";
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import {
   ensureCompletionState,
@@ -163,9 +163,9 @@ export class SubagentLifecycleController {
     // before browser/MCP retirement and cleanup delivery hand off. Own this
     // entire transition as an independent root so that boundary stays atomic.
     // Callers can detach while retaining parent ALS, so nesting is intentional.
-    await runWithGatewayIndependentRootWorkAdmission(async () => {
+    await runWithGatewayIndependentRootWorkContinuation(async () => {
       await completeSubagentRunAttempt(this, completeParams);
-    });
+    }, "subagents:lifecycle-complete");
   };
 
   completeCleanupBookkeeping = (params: CleanupBookkeepingParams) => {

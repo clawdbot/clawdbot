@@ -147,6 +147,15 @@ export interface MemoryEmbeddingCache {
   updated_at: number;
 }
 
+export interface MemoryEntryOrigins {
+  agent_id: string;
+  entry_key: string;
+  observed_at: number;
+  origin_class: string;
+  session_id: string;
+  session_key: string | null;
+}
+
 export interface MemoryIndexChunkProvenance {
   chunk_id: string;
   observed_at: number;
@@ -194,6 +203,13 @@ export interface MemoryIndexState {
   revision: number;
 }
 
+export interface MemorySessionTombstones {
+  agent_id: string;
+  created_at: number;
+  reason: string;
+  session_id: string;
+}
+
 export interface MessageToolRunOutcomes {
   agent_id: string;
   id: Generated<number>;
@@ -223,6 +239,15 @@ export interface SessionConversations {
   role: Generated<string>;
   route_context_json: string | null;
   session_id: string;
+}
+
+export interface SessionGoalOperations {
+  expires_at: number;
+  operation_id: string;
+  request_fingerprint: string;
+  result_json: string;
+  session_id: string;
+  session_key: string;
 }
 
 export interface SessionKeyContract {
@@ -273,11 +298,26 @@ export interface SessionNodes {
 
 export interface SessionParticipants {
   actor_id: string;
-  actor_source: string | null;
-  actor_type: string;
-  first_prompted_at: number;
-  last_prompted_at: number;
+  contribution_count: number;
+  first_prompted_at: number | null;
+  identity_namespace: string;
+  last_prompted_at: number | null;
   session_key: string;
+}
+
+export interface SessionPendingInputs {
+  accepted_at: number;
+  consumed_event_id: string | null;
+  idempotency_key: string;
+  input_id: string;
+  lifecycle_generation: string;
+  message_json: string;
+  request_hash: string;
+  run_id: string;
+  seq: Generated<number>;
+  session_id: string;
+  session_key: string;
+  state: string;
 }
 
 export interface SessionProgressCards {
@@ -304,6 +344,7 @@ export interface SessionSuggestions {
 
 export interface SessionTranscriptActiveEvents {
   active_position: number;
+  context_eligible: number | null;
   event_seq: number;
   message_position: number | null;
   session_id: string;
@@ -489,19 +530,23 @@ export interface DB {
   conversations: Conversations;
   heartbeat_outcomes: HeartbeatOutcomes;
   memory_embedding_cache: MemoryEmbeddingCache;
+  memory_entry_origins: MemoryEntryOrigins;
   memory_index_chunk_provenance: MemoryIndexChunkProvenance;
   memory_index_chunk_recall_metadata: MemoryIndexChunkRecallMetadata;
   memory_index_chunks: MemoryIndexChunks;
   memory_index_meta: MemoryIndexMeta;
   memory_index_sources: MemoryIndexSources;
   memory_index_state: MemoryIndexState;
+  memory_session_tombstones: MemorySessionTombstones;
   message_tool_run_outcomes: MessageToolRunOutcomes;
   schema_meta: SchemaMeta;
   session_conversations: SessionConversations;
+  session_goal_operations: SessionGoalOperations;
   session_key_contract: SessionKeyContract;
   session_members: SessionMembers;
   session_nodes: SessionNodes;
   session_participants: SessionParticipants;
+  session_pending_inputs: SessionPendingInputs;
   session_progress_cards: SessionProgressCards;
   session_suggestions: SessionSuggestions;
   session_transcript_active_events: SessionTranscriptActiveEvents;

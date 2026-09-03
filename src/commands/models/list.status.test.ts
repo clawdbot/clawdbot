@@ -2,10 +2,8 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, type Mock, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import {
-  getCurrentPluginMetadataSnapshot,
-  setCurrentPluginMetadataSnapshot,
-} from "../../plugins/current-plugin-metadata-snapshot.js";
+import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 
@@ -296,7 +294,7 @@ vi.mock("../../agents/harness/runtime-plugin.js", () => ({
   resolveAgentHarnessOwnerPluginIds: mocks.resolveAgentHarnessOwnerPluginIds,
   resolveAgentHarnessRuntimeAvailability: mocks.resolveAgentHarnessRuntimeAvailability,
 }));
-vi.mock("../../cli/update-cli/plugin-payload-validation.js", () => ({
+vi.mock("../../plugins/payload-verification.js", () => ({
   runPluginPayloadSmokeCheckForManifestRecords: mocks.runPluginPayloadSmokeCheckForManifestRecords,
 }));
 vi.mock("../../agents/prepared-model-catalog.js", () => ({
@@ -930,7 +928,7 @@ describe("modelsStatusCommand auth overview", () => {
       await modelsStatusCommand({ json: true }, localRuntime as never);
     });
 
-    expect(mocks.resolveAgentDir).not.toHaveBeenCalled();
+    expectResolveAgentDirCalledFor("main");
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/openclaw-isolated-agent");
     const payload = parseFirstJsonLog(localRuntime);
     expect(payload.agentDir).toBe("/tmp/openclaw-isolated-agent");
@@ -950,7 +948,7 @@ describe("modelsStatusCommand auth overview", () => {
       },
     );
 
-    expect(mocks.resolveAgentDir).not.toHaveBeenCalled();
+    expectResolveAgentDirCalledFor("main");
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/openclaw-legacy-agent");
     const payload = parseFirstJsonLog(localRuntime);
     expect(payload.agentDir).toBe("/tmp/openclaw-legacy-agent");
@@ -1959,12 +1957,18 @@ describe("modelsStatusCommand auth overview", () => {
   it("exits non-zero when auth is missing", async () => {
     const originalProfiles = { ...mocks.store.profiles };
     mocks.store.profiles = {};
-    const localRuntime = createRuntime();
+    const localRuntime = {
+      ...createRuntime(),
+      writeStdout: vi.fn(),
+      writeJson: vi.fn(),
+    };
     const originalEnvImpl = mocks.resolveEnvApiKey.getMockImplementation();
     mocks.resolveEnvApiKey.mockImplementation(() => null);
 
     try {
       await modelsStatusCommand({ check: true, plain: true }, localRuntime as never);
+      expect(localRuntime.writeStdout).toHaveBeenCalledOnce();
+      expect(localRuntime.log).not.toHaveBeenCalled();
       expect(localRuntime.exit).toHaveBeenCalledWith(1);
     } finally {
       mocks.store.profiles = originalProfiles;

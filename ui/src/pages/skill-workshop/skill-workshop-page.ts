@@ -31,7 +31,10 @@ import {
   type SkillWorkshopRouteData,
   type SkillWorkshopState,
 } from "./proposals.ts";
-import { SkillWorkshopRevisionRecoveryController } from "./revision-recovery.ts";
+import {
+  SkillWorkshopRevisionRecoveryController,
+  skillWorkshopRevisionAdmissionsFor,
+} from "./revision-recovery.ts";
 import { resolveSelfLearning, setSelfLearningEnabled } from "./self-learning.ts";
 import {
   captureSkillWorkshopSourceScope,
@@ -430,7 +433,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
       (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
     )
     .watch(
-      () => this.context?.skillWorkshopRevisionAdmissions,
+      () => (this.context ? skillWorkshopRevisionAdmissionsFor(this.context) : undefined),
       (admissions, notify) => admissions.subscribe(notify),
     );
 

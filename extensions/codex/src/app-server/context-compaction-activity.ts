@@ -39,6 +39,7 @@ export async function persistCodexContextCompactionActivity(params: {
       itemId: params.itemId,
       ...(params.runId ? { runId: params.runId } : {}),
     },
+    __openclaw: { itemId: params.itemId, ...(params.runId ? { runId: params.runId } : {}) },
     timestamp: params.timestamp,
     idempotencyKey: activityId,
   };

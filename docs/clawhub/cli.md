@@ -25,12 +25,11 @@ openclaw skills install @owner/<slug>
 openclaw skills install @owner/<slug> --version <version> --global
 openclaw skills install skills-sh:<owner>/<repo>/<slug>
 openclaw skills update @owner/<slug>
-openclaw skills update --all --acknowledge-clawhub-risk
+openclaw skills update --all
 openclaw skills verify @owner/<slug> --card
 
 openclaw plugins search "calendar"
 openclaw plugins install clawhub:<package>
-openclaw plugins install clawhub:<package> --acknowledge-clawhub-risk
 openclaw plugins update <id-or-npm-spec>
 openclaw plugins update --all
 ```
@@ -55,11 +54,10 @@ resolver-backed GitHub skills go through ClawHub's install resolver, which
 enforces scan and force-install policy before returning a pinned commit.
 
 - **Malicious or blocked** releases are refused outright.
-- **Risky** releases (non-clean scan, non-blocking moderation state) print a
-  warning and require `--acknowledge-clawhub-risk` to continue
-  non-interactively.
+- **Review** releases print the exact ClawHub audit overview and details link,
+  then continue installation.
 - **Official ClawHub publishers/packages and bundled OpenClaw sources** skip
-  the trust prompt and security-verdict fetch entirely.
+  the security-verdict fetch entirely.
 
 ## Remove an installed skill
 

@@ -1,4 +1,5 @@
 // Discord tests cover resolve channels plugin behavior.
+import { ChannelType } from "discord-api-types/v10";
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { resolveDiscordChannelAllowlist } from "./resolve-channels.js";
@@ -67,7 +68,11 @@ describe("resolveDiscordChannelAllowlist", () => {
     expect(res[0]?.guildId).toBe("111");
   }
 
-  it("resolves guild/channel by name", async () => {
+  it.each([
+    ["announcement", ChannelType.AnnouncementThread],
+    ["public", ChannelType.PublicThread],
+    ["private", ChannelType.PrivateThread],
+  ])("prefers a matching guild channel over a %s thread", async (_kind, threadType) => {
     const fetcher = withFetchPreconnect(async (input: RequestInfo | URL) => {
       const url = urlToString(input);
       if (url.endsWith("/users/@me/guilds")) {
@@ -75,6 +80,7 @@ describe("resolveDiscordChannelAllowlist", () => {
       }
       if (url.endsWith("/guilds/g1/channels")) {
         return jsonResponse([
+          { id: "thread-1", name: "general", guild_id: "g1", type: threadType },
           { id: "c1", name: "general", guild_id: "g1", type: 0 },
           { id: "c2", name: "random", guild_id: "g1", type: 0 },
         ]);

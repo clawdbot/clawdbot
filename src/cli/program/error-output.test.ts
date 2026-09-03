@@ -1,6 +1,17 @@
 // Error output tests cover program-level error display and exit messaging.
-import { CommanderError } from "commander";
+import { CommanderError, InvalidArgumentError } from "commander";
 import { describe, expect, it } from "vitest";
+import { createCronOutputCommand, isCronMachineOutput } from "../cron-cli/output-mode.js";
+import { isDevicesMachineOutput } from "../devices-output-mode.js";
+import { ExpectedCliError, formatCliJsonFailure } from "../failure-output.js";
+import {
+  isJsonOutputModeActive,
+  withConsoleLogsRoutedToStderrForJson,
+} from "../json-output-mode.js";
+import { isNodesMachineOutput } from "../nodes-cli/output-mode.js";
+import { isProxyMachineOutput } from "../proxy-output-mode.js";
+import { isSkillsMachineOutput } from "../skills-output-mode.js";
+import { isSystemMachineOutput } from "../system-output-mode.js";
 import {
   getCommanderErrorCommandNames,
   getCommanderErrorCommandPath,
@@ -10,6 +21,7 @@ import {
   createCliUnknownCommandError,
   formatCliParseErrorOutput,
 } from "./error-output.js";
+import { setCommandJsonMode } from "./json-mode.js";
 import { OpenClawCommand } from "./openclaw-command.js";
 import { registerLazyCommand } from "./register-lazy-command.js";
 
@@ -65,6 +77,381 @@ async function parseLazyGroupError(params: {
 }
 
 describe("formatCliParseErrorOutput", () => {
+  it.each([
+    {
+      name: "automation lookup",
+      args: ["cron", "get"],
+      root: "cron",
+      children: ["get"],
+      argument: "<id>",
+      message: 'Missing required argument "id".',
+      machineOutput: isCronMachineOutput,
+    },
+    {
+      name: "profiled automation alias",
+      args: ["--profile", "work", "automations", "runs"],
+      root: "cron",
+      alias: "automations",
+      children: ["runs"],
+      requiredOption: "--id <id>",
+      message: 'Missing required option "--id <id>".',
+      machineOutput: isCronMachineOutput,
+    },
+    {
+      name: "raw automation scratch",
+      args: ["cron", "scratch"],
+      root: "cron",
+      children: ["scratch"],
+      argument: "<id>",
+      message: 'Missing required argument "id".',
+      machineOutput: isCronMachineOutput,
+    },
+    {
+      name: "skill verification",
+      args: ["skills", "verify"],
+      root: "skills",
+      children: ["verify"],
+      argument: "<ref>",
+      message: 'Missing required argument "ref".',
+      machineOutput: isSkillsMachineOutput,
+    },
+    {
+      name: "node invocation",
+      args: ["nodes", "invoke"],
+      root: "nodes",
+      children: ["invoke"],
+      requiredOption: "--node <id>",
+      message: 'Missing required option "--node <id>".',
+      machineOutput: isNodesMachineOutput,
+    },
+    {
+      name: "node approval",
+      args: ["nodes", "approve"],
+      root: "nodes",
+      children: ["approve"],
+      argument: "<requestId>",
+      message: 'Missing required argument "requestId".',
+      machineOutput: isNodesMachineOutput,
+    },
+    {
+      name: "device rotation",
+      args: ["devices", "rotate"],
+      root: "devices",
+      children: ["rotate"],
+      requiredOption: "--device <id>",
+      message: 'Missing required option "--device <id>".',
+      machineOutput: isDevicesMachineOutput,
+    },
+    {
+      name: "raw proxy blob",
+      args: ["proxy", "blob"],
+      root: "proxy",
+      children: ["blob"],
+      argument: "<blobId>",
+      message: 'Missing required argument "blobId".',
+      machineOutput: isProxyMachineOutput,
+    },
+    {
+      name: "nested system heartbeat",
+      args: ["system", "heartbeat", "last", "--unknown"],
+      root: "system",
+      children: ["heartbeat", "last"],
+      message: 'OpenClaw does not recognize option "--unknown".',
+      machineOutput: isSystemMachineOutput,
+    },
+  ])("keeps $name parse failures machine-readable by default", async (testCase) => {
+    const originalArgv = process.argv;
+    process.argv = ["node", "openclaw", ...testCase.args];
+    try {
+      const program = new OpenClawCommand()
+        .name("openclaw")
+        .enablePositionalOptions()
+        .option("--profile <name>")
+        .exitOverride();
+      program.configureOutput({ writeErr: () => {} });
+      const root = program.command(testCase.root);
+      if (testCase.alias) {
+        root.alias(testCase.alias);
+      }
+      setCommandJsonMode(root, "output", ({ argv }) => testCase.machineOutput(argv));
+
+      let command = root;
+      for (const child of testCase.children) {
+        command =
+          testCase.root === "cron"
+            ? createCronOutputCommand(command, child as "get" | "runs" | "scratch")
+            : command.command(child).option("--json");
+      }
+      if (testCase.argument) {
+        command.argument(testCase.argument);
+      }
+      if (testCase.requiredOption) {
+        command.requiredOption(testCase.requiredOption);
+      }
+      command.action(() => {});
+
+      await withConsoleLogsRoutedToStderrForJson(
+        process.argv,
+        async () => {
+          const error = await program.parseAsync(process.argv).catch((cause: unknown) => cause);
+
+          expect(error).toBeInstanceOf(ExpectedCliError);
+          expect(isJsonOutputModeActive(process.argv)).toBe(true);
+          expect(formatCliJsonFailure(error)).toEqual({
+            ok: false,
+            error: {
+              type: "cli_error",
+              message: expect.stringContaining(testCase.message),
+            },
+          });
+        },
+        { machineOutput: testCase.machineOutput(process.argv), restoreChanges: true },
+      );
+    } finally {
+      process.argv = originalArgv;
+    }
+  });
+
+  it("keeps a consumed JSON spelling machine-readable when the command owns JSON by default", async () => {
+    const originalArgv = process.argv;
+    process.argv = ["node", "openclaw", "cron", "status", "--limit", "--json"];
+    try {
+      const program = new OpenClawCommand().name("openclaw").exitOverride();
+      program.configureOutput({ writeErr: () => {} });
+      const cron = program.command("cron");
+      setCommandJsonMode(cron, "output", ({ argv }) => isCronMachineOutput(argv));
+      createCronOutputCommand(cron, "status")
+        .option("--limit <value>", "Result limit", () => {
+          throw new InvalidArgumentError("--limit must be a positive integer.");
+        })
+        .action(() => {});
+
+      await withConsoleLogsRoutedToStderrForJson(
+        process.argv,
+        async () => {
+          const error = await program.parseAsync(process.argv).catch((cause: unknown) => cause);
+
+          expect(error).toBeInstanceOf(ExpectedCliError);
+          expect(isJsonOutputModeActive(process.argv)).toBe(true);
+          expect((error as ExpectedCliError).message).toContain(
+            "--limit must be a positive integer.",
+          );
+        },
+        { machineOutput: true, restoreChanges: true },
+      );
+    } finally {
+      process.argv = originalArgv;
+    }
+  });
+
+  it.each([
+    { name: "human automation", args: ["cron", "show"], root: "cron", child: "show" },
+    {
+      name: "parse-only config",
+      args: ["config", "set", "gateway.port", "--json"],
+      root: "config",
+      child: "set",
+    },
+    {
+      name: "human skill card",
+      args: ["skills", "verify", "--card"],
+      root: "skills",
+      child: "verify",
+    },
+  ])("keeps $name parse failures on the human error path", async (testCase) => {
+    const originalArgv = process.argv;
+    process.argv = ["node", "openclaw", ...testCase.args];
+    try {
+      const program = new OpenClawCommand().name("openclaw").exitOverride();
+      program.configureOutput({ writeErr: () => {} });
+      const root = program.command(testCase.root);
+      if (testCase.root === "cron") {
+        setCommandJsonMode(root, "output", ({ argv }) => isCronMachineOutput(argv));
+      } else if (testCase.root === "skills") {
+        setCommandJsonMode(root, "output", ({ argv }) => isSkillsMachineOutput(argv));
+      }
+      const command = root.command(testCase.child).argument("<id>").option("--json");
+      if (testCase.root === "config") {
+        command.argument("<value>");
+        setCommandJsonMode(command, "parse-only", () => true);
+      } else if (testCase.root === "skills") {
+        command.option("--card");
+      }
+      command.action(() => {});
+
+      await withConsoleLogsRoutedToStderrForJson(
+        process.argv,
+        async () => {
+          const error = await program.parseAsync(process.argv).catch((cause: unknown) => cause);
+
+          expect(error).toBeInstanceOf(CommanderError);
+          expect(error).not.toBeInstanceOf(ExpectedCliError);
+          expect(isJsonOutputModeActive(process.argv)).toBe(false);
+        },
+        { restoreChanges: true },
+      );
+    } finally {
+      process.argv = originalArgv;
+    }
+  });
+
+  it("keeps successful machine-command help outside the JSON failure path", async () => {
+    const originalArgv = process.argv;
+    process.argv = ["node", "openclaw", "cron", "get", "--help"];
+    let stdout = "";
+    try {
+      const program = new OpenClawCommand().name("openclaw").exitOverride();
+      program.configureOutput({
+        writeOut: (output) => {
+          stdout += output;
+        },
+        writeErr: () => {},
+      });
+      const cron = program.command("cron");
+      setCommandJsonMode(cron, "output", ({ argv }) => isCronMachineOutput(argv));
+      createCronOutputCommand(cron, "get")
+        .argument("<id>")
+        .action(() => {});
+
+      await withConsoleLogsRoutedToStderrForJson(
+        process.argv,
+        async () => {
+          const error = await program.parseAsync(process.argv).catch((cause: unknown) => cause);
+
+          expect(error).toBeInstanceOf(CommanderError);
+          expect((error as CommanderError).exitCode).toBe(0);
+          expect(stdout).toContain("Usage: openclaw cron get");
+          expect(isJsonOutputModeActive(process.argv)).toBe(false);
+        },
+        { machineOutput: true, restoreChanges: true },
+      );
+    } finally {
+      process.argv = originalArgv;
+    }
+  });
+
+  it.each([
+    { label: "JSON spelling", value: "--json", supportsJson: true },
+    { label: "true-valued JSON spelling", value: "--json=true", supportsJson: true },
+    { label: "false-valued JSON spelling", value: "--json=false", supportsJson: true },
+    { label: "command without JSON output", value: "--json", supportsJson: false },
+    {
+      label: "JSON spelling before a positional terminator",
+      value: "--json",
+      supportsJson: true,
+      suffix: ["--", "--json"],
+    },
+    {
+      label: "JSON spelling after a short option alias",
+      value: "--json",
+      supportsJson: true,
+      flag: "-l",
+    },
+  ])("keeps a consumed $label as a human parse error", async (testCase) => {
+    const { value, supportsJson } = testCase;
+    const originalArgv = process.argv;
+    process.argv = [
+      "node",
+      "openclaw",
+      "--profile",
+      "work",
+      "p",
+      "s",
+      testCase.flag ?? "--limit",
+      value,
+      ...(testCase.suffix ?? []),
+    ];
+    let stderr = "";
+    try {
+      const program = new OpenClawCommand()
+        .name("openclaw")
+        .enablePositionalOptions()
+        .option("--profile <name>")
+        .exitOverride();
+      program.configureOutput({
+        writeErr: (output) => {
+          stderr += output;
+        },
+      });
+      const command = program
+        .command("plugins")
+        .alias("p")
+        .command("search")
+        .alias("s")
+        .option("-l, --limit <value>", "Result limit", () => {
+          throw new InvalidArgumentError("--limit must be a positive integer.");
+        });
+      if (supportsJson) {
+        command.option("--json", "Output JSON");
+      }
+
+      await withConsoleLogsRoutedToStderrForJson(
+        process.argv,
+        async () => {
+          const error = await program.parseAsync(process.argv).catch((cause: unknown) => cause);
+
+          expect(error).toBeInstanceOf(CommanderError);
+          expect(error).not.toBeInstanceOf(ExpectedCliError);
+          expect((error as CommanderError).exitCode).toBe(1);
+          expect(stderr).toContain("--limit must be a positive integer.");
+          expect(isJsonOutputModeActive(process.argv)).toBe(false);
+        },
+        { restoreChanges: true },
+      );
+    } finally {
+      process.argv = originalArgv;
+    }
+  });
+
+  it.each([
+    { label: "before an invalid value", args: ["--json", "--limit", "bad"] },
+    { label: "after an invalid value", args: ["--limit", "bad", "--json"] },
+    { label: "before a consumed JSON value", args: ["--json", "--limit", "--json"] },
+    { label: "after a consumed JSON value", args: ["--limit", "--json", "--json"] },
+    { label: "after a consumed valued JSON token", args: ["--limit", "--json=true", "--json"] },
+  ])("preserves a genuine JSON request $label", async ({ args }) => {
+    const originalArgv = process.argv;
+    process.argv = ["node", "openclaw", "plugins", "search", ...args];
+    try {
+      const program = new OpenClawCommand().name("openclaw").exitOverride();
+      program.configureOutput({ writeErr: () => {} });
+      program
+        .command("plugins")
+        .command("search")
+        .option("--json", "Output JSON")
+        .option("--limit <value>", "Result limit", () => {
+          throw new InvalidArgumentError("--limit must be a positive integer.");
+        });
+
+      const error = await program.parseAsync(process.argv).catch((cause: unknown) => cause);
+
+      expect(error).toBeInstanceOf(ExpectedCliError);
+      expect((error as ExpectedCliError).message).toContain("--limit must be a positive integer.");
+    } finally {
+      process.argv = originalArgv;
+    }
+  });
+
+  it("preserves JSON diagnostics for an unsupported but genuine output flag", async () => {
+    const originalArgv = process.argv;
+    process.argv = ["node", "openclaw", "fleet", "logs", "--json"];
+    try {
+      const program = new OpenClawCommand().name("openclaw").exitOverride();
+      program.configureOutput({ writeErr: () => {} });
+      program
+        .command("fleet")
+        .command("logs")
+        .action(() => {});
+
+      const error = await program.parseAsync(process.argv).catch((cause: unknown) => cause);
+
+      expect(error).toBeInstanceOf(ExpectedCliError);
+      expect((error as ExpectedCliError).message).toContain("--json");
+    } finally {
+      process.argv = originalArgv;
+    }
+  });
+
   it("uses the same structured root diagnostic as the human renderer", () => {
     const error = createCliUnknownCommandError("pairng", {
       argv: ["node", "openclaw", "pairng", "--json"],

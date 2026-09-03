@@ -14,6 +14,10 @@ import { assignSessionOwner } from "../../config/sessions/session-accessor.js";
 import { patchPluginSessionExtension } from "../../plugins/host-hook-state.js";
 import { isPluginJsonValue } from "../../plugins/host-hooks.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
+import {
+  projectAssignableSessionOwner,
+  projectSessionActor,
+} from "../session-identity-projection.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
   authorizeIncognitoSessionTarget,
@@ -23,7 +27,6 @@ import {
 } from "../session-sharing.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import type { SessionActorProfileIdentity } from "../session-utils-contracts.js";
-import { projectAssignableSessionOwner, projectSessionActor } from "../session-utils-row.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
@@ -147,7 +150,8 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     }
     const authorizeView = (candidate: NonNullable<typeof target>) =>
       authorizeIncognitoSessionTarget({ client, sessionKey: key, target: candidate }) ??
-      (createSessionListEntryFilter({ client })?.(candidate.storeKey, candidate.entry) === false
+      (createSessionListEntryFilter({ client, cfg })?.(candidate.storeKey, candidate.entry) ===
+      false
         ? errorShape(ErrorCodes.FORBIDDEN, "session is not visible to this connection")
         : null);
     const visibilityError = authorizeView(target);
@@ -337,6 +341,12 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       reason,
       commandSource: "gateway:sessions.reset",
       creation: resolveOperatorSessionCreation(client),
+      ...(client?.authenticatedUserProfile
+        ? { requestingOperatorProfileId: client.authenticatedUserProfile.profileId }
+        : {}),
+      ...(client?.internal?.operatorRoleActor
+        ? { operatorRoleActor: client.internal.operatorRoleActor }
+        : {}),
       authorizedPluginId: normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId),
       armSessionDiffBaselineCapture: true,
       workerPlacementContext: context,
@@ -348,10 +358,10 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     }
     if ("incognitoDeleted" in result) {
       respond(true, { ok: true, key: result.key, deleted: true }, undefined);
-      // The session is gone, not reset: clients drop rows and navigate away
-      // only on "delete" (a non-delete reason merges a rowless no-op event).
       emitSessionsChanged(context, {
         sessionKey: result.key,
+        agentId: result.agentId,
+        sessionId: result.deletedSessionId,
         reason: "delete",
       });
       return;

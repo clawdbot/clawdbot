@@ -17,7 +17,7 @@ import { resolveLaunchAgentGuiDomain } from "./launchd-runtime.js";
 import { resolveLaunchAgentPlistPathForLabel } from "./launchd-service-files.js";
 
 const OPENCLAW_UPDATE_LAUNCHD_LABEL_PREFIX = "ai.openclaw.update.";
-const OPENCLAW_MANUAL_UPDATE_LAUNCHD_LABEL_PATTERN = /^ai\.openclaw\.manual-update\.\d+$/;
+const MANUAL_UPDATE_LAUNCHD_LABEL_PATTERN = /^ai\.openclaw\.manual-update\.\d+$/;
 const OPENCLAW_PROFILE_UPDATE_LAUNCHD_LABEL_PATTERN =
   /^ai\.openclaw\.[A-Za-z0-9._-]+\.update\.[A-Za-z0-9._-]+$/;
 const OPENCLAW_DIRECT_CLI_NAMES = new Set(["openclaw", "openclaw.mjs"]);
@@ -44,7 +44,7 @@ function normalizeOpenClawUpdateLaunchdLabel(label: unknown): string | null {
   }
   // Manual update jobs include a timestamp-like suffix and should be cleaned up
   // without matching arbitrary ai.openclaw labels.
-  return OPENCLAW_MANUAL_UPDATE_LAUNCHD_LABEL_PATTERN.test(trimmed) ? trimmed : null;
+  return MANUAL_UPDATE_LAUNCHD_LABEL_PATTERN.test(trimmed) ? trimmed : null;
 }
 
 function normalizeOpenClawUpdateLaunchdLabelCandidate(

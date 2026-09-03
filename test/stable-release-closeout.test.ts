@@ -128,6 +128,8 @@ describe("stable release closeout", () => {
     });
     const replay = verifyStableMainCloseout({
       ...validCloseoutParams,
+      existingManifest: first.manifest,
+      publishedAppcast: "<rss>newer app release without the old entry</rss>",
       allowStaleRollbackDrill: true,
       nowMs: Date.parse("2026-10-01T00:00:00Z"),
     });
@@ -136,21 +138,17 @@ describe("stable release closeout", () => {
     expect(replay.manifest).toEqual(first.manifest);
   });
 
-  it("requires the canonical macOS zip, dmg, and dSYM assets", () => {
+  it("records pending apps and appcast before app publication", () => {
     const result = verifyStableMainCloseout({
       ...validCloseoutParams,
-      release: {
-        ...release,
-        assets: [{ name: "openclaw-2026.6.8-dependency-evidence.zip" }],
-      },
-      mainAppcast:
-        "https://github.com/openclaw/openclaw/releases/download/v2026.6.8/openclaw-2026.6.8-dependency-evidence.zip\n",
+      release: { ...release, assets: [] },
+      mainAppcast: "https://example.test/old.zip\n",
       nowMs: Date.parse("2026-06-17T00:00:00Z"),
     });
 
-    expect(result.errors).toContain(
-      "GitHub release v2026.6.8 is missing required macOS asset(s): OpenClaw-2026.6.8.zip, OpenClaw-2026.6.8.dmg, OpenClaw-2026.6.8.dSYM.zip.",
-    );
+    expect(result.errors).toEqual([]);
+    expect(result.manifest).toMatchObject({ apps: "pending", appcast: "pending" });
+    expect(result.manifest).not.toHaveProperty("appcastSha256");
   });
 
   it("uses exact correction versions for correction-release state and assets", () => {
@@ -205,71 +203,27 @@ describe("stable release closeout", () => {
     });
   });
 
-  it("requires complete platform assets for failed-publish recovery", () => {
-    const missing = verifyStableMainCloseout({
+  it("records attached apps when every app family has published", () => {
+    const result = verifyStableMainCloseout({
       ...validCloseoutParams,
-      requireCompletePlatformAssets: true,
-      nowMs: Date.parse("2026-06-17T00:00:00Z"),
-    });
-
-    expect(missing.errors).toContain(
-      "GitHub release v2026.6.8 Android asset names do not match the recovery contract: expected OpenClaw-Android-SHA256SUMS.txt, OpenClaw-Android.apk; got <none>.",
-    );
-    expect(missing.errors).toContain(
-      "GitHub release v2026.6.8 Windows asset names do not match the recovery contract: expected OpenClawCompanion-SHA256SUMS.txt, OpenClawCompanion-Setup-arm64.exe, OpenClawCompanion-Setup-x64.exe; got <none>.",
-    );
-    expect(missing.errors).toContain(
-      "GitHub release v2026.6.8 Android recovery asset(s) lack GitHub SHA-256 digests: OpenClaw-Android-SHA256SUMS.txt, OpenClaw-Android.apk.",
-    );
-    expect(missing.errors).toContain(
-      "failed-publish recovery is missing the exact candidate-approved Windows installer digests.",
-    );
-    expect(missing.errors).toContain(
-      "failed-publish recovery is missing a trusted Windows Node Release run id.",
-    );
-
-    const complete = verifyStableMainCloseout({
-      ...validCloseoutParams,
-      requireCompletePlatformAssets: true,
-      windowsNodeReleaseRunId: "42",
-      windowsNodeInstallerDigests: {
-        "OpenClawCompanion-Setup-arm64.exe": `sha256:${"1".repeat(64)}`,
-        "OpenClawCompanion-Setup-x64.exe": `sha256:${"2".repeat(64)}`,
-      },
       release: {
         ...release,
         assets: [
           ...release.assets,
-          { name: "OpenClaw-Android-SHA256SUMS.txt", digest: `sha256:${"d".repeat(64)}` },
-          { name: "OpenClaw-Android.apk", digest: `sha256:${"e".repeat(64)}` },
-          {
-            name: "OpenClawCompanion-SHA256SUMS.txt",
-            digest: `sha256:${"f".repeat(64)}`,
-          },
-          {
-            name: "OpenClawCompanion-Setup-arm64.exe",
-            digest: `sha256:${"1".repeat(64)}`,
-          },
-          {
-            name: "OpenClawCompanion-Setup-x64.exe",
-            digest: `sha256:${"2".repeat(64)}`,
-          },
+          ...[
+            "OpenClaw-Android-SHA256SUMS.txt",
+            "OpenClaw-Android.apk",
+            "OpenClawCompanion-SHA256SUMS.txt",
+            "OpenClawCompanion-Setup-arm64.exe",
+            "OpenClawCompanion-Setup-x64.exe",
+          ].map((name) => ({ name, digest: `sha256:${"d".repeat(64)}` })),
         ],
       },
       nowMs: Date.parse("2026-06-17T00:00:00Z"),
     });
 
-    expect(complete.errors).toEqual([]);
-    expect(complete.manifest).toMatchObject({
-      releasePublishRecovery: {
-        completePlatformAssetsRequired: true,
-        windowsNodeReleaseRunId: "42",
-        windowsNodeInstallerDigests: {
-          "OpenClawCompanion-Setup-arm64.exe": `sha256:${"1".repeat(64)}`,
-          "OpenClawCompanion-Setup-x64.exe": `sha256:${"2".repeat(64)}`,
-        },
-      },
-    });
+    expect(result.errors).toEqual([]);
+    expect(result.manifest).toMatchObject({ apps: "attached", appcast: "verified" });
   });
 
   it("rejects calendar-normalized rollback drill dates", () => {

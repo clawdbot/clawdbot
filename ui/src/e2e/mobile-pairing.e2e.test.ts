@@ -1,9 +1,10 @@
 // Control UI tests cover mobile pairing setup through the mocked Gateway.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import type { Page } from "playwright";
 import qrcode from "qrcode";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { requireRecord, requireString } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -18,18 +19,17 @@ const suite = createControlUiE2eSuite({
 // Visual proof rides the behavioral scenario so every captured state is one the
 // assertions above it already proved, at whatever SHA the lane ran.
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const uiProofArtifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "mobile-pairing",
-);
+let uiProofArtifactDir: string;
+beforeEach(() => {
+  if (captureUiProofEnabled) {
+    uiProofArtifactDir = createControlUiE2eArtifactDir("mobile-pairing");
+  }
+});
 
 async function captureUiProof(page: Page, fileName: string) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await mkdir(uiProofArtifactDir, { recursive: true });
   await page.screenshot({ animations: "disabled", path: path.join(uiProofArtifactDir, fileName) });
 }
 
@@ -203,7 +203,18 @@ suite.define(() => {
         expect(dialogBox?.width).toBeLessThanOrEqual(390);
         await captureUiProof(page, "01-mobile-access-selection.png");
 
+        const helpDocumentUrl = "https://docs.openclaw.ai/channels/pairing";
+        const helpUrl = `${helpDocumentUrl}#pair-from-the-control-ui-recommended`;
+        // This mocked scenario owns navigation, not docs-site availability. Context
+        // routing also covers the popup's first request, which page routing misses.
+        await page.context().route(helpDocumentUrl, (route) =>
+          route.fulfill({
+            contentType: "text/html",
+            body: "<!doctype html><title>Pairing help</title>",
+          }),
+        );
         const help = page.getByRole("link", { name: "Pairing help (opens in a new tab)" });
+        expect(await help.getAttribute("href")).toBe(helpUrl);
         expect(await help.getAttribute("target")).toBe("_blank");
         expect((await help.getAttribute("rel"))?.split(" ")).toEqual(
           expect.arrayContaining(["noopener", "noreferrer"]),
@@ -214,8 +225,9 @@ suite.define(() => {
         await help.hover();
         await captureUiProof(page, "10-mobile-pairing-help-focus-hover.png");
         const [helpPopup] = await Promise.all([page.waitForEvent("popup"), help.click()]);
-        await helpPopup.waitForURL(/docs\.openclaw\.ai\/channels\/pairing/u);
-        expect(helpPopup.url()).toContain("docs.openclaw.ai/channels/pairing");
+        await helpPopup.waitForURL(helpUrl);
+        expect(helpPopup.url()).toBe(helpUrl);
+        expect(await helpPopup.title()).toBe("Pairing help");
         await helpPopup.close();
 
         await gateway.deferNext("device.pair.setupCode");
@@ -389,6 +401,19 @@ suite.define(() => {
           "device.pair.setupCode",
           setupResult("setup-recovered", "full"),
         );
+        await page.getByRole("button", { name: "Reload" }).click();
+        await qr.waitFor();
+
+        await page.clock.install();
+        await gateway.deferNext("device.pair.setupCode");
+        await page.getByRole("button", { name: "New code" }).click();
+        await page.clock.fastForward(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS + 1);
+        await page.clock.runFor(100);
+        expect(
+          await error
+            .getByText("gateway request timed out after 30000ms: device.pair.setupCode")
+            .isVisible(),
+        ).toBe(true);
         await page.getByRole("button", { name: "Reload" }).click();
         await qr.waitFor();
         await page.locator(".device-pair-setup__close").click();

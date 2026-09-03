@@ -265,7 +265,7 @@ describe("existing-session interaction navigation guard", () => {
   });
 
   it.each(GUARDED_TARGET_REFRESH_ACTIONS)(
-    "resolves current target after guarded $kind interaction",
+    "does not adopt an unrelated target after guarded $kind interaction",
     async (body) => {
       routeState.profileCtx.listTabs
         .mockResolvedValueOnce([routeState.tab])
@@ -276,7 +276,7 @@ describe("existing-session interaction navigation guard", () => {
       expect(response.statusCode).toBe(200);
       expect(response.body).toMatchObject({
         ok: true,
-        targetId: "new-target",
+        targetId: routeState.tab.targetId,
         url: routeState.tab.url,
       });
     },
@@ -591,6 +591,15 @@ describe("existing-session interaction navigation guard", () => {
     expect(chromeMcpMocks.evaluateChromeMcpScript).not.toHaveBeenCalled();
     expect(routeState.profileCtx.listTabs).not.toHaveBeenCalled();
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
+  });
+
+  it("normalizes keyboard aliases before existing-session Chrome MCP dispatch", async () => {
+    const response = await runAction({ kind: "press", key: "Ctrl+Shift+Esc" }, null);
+
+    expect(response.statusCode).toBe(200);
+    expect(chromeMcpMocks.pressChromeMcpKey).toHaveBeenCalledWith(
+      expect.objectContaining({ key: "Control+Shift+Escape" }),
+    );
   });
 
   it("still probes navigation when the interaction command throws", async () => {

@@ -1,10 +1,18 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
-import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-runner-inventory.js";
+import {
+  NODE_WORKER_PORTAL_STREAM_VERSION,
+  NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+} from "../infra/node-runner-inventory.js";
+import { createPluginRecord } from "../plugins/loader-records.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { markPluginRegistryActive } from "../plugins/registry-lifecycle.js";
+import type { WorkerProvider } from "../plugins/types.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createNodeDesktopStreamBroker } from "./desktop/node-stream-broker.js";
@@ -41,8 +49,11 @@ describe("gateway worker environment startup", () => {
 
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const startup = await loadGatewayWorkerEnvironmentStartupState();
+      const registry = createEmptyPluginRegistry();
       const runtime = await createGatewayWorkerEnvironmentRuntime({
-        getPluginRegistry: () => ({ workerProviders: new Map() }),
+        getPluginRegistry: () => registry,
+        getPortalRuntime: () => undefined,
+        resolveGatewayContext: () => undefined,
         desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
         startup,
         log: { child: () => ({ warn: () => {} }) },
@@ -57,6 +68,87 @@ describe("gateway worker environment startup", () => {
         await service.stop();
       }
       await expect(fs.stat(transferRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
+  it("composes idle provider maintenance and drains it during shutdown", async () => {
+    const stateDir = tempDirs.make("openclaw-worker-maintenance-startup-");
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      type MaintenanceContext = Parameters<NonNullable<WorkerProvider["maintain"]>>[0];
+      const entered = createDeferredCore<MaintenanceContext>();
+      const aborted = createDeferredCore();
+      const finish = createDeferredCore();
+      const maintain = vi.fn(async (context: MaintenanceContext) => {
+        context.assertCurrent();
+        context.signal.addEventListener("abort", () => aborted.resolve(), { once: true });
+        entered.resolve(context);
+        await finish.promise;
+      });
+      const registry = createEmptyPluginRegistry();
+      const owner = createPluginRecord({
+        id: "maintenance-owner",
+        source: "/synthetic/maintenance-owner/index.js",
+        origin: "bundled",
+        enabled: true,
+        configSchema: false,
+        contracts: { workerProviders: ["maintenance-provider"] },
+      });
+      registry.plugins.push(owner);
+      registry.workerProviders.set("maintenance-provider", {
+        pluginId: owner.id,
+        source: owner.source,
+        provider: {
+          id: "maintenance-provider",
+          maintain,
+          resolveAllocation: async () => ({ leaseId: "unused", sharedHost: false }),
+          provision: async () => {
+            throw new Error("unused");
+          },
+          inspect: async () => ({ status: "unknown" }),
+          destroy: async () => {},
+        },
+      });
+      markPluginRegistryActive(registry);
+      setRuntimeConfigSnapshot({
+        cloudWorkers: {
+          profiles: {
+            project: { provider: "maintenance-provider", settings: { location: "one" } },
+          },
+        },
+      });
+      const startup = await loadGatewayWorkerEnvironmentStartupState();
+      const runtime = await createGatewayWorkerEnvironmentRuntime({
+        getPluginRegistry: () => registry,
+        getPortalRuntime: () => undefined,
+        resolveGatewayContext: () => undefined,
+        desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
+        startup,
+        log: { child: () => ({ warn: () => {} }) },
+      });
+      const service = runtime.workerEnvironmentService;
+      if (!service) {
+        throw new Error("worker environment service was not created");
+      }
+      let stopping: Promise<void> | undefined;
+      let stopped = false;
+      try {
+        expect(startup.store.list()).toEqual([]);
+        const reconciliation = service.reconcileOnce();
+        const context = await entered.promise;
+        await reconciliation;
+        expect(maintain).toHaveBeenCalledOnce();
+        expect(context.profiles).toEqual([{ location: "one" }]);
+        stopping = service.stop().then(() => {
+          stopped = true;
+        });
+        await aborted.promise;
+        expect(stopped).toBe(false);
+        expect(() => context.assertCurrent()).toThrow();
+      } finally {
+        finish.resolve();
+        await (stopping ?? service.stop());
+      }
+      expect(stopped).toBe(true);
     });
   });
 
@@ -101,8 +193,11 @@ describe("gateway worker environment startup", () => {
           },
         });
 
+        const registry = createEmptyPluginRegistry();
         const runtime = await createGatewayWorkerEnvironmentRuntime({
-          getPluginRegistry: () => ({ workerProviders: new Map() }),
+          getPluginRegistry: () => registry,
+          getPortalRuntime: () => undefined,
+          resolveGatewayContext: () => undefined,
           desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
           startup,
           log: { child: () => ({ warn: () => {} }) },
@@ -116,7 +211,15 @@ describe("gateway worker environment startup", () => {
             "device-environment",
           ]);
           expect(startup.store.getCredential("device-environment")).toBeUndefined();
-          expect(startup.store.get("device-environment")?.state).toBe("orphaned");
+          expect(startup.store.get("device-environment")).toMatchObject({
+            state: "failed",
+            leaseId: null,
+            nodeDeviceId: null,
+            attachedSessionIds: [],
+            destroyRequestedAtMs: expect.any(Number),
+            teardownTerminalState: "failed",
+            lastError: "Worker provider no longer recognizes the lease",
+          });
         } finally {
           await service.stop();
         }
@@ -189,8 +292,11 @@ describe("gateway worker environment startup", () => {
           return { ok: true, payloadJSON: '{"status":"ready"}' };
         },
       };
+      const registry = createEmptyPluginRegistry();
       const runtime = await createGatewayWorkerEnvironmentRuntime({
-        getPluginRegistry: () => ({ workerProviders: new Map() }),
+        getPluginRegistry: () => registry,
+        getPortalRuntime: () => undefined,
+        resolveGatewayContext: () => undefined,
         desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
         nodeDesktopStreamBroker: createNodeDesktopStreamBroker(),
         startup,
@@ -202,6 +308,21 @@ describe("gateway worker environment startup", () => {
       }
       runtime.bindWorkerNodeDesktopControl(transport);
       try {
+        await expect(
+          service.supportsNodePortal(record.environmentId, record.ownerEpoch),
+        ).resolves.toBe(false);
+        runtime.bindDeviceNodeControl?.(transport);
+        await expect(
+          service.supportsNodePortal(record.environmentId, record.ownerEpoch),
+        ).resolves.toBe(false);
+        proof.workerHost.portalStream = NODE_WORKER_PORTAL_STREAM_VERSION;
+        await expect(
+          service.supportsNodePortal(record.environmentId, record.ownerEpoch),
+        ).resolves.toBe(true);
+        delete proof.workerHost.portalStream;
+        await expect(
+          service.supportsNodePortal(record.environmentId, record.ownerEpoch),
+        ).resolves.toBe(false);
         await expect(
           service.launchDesktopApp({ environmentId: record.environmentId, app: "terminal" }),
         ).resolves.toEqual({ app: "terminal", status: "ready" });

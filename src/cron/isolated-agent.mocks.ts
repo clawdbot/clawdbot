@@ -61,6 +61,10 @@ vi.mock("../agents/model-selection.js", async () => {
   };
 });
 
+vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
+  normalizeProviderModelIdWithRuntime: () => undefined,
+}));
+
 vi.mock("../agents/runtime-plugins.js", () => ({
   loadAgentRuntimePluginRegistryHandle: vi.fn(),
 }));

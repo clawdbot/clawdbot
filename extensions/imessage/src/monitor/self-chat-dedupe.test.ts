@@ -150,40 +150,16 @@ describe("echo cache — backward compat for channels without messageId", () => 
   // Proves text-fallback echo detection still works when no messageId is present
   // on either side. Critical for backward compat with channels that don't
   // populate messageId.
-  it("text-only remember/has works within TTL", async () => {
+  it.each([
+    { label: "within TTL", elapsed: 2000, text: "no id message", expected: true },
+    { label: "after TTL expiry", elapsed: 5000, text: "no id message", expected: false },
+    { label: "for different text", elapsed: 1000, text: "totally different text", expected: false },
+  ])("matches text-only echoes $label: $expected", ({ elapsed, text, expected }) => {
     useFakeTimersAt();
-
     const echoCache = createSentMessageCache();
-    const scope = "default:imessage:+15555550123";
-
-    echoCache.remember(scope, { text: "no id message" });
-
-    vi.advanceTimersByTime(2000);
-    expect(echoCache.has(scope, { text: "no id message" })).toBe(true);
-  });
-
-  it("text-only has returns false after TTL expiry", async () => {
-    useFakeTimersAt();
-
-    const echoCache = createSentMessageCache();
-    const scope = "default:imessage:+15555550123";
-
-    echoCache.remember(scope, { text: "no id message" });
-
-    vi.advanceTimersByTime(5000);
-    expect(echoCache.has(scope, { text: "no id message" })).toBe(false);
-  });
-
-  it("text-only has returns false for different text", async () => {
-    useFakeTimersAt();
-
-    const echoCache = createSentMessageCache();
-    const scope = "default:imessage:+15555550123";
-
-    echoCache.remember(scope, { text: "no id message" });
-
-    vi.advanceTimersByTime(1000);
-    expect(echoCache.has(scope, { text: "totally different text" })).toBe(false);
+    echoCache.remember(SELF_CHAT_SCOPE, { text: "no id message" });
+    vi.advanceTimersByTime(elapsed);
+    expect(echoCache.has(SELF_CHAT_SCOPE, { text })).toBe(expected);
   });
 });
 
@@ -285,56 +261,21 @@ describe("self-chat dedupe — #47830", () => {
     expect(decision.kind).toBe("dispatch");
   });
 
-  it("drops echo after text TTL expiry (4s TTL: expired at 5s)", async () => {
-    useFakeTimersAt();
-
-    const echoCache = createSentMessageCache();
-    const scope = "default:imessage:+15555550123";
-
-    // Agent sends text (no message id available)
-    echoCache.remember(scope, { text: "Hello there" });
-
-    // After 5 seconds — beyond the 4s TTL, should NOT match
-    vi.advanceTimersByTime(5000);
-
-    const result = echoCache.has(scope, { text: "Hello there" });
-    expect(result).toBe(false);
-  });
-
-  // Safe failure mode: TTL expiry causes duplicate delivery (noisy), never message loss (lossy)
-  it("does NOT catch echo after TTL expiry — safe failure mode is duplicate delivery", async () => {
-    useFakeTimersAt();
-
-    const echoCache = createSentMessageCache();
-    const scope = SELF_CHAT_SCOPE;
-
-    // Agent sends "Delayed echo test"
-    echoCache.remember(scope, { text: "Delayed echo test", messageId: "agent-msg-delayed" });
-
-    // 4.5 seconds later — beyond 4s TTL
-    vi.advanceTimersByTime(4500);
-
-    // Echo arrives with no messageId (text-only fallback path)
-    const result = echoCache.has(scope, { text: "Delayed echo test" });
-
-    // TTL expired → not caught → duplicate delivery (noisy but safe, not lossy)
-    expect(result).toBe(false);
-  });
-
-  it("still drops text echo within 4s TTL window", async () => {
-    useFakeTimersAt();
-
-    const echoCache = createSentMessageCache();
-    const scope = "default:imessage:+15555550123";
-
-    echoCache.remember(scope, { text: "Hello there" });
-
-    // After 3 seconds — within the 4s TTL, should still match
-    vi.advanceTimersByTime(3000);
-
-    const result = echoCache.has(scope, { text: "Hello there" });
-    expect(result).toBe(true);
-  });
+  // Late text-only matches must expire even when the original send had an ID.
+  it.each([
+    { elapsed: 5000, messageId: undefined, expected: false },
+    { elapsed: 4500, messageId: "agent-msg-delayed", expected: false },
+    { elapsed: 3000, messageId: undefined, expected: true },
+  ])(
+    "matches a text-only lookup after $elapsed ms (send ID $messageId): $expected",
+    ({ elapsed, messageId, expected }) => {
+      useFakeTimersAt();
+      const echoCache = createSentMessageCache();
+      echoCache.remember(SELF_CHAT_SCOPE, { text: "Hello there", messageId });
+      vi.advanceTimersByTime(elapsed);
+      expect(echoCache.has(SELF_CHAT_SCOPE, { text: "Hello there" })).toBe(expected);
+    },
+  );
 });
 
 describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {

@@ -4,9 +4,11 @@ import {
   EnvironmentsCreateResultSchema,
   EnvironmentsDestroyResultSchema,
   EnvironmentsListResultSchema,
+  EnvironmentsStatusResultSchema,
   EnvironmentSummarySchema,
   validateEnvironmentsCreateParams,
   validateEnvironmentsDestroyParams,
+  validateEnvironmentsListParams,
   validateWorkerDesktopLaunchParams,
   validateWorkerDesktopLaunchResult,
   WorkerEnvironmentStateSchema,
@@ -201,6 +203,45 @@ describe("worker environment protocol schemas", () => {
     }
   });
 
+  it("keeps runtime-scoped node command state bounded and closed", () => {
+    const node = { id: "node:build-mac", type: "node", status: "available" };
+    for (const state of ["invocable", "pending-approval", "undeclared", "unauthorized"] as const) {
+      expect(
+        Value.Check(EnvironmentSummarySchema, {
+          ...node,
+          requiredNodeCommand: { command: "runtime.exec", state },
+        }),
+      ).toBe(true);
+    }
+    const commandState = {
+      ...node,
+      requiredNodeCommand: { command: "runtime.exec", state: "invocable" },
+    };
+    for (const schema of [
+      EnvironmentsCreateResultSchema,
+      EnvironmentsDestroyResultSchema,
+      EnvironmentsStatusResultSchema,
+    ]) {
+      expect(Value.Check(schema, commandState)).toBe(false);
+    }
+    for (const requiredNodeCommand of [
+      { command: "", state: "undeclared" },
+      { command: "x".repeat(129), state: "undeclared" },
+      { command: "runtime.exec", state: "unknown" },
+      { command: "runtime.exec", state: "invocable", pending: true },
+    ]) {
+      expect(Value.Check(EnvironmentSummarySchema, { ...node, requiredNodeCommand })).toBe(false);
+    }
+
+    expect(validateEnvironmentsListParams({})).toBe(true);
+    expect(validateEnvironmentsListParams({ runtimeId: "codex" })).toBe(true);
+    expect(validateEnvironmentsListParams({ runtimeId: "" })).toBe(false);
+    expect(validateEnvironmentsListParams({ runtimeId: "x".repeat(129) })).toBe(false);
+    expect(validateEnvironmentsListParams({ runtimeId: "codex", command: "runtime.exec" })).toBe(
+      false,
+    );
+  });
+
   it("accepts bounded node lifecycle history and rejects malformed timestamps", () => {
     const node = {
       id: "node:build-mac",
@@ -254,7 +295,8 @@ describe("worker environment protocol schemas", () => {
             id: "aws",
             providerId: "crabbox",
             trust: "disposable",
-            executionMode: "remote-exec",
+            executionMode: "worker-turn",
+            executionModes: ["worker-turn", "remote-exec"],
             machines: [
               {
                 id: "standard",
@@ -265,7 +307,13 @@ describe("worker environment protocol schemas", () => {
               },
             ],
           },
-          { id: "worker", providerId: "static-ssh", executionMode: "worker-turn" },
+          {
+            id: "worker",
+            providerId: "static-ssh",
+            executionMode: "remote-exec",
+            executionModes: ["remote-exec"],
+          },
+          { id: "legacy-primary", providerId: "static-ssh", executionMode: "worker-turn" },
           { id: "legacy", providerId: "static-ssh" },
         ],
       }),
@@ -288,6 +336,20 @@ describe("worker environment protocol schemas", () => {
         profiles: [{ id: "aws", providerId: "crabbox", executionMode: "sandbox" }],
       }),
     ).toBe(false);
+    for (const executionModes of [
+      [],
+      ["worker-turn", "worker-turn"],
+      ["remote-exec", "worker-turn"],
+      ["worker-turn", "sandbox"],
+      ["worker-turn", "remote-exec", "worker-turn"],
+    ]) {
+      expect(
+        Value.Check(EnvironmentsListResultSchema, {
+          environments: [],
+          profiles: [{ id: "aws", providerId: "crabbox", executionModes }],
+        }),
+      ).toBe(false);
+    }
     expect(
       Value.Check(EnvironmentsListResultSchema, {
         environments: [],

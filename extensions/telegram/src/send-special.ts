@@ -102,7 +102,7 @@ async function sendStickerTelegramWithContext(
 }
 
 type TelegramPollOpts = TelegramThreadedSendOpts &
-  Pick<TelegramSendOpts, "onPlatformSendDispatch" | "silent"> & {
+  Pick<TelegramSendOpts, "assertPlatformSendAuthorized" | "onPlatformSendDispatch" | "silent"> & {
     /** Whether votes are anonymous. Defaults to true (Telegram default). */
     isAnonymous?: boolean;
   };
@@ -148,11 +148,11 @@ async function sendPollTelegramWithContext(
   const durationSeconds = normalizedPoll.durationSeconds;
   if (durationSeconds === undefined && normalizedPoll.durationHours !== undefined) {
     throw new Error(
-      "Telegram poll durationHours is not supported. Use durationSeconds (5-600) instead.",
+      "Telegram poll durationHours is not supported. Use durationSeconds (5-604800) instead.",
     );
   }
-  if (durationSeconds !== undefined && (durationSeconds < 5 || durationSeconds > 600)) {
-    throw new Error("Telegram poll durationSeconds must be between 5 and 600");
+  if (durationSeconds !== undefined && (durationSeconds < 5 || durationSeconds > 604_800)) {
+    throw new Error("Telegram poll durationSeconds must be between 5 and 604800");
   }
 
   const pollParams: TelegramSendPollParams = {
@@ -164,11 +164,15 @@ async function sendPollTelegramWithContext(
   };
 
   await opts.onPlatformSendDispatch?.();
-  const result = await prepared.request(
-    () =>
-      api.sendPoll(prepared.chatId, normalizedPoll.question, normalizedPoll.options, pollParams),
-    "poll",
-  );
+  const result = await prepared.request(() => {
+    opts.assertPlatformSendAuthorized?.();
+    return api.sendPoll(
+      prepared.chatId,
+      normalizedPoll.question,
+      normalizedPoll.options,
+      pollParams,
+    );
+  }, "poll");
   const pollId = result.poll.id;
   const routeChat = result.chat.type === "channel" ? undefined : result.chat;
   const routeMessage =

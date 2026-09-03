@@ -20,9 +20,12 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerMemoryImportEnglish } from "../../i18n/locales/en-memory-import.ts";
 import { normalizeAgentLabel } from "../../lib/agents/display.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import "../../styles/memory-import.css";
+
+registerMemoryImportEnglish();
 
 type MemoryCollection = {
   id: string;
@@ -692,8 +695,8 @@ export function renderMemoryImport(props: MemoryImportViewProps) {
           : nothing}
         ${props.loading && !props.plan
           ? html`<div class="settings-group memory-import__loading" aria-busy="true">
-              <div class="memory-import__skeleton"></div>
-              <div class="memory-import__skeleton"></div>
+              <div class="skeleton memory-import__skeleton"></div>
+              <div class="skeleton memory-import__skeleton"></div>
             </div>`
           : (props.plan?.providers ?? []).map((provider) => renderProvider(props, provider))}
         ${renderConfirmation(props)}

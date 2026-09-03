@@ -39,7 +39,7 @@ export async function fetchChannelMessage(
   messageId: string,
   deadline?: MSTeamsRequestDeadline,
 ): Promise<GraphThreadMessage | undefined> {
-  const path = `/teams/${encodeURIComponent(groupId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}?$select=id,from,body,createdDateTime`;
+  const path = `/teams/${encodeURIComponent(groupId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}`;
   try {
     return await fetchGraphJson<GraphThreadMessage>({
       token,
@@ -104,10 +104,7 @@ export async function fetchThreadReplies(
   deadline?: MSTeamsRequestDeadline,
 ): Promise<GraphThreadMessage[]> {
   const top = Math.min(Math.max(limit, 1), 50);
-  // NOTE: Graph replies endpoint returns oldest-first and does not support $orderby.
-  // For threads with >50 replies, only the oldest 50 are returned. The most recent
-  // replies (often the most relevant context) may be truncated.
-  const path = `/teams/${encodeURIComponent(groupId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}/replies?$top=${top}&$select=id,from,body,createdDateTime`;
+  const path = `/teams/${encodeURIComponent(groupId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}/replies?$top=${top}`;
   const res = await fetchGraphJson<GraphResponse<GraphThreadMessage>>({
     token,
     path,

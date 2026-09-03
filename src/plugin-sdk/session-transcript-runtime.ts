@@ -4,6 +4,7 @@ import { redactTranscriptMessage } from "../agents/transcript-redact.js";
 import {
   appendTranscriptMessage,
   appendTranscriptMessages,
+  bindSessionTranscriptStoreScope,
   isSessionTranscriptProjectionUnavailableError,
   loadSessionEntry,
   loadTranscriptEvents,
@@ -54,6 +55,7 @@ export type {
   TranscriptEntryAnchor,
   TranscriptTurnAdmission,
 } from "../config/sessions/session-accessor.js";
+export { hasPromptImageInput } from "../media/prompt-image-input.js";
 
 export {
   formatSessionTranscriptMemoryHitKey,
@@ -153,8 +155,11 @@ export type SessionTranscriptStrictMessageAppendResult<TMessage> =
 export type SessionTranscriptAssistantMirrorAppendParams = SessionTranscriptReadParams & {
   config?: OpenClawConfig;
   deliveryMirror?: SessionTranscriptDeliveryMirror;
+  expectedLifecycleRevision?: string;
+  expectedWriterRunId?: string;
   idempotencyKey?: string;
   mediaUrls?: string[];
+  signal?: AbortSignal;
   text?: string;
   updateMode?: SessionTranscriptUpdateMode;
 };
@@ -212,7 +217,7 @@ export async function resolveSessionTranscriptTarget(
 export async function readSessionTranscriptEvents(
   params: SessionTranscriptTargetParams,
 ): Promise<SessionTranscriptEvent[]> {
-  return await loadTranscriptEvents(params);
+  return await loadTranscriptEvents(bindSessionTranscriptStoreScope(params));
 }
 
 /** Reads one bounded raw page; the opaque cursor survives append and resets after replacement. */
@@ -220,7 +225,7 @@ export async function readSessionTranscriptRawDelta(
   params: SessionTranscriptRawDeltaParams,
 ): Promise<SessionTranscriptRawDeltaResult> {
   const { cursor, maxBytes, maxEvents, ...target } = params;
-  return readTranscriptRawDelta(target, {
+  return readTranscriptRawDelta(bindSessionTranscriptStoreScope(target), {
     ...(cursor !== undefined ? { cursor } : {}),
     ...(maxBytes !== undefined ? { maxBytes } : {}),
     ...(maxEvents !== undefined ? { maxEvents } : {}),
@@ -234,7 +239,7 @@ export async function readSessionTranscriptVisibleMessageDelta(
   const { cursor, maxBytes, maxMessages, ...target } = params;
   let result: ReturnType<typeof readVisibleMessageDelta>;
   try {
-    result = readVisibleMessageDelta(target, {
+    result = readVisibleMessageDelta(bindSessionTranscriptStoreScope(target), {
       ...(cursor !== undefined ? { cursor } : {}),
       ...(maxBytes !== undefined ? { maxBytes } : {}),
       ...(maxMessages !== undefined ? { maxMessages } : {}),
@@ -270,7 +275,7 @@ export async function readSessionTranscriptVisibleMessageDelta(
 export async function readVisibleSessionTranscriptMessageEntries(
   params: SessionTranscriptTargetParams,
 ): Promise<SessionTranscriptMessageEntry[]> {
-  return selectVisibleTranscriptEventEntries(await loadTranscriptEvents(params)).flatMap(
+  return selectVisibleTranscriptEventEntries(await readSessionTranscriptEvents(params)).flatMap(
     projectVisibleMessageEntry,
   );
 }
@@ -281,7 +286,7 @@ export async function readVisibleSessionTranscriptMessageEntries(
 export async function readLatestAssistantTextByIdentity(
   params: SessionTranscriptTargetParams,
 ): Promise<LatestAssistantTranscriptText | undefined> {
-  return readLatestTranscriptAssistantText(params);
+  return readLatestTranscriptAssistantText(bindSessionTranscriptStoreScope(params));
 }
 
 /**
@@ -290,6 +295,7 @@ export async function readLatestAssistantTextByIdentity(
 export async function appendAssistantMirrorMessageByIdentity(
   params: SessionTranscriptAssistantMirrorAppendParams,
 ): Promise<SessionTranscriptMirrorAppendResult> {
+  params.signal?.throwIfAborted();
   const text = resolveMirroredTranscriptText({
     ...(params.mediaUrls !== undefined ? { mediaUrls: params.mediaUrls } : {}),
     ...(params.text !== undefined ? { text: params.text } : {}),
@@ -302,19 +308,16 @@ export async function appendAssistantMirrorMessageByIdentity(
     ...(params.idempotencyKey !== undefined ? { idempotencyKey: params.idempotencyKey } : {}),
     text,
   });
-  return await withTranscriptWriteLock(params, async (locked) => {
-    const currentEntry = loadSessionEntry(params);
+  const scope = bindSessionTranscriptStoreScope(params, params.config);
+  return await withTranscriptWriteLock(scope, async (locked) => {
+    params.signal?.throwIfAborted();
+    const currentEntry = loadSessionEntry(scope);
     if (!currentEntry?.sessionId) {
       return { ok: false, reason: "missing active session", code: "blocked" };
     }
     if (params.sessionId && currentEntry.sessionId !== params.sessionId) {
       return { ok: false, reason: "session changed", code: "session-rebound" };
     }
-    const scope = {
-      ...params,
-      sessionId: currentEntry.sessionId,
-    };
-    const target = await resolveSessionTranscriptRuntimeTarget(scope);
     const latestEquivalentAssistantId =
       !params.idempotencyKey && isDeliveryMirrorAssistantMessage(message)
         ? findLatestEquivalentAssistantMessageId(
@@ -329,6 +332,7 @@ export async function appendAssistantMirrorMessageByIdentity(
         messageId: latestEquivalentAssistantId,
       };
     }
+    params.signal?.throwIfAborted();
     const appendResult = await locked.appendMessage({
       ...(params.config !== undefined ? { config: params.config } : {}),
       ...(params.idempotencyKey ? { idempotencyLookup: "scan" as const } : {}),
@@ -338,15 +342,9 @@ export async function appendAssistantMirrorMessageByIdentity(
       return { ok: false, reason: "message skipped", code: "blocked" };
     }
     if (params.updateMode !== "none" && appendResult.appended) {
+      params.signal?.throwIfAborted();
       await publishTranscriptUpdate(scope, {
-        agentId: target.agentId,
         messageId: appendResult.messageId,
-        sessionKey: target.sessionKey,
-        target: {
-          agentId: target.agentId,
-          sessionId: target.sessionId,
-          sessionKey: target.sessionKey,
-        },
       });
     }
     return {
@@ -364,7 +362,10 @@ export async function appendAssistantMirrorMessageByIdentity(
 export async function appendSessionTranscriptMessageByIdentity<TMessage>(
   params: SessionTranscriptAppendMessageParams<TMessage>,
 ): Promise<TranscriptMessageAppendResult<TMessage> | undefined> {
-  return await appendTranscriptMessage(params, params);
+  return await appendTranscriptMessage(
+    bindSessionTranscriptStoreScope(params, params.config),
+    params,
+  );
 }
 
 /** Appends one message while preserving distinct suppression and session-rebind outcomes. */
@@ -425,23 +426,7 @@ export async function publishSessionTranscriptUpdateByIdentity(
   params: SessionTranscriptTargetParams & { update?: TranscriptUpdatePayload },
 ): Promise<void> {
   const target = await resolveSessionTranscriptRuntimeTarget(params);
-  await publishTranscriptUpdate(
-    {
-      ...params,
-      sessionId: target.sessionId,
-      sessionKey: target.sessionKey,
-    },
-    {
-      ...params.update,
-      agentId: target.agentId,
-      sessionKey: target.sessionKey,
-      target: {
-        agentId: target.agentId,
-        sessionId: target.sessionId,
-        sessionKey: target.sessionKey,
-      },
-    },
-  );
+  await publishTranscriptUpdate({ ...params, ...target }, params.update);
 }
 
 /**

@@ -45,6 +45,17 @@ const OUTPUT_FORMAT_CASES = [
   { outputFormat: "future_123", fileExtension: ".bin", voiceCompatible: false },
 ] as const;
 
+const DIRECTIVE_POLICY = {
+  enabled: true,
+  allowText: true,
+  allowProvider: true,
+  allowVoice: true,
+  allowModelId: true,
+  allowVoiceSettings: true,
+  allowNormalization: true,
+  allowSeed: true,
+};
+
 describe("elevenlabs speech provider", () => {
   const originalFetch = globalThis.fetch;
 
@@ -72,6 +83,49 @@ describe("elevenlabs speech provider", () => {
       "eleven_monolingual_v1",
     ]);
   });
+
+  it.each([
+    ["stability", "0", { stability: 0 }],
+    ["similarity", "1", { similarityBoost: 1 }],
+    ["similarityboost", "0.25", { similarityBoost: 0.25 }],
+    ["similarity_boost", "5e-1", { similarityBoost: 0.5 }],
+    ["style", "1", { style: 1 }],
+    ["speed", ".5", { speed: 0.5 }],
+    ["speed", "2", { speed: 2 }],
+    ["stability", "-0.1", "stability must be between 0 and 1"],
+    ["similarity", "Infinity", "invalid similarityBoost value"],
+    ["similarity_boost", "1.1", "similarityBoost must be between 0 and 1"],
+    ["style", "0x1", "invalid style value"],
+    ["speed", ".49", "speed must be between 0.5 and 2"],
+    ["speed", "2.01", "speed must be between 0.5 and 2"],
+    ["speed", "invalid", undefined, false],
+  ] as const)(
+    "preserves the %s=%s voice-setting directive",
+    (key, value, expected, allowed?: boolean) => {
+      const currentOverrides = { voiceId: "existing-voice", voiceSettings: { style: 0.25 } };
+      const allowVoiceSettings = allowed ?? true;
+      const parsed = buildElevenLabsSpeechProvider().parseDirectiveToken?.({
+        key,
+        value,
+        policy: { ...DIRECTIVE_POLICY, allowVoiceSettings },
+        currentOverrides,
+      });
+
+      expect(parsed).toEqual(
+        !allowVoiceSettings
+          ? { handled: true }
+          : typeof expected === "string"
+            ? { handled: true, warnings: [expected] }
+            : {
+                handled: true,
+                overrides: {
+                  ...currentOverrides,
+                  voiceSettings: { ...currentOverrides.voiceSettings, ...expected },
+                },
+              },
+      );
+    },
+  );
 
   it("forwards the core-resolved voice-list timeout", async () => {
     globalThis.fetch = vi.fn(async () => Response.json({ voices: [] })) as unknown as typeof fetch;

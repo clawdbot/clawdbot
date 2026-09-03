@@ -5,15 +5,61 @@ import Testing
 
 #if canImport(Darwin)
 struct ManagedProcessTests {
-    @Test func `launch failures preserve the executable description`() async {
-        let executable = "/tmp/openclaw-missing-process-\(UUID().uuidString)"
+    @Test func `cancelled startup wait throws without crashing or consuming the process`() async throws {
+        let process = try await self.start(executable: "/bin/sh", arguments: ["-c", "sleep 30"])
+        defer { process.requestTermination(gracefully: false) }
+        let (gate, gateContinuation) = AsyncStream<Void>.makeStream()
+        defer { gateContinuation.finish() }
+
+        let waiter = Task {
+            var iterator = gate.makeAsyncIterator()
+            _ = await iterator.next()
+            return try await process.waitUntilStarted()
+        }
+        waiter.cancel()
 
         do {
-            _ = try await self.start(executable: executable)
-            Issue.record("expected the missing executable to fail")
+            _ = try await waiter.value
+            Issue.record("expected the cancelled startup waiter to throw")
         } catch {
-            #expect(error.localizedDescription.contains(executable))
+            #expect(error is CancellationError)
         }
+
+        #expect(process.isRunning)
+        await process.terminate(gracefully: false)
+        #expect(!process.isRunning)
+    }
+
+    @Test func `startup result is replayed to concurrent observers`() async throws {
+        let process = try await self.start(executable: "/bin/sh", arguments: ["-c", "sleep 30"])
+        defer { process.requestTermination(gracefully: false) }
+
+        async let first = process.waitUntilStarted()
+        async let second = process.waitUntilStarted()
+        let processIdentifiers = try await [first, second]
+
+        #expect(processIdentifiers[0] == processIdentifiers[1])
+        #expect(processIdentifiers[0] > 0)
+        await process.terminate(gracefully: false)
+    }
+
+    @Test func `launch failures preserve and replay the executable description`() async {
+        let executable = "/tmp/openclaw-missing-process-\(UUID().uuidString)"
+        let process = ManagedProcess.launch(
+            configuration: Subprocess.Configuration(executable: .path(.init(executable))),
+            input: .none,
+            output: .discarded,
+            error: .discarded)
+
+        for _ in 0..<2 {
+            do {
+                _ = try await process.waitUntilStarted()
+                Issue.record("expected the missing executable to fail")
+            } catch {
+                #expect(error.localizedDescription.contains(executable))
+            }
+        }
+        await process.terminate(gracefully: false)
     }
 
     @Test func `abortive termination interrupts the stdin grace period`() async throws {
@@ -25,7 +71,7 @@ struct ManagedProcessTests {
         let termFile = directory.appendingPathComponent("term")
         let stdinPipe = Pipe()
         let configuration = Subprocess.Configuration(
-            .path(.init("/bin/sh")),
+            executable: .path(.init("/bin/sh")),
             arguments: Arguments([
                 "-c",
                 #"trap 'touch "$2"; exit 0' TERM; while IFS= read -r _; do :; done; touch "$1"; while :; do sleep 1; done"#,
@@ -108,7 +154,7 @@ struct ManagedProcessTests {
         environment: [String: String] = [:]) async throws -> ManagedProcess
     {
         let configuration = Subprocess.Configuration(
-            .path(.init(executable)),
+            executable: .path(.init(executable)),
             arguments: Arguments(arguments),
             environment: ManagedProcess.environment(from: environment))
         let process = ManagedProcess.launch(

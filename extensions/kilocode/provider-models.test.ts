@@ -13,7 +13,11 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   }),
 }));
 
-import { discoverKilocodeModels, KILOCODE_MODELS_URL } from "./provider-models.js";
+import {
+  discoverKilocodeModels,
+  KILOCODE_DEFAULT_COST,
+  KILOCODE_MODELS_URL,
+} from "./provider-models.js";
 
 type MockKilocodeFetch = ((url: string, init?: RequestInit) => Promise<Response>) & {
   mock: { calls: unknown[][] };
@@ -187,6 +191,69 @@ describe("discoverKilocodeModels (fetch path)", () => {
       expect(sonnet.maxTokens).toBe(8192);
     });
   });
+
+  it.each([
+    {
+      label: "negative routing rates with missing cache prices",
+      pricing: { prompt: "-1", completion: "-1" },
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+    {
+      label: "unknown routing rates with valid cache prices",
+      pricing: {
+        prompt: "unavailable",
+        completion: "-1",
+        input_cache_read: "0.0000003",
+        input_cache_write: "0.00000375",
+      },
+      cacheRead: 0.3,
+      cacheWrite: 3.75,
+    },
+  ])(
+    "preserves known default-model pricing for $label",
+    async ({ pricing, cacheRead, cacheWrite }) => {
+      const mockFetch = vi.fn().mockResolvedValue(
+        jsonResponse({
+          data: [
+            makeAutoModel({ pricing }),
+            makeGatewayModel({
+              id: "kilo-auto/frontier",
+              pricing: { prompt: "-1", completion: "-1" },
+            }),
+            makeGatewayModel({
+              id: "kilo-auto/free",
+              pricing: {
+                prompt: "0",
+                completion: "0",
+                input_cache_read: "0",
+                input_cache_write: "0",
+              },
+            }),
+          ],
+        }),
+      );
+
+      await withFetchPathTest(mockFetch, async () => {
+        const models = await discoverKilocodeModels();
+
+        expect(requireModelById(models, "kilo-auto/balanced").cost).toEqual({
+          input: KILOCODE_DEFAULT_COST.input,
+          output: KILOCODE_DEFAULT_COST.output,
+          cacheRead,
+          cacheWrite,
+        });
+        for (const id of ["kilo-auto/frontier", "kilo-auto/free"]) {
+          expect(requireModelById(models, id).cost).toEqual({
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+          });
+        }
+      });
+    },
+  );
 
   it("falls back to static catalog on network error", async () => {
     const mockFetch = vi.fn().mockRejectedValue(new Error("network error"));

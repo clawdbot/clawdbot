@@ -1,6 +1,6 @@
 // Parses host tool parameters supplied by plugin tool contracts.
 import {
-  extractApplyPatchTargetPaths,
+  extractResolvedApplyPatchTargetPaths,
   type ApplyPatchPathExtractionOptions,
 } from "../agents/apply-patch-paths.js";
 
@@ -22,32 +22,18 @@ type HostToolDerivedParams = {
 type HostToolDerivationOptions = ApplyPatchPathExtractionOptions;
 
 /**
- * Per-tool host-owned param derivers. Keep this map small and focused — every
- * entry runs synchronously inside the before_tool_call hot path.
- */
-const HOST_TOOL_PARAM_PARSERS: Record<
-  string,
-  (params: unknown, options?: HostToolDerivationOptions) => HostToolDerivedParams
-> = {
-  apply_patch: (params, options) => {
-    const paths = extractApplyPatchTargetPaths(params, options);
-    return paths.length > 0 ? { derivedPaths: Object.freeze([...paths]) } : {};
-  },
-};
-
-/**
  * Derive host-owned metadata for a tool call. Returns an empty object when no
  * parser is registered for the tool, which lets callers spread the result
  * unconditionally without a nullability check.
  */
-export function deriveToolParams(
+export async function deriveToolParams(
   toolName: string,
   params: unknown,
   options?: HostToolDerivationOptions,
-): HostToolDerivedParams {
-  if (!Object.hasOwn(HOST_TOOL_PARAM_PARSERS, toolName)) {
+): Promise<HostToolDerivedParams> {
+  if (toolName !== "apply_patch") {
     return {};
   }
-  const parser = HOST_TOOL_PARAM_PARSERS[toolName];
-  return parser ? parser(params, options) : {};
+  const paths = await extractResolvedApplyPatchTargetPaths(params, options);
+  return paths.length > 0 ? { derivedPaths: Object.freeze([...paths]) } : {};
 }

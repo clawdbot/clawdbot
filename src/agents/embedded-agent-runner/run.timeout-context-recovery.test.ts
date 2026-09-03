@@ -1,17 +1,24 @@
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
+import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
+import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
 import { recoverEmbeddedRunTimeout } from "./run/timeout-context-recovery.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
+import {
+  resolveEmbeddedRunAbandonment,
+  markActiveEmbeddedRunAbandoned,
+  setActiveEmbeddedRun,
+} from "./runs.js";
+import { testing as runsTesting } from "./runs.test-support.js";
+import { createUsageAccumulator } from "./usage-accumulator.js";
 
 const mocks = vi.hoisted(() => ({
   compact: vi.fn(),
   info: vi.fn(),
   postCompactionSideEffects: vi.fn(),
   warn: vi.fn(),
-}));
-
-vi.mock("./run/compaction-runtime.js", () => ({
-  compactEmbeddedRunForRecovery: mocks.compact,
 }));
 
 vi.mock("./compaction-hooks.js", () => ({
@@ -50,13 +57,14 @@ function makeInput(overrides: RecoveryOverrides = {}): RecoveryInput {
     state = createEmbeddedRunContextRecoveryState(),
     ...inputOverrides
   } = overrides;
-  const attempt = {
+  const attempt = makeAttemptResult({
     terminal: { kind: "timeout", phase: "prompt", source: "runtime" },
     sessionIdUsed: "session-1",
+    assistantTexts: [],
     messagesSnapshot: [],
     ...attemptOverride,
-  } as EmbeddedRunAttemptResult;
-  return {
+  });
+  const input: RecoveryInput = {
     runParams: {
       runId: "run-1",
       sessionId: "session-1",
@@ -65,13 +73,49 @@ function makeInput(overrides: RecoveryOverrides = {}): RecoveryInput {
       workspaceDir: "/tmp/workspace",
       prompt: "continue",
       timeoutMs: 1_000,
+      onAutoCompactionSucceeded: vi.fn(),
     },
     state,
+    assertRecoveryActive: vi.fn(),
+    // This leaf doubles orchestration; real admission and writer fencing have composed coverage.
+    prepareRecoveryOwner: () => {
+      const assertActive = () => {
+        input.runParams.abortSignal?.throwIfAborted();
+        input.assertRecoveryActive();
+      };
+      assertActive();
+      const session = input.getActiveSession();
+      return {
+        session: {
+          ...session,
+          target: {
+            ...session.target,
+            agentId: session.target?.agentId ?? input.sessionAgentId,
+            sessionId: session.id,
+            sessionKey: session.target?.sessionKey ?? input.resolvedSessionKey,
+            storePath:
+              session.target?.storePath ?? path.join(input.workspaceDir, "openclaw-agent.sqlite"),
+          },
+        },
+        assertActive,
+        withTranscriptWrites: async <T>(signal: AbortSignal | undefined, run: () => Promise<T>) => {
+          signal?.throwIfAborted();
+          assertActive();
+          return await run();
+        },
+      };
+    },
+    prepareRecoverySession: () => ({
+      sessionManager: undefined,
+      assertActive: vi.fn(),
+      withSessionManagerRewriteLock: async <T>(operation: () => Promise<T> | T) =>
+        await operation(),
+    }),
     contextEngine: {
       info: { id: "legacy", name: "Legacy" },
       ingest: vi.fn(),
       assemble: vi.fn(),
-      compact: vi.fn(),
+      compact: mocks.compact,
     },
     contextTokenBudget: 200_000,
     genericCompactionRecoveryAllowed: true,
@@ -82,7 +126,10 @@ function makeInput(overrides: RecoveryOverrides = {}): RecoveryInput {
     timedOutByRunBudget: false,
     lastRunPromptUsage: { input: 150_000, total: 150_000 },
     attempt,
-    runtimeAuthPlan: {},
+    runtimeAuthPlan: {
+      providerForAuth: "openai",
+      authProfileProviderForAuth: "openai",
+    },
     resolvedSessionKey: "agent:main:session-1",
     sessionAgentId: "main",
     agentDir: "/tmp/agent",
@@ -93,7 +140,15 @@ function makeInput(overrides: RecoveryOverrides = {}): RecoveryInput {
     thinkLevel: "off",
     authProfileIdSource: "auto",
     resolveContextEnginePluginId: () => undefined,
-    buildRuntimeSettings: () => ({}),
+    buildRuntimeSettings: ({ tokenBudget, degradedReason }) =>
+      buildContextEngineRuntimeSettings({
+        contextEngineHost: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+        provider: input.provider,
+        requestedModel: input.modelId,
+        resolvedModel: input.modelId,
+        promptTokenBudget: tokenBudget,
+        degradedReason,
+      }),
     onCompactionHookMessages: vi.fn(async () => {}),
     runOwnsCompactionBeforeHook: vi.fn(async () => {}),
     runOwnsCompactionAfterHook: vi.fn(async () => {}),
@@ -101,20 +156,19 @@ function makeInput(overrides: RecoveryOverrides = {}): RecoveryInput {
     getActiveSession: () => ({ id: "session-1", file: "/tmp/session-1.jsonl" }),
     prepareCompactedTranscriptRetry: vi.fn(async () => {}),
     armPostCompactionGuard: vi.fn(),
+    usageAccumulator: createUsageAccumulator(),
     ...inputOverrides,
-  } as unknown as RecoveryInput;
+  };
+  return input;
 }
 
 describe("recoverEmbeddedRunTimeout", () => {
   beforeEach(() => {
-    mocks.compact.mockReset().mockResolvedValue({
-      result: successfulCompaction(),
-      runtimeContext: {},
-      runtimeSettings: {},
-    });
+    mocks.compact.mockReset().mockResolvedValue(successfulCompaction());
     mocks.info.mockReset();
     mocks.postCompactionSideEffects.mockReset();
     mocks.warn.mockReset();
+    runsTesting.resetActiveEmbeddedRuns();
   });
 
   it.each([
@@ -167,17 +221,19 @@ describe("recoverEmbeddedRunTimeout", () => {
     expect(await recoverEmbeddedRunTimeout(input)).toBe(true);
 
     expect(mocks.compact).toHaveBeenCalledWith(
-      input,
       expect.objectContaining({
         tokenBudget: 200_000,
-        trigger: "timeout_recovery",
-        attempt: 1,
-        maxAttempts: 2,
+        runtimeContext: expect.objectContaining({
+          trigger: "timeout_recovery",
+          attempt: 1,
+          maxAttempts: 2,
+        }),
       }),
     );
     expect(input.runOwnsCompactionBeforeHook).toHaveBeenCalledWith("timeout recovery");
     expect(input.adoptCompactionTranscript).toHaveBeenCalledWith(
       expect.objectContaining({ compacted: true }),
+      undefined,
     );
     expect(input.runOwnsCompactionAfterHook).toHaveBeenCalledWith(
       "timeout recovery",
@@ -189,16 +245,44 @@ describe("recoverEmbeddedRunTimeout", () => {
       autoCompactionCount: 1,
       lastCompactionTokensAfter: 80_000,
     });
+    expect(input.runParams.onAutoCompactionSucceeded).toHaveBeenCalledWith(1);
     expect(input.armPostCompactionGuard).toHaveBeenCalledOnce();
     expect(input.prepareCompactedTranscriptRetry).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    { sessionId: "session-1", tokensAfter: 80_000 },
+    { sessionId: "unaccepted-successor", tokensAfter: undefined },
+  ])(
+    "does not attribute $sessionId tokens to the predecessor when acceptance is cancelled",
+    async ({ sessionId, tokensAfter }) => {
+      const controller = new AbortController();
+      const callerError = new Error("caller cancelled successor acceptance");
+      mocks.compact.mockResolvedValueOnce(successfulCompaction({ sessionId }));
+      const input = makeInput({
+        assertRecoveryActive: () => controller.signal.throwIfAborted(),
+        adoptCompactionTranscript: vi.fn(async () => {
+          controller.abort(callerError);
+          throw callerError;
+        }),
+      });
+      input.runParams.abortSignal = controller.signal;
+
+      await expect(recoverEmbeddedRunTimeout(input)).rejects.toBe(callerError);
+
+      expect(input.state.autoCompactionCount).toBe(1);
+      expect(input.state.lastCompactionTokensAfter).toBe(tokensAfter);
+      expect(mocks.postCompactionSideEffects).not.toHaveBeenCalled();
+      expect(input.prepareCompactedTranscriptRetry).not.toHaveBeenCalled();
+    },
+  );
+
   it("counts compacted-false results against the shared retry cap", async () => {
     const state = createEmbeddedRunContextRecoveryState();
     mocks.compact.mockResolvedValue({
-      result: { ok: false, compacted: false, reason: "nothing to compact" },
-      runtimeContext: {},
-      runtimeSettings: {},
+      ok: false,
+      compacted: false,
+      reason: "nothing to compact",
     });
 
     expect(await recoverEmbeddedRunTimeout(makeInput({ state }))).toBe(false);
@@ -223,25 +307,81 @@ describe("recoverEmbeddedRunTimeout", () => {
     );
   });
 
-  it("runs post-compaction side effects only for an engine-owned compaction", async () => {
+  it("restores terminal abandonment when recovery throws after marking the run", async () => {
+    const handle = {} as Parameters<typeof setActiveEmbeddedRun>[1];
+    setActiveEmbeddedRun("session-1", handle, "agent:main:session-1");
+    expect(
+      markActiveEmbeddedRunAbandoned({
+        sessionId: "session-1",
+        handle,
+        sessionKey: "agent:main:session-1",
+        reason: "timeout",
+      }),
+    ).toBe(true);
+
     const input = makeInput({
-      contextEngine: {
-        info: { id: "test", name: "Test", ownsCompaction: true },
-        ingest: vi.fn(),
-        assemble: vi.fn(),
-        compact: vi.fn(),
-      } as RecoveryInput["contextEngine"],
-      getActiveSession: () => ({ id: "rotated", file: "/tmp/rotated.jsonl" }),
+      runOwnsCompactionAfterHook: vi.fn(async () => {
+        throw new Error("after-hook failed");
+      }),
     });
 
-    expect(await recoverEmbeddedRunTimeout(input)).toBe(true);
-
-    expect(mocks.postCompactionSideEffects).toHaveBeenCalledWith({
-      config: {},
-      sessionKey: "agent:main:session-1",
-      sessionId: "rotated",
-      agentId: "main",
-      sessionFile: "/tmp/rotated.jsonl",
-    });
+    await expect(recoverEmbeddedRunTimeout(input)).rejects.toThrow("after-hook failed");
+    expect(resolveEmbeddedRunAbandonment({ sessionId: "session-1" })).toBe("timeout");
   });
+
+  it("restores terminal abandonment when the next attempt fails before registration", async () => {
+    const handle = {
+      runId: "run-1",
+    } as Parameters<typeof setActiveEmbeddedRun>[1];
+    setActiveEmbeddedRun("session-1", handle, "agent:main:session-1");
+    expect(
+      markActiveEmbeddedRunAbandoned({
+        sessionId: "session-1",
+        handle,
+        sessionKey: "agent:main:session-1",
+        reason: "timeout",
+      }),
+    ).toBe(true);
+
+    const state = createEmbeddedRunContextRecoveryState();
+    expect(await recoverEmbeddedRunTimeout(makeInput({ state }))).toBe(true);
+    expect(resolveEmbeddedRunAbandonment({ sessionId: "session-1" })).toBe("recovering_timeout");
+
+    // The run loop owns this cleanup after recovery returns, including the
+    // fallible preparation window before the next active run is registered.
+    expect(state.restoreTimeoutRecoveryAbandonment()).toBe(true);
+    expect(resolveEmbeddedRunAbandonment({ sessionId: "session-1" })).toBe("timeout");
+  });
+
+  it.each(["durable", "detached"] as const)(
+    "keeps %s recovery accounting separate from durable post-compaction effects",
+    async (sessionPersistence) => {
+      const input = makeInput({
+        contextEngine: {
+          info: { id: "test", name: "Test", ownsCompaction: true },
+          ingest: vi.fn(),
+          assemble: vi.fn(),
+          compact: mocks.compact,
+        } as RecoveryInput["contextEngine"],
+        getActiveSession: () => ({ id: "rotated", file: "/tmp/rotated.jsonl" }),
+      });
+      input.runParams.sessionPersistence = sessionPersistence;
+
+      expect(await recoverEmbeddedRunTimeout(input)).toBe(true);
+      expect(input.state.autoCompactionCount).toBe(1);
+      expect(input.prepareCompactedTranscriptRetry).toHaveBeenCalledOnce();
+      if (sessionPersistence === "detached") {
+        expect(mocks.postCompactionSideEffects).not.toHaveBeenCalled();
+      } else {
+        expect(mocks.postCompactionSideEffects).toHaveBeenCalledWith({
+          config: {},
+          sessionKey: "agent:main:session-1",
+          sessionId: "rotated",
+          agentId: "main",
+          sessionFile: "/tmp/rotated.jsonl",
+          assertActive: input.assertRecoveryActive,
+        });
+      }
+    },
+  );
 });

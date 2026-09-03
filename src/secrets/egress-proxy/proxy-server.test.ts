@@ -178,14 +178,19 @@ async function requestThroughTunnel(params: {
   return { body, status };
 }
 
-async function forwardedRequest(auth?: string, protocol = "https"): Promise<number> {
-  const proxyUrl = new URL(proxy.proxyOrigin);
+async function forwardedRequest(
+  auth?: string,
+  protocol = "https",
+  proxyOrigin = proxy.proxyOrigin,
+  requestTarget?: string,
+): Promise<number> {
+  const proxyUrl = new URL(proxyOrigin);
   return await new Promise<number>((resolve, reject) => {
     const request = httpRequest(
       {
         hostname: proxyUrl.hostname,
         port: proxyUrl.port,
-        path: `${protocol}://localhost:${originPort}/forwarded-auth`,
+        path: requestTarget ?? `${protocol}://localhost:${originPort}/forwarded-auth`,
         method: "GET",
         headers: auth ? { "Proxy-Authorization": auth } : undefined,
       },
@@ -256,34 +261,36 @@ afterEach(async () => {
 });
 
 describe("secret egress proxy", () => {
+  it.each(["https://bad_host/", "https://[invalid]/"])(
+    "refuses malformed target %s on direct and TLS requests without escaping the handler",
+    async (target) => {
+      const auth = basicProxyAuth(registeredPassword(proxyEnv));
+      await expect(forwardedRequest(auth, "https", proxy.proxyOrigin, target)).resolves.toBe(400);
+      await expect(requestThroughTunnel({ path: target })).resolves.toMatchObject({ status: 400 });
+      expect(originRequests).toEqual([]);
+      expect(auditEvents).toEqual([
+        expect.objectContaining({ kind: "refused", substituted: false }),
+        expect.objectContaining({ kind: "refused", substituted: false }),
+      ]);
+      await expect(forwardedRequest(auth)).resolves.toBe(200);
+      expect(originRequests).toHaveLength(1);
+    },
+  );
+
   it("activates Node environment proxy support for registered Gateway runs", () => {
     expect(proxyEnv.NODE_USE_ENV_PROXY).toBe("1");
   });
 
   it("survives a client that resets a refused tunnel instead of crashing the Gateway", async () => {
-    // The proxy runs inside the Gateway process, so an unhandled socket 'error' would take
-    // the whole Gateway down. curl resets the connection after a 407, which is exactly this.
-    const proxyPort = Number(new URL(proxyEnv.HTTPS_PROXY as string).port);
-    const uncaught: Error[] = [];
-    const onUncaught = (error: Error) => uncaught.push(error);
-    process.on("uncaughtException", onUncaught);
-    try {
-      await new Promise<void>((resolve) => {
-        const socket = net.connect(proxyPort, "127.0.0.1", () => {
-          // No Proxy-Authorization: the proxy answers 407, then the peer resets abruptly.
-          socket.write("CONNECT example.test:443 HTTP/1.1\r\nHost: example.test:443\r\n\r\n");
-          setTimeout(() => {
-            socket.resetAndDestroy();
-            setTimeout(resolve, 150);
-          }, 50);
-        });
-        socket.on("error", () => {});
-      });
-    } finally {
-      process.off("uncaughtException", onUncaught);
-    }
+    // curl resets refused CONNECT tunnels; wait for the refusal before resetting.
+    const refused = await rawConnect({});
+    expect(refused.response).toContain("407 Proxy Authentication Required");
+    const closed = new Promise<void>((resolve) => {
+      refused.socket.once("close", () => resolve());
+    });
+    refused.socket.resetAndDestroy();
+    await closed;
 
-    expect(uncaught).toEqual([]);
     // The listener must still serve traffic after the reset.
     const stillAlive = await rawConnect({ auth: basicProxyAuth(registeredPassword(proxyEnv)) });
     expect(stillAlive.response).toContain("200 Connection Established");
@@ -293,8 +300,13 @@ describe("secret egress proxy", () => {
   it.each([
     { label: "missing", auth: undefined, expectedReason: "missing-proxy-auth" },
     {
-      label: "wrong",
+      label: "malformed",
       auth: basicProxyAuth("wrong-token"),
+      expectedReason: "invalid-proxy-auth",
+    },
+    {
+      label: "wrong",
+      auth: basicProxyAuth("A".repeat(43)),
       expectedReason: "invalid-proxy-auth",
     },
   ])("refuses $label authentication on CONNECT and forwarded requests", async (testCase) => {
@@ -308,6 +320,115 @@ describe("secret egress proxy", () => {
       expect.objectContaining({ kind: "refused", reason: testCase.expectedReason }),
       expect.objectContaining({ kind: "refused", reason: testCase.expectedReason }),
     ]);
+  });
+
+  it("forwards requests without sentinels to traffic-allowlisted hosts", async () => {
+    const allowedEvents: SecretEgressProxyAuditEvent[] = [];
+    const allowedProxy = await startSecretEgressProxyServer({
+      caDir,
+      allowedHosts: ["localhost"],
+      onAudit: (event) => allowedEvents.push(event),
+    });
+    proxies.push(allowedProxy);
+
+    await expect(
+      requestThroughTunnel({
+        caPath: allowedProxy.caCertPath,
+        proxyEnv: allowedProxy.registerRun(run),
+      }),
+    ).resolves.toMatchObject({ body: "ok", status: 200 });
+
+    expect(originRequests).toHaveLength(1);
+    expect(allowedEvents).toEqual([
+      expect.objectContaining({ kind: "forwarded", host: "localhost", substituted: false }),
+    ]);
+  });
+
+  it("refuses unlisted tunnels and direct requests with traffic-allowlist remediation", async () => {
+    const refusedEvents: SecretEgressProxyAuditEvent[] = [];
+    const restrictedProxy = await startSecretEgressProxyServer({
+      caDir,
+      allowedHosts: ["api.example.com"],
+      onAudit: (event) => refusedEvents.push(event),
+    });
+    proxies.push(restrictedProxy);
+    const restrictedEnv = restrictedProxy.registerRun(run);
+    const auth = basicProxyAuth(registeredPassword(restrictedEnv));
+
+    const refused = await rawConnect({ auth, proxyOrigin: restrictedProxy.proxyOrigin });
+    expect(refused.response).toContain("403 Forbidden");
+    expect(refused.response).toContain("secrets.egressProxy.allowedHosts");
+    expect(refused.response).toContain("--allow-host localhost");
+    refused.socket.destroy();
+
+    await expect(forwardedRequest(auth, "https", restrictedProxy.proxyOrigin)).resolves.toBe(403);
+    expect(originRequests).toEqual([]);
+    expect(refusedEvents).toEqual([
+      expect.objectContaining({ kind: "refused", host: "localhost", reason: "host-not-allowed" }),
+      expect.objectContaining({ kind: "refused", host: "localhost", reason: "host-not-allowed" }),
+    ]);
+  });
+
+  it("allows sentinel-bound hosts during traffic-allowlist lockdown", async () => {
+    const lockdownEvents: SecretEgressProxyAuditEvent[] = [];
+    const lockdownProxy = await startSecretEgressProxyServer({
+      caDir,
+      allowedHosts: [],
+      onAudit: (event) => lockdownEvents.push(event),
+    });
+    proxies.push(lockdownProxy);
+    const secret = "lockdown-secret-value";
+    const sentinel = mintSecretSentinel(secret, { label: "egress-lockdown" });
+
+    await expect(
+      requestThroughTunnel({
+        caPath: lockdownProxy.caCertPath,
+        headers: { Authorization: `Bearer ${sentinel}` },
+        proxyEnv: registerSentinel({
+          sentinel,
+          allowedHosts: ["localhost"],
+          targetProxy: lockdownProxy,
+        }),
+      }),
+    ).resolves.toMatchObject({ body: "ok", status: 200 });
+
+    expect(originRequests.at(-1)?.headers.authorization).toBe(`Bearer ${secret}`);
+    expect(lockdownEvents.at(-1)).toMatchObject({
+      kind: "forwarded",
+      host: "localhost",
+      substituted: true,
+    });
+  });
+
+  it("keeps per-secret destination bindings narrower than the traffic allowlist", async () => {
+    const restrictedEvents: SecretEgressProxyAuditEvent[] = [];
+    const restrictedProxy = await startSecretEgressProxyServer({
+      caDir,
+      allowedHosts: ["localhost"],
+      onAudit: (event) => restrictedEvents.push(event),
+    });
+    proxies.push(restrictedProxy);
+    const secret = "wrong-destination-secret";
+    const sentinel = mintSecretSentinel(secret, { label: "egress-wrong-destination" });
+
+    const result = await requestThroughTunnel({
+      caPath: restrictedProxy.caCertPath,
+      headers: { Authorization: `Bearer ${sentinel}` },
+      proxyEnv: registerSentinel({
+        sentinel,
+        allowedHosts: ["api.example.com"],
+        targetProxy: restrictedProxy,
+      }),
+    });
+
+    expect(result.status).toBe(502);
+    expect(result.body).toContain("--allow-host localhost");
+    expect(originRequests).toEqual([]);
+    expect(restrictedEvents.at(-1)).toMatchObject({
+      kind: "refused",
+      host: "localhost",
+      reason: "destination-not-allowed",
+    });
   });
 
   it("substitutes an authenticated header and strips proxy authorization upstream", async () => {

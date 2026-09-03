@@ -163,6 +163,8 @@ export const twitchConfigAdapter = {
   listAccountIds,
   resolveAccount: resolveTwitchAccount,
   defaultAccountId: resolveDefaultTwitchAccountId,
+  resolveDefaultTo: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string | null }) =>
+    resolveTwitchAccountContext(cfg, accountId).account?.channel,
   isConfigured: (account: ResolvedTwitchAccount, cfg: OpenClawConfig) =>
     resolveTwitchAccountContext(cfg, account.accountId).configured,
   isEnabled: (account: ResolvedTwitchAccount | undefined) => account?.enabled !== false,

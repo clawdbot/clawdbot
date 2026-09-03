@@ -1,8 +1,11 @@
 // Models set e2e tests cover persisted model selection updates through command handlers.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
+import { registerModelsCli } from "../cli/models-cli.js";
 import { stampConfigWriteMetadata } from "../config/io.meta.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { defaultRuntime } from "../runtime.js";
+import { runRegisteredCli } from "../test-utils/command-runner.js";
 
 const mocks = vi.hoisted(() => ({
   currentConfig: {} as Record<string, unknown>,
@@ -26,7 +29,6 @@ vi.mock("../config/config.js", async () => {
   };
 });
 
-import { modelsFallbacksAddCommand } from "./models/fallbacks.js";
 import { modelsSetImageCommand } from "./models/set-image.js";
 import { modelsSetCommand } from "./models/set.js";
 
@@ -56,11 +58,28 @@ function expectWrittenPrimaryModel(model: string) {
   });
 }
 
+const fallbackGroups = [
+  { name: "fallbacks", key: "model", label: "Fallbacks", singular: "Fallback" },
+  {
+    name: "image-fallbacks",
+    key: "imageModel",
+    label: "Image fallbacks",
+    singular: "Image fallback",
+  },
+] as const;
+
+async function runFallbackCommand(name: string, ...args: string[]) {
+  await runRegisteredCli({ register: registerModelsCli, argv: ["models", name, ...args] });
+}
+
 describe("models set + fallbacks", () => {
   beforeEach(() => {
     mocks.currentConfig = {};
     mocks.writtenConfig = undefined;
+    vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
   });
+
+  afterEach(() => vi.restoreAllMocks());
 
   it("normalizes z.ai provider in models set", async () => {
     mockConfigSnapshot({});
@@ -149,38 +168,112 @@ describe("models set + fallbacks", () => {
     expect(policy.allows({ provider: "openai", model: "gpt-5.6-sol" })).toBe(true);
   });
 
-  it("normalizes z-ai provider in models fallbacks add", async () => {
-    mockConfigSnapshot({ agents: { defaults: { model: { fallbacks: [] } } } });
-    const runtime = makeRuntime();
+  it.each(fallbackGroups)(
+    "normalizes z-ai provider in models $name add",
+    async ({ name, key, label }) => {
+      mockConfigSnapshot({ agents: { defaults: { [key]: { fallbacks: [] } } } });
 
-    await modelsFallbacksAddCommand("z-ai/glm-4.7", runtime);
+      await runFallbackCommand(name, "add", "z-ai/glm-4.7");
 
-    const written = getWrittenConfig();
-    expect(written.agents).toEqual({
-      defaults: {
-        model: { fallbacks: ["zai/glm-4.7"] },
-        models: { "zai/glm-4.7": {} },
-      },
-    });
-  });
-
-  it("preserves primary when adding fallbacks to string defaults.model", async () => {
-    mockConfigSnapshot({ agents: { defaults: { model: "openai/gpt-4.1-mini" } } });
-    const runtime = makeRuntime();
-
-    await modelsFallbacksAddCommand("anthropic/claude-opus-4-6", runtime);
-
-    const written = getWrittenConfig();
-    expect(written.agents).toEqual({
-      defaults: {
-        model: {
-          primary: "openai/gpt-4.1-mini",
-          fallbacks: ["anthropic/claude-opus-4-6"],
+      const written = getWrittenConfig();
+      expect(written.agents).toEqual({
+        defaults: {
+          [key]: { fallbacks: ["zai/glm-4.7"] },
+          models: { "zai/glm-4.7": {} },
         },
-        models: { "anthropic/claude-opus-4-6": {} },
-      },
+      });
+      expect(defaultRuntime.log).toHaveBeenLastCalledWith(`${label}: zai/glm-4.7`);
+    },
+  );
+
+  it.each(fallbackGroups)(
+    "preserves string primary when adding models $name",
+    async ({ name, key }) => {
+      mockConfigSnapshot({ agents: { defaults: { [key]: "openai/gpt-4.1-mini" } } });
+
+      await runFallbackCommand(name, "add", "anthropic/claude-opus-4-6");
+
+      const written = getWrittenConfig();
+      expect(written.agents).toEqual({
+        defaults: {
+          [key]: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: ["anthropic/claude-opus-4-6"],
+          },
+          models: { "anthropic/claude-opus-4-6": {} },
+        },
+      });
+    },
+  );
+
+  it.each(fallbackGroups)(
+    "does not duplicate a provider alias in models $name add",
+    async ({ name, key }) => {
+      mockConfigSnapshot({
+        agents: { defaults: { [key]: { fallbacks: ["moonshotai/kimi-k3"] } } },
+      });
+
+      await runFallbackCommand(name, "add", "moonshot/kimi-k3");
+
+      expect(getWrittenConfig().agents?.defaults?.[key]).toEqual({
+        fallbacks: ["moonshotai/kimi-k3"],
+      });
+    },
+  );
+
+  it.each(fallbackGroups)("removes a provider alias from models $name", async ({ name, key }) => {
+    mockConfigSnapshot({
+      agents: { defaults: { [key]: { fallbacks: ["moonshotai/kimi-k3"] } } },
     });
+
+    await runFallbackCommand(name, "remove", "moonshot-ai/kimi-k3");
+
+    expect(getWrittenConfig().agents?.defaults?.[key]).toEqual({ fallbacks: [] });
   });
+
+  it.each(fallbackGroups)(
+    "removes aliases and clears only models $name",
+    async ({ name, key, label, singular }) => {
+      const siblingKey = key === "model" ? "imageModel" : "model";
+      const primary = "openai/gpt-5.6-luna";
+      const sibling = { primary, fallbacks: [primary] };
+      mockConfigSnapshot({
+        agents: {
+          defaults: {
+            [key]: { primary, fallbacks: ["backup", primary] },
+            [siblingKey]: sibling,
+            models: { "zai/glm-4.7": { alias: "backup" } },
+          },
+        },
+      });
+
+      await runFallbackCommand(name, "remove", "z-ai/glm-4.7");
+
+      expect(getWrittenConfig().agents?.defaults?.[key]).toEqual({ primary, fallbacks: [primary] });
+      expect(getWrittenConfig().agents?.defaults?.[siblingKey]).toEqual(sibling);
+      expect(defaultRuntime.log).toHaveBeenLastCalledWith(`${label}: ${primary}`);
+      mocks.currentConfig = getWrittenConfig();
+
+      await runFallbackCommand(name, "clear");
+
+      expect(getWrittenConfig().agents?.defaults?.[key]).toEqual({ primary, fallbacks: [] });
+      expect(getWrittenConfig().agents?.defaults?.[siblingKey]).toEqual(sibling);
+      expect(defaultRuntime.log).toHaveBeenLastCalledWith(`${singular} list cleared.`);
+
+      mockConfigSnapshot(getWrittenConfig());
+      const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {
+        throw new Error("CLI exit");
+      });
+      await expect(runFallbackCommand(name, "remove", "backup")).rejects.toThrow("CLI exit");
+      expect(error).toHaveBeenCalledWith(
+        expect.stringContaining(`${singular} not found: zai/glm-4.7.`),
+      );
+      expect(error).toHaveBeenCalledWith(expect.stringContaining(`models ${name} list`));
+      expect(exit).toHaveBeenCalledWith(1);
+      expect(mocks.writtenConfig).toBeUndefined();
+    },
+  );
 
   it("normalizes provider casing in models set", async () => {
     mockConfigSnapshot({});

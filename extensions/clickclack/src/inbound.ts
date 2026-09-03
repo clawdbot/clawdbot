@@ -3,7 +3,10 @@ import {
   createChannelInboundEnvelopeBuilder,
   recordChannelBotPairLoopAndCheckSuppression,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { deriveDurableFinalDeliveryRequirements } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  createChannelMessageReplyPipeline,
+  deriveDurableFinalDeliveryRequirements,
+} from "openclaw/plugin-sdk/channel-outbound";
 /**
  * Converts authorized ClickClack messages into OpenClaw agent/model replies and
  * routes resulting outbound text back to ClickClack.
@@ -64,13 +67,31 @@ async function dispatchModelReply(params: {
       },
     ],
   });
-  const text = result.text.trim();
-  if (!text) {
+  const completion = result.text.trim();
+  if (!completion) {
     runtime.logging
       .getChildLogger({ plugin: "clickclack", feature: "model-reply" })
       .warn(`[${params.account.accountId}] ClickClack model reply produced no sendable text`);
     return;
   }
+  // Direct completions bypass agent dispatch; use its prefix/model-context owner.
+  const replyPipeline = createChannelMessageReplyPipeline({
+    cfg: params.cfg,
+    agentId: params.route.agentId,
+    channel: CHANNEL_ID,
+    accountId: params.account.accountId,
+  });
+  replyPipeline.onModelSelected?.({
+    provider: result.provider,
+    model: result.model,
+    thinkLevel: undefined,
+  });
+  const responsePrefix = replyPipeline.resolveResponsePrefix?.();
+  // An operator-owned system prompt may already ask the model to emit this prefix.
+  const text =
+    responsePrefix && !completion.startsWith(responsePrefix)
+      ? `${responsePrefix} ${completion}`
+      : completion;
   await sendClickClackText({
     cfg: params.cfg as CoreConfig,
     accountId: params.account.accountId,

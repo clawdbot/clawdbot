@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import { BROWSER_ANNOTATION_EVENT, type BrowserAnnotationEvent } from "./browser-annotation.ts";
 import {
   createBrowserClient,
@@ -140,14 +141,22 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
     const pendingNavigation = controller.openUrl("https://example.test/rejected", {
       newTab: false,
     });
-    navigation.reject(new Error("Navigation rejected"));
+    navigation.reject(
+      new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "Navigation rejected",
+        details: { reason: "navigation_blocked" },
+      }),
+    );
     await pendingNavigation;
     previousCapture.resolve({ path: "/old.png", targetId: "raw-stable", url: initialUrl });
     await pendingCapture;
 
     expect(controller.activeTargetId).toBe("stable-tab");
     expect(controller.view).toBe(previousView);
-    expect(controller.errorText).toBe("Browser request failed: Navigation rejected");
+    expect(controller.errorText).toBe(
+      "Browser request failed: The current browser navigation rules block this address. Select another tab or enter an allowed address.",
+    );
     expect(controller.loading).toBe(false);
   });
 
@@ -860,32 +869,35 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
     expect(screenshots[0]?.[1]).toMatchObject({ body: { targetId: "tab-b" } });
   });
 
-  it("does not disable a replacement gateway after an old inspection rejects", async () => {
-    vi.useFakeTimers({ now: 1_000 });
-    const previousInspection = createDeferred<unknown>();
-    const previous = createBrowserClient(async () => await previousInspection.promise);
-    const replacement = createBrowserClient(async () => ({ running: true, tabs: [] }));
-    const host = new TestBrowserPanelHost(previous.client);
-    const controller = new BrowserPanelController(host);
-    controller.activeTargetId = "tab-a";
-    controller.view = createView("tab-a");
-    controller.setMode("inspect");
-    controller.handleOverlayPointerMove(createPointer(10, 20));
+  it.each(["browser evaluateEnabled=false", "Browser connection temporarily unavailable"])(
+    "ignores a stale inspection rejection after gateway replacement: %s",
+    async (failure) => {
+      vi.useFakeTimers({ now: 1_000 });
+      const previousInspection = createDeferred<unknown>();
+      const previous = createBrowserClient(async () => await previousInspection.promise);
+      const replacement = createBrowserClient(async () => ({ running: true, tabs: [] }));
+      const host = new TestBrowserPanelHost(previous.client);
+      const controller = new BrowserPanelController(host);
+      controller.activeTargetId = "tab-a";
+      controller.view = createView("tab-a");
+      controller.setMode("inspect");
+      controller.handleOverlayPointerMove(createPointer(10, 20));
 
-    host.open = false;
-    host.client = replacement.client;
-    controller.synchronizeHostProperties(new Map([["client", previous.client]]));
-    host.open = true;
-    controller.activeTargetId = "tab-b";
-    controller.view = createView("tab-b");
-    controller.setMode("inspect");
-    previousInspection.reject(new Error("browser evaluateEnabled=false"));
-    await flushBrowserResponses();
+      host.open = false;
+      host.client = replacement.client;
+      controller.synchronizeClient();
+      host.open = true;
+      controller.activeTargetId = "tab-b";
+      controller.view = createView("tab-b");
+      controller.setMode("inspect");
+      previousInspection.reject(new Error(failure));
+      await flushBrowserResponses();
 
-    expect(controller.evaluateUnavailable).toBe(false);
-    expect(controller.mode).toBe("inspect");
-    expect(controller.errorText).toBeNull();
-  });
+      expect(controller.evaluateUnavailable).toBe(false);
+      expect(controller.mode).toBe("inspect");
+      expect(controller.errorText).toBeNull();
+    },
+  );
   it("preserves normal coalesced wheel actions on their original tab", async () => {
     vi.useFakeTimers();
     const { client, request } = createBrowserClient(async (envelope) => {

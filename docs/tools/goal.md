@@ -5,7 +5,7 @@ read_when:
   - You want OpenClaw to keep one objective visible across a long session
   - You need to pause, resume, block, complete, or clear a session goal
   - You want to understand the get_goal, create_goal, and update_goal tools
-  - You want to see how goals appear in the TUI
+  - You want to use the Goal composer in the Control UI or see goals in the TUI
 title: "Goal"
 ---
 
@@ -164,22 +164,71 @@ so an operator stop remains in effect until the goal is resumed.
 
 ## Control UI
 
+Select **Goal** from the command picker, type the objective, and send. The
+composer shows a Goal label so you can see what Send will do. The objective is
+literal text: words such as `clear` and text such as `/stop` do not become
+commands in Goal mode. Cancel leaves the objective as a normal chat draft.
+
+Starting a Goal saves the Goal, its user turn, and the run admission together
+before acknowledging Send. A failed admission leaves the draft intact and
+does not create a Goal. Start and Resume require an idle local session with
+recoverable history; they are not queued or steered into another run. The UI
+reports unsupported or busy sessions rather than creating an inactive Goal.
+
 The web Control UI shows the goal as a compact pill above the chat composer:
 a status icon, the status label (for example `Pursuing goal`), the truncated
 objective, and a live elapsed timer.
 
 The pill carries inline controls:
 
-- **Pencil** prefills the composer with `/goal edit <objective>` so the
-  objective can be reworded and submitted.
-- **Pause / resume** toggles between `/goal pause` and `/goal resume` based
-  on the current status.
-- **Trash** sends `/goal clear`.
+- **Pencil** opens an Edit Goal composer with the current objective. Saving
+  changes only the objective; cancelling restores the previous chat draft.
+- **Pause / resume** updates the current Goal. Resume also starts a continuation
+  through normal chat admission. Its internal input stays in model history
+  without appearing as a human chat message; the assistant reply remains visible.
+- **Trash** clears the current Goal.
 - **Chevron** expands the pill to show the full objective, the latest status
   note, token usage, and elapsed time.
 
-The action buttons are hidden while the composer cannot send (for example
-when the gateway connection is down); the expand chevron keeps working.
+Edit, Pause, and Clear do not send slash commands or add chat turns. Controls
+target the displayed Goal ID, so a stale button cannot change a replacement
+Goal. If a request is interrupted, retry it unchanged; a successful replay
+refreshes the current state instead of restoring an old Goal snapshot.
+
+The action buttons are unavailable without a connection; the expand chevron
+keeps working. Concurrent Goal actions are rejected while an operation is
+pending. These controls require
+a Gateway advertising the structured Goal capability. Text `/goal` commands
+remain available for CLI and other command-capable surfaces.
+
+### Gateway requests and retries
+
+Goal start uses `chat.send` with the ordinary `message` as the objective and
+`intent: { kind: "session-goal-start", version: 1, issuedAtMs }`. It keeps the
+normal `idempotencyKey`, attachment, and reply fields. Per-request runtime or
+delivery-route overrides are rejected; Goal work uses the session settings and
+local delivery so recovery keeps the same contract. Objectives
+must contain non-whitespace text and are limited to 16,000 characters.
+
+`sessions.goal.update` accepts `edit` with `objective`, or `pause`, `resume`,
+`block`, and `complete` with an optional `note` of at most 2,000 characters.
+`sessions.goal.clear` removes the Goal. Both methods require `sessionKey`,
+`goalId`, `operationId`, and `issuedAtMs`; `agentId` and `sessionId` can pin the
+target. They require normal session participation and `operator.write` scope.
+
+Keep the original operation ID, timestamp, target, and payload for retries.
+Receipts remain valid for 24 hours from `issuedAtMs`; timestamps more than
+five minutes ahead of the Gateway clock are rejected. Reusing an ID with a
+different request is rejected. Expired requests cannot recreate a cleared
+Goal. The per-session limit is 4,096 unexpired receipts; hitting it rejects
+new operations until receipts expire rather than evicting valid retry state.
+
+Results include `operationId`, `action`, `sessionId`, `goalId`, and `status`
+(`started`, `updated`, or `cleared`), plus the resulting `goal` when present
+and `runId` for start/resume. A replay adds `replayed: true`: this is the
+original operation result, not the current Goal state. Refresh the session
+after replay. Receipts prevent duplicate Goal mutations and input turns;
+they do not promise exactly-once external tool or provider effects.
 
 ## TUI
 

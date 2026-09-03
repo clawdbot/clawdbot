@@ -71,19 +71,10 @@ export async function maybeInstallDaemon(params: {
     if (action === "skip") {
       return "skipped";
     }
-    if (action === "reinstall") {
-      await withProgress(
-        { label: "Gateway service", indeterminate: true, delayMs: 0 },
-        async (progress) => {
-          progress.setLabel("Uninstalling Gateway service…");
-          await service.uninstall({ env: process.env, stdout: process.stdout });
-          progress.setLabel("Gateway service uninstalled.");
-        },
-      );
-    }
   }
 
   if (shouldInstall) {
+    // Keep the old service until preparation succeeds; install owns replacement.
     let installError: string | null = null;
     if (!params.daemonRuntime) {
       if (GATEWAY_DAEMON_RUNTIME_OPTIONS.length === 1) {
@@ -122,11 +113,13 @@ export async function maybeInstallDaemon(params: {
           progress.setLabel("Gateway service install blocked.");
           return;
         }
+        const existingCommand = await service.readCommand(process.env).catch(() => null);
         const { programArguments, workingDirectory, environment, environmentValueSources } =
           await buildGatewayInstallPlan({
             env: process.env,
             port: params.port,
             runtime: daemonRuntime,
+            existingCommand,
             warn: (message, title) => note(message, title),
             config: cfg,
           });
