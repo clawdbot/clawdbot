@@ -1028,13 +1028,17 @@ function buildCronSchedule(form: CronFormState) {
   return { kind: "cron" as const, expr, tz: form.cronTz.trim() || undefined, staggerMs };
 }
 
-function buildCronPayload(form: CronFormState) {
+function buildCronPayload(form: CronFormState, source: CronPayload | null, isUpdate: boolean) {
+  // Clones carry public restrictions, not the source's capture markers or authority.
+  // Updates must omit caps so the Gateway retains that job's existing authority.
+  const toolsAllow = !isUpdate && source && "toolsAllow" in source ? source.toolsAllow : undefined;
+  const restrictions = toolsAllow ? { toolsAllow: [...toolsAllow] } : {};
   if (form.payloadKind === "systemEvent") {
     const text = form.payloadText.trim();
     if (!text) {
       throw new Error(t("cron.errors.systemEventTextRequired"));
     }
-    return { kind: "systemEvent" as const, text };
+    return { kind: "systemEvent" as const, text, ...restrictions };
   }
   if (form.payloadKind !== "agentTurn") {
     throw new Error(`Cron ${form.payloadKind} payloads are read-only in Control UI.`);
@@ -1043,33 +1047,35 @@ function buildCronPayload(form: CronFormState) {
   if (!message) {
     throw new Error(t("cron.errors.agentMessageRequiredShort"));
   }
-  const payload: {
-    kind: "agentTurn";
-    message: string;
-    model?: string | null;
-    thinking?: string | null;
-    timeoutSeconds?: number;
-    lightContext?: boolean;
-  } = { kind: "agentTurn", message };
-  const model = form.payloadModel.trim();
-  if (model) {
-    payload.model = model;
-  }
-  const thinking = form.payloadThinking.trim();
-  if (thinking) {
-    payload.thinking = thinking;
-  }
+  const original = source?.kind === "agentTurn" ? source : undefined;
+  const cloned = isUpdate ? undefined : original;
+  // Blank stored overrides clear on update; a new job leaves them inherited.
+  const model =
+    form.payloadModel.trim() || (isUpdate && original?.model !== undefined ? null : undefined);
+  const thinking =
+    form.payloadThinking.trim() ||
+    (isUpdate && original?.thinking !== undefined ? null : undefined);
   const timeoutRaw = form.timeoutSeconds.trim();
-  if (timeoutRaw) {
-    const timeoutSeconds = toNumber(timeoutRaw, Number.NaN);
-    if (Number.isFinite(timeoutSeconds) && timeoutSeconds >= 0) {
-      payload.timeoutSeconds = timeoutSeconds;
-    }
-  }
-  if (form.payloadLightContext) {
-    payload.lightContext = true;
-  }
-  return payload;
+  const timeoutSeconds = toNumber(timeoutRaw, Number.NaN);
+  const lightContext =
+    form.payloadLightContext || original?.lightContext !== undefined
+      ? form.payloadLightContext
+      : undefined;
+  return {
+    kind: "agentTurn" as const,
+    message,
+    ...(model !== undefined ? { model } : {}),
+    ...(thinking !== undefined ? { thinking } : {}),
+    ...(timeoutRaw && Number.isFinite(timeoutSeconds) && timeoutSeconds >= 0
+      ? { timeoutSeconds }
+      : {}),
+    ...(lightContext !== undefined ? { lightContext } : {}),
+    ...restrictions,
+    ...(cloned?.fallbacks ? { fallbacks: [...cloned.fallbacks] } : {}),
+    ...(cloned?.allowUnsafeExternalContent !== undefined
+      ? { allowUnsafeExternalContent: cloned.allowUnsafeExternalContent }
+      : {}),
+  };
 }
 
 function normalizePersistedDeliveryChannel(
@@ -1166,8 +1172,8 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
     const expectedConfigRevision = editingJob
       ? requireCronConfigRevision(state.cronEditingConfigRevision)
       : undefined;
-    const editingPayload = editingJob ? getCronJobPayload(editingJob) : null;
     const sourceJob = editingJob ?? state.cronCloningJob;
+    const sourcePayload = sourceJob ? getCronJobPayload(sourceJob) : null;
     // Form fields cannot represent process commands, anchors, or full timestamp precision.
     const schedule =
       sourceJob && hasUnchangedCronSchedule(form, sourceJob)
@@ -1176,24 +1182,11 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
           : sourceJob.schedule
         : buildCronSchedule(form);
     const preserveLockedPayload = Boolean(
-      editingJob && form.payloadLocked && isReadOnlyCronPayload(editingPayload),
+      editingJob && form.payloadLocked && isReadOnlyCronPayload(sourcePayload),
     );
-    const payload = preserveLockedPayload ? undefined : buildCronPayload(form);
-    if (payload?.kind === "agentTurn" && editingJob && editingPayload?.kind === "agentTurn") {
-      // When editing, a blanked field that previously held a stored override must
-      // send an explicit clear; an omitted key means "leave unchanged" on merge.
-      // The form only shows stored overrides (not inherited defaults), so a blank
-      // input with a stored value is an intentional clear.
-      if (!form.payloadModel.trim() && editingPayload.model !== undefined) {
-        payload.model = null;
-      }
-      if (!form.payloadThinking.trim() && editingPayload.thinking !== undefined) {
-        payload.thinking = null;
-      }
-      if (!form.payloadLightContext && editingPayload.lightContext !== undefined) {
-        payload.lightContext = false;
-      }
-    }
+    const payload = preserveLockedPayload
+      ? undefined
+      : buildCronPayload(form, sourcePayload, Boolean(editingJob));
     const selectedDeliveryMode = form.deliveryMode;
     const normalizedDeliveryAccountId = form.deliveryAccountId.trim();
     // Update patches need null to clear stored routing; create payloads must

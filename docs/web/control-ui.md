@@ -538,6 +538,7 @@ This label does not change which request the approval buttons resolve.
   </Accordion>
   <Accordion title="Automations panel notes">
     - Selecting a row opens a full-page detail view with an Active/Paused switch and Run now in the header (run-if-due, clone, and remove in its menu); the Settings tab edits the automation inline (prompt, details, frequency, advanced overrides) and the Run history tab shows that automation's runs.
+    - Cloning an agent task retains its stored tool allowlist, model fallback list, lightweight-context setting, and external-content setting, including empty lists and explicit `false` values. Fields you change in the copy's form take precedence. The new task is authorized by the current operator; captured execution grants are not copied.
     - Both Run history views show a recorded delivery-suppression reason alongside the delivery status when available. Intentional suppression remains separate from delivery errors; the history does not infer a reason from a successful run.
     - Starter automations under the table prefill the create form with an editable prompt and schedule.
     - New isolated tasks default to internal-only delivery. Select announce explicitly to send a summary to a channel.
