@@ -857,6 +857,43 @@ final class OpenClawSnapshotUITests: XCTestCase {
         actions.tap()
         XCTAssertTrue(app.buttons["Copy Message"].waitForExistence(timeout: 3))
         self.attachScreenshot(named: "assistant-message-actions")
+
+        app.buttons["Select Text"].tap()
+        let selectableText = app.textViews["chat-selectable-text"]
+        XCTAssertTrue(selectableText.waitForExistence(timeout: 3))
+        XCTAssertTrue((selectableText.value as? String)?.contains("Ready when you are") == true)
+        self.attachScreenshot(named: "assistant-select-text")
+        app.buttons["Close"].tap()
+        XCTAssertTrue(selectableText.waitForNonExistence(timeout: 3))
+    }
+
+    func testCodeBlockCopyButtonCopiesRawCode() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone code block copy proof only")
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "chat",
+            initialDestination: "chat",
+            name: "code-block-copy"))
+        let app = try XCTUnwrap(self.app)
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        input.typeText("```swift\nlet copied = true\n```")
+        let send = app.buttons["chat-send-message"]
+        XCTAssertTrue(send.waitForExistence(timeout: 3))
+        send.tap()
+
+        // The user's block precedes any code parsed from the fixture's echoed reply.
+        let copyCode = app.buttons["Copy code"].firstMatch
+        XCTAssertTrue(copyCode.waitForExistence(timeout: 8))
+        app.scrollViews.firstMatch.swipeDown()
+        self.attachScreenshot(named: "code-block-copy")
+        // iOS prompts before another process reads pasteboard contents, so the runner can only
+        // observe that the tap wrote a string; ChatPasteboardTests covers the exact bytes in-process.
+        UIPasteboard.general.items = []
+        XCTAssertFalse(UIPasteboard.general.hasStrings)
+        copyCode.tap()
+        XCTAssertTrue(UIPasteboard.general.hasStrings)
+        self.attachScreenshot(named: "code-block-copied")
     }
 
     func testEmptyChatStarterPromptSendsMessage() throws {

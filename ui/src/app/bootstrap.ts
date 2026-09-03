@@ -12,6 +12,7 @@ import {
   routeIdFromPath,
   sameRouteLocation,
   startApplicationRouter,
+  warmApplicationRouteModule,
   type ApplicationRouter,
   type RouteId,
 } from "../app-routes.ts";
@@ -274,6 +275,7 @@ export function bootstrapApplication(): ApplicationRuntime {
   const runtimeConfig = createRuntimeConfigCapability(gateway);
   const overlays = createApplicationOverlays(gateway, {
     connectionBootstrap,
+    getActiveSessionKey: () => gateway.snapshot.sessionKey || undefined,
     drainConfigWrites: () => runtimeConfig.waitForPendingWrites(),
     onUpdateFailure: (failure, admission) =>
       void openUpdateFailureTriage(context, failure, admission),
@@ -284,6 +286,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     agents,
     overlays,
     scopeUpgrade,
+    connectionBootstrap,
   });
   // App-updater interlock: writing config (or restarting the gateway) while
   // the updater runs can corrupt the install; pause config writes until the
@@ -502,7 +505,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       void navigateWithMode(routeId, options, "replace");
     },
     revalidate: (routeId) => router.revalidate(context, routeId),
-    preload: (routeId, options) => router.preloadLocation(routeLocation(routeId, options), context),
+    preload: (routeId) => router.preloadLocation(locationForRoute(routeId, basePath), context),
   };
   return {
     context,
@@ -526,6 +529,11 @@ export function bootstrapApplication(): ApplicationRuntime {
         },
         () => startGatewayPageActivation(gateway, document, window),
       ];
+      if (startsApplicationRouter && !firstRunDefaultLanding) {
+        // Download explicit-route chunks alongside startup. Default landing must
+        // wait for setup's decision before fetching the Chat workspace graph.
+        steps.unshift(() => warmApplicationRouteModule(router, applicationLocation, basePath));
+      }
       // Resolve first-run setup before routing: the default Chat route owns the
       // workspace graph, which setup users would otherwise fetch and discard.
       steps.push(() =>

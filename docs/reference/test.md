@@ -484,7 +484,12 @@ JSON report together. Mantis allocates an invocation directory for setup logs,
 capture attempts, and its report; the builder preserves each attempt's relative
 paths and refuses to overwrite an existing report.
 
-Separate output owners remain: real-Gateway suites, `chat-outbox-*`, and
+The real-Gateway auth transport suite also allocates one fresh directory per
+suite invocation. Its screenshots wait for meaningful content and the presentation
+owner's finite entrance or resize animations, while perpetual descendant activity
+continues.
+
+Separate output owners remain: other real-Gateway suites, `chat-outbox-*`, and
 `chat-attachment-read-lifecycle`. Do not assume those owners have the ordinary
 mocked proof retention guarantee.
 

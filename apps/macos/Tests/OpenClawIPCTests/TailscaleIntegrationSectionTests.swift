@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 import Testing
 @testable import OpenClaw
@@ -5,6 +6,22 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct TailscaleIntegrationSectionTests {
+    @Test func `dashboard link uses the configured Control UI path`() async throws {
+        let host = "gateway-host.tailnet-example.ts.net"
+        let configPath = TestIsolation.tempConfigPath()
+        defer { try? FileManager.default.removeItem(atPath: configPath) }
+
+        try await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
+            #expect(TailscaleIntegrationSection.dashboardURL(host: host)?.absoluteString ==
+                "https://gateway-host.tailnet-example.ts.net/")
+
+            try Data(#"{"gateway":{"controlUi":{"basePath":" control "}}}"#.utf8)
+                .write(to: URL(fileURLWithPath: configPath))
+            #expect(TailscaleIntegrationSection.dashboardURL(host: host)?.absoluteString ==
+                "https://gateway-host.tailnet-example.ts.net/control/")
+        }
+    }
+
     @Test func `cli installation requires an executable candidate`() throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

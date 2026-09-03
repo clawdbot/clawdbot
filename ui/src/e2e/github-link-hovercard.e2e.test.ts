@@ -189,7 +189,7 @@ describeControlUiE2e("GitHub link hover cards", () => {
       const skeleton = card.locator('[aria-hidden="true"]');
       await skeleton.waitFor({ state: "visible" });
       expect(await card.locator("a").count()).toBe(0);
-      expect(await card.textContent()).toBe("");
+      expect((await card.textContent())?.trim()).toBe("");
       const placeholder = skeleton.locator(".skeleton").first();
       await placeholder.waitFor({ state: "visible" });
       const animating = () =>

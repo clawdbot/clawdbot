@@ -881,7 +881,6 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/package-acceptance-workflow.test.ts",
         "test/scripts/pr-crabbox-merge-bypass.test.ts",
         "test/scripts/release-tooling-identity.test.ts",
-        "test/scripts/run-additional-boundary-checks.test.ts",
         "test/scripts/validate-release-publish-approval.test.ts",
       ],
     );
@@ -3407,8 +3406,10 @@ describe("scripts/test-projects changed-target routing", () => {
       "ui/src/components/form-controls.browser.test.ts",
     );
     if (targets.length === 1) {
+      // Browser screenshots live in directories named after their test files.
+      const matchingFiles = fs.globSync(targets[0]!).filter((file) => fs.statSync(file).isFile());
       expect(plans.flatMap((plan) => plan.includePatterns ?? []).toSorted()).toEqual(
-        fs.globSync(targets[0]!).toSorted(),
+        matchingFiles.toSorted(),
       );
     }
   });

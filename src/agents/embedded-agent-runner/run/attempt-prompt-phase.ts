@@ -171,6 +171,7 @@ export async function runEmbeddedAttemptPromptPhase(input: {
       request,
       sessionAgentId: input.context.sessionAgentId,
       sessionManager,
+      toolResultPromptProjectionState: input.context.toolResultPromptProjectionState,
       prePromptMessageCount: input.lifecycle.getPrePromptMessageCount(),
       replaceSessionMessages: (messages) => {
         activeSession.agent.state.messages = messages;

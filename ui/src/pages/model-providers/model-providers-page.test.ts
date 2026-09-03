@@ -7,6 +7,7 @@ import type { DefaultModelSelection } from "./data.ts";
 import { EMPTY_MODEL_PROVIDERS_DATA } from "./load.ts";
 import {
   appendPage,
+  createEmptyModelProvidersRouteData,
   createHarness,
   deferred,
   publishableGateway,
@@ -40,6 +41,7 @@ describe("ModelProvidersPage agent scope", () => {
         "openclaw-model-providers-page",
       ) as ModelProvidersPageTestElement;
       page.context = context;
+      page.routeData = createEmptyModelProvidersRouteData(context);
       if (loadSource === "preload") {
         const routeData = {
           gateway: context.gateway,
@@ -84,6 +86,7 @@ describe("ModelProvidersPage agent scope", () => {
         "openclaw-model-providers-page",
       ) as ModelProvidersPageTestElement;
       page.context = context;
+      page.routeData = createEmptyModelProvidersRouteData(context);
       if (loadSource === "preload") {
         page.routeData = {
           gateway: context.gateway,

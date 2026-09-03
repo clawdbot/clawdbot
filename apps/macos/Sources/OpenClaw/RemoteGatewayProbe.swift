@@ -229,6 +229,9 @@ enum RemoteGatewayProbe {
                 })
             return .ready(RemoteGatewayProbeSuccess(authSource: authSource))
         } catch {
+            if let issue = GatewayCompatibilityIssue(error: error) {
+                return .failed(issue.message)
+            }
             if let authIssue = RemoteGatewayAuthIssue(error: error) {
                 return .authIssue(authIssue)
             }

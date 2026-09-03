@@ -9,6 +9,7 @@ import { icons } from "../../../components/icons.ts";
 import { renderSessionProgressCard } from "../../../components/session-progress-card.ts";
 import { t } from "../../../i18n/index.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
+import "../../../styles/chat/reply-preview.css";
 import type { ComposerDictationController } from "../composer-dictation.ts";
 import { insertComposerDictation } from "../composer-dictation.ts";
 import {
@@ -24,6 +25,10 @@ import {
 import { focusComposerFromChrome, paneDomId } from "./chat-composer-dom.ts";
 import type { GoalComposerController } from "./chat-composer-goal-mode.ts";
 import { renderChatGoal } from "./chat-composer-goal.ts";
+import {
+  renderSelectedHumanMentions,
+  type HumanMentionMenuHost,
+} from "./chat-composer-mention-menu.ts";
 import { renderChatComposerPlusMenu } from "./chat-composer-plus-menu.ts";
 import { renderChatQueue } from "./chat-composer-queue.ts";
 import {
@@ -36,6 +41,7 @@ import {
   resetSlashMenuState,
   type SlashMenuHost,
 } from "./chat-composer-slash-menu.ts";
+import { commitComposerDraft } from "./chat-composer-state.ts";
 import {
   renderChatRunStatusIndicator,
   renderFallbackIndicator,
@@ -80,6 +86,9 @@ type ChatComposerViewContext = {
   mirrorCameraPreview: boolean;
   slashMenuVisible: boolean;
   skillMenuVisible: boolean;
+  mentionMenuVisible: boolean;
+  mentionMenuHost: HumanMentionMenuHost;
+  mentionError: string | null;
   skillMenuHost: SkillMenuHost;
   slashMenuHost: SlashMenuHost;
   activeSlashMenuOptionId: string | null;
@@ -119,6 +128,9 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     mirrorCameraPreview,
     slashMenuVisible,
     skillMenuVisible,
+    mentionMenuVisible,
+    mentionMenuHost,
+    mentionError,
     skillMenuHost,
     slashMenuHost,
     activeSlashMenuOptionId,
@@ -127,7 +139,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     slashMenuAnnouncementId,
     goalComposer,
   } = context;
-  if (slashMenuVisible || skillMenuVisible) {
+  if (slashMenuVisible || skillMenuVisible || mentionMenuVisible) {
     ensureChatComposerPickerDismissal();
   }
   const disabledBanner = props.disabledBanner
@@ -206,11 +218,13 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
             ? icons.alertTriangle
             : icons.shieldQuestion,
       }
-    : state.dictationError
-      ? { text: state.dictationError, tone: "danger" as const, icon: icons.alertTriangle }
-      : offlineText
-        ? { text: offlineText, tone: "warn" as const, icon: icons.globeOff }
-        : null;
+    : mentionError
+      ? { text: mentionError, tone: "danger" as const, icon: icons.alertTriangle }
+      : state.dictationError
+        ? { text: state.dictationError, tone: "danger" as const, icon: icons.alertTriangle }
+        : offlineText
+          ? { text: offlineText, tone: "warn" as const, icon: icons.globeOff }
+          : null;
   const composerUnderlaps =
     showComposerInput && primaryComposerStatus
       ? html`<div class="agent-chat__composer-underlaps" data-tone=${primaryComposerStatus.tone}>
@@ -272,6 +286,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     onQueueEditCancel: props.queuedEdit?.onCancel,
     editingId: props.queuedEdit?.editingId ?? null,
     editingText: props.queuedEdit?.editingText,
+    editingMentions: props.queuedEdit?.editingMentions,
     editingSource: props.queuedEdit?.source,
     onQueueRemove: props.onQueueRemove,
   });
@@ -320,6 +335,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
               state.slashMenuOpen = false;
               resetSlashMenuState(state);
               resetSkillMenuState(state);
+              state.mentionMenu.close();
               requestUpdate();
             }}
             @click=${(event: MouseEvent) => focusComposerFromChrome(event, canCompose)}
@@ -333,8 +349,15 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
               ? renderSlashMenu(state, slashMenuHost, visibleDraft, requestUpdate)
               : nothing}
             ${skillMenuVisible ? renderSkillMenu(state, skillMenuHost, requestUpdate) : nothing}
+            ${mentionMenuVisible
+              ? state.mentionMenu.render(mentionMenuHost, requestUpdate)
+              : nothing}
             <div class="agent-chat__composer-lede">
               ${goalComposer.render()} ${renderAttachmentPreview(props)}
+              ${renderSelectedHumanMentions(visibleDraft, props.mentions, () => {
+                commitComposerDraft(props, props.getDraft?.() ?? props.draft, []);
+                requestUpdate();
+              })}
               ${props.replyTarget
                 ? html`
                     <div class="chat-reply-preview">
@@ -412,10 +435,12 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                   ?readonly=${dictation?.locksComposer === true || goalComposer.pending}
                   aria-autocomplete="list"
                   aria-controls=${ifDefined(
-                    slashMenuVisible || skillMenuVisible ? slashMenuListboxId : undefined,
+                    slashMenuVisible || skillMenuVisible || mentionMenuVisible
+                      ? slashMenuListboxId
+                      : undefined,
                   )}
                   aria-expanded=${ifDefined(
-                    slashMenuVisible || skillMenuVisible ? "true" : undefined,
+                    slashMenuVisible || skillMenuVisible || mentionMenuVisible ? "true" : undefined,
                   )}
                   aria-activedescendant=${ifDefined(activeSlashMenuOptionId ?? undefined)}
                   aria-describedby=${`${slashMenuAnnouncementId}${
@@ -431,6 +456,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                   @focus=${handleSelect}
                   @pointerup=${handleSelect}
                   @compositionstart=${(event: CompositionEvent) => {
+                    state.mentionMenu.close();
                     state.composerComposing = true;
                     state.composingDraft = {
                       key: draftKey,

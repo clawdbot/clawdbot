@@ -1393,12 +1393,14 @@ describe("GatewayClient connect auth payload", () => {
     async ({ canonical, legacy, protocolBounds }) => {
       const signDevicePayload = vi.fn((_privateKeyPem: string, _payload: string) => "signature");
       const deviceFamily = canonical === "macos" ? "Mac" : "Windows";
+      const modelIdentifier = "TestMachine1,1";
       const client = createClientWithIdentity(`device-${legacy}`, vi.fn(), {
         role: "node",
         mode: GATEWAY_CLIENT_MODES.NODE,
         clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
         platform: canonical,
         deviceFamily,
+        modelIdentifier,
         hostDeps: { signDevicePayload },
         ...protocolBounds,
       });
@@ -1407,8 +1409,12 @@ describe("GatewayClient connect auth payload", () => {
       expect(currentConnect.params).toMatchObject({
         minProtocol: PROTOCOL_VERSION,
         maxProtocol: PROTOCOL_VERSION,
-        client: { platform: canonical, deviceFamily },
+        client: { platform: canonical, deviceFamily, modelIdentifier },
       });
+      expect(signDevicePayload.mock.calls[0]?.[1]?.split("|").slice(9)).toEqual([
+        canonical,
+        deviceFamily.toLowerCase(),
+      ]);
 
       emitConnectFailure(
         currentWs,
@@ -1427,6 +1433,7 @@ describe("GatewayClient connect auth payload", () => {
         client: { platform: legacy },
       });
       expect(legacyConnect.params?.client).not.toHaveProperty("deviceFamily");
+      expect(legacyConnect.params?.client).not.toHaveProperty("modelIdentifier");
       expect(signDevicePayload.mock.calls.at(-1)?.[1]?.split("|").slice(9)).toEqual([legacy, ""]);
       client.stop();
     },

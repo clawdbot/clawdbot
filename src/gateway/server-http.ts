@@ -18,6 +18,7 @@ import {
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
 import { runHttpConnectionRequest } from "../infra/http-request-lifecycle.js";
+import { readTailscaleWhoisIdentity } from "../infra/tailscale.js";
 import { parseDevicePairingJoinRequestPath } from "../pairing/join-code.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveAssistantAgentId } from "./assistant-identity.js";
@@ -306,6 +307,10 @@ export function createGatewayHttpServer(opts: {
         req,
         trustedProxies,
         allowRealIpFallback,
+        // HTTP authorization must observe Tailnet revocation on the next request.
+        // WebSocket upgrades retain the ordinary cache because they authenticate once.
+        tailscaleWhois: (ip) =>
+          readTailscaleWhoisIdentity(ip, undefined, { cacheTtlMs: 0, errorTtlMs: 0 }),
       });
       const scopedNodeCapability = normalizePluginNodeCapabilityScopedUrl(req.url ?? "/");
       if (scopedNodeCapability.malformedScopedPath) {

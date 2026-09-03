@@ -87,6 +87,18 @@ default/latest release.
 
 See [Release channels](/install/development-channels) for channel semantics.
 
+### From chat
+
+The OpenClaw owner can say "update" (the agent uses the `gateway` action
+`update.run`) or send `/update`. The bot acknowledges, the Gateway restarts,
+and a completion or failure notice arrives in the same chat. If the update
+cannot start, the bot explains why and provides the manual command when available.
+
+The sender must be in [`commands.ownerAllowFrom`](/tools/slash-commands#configuration).
+`/update` also requires `commands.restart` (enabled by default).
+Agents must never run `npm install -g openclaw` or stop the Gateway service
+from a chat shell; use the update action so restart and notification stay coordinated.
+
 ## Retire update recovery data
 
 Once you have verified the update and your conversations, preview retained
@@ -449,6 +461,20 @@ Gateway version and reachability, and recover an installed-but-unloaded macOS
 LaunchAgent when possible. If the Gateway cannot make that handoff safely,
 `update.run` reports a safe shell command instead of running the package
 manager in-process.
+
+When `update.run` has a routable chat session, the Gateway sends an update
+acknowledgement before starting the handoff or in-process update. It waits up to
+10 seconds for delivery; a failed chat send does not block the update. The RPC
+response includes `ackDelivered` so clients can distinguish a delivered
+acknowledgement from an unavailable or failed route. A synchronous failure after
+a delivered acknowledgement sends a second notice when no restart is scheduled.
+
+The Control UI includes its active session in the update request. After restart,
+updates without an originating session send their notice to the system main
+session when it has an external route, otherwise to the most recently used
+eligible direct chat. If neither exists, recovery keeps the system-session wake
+without an outbound chat notice. Session-less recovery never resumes a supplied
+continuation as another chat's turn.
 
 The Control UI sidebar update card shows **Update Gateway** when it will start
 this `update.run` flow directly. This covers browser-hosted Control UI, remote

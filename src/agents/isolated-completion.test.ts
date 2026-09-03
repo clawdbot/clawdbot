@@ -204,6 +204,51 @@ function registerHarness(overrides: Partial<AgentHarness>): void {
 }
 
 describe("runIsolatedCompletion", () => {
+  it.each(["legacy", "v2"])(
+    "rejects expired authority after %s host authorization before harness egress",
+    async (version) => {
+      const preparing = createDeferred();
+      const finishPreparation = createDeferred();
+      const expired = new Error("completion owner retired");
+      let active = true;
+      mocks.prepareSimpleCompletionModel.mockImplementationOnce(async () => {
+        preparing.resolve();
+        await finishPreparation.promise;
+        return {
+          model: { provider: "test-provider", id: "test-model", api: "openai-responses" },
+          auth: { apiKey: "test-key", source: "test-profile", mode: "api-key" },
+        };
+      });
+      const run = vi.fn(async () => ({
+        assistant: assistant([{ type: "text", text: "must not be generated" }]),
+      }));
+      registerHarness({
+        id: "test-runtime",
+        ...(version === "legacy"
+          ? { runIsolatedCompletion: run }
+          : { runIsolatedCompletionV2: run }),
+      });
+      const result = runIsolatedCompletion({
+        ...request(),
+        agentHarnessRuntimeOverride: "test-runtime",
+        assertCurrent: () => {
+          if (!active) {
+            throw expired;
+          }
+        },
+      }).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      await preparing.promise;
+      active = false;
+      finishPreparation.resolve();
+      expect(await result).toEqual({ error: expired });
+      expect(run).not.toHaveBeenCalled();
+      expect(releaseRuntimeLease).toHaveBeenCalledOnce();
+    },
+  );
+
   it.each(["claude-cli", "anthropic"])(
     "keeps the CLI execution owner for a %s utility model without resolving HTTP credentials",
     async (provider) => {
@@ -299,76 +344,98 @@ describe("runIsolatedCompletion", () => {
     );
   });
 
-  it("keeps automatic harness fallback core-owned and scopes one profile per call", async () => {
-    const firstPlan = {
-      ...nativeAuthPlan,
-      forwardedAuthProfileId: "openai:first",
-      forwardedAuthProfileSource: "auto" as const,
-      forwardedAuthProfileCandidateIds: ["openai:first", "openai:backup"],
-    };
-    const backupPlan = {
-      ...firstPlan,
-      forwardedAuthProfileId: "openai:backup",
-      forwardedAuthProfileCandidateIds: ["openai:backup"],
-    };
-    mocks.ensureAuthProfileStore.mockReturnValueOnce({
-      version: 1,
-      profiles: {
-        "openai:first": { type: "token", provider: "openai", token: "first" },
-        "openai:backup": { type: "token", provider: "openai", token: "backup" },
-      },
-    });
-    mocks.prepareAgentRuntimeAuth.mockReturnValueOnce({
-      plan: firstPlan,
-      attempts: [
-        { kind: "profile", plan: firstPlan, profileId: "openai:first" },
-        { kind: "profile", plan: backupPlan, profileId: "openai:backup" },
-      ],
-    });
-    const runIsolatedCompletionV2 = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("first profile unavailable"))
-      .mockResolvedValueOnce({
-        assistant: assistant([{ type: "text", text: "backup result" }]),
+  it.each([false, true])(
+    "keeps profile fallback within live authority (retired: %s)",
+    async (retired) => {
+      let active = true;
+      const expired = new Error("completion owner retired");
+      const firstPlan = {
+        ...nativeAuthPlan,
+        forwardedAuthProfileId: "openai:first",
+        forwardedAuthProfileSource: "auto" as const,
+        forwardedAuthProfileCandidateIds: ["openai:first", "openai:backup"],
+      };
+      const backupPlan = {
+        ...firstPlan,
+        forwardedAuthProfileId: "openai:backup",
+        forwardedAuthProfileCandidateIds: ["openai:backup"],
+      };
+      mocks.ensureAuthProfileStore.mockReturnValueOnce({
+        version: 1,
+        profiles: {
+          "openai:first": { type: "token", provider: "openai", token: "first" },
+          "openai:backup": { type: "token", provider: "openai", token: "backup" },
+        },
       });
-    registerHarness({
-      authBootstrap: "harness",
-      runIsolatedCompletionV2,
-    });
+      mocks.prepareAgentRuntimeAuth.mockReturnValueOnce({
+        plan: firstPlan,
+        attempts: [
+          { kind: "profile", plan: firstPlan, profileId: "openai:first" },
+          { kind: "profile", plan: backupPlan, profileId: "openai:backup" },
+        ],
+      });
+      const runIsolatedCompletionV2 = vi
+        .fn()
+        .mockImplementationOnce(async () => {
+          active = !retired;
+          throw new Error("first profile unavailable");
+        })
+        .mockResolvedValueOnce({
+          assistant: assistant([{ type: "text", text: "backup result" }]),
+        });
+      registerHarness({
+        authBootstrap: "harness",
+        runIsolatedCompletionV2,
+      });
 
-    await expect(runIsolatedCompletion(request())).resolves.toMatchObject({
-      text: "backup result",
-    });
-    expect(runIsolatedCompletionV2).toHaveBeenCalledTimes(2);
-    expect(
-      runIsolatedCompletionV2.mock.calls.map(([params]) => ({
-        profileId:
-          params.authorization.owner === "harness"
-            ? params.authorization.plan.forwardedAuthProfileId
-            : undefined,
-        candidateIds:
-          params.authorization.owner === "harness"
-            ? params.authorization.plan.forwardedAuthProfileCandidateIds
-            : undefined,
-        profiles:
-          params.authorization.owner === "harness"
-            ? Object.keys(params.authorization.authProfileStore.profiles)
-            : [],
-      })),
-    ).toEqual([
-      {
-        profileId: "openai:first",
-        candidateIds: ["openai:first"],
-        profiles: ["openai:first"],
-      },
-      {
-        profileId: "openai:backup",
-        candidateIds: ["openai:backup"],
-        profiles: ["openai:backup"],
-      },
-    ]);
-    expect(mocks.prepareSimpleCompletionModel).not.toHaveBeenCalled();
-  });
+      const result = runIsolatedCompletion({
+        ...request(),
+        assertCurrent: () => {
+          if (!active) {
+            throw expired;
+          }
+        },
+      });
+      if (retired) {
+        await expect(result).rejects.toThrow(expired);
+        expect(runIsolatedCompletionV2).toHaveBeenCalledOnce();
+        expect(releaseRuntimeLease).toHaveBeenCalledOnce();
+        return;
+      }
+      await expect(result).resolves.toMatchObject({
+        text: "backup result",
+      });
+      expect(runIsolatedCompletionV2).toHaveBeenCalledTimes(2);
+      expect(
+        runIsolatedCompletionV2.mock.calls.map(([params]) => ({
+          profileId:
+            params.authorization.owner === "harness"
+              ? params.authorization.plan.forwardedAuthProfileId
+              : undefined,
+          candidateIds:
+            params.authorization.owner === "harness"
+              ? params.authorization.plan.forwardedAuthProfileCandidateIds
+              : undefined,
+          profiles:
+            params.authorization.owner === "harness"
+              ? Object.keys(params.authorization.authProfileStore.profiles)
+              : [],
+        })),
+      ).toEqual([
+        {
+          profileId: "openai:first",
+          candidateIds: ["openai:first"],
+          profiles: ["openai:first"],
+        },
+        {
+          profileId: "openai:backup",
+          candidateIds: ["openai:backup"],
+          profiles: ["openai:backup"],
+        },
+      ]);
+      expect(mocks.prepareSimpleCompletionModel).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([true, false])(
     "requires actual profile dispatch before direct auth (cooled: %s)",
@@ -511,9 +578,13 @@ describe("runIsolatedCompletion", () => {
   });
 
   it("passes one prepared route to the selected harness and returns text", async () => {
-    const runIsolatedCompletionHarness = vi.fn(async () => ({
-      assistant: assistant([{ type: "text", text: '{"ok":true}' }]),
-    }));
+    let retainedAssertCurrent: (() => void) | undefined;
+    const runIsolatedCompletionHarness = vi.fn(
+      async (params: Parameters<NonNullable<AgentHarness["runIsolatedCompletion"]>>[0]) => {
+        retainedAssertCurrent = params.assertCurrent;
+        return { assistant: assistant([{ type: "text", text: '{"ok":true}' }]) };
+      },
+    );
     registerHarness({
       runIsolatedCompletion: runIsolatedCompletionHarness,
     });
@@ -535,6 +606,8 @@ describe("runIsolatedCompletion", () => {
     );
     expect(mocks.acquireAgentRunPreparedModelRuntime).toHaveBeenCalledOnce();
     expect(releaseRuntimeLease).toHaveBeenCalledOnce();
+    expect(retainedAssertCurrent).toBeTypeOf("function");
+    expect(() => retainedAssertCurrent?.()).toThrow("Isolated completion has ended");
     expect(runIsolatedCompletionHarness).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "openai",

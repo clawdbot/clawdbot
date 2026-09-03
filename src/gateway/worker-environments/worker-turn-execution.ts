@@ -108,7 +108,6 @@ export async function executeWorkerTurn(
       : undefined;
     if (persisted) {
       baseLeafId = persisted.messageId;
-      turn.userTurnTranscriptRecorder?.markRuntimePersisted(persisted.message, persisted.admission);
       turn.onUserMessagePersisted?.(persisted.message);
     } else if (turn.userTurnTranscriptRecorder?.hasPersisted()) {
       baseLeafId = SessionManager.open(transcriptTarget).getLeafId();

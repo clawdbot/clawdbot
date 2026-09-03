@@ -1543,7 +1543,7 @@ describe("promoteAuthProfileInOrder", () => {
     });
   });
 
-  it("clears WHAM cooldown classification after a successful profile use", async () => {
+  it("clears cooldown classification and retry backoff after a successful profile use", async () => {
     await withAuthProfileTestState(
       "openclaw-auth-success-classification-",
       async ({ agentDir }) => {
@@ -1558,8 +1558,10 @@ describe("promoteAuthProfileInOrder", () => {
             usageStats: {
               [profileId]: {
                 cooldownUntil: Date.now() + 60_000,
-                cooldownReason: "auth",
+                cooldownReason: "rate_limit",
                 cooldownClassification: "wham_token_expired",
+                errorCount: 12,
+                failureCounts: { rate_limit: 12 },
               },
             },
           },
@@ -1569,10 +1571,14 @@ describe("promoteAuthProfileInOrder", () => {
 
         await markAuthProfileSuccess({ store, provider: "openai", profileId, agentDir });
 
-        expect(store.usageStats?.[profileId]?.cooldownClassification).toBeUndefined();
-        expect(loadPersistedAuthProfileStore(agentDir)?.usageStats?.[profileId]).not.toHaveProperty(
-          "cooldownClassification",
-        );
+        expect(store.usageStats?.[profileId]).toMatchObject({ errorCount: 0 });
+        expect(store.usageStats?.[profileId]?.failureCounts).toBeUndefined();
+        expect(store.usageStats?.[profileId]?.cooldownUntil).toBeUndefined();
+        const persistedStats = loadPersistedAuthProfileStore(agentDir)?.usageStats?.[profileId];
+        expect(persistedStats).toMatchObject({ errorCount: 0 });
+        expect(persistedStats).not.toHaveProperty("failureCounts");
+        expect(persistedStats).not.toHaveProperty("cooldownUntil");
+        expect(persistedStats).not.toHaveProperty("cooldownClassification");
       },
     );
   });

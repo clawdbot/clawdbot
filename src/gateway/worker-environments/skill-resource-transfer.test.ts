@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { loadWorkspaceSkills } from "../../skills/loading/workspace-skill-loader.js";
 import { buildSkillSnapshot } from "../../skills/loading/workspace-skill-prompt.js";
+import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
 import { transferSkillResources } from "./skill-resource-transfer.js";
 import type { WorkerWorkspaceTunnelHandle } from "./tunnel-contract.js";
 
@@ -150,6 +151,138 @@ describe("remote-exec skill resources", () => {
         }
       } finally {
         await fs.rm(path.dirname(remote), { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "omits a stale discovered skill from the transferred snapshot and prompt",
+    async () => {
+      const { workspace, snapshot } = await createSource();
+      const staleBaseDir = path.join(workspace, "skills", "stale");
+      await fs.mkdir(staleBaseDir, { recursive: true });
+      await fs.writeFile(
+        path.join(staleBaseDir, "SKILL.md"),
+        "---\ndescription: Stale resource\n---\n# Stale\n",
+      );
+      const sourceSkill = snapshot.resolvedSkills?.[0];
+      expect(sourceSkill).toBeDefined();
+      snapshot.resolvedSkills!.push({
+        ...sourceSkill!,
+        name: "stale",
+        filePath: path.join(staleBaseDir, "SKILL.md"),
+        baseDir: staleBaseDir,
+      });
+      snapshot.skills.push({
+        name: "stale",
+        skillKey: "stale",
+        primaryEnv: "STALE_SKILL_API_KEY",
+      });
+      snapshot.prompt += "\nstale";
+      await fs.rm(staleBaseDir, { recursive: true });
+      await fs.symlink(path.join(workspace, "missing-stale-target"), staleBaseDir, "dir");
+
+      const resources = await transferSkillResources({
+        tunnel,
+        assertCurrent: () => {},
+        snapshot,
+      });
+      const remoteRoot = path.dirname(resources!.mounts[0]!.containerPath);
+      try {
+        expect(resources!.mounts).toHaveLength(1);
+        expect(resources!.snapshot.skills.map((skill) => skill.name)).toEqual(["source"]);
+        expect(resources!.snapshot.resolvedSkills?.map((skill) => skill.name)).toEqual(["source"]);
+        expect(resources!.snapshot.prompt).not.toContain("stale");
+        const restoreEnv = applySkillEnvOverridesFromSnapshot({
+          snapshot: resources!.snapshot,
+          config: {
+            skills: {
+              entries: { stale: { apiKey: "must-not-apply" } }, // pragma: allowlist secret
+            },
+          },
+        });
+        try {
+          expect(process.env.STALE_SKILL_API_KEY).toBeUndefined();
+        } finally {
+          restoreEnv();
+        }
+      } finally {
+        await fs.rm(remoteRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "retains a skill identity when a same-named node skill remains active",
+    async () => {
+      const { workspace } = await createSource();
+      const staleBaseDir = path.join(workspace, "skills", "stale");
+      await fs.mkdir(staleBaseDir, { recursive: true });
+      await fs.writeFile(
+        path.join(staleBaseDir, "SKILL.md"),
+        "---\ndescription: Stale resource\n---\n# Stale\n",
+      );
+      const snapshot = buildSkillSnapshot(workspace, {
+        entries: loadWorkspaceSkills(workspace, { workspaceOnly: true }),
+      });
+      const sourceSkill = snapshot.resolvedSkills?.[0];
+      expect(sourceSkill).toBeDefined();
+      snapshot.skills.push({ name: "stale", skillKey: "stale" });
+      snapshot.resolvedSkills?.push(
+        {
+          ...structuredClone(sourceSkill!),
+          name: "stale",
+          filePath: path.join(staleBaseDir, "SKILL.md"),
+          baseDir: staleBaseDir,
+        },
+        {
+          ...structuredClone(sourceSkill!),
+          name: "stale",
+          filePath: "node://worker/skills/stale/SKILL.md",
+          baseDir: "node://worker/skills/stale",
+        },
+      );
+      await fs.rm(staleBaseDir, { recursive: true });
+      await fs.symlink(path.join(workspace, "missing-stale-target"), staleBaseDir, "dir");
+
+      const resources = await transferSkillResources({
+        tunnel,
+        assertCurrent: () => {},
+        snapshot,
+      });
+      const remoteRoot = path.dirname(resources!.mounts[0]!.containerPath);
+      try {
+        expect(resources!.snapshot.skills.map((skill) => skill.name)).toEqual(["source", "stale"]);
+        expect(resources!.snapshot.resolvedSkills?.map((skill) => skill.name)).toEqual([
+          "source",
+          "stale",
+        ]);
+      } finally {
+        await fs.rm(remoteRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "removes every stale skill from the transferred snapshot when no bundles remain",
+    async () => {
+      const { filePath, snapshot } = await createSource();
+      const baseDir = path.dirname(filePath);
+      await fs.rm(baseDir, { recursive: true });
+      await fs.symlink(path.join(path.dirname(baseDir), "missing-source-target"), baseDir, "dir");
+
+      const resources = await transferSkillResources({
+        tunnel,
+        assertCurrent: () => {},
+        snapshot,
+      });
+      try {
+        expect(resources?.mounts).toEqual([]);
+        expect(resources?.snapshot.skills).toEqual([]);
+        expect(resources?.snapshot.resolvedSkills).toEqual([]);
+        expect(resources?.snapshot.prompt).not.toContain("source");
+      } finally {
+        await resources?.cleanup();
       }
     },
   );

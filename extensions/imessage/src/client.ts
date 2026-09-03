@@ -5,6 +5,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
+import { recoverIMessageBridge } from "./bridge-recovery.js";
 import { expandIMessageUserPath } from "./cli-path.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 import { invalidateCachedIMessagePrivateApiStatus } from "./private-api-status.js";
@@ -292,6 +293,13 @@ export class IMessageRpcClient {
       // re-probe and report the real state.
       if (isIMessageBridgeStall(err)) {
         invalidateCachedIMessagePrivateApiStatus(this.configuredCliPath);
+        try {
+          await recoverIMessageBridge(this.configuredCliPath);
+        } catch (recoveryError) {
+          this.runtime?.error?.(
+            `imessage: automatic bridge recovery failed: ${formatErrorMessage(recoveryError)}`,
+          );
+        }
         throw describeIMessageBridgeStall(err);
       }
       throw err;

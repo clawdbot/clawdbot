@@ -1,6 +1,7 @@
 // Channels hub: connected-channel rows, add-a-channel gallery, setup wizard,
 // and a per-channel detail overlay with the full config form.
 import { html, nothing } from "lit";
+import { repeat } from "lit/directives/repeat.js";
 import "../../styles/channels.css";
 import type {
   ChannelsStatusSnapshot,
@@ -51,6 +52,7 @@ const RECOMMENDED_CHANNEL_ORDER: ChannelKey[] = [
 
 export function renderChannels(props: ChannelsProps) {
   const channelOrder = resolveChannelOrder(props.snapshot);
+  // Key both lists so status updates cannot retarget an in-flight channel click.
   const connected = channelOrder.filter((key) => channelEnabled(key, props));
   const available = channelOrder.filter((key) => !channelEnabled(key, props));
   const showingStaleSnapshot = Boolean(props.loading && props.snapshot && props.lastSuccessAt);
@@ -97,7 +99,11 @@ export function renderChannels(props: ChannelsProps) {
                 ${renderSettingsEmpty(t("channels.hub.noneConnected"))}
               </div>
             `
-          : connected.map((key) => renderConnectedRow(key, props)),
+          : repeat(
+              connected,
+              (key) => key,
+              (key) => renderConnectedRow(key, props),
+            ),
       )}
       ${renderSettingsSection(
         {
@@ -107,7 +113,11 @@ export function renderChannels(props: ChannelsProps) {
         html`
           ${!props.canAdmin
             ? html`<div class="callout info" role="note">${t("channels.hub.adminRequired")}</div>`
-            : html`${available.map((key) => renderAvailableRow(key, props))}
+            : html`${repeat(
+                available,
+                (key) => key,
+                (key) => renderAvailableRow(key, props),
+              )}
               ${renderBrowseAllRow(props)}`}
         `,
       )}

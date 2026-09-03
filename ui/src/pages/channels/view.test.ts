@@ -263,6 +263,59 @@ describe("channels section order", () => {
   });
 });
 
+describe("channel row actions", () => {
+  it.each([
+    { list: "connected", action: "details", update: "reorder" },
+    { list: "available", action: "details", update: "reorder" },
+    { list: "available", action: "setup", update: "reorder" },
+    { list: "available", action: "details", update: "connect" },
+    { list: "available", action: "setup", update: "connect" },
+  ])(
+    "keeps $list $action clicks on their channel after a status $update",
+    ({ list, action, update }) => {
+      const configured = list === "connected";
+      const snapshot = {
+        ts: 1,
+        channelOrder: ["whatsapp", "telegram"],
+        channelLabels: { whatsapp: "WhatsApp", telegram: "Telegram" },
+        channels: { whatsapp: { configured }, telegram: { configured } },
+        channelAccounts: {},
+        channelDefaultAccountId: {},
+      };
+      const props = createProps(snapshot);
+      const onAction = vi.fn();
+      if (action === "setup") {
+        props.onStartSetup = onAction;
+      } else {
+        props.onShowDetail = onAction;
+      }
+      const container = document.createElement("div");
+      render(renderChannels(props), container);
+      const row = Array.from(container.querySelectorAll<HTMLElement>(".channels-item")).find(
+        (element) => element.querySelector(".settings-row__title")?.textContent === "Telegram",
+      )!;
+      const button = row.matches("button")
+        ? (row as HTMLButtonElement)
+        : row.querySelector<HTMLButtonElement>(
+            action === "setup" ? ".btn" : ".channels-item__detail",
+          )!;
+
+      props.snapshot = {
+        ...snapshot,
+        ts: 2,
+        ...(update === "connect"
+          ? { channels: { ...snapshot.channels, whatsapp: { configured: true } } }
+          : { channelOrder: ["telegram", "whatsapp"] }),
+      };
+      render(renderChannels(props), container);
+      expect(container.contains(button)).toBe(true);
+      button.click();
+
+      expect(onAction).toHaveBeenCalledExactlyOnceWith("telegram");
+    },
+  );
+});
+
 function createWhatsAppStatus(overrides: Partial<WhatsAppStatus> = {}): WhatsAppStatus {
   return {
     configured: true,

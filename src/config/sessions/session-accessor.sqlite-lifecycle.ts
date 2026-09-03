@@ -227,6 +227,7 @@ export async function resetSessionEntryLifecycle(
     { agentId: resolved.agentId, storePath: params.storePath },
     async (recordCommit) =>
       runExclusiveSqliteSessionWrite(resolved, async () => {
+        params.commitGuard?.();
         const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
         const targetSnapshot = readLifecycleTargetSnapshot(database, params.target);
         const current = targetSnapshot[0];
@@ -244,6 +245,7 @@ export async function resetSessionEntryLifecycle(
           ...(current?.entry.sessionId ? { previousSessionId: current.entry.sessionId } : {}),
         };
         runOpenClawAgentWriteTransaction((transactionDb) => {
+          params.commitGuard?.();
           assertLifecycleTargetUnchanged(transactionDb, params.target, current?.entry, "reset");
           if (shouldAppendResetBoundary && current?.entry.sessionId && params.resetBoundary) {
             const event = buildSessionResetBoundaryEvent({
@@ -562,15 +564,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
         );
       });
       if (result.deleted) {
-        deletePersonalGitHubSessionReceipts({
-          agentId: resolved.agentId,
-          env: resolved.env,
-          sessionKeys: [
-            params.target.canonicalKey,
-            ...params.target.storeKeys,
-            ...prepared.targetSnapshot.map((row) => row.sessionKey),
-          ],
-        });
+        // The deletion is committed; observers must invalidate even if receipt cleanup fails.
         emitSessionIdentityMutation({
           kind: "delete",
           previous: {
@@ -579,6 +573,15 @@ async function deleteSqliteSessionEntryLifecycleLocked(
               : {}),
             sessionKeys: prepared.targetSnapshot.map((row) => row.sessionKey),
           },
+        });
+        deletePersonalGitHubSessionReceipts({
+          agentId: resolved.agentId,
+          env: resolved.env,
+          sessionKeys: [
+            params.target.canonicalKey,
+            ...params.target.storeKeys,
+            ...prepared.targetSnapshot.map((row) => row.sessionKey),
+          ],
         });
       }
       result.archivedTranscripts = await publishSessionStateArchives(

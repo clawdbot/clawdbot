@@ -1,8 +1,9 @@
 ---
-summary: "Auto-reply queue modes, defaults, and per-session overrides"
+summary: "Auto-reply queue modes, shared background capacity, and per-session overrides"
 read_when:
   - Changing auto-reply execution or concurrency
   - Explaining /queue modes or message steering behavior
+  - Inspecting background work and command-lane diagnostics
 title: "Command queue"
 ---
 
@@ -146,6 +147,14 @@ Host sleep that preserves the process can continue the existing queue normally.
 - Additional lanes may exist (e.g. `cron`, `cron-nested`, `nested`, `subagent`) so background jobs can run in parallel without blocking inbound replies. Isolated cron agent turns hold a `cron` slot while their inner agent execution uses `cron-nested`. Shared non-cron `nested` flows keep their own lane behavior. These detached runs are tracked as [background tasks](/automation/tasks).
 - Per-session lanes guarantee that only one agent run touches a given session at a time.
 - No external dependencies or background worker threads; pure TypeScript + promises.
+
+## Background work
+
+Skill Workshop reviews and plugin background completions, including [dreaming](/concepts/dreaming), share a separate budget of **three concurrent runs**. Workshop reviews use at most one slot; each plugin can use up to three available slots. This keeps maintenance work out of foreground reply capacity while bounding its total concurrency. These limits are built in and need no configuration.
+
+Schedulers that await background work do not occupy this budget themselves. Only the dispatched work holds a slot, through completion or cancellation cleanup, so a scheduler cannot block the child it is waiting for. Cancelled queued work is removed before it starts; Gateway restart or runtime retirement prevents stale completions from starting or returning results.
+
+The Control UI **System busyness** overlay and `diagnostics.lanes` report this work in one `background` row. Its active and queued counts include every owner; owner lanes are not counted again in the dynamic session-lane totals.
 
 ## Troubleshooting
 

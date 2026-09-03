@@ -1,5 +1,6 @@
 import { createContext } from "@lit/context";
 import type { RouteLocation } from "@openclaw/uirouter";
+import type { HumanMention } from "../../../packages/gateway-protocol/src/index.js";
 import type { RouteId } from "../app-route-paths.ts";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
 import type { AgentCapability } from "../lib/agents/index.ts";
@@ -76,12 +77,14 @@ export type ApplicationChatAttachmentHandoff = {
       attachments: readonly ChatAttachment[];
       fallbacks: Readonly<Record<string, ChatComposerMemoryFallback>>;
       message?: string;
+      mentions?: readonly HumanMention[];
     },
   ): void;
   consume(handoff: ChatAttachmentHandoffKey): {
     attachments: ChatAttachment[];
     fallbacks: Record<string, ChatComposerMemoryFallback>;
     message?: string;
+    mentions?: readonly HumanMention[];
   } | null;
   retireScope(scopeKey: string, beforeRevision: number): void;
   clearPane(paneId: string): void;
@@ -122,7 +125,8 @@ export type ApplicationContext<TRouteId extends string = string> = {
   ) => Promise<void>;
   readonly replace: (routeId: TRouteId, options?: ApplicationNavigationOptions) => void;
   readonly revalidate: (routeId?: TRouteId) => Promise<void>;
-  readonly preload: (routeId: TRouteId, options?: ApplicationNavigationOptions) => Promise<void>;
+  /** Warms a named route; dynamic locations load as part of navigation. */
+  readonly preload: (routeId: TRouteId) => Promise<void>;
 };
 
 export const applicationContext =

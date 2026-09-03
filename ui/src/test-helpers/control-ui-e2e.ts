@@ -324,6 +324,7 @@ export type ControlUiMockGatewayScenario = {
   assistantAgentId?: string;
   assistantName?: string;
   automaticallyFetchFavicons?: boolean;
+  communityInvite?: boolean;
   basePath?: string;
   controlUiTabs?: Array<{
     group?: string;
@@ -782,6 +783,7 @@ function controlUiE2ePreviewConfigPlugin(
     basePath: "/",
     assistantName: "",
     assistantAvatar: "",
+    communityInvite: true,
   },
 ): Plugin {
   return {
@@ -971,6 +973,7 @@ function normalizeScenario(
   return {
     attachmentMaxBytes: scenario.attachmentMaxBytes ?? DEFAULT_MOCK_ATTACHMENT_MAX_BYTES,
     automaticallyFetchFavicons: scenario.automaticallyFetchFavicons ?? false,
+    communityInvite: scenario.communityInvite ?? true,
     agentModel:
       scenario.agentModel === undefined ? "openai/gpt-5.5" : scenario.agentModel?.trim() || null,
     assistantAgentId: scenario.assistantAgentId?.trim() || defaultAgentId,
@@ -1055,6 +1058,7 @@ export function createControlUiMockBootstrapConfig(scenario: ControlUiMockGatewa
   return {
     allowExternalEmbedUrls: false,
     automaticallyFetchFavicons: normalizedScenario.automaticallyFetchFavicons,
+    communityInvite: normalizedScenario.communityInvite,
     assistantAgentId: normalizedScenario.assistantAgentId,
     assistantAvatar: "",
     assistantName: normalizedScenario.assistantName,

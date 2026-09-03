@@ -720,6 +720,49 @@ describe("createCopilotAgentHarness", () => {
     expect(session.disconnect).toHaveBeenCalledOnce();
   });
 
+  it.each(["client acquisition", "session creation"] as const)(
+    "rejects expired completion authority after %s without sending the prompt",
+    async (checkpoint) => {
+      let current = true;
+      const expired = new Error("completion owner expired during setup");
+      const session = {
+        abort: vi.fn().mockResolvedValue(undefined),
+        disconnect: vi.fn().mockResolvedValue(undefined),
+        sendAndWait: vi.fn(),
+      };
+      const createSession = vi.fn(async () => {
+        current = false;
+        return session;
+      });
+      const client = createMockCopilotClient({ createSession });
+      const handle = { client, key: TEST_POOL_KEY };
+      const pool = makePoolMock();
+      pool.acquire.mockImplementation(async () => {
+        if (checkpoint === "client acquisition") {
+          current = false;
+        }
+        return handle;
+      });
+      const harness = createCopilotAgentHarness({ pool });
+
+      await expect(
+        harness.runIsolatedCompletionV2?.({
+          ...ISOLATED_COMPLETION_PARAMS,
+          assertCurrent: () => {
+            if (!current) {
+              throw expired;
+            }
+          },
+        }),
+      ).rejects.toBe(expired);
+      await flushAsyncWork();
+      expect(session.sendAndWait).not.toHaveBeenCalled();
+      expect(createSession).toHaveBeenCalledTimes(checkpoint === "session creation" ? 1 : 0);
+      expect(session.disconnect).toHaveBeenCalledTimes(checkpoint === "session creation" ? 1 : 0);
+      expect(pool.release).toHaveBeenCalledExactlyOnceWith(handle);
+    },
+  );
+
   it("does not start a request when cancellation wins the send boundary", async () => {
     const controller = new AbortController();
     let boundaryRegistrations = 0;
