@@ -577,6 +577,103 @@ describe("update generation recovery transition matrix", () => {
     });
   });
 
+  it("never resumes a durable pre-activation failure implicitly", async () => {
+    const previous = selection("a");
+    const candidate = selection("b");
+    let materialization = append(
+      null,
+      receipt("intent", 0, {
+        namespaceKey: "openclaw-global-owner",
+        serviceBefore: { managed: true, running: true, enabled: true },
+        previousSelection: previous,
+        previousPackageVersion: "1.0.0",
+        stableBindingAlreadyVerified: true,
+        brokerId: "test-broker",
+        brokerRevision: null,
+      }),
+    );
+    materialization = append(
+      materialization,
+      receipt("generation-materialization-intent", 1, {
+        role: "candidate",
+        sourceArtifactId: "manager:stage",
+        generationId: candidate.generationId,
+        manifest: manifest("b"),
+        packageVersion: "2.0.0",
+        entrypointRelativePath: candidate.entrypointRelativePath,
+      }),
+    );
+    materialization = append(
+      materialization,
+      receipt("failure", 2, {
+        operation: "materialize-generation",
+        reason: "broker disconnected after durable intent",
+        serviceRestored: true,
+      }),
+    );
+    await expectRecovery({
+      record: materialization,
+      physical: physical({
+        selector: previous,
+        generations: [previous, candidate],
+        bindingConverged: true,
+      }),
+      action: "adjudicate-failure",
+    });
+
+    let beforeSelectionReceipt = append(
+      null,
+      receipt("intent", 0, {
+        namespaceKey: "openclaw-global-owner",
+        serviceBefore: { managed: true, running: true, enabled: true },
+        previousSelection: previous,
+        previousPackageVersion: "1.0.0",
+        stableBindingAlreadyVerified: true,
+        brokerId: "test-broker",
+        brokerRevision: null,
+      }),
+    );
+    beforeSelectionReceipt = append(
+      beforeSelectionReceipt,
+      receipt("generation-materialization-intent", 1, {
+        role: "candidate",
+        sourceArtifactId: "manager:stage",
+        generationId: candidate.generationId,
+        manifest: manifest("b"),
+        packageVersion: "2.0.0",
+        entrypointRelativePath: candidate.entrypointRelativePath,
+      }),
+    );
+    beforeSelectionReceipt = append(
+      beforeSelectionReceipt,
+      receipt("generation-materialized", 2, {
+        role: "candidate",
+        generation: { ...candidate, packageVersion: "2.0.0" },
+      }),
+    );
+    beforeSelectionReceipt = append(
+      beforeSelectionReceipt,
+      receipt("candidate-selection-intent", 3, { from: previous, to: candidate }),
+    );
+    const selectionFailure = append(
+      beforeSelectionReceipt,
+      receipt("failure", beforeSelectionReceipt.receipts.length, {
+        operation: "switch-selector",
+        reason: "selector outcome requires operator adjudication",
+        serviceRestored: true,
+      }),
+    );
+    await expectRecovery({
+      record: selectionFailure,
+      physical: physical({
+        selector: candidate,
+        generations: [previous, candidate],
+        bindingConverged: true,
+      }),
+      action: "adjudicate-failure",
+    });
+  });
+
   it("requires a verified stable binding for an existing selection", async () => {
     const previous = selection("a");
     const existing = append(

@@ -369,6 +369,18 @@ describe("confined update-generation filesystem contract", () => {
     }
   });
 
+  it("rejects omitted nullable recovery fields even when re-signed", () => {
+    for (const field of ["selector", "retainedPair"] as const) {
+      const receipt = signedRecoveryObservation();
+      Reflect.deleteProperty(receipt, field);
+      signReceipt(receipt);
+      expect(
+        () => assertUpdateGenerationBrokerReceiptIsValid(receipt),
+        `missing ${field}`,
+      ).toThrow();
+    }
+  });
+
   it("rejects forged non-boolean crash-durability claims even when re-signed", () => {
     const forgeries: Array<{
       label: string;

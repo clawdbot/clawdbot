@@ -305,24 +305,29 @@ function assertRequest(request: UpdateGenerationBrokerRequest): void {
 }
 
 function assertRetainedPair(
-  pair: UpdateGenerationRetainedPair,
+  pair: unknown,
   expected?: Extract<UpdateGenerationBrokerRequest, { kind: "verify-retained-pair" }>,
-): void {
-  assertSelection(pair.selected);
-  assertSelection(pair.rollback);
+): asserts pair is UpdateGenerationRetainedPair {
+  if (!pair || typeof pair !== "object") {
+    throw new TypeError("Broker receipt does not contain a retained generation pair");
+  }
+  // SAFETY: Every retained-pair field is validated below before the value escapes this function.
+  const candidate = pair as UpdateGenerationRetainedPair;
+  assertSelection(candidate.selected);
+  assertSelection(candidate.rollback);
   if (
-    pair.selected.generationId === pair.rollback.generationId ||
-    typeof pair.selectedManifestVerified !== "boolean" ||
-    !pair.selectedManifestVerified ||
-    typeof pair.rollbackManifestVerified !== "boolean" ||
-    !pair.rollbackManifestVerified
+    candidate.selected.generationId === candidate.rollback.generationId ||
+    typeof candidate.selectedManifestVerified !== "boolean" ||
+    !candidate.selectedManifestVerified ||
+    typeof candidate.rollbackManifestVerified !== "boolean" ||
+    !candidate.rollbackManifestVerified
   ) {
     throw new Error("Broker receipt does not prove two retained generations");
   }
   if (
     expected &&
-    (!selectionsEqual(pair.selected, expected.selected) ||
-      !selectionsEqual(pair.rollback, expected.rollback))
+    (!selectionsEqual(candidate.selected, expected.selected) ||
+      !selectionsEqual(candidate.rollback, expected.rollback))
   ) {
     throw new Error("Broker retained-pair receipt differs from its request");
   }
@@ -489,7 +494,7 @@ function assertReceiptMatchesRequest(
     if (typeof receipt.selectorDurable !== "boolean") {
       throw new TypeError("Recovery selector durability must be boolean");
     }
-    if (receipt.selector) {
+    if (receipt.selector !== null) {
       assertSelection(receipt.selector);
     }
     const generationIds = new Set<string>();
@@ -506,7 +511,7 @@ function assertReceiptMatchesRequest(
       }
       generationIds.add(generation.generationId);
     }
-    if (receipt.retainedPair) {
+    if (receipt.retainedPair !== null) {
       assertRetainedPair(receipt.retainedPair);
       if (
         !receipt.selectorDurable ||
