@@ -1,5 +1,6 @@
 // Coverage for cache-TTL session entries after embedded attempts.
 import { describe, expect, it, vi } from "vitest";
+import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
 import { appendAttemptCacheTtlIfNeeded } from "./attempt-thread-helpers.js";
 
 const ATTEMPT_CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
@@ -13,6 +14,7 @@ describe("runEmbeddedAttempt cache-ttl tracking after compaction", () => {
     };
     const appended = appendAttemptCacheTtlIfNeeded({
       sessionManager,
+      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
       timedOutDuringCompaction: false,
       compactionOccurredThisAttempt: true,
       config: {
@@ -35,12 +37,13 @@ describe("runEmbeddedAttempt cache-ttl tracking after compaction", () => {
     expect(sessionManager.appendCustomEntry).not.toHaveBeenCalled();
   });
 
-  it("appends cache-ttl for a direct OpenAI attempt when no compaction completed", () => {
+  it("appends cache-ttl when no compaction completed during the attempt", () => {
     const sessionManager = {
       appendCustomEntry: vi.fn(),
     };
     const appended = appendAttemptCacheTtlIfNeeded({
       sessionManager,
+      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
       timedOutDuringCompaction: false,
       compactionOccurredThisAttempt: false,
       config: {
@@ -52,9 +55,9 @@ describe("runEmbeddedAttempt cache-ttl tracking after compaction", () => {
           },
         },
       },
-      provider: "openai",
-      modelId: "gpt-4o",
-      model: { api: "openai-responses" } as never,
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-20250514",
+      model: { api: "anthropic-messages" } as never,
       isCacheTtlEligibleProvider: () => true,
       now: 123,
     });
@@ -62,8 +65,10 @@ describe("runEmbeddedAttempt cache-ttl tracking after compaction", () => {
     expect(appended).toBe(true);
     expect(sessionManager.appendCustomEntry).toHaveBeenCalledWith(ATTEMPT_CACHE_TTL_CUSTOM_TYPE, {
       timestamp: 123,
-      provider: "openai",
-      modelId: "gpt-4o",
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-20250514",
+      prunedToolResults: [],
+      ambiguousToolResultBaseKeys: [],
     });
   });
 });
