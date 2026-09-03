@@ -7,7 +7,7 @@ afterEach(() => vi.useRealTimers());
 function fixture() {
   const request = vi.fn().mockResolvedValue({ title: "Repair sidebar naming" });
   const input = { client: { request }, agentId: "main", message: "repair the sidebar naming" };
-  return { request, input, titles: new DraftTitlePreparation(vi.fn()) };
+  return { request, input, titles: new DraftTitlePreparation() };
 }
 
 describe("creation draft title preparation", () => {

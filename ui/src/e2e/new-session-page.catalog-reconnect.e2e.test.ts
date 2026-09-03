@@ -547,7 +547,7 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}new`);
         const message = page.locator(".new-session-page__message");
         await message.fill("ordinary Chat naming control");
-        await page.getByText("Session name: Ordinary Chat title", { exact: true }).waitFor();
+        await gateway.waitForRequest("sessions.title.prepare");
         expect(await gateway.getRequests("sessions.title.prepare")).toHaveLength(1);
         await navigateInApp(page, "new-session", `?catalog=${catalogId}`);
         await page.clock.install();
@@ -557,7 +557,6 @@ suite.define(() => {
         // Exercise the mounted controller's real idle debounce after proving Chat naming works.
         await page.clock.runFor(2_000);
         expect(await gateway.getRequests("sessions.title.prepare")).toHaveLength(1);
-        expect(await page.locator(".new-session-page__title-notice").count()).toBe(0);
         if (action === "Enter") {
           await message.press("Enter");
         } else {

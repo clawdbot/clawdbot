@@ -64,7 +64,6 @@ describe("prepared title creation handoff", () => {
       expect(
         request.mock.calls.filter(([method]) => method === "sessions.title.prepare"),
       ).toHaveLength(0);
-      expect(titles.preparedTitle()).toBeUndefined();
       titles.hostDisconnected();
       flow.disconnect();
     },
@@ -104,7 +103,7 @@ describe("prepared title creation handoff", () => {
     );
     finish({ title: "Too late" });
     await vi.advanceTimersByTimeAsync(0);
-    expect(titles.preparedTitle()).toBeUndefined();
+    expect(titles.takePreparedTitle()).toBeUndefined();
     titles.hostDisconnected();
     flow.disconnect();
   });

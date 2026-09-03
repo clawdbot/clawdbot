@@ -916,7 +916,6 @@ export const en: TranslationMap & {
     draft: "Draft",
     draftDescription: "Keep this session to yourself until you publish it",
     messagePlaceholder: "What should this session work on?",
-    preparedTitle: "Session name: {title}",
     dictate: "Dictate",
     readingAttachment: "Reading attachment",
     start: "Start session",

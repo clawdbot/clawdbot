@@ -35,8 +35,6 @@ export class DraftTitlePreparation {
   private pending = false;
   private readyAt = 0;
 
-  constructor(private readonly requestUpdate: () => void) {}
-
   sync(input: DraftTitleInput | null) {
     const message = input?.message.trim() ?? "";
     const next =
@@ -85,7 +83,6 @@ export class DraftTitlePreparation {
       // including a draft that changes away and then back during the request.
       if (this.current === current) {
         this.title = result.title;
-        this.requestUpdate();
       }
     } catch {
       // Speculation must never block Send or leak a provider error into the draft.
@@ -99,7 +96,7 @@ export class DraftTitlePreparation {
 
 /** Connects disposable title work to the new-session page, never the chat route. */
 export class NewSessionTitleController implements ReactiveController {
-  private readonly preparation: DraftTitlePreparation;
+  private readonly preparation = new DraftTitlePreparation();
   private connected = false;
   private composing = false;
   private submitted: DraftTitleInput | null = null;
@@ -114,7 +111,6 @@ export class NewSessionTitleController implements ReactiveController {
       dictating: boolean;
     },
   ) {
-    this.preparation = new DraftTitlePreparation(() => host.requestUpdate());
     host.addController(this);
   }
 
@@ -133,10 +129,6 @@ export class NewSessionTitleController implements ReactiveController {
   setComposing(composing: boolean) {
     this.composing = composing;
     this.hostUpdated();
-  }
-
-  preparedTitle(): string | undefined {
-    return this.preparation.titleFor(this.input());
   }
 
   takePreparedTitle(): string | undefined {

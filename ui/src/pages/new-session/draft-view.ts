@@ -46,7 +46,6 @@ export function renderNewSessionDraftView(options: {
   const preferences = context?.theme.settings;
   const voiceControl = dictation.render(draftOwnerKey, preferences?.realtimeTalkInputDeviceId);
   const dictationLocked = dictation.active;
-  const preparedTitle = titlePreparation.preparedTitle();
   return html`
     <div
       class="new-session-page__draft"
@@ -136,11 +135,6 @@ export function renderNewSessionDraftView(options: {
             ? undefined
             : () => void submission.submit(undefined, true),
       })}
-      ${preparedTitle
-        ? html`<span class="new-session-page__prepared-title" role="status"
-            >${t("newSession.preparedTitle", { title: preparedTitle })}</span
-          >`
-        : nothing}
       ${!isCatalogTarget
         ? renderNewSessionIncognitoNotice(submission.visibility === "incognito")
         : nothing}

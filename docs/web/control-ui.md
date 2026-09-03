@@ -46,15 +46,16 @@ The environment adds a 2 px top stripe, an agent-avatar ring, label pills in the
 
 ## New session names
 
-In **New session**, pausing typing for one second prepares a suggested name using
-only the selected agent's utility model. Preparation starts after at least 12
-characters and sends at most the first 1,000 characters; it does not send attachments.
+In **New session**, pausing typing for one second prepares a session name in the
+background using only the selected agent's utility model. Preparation sends unsent
+draft text to that provider before submission. It starts after at least 12 characters
+and sends at most the first 1,000 characters; it does not send attachments.
 
 Preparation is disabled in incognito and for slash commands. Edits replace stale
-suggestions, and only one request runs at a time. A missing or failed utility model
+prepared names, and only one request runs at a time. A missing or failed utility model
 does not fall back to the primary model or prevent you from starting the session.
 
-**Start session** uses a matching suggestion if it is ready. Otherwise, normal
+**Start session** uses a matching prepared name if it is ready. Otherwise, normal
 initial naming runs after submission; Start never waits for the speculative call.
 This is creation-only: later messages do not regenerate an existing session's
 name. Explicit worktree names are preserved, and typing never creates a worktree
