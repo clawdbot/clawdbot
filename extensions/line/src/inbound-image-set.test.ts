@@ -290,6 +290,9 @@ describe("createLineImageSetIngressBuffer", () => {
     const release = await buffer.enterLane("user:UOTHER");
     expect(buffer.isBusy("user:UOTHER")).toBe(true);
     release();
+    // The lane row is dropped by the queue's own cleanup continuation, so the
+    // lane reads free only once the microtask queue behind the release drains.
+    await vi.advanceTimersByTimeAsync(0);
     expect(buffer.isBusy("user:UOTHER")).toBe(false);
 
     await vi.advanceTimersByTimeAsync(1_000);
