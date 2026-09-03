@@ -351,6 +351,16 @@ export function renderSessionProgressCard(
     validEndedAt >= validStartedAt &&
     validUpdatedAt !== undefined &&
     validUpdatedAt >= validStartedAt;
+  // A card whose last update predates the current run cannot describe that
+  // run's work. Render its in-progress steps as paused (stale) instead of
+  // live, even while a run is in flight, so a later unrelated run does not
+  // revive a completed task's spinner.
+  const staleCard =
+    hasActiveRun &&
+    validStartedAt !== undefined &&
+    validUpdatedAt !== undefined &&
+    validUpdatedAt < validStartedAt;
+  const effectiveHasActiveRun = staleCard ? false : hasActiveRun;
   const terminalTimestamp =
     sessionStatus && TERMINAL_OUTCOME_LABEL_KEYS[sessionStatus] && hasValidRunWindow
       ? validEndedAt
@@ -410,7 +420,7 @@ export function renderSessionProgressCard(
         })
       : nothing;
     const presentedCurrentStatus =
-      currentStep?.status === "in_progress" && !hasActiveRun && !terminalOutcomeKey
+      currentStep?.status === "in_progress" && !effectiveHasActiveRun && !terminalOutcomeKey
         ? "paused"
         : currentStep?.status;
     const summaryIndicator =
@@ -483,7 +493,7 @@ export function renderSessionProgressCard(
       </summary>
       <div class="session-progress-card__body" role="region" aria-label=${composerCountLabel}>
         ${renderProgressCardMarkdown(card.markdown)}
-        ${renderSteps(card, hasActiveRun, effectiveSessionStatus)}
+        ${renderSteps(card, effectiveHasActiveRun, effectiveSessionStatus)}
       </div>
     </details>`;
   }
@@ -500,6 +510,6 @@ export function renderSessionProgressCard(
         >${dismiss}
       </span>
     </div>
-    ${renderBody(card, hasActiveRun, effectiveSessionStatus)}
+    ${renderBody(card, effectiveHasActiveRun, effectiveSessionStatus)}
   </section>`;
 }

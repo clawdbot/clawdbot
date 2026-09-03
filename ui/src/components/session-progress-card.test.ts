@@ -467,7 +467,33 @@ describe("renderSessionProgressCard", () => {
 
     expect(container.querySelector("time")?.textContent).toBe("Updated 3m ago");
     expect(container.querySelector("[data-outcome=failed]")).toBeNull();
-    expect(container.querySelector(".session-run-spinner")).not.toBeNull();
+    // The card predates this run, so its in-progress step renders paused
+    // rather than carrying a live session-run spinner.
+    expect(container.querySelector(".session-run-spinner")).toBeNull();
+    expect(container.querySelector(".session-progress-card__step--paused")).not.toBeNull();
+  });
+
+  it("renders a stale in-progress card as paused during a later active run", () => {
+    // Repro from #137188: a card whose task completed earlier flips back to a
+    // live spinner while a later, unrelated run executes in the same session.
+    const container = document.createElement("div");
+    render(
+      renderSessionProgressCard(
+        { ...progressCard, updatedAt: RUN_STARTED_MS - 1 },
+        "board",
+        undefined,
+        "running",
+        RUN_STARTED_MS,
+        undefined,
+        true,
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".session-run-spinner")).toBeNull();
+    const pausedStep = container.querySelector(".session-progress-card__step--paused");
+    expect(pausedStep).not.toBeNull();
+    expect(pausedStep?.getAttribute("aria-label")).toBe("Wire the checklist, paused");
   });
 
   it("falls back safely for timestamps outside the Date range", () => {
