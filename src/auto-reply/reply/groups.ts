@@ -124,7 +124,7 @@ function buildMessageToolOnlyDelivery(params: {
   return {
     mechanism: `In ${destinationLabel}, message(action=send) is the only delivery path for a visible text reply; the target defaults to ${destinationLabel}. Reactions and other non-text message actions remain visible outcomes when appropriate. Your normal final answer is private and is never posted to ${destinationLabel}.`,
     gate: [
-      `If this turn needs no ${responseLabel}, do not call message(action=send) and end the turn.`,
+      `If this turn needs no ${responseLabel}, use an appropriate non-text message action when warranted; otherwise do not call message(action=send) and end the turn.`,
       "If it does, deliver it with message(action=send) before the turn ends; a reply left in your final answer reaches nobody.",
     ],
   };

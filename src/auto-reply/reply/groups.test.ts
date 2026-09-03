@@ -186,9 +186,10 @@ describe("group runtime loading", () => {
         `Your normal final answer is private and is never posted to ${destination}.`,
       );
 
-      // Gate: both exits adjacent, and the "no reply" exit never grants a private answer.
+      // Gate: reaction-only turns stay actionable, both text exits stay adjacent,
+      // and the "no reply" exit never grants a private answer.
       expect(prompt).toContain(
-        `If this turn needs no ${responseLabel}, do not call message(action=send) and end the turn. If it does, deliver it with message(action=send) before the turn ends; a reply left in your final answer reaches nobody.`,
+        `If this turn needs no ${responseLabel}, use an appropriate non-text message action when warranted; otherwise do not call message(action=send) and end the turn. If it does, deliver it with message(action=send) before the turn ends; a reply left in your final answer reaches nobody.`,
       );
       expect(prompt).not.toContain("stays private and will not be posted");
       expect(prompt).not.toMatch(/no visible[^.]*response is needed[^.]*\.\s*Your normal final/u);
