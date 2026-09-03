@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
+import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
 import {
   buildMinimalGatewayHelloOkPayload,
   closeMinimalGatewayServer,
@@ -17,7 +18,6 @@ import {
   inspectPortUsage,
   makeGatewayService,
   callGateway,
-  gatewayHealthResponse,
   gatewayResponseError,
   resetRestartHealthMocks,
   restoreRestartHealthMocks,

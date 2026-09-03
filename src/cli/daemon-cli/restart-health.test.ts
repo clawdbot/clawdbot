@@ -1,6 +1,7 @@
 // Managed gateway restart inspection tests.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayService } from "../../daemon/service.js";
+import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
 import {
   classifyPortListener,
   createConfigIO,
@@ -11,7 +12,6 @@ import {
   inspectUnknownListenerFallback,
   makeGatewayService,
   callGateway,
-  gatewayHealthResponse,
   gatewayResponseError,
   readBestEffortConfig,
   resetRestartHealthMocks,

@@ -1,10 +1,10 @@
 // Externally supervised gateway restart polling tests.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
 import {
   inspectPortUsage,
   mockGatewayLockReplacement,
   callGateway,
-  gatewayHealthResponse,
   gatewayResponseError,
   readActiveGatewayLockIdentity,
   resetRestartHealthMocks,

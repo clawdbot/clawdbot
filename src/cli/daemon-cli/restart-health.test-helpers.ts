@@ -5,7 +5,7 @@ import {
 } from "../../../packages/gateway-client/src/protocol-request.js";
 import type { GatewayService } from "../../daemon/service.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
-import { buildMinimalGatewayHelloOkPayload } from "../../gateway/minimal-gateway.test-helpers.js";
+import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
 import type { GatewayLockIdentity } from "../../infra/gateway-lock.js";
 import type { PortUsage } from "../../infra/ports-types.js";
 
@@ -23,29 +23,6 @@ export const classifyPortListener = vi.fn<(_listener: unknown, _port: number) =>
   () => "gateway",
 );
 export const callGateway = vi.fn<(opts: CallGatewayOptions) => Promise<unknown>>();
-
-export function gatewayHealthResponse(
-  params: {
-    server?: Partial<Parameters<NonNullable<CallGatewayOptions["onHelloOk"]>>[0]["server"]>;
-    health?: unknown;
-    error?: Error;
-  } = {},
-) {
-  return async (opts: CallGatewayOptions): Promise<unknown> => {
-    const hello = buildMinimalGatewayHelloOkPayload();
-    opts.onHelloOk?.({
-      ...hello,
-      type: "hello-ok",
-      server: { ...hello.server, ...params.server },
-      auth: { role: "operator", scopes: ["operator.read"] },
-      snapshot: { presence: [], health: {}, stateVersion: { presence: 0, health: 0 }, uptimeMs: 0 },
-    });
-    if (params.error) {
-      throw params.error;
-    }
-    return params.health ?? { ok: true };
-  };
-}
 
 export function gatewayResponseError(message: string): GatewayProtocolRequestError {
   const error = new GatewayProtocolRequestError({ code: "UNAVAILABLE", message });
