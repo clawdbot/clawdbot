@@ -162,7 +162,7 @@ function buildTruncationResult(
     truncated: boolean;
     truncatedBy: TruncationResult["truncatedBy"];
     outputLines: number;
-    outputBytes?: number;
+    outputBytes: number;
     lastLinePartial?: boolean;
     firstLineExceedsLimit?: boolean;
   },
@@ -174,7 +174,7 @@ function buildTruncationResult(
     totalLines: input.totalLines,
     totalBytes: input.totalBytes,
     outputLines: params.outputLines,
-    outputBytes: params.outputBytes ?? utf8ByteLength(params.content),
+    outputBytes: params.outputBytes,
     lastLinePartial: params.lastLinePartial ?? false,
     firstLineExceedsLimit: params.firstLineExceedsLimit ?? false,
     maxLines: input.maxLines,
@@ -217,8 +217,8 @@ export function truncateHead(content: string, options: TruncationOptions = {}): 
   let outputBytesCount = 0;
   let truncatedBy: "lines" | "bytes" = input.totalLines > input.maxLines ? "lines" : "bytes";
 
-  for (const [i, line] of input.lines.slice(0, input.maxLines).entries()) {
-    const lineBytes = utf8ByteLength(line) + (i > 0 ? 1 : 0); // +1 for newline
+  for (const line of input.lines.slice(0, input.maxLines)) {
+    const lineBytes = utf8ByteLength(line) + (outputLinesArr.length > 0 ? 1 : 0); // +1 for newline
 
     if (outputBytesCount + lineBytes > input.maxBytes) {
       truncatedBy = "bytes";
@@ -237,13 +237,12 @@ export function truncateHead(content: string, options: TruncationOptions = {}): 
     truncatedBy = "lines";
   }
 
-  const outputContent = outputLinesArr.join("\n");
-
   return buildTruncationResult(input, {
-    content: outputContent,
+    content: outputLinesArr.join("\n"),
     truncated: true,
     truncatedBy,
     outputLines: outputLinesArr.length,
+    outputBytes: outputBytesCount,
   });
 }
 
@@ -303,13 +302,12 @@ export function truncateTail(content: string, options: TruncationOptions = {}): 
     truncatedBy = "lines";
   }
 
-  const outputContent = outputLinesArr.join("\n");
-
   return buildTruncationResult(input, {
-    content: outputContent,
+    content: outputLinesArr.join("\n"),
     truncated: true,
     truncatedBy,
     outputLines: outputLinesArr.length,
+    outputBytes: outputBytesCount,
     lastLinePartial,
   });
 }

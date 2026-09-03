@@ -28,15 +28,11 @@ import type {
   QaSuiteEnvironment,
   QaSuiteResult as QaSuiteBaseResult,
   QaSuiteRunParams as QaSuiteBaseRunParams,
-  QaSuiteScenarioResult as QaSuiteBaseScenarioResult,
+  QaSuiteScenarioResult,
   QaSuiteStartLabFn,
 } from "./suite-types.js";
 
-export type QaSuiteScenarioResult = QaSuiteBaseScenarioResult & {
-  modelSwitchEvidence?: Record<string, unknown>;
-};
-
-export type { QaSuiteStartLabFn } from "./suite-types.js";
+export type { QaSuiteScenarioResult, QaSuiteStartLabFn };
 
 export async function createQaSuiteTransportAdapter(params: {
   adapterOptions?: QaSuiteRunParams["adapterOptions"];

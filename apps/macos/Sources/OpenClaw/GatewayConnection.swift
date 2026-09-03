@@ -1,3 +1,4 @@
+import ConcurrencyExtras
 import CryptoKit
 import Foundation
 import OpenClawChatUI
@@ -148,7 +149,7 @@ actor GatewayConnection {
 
     private struct ConfiguredConnection {
         let client: GatewayChannelActor
-        let endpoint: EndpointSnapshot
+        var endpoint: EndpointSnapshot
         let tlsMetadataProvider: (any GatewayTLSRouteMetadataProviding)?
         let shutdownGeneration: UInt64
         let activationBindingKey: SymmetricKey?
@@ -168,7 +169,11 @@ actor GatewayConnection {
         }
     }
 
-    private var configuredConnection: ConfiguredConnection?
+    private nonisolated let connectedRevision = LockIsolated<UInt64?>(nil)
+    private var configuredConnection: ConfiguredConnection? {
+        didSet { self.publishConnectedEndpointRevision() }
+    }
+
     private var highestEndpointRevision: UInt64?
     private var routeGeneration: UInt64 = 0
     /// Unbound operations capture this before their first suspension. Shutdown
@@ -183,7 +188,21 @@ actor GatewayConnection {
     var realtimeTalkSubscribers: [
         UInt64: [UUID: AsyncStream<GatewayPush>.Continuation]
     ] = [:]
-    var lastSnapshot: HelloOk?
+    var lastSnapshot: HelloOk? {
+        didSet { self.publishConnectedEndpointRevision() }
+    }
+
+    nonisolated var connectedEndpointRevision: UInt64? {
+        self.connectedRevision.value
+    }
+
+    private func publishConnectedEndpointRevision() {
+        // Publish the admitted handshake's owner, not an untagged queued snapshot.
+        // Clearing either connection state also retires this synchronous UI fact.
+        let revision = self.lastSnapshot == nil ? nil : self.configuredConnection?.endpoint.revision
+        self.connectedRevision.withValue { $0 = revision }
+    }
+
     var canvasPluginSurfaceURL: String?
 
     struct CanvasPluginSurfaceRefresh {
@@ -308,6 +327,7 @@ actor GatewayConnection {
             return try await client.request(method: method, params: params, timeoutMs: timeoutMs)
         } catch {
             try Task.checkCancellation()
+            if GatewayCompatibilityIssue(error: error) != nil { throw error }
             if allowTLSRepair,
                let tlsError = error as? GatewayTLSValidationError,
                await GatewayTLSRepairCoordinator.shared.repair(
@@ -342,12 +362,11 @@ actor GatewayConnection {
                 let lastError: Error
                 do {
                     return try await self.retryRequest(
-                        client: client,
-                        method: method,
-                        params: params,
-                        timeoutMs: timeoutMs,
                         after: error,
                         shutdownGeneration: shutdownGeneration)
+                    {
+                        try await client.request(method: method, params: params, timeoutMs: timeoutMs)
+                    }
                 } catch {
                     lastError = error
                 }
@@ -361,12 +380,11 @@ actor GatewayConnection {
                         endpoint: fallback,
                         shutdownGeneration: shutdownGeneration)
                     return try await self.retryRequest(
-                        client: fallbackClient,
-                        method: method,
-                        params: params,
-                        timeoutMs: timeoutMs,
                         after: lastError,
                         shutdownGeneration: shutdownGeneration)
+                    {
+                        try await fallbackClient.request(method: method, params: params, timeoutMs: timeoutMs)
+                    }
                 }
 
                 throw lastError
@@ -385,23 +403,16 @@ actor GatewayConnection {
                     lastError = error
                 }
 
-                for delayMs in [150, 400, 900] {
-                    try await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
-                    try requireCurrentShutdownGeneration(shutdownGeneration)
-                    do {
-                        let endpoint = try await currentEndpoint()
-                        let client = try await configure(
-                            endpoint: endpoint,
-                            shutdownGeneration: shutdownGeneration)
-                        return try await client.request(method: method, params: params, timeoutMs: timeoutMs)
-                    } catch {
-                        try requireCurrentShutdownGeneration(shutdownGeneration)
-                        lastError = error
-                    }
+                return try await self.retryRequest(
+                    after: lastError,
+                    shutdownGeneration: shutdownGeneration)
+                {
+                    let endpoint = try await self.currentEndpoint()
+                    let client = try await self.configure(
+                        endpoint: endpoint,
+                        shutdownGeneration: shutdownGeneration)
+                    return try await client.request(method: method, params: params, timeoutMs: timeoutMs)
                 }
-
-                try requireCurrentShutdownGeneration(shutdownGeneration)
-                throw lastError
             case .unconfigured:
                 throw error
             }
@@ -409,21 +420,21 @@ actor GatewayConnection {
     }
 
     private func retryRequest(
-        client: GatewayChannelActor,
-        method: String,
-        params: [String: AnyCodable]?,
-        timeoutMs: Double?,
         after initialError: Error,
-        shutdownGeneration: UInt64) async throws -> Data
+        shutdownGeneration: UInt64,
+        operation: @Sendable () async throws -> Data) async throws -> Data
     {
         var lastError = initialError
         for delayMs in [150, 400, 900] {
             try await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
             try requireCurrentShutdownGeneration(shutdownGeneration)
             do {
-                return try await client.request(method: method, params: params, timeoutMs: timeoutMs)
+                return try await operation()
             } catch {
                 try requireCurrentShutdownGeneration(shutdownGeneration)
+                // Preserve the authoritative rejection before a later retry can
+                // replace update guidance with an unrelated transport failure.
+                if GatewayCompatibilityIssue(error: error) != nil { throw error }
                 lastError = error
             }
         }
@@ -931,6 +942,11 @@ extension GatewayConnection {
                   endpoint: endpoint,
                   shutdownGeneration: shutdownGeneration)
         else { return nil }
+        // Equivalent routes can acquire a new endpoint revision without reconnecting.
+        // An older waiter must not roll the recorded connection owner backward.
+        if endpoint.revision == self.highestEndpointRevision {
+            self.configuredConnection?.endpoint = endpoint
+        }
         return connection.client
     }
 

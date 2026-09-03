@@ -251,6 +251,7 @@ async function callTabsFocus(params: {
   profileCtx: ProfileContext;
   body: Record<string, unknown>;
   ssrfPolicy?: unknown;
+  signal?: AbortSignal;
 }) {
   return await callTabsRoute({ ...params, method: "post", path: "/tabs/focus" });
 }
@@ -259,6 +260,7 @@ async function callTabsDelete(params: {
   profileCtx: ProfileContext;
   targetId: string;
   query?: Record<string, unknown>;
+  signal?: AbortSignal;
 }) {
   const { app, deleteHandlers } = createBrowserRouteApp();
   registerBrowserTabRoutes(app, createRouteContext(params.profileCtx) as never);
@@ -271,6 +273,7 @@ async function callTabsDelete(params: {
       params: { targetId: params.targetId },
       query: params.query ?? {},
       body: {},
+      ...(params.signal ? { signal: params.signal } : {}),
     },
     response.res,
   );
@@ -319,6 +322,10 @@ describe("browser tab routes", () => {
 
     expect(response.statusCode).toBe(500);
     expect(response.body).toEqual({ error: String(navigationError) });
+    expect(profileCtx.openTab).toHaveBeenCalledWith("https://unresolved.example", {
+      label: undefined,
+      signal: expect.any(AbortSignal),
+    });
   });
 
   it("returns browser-not-running for close when the browser is not reachable", async () => {
@@ -340,7 +347,10 @@ describe("browser tab routes", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.body).toEqual({ ok: true, targetId: "T1" });
-    expect(profileCtx.closeTab).toHaveBeenCalledWith("T1", { exactTargetId: true });
+    expect(profileCtx.closeTab).toHaveBeenCalledWith("T1", {
+      exactTargetId: true,
+      signal: expect.any(AbortSignal),
+    });
   });
 
   it("returns the canonical target id resolved behind a friendly close reference", async () => {
@@ -355,7 +365,7 @@ describe("browser tab routes", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.body).toEqual({ ok: true, targetId: "T1_RAW" });
-    expect(profileCtx.closeTab).toHaveBeenCalledWith("docs", undefined);
+    expect(profileCtx.closeTab).toHaveBeenCalledWith("docs", { signal: expect.any(AbortSignal) });
   });
 
   it("rejects unknown target id modes before mutating a tab", async () => {
@@ -388,7 +398,10 @@ describe("browser tab routes", () => {
 
       expect(response.statusCode).toBe(200);
       expect(isReachable).toHaveBeenCalledTimes(2);
-      expect(profileCtx.closeTab).toHaveBeenCalledWith("T1", { exactTargetId: true });
+      expect(profileCtx.closeTab).toHaveBeenCalledWith("T1", {
+        exactTargetId: true,
+        signal: expect.any(AbortSignal),
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -647,9 +660,11 @@ describe("browser tab routes", () => {
     expect(tabIdResponse.statusCode).toBe(200);
     expect(profileCtx.focusTab).toHaveBeenNthCalledWith(1, "T1_RAW", {
       exactTargetId: true,
+      signal: expect.any(AbortSignal),
     });
     expect(profileCtx.focusTab).toHaveBeenNthCalledWith(2, "T1_RAW", {
       exactTargetId: true,
+      signal: expect.any(AbortSignal),
     });
   });
 
@@ -681,7 +696,10 @@ describe("browser tab routes", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.body).toEqual({ ok: true, targetId: "T2" });
-    expect(profileCtx.focusTab).toHaveBeenCalledWith("T2", { exactTargetId: true });
+    expect(profileCtx.focusTab).toHaveBeenCalledWith("T2", {
+      exactTargetId: true,
+      signal: expect.any(AbortSignal),
+    });
     expect(profileCtx.ensureTabAvailable).not.toHaveBeenCalled();
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
   });
@@ -698,7 +716,10 @@ describe("browser tab routes", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.body).toEqual({ ok: true, targetId: "T2" });
-    expect(profileCtx.focusTab).toHaveBeenCalledWith("T2", { exactTargetId: true });
+    expect(profileCtx.focusTab).toHaveBeenCalledWith("T2", {
+      exactTargetId: true,
+      signal: expect.any(AbortSignal),
+    });
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
   });
 
@@ -750,5 +771,64 @@ describe("browser tab routes", () => {
       },
     });
     expect(profileCtx.labelTab).toHaveBeenCalledWith("t1", "meet");
+  });
+
+  it("does not focus a tab after cancellation during target resolution", async () => {
+    const abort = new AbortController();
+    let markListStarted: (() => void) | undefined;
+    const listStarted = new Promise<void>((resolve) => {
+      markListStarted = resolve;
+    });
+    const listTabs = vi.fn(async (options?: { signal?: AbortSignal }) => {
+      const signal = options?.signal;
+      markListStarted?.();
+      if (signal) {
+        await new Promise<void>((_resolve, reject) => {
+          const rejectAbort = () =>
+            reject(signal.reason instanceof Error ? signal.reason : new Error("aborted"));
+          if (signal.aborted) {
+            rejectAbort();
+            return;
+          }
+          signal.addEventListener("abort", rejectAbort, { once: true });
+        });
+      }
+      return [
+        { targetId: "T1", title: "Tab 1", url: "https://example.com", type: "page" as const },
+      ];
+    });
+    const focusTab = vi.fn(async () => {});
+    const profileCtx = createProfileContext({ listTabs, focusTab });
+
+    const pending = callTabsFocus({
+      profileCtx,
+      body: { targetId: "T1" },
+      signal: abort.signal,
+    });
+
+    await listStarted;
+    abort.abort(new Error("cancelled"));
+    const response = await pending;
+
+    expect(response.statusCode).toBe(500);
+    expect(focusTab).not.toHaveBeenCalled();
+  });
+
+  it("does not close a tab after cancellation before the mutation", async () => {
+    // A pre-aborted signal must fence the close mutation so a cancelled request
+    // does not change the browser.
+    const closeTab = vi.fn(async (targetId: string) => targetId);
+    const profileCtx = createProfileContext({ closeTab });
+    const preAborted = new AbortController();
+    preAborted.abort(new Error("pre-cancelled"));
+
+    const response = await callTabsDelete({
+      profileCtx,
+      targetId: "T1",
+      signal: preAborted.signal,
+    });
+
+    expect(closeTab).not.toHaveBeenCalled();
+    expect(response.statusCode).toBe(500);
   });
 });

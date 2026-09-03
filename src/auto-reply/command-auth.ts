@@ -6,6 +6,7 @@ import {
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   getLoadedChannelPluginById,
+  getLoadedChannelPluginForRead,
   listLoadedChannelPlugins,
 } from "../channels/plugins/registry-loaded.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
@@ -571,6 +572,20 @@ export function resolveCommandAuthorization(
   params: CommandAuthorizationParams,
 ): CommandAuthorization {
   return resolveCommandAuthorizationState(params).authorization;
+}
+
+/** Recheck admitted sender identity against the current global owner list. */
+export function isConfiguredCommandOwner(
+  cfg: OpenClawConfig,
+  requester: { channel?: string; accountId?: string; senderId?: string },
+): boolean {
+  const providerId = normalizeAnyChannelId(requester.channel) ?? requester.channel;
+  const plugin = providerId ? getLoadedChannelPluginForRead(providerId) : undefined;
+  const params = { cfg, plugin, providerId, accountId: requester.accountId };
+  const owners = stripWildcardAllowFrom(resolveOwnerAllowFromList(params));
+  return resolveSenderCandidates({ ...params, senderId: requester.senderId }).some((sender) =>
+    owners.includes(sender),
+  );
 }
 
 /** Resolves reset admission without granting other command or owner authority. */

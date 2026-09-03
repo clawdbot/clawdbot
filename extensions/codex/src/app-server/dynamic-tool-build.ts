@@ -54,6 +54,7 @@ import {
   createGatewayProcessProjection,
   createNodeExecAliasDynamicTool,
   isCodexDynamicToolExcluded,
+  type NodeExecAvailabilityRef,
 } from "./shell-dynamic-tools.js";
 import { filterCodexVisionTools } from "./vision-tools.js";
 import { resolveCodexWebSearchPlan, type CodexNativeWebSearchSupport } from "./web-search.js";
@@ -79,6 +80,15 @@ const CODEX_NATIVE_SANDBOX_TOOL_REQUIREMENTS = [
   "apply_patch",
 ] as const;
 const CODEX_MEMORY_FLUSH_DYNAMIC_TOOL_ALLOW = new Set(["read", "write"]);
+const CODEX_DISABLED_NATIVE_SHELL_DYNAMIC_TOOLS = new Set([
+  "exec",
+  "process",
+  "sandbox_exec",
+  "sandbox_process",
+  CODEX_GATEWAY_EXEC_DYNAMIC_TOOL_NAME,
+  CODEX_GATEWAY_PROCESS_DYNAMIC_TOOL_NAME,
+  CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME,
+]);
 
 /** Keeps node filesystem and process ownership on its native exec-server. */
 export function resolveCodexNodePlacementToolConstructionPlan(
@@ -132,6 +142,7 @@ type DynamicToolBuildParams = {
   nativeToolSurfaceEnabled?: boolean;
   nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
   runAbortController: AbortController;
+  nodeExecAvailability?: NodeExecAvailabilityRef;
   sessionAgentId: string;
   policyAgentId: string;
   pluginConfig: CodexPluginConfig;
@@ -189,19 +200,11 @@ type CodexDynamicToolBuildStageSummary = {
 };
 const CODEX_DYNAMIC_TOOL_BUILD_WARN_TOTAL_MS = 1_000;
 const CODEX_DYNAMIC_TOOL_BUILD_WARN_STAGE_MS = 500;
-/** Creates cheap optional timing instrumentation for the dynamic-tool hot path. */
-export function createCodexDynamicToolBuildStageTracker(options: { enabled?: boolean } = {}): {
+/** Captures bounded preparation stages before a slow turn needs diagnosis. */
+export function createCodexDynamicToolBuildStageTracker(): {
   mark: (name: string) => void;
   snapshot: () => CodexDynamicToolBuildStageSummary;
 } {
-  if (!options.enabled) {
-    return {
-      mark() {},
-      snapshot() {
-        return { totalMs: 0, stages: [] };
-      },
-    };
-  }
   const startedAt = Date.now();
   let previousAt = startedAt;
   const stages: CodexDynamicToolBuildStageTiming[] = [];
@@ -227,10 +230,13 @@ export function createCodexDynamicToolBuildStageTracker(options: { enabled?: boo
 /** Returns true when dynamic-tool construction is slow enough to warrant a warning log. */
 export function shouldWarnCodexDynamicToolBuildStageSummary(
   summary: CodexDynamicToolBuildStageSummary,
+  profilerEnabled = false,
 ): boolean {
+  const totalWarnMs = profilerEnabled ? CODEX_DYNAMIC_TOOL_BUILD_WARN_TOTAL_MS : 10_000;
+  const stageWarnMs = profilerEnabled ? CODEX_DYNAMIC_TOOL_BUILD_WARN_STAGE_MS : 5_000;
   return (
-    summary.totalMs >= CODEX_DYNAMIC_TOOL_BUILD_WARN_TOTAL_MS ||
-    summary.stages.some((stage) => stage.durationMs >= CODEX_DYNAMIC_TOOL_BUILD_WARN_STAGE_MS)
+    summary.totalMs >= totalWarnMs ||
+    summary.stages.some((stage) => stage.durationMs >= stageWarnMs)
   );
 }
 /** Formats per-stage timings into the compact form used by Codex app-server logs. */
@@ -264,11 +270,7 @@ export async function buildDynamicTools(
     input.onWebSearchPolicyResolved?.(false);
     return [];
   }
-  // Dynamic tool construction is on the reply hot path, so per-stage
-  // Date.now/span bookkeeping runs only when the Codex profiler flag is set.
-  const toolBuildStages = createCodexDynamicToolBuildStageTracker({
-    enabled: input.profilerEnabled,
-  });
+  const toolBuildStages = createCodexDynamicToolBuildStageTracker();
   const modelHasVision = params.model.input?.includes("image") ?? false;
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, input.sessionAgentId);
   const injectedOpenClawCodingToolsFactory = dynamicToolBuildState.openClawCodingToolsFactory;
@@ -349,6 +351,10 @@ export async function buildDynamicTools(
             resolvedWorkspace: input.resolvedWorkspace,
           }),
     config: params.config,
+    skillsSnapshot: params.skillsSnapshot,
+    ...(params.skillLibraryAuthoring
+      ? { skillWorkshop: { libraryAuthoring: params.skillLibraryAuthoring } }
+      : {}),
     githubPublicationAvailable: params.githubPublicationAvailable,
     authProfileStore: params.toolAuthProfileStore ?? params.authProfileStore,
     abortSignal: input.runAbortController.signal,
@@ -450,7 +456,7 @@ export async function buildDynamicTools(
     hostSystemAgentActive && isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow)
       ? preserveRingZeroSystemAgentTool(readableAllTools, normallyProfiledTools)
       : normallyProfiledTools;
-  const codexFilteredTools = addNodeShellDynamicToolsIfNeeded(
+  const codexFilteredTools = await addNodeShellDynamicToolsIfNeeded(
     addGatewayShellDynamicToolsIfAvailable(
       addSandboxShellDynamicToolsIfAvailable(
         isCodexMemoryFlushRun(params)
@@ -545,9 +551,13 @@ export async function buildDynamicTools(
     ? webSearchPlan.webFetchHostnameAllowlist
     : undefined;
   input.onWebSearchPolicyResolved?.(webSearchAllowed);
-  const exposedTools = webSearchPlan.suppressManagedWebSearch
+  const webSearchFilteredTools = webSearchPlan.suppressManagedWebSearch
     ? normalizedTools.filter((tool) => tool.name !== "web_search")
     : normalizedTools;
+  const exposedTools = placeDisabledNativeShellToolsInDirectNamespace(
+    webSearchFilteredTools,
+    input.nativeToolSurfaceEnabled,
+  );
   if (preNormalizationDiagnostics.length > 0) {
     embeddedAgentLog.warn(
       `codex app-server quarantined ${preNormalizationDiagnostics.length} unsupported runtime tool schema${preNormalizationDiagnostics.length === 1 ? "" : "s"} before dynamic tool registration`,
@@ -564,7 +574,7 @@ export async function buildDynamicTools(
     );
   }
   const summary = toolBuildStages.snapshot();
-  if (shouldWarnCodexDynamicToolBuildStageSummary(summary)) {
+  if (shouldWarnCodexDynamicToolBuildStageSummary(summary, input.profilerEnabled)) {
     const phase = input.forceHeartbeatTool ? "registered-tools" : "runtime-tools";
     embeddedAgentLog.warn(
       `codex app-server dynamic tool build timings runId=${params.runId} sessionId=${params.sessionId} phase=${phase} totalMs=${summary.totalMs} stages=${formatCodexDynamicToolBuildStageSummary(summary)}`,
@@ -878,12 +888,12 @@ function addSandboxShellDynamicToolsIfAvailable(
 function isSandboxShellDynamicToolExcluded(config: CodexPluginConfig): boolean {
   return isCodexDynamicToolExcluded(config, ["exec", "sandbox_exec", "process", "sandbox_process"]);
 }
-function addNodeShellDynamicToolsIfNeeded(
+async function addNodeShellDynamicToolsIfNeeded(
   filteredTools: OpenClawDynamicTool[],
   allTools: OpenClawDynamicTool[],
   input: DynamicToolBuildParams,
   nodePolicy: CodexNativeExecutionPolicy,
-): OpenClawDynamicTool[] {
+): Promise<OpenClawDynamicTool[]> {
   if (isCodexMemoryFlushRun(input.params)) {
     return filteredTools;
   }
@@ -894,18 +904,22 @@ function addNodeShellDynamicToolsIfNeeded(
     return filteredTools;
   }
   const execTool = allTools.find((tool) => normalizeCodexDynamicToolName(tool.name) === "exec");
-  if (!execTool) {
-    return filteredTools;
-  }
   if (
-    !isCodexDynamicToolExcluded(input.pluginConfig, ["exec", CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME]) &&
-    !filteredTools.some(
+    !execTool ||
+    isCodexDynamicToolExcluded(input.pluginConfig, ["exec", CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME]) ||
+    filteredTools.some(
       (tool) => normalizeCodexDynamicToolName(tool.name) === CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME,
     )
   ) {
-    return [...filteredTools, createNodeExecAliasDynamicTool(execTool, nodePolicy.node)];
+    return filteredTools;
   }
-  return filteredTools;
+  const nodeExec = await createNodeExecAliasDynamicTool(
+    execTool,
+    nodePolicy.node,
+    input.runAbortController.signal,
+    input.nodeExecAvailability,
+  );
+  return nodeExec ? [...filteredTools, nodeExec] : filteredTools;
 }
 function shouldKeepOpenClawShellDynamicTools(
   input: DynamicToolBuildParams,
@@ -919,6 +933,22 @@ function shouldKeepOpenClawShellDynamicTools(
     input.sandbox?.enabled !== true &&
     nodePolicy.effectiveExecHost !== "node"
   );
+}
+/** Keeps replacement shell tools direct even when model metadata mandates Codex Code Mode. */
+function placeDisabledNativeShellToolsInDirectNamespace<
+  T extends { name: string; catalogMode?: string },
+>(tools: T[], nativeToolSurfaceEnabled: boolean | undefined): T[] {
+  if (nativeToolSurfaceEnabled !== false) {
+    return tools;
+  }
+  for (const tool of tools) {
+    if (CODEX_DISABLED_NATIVE_SHELL_DYNAMIC_TOOLS.has(normalizeCodexDynamicToolName(tool.name))) {
+      // Runtime tools can carry non-enumerable policy metadata and prototype behavior.
+      // Preserve the prepared object identity while changing only its Codex catalog placement.
+      tool.catalogMode = "direct-only";
+    }
+  }
+  return tools;
 }
 /** Applies a normalized tool allowlist while preserving shell aliases for exec/process. */
 function filterCodexDynamicToolsForAllowlist<T extends { name: string }>(

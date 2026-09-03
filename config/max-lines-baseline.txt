@@ -135,8 +135,6 @@ extensions/mattermost/src/mattermost/monitor.inbound-system-event.test.ts
 extensions/mattermost/src/mattermost/slash-http.ts
 extensions/memory-core/doctor-contract-api.test.ts
 extensions/memory-core/src/cli.test.ts
-extensions/memory-core/src/dreaming-narrative.test.ts
-extensions/memory-core/src/dreaming-narrative.ts
 extensions/memory-core/src/dreaming-phases.test.ts
 extensions/memory-core/src/dreaming-phases.ts
 extensions/memory-core/src/dreaming.test.ts
@@ -552,7 +550,6 @@ src/config/plugin-auto-enable.shared.ts
 src/config/redact-snapshot.test.ts
 src/config/schema.labels.ts
 src/config/schema.test.ts
-src/config/schema.ts
 src/config/sessions/disk-budget.ts
 src/config/sessions/session-accessor.conformance.test.ts
 src/config/sessions/session-accessor.test.ts
@@ -719,7 +716,6 @@ src/logging/diagnostic-stability.ts
 src/logging/diagnostic-support-export.ts
 src/logging/diagnostic.test.ts
 src/logging/diagnostic.ts
-src/logging/logger.ts
 src/logging/redact.test.ts
 src/logging/redact.ts
 src/media-understanding/apply.test.ts

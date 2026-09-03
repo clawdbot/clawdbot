@@ -1,9 +1,16 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString as normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeQueueMode } from "../../../../src/auto-reply/reply/queue/normalize.js";
+import { t } from "../../i18n/index.ts";
 import { normalizeAgentId } from "../sessions/session-key.ts";
-import type { ChatAttachment, ChatGoalDraftMode, ChatQueueItem } from "./chat-types.ts";
+import type {
+  ChatAttachment,
+  ChatGoalDraftMode,
+  ChatQueueItem,
+  HumanMention,
+} from "./chat-types.ts";
 import { isChatGoalDraftMode } from "./goal-draft.ts";
+import { readHumanMentions } from "./human-mentions.ts";
 import { normalizeSenderIdentity } from "./sender-label.ts";
 
 export const MAX_STORED_SESSIONS = 20;
@@ -18,6 +25,7 @@ export const INTERRUPTED_SETTINGS_WAIT_ERROR =
 export type StoredComposerSession = {
   awaitingDefaults?: true;
   draft?: string;
+  draftMentions?: readonly HumanMention[];
   goalMode?: ChatGoalDraftMode;
   draftRevision?: number;
   queue?: ChatQueueItem[];
@@ -27,6 +35,8 @@ export type StoredComposerSession = {
 export function sameQueuedDeliveryVersion(left: ChatQueueItem, right: ChatQueueItem): boolean {
   return (
     left.id === right.id &&
+    left.text === right.text &&
+    JSON.stringify(left.mentions ?? []) === JSON.stringify(right.mentions ?? []) &&
     left.sendRunId === right.sendRunId &&
     left.sendAttempts === right.sendAttempts &&
     left.sendState === right.sendState &&
@@ -92,6 +102,10 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
         .filter((item): item is ChatAttachment => item !== null)
     : [];
   const item: ChatQueueItem = { id, text, createdAt };
+  const mentions = readHumanMentions(text, entry.mentions);
+  if (mentions) {
+    item.mentions = mentions;
+  }
   if (entry.attachmentPayload !== undefined) {
     const payload = entry.attachmentPayload;
     if (
@@ -216,6 +230,14 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
   if (agentId) {
     item.agentId = normalizeAgentId(agentId);
   }
+  if (
+    entry.mentions !== undefined &&
+    (!Array.isArray(entry.mentions) || entry.mentions.length !== (mentions?.length ?? 0))
+  ) {
+    // A reconnect must not send a different recipient selection after losing its binding.
+    item.sendState = "failed";
+    item.sendError = t("chat.mentions.restoreFailed");
+  }
   return item;
 }
 
@@ -225,6 +247,7 @@ export function normalizeStoredSession(value: unknown): StoredComposerSession | 
   }
   const entry = value;
   const draft = typeof entry.draft === "string" ? entry.draft : undefined;
+  const draftMentions = draft ? readHumanMentions(draft, entry.draftMentions) : undefined;
   if (entry.goalMode !== undefined && !isChatGoalDraftMode(entry.goalMode)) {
     return null;
   }
@@ -264,6 +287,7 @@ export function normalizeStoredSession(value: unknown): StoredComposerSession | 
   return {
     ...(entry.awaitingDefaults === true ? { awaitingDefaults: true } : {}),
     ...(draft ? { draft } : {}),
+    ...(draftMentions ? { draftMentions } : {}),
     ...(goalMode ? { goalMode } : {}),
     ...(draftRevision !== undefined ? { draftRevision } : {}),
     ...(queue && queue.length > 0 ? { queue } : {}),

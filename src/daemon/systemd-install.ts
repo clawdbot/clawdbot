@@ -54,7 +54,18 @@ import {
   buildSystemdUnit,
   parseSystemdEnvAssignments,
   renderSystemdEnvAssignment,
+  splitSystemdLogicalLines,
 } from "./systemd-unit.js";
+
+const SYSTEMD_GATEWAY_CREDENTIAL_KEYS = new Set([
+  "OPENCLAW_GATEWAY_TOKEN",
+  "OPENCLAW_GATEWAY_PASSWORD",
+]);
+
+function restrictSystemdArtifactMode(mode: number | undefined): number {
+  const ownerOnly = (mode ?? 0o600) & 0o700;
+  return ownerOnly || 0o600;
+}
 
 function collectSystemdInlineManagedKeys(params: {
   environment?: GatewayServiceEnv;
@@ -110,13 +121,14 @@ function collectSystemdFileBackedEnvironment(params: {
 
 function removeSystemdInlineEnvironmentKeys(content: string, keys: ReadonlySet<string>): string {
   const sanitizedLines: string[] = [];
-  for (const rawLine of content.split("\n")) {
+  for (const rawLine of splitSystemdLogicalLines(content)) {
     const line = rawLine.trim();
-    if (!line.startsWith("Environment=")) {
+    const separator = line.indexOf("=");
+    if (separator < 0 || line.slice(0, separator).trim() !== "Environment") {
       sanitizedLines.push(rawLine);
       continue;
     }
-    const assignments = parseSystemdEnvAssignments(line.slice("Environment=".length).trim());
+    const assignments = parseSystemdEnvAssignments(line.slice(separator + 1).trim());
     const keptAssignments = assignments.filter(({ key }) => {
       const normalizedKey = normalizeServiceEnvKey(key);
       return !normalizedKey || !keys.has(normalizedKey);
@@ -142,12 +154,12 @@ function sanitizeSystemdUnitBackupContent(params: {
   content: string;
   fileManagedKeys: ReadonlySet<string>;
 }): string {
-  if (params.fileManagedKeys.size === 0) {
-    return params.content;
-  }
-  // Backups should not retain file-managed secrets that OpenClaw moved into the
-  // generated EnvironmentFile during this rewrite.
-  return removeSystemdInlineEnvironmentKeys(params.content, params.fileManagedKeys);
+  // Gateway credentials are never useful in a recovery artifact. File-managed
+  // values are also omitted after OpenClaw moves them to the generated env file.
+  return removeSystemdInlineEnvironmentKeys(
+    params.content,
+    new Set([...params.fileManagedKeys, ...SYSTEMD_GATEWAY_CREDENTIAL_KEYS]),
+  );
 }
 
 function removeLegacyGatewayVersionMetadata(content: string): string {
@@ -264,6 +276,8 @@ async function writeSystemdUnit({
       ? undefined
       : (mutation.snapshots.get(environmentFilePath) ?? null);
     const existingUnit = mutation.snapshots.get(unitPath) ?? null;
+    const backupPath = `${unitPath}.bak`;
+    const existingBackup = mutation.snapshots.get(backupPath) ?? null;
     const { entries: stateDirDotEnvEntries, skippedShellReferenceKeys } =
       readStateDirDotEnvFromStateDir(stateDir);
     const stateDirDotEnvVars = new Map(
@@ -279,14 +293,15 @@ async function writeSystemdUnit({
     const fileManagedKeys = collectSystemdFileManagedKeys(environmentValueSources);
     const existingEnvironment = await readSystemdGatewayEnvironmentFiles(stateDir, environment);
 
-    if (existingUnit) {
+    const backupSource = existingUnit ?? existingBackup;
+    if (backupSource) {
       await mutation.publish(
-        `${unitPath}.bak`,
+        backupPath,
         sanitizeSystemdUnitBackupContent({
-          content: existingUnit.contents.toString("utf8"),
+          content: backupSource.contents.toString("utf8"),
           fileManagedKeys,
         }),
-        existingUnit.mode || 0o600,
+        restrictSystemdArtifactMode(backupSource.mode),
       );
     }
     try {
@@ -351,7 +366,7 @@ async function writeSystemdUnit({
         environmentFiles: hasGeneratedValues ? [environmentFilePath] : [],
       });
       await assertNoSystemGatewayOwnership(env);
-      await mutation.publish(unitPath, unit, existingUnit?.mode ?? 0o644);
+      await mutation.publish(unitPath, unit, restrictSystemdArtifactMode(existingUnit?.mode));
       try {
         await assertNoSystemGatewayOwnership(env);
       } catch (ownershipError) {
@@ -359,8 +374,26 @@ async function writeSystemdUnit({
         throw ownershipError;
       }
     } catch (error) {
+      let rollbackError: unknown;
+      try {
+        await mutation.restore(backupPath, existingBackup);
+      } catch (cause) {
+        rollbackError = cause;
+      }
       if (environmentFileSnapshot !== undefined) {
-        await mutation.restore(environmentFilePath, environmentFileSnapshot);
+        try {
+          await mutation.restore(environmentFilePath, environmentFileSnapshot);
+        } catch (cause) {
+          rollbackError ??= cause;
+        }
+      }
+      if (rollbackError) {
+        const failureDetail = error instanceof Error ? error.message : String(error);
+        const rollbackDetail =
+          rollbackError instanceof Error ? rollbackError.message : "unknown rollback error";
+        throw new Error(`${failureDetail}\nSystemd rollback failed: ${rollbackDetail}`, {
+          cause: error,
+        });
       }
       throw error;
     }
@@ -525,6 +558,11 @@ export async function uninstallSystemdService({
     }
     // Unit file was already absent; still clean generated node env state below.
   }
+  await fs.unlink(`${unitPath}.bak`).catch((error: unknown) => {
+    if (!hasErrnoCode(error, "ENOENT")) {
+      throw error;
+    }
+  });
   await removeNodeSystemdManagedEnvironmentKeys(env);
   if (removed) {
     stdout.write(`${formatLine("Removed systemd service", unitPath)}\n`);

@@ -44,6 +44,17 @@ state, so each browser can keep its own working layout.
 
 ## Build a dashboard by asking
 
+Watch Patrick Erichsen build an OpenClaw 2.0 release dashboard from one prompt:
+
+<iframe
+  style={{ width: "100%", height: "auto", aspectRatio: "16 / 9", border: 0, borderRadius: "8px" }}
+  src="https://www.youtube-nocookie.com/embed/gHyBueWideg"
+  title="Build an OpenClaw Dashboard with One Prompt"
+  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+  referrerPolicy="strict-origin-when-cross-origin"
+  allowFullScreen
+></iframe>
+
 Ask your agent for what you want to see:
 
 > Create a widget named revenue-graph: an interactive bar chart of monthly
@@ -69,6 +80,9 @@ never needs the agent.
   medium, large, extra large) from the widget menu. Nobody places pixels —
   not you, not the agent. On narrow boards, widgets stack at full width in
   their saved order; widening the board restores their saved column widths.
+- **Automatic height.** HTML widgets adjust their height to fit their content.
+  Resizing by handle or choosing a size preset fixes the height. Choose
+  **Auto height** from the widget menu to fit the content again.
 - **Tabs.** A board can have several pages — say, an overview tab and a
   focused tab with one big widget. Each tab remembers its own chat-dock
   position.
@@ -112,10 +126,12 @@ explicit session mode, the equivalent configured exec approval policy applies.
 
 Enabled plugins can add their own named read-only feeds and actions to these capability lists; disabling the plugin removes those integrations.
 
-Grants are bound to the exact widget bytes and revision approved by your session
-policy. If the agent changes the widget and asks for _more_ than was approved,
-OpenClaw applies that policy again; refreshing content within the same
-permissions keeps the grant.
+Grants are bound to the exact widget bytes approved by your session policy.
+Changed HTML or registered-source bytes require a new decision even when the
+permissions stay the same or shrink. A grant is preserved only when the
+approved bytes still match and the requested permissions do not widen.
+The authoring result distinguishes pending, rejected, and granted access;
+saving a widget does not imply its capabilities were approved.
 Widget interactions the agent should know about (filters you clicked, views
 you switched) reach it quietly as session notices — it stays informed without
 being interrupted.

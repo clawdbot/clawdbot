@@ -12,6 +12,7 @@ import {
   finalizeNodePairingCleanupClaim,
   recordPairedNodeConnection,
 } from "../../../infra/device-pairing-node.js";
+import { getGatewaySuspendAdmissionPhase } from "../../../process/gateway-work-admission.js";
 import { hasMultipleSessionSharingIdentities } from "../../../state/user-profiles.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../../../version.js";
 import { resolveChatAttachmentPolicy } from "../../chat-attachment-policy.js";
@@ -84,8 +85,11 @@ export async function sendGatewayHello(
     deviceToken,
     bootstrapDeviceTokens,
   } = state;
-  // Prefer the authenticated human; principal scopes never inherit device-token rows.
-  const authenticatedPrincipal = authenticatedUserProfileId ?? authResult.user;
+  // Only an upstream-verified identity owns principal recovery; owner profiles
+  // attribute shared-secret/device connections without changing their recovery scope.
+  const authenticatedPrincipal = authResult.user
+    ? (authenticatedUserProfileId ?? authResult.user)
+    : undefined;
   const recoveryScopeMaterial = authenticatedPrincipal
     ? ["principal", authenticatedPrincipal, device?.id ?? ""]
     : deviceToken?.token
@@ -218,6 +222,8 @@ export async function sendGatewayHello(
     }
   }
   try {
+    // Bootstrap bookkeeping can await; hello must supersede any earlier admission event.
+    snapshot.suspension = { phase: getGatewaySuspendAdmissionPhase() };
     await sendFrame({ type: "res", id: frame.id, ok: true, payload: helloOk });
   } catch (err) {
     if (bootstrapHandoff) {

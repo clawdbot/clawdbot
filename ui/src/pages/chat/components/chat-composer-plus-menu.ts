@@ -1,14 +1,14 @@
-import "@awesome.me/webawesome/dist/components/switch/switch.js";
 import { html, nothing, type TemplateResult } from "lit";
 import type { ToolsEffectiveEntry, ToolsEffectiveResult } from "../../../api/types.ts";
 import { pathForPluginsHubTab, pathForRoute } from "../../../app-route-paths.ts";
+import "@awesome.me/webawesome/dist/components/switch/switch.js";
 import type { ApplicationNavigationOptions } from "../../../app/context.ts";
 import { icons } from "../../../components/icons.ts";
-import "../../../components/tooltip.ts";
-import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import type { McpServerSummary } from "../../../lib/config/mcp-servers.ts";
 import { formatUiExternalText } from "../../../lib/format-error.ts";
+import "../../../components/tooltip.ts";
+import "../../../components/web-awesome.ts";
 import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
 import {
   countSessionToolOverrides,
@@ -18,14 +18,29 @@ import {
   readOwnEntry,
   resolveToolOverrideState,
 } from "../../../lib/sessions/tool-overrides.ts";
+import type { ComposerLibraryProps } from "../composer-library-session.ts";
 import {
   handleChatAttachmentMenuSelection,
   renderChatAttachmentMenuOptions,
   renderChatAttachmentMenuTrigger,
   type ChatAttachmentControlsProps,
 } from "./chat-attachments.ts";
+import {
+  handleComposerLibrarySelection,
+  renderComposerLibraryMenu,
+} from "./chat-composer-library-menu.ts";
+import {
+  renderBackRow,
+  renderCapabilityToggleRow,
+  menuDivider,
+} from "./chat-composer-menu-rows.ts";
 
-export type ChatComposerPlusMenuView = "root" | "skills" | "connectors" | `tools:${string}`;
+export type ChatComposerPlusMenuView =
+  | "root"
+  | "skills"
+  | "connectors"
+  | `tools:${string}`
+  | `library:${string}`;
 
 export type ChatComposerMenuSkill = {
   key: string;
@@ -59,6 +74,8 @@ type ChatComposerPlusMenuProps = {
   skills: readonly ChatComposerMenuSkill[] | null;
   skillsLoading: boolean;
   skillsError: boolean;
+  library?: ComposerLibraryProps;
+  libraryDialog?: TemplateResult | typeof nothing;
   mcpServers: readonly McpServerSummary[];
   toolsEffectiveResult: ToolsEffectiveResult | null;
   toolsEffectiveLoading: boolean;
@@ -92,10 +109,6 @@ export type ChatComposerCapabilityMenuProps = Omit<
   | "rootToggles"
 >;
 
-function menuDivider(): TemplateResult {
-  return html`<div class="agent-chat__capability-menu-divider" role="separator"></div>`;
-}
-
 function internalLink(href: string, label: string): TemplateResult {
   return html`<a
     class="agent-chat__capability-menu-link"
@@ -104,55 +117,6 @@ function internalLink(href: string, label: string): TemplateResult {
     @click=${(event: MouseEvent) => event.preventDefault()}
     >${label}</a
   >`;
-}
-
-function renderBackRow() {
-  return html`
-    <wa-dropdown-item class="agent-chat__capability-menu-item" value="back">
-      <span slot="icon" aria-hidden="true">${icons.arrowLeft}</span>
-      <span>${t("chat.composer.menu.back")}</span>
-    </wa-dropdown-item>
-    ${menuDivider()}
-  `;
-}
-
-function renderCapabilityToggleRow(options: {
-  value: string;
-  label: string;
-  checked: boolean;
-  disabled: boolean;
-  title: string | null | undefined;
-  icon?: TemplateResult;
-  note?: TemplateResult | typeof nothing;
-  checkbox?: boolean;
-}) {
-  return html`
-    <wa-dropdown-item
-      class="agent-chat__capability-menu-item agent-chat__capability-menu-toggle"
-      value=${options.value}
-      type=${options.checkbox ? "checkbox" : "normal"}
-      .checked=${options.checked}
-      ?disabled=${options.disabled}
-      title=${options.title ?? ""}
-    >
-      ${options.icon ? html`<span slot="icon" aria-hidden="true">${options.icon}</span>` : nothing}
-      <span class="agent-chat__capability-menu-label">
-        <span>${options.label}</span>
-        ${options.note ?? nothing}
-      </span>
-      ${options.checkbox
-        ? nothing
-        : html`<wa-switch
-            slot="details"
-            class="agent-chat__capability-menu-switch"
-            size="s"
-            tabindex="-1"
-            .checked=${options.checked}
-            ?disabled=${options.disabled}
-            aria-label=${options.label}
-          ></wa-switch>`}
-    </wa-dropdown-item>
-  `;
 }
 
 function renderRootView(props: ChatComposerPlusMenuProps) {
@@ -295,7 +259,7 @@ function renderSkillView(props: ChatComposerPlusMenuProps) {
             });
           });
   return html`
-    ${renderBackRow()} ${rows} ${menuDivider()}
+    ${renderBackRow()} ${renderComposerLibraryMenu(props.library)} ${rows} ${menuDivider()}
     <wa-dropdown-item class="agent-chat__capability-menu-item" value="manage-skills">
       ${internalLink(pathForRoute("skills", props.basePath), t("chat.composer.menu.manageSkills"))}
     </wa-dropdown-item>
@@ -489,12 +453,22 @@ function handleMenuSelection(
   };
   if (value === "back") {
     event.preventDefault();
-    changeView(props.view.startsWith("tools:") ? "connectors" : "root");
+    changeView(
+      props.view.startsWith("tools:")
+        ? "connectors"
+        : props.view.startsWith("library:")
+          ? "skills"
+          : "root",
+    );
     return;
   }
   if (value === "open-skills" || value === "open-connectors") {
     event.preventDefault();
     changeView(value === "open-skills" ? "skills" : "connectors");
+    return;
+  }
+  if (handleComposerLibrarySelection(value, props.library, changeView)) {
+    event.preventDefault();
     return;
   }
   if (value === "toggle-web-search") {
@@ -609,7 +583,9 @@ function renderChatComposerPlusMenuContent(props: ChatComposerPlusMenuProps) {
         ? renderConnectorView(props)
         : view.startsWith("tools:")
           ? renderToolAccessView(props, view.slice("tools:".length))
-          : renderRootView(props);
+          : view.startsWith("library:")
+            ? renderComposerLibraryMenu(props.library, view.slice("library:".length))
+            : renderRootView(props);
   return html`
     <wa-dropdown
       class="agent-chat__attach-menu agent-chat__capability-menu"
@@ -633,7 +609,7 @@ function renderChatComposerPlusMenuContent(props: ChatComposerPlusMenuProps) {
     >
       ${renderChatAttachmentMenuTrigger(props.disabled, hasOverrides)} ${content}
     </wa-dropdown>
-    ${props.addServerDialog ?? nothing}
+    ${props.addServerDialog ?? nothing} ${props.libraryDialog ?? nothing}
   `;
 }
 
@@ -660,6 +636,8 @@ export function renderChatComposerPlusMenu(props: {
     skills: capabilityMenu?.skills ?? null,
     skillsLoading: capabilityMenu?.skillsLoading ?? false,
     skillsError: capabilityMenu?.skillsError ?? false,
+    library: capabilityMenu?.library,
+    libraryDialog: capabilityMenu?.libraryDialog,
     mcpServers: capabilityMenu?.mcpServers ?? [],
     toolsEffectiveResult: capabilityMenu?.toolsEffectiveResult ?? null,
     toolsEffectiveLoading: capabilityMenu?.toolsEffectiveLoading ?? false,

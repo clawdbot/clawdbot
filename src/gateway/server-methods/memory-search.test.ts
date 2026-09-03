@@ -308,7 +308,47 @@ describe("memory.search gateway method", () => {
         stale: true,
         warning:
           "Memory index is stale: embedding request timed out. Search results may be incomplete.",
-        action: "Run: openclaw memory status --index --agent main",
+        action:
+          "Run: openclaw memory status --index --agent main. Rebuilding uses keyword indexing only and does not call an embedding provider.",
+      },
+      undefined,
+    );
+  });
+
+  it("preserves OpenClaw index ownership and configured provider intent", async () => {
+    const cfg = createConfig(testState.workspaceDir);
+    const manager = createStubManager();
+    manager.status.mockReturnValue({
+      backend: "builtin",
+      provider: "none",
+      requestedProvider: "openai",
+      dirty: true,
+      custom: {
+        searchMode: "fts-only",
+        indexIdentity: {
+          status: "mismatched",
+          reason: "index provenance classifier changed",
+          code: "provenance_version",
+          owner: "openclaw",
+        },
+      },
+    });
+    getActiveMemorySearchManagerCore.mockResolvedValue({ manager });
+
+    const respond = await invokeMemorySearch({ query: "hidden codeword" }, cfg);
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        agentId: "main",
+        provider: "none",
+        searchMode: "fts-only",
+        results: [],
+        stale: true,
+        warning:
+          "Memory index is stale: index provenance classifier changed (owner: openclaw, code: provenance_version). Search results may be incomplete.",
+        action:
+          "Run: openclaw memory status --index --agent main. Rebuilding may call the configured embedding provider and can incur provider cost.",
       },
       undefined,
     );

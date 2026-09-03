@@ -1,4 +1,5 @@
 import type { RuntimeAuthMaterialization } from "../agents/auth-profiles/runtime-materializations.js";
+import type { LoadPreparedModelCatalogParams } from "../agents/prepared-model-catalog.js";
 import type { ResolvedPublishedModelCatalogOwner } from "../agents/prepared-model-catalog.types.js";
 import type { PreparedModelRuntimeAuthScope } from "../agents/prepared-model-runtime-auth.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
@@ -15,7 +16,7 @@ type GatewayModelCatalogReadParams = {
   authScope?: PreparedModelRuntimeAuthScope;
   readOnly?: boolean;
   refreshAuth?: boolean;
-  refreshFullCatalog?: boolean;
+  refreshFullCatalog?: LoadPreparedModelCatalogParams["refreshFullCatalog"];
   workspaceDir?: string;
 };
 

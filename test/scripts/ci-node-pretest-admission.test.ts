@@ -89,10 +89,12 @@ describe("compact node prerequisite admission", () => {
     ]);
     const jobs = plan();
     expect(jobs).toHaveLength(2);
-    expect(jobs.map((job) => [job.pretestBuildMode, job.predictedSeconds]).toSorted()).toEqual([
-      ["private-qa", 180],
-      ["runtime", 200],
-    ]);
+    expect(jobs.map((job) => [job.pretestBuildMode, job.predictedSeconds])).toEqual(
+      expect.arrayContaining([
+        ["private-qa", 180],
+        ["runtime", 200],
+      ]),
+    );
   });
 
   it("upgrades one shared build to private QA when it still fits", () => {
@@ -111,10 +113,11 @@ describe("compact node prerequisite admission", () => {
       ["runtime-b", "runtime", 20],
       ["plain-a", undefined, 150],
       ["plain-b", undefined, 80],
+      ["plain-c", undefined, 40],
     ]);
     const jobs = plan();
     expect(jobs).toHaveLength(2);
-    expect(jobs.map((job) => job.predictedSeconds).toSorted((a, b) => a! - b!)).toEqual([220, 230]);
+    expect(jobs.map((job) => job.predictedSeconds).toSorted((a, b) => a! - b!)).toEqual([220, 270]);
     const runtime = jobs.find((job) => job.pretestBuildMode === "runtime");
     expect(runtime?.groups.map((group) => group.shard_name).toSorted()).toEqual([
       "runtime-a",
@@ -123,9 +126,29 @@ describe("compact node prerequisite admission", () => {
     expect(jobs.flatMap((job) => job.groups.map((group) => group.shard_name)).toSorted()).toEqual([
       "plain-a",
       "plain-b",
+      "plain-c",
       "runtime-a",
       "runtime-b",
     ]);
+  });
+
+  it.each([
+    { seconds: [180, 100, 20], blacksmithJobs: 1 },
+    { seconds: [280, 20], blacksmithJobs: 2 },
+  ])("shares ordinary job setup without adding work to oversized groups: $seconds", (sample) => {
+    for (const profile of ["blacksmith", "github", "hybrid"]) {
+      setGroups(sample.seconds.map((seconds, index) => [`plain-${index}`, undefined, seconds]));
+      const jobs = plan(profile);
+      expect(jobs).toHaveLength(profile === "blacksmith" ? sample.blacksmithJobs : 2);
+      if (jobs.length === 1) {
+        expect(jobs[0]).toMatchObject({
+          planConcurrency: 2,
+          predictedSeconds: 300,
+          runner: "blacksmith-32vcpu-ubuntu-2404",
+        });
+        expect(jobs[0]?.pretestBuildMode).toBeUndefined();
+      }
+    }
   });
 
   it.each([

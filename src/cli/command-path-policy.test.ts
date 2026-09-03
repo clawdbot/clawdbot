@@ -9,6 +9,7 @@ import {
 
 const DEFAULT_EXPECTED_POLICY: CliCommandPathPolicy = {
   configGuard: "run",
+  stateStoreGuard: "skip",
   loadPlugins: "never",
   pluginRegistry: { scope: "all" },
   ownsProtocolStdout: false,
@@ -59,6 +60,25 @@ function expectConfigGuardResolver(
 }
 
 describe("command-path-policy", () => {
+  it.each([
+    { commandPath: ["configure"] },
+    { commandPath: ["models", "auth"] },
+    { commandPath: ["models", "auth", "paste-token"] },
+    { commandPath: ["channels", "add"] },
+    { commandPath: ["channels", "login"] },
+  ])("guards local state writes for $commandPath", ({ commandPath }) => {
+    expect(resolveCliCommandPathPolicy(commandPath).stateStoreGuard).toBe("run");
+  });
+
+  it.each([
+    { commandPath: ["models", "list"] },
+    { commandPath: ["channels", "status"] },
+    { commandPath: ["config", "set"] },
+    { commandPath: ["onboard"] },
+  ])("does not broaden the state-store guard to $commandPath", ({ commandPath }) => {
+    expect(resolveCliCommandPathPolicy(commandPath).stateStoreGuard).toBe("skip");
+  });
+
   it("resolves status policy with shared startup semantics", () => {
     expectResolvedPolicy(["status"], {
       configGuard: "skip",
@@ -72,6 +92,7 @@ describe("command-path-policy", () => {
   it.each([
     { commandPath: ["database"], hideBanner: true },
     { commandPath: ["audit"], hideBanner: false },
+    { commandPath: ["node", "identity"], hideBanner: false },
     { commandPath: ["update", "cleanup"], hideBanner: true },
   ])("keeps passive startup for $commandPath", ({ commandPath, hideBanner }) => {
     expectResolvedPolicy(commandPath, {
@@ -114,6 +135,24 @@ describe("command-path-policy", () => {
     expectResolvedPolicy(["nodes", "pair"], { networkProxy: "bypass" });
   });
 
+  it("retains node host startup outside the exact identity lookup", () => {
+    for (const commandPath of [
+      ["node"],
+      ["node", "install"],
+      ["node", "status"],
+      ["node", "identity", "unknown"],
+    ]) {
+      expectResolvedPolicy(commandPath, { networkProxy: "bypass" });
+    }
+    expectResolvedPolicy(["node", "run"], {});
+    expectResolvedPolicy(["node", "worker"], {
+      configGuard: "validate",
+      hideBanner: true,
+      ownsProtocolStdout: true,
+      networkProxy: "bypass",
+    });
+  });
+
   it("keeps gateway-owned node and device mutations off the local config guard", () => {
     for (const subcommand of [
       "list",
@@ -150,6 +189,7 @@ describe("command-path-policy", () => {
       pluginRegistry: { scope: "configured-channels" },
     });
     expectResolvedPolicy(["channels", "login"], {
+      stateStoreGuard: "run",
       loadPlugins: "always",
       pluginRegistry: { scope: "configured-channels" },
     });
@@ -158,6 +198,7 @@ describe("command-path-policy", () => {
       pluginRegistry: { scope: "configured-channels" },
     });
     expectResolvedPolicy(["channels", "add"], {
+      stateStoreGuard: "run",
       loadPlugins: "never",
       pluginRegistry: { scope: "configured-channels" },
       networkProxy: "bypass",
@@ -379,6 +420,7 @@ describe("command-path-policy", () => {
     });
     expectResolvedPolicy(["configure"], {
       configGuard: "skip",
+      stateStoreGuard: "run",
       loadPlugins: "never",
     });
     expectResolvedPolicy(["config"], {

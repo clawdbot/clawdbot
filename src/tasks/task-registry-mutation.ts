@@ -157,11 +157,17 @@ export function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskReco
   if (!current) {
     return null;
   }
-  const next = normalizeTaskTimestamps({
+  const updated = {
     ...current,
     ...patch,
     ...(patch.detail !== undefined ? { detail: structuredClone(patch.detail) } : {}),
-  });
+  };
+  const becomesTerminal =
+    !isTerminalTaskStatus(current.status) && isTerminalTaskStatus(updated.status);
+  if (becomesTerminal && patch.endedAt === undefined) {
+    updated.endedAt = patch.lastEventAt ?? Date.now();
+  }
+  const next = normalizeTaskTimestamps(updated);
   if (Object.hasOwn(patch, "error") && patch.error === undefined) {
     delete next.error;
   }
@@ -179,8 +185,6 @@ export function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskReco
   const parentFlowIndexChanged = current.parentFlowId?.trim() !== next.parentFlowId?.trim();
   ensureLinkedTaskFlowRegistryReady(current);
   ensureLinkedTaskFlowRegistryReady(next);
-  const becomesTerminal =
-    !isTerminalTaskStatus(current.status) && isTerminalTaskStatus(next.status);
   if (becomesTerminal) {
     flushTaskActivity(taskId);
   }

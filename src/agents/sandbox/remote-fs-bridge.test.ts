@@ -81,9 +81,17 @@ function createWorkspaceReadBridge(workspaceDir: string) {
 }
 
 describe("remote sandbox fs bridge", () => {
-  it.runIf(process.platform !== "win32")(
-    "preserves binary payloads, quoted paths, empty files, and exclusive creates without a host mirror",
-    async () => {
+  it.runIf(process.platform !== "win32").each([
+    { workspaceAccess: "rw", mutation: "write" },
+    { workspaceAccess: "none", mutation: "write" },
+    { workspaceAccess: "ro", mutation: "write" },
+    { workspaceAccess: "rw", mutation: "remove" },
+    { workspaceAccess: "none", mutation: "remove" },
+    { workspaceAccess: "rw", mutation: "rename" },
+    { workspaceAccess: "none", mutation: "rename" },
+  ] as const)(
+    "enforces $workspaceAccess workspace writes and protects remote-only skills from $mutation",
+    async ({ workspaceAccess, mutation }) => {
       await withTempDir("openclaw-remote-fs-payload-", async (stateDir) => {
         const workspaceDir = path.join(await fs.realpath(stateDir), "host-workspace");
         const remoteWorkspaceDir = path.join(await fs.realpath(stateDir), "remote 'workspace'");
@@ -94,12 +102,23 @@ describe("remote sandbox fs bridge", () => {
           remoteAgentWorkspaceDir: remoteWorkspaceDir,
         });
         const bridge = createRemoteShellSandboxFsBridge({
-          sandbox: createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir }),
+          sandbox: createSandbox({
+            workspaceDir,
+            agentWorkspaceDir: workspaceDir,
+            workspaceAccess,
+          }),
           runtime,
         });
         const filePath = "quoted ' \" $() `literal`.bin";
         const payload = Buffer.from([0, 255, 128, 10, 13, 39, 34, 36, 96]);
         const createFileExclusive = bridge.createFileExclusive!.bind(bridge);
+        if (workspaceAccess === "ro") {
+          await expect(createFileExclusive({ filePath, data: payload })).rejects.toThrow(
+            "read-only",
+          );
+          await expect(fs.readdir(remoteWorkspaceDir)).resolves.toEqual([]);
+          return;
+        }
 
         await expect(createFileExclusive({ filePath, data: payload })).resolves.toBe("created");
         await expect(bridge.readFile({ filePath })).resolves.toEqual(payload);
@@ -118,6 +137,19 @@ describe("remote sandbox fs bridge", () => {
           Buffer.alloc(0),
         );
         await expect(fs.readdir(workspaceDir)).resolves.toEqual([]);
+        const skillRelativePath =
+          mutation === "write" ? "skills/demo/SKILL.md" : ".agents/skills/demo/SKILL.md";
+        const skillPath = path.join(remoteWorkspaceDir, skillRelativePath);
+        await fs.mkdir(path.dirname(skillPath), { recursive: true });
+        await fs.writeFile(skillPath, "managed instructions");
+        const mutate =
+          mutation === "write"
+            ? bridge.writeFile({ filePath: skillRelativePath, data: "changed" })
+            : mutation === "remove"
+              ? bridge.remove({ filePath: ".agents", recursive: true })
+              : bridge.rename({ from: ".agents", to: "moved-instructions" });
+        await expect(mutate).rejects.toThrow("read-only");
+        await expect(fs.readFile(skillPath, "utf8")).resolves.toBe("managed instructions");
       });
     },
   );
@@ -483,6 +515,9 @@ describe.runIf(process.platform === "linux")("remote sandbox fs bridge (GNU shel
       await expect(
         createFileExclusive!({ filePath: "escape/outside.txt", data: "blocked" }),
       ).rejects.toThrow(/escapes allowed mounts/);
+      await expect(bridge.mkdirp({ filePath: "escape/dir" })).rejects.toThrow(
+        /escapes allowed mounts/,
+      );
     });
   });
 

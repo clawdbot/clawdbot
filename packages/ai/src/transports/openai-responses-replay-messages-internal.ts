@@ -20,7 +20,6 @@ import {
   buildOpenAIResponsesCompactionReplayPlan,
   isOpenAIResponsesReplayContext,
   isSafeResponsesReplayItemId,
-  openAIResponsesReplayContextMatches,
   type OpenAIResponsesReplayMode,
 } from "./openai-responses-compaction-replay.js";
 import {
@@ -33,6 +32,7 @@ import {
   type ReplayableResponseReasoningItem,
 } from "./openai-responses-contracts.js";
 import { resolveReplayableResponsesMessageId } from "./openai-responses-replay.js";
+import { providerReplayContextMatches } from "./provider-replay-context.js";
 import {
   sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
@@ -125,10 +125,7 @@ function prepareOpenAIResponsesReasoningItemForReplay(
     blockMetadata === undefined &&
     !hasRawMetadata &&
     options?.preserveUnattributedEncryptedContent === true;
-  if (
-    preserveUnattributed ||
-    (metadata && openAIResponsesReplayContextMatches(metadata, context))
-  ) {
+  if (preserveUnattributed || (metadata && providerReplayContextMatches(metadata, context))) {
     return normalizeOpenAIResponsesReasoningReplayItem(rest as ReplayableResponseReasoningItem);
   }
   const stripped = stripEncryptedReasoningContentFields(rest);

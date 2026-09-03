@@ -19,6 +19,7 @@ import { resolvePathEnvKey } from "./windows-cmd-helpers.mjs";
 
 const PREPARE_EXTENSION_BOUNDARY_ARGS = distArtifactEntryArgs(
   path.resolve("scripts", "prepare-extension-package-boundary-artifacts.mts"),
+  ["--mode=package-boundary"],
 );
 const OXLINT_PREPARE_SKIP_FLAGS = new Set([
   "--help",

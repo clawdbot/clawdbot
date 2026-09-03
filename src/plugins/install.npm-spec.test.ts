@@ -2894,12 +2894,7 @@ describe("installPluginFromNpmSpec", () => {
     if (!result.ok) {
       expect(result.error).toContain("registry unavailable");
     }
-    await expect(
-      fs.promises.access(path.join(npmProjectRoot, "package.json")),
-    ).rejects.toHaveProperty("code", "ENOENT");
-    await expect(
-      fs.promises.access(path.join(npmProjectRoot, "node_modules", "openclaw")),
-    ).rejects.toHaveProperty("code", "ENOENT");
+    await expect(fs.promises.access(npmProjectRoot)).rejects.toHaveProperty("code", "ENOENT");
   });
 
   it.each(["npm", "npm-pack"] as const)(
@@ -2946,6 +2941,52 @@ describe("installPluginFromNpmSpec", () => {
       expect(retry).toMatchObject({ ok: true, pluginId });
       await resolvePluginInstallTransaction(retry)?.commit();
       expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, packageName))).toBe(true);
+    },
+  );
+
+  it.each([
+    { source: "npm", initialProject: "absent" },
+    { source: "npm", initialProject: "empty" },
+    { source: "npm-pack", initialProject: "absent" },
+    { source: "npm-pack", initialProject: "empty" },
+  ] as const)(
+    "removes an $initialProject managed project after refused $source relocation and permits retry",
+    async ({ source, initialProject }) => {
+      const stateDir = suiteTempRootTracker.makeTempDir();
+      const npmRoot = path.join(stateDir, "npm");
+      const packageName = "relocation-fixture";
+      const spec = `${packageName}@1.0.0`;
+      const archivePath = path.join(stateDir, "plugin.tgz");
+      fs.writeFileSync(archivePath, "fixture archive", "utf8");
+      const npmProjectRoot = resolvePluginNpmProjectDir({ npmDir: npmRoot, packageName });
+      if (initialProject === "empty") {
+        fs.mkdirSync(npmProjectRoot, { recursive: true });
+      }
+      mockNpmViewAndInstallMany([
+        { spec, packArchivePath: archivePath, packageName, version: "1.0.0", npmRoot },
+      ]);
+      const refused = new Error("artifact consent refused");
+      const onBeforePluginArtifactCommit = vi.fn(async () => {});
+      onBeforePluginArtifactCommit.mockRejectedValueOnce(refused);
+      const install = () => {
+        const params = {
+          npmDir: npmRoot,
+          mode: "update" as const,
+          onBeforePluginArtifactCommit,
+        };
+        return source === "npm"
+          ? installPluginFromNpmSpec({ ...params, spec })
+          : installPluginFromNpmPackArchive({ ...params, archivePath });
+      };
+      await expect(install()).rejects.toBe(refused);
+      expect(fs.existsSync(npmProjectRoot)).toBe(false);
+      const retry = await install();
+      expect(retry).toMatchObject({ ok: true, pluginId: packageName });
+      expect(
+        fs.existsSync(
+          path.join(resolveTestPluginPackageDir(npmRoot, packageName), "dist", "index.js"),
+        ),
+      ).toBe(true);
     },
   );
 
@@ -3581,6 +3622,32 @@ describe("installPluginFromNpmSpec", () => {
     }
   });
 
+  it("accepts a trusted catalog lookup id replacement during update", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    mockNpmViewAndInstall({
+      spec: "@tencent-connect/openclaw-qqbot@2.0.3",
+      packageName: "@tencent-connect/openclaw-qqbot",
+      version: "2.0.3",
+      pluginId: "openclaw-qqbot",
+      npmRoot,
+    });
+
+    const result = await installPluginFromNpmSpec({
+      spec: "@tencent-connect/openclaw-qqbot@2.0.3",
+      npmDir: npmRoot,
+      mode: "update",
+      expectedPluginId: "qqbot",
+      expectedReplacementPluginId: "openclaw-qqbot",
+      trustedSourceLinkedOfficialInstall: true,
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.pluginId).toBe("openclaw-qqbot");
+    }
+  });
+
   it.each([
     {
       name: "untrusted source",
@@ -3785,6 +3852,9 @@ describe("installPluginFromNpmSpec", () => {
       expectedIntegrity: "sha512-old",
       actualIntegrity: "sha512-new",
     });
+    expect(
+      runCommandWithTimeoutMock.mock.calls.some(([argv]) => isManagedNpmInstallCommand(argv)),
+    ).toBe(false);
   });
 
   it("classifies npm package-not-found errors with a stable error code", async () => {

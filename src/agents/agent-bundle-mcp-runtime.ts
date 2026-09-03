@@ -46,7 +46,7 @@ import {
 } from "./mcp-client-lifecycle.js";
 import {
   normalizeMcpCodexToolAnnotations,
-  resolveMcpCodexToolApprovalMode,
+  resolveProjectedMcpCodexToolApprovalMode,
 } from "./mcp-codex-tool-approval.js";
 import {
   applyMcpConnectionOverride,
@@ -794,7 +794,10 @@ export function createSessionMcpRuntime(params: {
                   ...(deniedToolNames.size > 0
                     ? { deniedToolNames: [...deniedToolNames].toSorted() }
                     : {}),
-                  codexApprovalMode: resolveMcpCodexToolApprovalMode(serverName, rawServer),
+                  codexApprovalMode: resolveProjectedMcpCodexToolApprovalMode(
+                    serverName,
+                    rawServer,
+                  ),
                 };
                 const toolEntries: McpCatalogTool[] = [];
                 const policyToolEntries: McpCatalogTool[] = [];

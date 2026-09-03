@@ -6,10 +6,25 @@ import {
   writeControlPlaneUpdateRestartSentinel,
   type ControlPlaneUpdateSentinelMetaFile,
 } from "../../infra/update-control-plane-sentinel.js";
+import { verifyPackageUpdateRecovery } from "../../infra/update-global.js";
+import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import { printResult } from "./progress.js";
 import type { UpdateCommandOptions } from "./shared.js";
+
+/** Unwind update ownership before diagnostics or an interactive agent can run. */
+export class UpdateCommandFailure extends Error {
+  constructor(
+    readonly result: UpdateRunResult,
+    readonly exitCode = 1,
+    readonly detail?: string,
+    options?: ErrorOptions,
+  ) {
+    super(detail ?? result.reason ?? "Update failed", options);
+    this.name = "UpdateCommandFailure";
+  }
+}
 
 export async function reportPreMutationUpdateFailure(params: {
   root: string;
@@ -24,7 +39,13 @@ export async function reportPreMutationUpdateFailure(params: {
     mode: params.installKind === "git" ? "git" : "unknown",
     root: params.root,
     reason: params.reason,
-    recovery: { serviceRestartSafe: true },
+    ...(params.opts.dryRun !== true
+      ? {
+          recovery: await (params.installKind === "git"
+            ? readCurrentGitUpdateRecovery(params.root)
+            : verifyPackageUpdateRecovery(params.root)),
+        }
+      : {}),
     steps: [],
     durationMs: 0,
   };
@@ -39,7 +60,11 @@ export async function reportPreMutationUpdateFailure(params: {
     defaultRuntime.error(params.message);
   }
   printResult(result, params.opts);
-  defaultRuntime.exit(resolveManagedServiceUpdateFailureExitCode(result));
+  throw new UpdateCommandFailure(
+    result,
+    resolveManagedServiceUpdateFailureExitCode(result),
+    params.message,
+  );
 }
 
 export async function writeControlPlaneUpdateRestartSentinelBestEffort(params: {

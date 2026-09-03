@@ -178,114 +178,64 @@ export function verifyStableMainCloseout(params) {
     `OpenClaw-${macAssetVersion}.dmg`,
     `OpenClaw-${macAssetVersion}.dSYM.zip`,
   ];
-  const releaseAssets = readReleaseAssets(params.release);
-  const assetNames = new Set(releaseAssets.map((asset) => asset.name));
-  let releasePublishRecovery = null;
-  const missingMacAssets = expectedMacAssets.filter((asset) => !assetNames.has(asset));
-  if (missingMacAssets.length > 0) {
-    errors.push(
-      `GitHub release ${params.tag} is missing required macOS asset(s): ${missingMacAssets.join(", ")}.`,
-    );
-  } else {
-    const macZip = expectedMacAssets[0];
-    if (!params.mainAppcast.includes(`/releases/download/${params.tag}/${macZip}`)) {
-      errors.push(`main appcast.xml does not point at ${macZip} from ${params.tag}.`);
-    }
-  }
-
-  if (params.requireCompletePlatformAssets) {
-    const requiredPlatformFamilies = [
-      {
-        label: "Android",
-        prefix: "OpenClaw-Android",
-        expected: ["OpenClaw-Android-SHA256SUMS.txt", "OpenClaw-Android.apk"],
-      },
-      {
-        label: "Windows",
-        prefix: "OpenClawCompanion-",
-        expected: [
-          "OpenClawCompanion-SHA256SUMS.txt",
-          "OpenClawCompanion-Setup-arm64.exe",
-          "OpenClawCompanion-Setup-x64.exe",
-        ],
-      },
-    ];
-    for (const family of requiredPlatformFamilies) {
-      const compareNames = (left, right) => left.localeCompare(right);
-      const actual = [...assetNames]
-        .filter((name) => name.startsWith(family.prefix))
-        .toSorted(compareNames);
-      const expected = family.expected.toSorted(compareNames);
-      if (JSON.stringify(actual) !== JSON.stringify(expected)) {
-        errors.push(
-          `GitHub release ${params.tag} ${family.label} asset names do not match the recovery contract: expected ${family.expected.join(", ")}; got ${actual.join(", ") || "<none>"}.`,
-        );
-      }
-      const invalidDigests = family.expected.filter((name) => {
-        const asset = releaseAssets.find((candidate) => candidate.name === name);
-        return !/^sha256:[0-9a-f]{64}$/u.test(asset?.digest ?? "");
-      });
-      if (invalidDigests.length > 0) {
-        errors.push(
-          `GitHub release ${params.tag} ${family.label} recovery asset(s) lack GitHub SHA-256 digests: ${invalidDigests.join(", ")}.`,
-        );
-      }
-    }
-
-    const windowsInstallerNames = [
+  const platformAssets = {
+    macos: expectedMacAssets,
+    android: ["OpenClaw-Android-SHA256SUMS.txt", "OpenClaw-Android.apk"],
+    windows: [
+      "OpenClawCompanion-SHA256SUMS.txt",
       "OpenClawCompanion-Setup-arm64.exe",
       "OpenClawCompanion-Setup-x64.exe",
-    ];
-    let trustedWindowsDigests = params.windowsNodeInstallerDigests;
-    if (typeof trustedWindowsDigests === "string") {
-      try {
-        trustedWindowsDigests = JSON.parse(trustedWindowsDigests);
-      } catch {
-        trustedWindowsDigests = null;
+    ],
+  };
+  const expectedAppAssets = new Set(Object.values(platformAssets).flat());
+  const observedAssets = readReleaseAssets(params.release).filter(
+    (asset) => !isCloseoutEvidenceAsset(asset.name, params.tag),
+  );
+  const existingManifest = params.existingManifest;
+  const releaseAssets = existingManifest?.githubReleaseAssets ?? observedAssets;
+  if (existingManifest) {
+    // Closeout records a publication-time snapshot. Later app attachments may
+    // extend it, but must never rewrite recorded assets or release evidence.
+    for (const recorded of releaseAssets) {
+      const observed = observedAssets.find((asset) => asset.name === recorded.name);
+      if (!observed || (observed.digest ?? null) !== recorded.digest) {
+        errors.push(`Recorded release asset changed or disappeared: ${recorded.name}.`);
       }
     }
-    const trustedDigestNames =
-      trustedWindowsDigests &&
-      typeof trustedWindowsDigests === "object" &&
-      !Array.isArray(trustedWindowsDigests)
-        ? Object.keys(trustedWindowsDigests).toSorted((left, right) => left.localeCompare(right))
-        : [];
-    const expectedDigestNames = windowsInstallerNames.toSorted((left, right) =>
-      left.localeCompare(right),
-    );
-    const trustedDigestContractValid =
-      JSON.stringify(trustedDigestNames) === JSON.stringify(expectedDigestNames) &&
-      windowsInstallerNames.every((name) =>
-        /^sha256:[0-9a-f]{64}$/u.test(trustedWindowsDigests?.[name] ?? ""),
-      );
-    if (!trustedDigestContractValid) {
-      errors.push(
-        "failed-publish recovery is missing the exact candidate-approved Windows installer digests.",
-      );
-    } else {
-      const mismatchedWindowsAssets = windowsInstallerNames.filter((name) => {
-        const asset = releaseAssets.find((candidate) => candidate.name === name);
-        return asset?.digest !== trustedWindowsDigests[name];
-      });
-      if (mismatchedWindowsAssets.length > 0) {
-        errors.push(
-          `GitHub release ${params.tag} Windows recovery asset(s) do not match candidate-approved digests: ${mismatchedWindowsAssets.join(", ")}.`,
-        );
+    for (const observed of observedAssets) {
+      if (
+        !releaseAssets.some((asset) => asset.name === observed.name) &&
+        !expectedAppAssets.has(observed.name)
+      ) {
+        errors.push(`Unexpected release asset added after closeout: ${observed.name}.`);
       }
-    }
-    if (!/^[1-9]\d*$/u.test(params.windowsNodeReleaseRunId ?? "")) {
-      errors.push("failed-publish recovery is missing a trusted Windows Node Release run id.");
-    }
-    if (trustedDigestContractValid && /^[1-9]\d*$/u.test(params.windowsNodeReleaseRunId ?? "")) {
-      releasePublishRecovery = {
-        completePlatformAssetsRequired: true,
-        windowsNodeReleaseRunId: params.windowsNodeReleaseRunId,
-        windowsNodeInstallerDigests: Object.fromEntries(
-          windowsInstallerNames.map((name) => [name, trustedWindowsDigests[name]]),
-        ),
-      };
     }
   }
+  const assetNames = new Set(releaseAssets.map((asset) => asset.name));
+  const macAttachedAtCloseout = expectedMacAssets.every((asset) => assetNames.has(asset));
+  const macPublished = expectedMacAssets.every((name) =>
+    observedAssets.some((asset) => asset.name === name),
+  );
+  // A recorded appcast remains bound to its main snapshot. Only late macOS
+  // publication needs the current feed, which may have retired older entries.
+  const appcast = macAttachedAtCloseout
+    ? params.mainAppcast
+    : (params.publishedAppcast ?? params.mainAppcast);
+  if (
+    macPublished &&
+    !appcast.includes(`/releases/download/${params.tag}/${expectedMacAssets[0]}`)
+  ) {
+    errors.push(`main appcast.xml does not point at ${expectedMacAssets[0]} from ${params.tag}.`);
+  }
+  const appPlatforms = Object.fromEntries(
+    Object.entries(platformAssets).map(([platform, assets]) => [
+      platform,
+      assets.every((asset) => assetNames.has(asset)) ? "attached" : "pending",
+    ]),
+  );
+  const apps = Object.values(appPlatforms).every((state) => state === "attached")
+    ? "attached"
+    : "pending";
 
   verifyRollbackDrill(params, errors);
 
@@ -293,32 +243,43 @@ export function verifyStableMainCloseout(params) {
     return { errors, manifest: null };
   }
 
-  return {
-    errors,
-    manifest: {
-      version: 2,
-      releaseTag: params.tag,
-      releaseVersion: version,
-      releaseTagSha: params.releaseTagSha,
-      mainSha: params.mainSha,
-      mainPackageVersion: mainVersion,
-      releaseTagPackageVersion: tagPackageVersion,
-      changelogSha256: sha256(mainChangelog),
-      appcastSha256: sha256(params.mainAppcast),
-      fullReleaseValidationRunId: params.fullReleaseValidationRunId,
-      fullReleaseValidationRunAttempt,
-      releasePublishRunId: params.releasePublishRunId,
-      ...(releasePublishRecovery ? { releasePublishRecovery } : {}),
-      rollbackDrill: {
-        id: params.rollbackDrillId,
-        date: params.rollbackDrillDate,
-      },
-      githubReleaseAssets: releaseAssets
-        .filter((asset) => !isCloseoutEvidenceAsset(asset.name, params.tag))
-        .map((asset) => ({
-          name: asset.name,
-          digest: typeof asset.digest === "string" ? asset.digest : null,
-        })),
+  const manifest = {
+    version: 2,
+    releaseTag: params.tag,
+    releaseVersion: version,
+    releaseTagSha: params.releaseTagSha,
+    mainSha: params.mainSha,
+    mainPackageVersion: mainVersion,
+    releaseTagPackageVersion: tagPackageVersion,
+    changelogSha256: sha256(mainChangelog),
+    ...(!existingManifest || "apps" in existingManifest
+      ? { apps, appPlatforms, appcast: macAttachedAtCloseout ? "verified" : "pending" }
+      : {}),
+    ...(macAttachedAtCloseout ? { appcastSha256: sha256(params.mainAppcast) } : {}),
+    fullReleaseValidationRunId: params.fullReleaseValidationRunId,
+    fullReleaseValidationRunAttempt,
+    releasePublishRunId: params.releasePublishRunId,
+    ...(existingManifest?.releasePublishRecovery
+      ? { releasePublishRecovery: existingManifest.releasePublishRecovery }
+      : params.allowFailedPublishRecovery
+        ? { releasePublishRecovery: { npmDockerVerified: true } }
+        : {}),
+    rollbackDrill: {
+      id: params.rollbackDrillId,
+      date: params.rollbackDrillDate,
     },
+    githubReleaseAssets: releaseAssets
+      .filter((asset) => !isCloseoutEvidenceAsset(asset.name, params.tag))
+      .map((asset) => ({
+        name: asset.name,
+        digest: typeof asset.digest === "string" ? asset.digest : null,
+      })),
   };
+  if (existingManifest && JSON.stringify(manifest) !== JSON.stringify(existingManifest)) {
+    return {
+      errors: ["Recorded closeout manifest does not match the verified release state."],
+      manifest: null,
+    };
+  }
+  return { errors, manifest };
 }

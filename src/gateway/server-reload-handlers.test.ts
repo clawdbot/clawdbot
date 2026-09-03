@@ -10,6 +10,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   getRuntimeAuthProfileStoreCredentialsRevision,
+  getRuntimeAuthProfileStoreSnapshotsRevision,
   prepareRuntimeAuthProfileStoreSnapshots,
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import { addSession, markBackgrounded, markExited } from "../agents/bash-process-registry.js";
@@ -489,6 +490,7 @@ function makePreparedSecretsSnapshot(
     sourceConfig: config,
     config,
     authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+    authStoreSnapshotsRevision: getRuntimeAuthProfileStoreSnapshotsRevision(),
     warnings: [],
     webTools: createEmptyRuntimeWebToolsMetadata(),
     ...overrides,

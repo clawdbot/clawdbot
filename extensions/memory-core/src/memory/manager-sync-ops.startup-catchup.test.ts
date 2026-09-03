@@ -482,25 +482,10 @@ describe("session startup catch-up", () => {
   ];
 
   it.each(cacheBoundSyncs)("bounds the embedding cache on a %s sync", async (_label, params) => {
-    // Enforcement first lived inside runInPlaceReindex's shadow rebuild, bounding a throwaway
-    // database and never the live one; moving it into the incremental branch then skipped the
-    // paths that return early. Long-running databases stayed unbounded (openclaw/openclaw#114612).
-    await writeSessionFile("thread.jsonl");
+    await writeSqliteSession();
     const harness = new SessionStartupCatchupHarness([]);
 
     await harness.runSyncForTest(params);
-
-    expect(harness.embeddingCachePrunes).toBeGreaterThan(0);
-  });
-
-  it("bounds the embedding cache when the sync pass aborts", async () => {
-    // The full-reindex branch returns before the incremental code and cannot complete against
-    // this harness, so it stands in for every early or failed exit: enforcement inside any one
-    // branch skips them, a finally around the pass does not.
-    await writeSessionFile("thread.jsonl");
-    const harness = new SessionStartupCatchupHarness([]);
-
-    await expect(harness.runSyncForTest({ reason: "cli", force: true })).rejects.toThrow();
 
     expect(harness.embeddingCachePrunes).toBeGreaterThan(0);
   });

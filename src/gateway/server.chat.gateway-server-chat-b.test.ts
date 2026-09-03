@@ -19,7 +19,7 @@ import { createSessionsHistoryTool } from "../agents/tools/sessions-history-tool
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
-import { clearConfigCache, getRuntimeConfig } from "../config/config.js";
+import { getRuntimeConfig, resetConfigRuntimeState } from "../config/config.js";
 import { resolveSessionRoutingContract } from "../config/sessions/main-session.js";
 import {
   appendTranscriptEvent,
@@ -285,8 +285,8 @@ async function withGatewayChatHarness(
     if (process.env.OPENCLAW_CONFIG_PATH) {
       await fs.rm(process.env.OPENCLAW_CONFIG_PATH, { force: true });
     }
-    clearConfigCache();
     testState.sessionStorePath = undefined;
+    resetConfigRuntimeState();
     ws.close();
   }
 }
@@ -325,7 +325,7 @@ async function writeGatewayConfig(config: Record<string, unknown>) {
   }
   await fs.mkdir(path.dirname(configPath), { recursive: true });
   await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
-  clearConfigCache();
+  resetConfigRuntimeState();
 }
 
 async function writeMainSessionTranscript(
@@ -388,7 +388,7 @@ function openDirectChatSession() {
 function resetDirectChatSession() {
   dispatchInboundMessageMock.mockReset();
   testState.sessionStorePath = undefined;
-  clearConfigCache();
+  resetConfigRuntimeState();
 }
 
 async function writeStoredMainSession(entry: StoredSessionEntry = {}) {
@@ -886,7 +886,6 @@ describe("gateway server chat", () => {
         ).toMatchObject({ state: "active", environmentId: "env-placement" });
       } finally {
         testState.sessionStorePath = undefined;
-        clearConfigCache();
       }
     },
   );
@@ -936,7 +935,6 @@ describe("gateway server chat", () => {
         });
       } finally {
         testState.sessionStorePath = undefined;
-        clearConfigCache();
       }
     },
   );
@@ -1121,7 +1119,6 @@ describe("gateway server chat", () => {
       } finally {
         clearActiveEmbeddedRun("sess-main", handle, "main");
         testState.sessionStorePath = undefined;
-        clearConfigCache();
       }
     },
   );
@@ -1181,7 +1178,6 @@ describe("gateway server chat", () => {
       } finally {
         testState.sessionConfig = undefined;
         testState.sessionStorePath = undefined;
-        clearConfigCache();
       }
     },
   );
@@ -1387,7 +1383,6 @@ describe("gateway server chat", () => {
       } finally {
         handler.dispose();
         testState.sessionStorePath = undefined;
-        clearConfigCache();
       }
     },
   );
@@ -1733,7 +1728,6 @@ describe("gateway server chat", () => {
       } finally {
         testState.agentConfig = undefined;
         testState.sessionStorePath = undefined;
-        clearConfigCache();
       }
     },
   );
@@ -2024,7 +2018,6 @@ describe("gateway server chat", () => {
       testState.agentConfig = undefined;
       testState.agentsConfig = undefined;
       testState.sessionStorePath = undefined;
-      clearConfigCache();
     }
   });
 
@@ -2069,7 +2062,6 @@ describe("gateway server chat", () => {
             talk: { agentId: "main" },
           };
           await state.writeConfig(config);
-          clearConfigCache();
           const pluginMetadataSnapshot = createGatewayPluginMetadataSnapshot(config);
           assertPluginMetadataSnapshotConsistency(pluginMetadataSnapshot);
           releasePluginMetadata = installTemporaryCurrentPluginMetadataSnapshot(
@@ -2497,7 +2489,6 @@ describe("gateway server chat", () => {
           testState.agentsConfig = previousAgentsConfig;
           testState.sessionStorePath = undefined;
           releasePluginMetadata();
-          clearConfigCache();
         }
       },
     );
@@ -3740,7 +3731,6 @@ describe("gateway server chat", () => {
         dispatchInboundMessageMock.mockReset();
         testState.agentConfig = undefined;
         testState.sessionStorePath = undefined;
-        clearConfigCache();
       }
     },
   );

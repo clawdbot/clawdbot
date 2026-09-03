@@ -17,6 +17,7 @@ import type { CronScheduledToolCallerOrigin } from "../cron/scheduled-tool-polic
 import type { ExecMode } from "../infra/exec-approvals.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
+import type { SkillLibraryAuthoringCapability } from "../skills/library/authoring.js";
 import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
 
 export type McpLoopbackRequestContext = {
@@ -55,7 +56,7 @@ export type McpLoopbackRequestContext = {
    * hard enforcement. Unset keeps the full session-scoped surface.
    */
   toolsAllow?: string[];
-  skillWorkshop?: SkillWorkshopRunOptions;
+  skillWorkshop?: Pick<SkillWorkshopRunOptions, "proposalRevision">;
   /**
    * Attempt-local authority to start or redirect delegated work, stamped into
    * the grant so a fallback completion-report turn running on a CLI backend
@@ -114,6 +115,7 @@ type StoredMcpLoopbackClientGrant = McpLoopbackClientGrant & {
   runtimeOwnerToken: string;
   /** Exact host admission retained outside the child-visible request context. */
   admittedRunContext?: AdmittedRunContext;
+  skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
   activeCaptureKey?: string;
   toolAuth?: McpLoopbackToolAuth;
 };
@@ -222,6 +224,7 @@ export function mintMcpLoopbackClientGrant(params: {
   context: McpLoopbackRequestContext;
   runtimeOwnerToken: string;
   admittedRunContext?: AdmittedRunContext;
+  skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
   toolAuth?: McpLoopbackToolAuth;
 }): McpLoopbackClientGrant {
   const sessionKey = params.context.sessionKey.trim();
@@ -237,6 +240,9 @@ export function mintMcpLoopbackClientGrant(params: {
     context: structuredClone({ ...params.context, sessionKey }),
     runtimeOwnerToken,
     ...(params.admittedRunContext ? { admittedRunContext: params.admittedRunContext } : {}),
+    ...(params.skillLibraryAuthoring
+      ? { skillLibraryAuthoring: params.skillLibraryAuthoring }
+      : {}),
     ...(params.toolAuth ? { toolAuth: structuredClone(params.toolAuth) } : {}),
   };
   clientGrantsByToken.set(grant.token, grant);
@@ -353,18 +359,24 @@ export function resolveMcpLoopbackClientGrant(params: {
   | {
       context: McpLoopbackRequestContext;
       captureKey: string;
-      admittedRunContext?: AdmittedRunContext;
+      admittedRunContext: AdmittedRunContext;
+      skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
+      isCurrent: () => boolean;
       toolAuth?: McpLoopbackToolAuth;
     }
   | undefined {
-  const grant = clientGrantsByToken.get(params.token);
+  const { token, runtimeOwnerToken, captureKey } = params;
+  const grant = clientGrantsByToken.get(token);
+  const admittedRunContext = grant?.admittedRunContext;
+  const delegatedAuthority =
+    admittedRunContext && getAdmittedRunDelegatedAuthority(admittedRunContext);
   if (
     !grant ||
-    grant.runtimeOwnerToken !== params.runtimeOwnerToken ||
-    !grant.admittedRunContext ||
-    !getAdmittedRunDelegatedAuthority(grant.admittedRunContext) ||
+    grant.runtimeOwnerToken !== runtimeOwnerToken ||
+    !admittedRunContext ||
+    !delegatedAuthority ||
     !grant.activeCaptureKey ||
-    grant.activeCaptureKey !== params.captureKey
+    grant.activeCaptureKey !== captureKey
   ) {
     return undefined;
   }
@@ -373,7 +385,12 @@ export function resolveMcpLoopbackClientGrant(params: {
   return {
     context: structuredClone(grant.context),
     captureKey: grant.activeCaptureKey,
-    ...(grant.admittedRunContext ? { admittedRunContext: grant.admittedRunContext } : {}),
+    admittedRunContext,
+    ...(grant.skillLibraryAuthoring ? { skillLibraryAuthoring: grant.skillLibraryAuthoring } : {}),
+    // Every bind, capture change, and transfer replaces the row, fencing even same-reference reuse.
+    isCurrent: () =>
+      clientGrantsByToken.get(token) === grant &&
+      getAdmittedRunDelegatedAuthority(admittedRunContext) === delegatedAuthority,
     ...(grant.toolAuth ? { toolAuth: grant.toolAuth } : {}),
   };
 }

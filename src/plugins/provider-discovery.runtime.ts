@@ -1,8 +1,6 @@
 // Runtime boundary for provider discovery through plugin entrypoints.
-import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { sortUniqueStrings } from "../../packages/normalization-core/src/string-normalization.js";
-import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
@@ -12,6 +10,15 @@ import { withProfile } from "./plugin-load-profile.js";
 import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
 import { getCachedPluginModuleLoader, preparePluginModule } from "./plugin-module-loader-cache.js";
 import { resolvePluginRuntimeArtifact } from "./plugin-runtime-artifact-resolution.js";
+import {
+  prefersBuiltPluginArtifacts,
+  resolvePluginRuntimeArtifactPreference,
+} from "./plugin-runtime-artifact-selection.js";
+import { buildEffectiveManifestProviderConfig } from "./provider-catalog.js";
+import type {
+  ProviderDiscoveryPlan,
+  ResolveRuntimePluginDiscoveryProvidersParams,
+} from "./provider-discovery.js";
 import { resolveDiscoveredProviderPluginIds } from "./providers.js";
 import { resolvePluginProvidersCore } from "./providers.runtime.js";
 import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-scope.js";
@@ -71,7 +78,11 @@ function loadProviderDiscoveryModule(manifest: PluginManifestRecord): ProviderDi
         rootDir: manifest.rootDir,
         origin: manifest.origin,
         packageManifest: manifest.packageManifest,
-        preferBuiltPluginArtifacts: loadContext?.preferBuiltPluginArtifacts === true,
+        preferBuiltPluginArtifacts: prefersBuiltPluginArtifacts(
+          resolvePluginRuntimeArtifactPreference(loadContext?.preferBuiltPluginArtifacts),
+          manifest.origin,
+        ),
+        sourcePreferred: manifest.sourcePreferred,
         registry,
       })
     : { source: manifest.providerDiscoverySource!, rootDir: manifest.rootDir };
@@ -123,67 +134,6 @@ function hasProviderAuthEnvCredential(
   });
 }
 
-function modelDefinitionCostFromManifestRow(
-  row: NormalizedModelCatalogRow,
-): ModelDefinitionConfig["cost"] {
-  const cost = row.cost;
-  return {
-    input: cost?.input ?? 0,
-    output: cost?.output ?? 0,
-    cacheRead: cost?.cacheRead ?? 0,
-    cacheWrite: cost?.cacheWrite ?? 0,
-    ...(cost?.tieredPricing ? { tieredPricing: cost.tieredPricing } : {}),
-  };
-}
-
-function modelDefinitionFromManifestRow(
-  row: NormalizedModelCatalogRow,
-): ModelDefinitionConfig | undefined {
-  const cost = modelDefinitionCostFromManifestRow(row);
-  if (!row.contextWindow || !row.maxTokens) {
-    return undefined;
-  }
-  const input: ModelDefinitionConfig["input"] = row.input.filter(
-    (value): value is "text" | "image" => value === "text" || value === "image",
-  );
-  return {
-    id: row.id,
-    name: row.name || row.id,
-    ...(row.api ? { api: row.api } : {}),
-    ...(row.baseUrl ? { baseUrl: row.baseUrl } : {}),
-    reasoning: row.reasoning,
-    input,
-    cost,
-    contextWindow: row.contextWindow,
-    ...(row.contextTokens ? { contextTokens: row.contextTokens } : {}),
-    maxTokens: row.maxTokens,
-    ...(row.thinkingLevelMap ? { thinkingLevelMap: { ...row.thinkingLevelMap } } : {}),
-    ...(row.headers ? { headers: row.headers } : {}),
-    ...(row.compat ? { compat: row.compat } : {}),
-    ...(row.mediaInput ? { mediaInput: row.mediaInput } : {}),
-  };
-}
-
-function providerConfigFromManifestRows(
-  rows: readonly NormalizedModelCatalogRow[],
-): ModelProviderConfig | undefined {
-  const firstRow = rows[0];
-  if (!firstRow?.baseUrl || !firstRow.api) {
-    return undefined;
-  }
-  const models = rows
-    .map((row) => modelDefinitionFromManifestRow(row))
-    .filter((model): model is ModelDefinitionConfig => Boolean(model));
-  if (models.length === 0) {
-    return undefined;
-  }
-  return {
-    baseUrl: firstRow?.baseUrl ?? "",
-    ...(firstRow?.api ? { api: firstRow.api } : {}),
-    models,
-  };
-}
-
 function prepareManifestCatalogDiscovery(
   pluginRecords: readonly PluginManifestRecord[],
   config: OpenClawConfig,
@@ -220,7 +170,7 @@ function prepareManifestCatalogDiscovery(
       if (!includeProviders || entry.rows.length === 0) {
         continue;
       }
-      const providerConfig = providerConfigFromManifestRows(entry.rows);
+      const providerConfig = buildEffectiveManifestProviderConfig(entry.rows);
       if (!providerConfig) {
         continue;
       }
@@ -335,18 +285,9 @@ function resolveRuntimeEntryProviders(entryResult: ProviderDiscoveryEntryResult)
   });
 }
 
-export function resolvePluginDiscoveryProvidersRuntime(params: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  onlyPluginIds?: string[];
-  includeUntrustedWorkspacePlugins?: boolean;
-  requireCompleteDiscoveryEntryCoverage?: boolean;
-  discoveryEntriesOnly?: boolean;
-  includeManifestModelCatalogProviders?: boolean;
-  includeSyntheticAuthProviders?: boolean;
-  pluginMetadataSnapshot?: PluginMetadataRegistryView;
-}): ProviderPlugin[] {
+export function planPluginDiscoveryRuntime(
+  params: ResolveRuntimePluginDiscoveryProvidersParams,
+): ProviderDiscoveryPlan {
   const env = params.env ?? process.env;
   const entryResult = resolveProviderDiscoveryEntryPlugins({ ...params, env });
   const entryProviders = entryResult.providers.filter(
@@ -357,7 +298,7 @@ export function resolvePluginDiscoveryProvidersRuntime(params: {
   );
   const runtimeEntryProviders = resolveRuntimeEntryProviders(entryResult);
   if (params.discoveryEntriesOnly === true) {
-    return entryProviders;
+    return { kind: "entries", providers: entryProviders };
   }
   if (
     entryResult.providers.length > 0 &&
@@ -365,7 +306,7 @@ export function resolvePluginDiscoveryProvidersRuntime(params: {
     runtimeEntryProviders.length === entryResult.providers.length &&
     entryResult.runtimeManifestCatalogPluginIds.size === 0
   ) {
-    return runtimeEntryProviders;
+    return { kind: "entries", providers: runtimeEntryProviders };
   }
   let fullPluginIds = params.onlyPluginIds;
   let retainedProviders: ProviderPlugin[] | undefined;
@@ -383,7 +324,7 @@ export function resolvePluginDiscoveryProvidersRuntime(params: {
       ...entryResult.runtimeManifestCatalogPluginIds,
     ]);
     if (fullPluginIds.length === 0) {
-      return [...runtimeEntryProviders];
+      return { kind: "entries", providers: runtimeEntryProviders };
     }
     const fullPluginIdSet = new Set(fullPluginIds);
     retainedProviders = runtimeEntryProviders.filter(
@@ -399,10 +340,20 @@ export function resolvePluginDiscoveryProvidersRuntime(params: {
       fullPluginIds = entryPluginIds;
     }
   }
+  return { kind: "runtime", providers: retainedProviders ?? [], pluginIds: fullPluginIds };
+}
+
+export function resolvePluginDiscoveryProvidersRuntime(
+  params: ResolveRuntimePluginDiscoveryProvidersParams,
+): ProviderPlugin[] {
+  const plan = planPluginDiscoveryRuntime(params);
+  if (plan.kind === "entries") {
+    return plan.providers;
+  }
   const fullProviders = resolvePluginProvidersCore({
     ...params,
-    env,
-    ...(fullPluginIds ? { onlyPluginIds: fullPluginIds } : {}),
+    env: params.env ?? process.env,
+    ...(plan.pluginIds ? { onlyPluginIds: plan.pluginIds } : {}),
   });
-  return retainedProviders ? [...retainedProviders, ...fullProviders] : fullProviders;
+  return [...plan.providers, ...fullProviders];
 }

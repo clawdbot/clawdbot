@@ -667,7 +667,7 @@ suite.define(() => {
         color: style.color,
       };
     });
-    expect(wave.animationName).toBe("chatToolRowTextWave");
+    expect(wave.animationName).toBe("text-shimmer");
     expect(wave.backgroundClip).toBe("text");
     expect(wave.color).toBe("rgba(0, 0, 0, 0)");
     await captureToolActivityProof(page, "tool-row-running-text-wave");

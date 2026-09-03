@@ -87,6 +87,7 @@ describe("runCodexIsolatedCompletion", () => {
 
   it("uses native authorization on a ring-zero configured-transport turn", async () => {
     const params = createParams();
+    params.assertCurrent = vi.fn();
 
     await expect(runCodexIsolatedCompletion(params, {})).resolves.toEqual({
       assistant: expect.objectContaining({
@@ -118,6 +119,7 @@ describe("runCodexIsolatedCompletion", () => {
         authRequirement: "subscription",
         isolation: "configured-transport",
         requireNoExternalCapabilities: true,
+        assertCurrent: params.assertCurrent,
         developerInstructions: "Name the conversation.",
         input: [{ type: "text", text: "Help me plan a garden.", text_elements: [] }],
       }),

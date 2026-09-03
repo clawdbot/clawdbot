@@ -13,7 +13,7 @@ import {
   getMediaUnderstandingProvider,
   normalizeMediaProviderId,
 } from "./provider-registry.js";
-import { resolveMediaRuntimeTimeoutMs } from "./resolve.js";
+import { resolveMaxBytes, resolveMediaRuntimeTimeoutMs, resolveModelEntries } from "./resolve.js";
 import { findDecisionReason, normalizeDecisionReason } from "./runner.entries.js";
 import {
   buildProviderRegistry,
@@ -390,6 +390,32 @@ export async function describeVideoFile(
   params: DescribeVideoFileParams,
 ): Promise<RunMediaUnderstandingFileResult> {
   return await runMediaUnderstandingFile({ ...params, capability: "video" });
+}
+
+/** Prepares the largest input that any configured transcription fallback can accept. */
+export async function resolveAudioInputBudget(params: {
+  cfg: OpenClawConfig;
+}): Promise<{ enabled: false } | { enabled: true; maxBytes: number }> {
+  const { cfg } = params;
+  const config = cfg.tools?.media?.audio;
+  if (config?.enabled === false) {
+    return { enabled: false };
+  }
+  const capability = "audio";
+  const entries = resolveModelEntries({
+    cfg,
+    capability,
+    config,
+    providerRegistry: buildProviderRegistry(undefined, cfg),
+  }).map(({ entry }) => entry);
+  // Auto-detected provider and CLI entries inherit the capability limit.
+  const candidates = entries.length > 0 ? entries : [{}];
+  return {
+    enabled: true,
+    maxBytes: Math.max(
+      ...candidates.map((entry) => resolveMaxBytes({ cfg, capability, config, entry })),
+    ),
+  };
 }
 
 /** Transcribes one audio file or URL through the configured audio-understanding pipeline. */

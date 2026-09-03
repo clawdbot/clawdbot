@@ -798,13 +798,14 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}activity`);
       // The production DesktopClient still owns noVNC; only the RFB endpoint
       // is scripted here so this CI test remains deterministic.
-      await installScriptedRfbServer(page);
+      const rfb = await installScriptedRfbServer(page, { disconnectAfterLastPeer: true });
 
       await openDirectDesktop(page, "worker-desktop-1");
       const panel = page.locator("openclaw-desktop-panel");
       await panel.locator("section[aria-label='Desktop']").waitFor();
       const canvas = panel.locator(".desktop-surface canvas");
       await canvas.waitFor();
+      await expect.poll(rfb.events).toEqual(["authenticated:1"]);
       const canvasHandle = await canvas.elementHandle();
       await panel.getByRole("button", { name: "Enter fullscreen", exact: true }).click();
       await expect.poll(() => page.evaluate(() => document.fullscreenElement !== null)).toBe(true);
@@ -824,7 +825,9 @@ suite.define(() => {
         source: { kind: "environment", environmentId: "worker-desktop-1" },
         control: true,
       });
-      await panel.locator(".desktop-surface canvas").waitFor();
+      await expect.poll(rfb.events).toEqual(["authenticated:1", "authenticated:2", "closed:1"]);
+      await expect.poll(() => panel.locator(".desktop-surface canvas").count()).toBe(1);
+      expect(await panel.getByRole("status", { name: "Connecting to desktop…" }).count()).toBe(0);
       expect(await takeControl.count()).toBe(0);
       expect(await page.evaluate(() => document.fullscreenElement !== null)).toBe(true);
       await panel.getByRole("button", { name: "Exit fullscreen", exact: true }).click();

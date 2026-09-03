@@ -328,10 +328,14 @@ describe("createComputerTool node resolution", () => {
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
-  it("rejects an ambiguous eligible display-name match", async () => {
+  it("rejects an ambiguous eligible display-name match across current clients", async () => {
     listNodesMock.mockResolvedValue([
-      macComputerNode({ nodeId: "mac-a", displayName: "Shared Desktop" }),
-      macComputerNode({ nodeId: "mac-b", displayName: "Shared Desktop" }),
+      macComputerNode({
+        nodeId: "mac-a",
+        displayName: "Shared Desktop",
+        clientId: "openclaw-macos",
+      }),
+      macComputerNode({ nodeId: "mac-b", displayName: "Shared Desktop", clientId: "node-host" }),
     ]);
     const tool = createComputerTool({ modelHasVision: true });
     await expect(

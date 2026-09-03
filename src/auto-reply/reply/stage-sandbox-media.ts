@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { root as fsRoot, FsSafeError, readLocalFileSafely } from "../../infra/fs-safe.js";
 import { safeFileURLToPath } from "../../infra/local-file-access.js";
+import { retryAsync } from "../../infra/retry.js";
 import { normalizeScpRemoteHost, normalizeScpRemotePath } from "../../infra/scp-host.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { resolveChannelRemoteInboundAttachmentRoots } from "../../media/channel-inbound-roots.js";
@@ -379,27 +380,32 @@ async function scpFile(remoteHost: string, remotePath: string, localPath: string
   if (!safeRemotePath) {
     throw new Error("invalid remote path for SCP");
   }
-  const result = await runCommandWithTimeout(
-    [
-      "scp",
-      "-o",
-      "BatchMode=yes",
-      "-o",
-      "StrictHostKeyChecking=yes",
-      "--",
-      `${safeRemoteHost}:${safeRemotePath}`,
-      localPath,
-    ],
-    {
-      // Four UTF-8 bytes per code point preserves enough data for the existing
-      // UTF-16 diagnostic tail contract without retaining unbounded stderr.
-      maxOutputBytes: { stdout: 1, stderr: SCP_STDERR_TAIL_CHARS * 4 },
+  await retryAsync(
+    async () => {
+      const result = await runCommandWithTimeout(
+        [
+          "scp",
+          "-o",
+          "BatchMode=yes",
+          "-o",
+          "StrictHostKeyChecking=yes",
+          "--",
+          `${safeRemoteHost}:${safeRemotePath}`,
+          localPath,
+        ],
+        {
+          // Four UTF-8 bytes per code point preserves enough data for the existing
+          // UTF-16 diagnostic tail contract without retaining unbounded stderr.
+          maxOutputBytes: { stdout: 1, stderr: SCP_STDERR_TAIL_CHARS * 4 },
+        },
+      );
+      if (result.code !== 0) {
+        const stderr = appendScpStderrTail("", result.stderr).trim();
+        throw new Error(`scp failed (${result.code}): ${stderr}`);
+      }
     },
+    { attempts: 3, label: "remote inbound media SCP" },
   );
-  if (result.code !== 0) {
-    const stderr = appendScpStderrTail("", result.stderr).trim();
-    throw new Error(`scp failed (${result.code}): ${stderr}`);
-  }
 }
 
 function appendScpStderrTail(

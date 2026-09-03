@@ -10,6 +10,7 @@ export {
   listSessionPendingInputReceipts,
   listSessionPendingInputs,
   readSessionPendingInput,
+  readSessionSubmittedInput,
   stageSessionPendingInput,
   withSessionPendingInputPersistence,
   type SessionPendingInput,
@@ -70,6 +71,7 @@ export type {
   SessionEntryPatchContext,
   SessionEntryPatchOptions,
   SessionEntryPatchResult,
+  SessionEntryReadScope,
   SessionEntryReadView,
   SessionEntryReplacement,
   SessionEntryReplacementSnapshot,
@@ -253,6 +255,7 @@ export {
   readLatestTranscriptAssistantText,
   readTranscriptEventAtSeqSync,
   readTranscriptRawDelta,
+  readTranscriptStatsBatchReadOnlySync,
   readTranscriptStatsSync,
   replaceTranscriptEvents,
   replaceTranscriptEventsSync,
@@ -301,6 +304,7 @@ export {
   type SessionTranscriptWatermark,
 } from "./session-accessor.sqlite-transcript-watermark.js";
 export {
+  bindSessionTranscriptStoreScope,
   resolveConcreteSessionStorePath,
   resolveSessionTranscriptDatabasePath,
   resolveSessionTranscriptReadTarget,

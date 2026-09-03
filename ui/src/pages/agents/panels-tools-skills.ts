@@ -20,15 +20,16 @@ import {
   renderSettingsSection,
   renderSettingsToggle,
 } from "../../components/settings-ui.ts";
+import type { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
+import { renderGitHubIdentity } from "../../features/github-connections/github-identity-view.ts";
 import { t } from "../../i18n/index.ts";
+import { resolveAgentConfig, resolveAgentSkillsFilter } from "../../lib/agents/display.ts";
 import {
   type AgentToolEntry,
   type AgentToolSection,
-  resolveAgentConfig,
-  resolveAgentSkillsFilter,
   resolveToolProfileOptions,
   resolveToolSections,
-} from "../../lib/agents/display.ts";
+} from "../../lib/agents/tool-catalog.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import type { SkillGroup } from "../../lib/skills-grouping.ts";
@@ -38,8 +39,6 @@ import {
   computeSkillReasons,
   renderSkillStatusChips,
 } from "../../lib/skills-shared.ts";
-import type { GitHubIdentityController } from "./github-identity-controller.ts";
-import { renderGitHubIdentity } from "./github-identity-view.ts";
 import { isAllowedByPolicy, matchesList } from "./tool-policy.ts";
 
 function renderToolMetaBadges(labels: string[]) {
@@ -241,6 +240,7 @@ export function renderAgentTools(params: {
   runtimeSessionMatchesSelectedAgent: boolean;
   canUpdateConfig: boolean;
   githubIdentity: GitHubIdentityController;
+  onOpenGitHubConnections: () => void;
   onProfileChange: (agentId: string, profile: string | null, clearAllow: boolean) => void;
   onOverridesChange: (agentId: string, alsoAllow: string[], deny: string[]) => void;
   onConfigReload: () => void;
@@ -513,7 +513,7 @@ export function renderAgentTools(params: {
       },
       html`${renderEffectiveToolNotices(params.toolsEffectiveResult)}${runtimeAvailability}`,
     )}
-    ${renderGitHubIdentity(params.githubIdentity)}
+    ${renderGitHubIdentity(params.githubIdentity, params.onOpenGitHubConnections)}
     ${renderSettingsSection(
       { title: t("agentTools.catalogTitle") },
       html`

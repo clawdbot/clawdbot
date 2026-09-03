@@ -12,12 +12,14 @@ import {
 } from "../plugins/runtime.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
 import { createGatewayKernel } from "./server-kernel.js";
+import type { GatewayClient } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 
 describe("createGatewayKernel", () => {
@@ -141,6 +143,7 @@ describe("createGatewayKernel", () => {
       },
     });
     const token = "gateway-kernel-direct-close-readiness-token";
+    const bootId = "gateway-kernel-direct-close";
     const configReloaderStop = createDeferred();
     let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
     try {
@@ -149,6 +152,7 @@ describe("createGatewayKernel", () => {
       });
       state.applyEnv();
       kernel = await createGatewayKernel(port, {
+        bootId,
         auth: { mode: "token", token },
         bind: "loopback",
         controlUiEnabled: false,
@@ -159,6 +163,25 @@ describe("createGatewayKernel", () => {
       const { getStartup, getReadiness } = kernel.createHttpTransportOptions();
       expect(getStartup()).toMatchObject({ ok: true, status: "started" });
       expect(getReadiness()).toMatchObject({ ready: true, failing: [] });
+      const reader = {
+        connect: {
+          minProtocol: 1,
+          maxProtocol: 1,
+          client: { id: "openclaw-control-ui", version: "test", platform: "web", mode: "webchat" },
+          role: "operator",
+          scopes: ["operator.read"],
+        },
+        authenticatedUserProfile: {
+          profileId: ensureProfileForEmail("mention-reader@example.test").id,
+          displayName: "Reader",
+          hasAvatar: false,
+          updatedAt: 1,
+        },
+      } satisfies GatewayClient;
+      expect(kernel.gatewayRequestContext.mentionInbox?.list(reader)).toMatchObject({
+        ok: true,
+        value: { gatewayInstanceId: bootId, items: [] },
+      });
 
       const closeFirstStop = vi.fn(async () => {});
       kernel.kernel.swapBonjourStop(closeFirstStop);
@@ -169,6 +192,10 @@ describe("createGatewayKernel", () => {
 
       expect(getStartup()).toMatchObject({ ok: false, status: "draining" });
       expect(getReadiness()).toMatchObject({ ready: false, failing: ["gateway-draining"] });
+      expect(kernel.gatewayRequestContext.mentionInbox?.list(reader)).toMatchObject({
+        ok: false,
+        error: { code: "UNAVAILABLE" },
+      });
       configReloaderStop.resolve();
       await closing;
       expect(closeFirstStop).toHaveBeenCalledOnce();

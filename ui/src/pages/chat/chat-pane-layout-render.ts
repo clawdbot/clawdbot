@@ -107,6 +107,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
           catalog,
           agentWorkspace,
           workspaceGit,
+          chatProps.placementStartup,
           sidebarLayout,
         );
     const recovery = html`<openclaw-chat-outbox-recovery
@@ -183,6 +184,8 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       connected: state.connected,
       pendingQuestion: companionThread.pendingQuestion,
       onClearCompanion: () => void this.clearSessionCompanion(),
+      onRefreshTasks: backgroundTasks.onRefresh,
+      tasksLoading: backgroundTasks.loading,
       discussion,
       discussionAvailable,
       discussionOpenUrl: discussion?.openUrl ?? null,

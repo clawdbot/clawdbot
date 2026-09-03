@@ -16,7 +16,7 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { ensureAgentWorkspace } from "../../agents/workspace.js";
 import { normalizeThinkLevel, resolveThinkingProfile } from "../../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../../config/config.js";
-import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
+import * as session from "../../config/sessions/lifecycle.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   deleteSessionEntryLifecycle,
@@ -639,11 +639,11 @@ async function runWithSessionWorkAdmission<T>(
         ? !currentEntry || currentEntry.sessionId !== initialEntry.sessionId
         : Boolean(currentEntry);
       if (changed) {
-        throw new Error(`Session "${params.sessionKey}" changed while starting work. Retry.`);
+        throw session.createSessionWorkStartChangedError(params.sessionKey);
       }
-      const archivedSessionError = resolveSessionWorkStartError(params.sessionKey, currentEntry);
-      if (archivedSessionError) {
-        throw new Error(archivedSessionError);
+      const startError = session.resolveSessionWorkStartError(params.sessionKey, currentEntry);
+      if (startError) {
+        throw new Error(startError);
       }
     },
   });

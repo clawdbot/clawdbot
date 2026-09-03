@@ -1,15 +1,6 @@
-import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { chmod, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect } from "vitest";
 import {
@@ -39,15 +30,15 @@ function digest(contents: string | Buffer) {
   return createHash("sha256").update(contents).digest("hex");
 }
 
-export function write(file: string, contents: string | Buffer, mode = 0o644) {
-  mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(file, contents);
-  chmodSync(file, mode);
+export async function write(file: string, contents: string | Buffer, mode = 0o644) {
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, contents);
+  await chmod(file, mode);
 }
 
-export function artifactFixture(mac: MacScriptFixture) {
+export async function artifactFixture(mac: MacScriptFixture) {
   const root = mac.createTempDir("openclaw-elevation-native-");
-  const binaries = compiledMacNativeFixtures(root);
+  const binaries = await compiledMacNativeFixtures(root, mac);
   const home = path.join(root, "home [portable]");
   const payload = path.join(root, "payload [archive]");
   const app = path.join(payload, "OpenClaw.app");
@@ -58,12 +49,12 @@ export function artifactFixture(mac: MacScriptFixture) {
   const calls = path.join(home, "policy-calls");
   const fileCalls = path.join(home, "file-calls");
   const forbidden = path.join(home, "forbidden-calls");
-  mkdirSync(bin, { recursive: true });
-  write(installer, readFileSync("scripts/mac-elevation-host.sh"), 0o555);
-  write(calls, "");
-  write(fileCalls, "");
+  await mkdir(bin, { recursive: true });
+  await write(installer, readFileSync("scripts/mac-elevation-host.sh"), 0o555);
+  await write(calls, "");
+  await write(fileCalls, "");
   const fileCallCount = () => readFileSync(fileCalls, "utf8").split("\n").filter(Boolean).length;
-  write(
+  await write(
     app + "/Contents/Info.plist",
     `<?xml version="1.0"?><plist version="1.0"><dict>
 <key>CFBundleIdentifier</key><string>ai.openclaw.mac</string>
@@ -75,31 +66,39 @@ export function artifactFixture(mac: MacScriptFixture) {
 <key>OpenClawWorkerBuildID</key><string>${buildInfo.buildId}</string>
 </dict></plist>`,
   );
-  write(app + "/Contents/MacOS/OpenClaw", binaries.universal, 0o755);
-  write(app + "/Contents/MacOS/openclaw-mlx-tts", binaries.universal, 0o755);
-  write(app + "/Contents/Frameworks/shared [fixture].dylib", binaries.universalLibrary, 0o755);
+  await write(app + "/Contents/MacOS/OpenClaw", binaries.universal, 0o755);
+  await write(app + "/Contents/MacOS/openclaw-mlx-tts", binaries.universal, 0o755);
+  await write(
+    app + "/Contents/Frameworks/shared [fixture].dylib",
+    binaries.universalLibrary,
+    0o755,
+  );
   for (const arch of ["arm64", "x86_64"] as const) {
     const worker = path.join(app, workerRoot, arch);
-    write(path.join(worker, "bin/node"), binaries[arch], 0o755);
-    write(path.join(worker, workerDist, "entry.js"), "// inert package entry\n");
-    write(path.join(worker, workerDist, "build-info.json"), JSON.stringify(buildInfo));
-    write(path.join(worker, addon), binaries[arch === "arm64" ? "armLibrary" : "intelLibrary"]);
-    write(path.join(worker, library), binaries.universalLibrary);
-    write(
+    await write(path.join(worker, "bin/node"), binaries[arch], 0o755);
+    await write(path.join(worker, workerDist, "entry.js"), "// inert package entry\n");
+    await write(path.join(worker, workerDist, "build-info.json"), JSON.stringify(buildInfo));
+    await write(
+      path.join(worker, addon),
+      binaries[arch === "arm64" ? "armLibrary" : "intelLibrary"],
+    );
+    await write(path.join(worker, library), binaries.universalLibrary);
+    await write(
       path.join(worker, "lib/native.a"),
       binaries[arch === "arm64" ? "armArchive" : "intelArchive"],
     );
-    symlinkSync("../lib/node_modules/openclaw/dist/entry.js", path.join(worker, "bin/openclaw"));
-    symlinkSync("native [fixture]", path.join(worker, "lib/node_modules/native-alias"));
+    await symlink("../lib/node_modules/openclaw/dist/entry.js", path.join(worker, "bin/openclaw"));
+    await symlink("native [fixture]", path.join(worker, "lib/node_modules/native-alias"));
   }
-  const jq = spawnSync("/bin/sh", ["-c", "command -v jq"], {
+  const jq = await mac.run("/bin/sh", ["-c", "command -v jq"], {
     encoding: "utf8",
     env: { PATH: process.env.PATH },
   });
+  expect(jq.error, jq.stderr).toBeUndefined();
   expect(jq.status, jq.stderr).toBe(0);
-  symlinkSync(jq.stdout.trim(), path.join(bin, "jq"));
+  await symlink(jq.stdout.trim(), path.join(bin, "jq"));
   const bashEnv = path.join(home, "intercepts.bash");
-  write(
+  await write(
     bashEnv,
     `
 record() { printf '%s\\n' "$*" >>"$TEST_CALLS"; }
@@ -219,7 +218,7 @@ plutil() {
     "curl",
     "ssh",
   ]) {
-    write(
+    await write(
       path.join(bin, tool),
       '#!/bin/sh\nprintf "%s\\n" "forbidden PATH fallthrough" >>"$TEST_FORBIDDEN"\nexit 97\n',
       0o755,
@@ -269,21 +268,27 @@ plutil() {
     teamIdentifier: "FWJYW4S8P8",
     cdhashes: { arm64: "FIXTUREARM64", x86_64: "FIXTUREX8664" },
     architectures: {
-      main: runMacFixtureTool("/usr/bin/lipo", ["-archs", app + "/Contents/MacOS/OpenClaw"], root),
-      helper: runMacFixtureTool(
+      main: await runMacFixtureTool(
+        "/usr/bin/lipo",
+        ["-archs", app + "/Contents/MacOS/OpenClaw"],
+        root,
+        mac,
+      ),
+      helper: await runMacFixtureTool(
         "/usr/bin/lipo",
         ["-archs", app + "/Contents/MacOS/openclaw-mlx-tts"],
         root,
+        mac,
       ),
     },
     entitlementsSha256: { main: digest(entitlements), helper: digest(entitlements) },
     notarizationId: "12345678-1234-1234-1234-123456789abc",
   };
-  const verify = (fault = "") => {
-    rmSync(archive, { force: true });
-    runMacFixtureTool("/usr/bin/ditto", ["-c", "-k", payload, archive], root);
+  const verify = async (fault = "") => {
+    await rm(archive, { force: true });
+    await runMacFixtureTool("/usr/bin/ditto", ["-c", "-k", payload, archive], root, mac);
     receipt.archiveSha256 = digest(readFileSync(archive));
-    write(receiptPath, JSON.stringify(receipt));
+    await write(receiptPath, JSON.stringify(receipt));
     return run(
       [
         installer,
@@ -298,11 +303,11 @@ plutil() {
       fault,
     );
   };
-  const verifyProgram = (program: string, fault: string) => {
+  const verifyProgram = async (program: string, fault: string) => {
     const script = readFileSync(installer, "utf8");
     // Retain actual owners and cleanup, but exclude every operational entrypoint.
-    chmodSync(installer, 0o755);
-    write(
+    await chmod(installer, 0o755);
+    await write(
       installer,
       `${script.slice(0, script.lastIndexOf("\nrefresh_runtime_paths\n"))}
 prepare_authenticated_artifact_inputs "$ARTIFACT_RECEIPT" "$ARCHIVE" "\${BASH_SOURCE[0]}"
@@ -320,7 +325,7 @@ ${program}`,
     calls,
     fileCallCount,
     at: (relative: string) => path.join(app, relative),
-    verifyCode() {
+    async verifyCode() {
       // Measure discovery independently of ZIP extraction and receipt verification;
       // full portable-artifact cases below still exercise those boundaries.
       const script = readFileSync(installer, "utf8");
@@ -331,7 +336,7 @@ ${program}`,
       const fail = script.slice(script.indexOf("fail() {"), script.indexOf("\nusage() {"));
       const verifier = path.join(home, "verify-code.bash");
       // System Bash reads BASH_ENV for a script file, but not for -c here.
-      write(
+      await write(
         verifier,
         `set -euo pipefail\n${fail}\n${helpers}\nverify_elevation_code "$1"\nprintf 'Elevation code verified\\n'`,
       );
@@ -359,7 +364,7 @@ printf 'Staged copy verified: %s\\n' "$STAGED_INSTALL_APP_PATH"
         fault,
       );
     },
-    recoveryPlan(fault: string) {
+    async recoveryPlan(fault: string) {
       const script = readFileSync(installer, "utf8");
       const functions = (
         [
@@ -372,7 +377,7 @@ printf 'Staged copy verified: %s\\n' "$STAGED_INSTALL_APP_PATH"
       const planner = path.join(home, "recovery-plan.bash");
       // Keep the real recovery conditional, but exit before receipt/transaction work.
       // The existing BASH_ENV still intercepts policy and denies live tools.
-      write(
+      await write(
         planner,
         `set -euo pipefail
 ${functions.join("\n")}

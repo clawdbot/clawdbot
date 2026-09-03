@@ -86,6 +86,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
       status: "delivered",
       requesterVisibleFinal: { requesterTurnRunId: REQUESTER_TURN, batchRunIds: [entry.runId] },
     };
+    entry.requesterSettleWake = { status: "pending", attemptCount: 0 };
     const schedule = vi.fn();
 
     expect(

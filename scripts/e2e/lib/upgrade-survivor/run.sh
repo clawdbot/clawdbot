@@ -488,6 +488,26 @@ assert_prepublish_fixture_idle() {
     assert-no-requests "$OPENCLAW_CLAWHUB_URL"
 }
 
+assert_prepublish_plugin_install() {
+  local allow_pending="${1:-0}" plugin_id="whatsapp" help consent
+  local consent_supported=0 pending_args=()
+  if configured_plugin_installs_enabled; then
+    plugin_id="matrix"
+  fi
+  help="$(openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw plugins install --help)" || return "$?"
+  consent="$(printf '%s' "$help" | node scripts/e2e/lib/package-compat.mjs fixture-consent)" || return "$?"
+  [ -z "$consent" ] || consent_supported=1
+  if [ "$allow_pending" = "1" ] && [ "$update_repair_required" = "1" ]; then
+    pending_args=("$UPDATE_JSON" "$initial_update_observation_root" "$baseline_version")
+  fi
+  # A served npm primary must match the prepared artifact. An empty ClawHub ledger alone
+  # cannot prove installation; explicit ClawHub companion installs have their own audit.
+  node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
+    assert-npm-plugin-install "$plugin_id" "@openclaw/$plugin_id" "$candidate_version" \
+    "$consent_supported" ${pending_args[@]+"${pending_args[@]}"} || return "$?"
+  assert_prepublish_fixture_idle
+}
+
 configure_plugin_registry() {
   local fixture_root="$ARTIFACT_ROOT/plugin-registry"
   local package_dir="$fixture_root/package"
@@ -838,14 +858,9 @@ seed_state() {
 }
 
 apply_baseline_config_recipe() {
-  local tsx_import="${OPENCLAW_UPGRADE_SURVIVOR_TSX_IMPORT:-tsx}"
-  local recipe_runner=(
-    node --import "$tsx_import" scripts/e2e/lib/upgrade-survivor/config-recipe.mts
-  )
-  if [ ! -f scripts/e2e/lib/upgrade-survivor/config-recipe.mts ]; then
-    recipe_runner=(node scripts/e2e/lib/upgrade-survivor/config-recipe.mjs)
-  fi
-  "${recipe_runner[@]}" apply \
+  # Source recipes need the runner's native tsx, not a host dependency mount.
+  openclaw_e2e_run_script_entrypoint \
+    scripts/e2e/lib/upgrade-survivor/config-recipe apply \
     --summary "$CONFIG_COVERAGE_JSON" \
     --baseline-version "$baseline_version"
 }
@@ -923,6 +938,8 @@ prepare_update_restart_probe() {
 }
 
 assert_baseline_state() {
+  OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE=baseline \
+    node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-exec-approvals
   OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE=baseline \
     node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-config
   OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE=baseline \
@@ -1036,6 +1053,9 @@ update_candidate() {
   else
     openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" "${update_env[@]}" openclaw "${update_args[@]}" >"$update_json" 2>"$update_err" || update_status=$?
   fi
+  # The package swap can precede a failed Doctor. Observe installed bytes before
+  # classifying the result; an unreadable package must not retain the baseline.
+  installed_version="$(read_installed_version)" || installed_version=""
   if [ "$after_repair" != "1" ] && [ "$update_status" -le 1 ] && node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
     assert-recoverable-update-json "$update_json" "$candidate_version" "$observation_root" "$baseline_version" >"$ARTIFACT_ROOT/update-result-check.log" 2>&1; then
     update_repair_required="1"
@@ -1064,7 +1084,6 @@ update_candidate() {
     [ "$update_status" -ne 0 ] || update_status=1
     return "$update_status"
   fi
-  installed_version="$(read_installed_version)"
   if [ "$installed_version" != "$candidate_version" ]; then
     echo "update did not leave the candidate installed: $installed_version" >&2
     return 1
@@ -1129,15 +1148,7 @@ repair_fixture_plugin_consent() {
     fi
   fi
   if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ]; then
-    local attempts=1
-    local minimum_attempts=1
-    if [ "$UPDATE_RESTART_MODE" = "auto-auth" ] || [ "$update_repair_required" = "1" ]; then
-      attempts=complete
-      minimum_attempts=2
-    fi
-    phase assert-prepublish-recovery-requests node \
-      "${OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER:-scripts/e2e/lib/clawhub-fixture-server.cjs}" \
-      assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "$prepublish_package" "$candidate_version" "$clawhub_security_mode" "$attempts" "$minimum_attempts"
+    phase assert-prepublish-recovery-requests assert_prepublish_plugin_install
   fi
 }
 
@@ -1168,6 +1179,7 @@ validate_post_doctor_config() {
 }
 
 assert_survival() {
+  node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-exec-approvals
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-config
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state
   installed_version="$(read_installed_version)"
@@ -1328,28 +1340,13 @@ if [ "$SCENARIO" = "recovery-cleanup" ]; then
 fi
 phase configure-plugin-registry configure_plugin_registry
 phase update-candidate update_candidate
-if [ "$SCENARIO" = "sqlite-volume" ] || [ "$SCENARIO" = "recovery-cleanup" ]; then
-  # A standalone Doctor pass would conceal missing migrations in the updater.
-  phase assert-automatic-migration assert_survival
-fi
+# A standalone Doctor pass would conceal missing migrations in the updater.
+phase assert-automatic-migration assert_survival
 if [ "$SCENARIO" = "recovery-cleanup" ]; then
   phase assert-recovery-migration node scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs migrated
 fi
 if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ]; then
-  clawhub_security_mode="$(
-    node scripts/e2e/lib/package-compat.mjs --clawhub-release-security-mode "$candidate_version"
-  )"
-  prepublish_package="@openclaw/whatsapp"
-  if configured_plugin_installs_enabled; then
-    prepublish_package="@openclaw/matrix"
-  fi
-  clawhub_request_attempts=1
-  if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
-    clawhub_request_attempts=complete
-  fi
-  phase assert-prepublish-requests node \
-    "${OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER:-scripts/e2e/lib/clawhub-fixture-server.cjs}" \
-    assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "$prepublish_package" "$candidate_version" "$clawhub_security_mode" "$clawhub_request_attempts"
+  phase assert-prepublish-requests assert_prepublish_plugin_install 1
 fi
 phase root-managed-vps-cli-usable assert_root_managed_vps_cli_usable
 phase assert-legacy-plugin-dependency-debris-before-doctor assert_legacy_plugin_dependency_debris_before_doctor

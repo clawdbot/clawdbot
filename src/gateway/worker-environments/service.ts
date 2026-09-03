@@ -1,5 +1,4 @@
 import type {
-  WorkerGitHubPublishParams,
   WorkerPortalParams,
   WorkerSessionsSendParams,
   WorkerSessionsSpawnParams,
@@ -8,6 +7,7 @@ import type {
   WorkerTranscriptCommitParams,
   WorkerTranscriptCommitResult,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { WorkerSkillWorkshopParams } from "../../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
 import { onSessionIdentityMutation } from "../../config/sessions/session-accessor.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { withTimeout } from "../../infra/fs-safe.js";
@@ -106,6 +106,12 @@ type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOptions & {
     params:
       | {
           identity: WorkerConnectionIdentity;
+          toolName: "skill_workshop";
+          request: WorkerSkillWorkshopParams;
+          signal?: AbortSignal;
+        }
+      | {
+          identity: WorkerConnectionIdentity;
           toolName: "sessions_spawn";
           request: WorkerSessionsSpawnParams;
           signal?: AbortSignal;
@@ -114,12 +120,6 @@ type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOptions & {
           identity: WorkerConnectionIdentity;
           toolName: "sessions_send";
           request: WorkerSessionsSendParams;
-          signal?: AbortSignal;
-        }
-      | {
-          identity: WorkerConnectionIdentity;
-          toolName: "github_publish";
-          request: WorkerGitHubPublishParams;
           signal?: AbortSignal;
         }
       | {
@@ -650,8 +650,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         }),
       );
     },
-    destroy: async (environmentId: string) =>
-      environmentAccess.project(await providerLifecycle.destroy(environmentId)),
+    destroy: async (environmentId: string, reason?: "operator-abandon") =>
+      environmentAccess.project(await providerLifecycle.destroy(environmentId, { reason })),
     destroyUnattached: async (environmentId: string) =>
       environmentAccess.project(
         await providerLifecycle.destroy(environmentId, { requireUnattached: true }),

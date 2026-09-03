@@ -79,10 +79,14 @@ export function listSubagentRunsForController(
 }
 
 /** Counts active descendant runs for a requester/session tree. */
-export function countActiveDescendantRuns(rootSessionKey: string): number {
+export function countActiveDescendantRuns(
+  rootSessionKey: string,
+  requesterAgentId?: string,
+): number {
   return countActiveDescendantRunsFromRuns(
     getSubagentRunsSnapshotForRead(subagentRuns),
     rootSessionKey,
+    requesterAgentId,
   );
 }
 

@@ -93,7 +93,7 @@ function makeNormalizationInput(
         lastProfileId: undefined,
       }),
     } as never,
-    dispatchedAttempt: { rawAttempt: attempt, cancellationRequested: false } as never,
+    dispatchedAttempt: { rawAttempt: attempt } as never,
     sessionPromptState: sessionPromptState as never,
     provider: "openai",
     modelId: "gpt-5.6-luna",

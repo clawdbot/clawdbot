@@ -10,9 +10,8 @@ import type { ProgressNarrationInput } from "./progress-narrator-model.js";
 const narratorWarnSpy = vi.hoisted(() => vi.fn());
 const narrationModelMocks = vi.hoisted(() => ({
   prepared: {
-    selection: { provider: "openai", modelId: "gpt-5.5-mini" },
-    model: {},
-    auth: {},
+    provider: "openai",
+    model: "gpt-5.5-mini",
   },
   prepare: vi.fn(),
   generate: vi.fn(),

@@ -14,6 +14,7 @@ import {
   configuredOwnersAreRequestVisible,
   registerPreparedRuntimeAuthMaterializationPublisher,
 } from "./prepared-model-runtime-materializations.js";
+import { preparedModelInventoryKey } from "./prepared-model-runtime.facts.js";
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimeOwnerRetention,
@@ -458,6 +459,13 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
   const catalogMode = options.catalogMode ?? "live";
   gatewayLifecycleActive ||= options.gatewayLifecycle === true;
   const staleError = new Error("prepared model runtime owner is stale after config publication");
+  const inventories = new Map(
+    [...owners.values()].flatMap((owner) =>
+      owner.provenance === "configured" && owner.catalogInventory
+        ? [[owner.catalogInventory.key, owner.catalogInventory] as const]
+        : [],
+    ),
+  );
   updateOwnersForScopedRefresh(owners, options.agentIds, staleError, {
     retainedConfig: config,
   });
@@ -493,6 +501,7 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
       catalogMode,
       existing?.provenance === "configured" ? existing : undefined,
     );
+    owner.catalogInventory = inventories.get(preparedModelInventoryKey(input));
     return { input, owner };
   });
   await publishPreparedModelRuntimeOwnerBatch({

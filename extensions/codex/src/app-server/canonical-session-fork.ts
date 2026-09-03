@@ -58,7 +58,7 @@ export async function forkCanonicalCodexSession(params: {
   }
   const sourceIdentity = sessionBindingIdentity({ ...fork.source, config });
   return bindingStore.withLease(sourceIdentity, async () => {
-    if (!isDeepStrictEqual(await bindingStore.read(sourceIdentity), sourceBinding)) {
+    if (!isDeepStrictEqual(bindingStore.read(sourceIdentity), sourceBinding)) {
       throw new Error("Codex canonical source binding changed before initialization");
     }
     let freshThreadId: string | undefined;
@@ -165,7 +165,7 @@ export async function forkCanonicalCodexSession(params: {
           assertCurrent();
           await resolved.canonical.assertUnchanged();
           assertCurrent();
-          if (!isDeepStrictEqual(await bindingStore.read(sourceIdentity), sourceBinding)) {
+          if (!isDeepStrictEqual(bindingStore.read(sourceIdentity), sourceBinding)) {
             throw new Error("Codex canonical source binding changed during preparation");
           }
           assertCurrent();
@@ -330,7 +330,7 @@ export async function forkCanonicalCodexSession(params: {
           initialization.assertCurrent();
           await resolved.canonical.assertUnchanged();
           initialization.assertCurrent();
-          if (!isDeepStrictEqual(await bindingStore.read(sourceIdentity), sourceBinding)) {
+          if (!isDeepStrictEqual(bindingStore.read(sourceIdentity), sourceBinding)) {
             throw new Error("Codex source binding changed before fork readiness");
           }
           initialization.assertCurrent();

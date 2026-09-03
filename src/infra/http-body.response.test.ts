@@ -186,6 +186,16 @@ describe("readResponseWithLimit", () => {
     await expect(readResponseWithLimit(response, 100)).resolves.toEqual(Buffer.from([1, 2, 3, 4]));
   });
 
+  it.each([0.5, 3.5])("reports overflow for a fractional byte budget of %s", async (maxBytes) => {
+    const response = new Response(makeStream([new Uint8Array([1, 2, 3]), new Uint8Array([4, 5])]));
+
+    await expect(
+      readResponseWithLimit(response, maxBytes, {
+        onOverflow: ({ maxBytes: limit }) => new Error(`Exceeded ${limit} bytes`),
+      }),
+    ).rejects.toThrow(`Exceeded ${maxBytes} bytes`);
+  });
+
   it.each([
     {
       name: "throws when total exceeds maxBytes",
@@ -502,6 +512,21 @@ describe("readResponseTextSnippet", () => {
       truncated: true,
     });
     expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { maxBytes: 0.5, text: "", size: 3 },
+    { maxBytes: 3.5, text: "abc", size: 6 },
+  ])("returns whole bytes under a fractional prefix budget of $maxBytes", async (expected) => {
+    const response = new Response(
+      makeStream([new TextEncoder().encode("abc"), new TextEncoder().encode("def")]),
+    );
+
+    await expect(readResponseTextPrefix(response, expected.maxBytes)).resolves.toEqual({
+      text: expected.text,
+      size: expected.size,
+      truncated: true,
+    });
   });
 
   it("applies the idle timeout while reading snippets", async () => {

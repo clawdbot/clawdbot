@@ -312,6 +312,7 @@ function buildEffectiveKnownNode(entry: {
     ),
     computerUse: live?.computerUse,
     sessionHost,
+    ...(live?.hostStats ? { hostStats: { ...live.hostStats } } : {}),
     ...(live && workerSlots ? { workerSlots: { ...workerSlots } } : {}),
     ...(live && workerBundle ? { workerBundle: structuredClone(workerBundle) } : {}),
     ...(issues?.length ? { issues: [...issues] } : {}),

@@ -249,7 +249,11 @@ suite.define(() => {
             .poll(async () => (await gateway.getRequests("desktop.observe")).length)
             .toBe(2);
           expect(await page.evaluate(() => document.fullscreenElement !== null)).toBe(true);
-          await panel.locator(".desktop-surface canvas").waitFor();
+          // The authenticated handoff keeps both canvases until the replacement connects.
+          await expect
+            .poll(() => screenHandle?.evaluate((element) => element.isConnected))
+            .toBe(false);
+          await screen.waitFor();
           await expect
             .poll(() => panel.getByRole("button", { name: "Take control", exact: true }).count())
             .toBe(0);

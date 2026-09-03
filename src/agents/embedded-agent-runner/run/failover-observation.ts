@@ -90,6 +90,8 @@ export function createFailoverDecisionLogger(
       !shouldSuppressRawErrorConsoleSuffix(observedError.providerRuntimeFailureKind)
         ? ` rawError=${safeRawErrorPreview}`
         : "";
+    const retryCount = extra?.retryCount ?? normalizedBase.retryCount;
+    const profileRotationCount = extra?.profileRotationCount ?? normalizedBase.profileRotationCount;
     log.warn("embedded run failover decision", {
       event: "embedded_run_failover_decision",
       tags: ["error_handling", "failover", normalizedBase.stage, decision],
@@ -107,14 +109,14 @@ export function createFailoverDecisionLogger(
       timedOut: normalizedBase.timedOut,
       aborted: normalizedBase.aborted,
       status: extra?.status,
-      retryCount: extra?.retryCount ?? normalizedBase.retryCount,
-      profileRotationCount: extra?.profileRotationCount ?? normalizedBase.profileRotationCount,
+      retryCount,
+      profileRotationCount,
       attemptCount: normalizedBase.attemptCount,
       ...observedError,
       consoleMessage:
         `embedded run failover decision: runId=${safeRunId} stage=${normalizedBase.stage} decision=${decision} ` +
         `reason=${reasonText} attempt=${normalizedBase.attemptCount ?? "-"} ` +
-        `retry=${normalizedBase.retryCount ?? "-"} rotations=${normalizedBase.profileRotationCount ?? "-"} ` +
+        `retry=${retryCount ?? "-"} rotations=${profileRotationCount ?? "-"} ` +
         `from=${safeSourceProvider}/${safeSourceModel}` +
         `${sourceChanged ? ` to=${safeProvider}/${safeModel}` : ""} profile=${profileText}${rawErrorConsoleSuffix}`,
     });

@@ -12,7 +12,6 @@ IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-codex-on-demand-e2e" OPENCLAW_C
 DOCKER_TARGET="${OPENCLAW_CODEX_ON_DEMAND_DOCKER_TARGET:-bare}"
 HOST_BUILD="${OPENCLAW_CODEX_ON_DEMAND_HOST_BUILD:-1}"
 PACKAGE_TGZ="${OPENCLAW_CURRENT_PACKAGE_TGZ:-}"
-OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS=()
 AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT=""
 run_log=""
 
@@ -20,11 +19,6 @@ run_log=""
 # Keep the package install budget above the shared default so slow npm hosts reach
 # the Codex assertions instead of failing as a silent package-install timeout.
 export OPENCLAW_E2E_NPM_INSTALL_TIMEOUT="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-1200s}"
-
-if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
-  openclaw_prepublish_plugin_registry_configure_docker_args \
-    "$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR"
-fi
 
 cleanup() {
   if [ -n "${PACKAGE_TGZ:-}" ]; then
@@ -65,8 +59,7 @@ if [ -z "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ] &&
     OPENCLAW_DOCKER_ALL_LOG_DIR="$AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT" \
     OPENCLAW_DOCKER_ALL_TIMINGS=0 \
     node "$ROOT_DIR/scripts/test-docker-all.mjs" --prepare-plugin-registry >/dev/null
-  openclaw_prepublish_plugin_registry_configure_docker_args \
-    "$AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT/prepublish-plugin-registry"
+  export OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR="$AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT/prepublish-plugin-registry"
 fi
 
 docker_e2e_package_mount_args "$PACKAGE_TGZ"
@@ -77,7 +70,6 @@ echo "Running Codex on-demand Docker E2E..."
 if ! docker_e2e_run_with_harness \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
-  "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS[@]}" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'; then
 set -euo pipefail

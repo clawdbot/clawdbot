@@ -193,18 +193,43 @@ describe("harness runtime plugins", () => {
     expect(formatForLog((error as Error).message)).toContain('Run "openclaw doctor --fix"');
   });
 
-  it("reports explicit library policy without a prepared registry context", async () => {
+  it.each([
+    {
+      name: "global disablement",
+      plugins: { enabled: false },
+      expectedReason: "plugins disabled",
+    },
+    {
+      name: "a restrictive allowlist",
+      plugins: { allow: ["telegram"] },
+      expectedReason: "not in allowlist",
+    },
+    {
+      name: "a denylist",
+      plugins: { deny: ["codex"] },
+      expectedReason: "blocked by denylist",
+    },
+    {
+      name: "an explicitly disabled owner",
+      plugins: { entries: { codex: { enabled: false } } },
+      expectedReason: "disabled in config",
+    },
+  ] satisfies Array<{
+    name: string;
+    plugins: NonNullable<OpenClawConfig["plugins"]>;
+    expectedReason: string;
+  }>)("reports $name without a prepared registry context", async ({ plugins, expectedReason }) => {
     const error = await ensureSelectedAgentHarnessPlugin({
       provider: "openai",
       modelId: "gpt-5.5",
-      config: { plugins: { enabled: false } },
+      config: { plugins },
       agentHarnessRuntimeOverride: "codex",
       workspaceDir: "/tmp/workspace",
       pluginRegistry: undefined,
     }).catch((cause: unknown) => cause);
 
     expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toContain("plugins disabled");
+    expect((error as Error).message).toContain(expectedReason);
     expect((error as Error).message).not.toContain("absent from this prepared plugin generation");
   });
 

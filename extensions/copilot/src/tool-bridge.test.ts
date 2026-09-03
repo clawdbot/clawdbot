@@ -1171,12 +1171,13 @@ describe("createCopilotToolBridge", () => {
       expect(exec).toMatchObject({ security: "fast", elevated: { allowed: true } });
     });
 
-    it("forwards run-trace and scheduled policy context", async () => {
+    it("forwards active thinking, run-trace and scheduled policy context", async () => {
       const { createOpenClawCodingTools, getOpts } = captureCall();
 
       await createCopilotToolBridge({
         attemptParams: {
           trigger: "cron",
+          thinkLevel: "off",
           jobId: "job-1",
           memoryFlushWritePath: ".memory/append.md",
           toolsAllow: ["read", "edit"],
@@ -1186,12 +1187,13 @@ describe("createCopilotToolBridge", () => {
             ownerSessionKey: "agent:main:discord:group:ops",
             ownerAccountId: "default",
           },
-        } as never,
+        },
         createOpenClawCodingTools,
       });
 
       const opts = getOpts();
       expect(opts.trigger).toBe("cron");
+      expect(opts.requesterThinkingLevel).toBe("off");
       expect(opts.jobId).toBe("job-1");
       expect(opts.memoryFlushWritePath).toBe(".memory/append.md");
       // buildEmbeddedAttemptToolRunContext renames toolsAllow ->

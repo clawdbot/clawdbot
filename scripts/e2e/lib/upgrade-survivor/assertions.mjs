@@ -5,8 +5,13 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { validatePrepublishPluginRegistryArtifact } from "../../../prepublish-plugin-registry-artifact.mjs";
 import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
 import { readPostCoreSnapshot } from "./diagnostics.mjs";
+import {
+  assertExecApprovalPolicySurvived,
+  seedLegacyExecApprovalPolicy,
+} from "./exec-approval-fixture.mjs";
 import { assertUpgradeVolumeMigrated, seedUpgradeVolume } from "./sqlite-volume.mjs";
 
 const command = process.argv[2];
@@ -373,6 +378,7 @@ function seedState() {
   });
   // Volume imports start in per-agent JSON; other scenarios cover the older shared-store move.
   seedLegacySessionMetadata(stateDir, scenario === "sqlite-volume");
+  seedLegacyExecApprovalPolicy(stateDir);
   if (scenario === "meeting-transcripts-sqlite") {
     seedLegacyMeetingTranscripts(stateDir);
   }
@@ -1125,6 +1131,15 @@ function acceptedSurfaceHash(surface) {
   return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
 }
 
+function hasCompanionPluginConsent(record) {
+  return [
+    record.acceptedSurface,
+    record.acceptedSurfaceHash,
+    record.acceptedSurfaceAt,
+    record.acceptedSurfaceIntegrity,
+  ].some((value) => value !== undefined);
+}
+
 function assertCompanionPluginConsent(record, pluginId, integrity) {
   assert(
     record.acceptedSurface && typeof record.acceptedSurface === "object",
@@ -1149,6 +1164,61 @@ function assertCompanionPluginConsent(record, pluginId, integrity) {
       Number.isFinite(Date.parse(record.acceptedSurfaceAt)),
     `${pluginId} plugin consent timestamp missing`,
   );
+}
+
+function assertNpmPluginInstall([
+  pluginId,
+  packageName,
+  expectedVersion,
+  capabilityConsentSupported,
+  pendingUpdateFile,
+  observationRoot,
+  baselineVersion,
+]) {
+  assert(
+    pluginId && packageName && expectedVersion,
+    "npm plugin assertion requires identity and version",
+  );
+  assert(
+    capabilityConsentSupported === "0" || capabilityConsentSupported === "1",
+    "npm plugin assertion requires candidate capability-consent support",
+  );
+  if (
+    pendingUpdateFile &&
+    assertRecoverableUpdateJson([
+      pendingUpdateFile,
+      expectedVersion,
+      observationRoot,
+      baselineVersion,
+    ]).has(pluginId)
+  ) {
+    // Only this plugin's recorded denial defers its artifact check until repair.
+    process.stdout.write(`Plugin "${pluginId}" is awaiting fixture capability consent.\n`);
+    return;
+  }
+  const records = readInstalledPluginIndex().installRecords ?? {};
+  const packageJson = assertExternalPluginInstall(records, pluginId, packageName);
+  const record = records[pluginId];
+  assert(record.source === "npm", `${pluginId} plugin must be installed from npm`);
+  assertPluginArtifactConsent(
+    record,
+    pluginId,
+    packageJson,
+    expectedVersion,
+    capabilityConsentSupported,
+  );
+  const artifactDir = requireEnv("OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR");
+  const { manifest } = validatePrepublishPluginRegistryArtifact({
+    artifactDir,
+    expectedSourceSha: requireEnv("OPENCLAW_DOCKER_E2E_SELECTED_SHA"),
+    expectedCandidateVersion: expectedVersion,
+    expectedManifestSha256: requireEnv("OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256"),
+    requiredPackages: [packageName],
+  });
+  const artifact = manifest.packages.find((entry) => entry.name === packageName);
+  const archive = fs.readFileSync(path.join(artifactDir, artifact.tarball));
+  const integrity = `sha512-${createHash("sha512").update(archive).digest("base64")}`;
+  assert(record.integrity === integrity, `${pluginId} plugin registry artifact integrity changed`);
 }
 
 function assertCompanionPluginInstalls([expectedVersion, capabilityConsentSupported]) {
@@ -1198,6 +1268,37 @@ function assertPluginArtifactConsent(
     `${pluginId} plugin integrity missing`,
   );
   if (capabilityConsentSupported === "1") {
+    const inspection = JSON.parse(
+      execFileSync("openclaw", ["plugins", "inspect", pluginId, "--json"], {
+        encoding: "utf8",
+        timeout: 120_000,
+      }),
+    );
+    assert(inspection.plugin?.id === pluginId, `${pluginId} inspected plugin id changed`);
+    assert(
+      inspection.plugin.packageName === packageJson.name,
+      `${pluginId} inspected package name changed`,
+    );
+    assert(
+      typeof inspection.plugin.rootDir === "string" &&
+        fs.realpathSync(inspection.plugin.rootDir) ===
+          fs.realpathSync(resolveHomePath(record.installPath)),
+      `${pluginId} inspected install path changed`,
+    );
+    assertStrict.deepEqual(
+      inspection.install,
+      record,
+      `${pluginId} inspected install record changed`,
+    );
+    // Official provenance is not operator acceptance. Use the metadata owner's
+    // decision for this exact record, but validate any recorded acceptance so a
+    // partial or stale artifact claim cannot pass the upgrade proof.
+    if (inspection.plugin.trustedOfficialInstall === true && !hasCompanionPluginConsent(record)) {
+      process.stdout.write(
+        `Plugin "${pluginId}" has verified official capability-consent exemption.\n`,
+      );
+      return;
+    }
     assertCompanionPluginConsent(record, pluginId, integrity);
   }
 }
@@ -1285,10 +1386,6 @@ function assertRecoverableUpdateJson([file, expectedVersion, observationRoot, ba
   }
   const plugins = result.postUpdate?.plugins;
   assertStrict.equal(plugins?.status, result.status === "error" ? "error" : "warning");
-  assertStrict.equal(
-    plugins?.reason,
-    result.status === "error" ? "post-plugin-doctor-invalid-config" : undefined,
-  );
   assertStrict.deepEqual(plugins.integrityDrifts, []);
   // These are the reviewed packages in the base and scenario recipes.
   // Any other plugin or failure needs investigation before accepting it.
@@ -1305,6 +1402,15 @@ function assertRecoverableUpdateJson([file, expectedVersion, observationRoot, ba
       assertStrict.equal(outcome.nextVersion, expectedVersion);
     }
   }
+  // Typed consent errors survive post-plugin validation without a Doctor reason.
+  // Check before warnings contribute IDs; prose alone cannot admit this shape.
+  const typedConsentOnly = plugins.reason === undefined && denied.size > 0;
+  assertStrict.equal(
+    plugins.reason,
+    result.status === "error" && !typedConsentOnly
+      ? "post-plugin-doctor-invalid-config"
+      : undefined,
+  );
   assertStrict.ok(Array.isArray(plugins.sync?.errors));
   assertStrict.ok(Array.isArray(plugins.warnings));
   for (const warning of [
@@ -1533,6 +1639,11 @@ if (command === "list-scenarios") {
   process.stdout.write(`${JSON.stringify([...SCENARIOS])}\n`);
 } else if (command === "seed") {
   seedState();
+} else if (command === "assert-exec-approvals") {
+  assertExecApprovalPolicySurvived(
+    requireEnv("OPENCLAW_STATE_DIR"),
+    process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival",
+  );
 } else if (command === "seed-volume") {
   assert(getScenario() === "sqlite-volume", "seed-volume requires the sqlite-volume scenario");
   const stateDir = requireEnv("OPENCLAW_STATE_DIR");
@@ -1548,6 +1659,8 @@ if (command === "list-scenarios") {
     "transcript export requires the meeting scenario",
   );
   assertMeetingTranscriptExport(requireEnv("OPENCLAW_STATE_DIR"));
+} else if (command === "assert-npm-plugin-install") {
+  assertNpmPluginInstall(process.argv.slice(3));
 } else if (command === "assert-companion-installs") {
   assertCompanionPluginInstalls(process.argv.slice(3));
 } else if (command === "assert-recovered-plugin-installs") {

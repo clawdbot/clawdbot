@@ -101,6 +101,9 @@ describe("tsdown config", () => {
     const rsyncReceiver = configs.find((config) =>
       entryKeys(config).includes("worker/workspace-rsync-receiver"),
     );
+    const githubExecLauncher = configs.find((config) =>
+      entryKeys(config).includes("worker/github-exec-launcher"),
+    );
 
     expect(deployWorker?.minify).toEqual({
       codegen: true,
@@ -108,6 +111,7 @@ describe("tsdown config", () => {
       mangle: { keepNames: true },
     });
     expect(rsyncReceiver?.minify).toBeUndefined();
+    expect(githubExecLauncher?.minify).toBeUndefined();
     expect(requireUnifiedDistGraph().minify).toBeUndefined();
   });
 
@@ -366,7 +370,7 @@ describe("tsdown config", () => {
     expect(externalize("jimp", undefined, false)).toBe(true);
   });
 
-  it("always bundles plugin SDK package-local runtime dependencies", () => {
+  it("bundles SDK-owned helpers while retaining fs-safe package ownership", () => {
     const unifiedGraph = requireUnifiedDistGraph();
     const alwaysBundle = unifiedGraph.deps?.alwaysBundle;
 
@@ -374,8 +378,8 @@ describe("tsdown config", () => {
       throw new Error("expected unified graph alwaysBundle predicate");
     }
 
-    expect(alwaysBundle("@openclaw/fs-safe")).toBe(true);
-    expect(alwaysBundle("@openclaw/fs-safe/path")).toBe(true);
+    expect(alwaysBundle("@openclaw/fs-safe")).toBe(false);
+    expect(alwaysBundle("@openclaw/fs-safe/path")).toBe(false);
     expect(alwaysBundle("openclaw/plugin-sdk/ssrf-runtime-internal")).toBe(true);
     expect(alwaysBundle("openclaw/plugin-sdk/ssrf-runtime")).toBe(false);
     expect(alwaysBundle("zod")).toBe(true);

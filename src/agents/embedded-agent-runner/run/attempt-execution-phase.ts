@@ -245,6 +245,7 @@ export async function runEmbeddedAttemptExecutionPhase(
   const attemptTimeout = prepareEmbeddedAttemptTimeout({
     attempt,
     activeSession,
+    runAbortSignal: input.runAbortController.signal,
     compactionState: preparedStream.subscription,
     compactionTimeoutMs: input.sessionLock.compactionTimeoutMs,
     isProbeSession,

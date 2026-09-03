@@ -1,5 +1,6 @@
 // Build All tests cover build all script behavior.
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnOptions } from "node:child_process";
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -28,6 +29,7 @@ import {
 } from "../../scripts/lib/build-artifact-cache.mts";
 import { listBundledPluginBuildEntries } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
 import { TSDOWN_UNIFIED_CONFIG_GROUP } from "../../scripts/lib/tsdown-config-groups.mts";
+import { runNodeMain } from "../../scripts/run-node.mts";
 
 function getBuildAllStep(label: string) {
   const step = BUILD_ALL_STEPS.find((entry) => entry.label === label);
@@ -791,6 +793,99 @@ describe("resolveBuildAllSteps", () => {
     ]);
   });
 
+  it.each([undefined, "0", "1"])(
+    "preserves source-run declaration choice %s through the canonical runtime build",
+    async (skipDts) => {
+      const cwd = fs.realpathSync(
+        fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-source-rebuild-")),
+      );
+      const childEnv = {
+        OPENCLAW_BUILD_PRIVATE_QA: "1",
+        OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: skipDts,
+      };
+      const spawn = vi.fn((_command: string, _args: string[], _options: SpawnOptions) => {
+        const child = new EventEmitter();
+        queueMicrotask(() => child.emit("exit", 0, null));
+        return child;
+      });
+      const postbuild = vi.fn();
+      try {
+        expect(
+          await runNodeMain({
+            cwd,
+            env: childEnv,
+            args: ["status"],
+            spawn,
+            spawnSync: () => ({ status: 1 }),
+            stderr: { write: () => true },
+            runRuntimePostBuild: postbuild,
+          }),
+        ).toBe(0);
+        expect(spawn.mock.calls.map(([, args]) => args)).toEqual([
+          ["--import", "tsx", "scripts/build-all.mts", "qaRuntime"],
+          ["openclaw.mjs", "status"],
+        ]);
+        const env = spawn.mock.calls[0]![2].env!;
+        const invocations: ReturnType<typeof resolveBuildAllStep>[] = [];
+        const result = await runBuildAllSteps("qaRuntime", {
+          env,
+          logger: { error: vi.fn(), warn: vi.fn() },
+          resolveCacheState: () => ({ cacheable: false, fresh: false, reason: "no-cache" }),
+          runStep(invocation) {
+            invocations.push(invocation);
+            return { status: 0 };
+          },
+        });
+        expect(result.exitCode).toBe(0);
+        const compiler = invocations.find((call) =>
+          call.args.includes("scripts/tsdown-build.mts"),
+        )!;
+        expect(compiler.options.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe(skipDts ?? "1");
+        expect(
+          invocations.every((call) => call.options.env.OPENCLAW_BUILD_PRIVATE_QA === "1"),
+        ).toBe(true);
+        expect(result.timings.map(({ label }) => label)).toEqual([
+          "plugins:assets:build",
+          "tsdown",
+          "external-plugins:local-dist",
+          "check-cli-bootstrap-imports",
+          "plugins:assets:copy",
+          "runtime-postbuild",
+          "build-stamp",
+          "runtime-postbuild-stamp",
+        ]);
+        expect(postbuild).not.toHaveBeenCalled();
+        expect(fs.existsSync(path.join(cwd, ".artifacts/run-node-build.lock"))).toBe(false);
+      } finally {
+        fs.rmSync(cwd, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each([
+    ["external-plugins:local-dist", "scripts/build-external-plugin-local-dist.mts"],
+    ["runtime-postbuild", "scripts/runtime-postbuild.mjs"],
+  ])("does not stamp qaRuntime after %s fails", async (label, script) => {
+    const invocations: ReturnType<typeof resolveBuildAllStep>[] = [];
+    const result = await runBuildAllSteps("qaRuntime", {
+      env: {},
+      logger: { error: vi.fn(), warn: vi.fn() },
+      resolveCacheState: () => ({ cacheable: false, fresh: false, reason: "no-cache" }),
+      runStep(invocation) {
+        invocations.push(invocation);
+        return { status: invocation.args.includes(script) ? 23 : 0 };
+      },
+    });
+
+    expect(result.exitCode).toBe(23);
+    expect(result.timings.at(-1)).toMatchObject({ label, status: "failed" });
+    expect(invocations.at(-1)?.args).toContain(script);
+    for (const invocation of invocations) {
+      expect(invocation.args).not.toContain("scripts/build-stamp.mts");
+      expect(invocation.args).not.toContain("scripts/runtime-postbuild-stamp.mts");
+    }
+  });
+
   it("uses the full runtime artifact surface without declaration work when DTS is disabled", () => {
     const steps = resolveBuildAllSteps("full", {
       OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
@@ -1285,6 +1380,7 @@ describe("resolveBuildStepCacheState", () => {
   it("marks cacheable steps fresh when the input signature matches", () => {
     withBuildCacheFixture(({ rootDir, step }) => {
       const cacheState = resolveBuildStepCacheState(step, { rootDir });
+      expect(cacheState.reason).toBe("record-unavailable");
       writeBuildStepCacheStamp(step, cacheState, { rootDir });
 
       const fresh = resolveBuildStepCacheState(step, { rootDir });
@@ -1345,7 +1441,7 @@ describe("resolveBuildStepCacheState", () => {
 
       expect(stale).toMatchObject({
         fresh: false,
-        reason: "stale",
+        reason: "required-output-unrecorded",
         restorable: false,
         signature: legacyState.signature,
         stampedOutputs: ["dist/output.js"],
@@ -1398,7 +1494,7 @@ describe("resolveBuildStepCacheState", () => {
       expect(fs.readFileSync(cachedOutputPath, "utf8")).toBe("output");
       expect(resolveBuildStepCacheState(completeStep, { rootDir })).toMatchObject({
         fresh: false,
-        reason: "stale",
+        reason: "required-output-unrecorded",
       });
     });
   });
@@ -1421,6 +1517,9 @@ describe("resolveBuildStepCacheState", () => {
         fs.writeFileSync(inputPath, "changed input");
 
         const refreshed = resolveBuildStepCacheState(step, { rootDir });
+        expect(refreshed.reason).toBe(
+          stampKind === "current" ? "signature-mismatch" : "record-unavailable",
+        );
         writeBuildStepCacheStamp(step, refreshed, { rootDir });
 
         expect(fs.readdirSync(path.join(refreshed.outputRoot!, "dist"))).toEqual(["output.js"]);
@@ -1429,19 +1528,32 @@ describe("resolveBuildStepCacheState", () => {
     },
   );
 
-  it("marks cacheable steps stale when an input changes", () => {
+  it.each([
+    { change: "input changed", reason: "signature-mismatch" },
+    { change: "cached output changed", reason: "output-digest-mismatch" },
+    { change: "cached output removed", reason: "output-missing-or-unreadable" },
+  ])("reports stale cache state after $change", ({ change, reason }) => {
     withBuildCacheFixture(({ rootDir, inputPath, step }) => {
-      const cacheState = resolveBuildStepCacheState(step, { rootDir });
-      writeBuildStepCacheStamp(step, cacheState, { rootDir });
-      fs.writeFileSync(inputPath, "changed");
+      const restoreStep = { ...step, cache: { ...step.cache, restore: "always" as const } };
+      const cacheState = resolveBuildStepCacheState(restoreStep, { rootDir });
+      writeBuildStepCacheStamp(restoreStep, cacheState, { rootDir });
+      const cachedOutput = path.join(cacheState.outputRoot!, "dist/output.js");
+      if (change === "input changed") {
+        fs.writeFileSync(inputPath, "changed");
+      } else if (change === "cached output changed") {
+        fs.writeFileSync(cachedOutput, "changed");
+      } else {
+        fs.rmSync(cachedOutput);
+      }
 
-      const stale = resolveBuildStepCacheState(step, { rootDir });
+      const stale = resolveBuildStepCacheState(restoreStep, { rootDir });
       expect(stale.cacheable).toBe(true);
       expect(stale.fresh).toBe(false);
-      expect(stale.reason).toBe("stale");
+      expect(stale.reason).toBe(reason);
       expect(stale.inputFiles).toBe(1);
       expect(stale.outputFiles).toBe(1);
       expect(stale.restorable).toBe(false);
+      expect(restoreBuildStepCacheOutputs(stale, { rootDir })).toBe(false);
       expect(stale.relativeOutputFiles).toEqual(["dist/output.js"]);
       expect(stale.stampedOutputs).toEqual(["dist/output.js"]);
       expect(typeof stale.signature).toBe("string");
@@ -1458,7 +1570,7 @@ describe("resolveBuildStepCacheState", () => {
         inputFiles: 1,
         outputFiles: 1,
         outputRoot: stale.outputRoot,
-        reason: "stale",
+        reason,
         relativeOutputFiles: ["dist/output.js"],
         restorable: false,
         signature: stale.signature,
@@ -1546,7 +1658,7 @@ describe("resolveBuildStepCacheState", () => {
       expect(stale.cacheable).toBe(true);
       expect(stale.fresh).toBe(false);
       expect(stale.restorable).toBe(false);
-      expect(stale.reason).toBe("stale");
+      expect(stale.reason).toBe("signature-mismatch");
     });
   });
 

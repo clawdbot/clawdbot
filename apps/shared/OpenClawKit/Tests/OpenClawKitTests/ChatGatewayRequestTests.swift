@@ -33,6 +33,20 @@ struct ChatGatewayRequestTests {
         }
     }
 
+    @Test(arguments: [[String]?.none, [], ["watch-run", "queued-source"]])
+    func `history requests consumption only for supplied input runs`(inputRunIDs: [String]?) {
+        let request = OpenClawChatGatewayRequests.history(
+            sessionKey: "global",
+            agentID: "reviewer",
+            inputRunIDs: inputRunIDs)
+
+        #expect(request.method == "chat.history")
+        #expect(request.params["sessionKey"]?.value as? String == "global")
+        #expect(request.params["agentId"]?.value as? String == "reviewer")
+        #expect(request.params["inputRunIds"]?.value as? [String] ==
+            (inputRunIDs?.isEmpty == false ? inputRunIDs : nil))
+    }
+
     @Test func `models list scopes worker catalogs and preserves default scope`() {
         let worker = OpenClawChatGatewayRequests.modelsList(agentID: " worker ")
         let defaultAgent = OpenClawChatGatewayRequests.modelsList(agentID: nil)
@@ -482,14 +496,17 @@ struct ChatGatewayRequestTests {
     @Test func `chat metadata request selects session agent before fallback`() {
         let scoped = OpenClawChatGatewayRequests.chatMetadata(
             sessionKey: "agent:reviewer:main",
-            fallbackAgentID: "fallback")
+            fallbackAgentID: "fallback",
+            includeSessionKey: true)
         #expect(scoped.method == "chat.metadata")
         #expect(scoped.params["agentId"]?.value as? String == "reviewer")
+        #expect(scoped.params["sessionKey"]?.value as? String == "agent:reviewer:main")
 
         let global = OpenClawChatGatewayRequests.chatMetadata(
             sessionKey: "global",
             fallbackAgentID: "reviewer")
         #expect(global.params["agentId"]?.value as? String == "reviewer")
+        #expect(global.params["sessionKey"] == nil)
     }
 
     @Test func `commands request selects session agent before fallback`() {
@@ -622,6 +639,23 @@ struct ChatGatewayPayloadCodecTests {
         #expect(missing.advertisedOperatorScopes() == nil)
     }
 
+    @Test(arguments: [
+        nil,
+        [],
+        [["runId": "watch-run", "consumedByEventId": "aggregate-user"]],
+    ] as [[[String: String]]?])
+    func `history decoding preserves optional input consumption receipts`(consumptions: [[String: String]]?) throws {
+        var object: [String: Any] = ["sessionKey": "main", "messages": []]
+        object["inputConsumptions"] = consumptions
+        let payload = try JSONDecoder().decode(
+            OpenClawChatHistoryPayload.self,
+            from: JSONSerialization.data(withJSONObject: object))
+        let encoded = try #require(JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(payload)) as? [String: Any])
+
+        #expect(encoded["inputConsumptions"] as? [[String: String]] == consumptions)
+    }
+
     @Test func `session row decodes permission and every tool override family`() throws {
         let row = try JSONDecoder().decode(OpenClawChatSessionEntry.self, from: Data(#"""
         {
@@ -669,16 +703,22 @@ struct ChatGatewayPayloadCodecTests {
     }
 
     @Test func `model choices preserve metadata and replace blank names`() throws {
-        let choices = try OpenClawChatGatewayPayloadCodec.decodeModelChoices(Data(
-            #"{"models":[{"id":"gpt-5","name":"  ","provider":"openai","contextWindow":200000,"reasoning":true}]}"#
-                .utf8))
+        let payload = Data(
+            #"{"models":[{"id":"gpt-5","name":"  ","provider":"openai","available":false,"unavailableReason":"missing-auth","unavailableUntil":1234,"contextWindow":200000,"reasoning":true}]}"#
+                .utf8)
+        let choices = try OpenClawChatGatewayPayloadCodec.decodeModelChoices(payload)
+        let metadataChoices = try OpenClawChatGatewayPayloadCodec.decodeChatMetadataModelChoices(payload)
 
         #expect(choices == [OpenClawChatModelChoice(
             modelID: "gpt-5",
             name: "gpt-5",
             provider: "openai",
+            available: false,
+            unavailableReason: "missing-auth",
+            unavailableUntil: 1234,
             contextWindow: 200_000,
             reasoning: true)])
+        #expect(metadataChoices == choices)
     }
 
     @Test func `command choice normalizes source aliases and identity`() {
@@ -845,6 +885,14 @@ struct ChatGatewayPayloadCodecTests {
         }
         #expect(event.sessionkey == "agent:main:main")
         #expect(event.revision.value as? Int == 7)
+
+        guard case .chatMetadataChanged = OpenClawChatGatewayPayloadCodec.event(from: EventFrame(
+            type: "event",
+            event: "chat.metadata.changed"))
+        else {
+            Issue.record("expected chatMetadataChanged")
+            return
+        }
 
         #expect(OpenClawChatGatewayPayloadCodec.event(from: EventFrame(
             type: "event",

@@ -125,7 +125,10 @@ export type PageState = {
   /** Persistent session and queue for page-scoped emulation overrides. */
   emulation?: {
     session?: Promise<CDPSession>;
-    deviceTransitionTail?: Promise<void>;
+    transitionTail?: Promise<void>;
+    transitionAbort?: AbortController;
+    metricsOwner?: { session: CDPSession; viewport: { width: number; height: number } };
+    touch?: { session: CDPSession; enabled: boolean };
   };
   /**
    * Role-based refs from the last role snapshot (e.g. e1/e2).

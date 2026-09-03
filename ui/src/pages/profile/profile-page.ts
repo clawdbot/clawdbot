@@ -43,6 +43,7 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 import { processProfileAvatar, ProfileAvatarError } from "./avatar-processing.ts";
 import "../../styles/profile.css";
+import "../../features/github-connections/github-connections.ts";
 import { renderIdentitySection } from "./identity-section.ts";
 import { userProfileAvatarUrl } from "./profile-avatar-url.ts";
 
@@ -131,7 +132,7 @@ export class ProfilePage extends OpenClawLightDomElement {
     this.connected = nextConnected;
     this.canWrite = nextCanWrite;
     this.selfUser = nextSelfUser;
-    // connected/client are plain fields; an unidentified (token-auth) connect or
+    // connected/client are plain fields; an unidentified connect or
     // disconnect changes no @state, so the render branch must be invalidated
     // explicitly or the page sticks on the stale offline/connected view.
     this.requestUpdate();
@@ -351,7 +352,12 @@ export class ProfilePage extends OpenClawLightDomElement {
 
   private renderIdentity() {
     if (!this.selfUser) {
-      return nothing;
+      return html`<div id=${PROFILE_SETTINGS_TARGET_IDS.identity}>
+        ${renderSettingsSection(
+          { title: t("profilePage.identity.title") },
+          renderSettingsEmpty(t("profilePage.identity.unidentified")),
+        )}
+      </div>`;
     }
     if (!this.canWrite) {
       return html`<div id=${PROFILE_SETTINGS_TARGET_IDS.identity}>
@@ -475,6 +481,7 @@ export class ProfilePage extends OpenClawLightDomElement {
     }
     return renderSettingsPage(html`
       ${this.renderHero()} ${this.renderIdentity()}
+      <openclaw-github-connections></openclaw-github-connections>
       ${renderSettingsGroup(
         renderSettingsNavRow({
           title: t("profilePage.usageStatistics"),

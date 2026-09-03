@@ -188,6 +188,15 @@ export function dispatchAgentRunFromGateway(params: {
       return false;
     }
   };
+  let runOwnerCleanedUp = false;
+  const cleanupRunOwner = () => {
+    if (runOwnerCleanedUp) {
+      return;
+    }
+    runOwnerCleanedUp = true;
+    clearAgentRunContext(params.runId, params.ingressOpts.lifecycleGeneration);
+    params.cleanupAbortController();
+  };
   const cronCreatorAuthorityCapability = params.cronCreatorAuthority
     ? createCronCreatorAuthorityCapability(
         params.cronCreatorAuthority.runId,
@@ -343,6 +352,7 @@ export function dispatchAgentRunFromGateway(params: {
           keys: params.dedupeKeys,
           entry: { ts: Date.now(), ok: false, payload: failedPayload, error },
         });
+        cleanupRunOwner();
         params.io.emitFinal([false, failedPayload, error], {
           runId: params.runId,
           error: summary,
@@ -350,6 +360,9 @@ export function dispatchAgentRunFromGateway(params: {
         return;
       }
       persistTerminalDedupe();
+      // A final response resumes durable delivery cleanup. Release the terminal
+      // run owner first so exact-session deletion cannot race this admission.
+      cleanupRunOwner();
       // Send a second res frame (same id) so TS clients with expectFinal can wait.
       // Swift clients will typically treat the first res as the result and ignore this.
       params.io.emitFinal([true, payload, undefined], { runId: params.runId });
@@ -410,13 +423,11 @@ export function dispatchAgentRunFromGateway(params: {
         onRecovered: () => persistTerminalDedupe(true),
       });
       persistTerminalDedupe(settled);
+      cleanupRunOwner();
       params.io.emitFinal([aborted && settled, payload, aborted && settled ? undefined : error], {
         runId: params.runId,
         ...(aborted ? {} : { error: renderedErr }),
       });
     })
-    .finally(() => {
-      clearAgentRunContext(params.runId, params.ingressOpts.lifecycleGeneration);
-      params.cleanupAbortController();
-    });
+    .finally(cleanupRunOwner);
 }

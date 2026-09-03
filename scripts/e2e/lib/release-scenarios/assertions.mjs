@@ -15,6 +15,7 @@ import {
   parseMockOpenAiPort,
 } from "../fixtures/mock-openai-config.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
+import { isExplicitPluginDisableMarker } from "../plugin-uninstall-assertions.mjs";
 import {
   ERROR_DETAIL_TAIL_BYTES,
   fileContainsText,
@@ -209,7 +210,10 @@ function assertPluginUninstalled() {
   const cfg = readJson(configPath());
   const installRecords = readPluginInstallRecords({ configPath: configPath() });
   assert(!installRecords[pluginId], `install record still present for ${pluginId}`);
-  assert(!cfg.plugins?.entries?.[pluginId], `plugin config entry still present for ${pluginId}`);
+  assert(
+    isExplicitPluginDisableMarker(cfg, pluginId),
+    `exact disabled uninstall marker missing for ${pluginId}`,
+  );
   const managedRoot = path.join(
     process.env.HOME ?? "",
     ".openclaw",

@@ -14,7 +14,6 @@ import type {
 } from "./plugin-registry-snapshot.types.js";
 
 export type PluginMetadataSnapshotPluginIdScope = {
-  key: string;
   resolve: (params: { index: InstalledPluginIndex }) => readonly string[] | undefined;
 };
 

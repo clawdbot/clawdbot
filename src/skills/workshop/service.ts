@@ -13,6 +13,7 @@ import {
   type SkillProposalTransitionInput,
 } from "./apply-transition.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
+import { resolveSkillProposalName } from "./frontmatter.js";
 import { createSkillProposalEvent, dispatchSkillProposalChanged } from "./plugin-hooks.js";
 import { nextProposalVersion, prepareSkillProposalDraft } from "./proposal-draft.js";
 import { createSkillProposalGenerationDraftFile } from "./proposal-generation.js";
@@ -124,7 +125,7 @@ export async function reviseSkillProposal(
     const description = normalizeOptionalString(input.description) ?? record.description;
     const now = new Date().toISOString();
     const prepared = prepareSkillProposalDraft({
-      name: record.target.skillKey,
+      name: resolveSkillProposalName(record.kind, record.target),
       description,
       content: requestedContent,
       fallbackFrontmatterContent: read.content,

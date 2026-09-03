@@ -57,7 +57,8 @@ describe("cli json stdout contract", () => {
           const endpoint =
             env.OPENCLAW_TELEMETRY_ENDPOINT ?? "https://telemetry.openclaw.ai/api/latest-version";
           if (format === "JSON") {
-            expect(result.stdout, result.stderr).not.toMatch(/[\u001B\u0007]/u);
+            expect(result.stdout, result.stderr).not.toContain("\u001B");
+            expect(result.stdout, result.stderr).not.toContain("\u0007");
             const payload = JSON.parse(result.stdout);
             expect(payload).toEqual({
               featureStatsEnabled: false,
@@ -212,7 +213,8 @@ describe("cli json stdout contract", () => {
           if ("human" in testCase) {
             expect(result.stdout).toBe("");
           } else {
-            expect(result.stdout, result.stderr).not.toMatch(/[\u001B\u0007]/u);
+            expect(result.stdout, result.stderr).not.toContain("\u001B");
+            expect(result.stdout, result.stderr).not.toContain("\u0007");
             expect(JSON.parse(result.stdout)).toEqual({
               ok: false,
               error: { type: "cli_error", message: testCase.message },
@@ -225,6 +227,112 @@ describe("cli json stdout contract", () => {
           }
         },
         { prefix: "openclaw-channels-capabilities-failure-e2e-" },
+      );
+    },
+  );
+
+  it.each(["probe", "diagnostics"])(
+    "keeps the CLI alive until stalled channel capability %s reports its timeout",
+    async (stage) => {
+      await withTempHome(
+        async (tempHome) => {
+          const pluginDir = path.join(tempHome, "capability-plugin");
+          const workspace = path.join(tempHome, "workspace");
+          await fs.mkdir(pluginDir);
+          await fs.mkdir(workspace);
+          const id = "capability-fixture";
+          const meta = {
+            id,
+            label: "Capability fixture",
+            selectionLabel: "Capability fixture",
+            docsPath: "/channels/test",
+            blurb: "Synthetic channel",
+          };
+          const schema = {
+            type: "object",
+            additionalProperties: false,
+            properties: { enabled: { type: "boolean" } },
+          };
+          await fs.writeFile(
+            path.join(pluginDir, "package.json"),
+            JSON.stringify({
+              name: id,
+              version: "1.0.0",
+              type: "module",
+              openclaw: {
+                extensions: ["./index.js"],
+                setupEntry: "./index.js",
+                channel: meta,
+              },
+            }),
+          );
+          await fs.writeFile(
+            path.join(pluginDir, "openclaw.plugin.json"),
+            JSON.stringify({
+              id,
+              channels: [id],
+              configSchema: { type: "object", additionalProperties: false, properties: {} },
+              channelConfigs: { [id]: { schema } },
+            }),
+          );
+          await fs.writeFile(
+            path.join(pluginDir, "index.js"),
+            `export const plugin = {
+              id: ${JSON.stringify(id)}, meta: ${JSON.stringify(meta)},
+              capabilities: { chatTypes: ["direct"] },
+              configSchema: { schema: ${JSON.stringify(schema)} },
+              config: {
+                listAccountIds: () => ["default"],
+                resolveAccount: () => ({ accountId: "default", enabled: true }),
+                isConfigured: () => true, isEnabled: () => true,
+              },
+              status: {
+                async probeAccount() { return ${stage === "probe" ? "new Promise(() => {})" : "{ ok: true }"}; },
+                async buildCapabilitiesDiagnostics() { return ${stage === "diagnostics" ? "new Promise(() => {})" : "{ lines: [] }"}; },
+              },
+            };
+            export default { id: plugin.id, register(api) { api.registerChannel({ plugin }); } };`,
+          );
+          const configPath = path.join(tempHome, "openclaw.json");
+          await fs.writeFile(
+            configPath,
+            JSON.stringify({
+              agents: { defaults: { workspace } },
+              plugins: { load: { paths: [pluginDir] }, entries: { [id]: { enabled: true } } },
+              channels: { [id]: { enabled: true } },
+              logging: { level: "silent", consoleLevel: "silent" },
+            }),
+          );
+
+          const result = runBuiltCli(
+            tempHome,
+            ["channels", "capabilities", "--json", "--timeout", "20"],
+            {
+              OPENCLAW_CONFIG_PATH: configPath,
+              OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+              OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+            },
+            { inheritEnvironment: false },
+          );
+
+          expect(result.status, result.stderr).toBe(0);
+          const [report] = JSON.parse(result.stdout).channels;
+          expect(report.channel).toBe(id);
+          if (stage === "probe") {
+            expect(report.probe).toEqual({
+              ok: false,
+              timedOut: true,
+              error: "probe timed out after 20ms",
+            });
+          } else {
+            expect(report.probe).toEqual({ ok: true });
+            expect(report.diagnostics).toEqual({
+              lines: [{ text: "Diagnostics: timed out after 20ms", tone: "error" }],
+              details: { timedOut: true },
+            });
+          }
+        },
+        { prefix: "openclaw-capabilities-timeout-e2e-" },
       );
     },
   );
@@ -245,6 +353,44 @@ describe("cli json stdout contract", () => {
         });
       },
       { prefix: "openclaw-json-failure-e2e-" },
+    );
+  });
+
+  it.each([
+    {
+      name: "secrets apply",
+      args: (tempHome: string) => [
+        "secrets",
+        "apply",
+        "--from",
+        path.join(tempHome, "missing-plan.json"),
+        "--json",
+      ],
+      status: 1,
+      message: (tempHome: string) =>
+        `Secrets plan file not found: ${path.join(tempHome, "missing-plan.json")}`,
+    },
+    {
+      name: "secrets store get",
+      args: () => ["secrets", "store", "get", "MISSING_VALUE", "--json"],
+      status: 3,
+      message: () => 'Secret store entry "MISSING_VALUE" was not found.',
+    },
+  ])("keeps $name failures machine-readable", async (testCase) => {
+    await withTempHome(
+      async (tempHome) => {
+        const result = runBuiltCli(tempHome, testCase.args(tempHome), {
+          OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+        });
+
+        expect(result.status, result.stderr).toBe(testCase.status);
+        expect(JSON.parse(result.stdout)).toEqual({
+          ok: false,
+          error: { type: "cli_error", message: testCase.message(tempHome) },
+        });
+        expect(result.stdout).not.toContain("[openclaw]");
+      },
+      { prefix: "openclaw-secrets-json-failure-e2e-" },
     );
   });
 
@@ -470,7 +616,8 @@ describe("cli json stdout contract", () => {
         expect(payload.error.message).toBe(
           'OpenClaw sessions has no command "lst".\nDid you mean this?\n  openclaw sessions list\nTry: openclaw sessions --help\nDocs: https://docs.openclaw.ai/cli',
         );
-        expect(payload.error.message).not.toMatch(/[\u001B\u0007]/u);
+        expect(payload.error.message).not.toContain("\u001B");
+        expect(payload.error.message).not.toContain("\u0007");
         expect(result.stdout).not.toContain("\\u001b");
         expect(result.stderr).toContain("\u001B[");
       },

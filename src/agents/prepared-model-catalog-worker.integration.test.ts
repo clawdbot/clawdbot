@@ -54,7 +54,7 @@ import {
   loadPreparedModelRuntimeAuth,
   setPreparedModelRuntimeAuthLoader,
 } from "./prepared-model-runtime-auth.js";
-import { startSerializedSnapshotBuild } from "./prepared-model-runtime.build.js";
+import { startSerializedSnapshotBuildBatch } from "./prepared-model-runtime.build.js";
 import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
 import {
   getPreparedModelRuntimeSnapshot,
@@ -208,18 +208,23 @@ async function createStaticSnapshot(
     options?.provideMetadataToWorker && loadedMetadataSnapshot
       ? markPluginMetadataSnapshotProvided(loadedMetadataSnapshot)
       : loadedMetadataSnapshot;
-  const build = await startSerializedSnapshotBuild(
-    {
-      input,
-      catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),
-      isGenerationCurrent: isCurrent,
-      prepareInboundPluginRegistry: options?.prepareInboundPluginRegistry,
-    },
+  const results = await startSerializedSnapshotBuildBatch(
+    [
+      {
+        input,
+        catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),
+        isGenerationCurrent: isCurrent,
+        isBuildCurrent: isCurrent,
+        prepareInboundPluginRegistry: options?.prepareInboundPluginRegistry,
+      },
+    ],
     new Map(),
     30_000,
     "static",
+    undefined,
     providedMetadataSnapshot,
   ).pending;
+  const build = results[0]!;
   return {
     ...fixture,
     pluginMetadataSnapshot: build.pluginGeneration.pluginMetadataSnapshot,
@@ -316,20 +321,24 @@ describe("prepared model catalog worker boundary", () => {
       current = false;
     };
     retireAfterTest(supersede);
-    const build = startSerializedSnapshotBuild(
-      {
-        input,
-        catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),
-        isGenerationCurrent: () => current,
-      },
+    const isCurrent = () => current;
+    const build = startSerializedSnapshotBuildBatch(
+      [
+        {
+          input,
+          catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),
+          isGenerationCurrent: isCurrent,
+          isBuildCurrent: isCurrent,
+        },
+      ],
       new Map(),
       30_000,
       "static",
     );
-    let snapshot: Awaited<typeof build.pending>["snapshot"] | undefined;
+    let snapshot: Awaited<typeof build.pending>[number]["snapshot"] | undefined;
     let driftedAgentDir: string | undefined;
     try {
-      snapshot = (await build.pending).snapshot;
+      snapshot = (await build.pending)[0]!.snapshot;
       const modelCatalog = await snapshot.loadFullModelCatalog!();
       expect(modelCatalog.entries).toContainEqual(
         expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),

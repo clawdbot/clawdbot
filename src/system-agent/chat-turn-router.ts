@@ -631,12 +631,10 @@ export class ChatTurnRouter {
     };
   }
 
-  private commandDeps(): SystemAgentCommandDeps | undefined {
-    if (!this.options.deps && !this.options.surface) {
-      return undefined;
-    }
+  private commandDeps(): SystemAgentCommandDeps {
     return {
       ...this.options.deps,
+      loadOverview: this.callbacks.loadOverview,
       ...(this.options.surface ? { setupSurface: this.options.surface } : {}),
     };
   }

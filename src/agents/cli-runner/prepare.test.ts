@@ -31,7 +31,9 @@ import { createPluginRegistry } from "../../plugins/registry.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
+import type { SkillLibraryAuthoringCapability } from "../../skills/library/authoring.js";
 import { buildSkillSnapshot } from "../../skills/loading/workspace-skill-prompt.js";
+import type { SkillSnapshot } from "../../skills/types.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -3087,6 +3089,13 @@ describe("prepareCliRunContext", () => {
   });
 
   it("uses loopback-scoped tools when building bundled MCP CLI prompts", async () => {
+    const skillLibraryAuthoring: SkillLibraryAuthoringCapability = {
+      target: "personal",
+      defaultTarget: "workspace",
+      multipleProfiles: true,
+      bind: vi.fn(),
+      invoke: vi.fn(),
+    };
     registerTestMemoryPromptBuilder(({ availableTools }) =>
       availableTools.has("memory_search")
         ? ["## Memory Recall", `tools=${[...availableTools].toSorted().join(",")}`, ""]
@@ -3151,6 +3160,7 @@ describe("prepareCliRunContext", () => {
       agentId: "worker",
       provider: "native-cli",
       runId: "run-test-loopback-prompt-tools",
+      skillLibraryAuthoring,
       config: createCliBackendConfig({ bundleMcp: true }),
       scheduledToolPolicy: {
         version: 1,
@@ -3178,12 +3188,18 @@ describe("prepareCliRunContext", () => {
       cfg: projectedConfig,
       authProfileStore,
       authProfileStoreAgentDir,
+      skillWorkshop,
       ...projectedContext
     } = projected ?? {};
     expect(projectedConfig).toEqual(expect.any(Object));
     expect(authProfileStore).toMatchObject({ version: 1, profiles: {} });
     expect(authProfileStoreAgentDir).toEqual(expect.any(String));
     expect(projectedContext).toEqual(grantContext);
+    expect(skillWorkshop).toEqual({ libraryAuthoring: skillLibraryAuthoring });
+    expect(mintMcpLoopbackClientGrant).toHaveBeenLastCalledWith(
+      expect.objectContaining({ skillLibraryAuthoring }),
+    );
+    expect(grantContext).not.toHaveProperty("skillWorkshop.libraryAuthoring");
     expect(projectedContext).toMatchObject({
       sessionKey: "agent:worker:main",
       sessionId: expect.any(String),
@@ -3821,38 +3837,81 @@ describe("prepareCliRunContext", () => {
     expect(cleanup).toHaveBeenCalledOnce();
   });
 
-  it("projects node-placed Claude availability before prepared-execution enforcement", async () => {
-    const prepareExecution = vi.fn(async () => ({ toolAvailabilityEnforced: true as const }));
-    setRawCliBackendForPrepareTest({
-      id: "claude-cli",
-      pluginId: "anthropic",
-      bundleMcp: false,
-      nativeToolMode: "selectable",
-      toolAvailabilityEnforcement: "prepare-execution",
-      prepareExecution,
-      config: {
-        command: "claude",
-        args: ["--print"],
-        output: "jsonl",
-        input: "stdin",
-        sessionMode: "existing",
-      },
-    });
+  it.each([false, true])(
+    "projects node-placed Claude availability with Workshop enabled=%s",
+    async (workshopEnabled) => {
+      const skillLibraryAuthoring: SkillLibraryAuthoringCapability = {
+        target: "personal",
+        defaultTarget: "workspace",
+        multipleProfiles: true,
+        bind: vi.fn(),
+        invoke: vi.fn(),
+      };
+      const resolveMcpLoopbackScopedTools = vi.fn(() => ({
+        agentId: "main",
+        tools: [
+          {
+            name: "skill_workshop",
+            label: "Skill Workshop",
+            description: "Manage skills",
+            parameters: { type: "object", properties: {} },
+            execute: vi.fn(),
+          },
+        ],
+      }));
+      setCliRunnerPrepareTestDeps({ resolveMcpLoopbackScopedTools });
+      const prepareExecution = vi.fn(async () => ({ toolAvailabilityEnforced: true as const }));
+      setRawCliBackendForPrepareTest({
+        id: "claude-cli",
+        pluginId: "anthropic",
+        bundleMcp: false,
+        nativeToolMode: "selectable",
+        toolAvailabilityEnforcement: "prepare-execution",
+        prepareExecution,
+        config: {
+          command: "claude",
+          args: ["--print"],
+          output: "jsonl",
+          input: "stdin",
+          sessionMode: "existing",
+        },
+      });
 
-    const context = await fixture.prepare({
-      provider: "claude-cli",
-      sessionEntry: { execHost: "node", execNode: "node-a" } as never,
-      cliToolAvailability: { native: ["Read"], openClaw: ["message"] },
-    });
+      const context = await fixture.prepare({
+        provider: "claude-cli",
+        sessionEntry: { execHost: "node", execNode: "node-a" } as never,
+        cliToolAvailability: { native: ["Read"], openClaw: ["message", "skill_workshop"] },
+        ...(workshopEnabled ? { skillLibraryAuthoring } : {}),
+      });
 
-    expect(prepareExecution).toHaveBeenCalledWith(
-      expect.objectContaining({
-        toolAvailability: { native: ["Read"], openClaw: [] },
-      }),
-    );
-    expect(context.params.cliToolAvailability).toEqual({ native: ["Read"], openClaw: [] });
-    await context.preparedBackend.cleanup?.();
-  });
+      expect(prepareExecution).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolAvailability: { native: ["Read"], openClaw: ["skill_workshop"] },
+        }),
+      );
+      expect(context.params.cliToolAvailability).toEqual({
+        native: ["Read"],
+        openClaw: ["skill_workshop"],
+      });
+      if (workshopEnabled) {
+        expect(resolveMcpLoopbackScopedTools).toHaveBeenCalledWith(
+          expect.objectContaining({
+            skillWorkshop: {
+              libraryAuthoring: { ...skillLibraryAuthoring, defaultTarget: "personal" },
+            },
+          }),
+        );
+        expect(context.nodeSkillWorkshop?.name).toBe("skill_workshop");
+        expect(context.systemPromptReport.tools.entries.map((tool) => tool.name)).toContain(
+          "skill_workshop",
+        );
+      } else {
+        expect(resolveMcpLoopbackScopedTools).not.toHaveBeenCalled();
+        expect(context.nodeSkillWorkshop).toBeUndefined();
+      }
+      await context.preparedBackend.cleanup?.();
+    },
+  );
 
   it("finalizes prompt guidance after backend message-tool projection", async () => {
     const prepareExecution = vi.fn(async () => ({ toolAvailabilityEnforced: true as const }));
@@ -4727,40 +4786,41 @@ describe("prepareCliRunContext", () => {
       const config: OpenClawConfig = {
         agents: { ownership: "explicit", entries: { main: {}, worker: {} } },
       };
+      const skillsSnapshot: SkillSnapshot = {
+        prompt: [
+          "<available_skills>",
+          "  <skill>",
+          "    <name>gog</name>",
+          "    <description>Read Gmail safely.</description>",
+          `    <location>${hostSkillPath}</location>`,
+          "  </skill>",
+          "</available_skills>",
+        ].join("\n"),
+        skills: [{ name: "gog" }],
+        resolvedSkills: [
+          {
+            name: "gog",
+            description: "Read Gmail safely.",
+            filePath: hostSkillPath,
+            baseDir: hostSkillDir,
+            source: "openclaw-bundled",
+            sourceInfo: {
+              path: hostSkillPath,
+              source: "openclaw-bundled",
+              scope: "project",
+              origin: "top-level",
+              baseDir: hostSkillDir,
+            },
+            disableModelInvocation: false,
+          },
+        ],
+      };
       const context = await fixture.prepare({
         config,
         sessionKey,
         agentId: "main",
         prompt: "are there any unread emails",
-        skillsSnapshot: {
-          prompt: [
-            "<available_skills>",
-            "  <skill>",
-            "    <name>gog</name>",
-            "    <description>Read Gmail safely.</description>",
-            `    <location>${hostSkillPath}</location>`,
-            "  </skill>",
-            "</available_skills>",
-          ].join("\n"),
-          skills: [{ name: "gog" }],
-          resolvedSkills: [
-            {
-              name: "gog",
-              description: "Read Gmail safely.",
-              filePath: hostSkillPath,
-              baseDir: hostSkillDir,
-              source: "openclaw-bundled",
-              sourceInfo: {
-                path: hostSkillPath,
-                source: "openclaw-bundled",
-                scope: "project",
-                origin: "top-level",
-                baseDir: hostSkillDir,
-              },
-              disableModelInvocation: false,
-            },
-          ],
-        },
+        skillsSnapshot,
       });
 
       expect(ensureSandboxWorkspaceForSessionMock).toHaveBeenCalledWith({
@@ -4768,6 +4828,7 @@ describe("prepareCliRunContext", () => {
         agentId: "main",
         sessionKey,
         workspaceDir: dir,
+        skillsSnapshot,
       });
       expect(context.systemPrompt).toContain(
         "/workspace/.openclaw/sandbox-skills/skills/gog/SKILL.md",

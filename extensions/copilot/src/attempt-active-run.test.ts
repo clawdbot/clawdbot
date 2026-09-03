@@ -36,6 +36,8 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
 
 function registerTestRun(params?: {
   canAcceptSteering?: () => boolean;
+  isAborted?: () => boolean;
+  isSettled?: () => boolean;
   startedAtMs?: number;
   receipt?: Promise<void>;
   send?: SessionLike["send"];
@@ -57,8 +59,8 @@ function registerTestRun(params?: {
     canAcceptSteering: params?.canAcceptSteering ?? (() => true),
     startedAtMs: params?.startedAtMs ?? 1_750_000_000_000,
     input: { runId: "run-1", sessionId: "session-1" } as AttemptParamsLike,
-    isAborted: () => false,
-    isSettled: () => false,
+    isAborted: params?.isAborted ?? (() => false),
+    isSettled: params?.isSettled ?? (() => false),
     session,
     transcriptJournal:
       params?.journal ??
@@ -128,13 +130,27 @@ describe("registerCopilotActiveRun", () => {
   });
 
   it.each(["before response", "after response", "during tools", "hook replacement"])(
-    "persists steering provenance once and confirms its SDK receipt: %s",
+    "persists decorated reply steering with selected mentions once: %s",
     async (timing) => {
       const { journal, recorder, session, target } = await createFixture();
       await journal.persistInitialUser();
       session.emit(event("user.message", "initial-user", { content: "inspect both files" }));
-      const steeringRecorder = createSteeringRecorder(recorder);
-      const { message } = steeringRecorder;
+      const mentions = [{ profileId: "profile-taylor", start: 3, end: 10 }];
+      const message = {
+        role: "user" as const,
+        content: "Hi @Taylor",
+        timestamp: 1,
+        provenance: { kind: "external_user" as const },
+        __openclaw: { humanMentions: mentions },
+      };
+      const steeringRecorder = {
+        ...recorder,
+        message,
+        resolveMessage: vi.fn(async () => message),
+        markSentToProvider: vi.fn(),
+        markRuntimePersisted: vi.fn(),
+      };
+      const modelPrompt = `Reply context: earlier message\n\n${message.content}`;
       const { provenance } = message;
       if (timing === "hook replacement") {
         initializeGlobalHookRunner(
@@ -148,11 +164,15 @@ describe("registerCopilotActiveRun", () => {
           ]),
         );
       }
-      const sdkUser = event("user.message", "steer-1", { content: message.content });
+      const sdkUserEvent = (options: Parameters<SessionLike["send"]>[0]) =>
+        event("user.message", "steer-1", {
+          content: options.displayPrompt ?? options.prompt,
+          transformedContent: options.prompt,
+        });
       const response = createDeferred<string>();
-      const send = vi.fn(() => {
+      const send = vi.fn<SessionLike["send"]>((options) => {
         if (timing !== "after response") {
-          session.emit(sdkUser);
+          session.emit(sdkUserEvent(options));
         }
         return response.promise;
       });
@@ -173,7 +193,7 @@ describe("registerCopilotActiveRun", () => {
       const onQueueAccepted = vi.fn();
       let confirmed = false;
       const delivery = handle
-        .queueMessage(message.content, {
+        .queueMessage(modelPrompt, {
           userTurnTranscriptRecorder: steeringRecorder,
           onQueueAccepted,
           waitForTranscriptCommit: true,
@@ -183,6 +203,7 @@ describe("registerCopilotActiveRun", () => {
           return result;
         });
       await vi.waitFor(() => expect(send).toHaveBeenCalledOnce());
+      const sdkUser = sdkUserEvent(send.mock.calls[0]![0]);
       expect(onQueueAccepted).not.toHaveBeenCalled();
       response.resolve("steer-1");
       await vi.waitFor(() => expect(onQueueAccepted).toHaveBeenCalledWith(true));
@@ -205,16 +226,24 @@ describe("registerCopilotActiveRun", () => {
       await journal.barrier("steering replay");
       const rows = transcriptMessages(await readSessionTranscriptEvents(target));
       const steered = rows.filter(
-        (row) => row.message.role === "user" && row.message.content === message.content,
+        (row) => row.message.idempotencyKey === "copilot-sdk:sdk-session:steer-1",
       );
+      expect(send).toHaveBeenCalledExactlyOnceWith({
+        prompt: modelPrompt,
+        displayPrompt: message.content,
+      });
       expect(steered).toHaveLength(1);
       expect(steered[0]?.message).toMatchObject({
+        role: "user",
+        content: message.content,
         provenance,
+        __openclaw: { humanMentions: mentions },
         idempotencyKey: "copilot-sdk:sdk-session:steer-1",
       });
-      expect(steeringRecorder.markRuntimePersisted).toHaveBeenCalledWith(
-        expect.objectContaining({ provenance }),
+      expect(steeringRecorder.markRuntimePersisted).toHaveBeenCalledExactlyOnceWith(
+        steered[0]?.message,
         expect.objectContaining({ entryId: steered[0]?.id }),
+        { appended: true },
       );
       expect(steeringRecorder.persistApproved).not.toHaveBeenCalled();
       expect(steeringRecorder.markSentToProvider).toHaveBeenCalledOnce();
@@ -324,6 +353,43 @@ describe("registerCopilotActiveRun", () => {
     expect(onQueueAccepted).toHaveBeenCalledWith(false);
     expect(send).not.toHaveBeenCalled();
   });
+
+  it.each(["settled", "aborted", "unavailable"] as const)(
+    "revalidates steering after resolving source text when the run becomes %s",
+    async (changedState) => {
+      const { recorder } = await createFixture();
+      const resolution = createDeferred<Awaited<ReturnType<typeof recorder.resolveMessage>>>();
+      recorder.resolveMessage.mockReturnValue(resolution.promise);
+      let stateChanged = false;
+      const { handle, send } = registerTestRun({
+        isSettled: () => stateChanged && changedState === "settled",
+        isAborted: () => stateChanged && changedState === "aborted",
+        canAcceptSteering: () => !stateChanged || changedState !== "unavailable",
+      });
+      const onQueueAccepted = vi.fn();
+      const outcome = handle
+        .queueMessage("Reply context: earlier message\n\ninspect both files", {
+          userTurnTranscriptRecorder: recorder,
+          onQueueAccepted,
+        })
+        .catch((error: unknown) => error);
+
+      await vi.waitFor(() => expect(recorder.resolveMessage).toHaveBeenCalledOnce());
+      expect(send).not.toHaveBeenCalled();
+      expect(onQueueAccepted).not.toHaveBeenCalled();
+      stateChanged = true;
+      resolution.resolve(recorder.message);
+
+      await expect(outcome).resolves.toMatchObject({
+        message:
+          changedState === "unavailable"
+            ? "Copilot steering is unavailable before initial user validation"
+            : "Copilot steering is unavailable after the active run ended",
+      });
+      expect(send).not.toHaveBeenCalled();
+      expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(false);
+    },
+  );
 
   it("reports a rejected send as rejected", async () => {
     const onQueueAccepted = vi.fn();

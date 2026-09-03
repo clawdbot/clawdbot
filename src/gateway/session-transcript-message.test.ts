@@ -40,9 +40,17 @@ describe("trusted transcript display metadata", () => {
   it.each(["compaction", "reset"])(
     "keeps %s markers in the same physical coordinate space",
     (type) => {
-      expect(projectTranscriptEntryMessage({ type, id: "boundary" }, 3, position)).toMatchObject({
-        role: "system",
-        __openclaw: { kind: type, id: "boundary", seq: 3, transcriptPosition: position },
+      const identity = { runId: "run-compaction", itemId: "item-compaction" };
+      const projected = asOptionalRecord(
+        projectTranscriptEntryMessage({ type, id: "boundary", __openclaw: identity }, 3, position),
+      );
+      expect(projected?.role).toBe("system");
+      expect(projected?.["__openclaw"]).toEqual({
+        kind: type,
+        id: "boundary",
+        seq: 3,
+        transcriptPosition: position,
+        ...(type === "compaction" ? identity : {}),
       });
     },
   );

@@ -2,18 +2,10 @@
    detail overlay, and the guided setup wizard dialog. Everything else uses the
    shared settings design language. */
 
-/* Compact refresh actions should not retain the spacing and top alignment
-   reserved for settings headers with full-size controls. */
+/* Compact refresh actions should not retain the spacing reserved for settings
+   headers with full-size controls. */
 .settings-section:has(.settings-section__actions .btn--xs.btn--icon) {
   gap: var(--space-2);
-}
-
-@media not all and (max-width: 640px) {
-  .settings-section__header:not(:has(.settings-section__desc)):has(
-    .settings-section__actions .btn--xs.btn--icon
-  ) {
-    align-items: center;
-  }
 }
 
 .channels-empty {
@@ -74,6 +66,12 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.channels-cover--icon img {
+  width: 96px;
+  height: 96px;
+  border-radius: var(--radius-lg);
 }
 
 .channels-cover--fallback {

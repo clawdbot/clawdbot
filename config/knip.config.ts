@@ -16,11 +16,15 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 const repositoryScriptEntries = [
   // CI imports this selector from its trusted harness inside an inline Node script.
   ".github/actions/git-owner/test-prerequisites.mjs!",
+  // mobile-release-authority invokes this helper from composite-action YAML.
+  ".github/actions/mobile-release-authority/authority.mjs!",
   // setup-node-env invokes this helper from composite-action YAML.
   ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
   "apps/android/scripts/build-release-artifacts.ts!",
   "scripts/bundle-a2ui.mts!",
   "scripts/build-discord-activity-sdk.mts!",
+  // package-mac-app.sh launches the architecture scheduler by path.
+  "scripts/build-mac-swift.mts!",
   "scripts/check-control-ui-performance.mts!",
   "scripts/check-control-ui-precompressed-assets.mts!",
   "scripts/check-live-cache.ts!",
@@ -93,6 +97,10 @@ const repositoryScriptEntries = [
   "scripts/mcp-code-mode-gateway-e2e.ts!",
   "scripts/openclaw-release-clawhub-plan.ts!",
   "scripts/openclaw-release-clawhub-runtime-state.ts!",
+  // Plugin Prerelease builds immutable package artifacts, then scans them in a bounded child.
+  "scripts/plugin-npm-security-prepare.mts!",
+  "scripts/plugin-npm-security-scan-runner.mjs!",
+  "scripts/plugin-npm-security-scan.mts!",
   // Oxlint loads this JS plugin by path from config/oxlint/boundary-guards.json.
   "scripts/oxlint-boundary-guards.mjs!",
   "scripts/plugin-prerelease-liveish-matrix.mts!",
@@ -103,6 +111,8 @@ const repositoryScriptEntries = [
   "scripts/pr-lib/ci-dispatch.mjs!",
   // merge.sh invokes this native review-authority parser by path.
   "scripts/pr-lib/clawsweeper-review-gate.mjs!",
+  "scripts/pr-lib/gh-api-preflight.mjs!",
+  "scripts/pr-lib/merge-body.mjs!",
   "scripts/pr-lib/review-artifacts.mjs!",
   "scripts/pr-lib/process-group-runner.mjs!",
   "scripts/pre-commit/filter-staged-files.mjs!",

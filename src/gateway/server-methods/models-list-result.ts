@@ -237,7 +237,6 @@ export function createGatewayAgentModelCatalogProjector(params: {
           const routeVariants = resolveRouteVariants(entry);
           const evaluation = evaluateNative(entry, await evaluateEntry(entry, routeVariants));
           const state = resolveLogicalModelCatalogEntryState({
-            entry,
             evaluation,
             routePolicy: openAIModelCatalogRoutePolicy,
           });
@@ -446,7 +445,7 @@ export async function prepareModelsListResult(
       loadedSnapshot = await loadDeferredCatalog(params.context, initialAgentId, {
         readOnly: loadedReadOnly,
         refreshAuth: refresh && loadedReadOnly,
-        ...(!preparedOnly ? { refreshFullCatalog: true } : {}),
+        ...(!preparedOnly ? { refreshFullCatalog: refresh ? true : "stale" } : {}),
       });
       return loadedSnapshot;
     },
@@ -474,7 +473,7 @@ export async function prepareModelsListResult(
         fullSnapshot = await loadDeferredCatalog(params.context, escalationAgentId, {
           readOnly,
           refreshAuth: refresh && readOnly,
-          refreshFullCatalog: true,
+          refreshFullCatalog: refresh ? true : "stale",
         });
         return fullSnapshot;
       },
@@ -680,7 +679,6 @@ export async function prepareModelsListResult(
           evaluation.availability === undefined &&
           evaluation.evidence === "synthetic";
         return resolveLogicalModelCatalogEntryState({
-          entry,
           evaluation,
           authBacked: evaluation.availability === true || syntheticLocal,
           routePolicy: openAIModelCatalogRoutePolicy,

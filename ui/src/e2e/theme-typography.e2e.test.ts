@@ -10,10 +10,10 @@ import { finishElementAnimations } from "../test-helpers/animations.ts";
 import {
   controlUiBundledGatewayUrl,
   installMockGateway,
+  type ControlUiMockGatewayScenario,
   waitForControlUiRoute,
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
-import { requireRecord, requireString } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 /*
@@ -47,7 +47,11 @@ function themeConfigResponse(theme: string, mode: "dark" | "light") {
   };
 }
 
-async function openThemedChat(theme: string, mode: "dark" | "light", basePath = "") {
+async function openThemedChat(
+  theme: string,
+  mode: "dark" | "light",
+  scenario: Pick<ControlUiMockGatewayScenario, "basePath" | "historyMessages"> = {},
+) {
   const context = await suite.newBrowserContext({
     colorScheme: mode,
     locale: "en-US",
@@ -74,39 +78,16 @@ async function openThemedChat(theme: string, mode: "dark" | "light", basePath = 
   const page = await context.newPage();
   const themeRequests: string[] = [];
   page.on("response", (response) => {
-    const url = response.url();
-    if (url.includes("/fonts/") || url.includes("/themes/")) {
-      themeRequests.push(`${url.split("/").pop()} ${response.status()}`);
+    const { pathname } = new URL(response.url());
+    if (pathname.includes("/fonts/") || pathname.includes("/themes/")) {
+      themeRequests.push(`${pathname.split("/").pop()} ${response.status()}`);
     }
   });
   const gateway = await installMockGateway(page, {
-    ...(basePath ? { basePath } : {}),
+    ...scenario,
     methodResponses: { "config.get": themeConfigResponse(theme, mode) },
   });
   return { themeRequests, gateway, page };
-}
-
-async function renderAssistantProse(
-  gateway: Awaited<ReturnType<typeof installMockGateway>>,
-  page: Awaited<ReturnType<typeof openThemedChat>>["page"],
-) {
-  await page.locator(".agent-chat__composer-combobox textarea").fill("say something");
-  await page.getByRole("button", { name: "Send message" }).click();
-  const sendRequest = await gateway.waitForRequest("chat.send");
-  const runId = requireString(
-    requireRecord(sendRequest.params).idempotencyKey,
-    "chat send idempotency key",
-  );
-  const text =
-    "Typography carries the theme: chat prose renders in the reading face while chrome, chips, and code keep their own.";
-  await gateway.emitGatewayEvent("chat", {
-    message: { content: [{ text, type: "text" }], role: "assistant", timestamp: Date.now() },
-    runId,
-    sessionKey: "main",
-    state: "final",
-  });
-  // first() is the prompt this test just sent; the assistant reply is last.
-  await expect.poll(() => page.locator(".chat-text").last().textContent()).toContain("Typography");
 }
 
 async function captureTypography(
@@ -250,9 +231,27 @@ suite.define(() => {
   ] as const)(
     "paints %s chrome and chat prose in its own faces",
     async (theme, body, chat, faces, chatSmoothing) => {
-      const { themeRequests, gateway, page } = await openThemedChat(theme, "dark");
+      const timestamp = Date.now();
+      const text =
+        "Typography carries the theme: chat prose renders in the reading face while chrome, chips, and code keep their own.";
+      const { themeRequests, page } = await openThemedChat(theme, "dark", {
+        historyMessages: [
+          {
+            content: [{ text: "say something", type: "text" }],
+            role: "user",
+            timestamp: timestamp - 1,
+          },
+          {
+            content: [{ text, type: "text" }],
+            role: "assistant",
+            timestamp,
+          },
+        ],
+      });
       await page.goto(`${suite.server.baseUrl}chat`);
-      await renderAssistantProse(gateway, page);
+      await expect
+        .poll(() => page.locator(".chat-text").last().textContent())
+        .toContain("Typography");
 
       const report = await page.evaluate(async () => {
         await document.fonts.ready;
@@ -261,14 +260,18 @@ suite.define(() => {
         const primary = (value: string) =>
           (value.split(",")[0] ?? "").trim().replace(/^["']|["']$/gu, "");
         return {
+          buildId: document.documentElement.getAttribute("data-openclaw-control-ui-build-id"),
           chatFontFamily: lastChat ? primary(getComputedStyle(lastChat).fontFamily) : null,
           chatFontSmoothing: lastChat
             ? getComputedStyle(lastChat).getPropertyValue("-webkit-font-smoothing")
             : null,
           bodyFontFamily: primary(getComputedStyle(document.body).fontFamily),
-          linkHrefs: [...document.querySelectorAll('link[id^="openclaw-typeface-"]')].map((link) =>
-            link.getAttribute("href"),
-          ),
+          stylesheets: [
+            ...document.querySelectorAll<HTMLLinkElement>('link[id^="openclaw-typeface-"]'),
+          ].map((link) => {
+            const url = new URL(link.href);
+            return { pathname: url.pathname, version: url.searchParams.get("v") };
+          }),
           loaded: [...document.fonts].filter((f) => f.status === "loaded").map((f) => f.family),
         };
       });
@@ -276,7 +279,15 @@ suite.define(() => {
       // Every theme also declares the mono face: base.css --mono names
       // JetBrains Mono for code spans regardless of the active family.
       const expectedFaces = [...new Set([...faces, "jetbrains-mono"])];
-      expect(report.linkHrefs).toEqual(expectedFaces.map((face) => `/fonts/${face}.css`));
+      if (report.buildId !== null) {
+        expect(report.buildId).not.toBe("");
+      }
+      expect(report.stylesheets).toEqual(
+        expectedFaces.map((face) => ({
+          pathname: `/fonts/${face}.css`,
+          version: report.buildId,
+        })),
+      );
       expect(report.bodyFontFamily).toBe(body);
       expect(report.chatFontFamily).toBe(chat);
       // Serif chat faces opt out of the app-wide `antialiased` thinning
@@ -379,6 +390,7 @@ suite.define(() => {
         await page.route("**/assets/**.js", (route) => route.abort());
         await page.goto(`${suite.server.baseUrl}chat`);
         const report = await page.evaluate(() => ({
+          buildId: document.documentElement.getAttribute("data-openclaw-control-ui-build-id"),
           background: getComputedStyle(document.documentElement).getPropertyValue("--bg").trim(),
           resolvedTheme: document.documentElement.dataset.theme,
           palette: performance
@@ -386,6 +398,7 @@ suite.define(() => {
             .filter((entry) => new URL(entry.name).pathname.includes("/themes/"))
             .map((entry) => ({
               pathname: new URL(entry.name).pathname,
+              version: new URL(entry.name).searchParams.get("v"),
               blocking: (entry as PerformanceResourceTiming & { renderBlockingStatus: string })
                 .renderBlockingStatus,
             })),
@@ -393,7 +406,7 @@ suite.define(() => {
         expect(report.resolvedTheme).toBe(mode === "dark" ? resolved : `${resolved}-light`);
         expect(report.background).toBe(mode === "dark" ? dark : light);
         expect(report.palette).toEqual([
-          { pathname: `/themes/${theme}.css`, blocking: "blocking" },
+          { pathname: `/themes/${theme}.css`, version: report.buildId, blocking: "blocking" },
         ]);
       }
     },
@@ -513,7 +526,8 @@ suite.define(() => {
     const paletteGate = new Promise<void>((resolve) => {
       releasePalette = resolve;
     });
-    await page.route("**/themes/tide.css", async (route) => {
+    const tidePaletteUrl = /\/themes\/tide\.css(?:\?|$)/u;
+    await page.route(tidePaletteUrl, async (route) => {
       await paletteGate;
       await route.continue();
     });
@@ -534,7 +548,7 @@ suite.define(() => {
       await gateway.emitGatewayEvent("config.changed", { hash: `theme-${theme}`, ts: Date.now() });
     };
     try {
-      const request = page.waitForRequest("**/themes/tide.css");
+      const request = page.waitForRequest(tidePaletteUrl);
       await changeTheme("tide");
       await request;
       expect(await page.locator("html").getAttribute("data-theme")).toBe("openknot-light");
@@ -545,7 +559,7 @@ suite.define(() => {
       ).toBe("#f9f9fb");
       await changeTheme("beacon");
       await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe("beacon-light");
-      const response = page.waitForResponse("**/themes/tide.css");
+      const response = page.waitForResponse(tidePaletteUrl);
       releasePalette();
       await response;
       await page.evaluate(
@@ -574,7 +588,7 @@ suite.define(() => {
     // root-absolute font URLs 404 there and the theme silently falls back to
     // system faces while its palette still applies.
     const basePath = "/openclaw";
-    const { page } = await openThemedChat("absolutely", "dark", basePath);
+    const { page } = await openThemedChat("absolutely", "dark", { basePath });
     const requested: string[] = [];
     // The preview server does not stamp Gateway HTML. Reproduce the actual
     // document contract, rather than letting runtime repair a wrong boot URL.
@@ -615,14 +629,22 @@ suite.define(() => {
         document.getElementById("openclaw-typeface-space-grotesk")?.getAttribute("href") ?? null,
     );
 
-    expect(linkHref).toBe(`${basePath}/fonts/space-grotesk.css`);
+    const buildId = await page.locator("html").getAttribute("data-openclaw-control-ui-build-id");
+    if (buildId !== null) {
+      expect(buildId).not.toBe("");
+    }
+    const fontUrl = new URL(linkHref ?? "", suite.server.baseUrl);
+    expect(fontUrl.pathname).toBe(`${basePath}/fonts/space-grotesk.css`);
+    expect(fontUrl.searchParams.get("v")).toBe(buildId);
     // The palette link is built in the first-paint script from the mount prefix
     // the gateway stamps on <html>, so it has to follow the mount too.
     const paletteHref = await page.evaluate(
       () =>
         document.getElementById("openclaw-theme-palette-absolutely")?.getAttribute("href") ?? null,
     );
-    expect(paletteHref).toBe(`${basePath}/themes/absolutely.css`);
+    const paletteUrl = new URL(paletteHref ?? "", suite.server.baseUrl);
+    expect(paletteUrl.pathname).toBe(`${basePath}/themes/absolutely.css`);
+    expect(paletteUrl.searchParams.get("v")).toBe(buildId);
     expect(requested).toContain(`${basePath}/themes/absolutely.css`);
     expect(
       await page.evaluate(() =>

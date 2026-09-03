@@ -195,6 +195,7 @@ export function isInstalledPluginEnabled(
   const state = resolveEffectivePluginActivationState({
     id: record.pluginId,
     origin: record.origin,
+    channelIds: record.contributions?.channels,
     config: normalizedConfig,
     rootConfig: activationConfig,
     enabledByDefault: isPluginEnabledByDefaultForPlatform(record),

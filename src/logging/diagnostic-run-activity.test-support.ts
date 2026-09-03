@@ -6,14 +6,8 @@ type DiagnosticModelStartedActivityEvent = Pick<
   "runId" | "sessionId" | "sessionKey" | "provider" | "model" | "observationUnit"
 > & { seq?: number };
 
-type DiagnosticRunProgressActivityEvent = Pick<
-  Extract<DiagnosticEventPayload, { type: "run.progress" }>,
-  "runId" | "sessionId" | "sessionKey" | "reason"
-> & { progressKind?: "semantic" | "liveness" };
-
 type DiagnosticRunActivityTestApi = {
   markDiagnosticModelStartedForTest(params: DiagnosticModelStartedActivityEvent): void;
-  markDiagnosticRunProgressForTest(params: DiagnosticRunProgressActivityEvent): void;
   markDiagnosticToolStartedForTest(params: {
     sessionId?: string;
     sessionKey?: string;
@@ -33,10 +27,6 @@ export function markDiagnosticModelStartedForTest(
   params: DiagnosticModelStartedActivityEvent,
 ): void {
   getTestApi().markDiagnosticModelStartedForTest(params);
-}
-
-export function markDiagnosticRunProgressForTest(params: DiagnosticRunProgressActivityEvent): void {
-  getTestApi().markDiagnosticRunProgressForTest(params);
 }
 
 export function markDiagnosticToolStartedForTest(

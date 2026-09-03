@@ -102,6 +102,9 @@ jobs:
           cache-mode: restore
           install-bun: "false"
 
+      - name: Prepare Apple Mermaid assets
+        run: node scripts/prepare-apple-mermaid.mjs
+
       - name: Install Periphery
         run: |
           periphery_dir="$RUNNER_TEMP/openclaw-periphery"

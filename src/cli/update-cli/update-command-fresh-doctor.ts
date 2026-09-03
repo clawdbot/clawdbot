@@ -6,11 +6,15 @@ import {
   UPDATE_POST_CORE_CONVERGENCE_ENV,
 } from "../../commands/doctor/shared/update-phase.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
+import { resolveStateDir } from "../../config/paths.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { buildUpdateDoctorEnv } from "../../infra/update-runner-doctor.js";
+import { redactSupportString } from "../../logging/diagnostic-support-redaction.js";
+import { formatCommandOutput } from "../../process/command-error.js";
 import { runExec } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
+import { truncateUtf8Prefix, truncateUtf8Suffix } from "../../utils/utf8-truncate.js";
 import { resolveNodeRunner } from "./shared.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 import { applyPostPluginUpdateReadiness } from "./update-command-post-plugin-readiness.js";
@@ -143,6 +147,30 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   } catch (error) {
     if (isRecord(error)) {
       result = error;
+    }
+    const redaction = { env: process.env, stateDir: resolveStateDir() };
+    const details = (["stderr", "stdout"] as const).flatMap((stream) => {
+      const output = result?.[stream];
+      if (typeof output !== "string" || !output.trim()) {
+        return [];
+      }
+      // Execa's message starts with full argv. Keep both actual diagnostics before
+      // the bounded update handoff, without cutting a credential before redaction.
+      const redacted = redactSupportString(output, redaction, {
+        maxLength: Number.MAX_SAFE_INTEGER,
+      });
+      const formatted = formatCommandOutput(redacted, 384);
+      let excerpt = formatted;
+      if (Buffer.byteLength(redacted) > 384 || Buffer.byteLength(formatted) > 384) {
+        const beginning = formatCommandOutput(truncateUtf8Prefix(redacted, 256), 256);
+        excerpt = `${truncateUtf8Prefix(beginning, 256)}\n...\n${truncateUtf8Suffix(formatted, 123)}`;
+      }
+      return excerpt ? [`${stream}: ${excerpt}`] : [];
+    });
+    if (details.length > 0) {
+      throw new Error(`Updated ${params.phase} Doctor failed:\n${details.join("\n")}`, {
+        cause: error,
+      });
     }
     throw error;
   } finally {
