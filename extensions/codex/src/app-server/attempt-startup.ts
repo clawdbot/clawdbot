@@ -497,8 +497,7 @@ export async function startCodexAttemptThread(params: {
                   params.agentWorkspaceDeveloperInstructionsAllowed,
                 captureNativeProjectInstructions: params.captureNativeProjectInstructions,
                 projectInstructionsUnavailableToGateway:
-                  params.projectInstructionsUnavailableToGateway === true &&
-                  Boolean(startupEnvironmentSelection?.length),
+                  params.projectInstructionsUnavailableToGateway,
                 nativeProjectDocsDisabledOnResume: params.nativeProjectDocsDisabledOnResume,
                 config: threadConfig,
                 shellEnvironment: params.shellEnvironment,

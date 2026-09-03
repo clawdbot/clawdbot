@@ -215,6 +215,8 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
   memoryToolNames: readonly string[];
   ringZeroActive: boolean;
   sandboxed?: boolean;
+  /** True only when native instruction paths are owned by this Gateway filesystem. */
+  nativeProjectInstructionSourcesHostLocal: boolean;
 }): Promise<CodexWorkspaceBootstrapContext> {
   try {
     const executionWorkspace = params.executionWorkspace ?? params.resolvedWorkspace;
@@ -299,7 +301,8 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       params.params.pluginHarnessToolPolicyRestricted === true;
     // Selected-environment paths belong to that environment, not necessarily the Gateway host.
     // Keep native discovery authoritative when an OpenClaw sandbox owns the filesystem.
-    const nativeProjectInstructionSnapshotAllowed = params.sandboxed !== true;
+    const nativeProjectInstructionSnapshotAllowed =
+      params.sandboxed !== true && params.nativeProjectInstructionSourcesHostLocal;
     const agentProjectInstructionFiles =
       agentWorkspaceDeveloperInstructionsAllowed && nativeProjectDocNeedsOpenClawCarrier
         ? agentRootProjectInstructionFiles

@@ -27,6 +27,7 @@ import {
 } from "./protocol.js";
 import { resolveCodexAppServerReasoningEffort } from "./reasoning-effort.js";
 import {
+  CODEX_UNAVAILABLE_PROJECT_DOCS_AUTHORITY,
   createCodexAppServerBindingStore,
   sessionBindingIdentity,
   type CodexAppServerBindingStore,
@@ -2822,6 +2823,53 @@ describe("Codex plugin binding recovery", () => {
         binding: expect.objectContaining({ threadId: "thread-managed" }),
       }),
     );
+  });
+
+  it("persists a remote instruction owner without an explicit environment selection", async () => {
+    const params = createThreadLifecycleParams(
+      path.join(tempDir, "session-remote-instructions.jsonl"),
+      path.join(tempDir, "workspace-remote-instructions"),
+    );
+    const stateStore = createCodexTestBindingStateStore();
+    const bindingStore = createCodexAppServerBindingStore(stateStore);
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return {
+          ...threadStartResult("thread-remote-instructions"),
+          instructionSources: ["/remote/workspace/AGENTS.md"],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const appServer = createThreadLifecycleAppServerOptions();
+    appServer.start = {
+      ...appServer.start,
+      transport: "websocket",
+      url: "wss://codex.example.test/app-server",
+    };
+    appServer.connectionClass = "remote";
+    appServer.remoteWorkspaceRoot = "/remote/workspace";
+
+    await expect(
+      startOrResumeThreadImpl({
+        client: {
+          request,
+          getRuntimeIdentity: () => ({ codexHome: "/remote/codex" }),
+        } as never,
+        params,
+        cwd: "/remote/workspace",
+        dynamicTools: [],
+        appServer,
+        bindingStore,
+        agentWorkspaceDeveloperInstructionsAllowed: true,
+        projectInstructionsUnavailableToGateway: true,
+      }),
+    ).resolves.toMatchObject({
+      threadId: "thread-remote-instructions",
+      agentWorkspaceDeveloperInstructions: CODEX_UNAVAILABLE_PROJECT_DOCS_AUTHORITY,
+      projectInstructionsUnavailableToGateway: true,
+      environmentSelectionFingerprint: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u),
+    });
   });
 
   it.each([

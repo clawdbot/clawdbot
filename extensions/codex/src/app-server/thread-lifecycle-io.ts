@@ -168,6 +168,12 @@ export async function resumeExistingCodexThread(
       typeof resumeParams.modelProvider === "string" && resumeParams.modelProvider.trim()
         ? resumeParams.modelProvider
         : undefined;
+    const shouldCaptureNativeProjectInstructions =
+      params.captureNativeProjectInstructions === true &&
+      resumeBinding.agentWorkspaceDeveloperInstructions === undefined;
+    const instructionCaptureNotModifiedSinceMs = shouldCaptureNativeProjectInstructions
+      ? performance.timeOrigin + performance.now()
+      : undefined;
     // Keep ownership accounting atomic with the resume request: a
     // pre-aborted request retains no subscription, so it must not reserve.
     throwIfAborted();
@@ -186,6 +192,19 @@ export async function resumeExistingCodexThread(
     acceptedConfiguration = configuration;
     assertCodexThreadAcceptsDirectInput(response.thread);
     configuration.assertConfigured();
+    let capturedAgentWorkspaceDeveloperInstructions: string | null | undefined;
+    if (shouldCaptureNativeProjectInstructions) {
+      capturedAgentWorkspaceDeveloperInstructions =
+        (await lifecycleTiming.measure("project-instructions-capture", () =>
+          captureCodexNativeProjectInstructions({
+            cwd: params.cwd,
+            instructionSources: response.instructionSources,
+            config: resumeParams.config,
+            notModifiedSinceMs: instructionCaptureNotModifiedSinceMs,
+          }),
+        )) ?? null;
+      assertHandoffCurrent();
+    }
     // Current-policy denial must release this subscription and stop, not retry
     // as a fresh thread. A confirmed config change still follows normal rotation.
     const loadedPluginThreadConfig = await context.buildLoadedPluginThreadConfig?.(resumeBinding);
@@ -222,11 +241,13 @@ export async function resumeExistingCodexThread(
     });
     policyOutcome = "acknowledged";
     assertHandoffCurrent();
-    const resumedAgentInstructions =
-      resumeBinding.agentWorkspaceDeveloperInstructions !== undefined ||
-      params.agentWorkspaceDeveloperInstructions !== undefined
-        ? captureAgentInstructions(params, resumeBinding.agentWorkspaceDeveloperInstructions)
-        : {};
+    const resumedAgentInstructions = captureAgentInstructions(
+      params,
+      capturedAgentWorkspaceDeveloperInstructions !== undefined
+        ? capturedAgentWorkspaceDeveloperInstructions
+        : resumeBinding.agentWorkspaceDeveloperInstructions,
+      response.instructionSources,
+    );
     const resumePatch = {
       // Resume moves native subscription ownership to this physical client.
       // Keeping its previous client id disables warm reuse after every restart.

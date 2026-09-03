@@ -112,7 +112,10 @@ import {
   releaseCodexSandboxExecServerEnvironment,
 } from "./sandbox-exec-server.js";
 import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
-import { CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY } from "./session-binding.js";
+import {
+  CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY,
+  CODEX_UNAVAILABLE_PROJECT_DOCS_AUTHORITY,
+} from "./session-binding.js";
 import {
   createCodexTestBindingStore,
   resetCodexTestBindingStore,
@@ -423,6 +426,7 @@ async function buildCodexTurnContextForTest(
     sessionAgentId,
     memoryToolNames,
     ringZeroActive: false,
+    nativeProjectInstructionSourcesHostLocal: true,
   });
   const threadDeveloperInstructions = [
     testing.buildDeveloperInstructions(params, { dynamicTools }),
@@ -5123,6 +5127,90 @@ describe("runCodexAppServerAttempt", () => {
     expect(resumeRequest?.config?.project_doc_max_bytes).toBe(0);
     expect(resumeRequest?.developerInstructions).toContain(capturedGuidance);
     expect(resumeRequest?.developerInstructions).not.toContain(replacementGuidance);
+  });
+
+  it("captures native project instructions while upgrading a legacy cold resume", async () => {
+    const { sessionFile, workspaceDir } = createRunPaths();
+    const agentsPath = path.join(workspaceDir, "AGENTS.md");
+    const capturedGuidance = "Freeze these instructions while upgrading the legacy binding.";
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(agentsPath, capturedGuidance);
+    await writeExistingBinding(sessionFile, workspaceDir);
+    const resumeHarness = createResumeHarness({
+      threadId: "thread-existing",
+      instructionSources: [agentsPath],
+    });
+
+    const resumedRun = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await resumeHarness.waitForMethod("turn/start");
+    await resumeHarness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await resumedRun;
+
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-existing",
+      agentWorkspaceDeveloperInstructions: expect.stringContaining(capturedGuidance),
+    });
+  });
+
+  it("fences sandbox project instructions discovered on a legacy cold resume", async () => {
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("exec"),
+      createRuntimeDynamicTool("process"),
+      createRuntimeDynamicTool("message"),
+    ]);
+    const { sessionFile, workspaceDir } = createRunPaths();
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await writeExistingBinding(sessionFile, workspaceDir);
+    const sandbox = {
+      ...createSandboxContext({}),
+      sessionKey: "agent:main:legacy-sandbox-authority",
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+      runtimeId: `legacy-sandbox-authority-${path.basename(tempDir)}`,
+      runtimeLabel: "Legacy sandbox instruction authority",
+      containerName: "legacy-sandbox-instruction-authority",
+    };
+    const pluginConfig = {
+      appServer: {
+        mode: "yolo" as const,
+        experimental: { sandboxExecServer: true },
+      },
+    };
+    const sandboxParams = createParams(sessionFile, workspaceDir);
+    sandboxParams.disableTools = false;
+    sandboxParams.runtimePlan = createCodexRuntimePlanFixture();
+    sandboxParams.sandbox = sandbox as never;
+    setCodexTestModelSupportsTools(sandboxParams, true);
+    setAgentWorkspaceForTest(sandboxParams, workspaceDir);
+    const sandboxHarness = createResumeHarness({
+      threadId: "thread-existing",
+      instructionSources: ["/workspace/AGENTS.md"],
+    });
+
+    const sandboxRun = runCodexAppServerAttempt(sandboxParams, { pluginConfig });
+    await sandboxHarness.waitForMethod("turn/start");
+    await sandboxHarness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await sandboxRun;
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-existing",
+      agentWorkspaceDeveloperInstructions: CODEX_UNAVAILABLE_PROJECT_DOCS_AUTHORITY,
+      projectInstructionsUnavailableToGateway: true,
+      environmentSelectionFingerprint: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u),
+    });
+    sandboxHarness.close(new Error("sandbox app-server process exited"));
+
+    const hostHarness = createStartedThreadHarness(async (method) => {
+      if (method === "thread/resume") {
+        throw new Error("unsafe thread/resume reached");
+      }
+      return undefined;
+    });
+    const hostParams = createParams(sessionFile, workspaceDir);
+    setAgentWorkspaceForTest(hostParams, workspaceDir);
+    await expect(runCodexAppServerAttempt(hostParams, { pluginConfig })).rejects.toThrow(
+      "original project instructions belong to an unavailable environment",
+    );
+    expect(hostHarness.requests.map((request) => request.method)).not.toContain("thread/resume");
   });
 
   it("keeps the established nested AGENTS.md hierarchy after root drift on cold resume", async () => {
