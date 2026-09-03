@@ -121,6 +121,25 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
   const spawnWorkspaceDir = resolveWorkspaceRoot(options?.spawnWorkspaceDir ?? workspaceDir);
   options?.recordToolPrepStage?.("openclaw-tools:session-workspace");
   const widgetPresentation = resolveWidgetPresentationForRun(options);
+  const inlineWidgetClientAvailable = options?.clientCaps?.includes("inline-widgets") === true;
+  const widgetSessionKey = normalizeOptionalString(
+    options?.runSessionKey ?? options?.agentSessionKey,
+  );
+  const scheduledWidgetExplicitlyAllowed = isToolExplicitlyAllowedByFactoryPolicy({
+    toolName: "show_widget",
+    allowlist: options?.runtimeToolAllowlist,
+    denylist: options?.pluginToolDenylist,
+  });
+  // Scheduled turns with an explicit server-stamped tool cap have no originating
+  // renderer. Persistent session targets may still write their durable board;
+  // detached cron-run sessions stay gated because their board is not user-owned.
+  const scheduledPinnedWidgetOnly =
+    options?.gatewayCallerScheduled === true &&
+    scheduledWidgetExplicitlyAllowed &&
+    !inlineWidgetClientAvailable &&
+    !widgetPresentation.currentChannelPresenter &&
+    Boolean(widgetSessionKey) &&
+    !isCronRunSessionKey(widgetSessionKey);
   const gatewayCallerAccountId = options?.gatewayCallerAccountId ?? options?.agentAccountId;
   const runtimeWebTools = getActiveRuntimeWebToolsMetadataFromState();
   const sandbox =
@@ -411,9 +430,10 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
           createShowWidgetTool({
             sessionId: options?.sessionId,
             agentId: sessionAgentId,
-            agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+            agentSessionKey: widgetSessionKey,
             inlineHostEnabled: isCoreCanvasHostEnabled(resolvedConfig),
-            inlineClientAvailable: options?.clientCaps?.includes("inline-widgets") === true,
+            inlineClientAvailable: inlineWidgetClientAvailable,
+            pinnedOnly: scheduledPinnedWidgetOnly,
             presenters: widgetPresentation.presenters,
             presenterContext: widgetPresentation.context,
           }),
