@@ -688,12 +688,12 @@ function createToolEventRecipientRegistryForStore(
 
   const get = (runId: string) => {
     const entry = store.runs.get(runId)?.toolRecipient;
-    if (!entry) {
-      return undefined;
+    if (entry) {
+      entry.updatedAt = Date.now();
+      prune();
     }
-    entry.updatedAt = Date.now();
-    prune();
-    return entry.connIds;
+    // Pruning may retire this finalized run; never return its former audience.
+    return store.runs.get(runId)?.toolRecipient?.connIds;
   };
 
   const markFinal = (runId: string) => {
