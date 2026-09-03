@@ -127,7 +127,7 @@ describe("board session shell", () => {
     ).toBe(activeMode);
   });
 
-  it("renders an icon-only control with an accessible label for every mode", () => {
+  it("renders an icon and visible label for every mode", () => {
     const container = createContainer();
     render(
       renderBoardViewSwitch({
@@ -142,11 +142,10 @@ describe("board session shell", () => {
     );
 
     const radios = [...container.querySelectorAll("wa-radio")];
-    expect(radios.map((radio) => radio.querySelector(".sr-only")?.textContent)).toEqual([
-      "Chat",
-      "Split",
-      "Dashboard",
-    ]);
+    expect(
+      radios.map((radio) => radio.querySelector(".chat-pane__face-label")?.textContent),
+    ).toEqual(["Chat", "Split", "Dashboard"]);
+    expect(radios.every((radio) => radio.querySelector(".sr-only") === null)).toBe(true);
     expect(radios.every((radio) => radio.querySelector("svg") !== null)).toBe(true);
     expect(radios.map((radio) => radio.getAttribute("title"))).toEqual([
       "Chat",
