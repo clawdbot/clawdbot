@@ -57,6 +57,8 @@ function launchDescriptor(): WorkerLaunchDescriptor {
   };
 }
 
+// Legacy-shape descriptors may fail closed through whole-descriptor rejection or
+// parsed denied exec authority, so accept either outcome here.
 function expectExecDeniedOrDescriptorRejected(candidate: unknown): void {
   let parsed: WorkerLaunchDescriptor;
   try {
