@@ -100,6 +100,7 @@ export type OutboundPayloadDeliveryOutcome =
       hookEffect?: {
         cancelReason?: string;
         metadata?: Record<string, unknown>;
+        suppressFallback?: true;
       };
     }
   | {

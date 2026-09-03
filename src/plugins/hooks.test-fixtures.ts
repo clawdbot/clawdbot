@@ -5,6 +5,7 @@ import type { PluginRegistry } from "./registry.js";
 import type {
   PluginHookAgentContext,
   PluginHookAgentTrigger,
+  PluginHookFailurePolicy,
   PluginHookRegistration,
   PluginToolMatcher,
 } from "./types.js";
@@ -56,6 +57,7 @@ export function createHookRunnerWithRegistry(
     pluginId?: string;
     priority?: number;
     timeoutMs?: number;
+    failurePolicy?: PluginHookFailurePolicy;
     eligibleTriggers?: readonly PluginHookAgentTrigger[];
     requiresToolAuthority?: true;
   }>,

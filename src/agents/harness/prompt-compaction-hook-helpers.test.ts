@@ -13,6 +13,45 @@ afterEach(() => {
 });
 
 describe("resolveAgentHarnessBeforePromptBuildResult", () => {
+  it("replaces the model prompt without duplicating the original input", async () => {
+    const seenEvents: unknown[] = [];
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_prompt_build",
+          handler: (event) => {
+            seenEvents.push(event);
+            return {
+              prompt: `<read_only><message>${event.transcriptPrompt}</message></read_only>`,
+            };
+          },
+        },
+      ]),
+    );
+
+    const result = await resolveAgentHarnessBeforePromptBuildResult({
+      prompt: "OpenClaw assembled context\n\nhello",
+      transcriptPrompt: "hello",
+      developerInstructions: "base instructions",
+      messages: [],
+      ctx: {},
+    });
+
+    expect(result).toEqual({
+      prompt: "<read_only><message>hello</message></read_only>",
+      developerInstructions: "base instructions",
+      promptInputRange: { start: 0, end: 47 },
+    });
+    expect(seenEvents).toEqual([
+      {
+        prompt: "OpenClaw assembled context\n\nhello",
+        transcriptPrompt: "hello",
+        messages: [],
+      },
+    ]);
+    expect(result.prompt.match(/hello/g)).toHaveLength(1);
+  });
+
   it.each([false, true])(
     "isolates nested prompt history across rebuilds (authorized=%s)",
     async (authorized) => {

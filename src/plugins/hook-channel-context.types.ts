@@ -1,6 +1,8 @@
 export interface PluginHookChannelSenderContext {
   /** Channel-scoped sender ID, matching `ctx.senderId` when both are present. */
   id?: string;
+  /** Whether the originating channel identified this as its own account. */
+  isSelf?: boolean;
   [key: string]: unknown;
 }
 

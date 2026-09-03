@@ -69,6 +69,7 @@ import type {
   PluginHookMessageContext,
   PluginHookMessageSendingEvent,
   PluginHookMessageSendingResult,
+  PluginHookFailurePolicy,
   PluginHookName,
   PluginHookRegistration,
   PluginHookSubagentContext,
@@ -111,7 +112,6 @@ type HookRunnerLogger = {
   error: (message: string) => void;
 };
 
-type HookFailurePolicy = "fail-open" | "fail-closed";
 export type VoidHookRunOptions = {
   unrefTimeout?: boolean;
 };
@@ -129,7 +129,7 @@ type HookRunnerOptions = {
    * Optional per-hook failure policy.
    * Defaults to fail-open unless explicitly overridden for a hook name.
    */
-  failurePolicyByHook?: Partial<Record<PluginHookName, HookFailurePolicy>>;
+  failurePolicyByHook?: Partial<Record<PluginHookName, PluginHookFailurePolicy>>;
   /**
    * Optional timeout for void/observation hooks. A timed-out hook is logged and
    * the runner continues, but the plugin's underlying work is not cancelled.
@@ -215,6 +215,7 @@ type ModifyingHookPolicy<K extends PluginHookName, TResult> = {
     result: TResult | undefined;
   }) => void;
   onHandlerError?: (hook: PluginHookRegistration<K>, failOpen: boolean) => void;
+  mapFailClosedError?: (params: { hook: PluginHookRegistration<K>; error: unknown }) => TResult;
 };
 
 type PluginTargetedInboundClaimOutcome =
@@ -310,7 +311,7 @@ export function createHookRunner(
   const failurePolicyByHook = {
     before_agent_run: "fail-closed",
     ...options.failurePolicyByHook,
-  } satisfies Partial<Record<PluginHookName, HookFailurePolicy>>;
+  } satisfies Partial<Record<PluginHookName, PluginHookFailurePolicy>>;
   const voidHookTimeoutMsByHook = {
     ...DEFAULT_VOID_HOOK_TIMEOUT_MS_BY_HOOK,
     ...options.voidHookTimeoutMsByHook,
@@ -325,8 +326,15 @@ export function createHookRunner(
   const runtimeDecisionScopeId = randomUUID();
   let runtimeDecisionOrdinal = 0;
 
-  const shouldCatchHookErrors = (hookName: PluginHookName): boolean =>
-    catchErrors && (failurePolicyByHook[hookName] ?? "fail-open") === "fail-open";
+  const resolveHookFailurePolicy = (
+    hookName: PluginHookName,
+    hook?: PluginHookRegistration,
+  ): PluginHookFailurePolicy => hook?.failurePolicy ?? failurePolicyByHook[hookName] ?? "fail-open";
+
+  const shouldCatchHookErrors = (
+    hookName: PluginHookName,
+    hook?: PluginHookRegistration,
+  ): boolean => catchErrors && resolveHookFailurePolicy(hookName, hook) === "fail-open";
 
   const recordBeforeToolCallDecision = (params: {
     event: PluginHookBeforeToolCallEvent;
@@ -509,7 +517,10 @@ export function createHookRunner(
             ],
             toolRestrictions,
           );
+    const prompt = firstDefined(acc?.prompt, next.prompt);
     return {
+      // Keep the first defined replacement so higher-priority hooks win.
+      ...(prompt !== undefined ? { prompt } : {}),
       // Keep the first defined system prompt so higher-priority hooks win.
       systemPrompt: firstDefined(acc?.systemPrompt, next.systemPrompt),
       prependContext: concatOptionalTextSegments({
@@ -643,10 +654,11 @@ export function createHookRunner(
   const handleHookError = (params: {
     hookName: PluginHookName;
     pluginId: string;
+    hook?: PluginHookRegistration;
     error: unknown;
   }): never | void => {
     const msg = `[hooks] ${params.hookName} handler from ${params.pluginId} failed: ${formatHookErrorForLog(params.error)}`;
-    if (shouldCatchHookErrors(params.hookName)) {
+    if (shouldCatchHookErrors(params.hookName, params.hook)) {
       logger?.error(msg);
       return;
     }
@@ -885,12 +897,24 @@ export function createHookRunner(
           }
         }
       } catch (err) {
-        const failOpen = !(err instanceof HookIsolationError) && shouldCatchHookErrors(hookName);
+        const failOpen =
+          !(err instanceof HookIsolationError) && shouldCatchHookErrors(hookName, hook);
         policy.onHandlerError?.(hook, failOpen);
         if (err instanceof HookIsolationError) {
           throw err;
         }
-        handleHookError({ hookName, pluginId: hook.pluginId, error: err });
+        if (
+          resolveHookFailurePolicy(hookName, hook) === "fail-closed" &&
+          policy.mapFailClosedError
+        ) {
+          logger?.error(
+            `[hooks] ${hookName} handler from ${hook.pluginId} failed closed: ${formatHookErrorForLog(err)}`,
+          );
+          result = policy.mapFailClosedError({ hook, error: err });
+          shouldStop = policy.shouldStop?.(result) ?? true;
+        } else {
+          handleHookError({ hookName, pluginId: hook.pluginId, hook, error: err });
+        }
       }
       policy.assertHandlerBoundaryActive?.();
       if (shouldStop) {
@@ -1333,6 +1357,9 @@ export function createHookRunner(
           payload: currentPayload as PluginHookReplyPayload,
           cancel: stickyTrue(result?.cancel, handlerResult.cancel),
           reason: lastDefined(result?.reason, handlerResult.reason),
+          ...(stickyTrue(result?.suppressFallback, handlerResult.suppressFallback)
+            ? { suppressFallback: true }
+            : {}),
         };
 
         if (result.cancel === true) {
@@ -1377,6 +1404,11 @@ export function createHookRunner(
         },
         shouldStop: (result) => result.cancel === true,
         terminalLabel: "cancel=true",
+        mapFailClosedError: ({ hook }) => ({
+          cancel: true,
+          cancelReason: "message_sending_hook_failed_closed",
+          metadata: { pluginId: hook.pluginId },
+        }),
       },
     );
   }

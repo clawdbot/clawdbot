@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildAgentHookContextChannelFields,
   buildAgentHookContextIdentityFields,
+  withAgentHookSenderSelf,
 } from "./hook-agent-context.js";
 
 describe("buildAgentHookContextChannelFields", () => {
@@ -46,10 +47,14 @@ describe("buildAgentHookContextIdentityFields", () => {
     expect(
       buildAgentHookContextIdentityFields({
         senderId: "open-id-1",
+        senderName: "Alice",
+        senderE164: "+15551234567",
         chatId: "chat-1",
       }),
     ).toEqual({
       senderId: "open-id-1",
+      senderName: "Alice",
+      senderE164: "+15551234567",
       chatId: "chat-1",
       channelContext: {
         sender: { id: "open-id-1" },
@@ -79,8 +84,26 @@ describe("buildAgentHookContextIdentityFields", () => {
       buildAgentHookContextIdentityFields({
         trigger: "cron",
         senderId: "open-id-1",
+        senderName: "Alice",
+        senderE164: "+15551234567",
         chatId: "chat-1",
       }),
     ).toEqual({});
+  });
+});
+
+describe("withAgentHookSenderSelf", () => {
+  it("preserves an ingress-authenticated self sender", () => {
+    expect(
+      withAgentHookSenderSelf({
+        channelContext: { sender: { id: "+15551234567" } },
+        senderIsSelf: true,
+      }),
+    ).toEqual({ sender: { id: "+15551234567", isSelf: true } });
+  });
+
+  it("does not invent a self sender for ordinary inbound messages", () => {
+    const channelContext = { sender: { id: "+15551234567" } };
+    expect(withAgentHookSenderSelf({ channelContext })).toBe(channelContext);
   });
 });

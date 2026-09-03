@@ -116,6 +116,7 @@ function resolveDurableSuppression(
     reason: send.reason,
     ...(hookEffect?.cancelReason ? { cancelReason: hookEffect.cancelReason } : {}),
     ...(hookEffect?.metadata ? { metadata: hookEffect.metadata } : {}),
+    ...(hookEffect?.suppressFallback ? { suppressFallback: true } : {}),
   };
 }
 

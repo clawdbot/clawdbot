@@ -35,6 +35,8 @@ export type AgentHarnessHookContext = {
   contextWindowReferenceTokens?: number;
   config?: OpenClawConfig;
   senderId?: string;
+  senderName?: string;
+  senderE164?: string;
   chatId?: string;
   channel?: string;
   channelContext?: PluginHookChannelContext;
@@ -67,6 +69,8 @@ export function buildAgentHookContext(params: AgentHarnessHookContext): PluginHo
     ...buildAgentHookContextIdentityFields({
       trigger: params.trigger,
       senderId: params.senderId,
+      senderName: params.senderName,
+      senderE164: params.senderE164,
       chatId: params.chatId,
       channelContext: params.channelContext,
     }),

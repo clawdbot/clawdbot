@@ -76,7 +76,9 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   let acceptedFinal = false;
   let sessionWriterDeliveryRevoked = false;
   let channelTransformSuppressedFinal = false;
+  let replyHookSuppressedFallback = false;
   const finalDeliveries: Array<Promise<ReplyDispatchDeliveryOutcome> | undefined> = [];
+  const fallbackSuppressionOutcomes: Array<Promise<ReplyDispatchDeliveryOutcome>> = [];
   const sentFinalPayloadDedupeKeys = new Set<string>();
   let deferredTtsTextPending = state.progressState.accumulatedBlockTtsText;
   let continuationSettlementAttempted = false;
@@ -153,6 +155,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
             }
           : {}),
       });
+      replyHookSuppressedFallback ||= finalReply.suppressFallback === true;
       if (finalReply.sessionWriterDeliveryRevoked) {
         sessionWriterDeliveryRevoked = true;
         continue;
@@ -175,6 +178,9 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       routedFinalCount += finalReply.routedFinalCount;
       if (finalReply.queuedFinal) {
         finalDeliveries.push(finalReply.dispatcherOutcome);
+        if (finalReply.dispatcherOutcome) {
+          fallbackSuppressionOutcomes.push(finalReply.dispatcherOutcome);
+        }
       }
       // Metadata survives usage, threading, and transcript decoration; object identity does not.
       if (pendingContinuationSettlement && getReplyPayloadMetadata(reply)?.continuationStatus) {
@@ -269,6 +275,10 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
             abortSignal: getDispatchAbortSignal(),
             skipTts: true,
           });
+          replyHookSuppressedFallback ||= finalReply.suppressFallback === true;
+          if (finalReply.dispatcherOutcome) {
+            fallbackSuppressionOutcomes.push(finalReply.dispatcherOutcome);
+          }
           queuedFinal = finalReply.queuedFinal || queuedFinal;
           routedFinalCount += finalReply.routedFinalCount;
         } else if (
@@ -282,6 +292,10 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
             abortSignal: getDispatchAbortSignal(),
             skipTts: true,
           });
+          replyHookSuppressedFallback ||= finalReply.suppressFallback === true;
+          if (finalReply.dispatcherOutcome) {
+            fallbackSuppressionOutcomes.push(finalReply.dispatcherOutcome);
+          }
           queuedFinal = finalReply.queuedFinal || queuedFinal;
           routedFinalCount += finalReply.routedFinalCount;
         }
@@ -298,6 +312,10 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
             { text: deferredVisibleText },
             { abortSignal: getDispatchAbortSignal(), skipTts: true },
           );
+          replyHookSuppressedFallback ||= finalReply.suppressFallback === true;
+          if (finalReply.dispatcherOutcome) {
+            fallbackSuppressionOutcomes.push(finalReply.dispatcherOutcome);
+          }
           queuedFinal = finalReply.queuedFinal || queuedFinal;
           routedFinalCount += finalReply.routedFinalCount;
         }
@@ -324,6 +342,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     !pendingContinuation &&
     !sessionWriterDeliveryRevoked &&
     !channelTransformSuppressed &&
+    !replyHookSuppressedFallback &&
     !getObservedReplyDelivery() &&
     !replyAcceptedByActiveRun &&
     !turnLedger.hasVisibleDelivery();
@@ -337,6 +356,11 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     queuedSettleResult = await turnLedger.settleQueued(getDispatchAbortSignal());
   }
   if (queuedSettleResult === "settled") {
+    replyHookSuppressedFallback ||=
+      fallbackSuppressionOutcomes.length > 0 &&
+      (await Promise.all(fallbackSuppressionOutcomes)).some(
+        (outcome) => outcome === "cancelled-suppress-fallback",
+      );
     // Adapter-owned presentation may capture a final after sending hooks. Keep that
     // intentional suppression distinct from invisible, cancelled, or failed delivery.
     channelTransformSuppressed ||=
@@ -461,7 +485,8 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     !emptyFinalAllowedAsSilent &&
     !deliberateSilentTerminalReply &&
     !pendingContinuation &&
-    !channelTransformSuppressed
+    !channelTransformSuppressed &&
+    !replyHookSuppressedFallback
       ? { noVisibleReplyFallbackEligible: true }
       : {}),
     ...(noVisibleReplyFallbackDelivered ? { noVisibleReplyFallbackDelivered: true } : {}),

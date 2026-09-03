@@ -198,6 +198,7 @@ export type ChannelDeliveryResult = ChannelDeliveryOutcome & {
     reason: OutboundPayloadDeliverySuppressionReason | "channel_transform" | "no_visible_result";
     cancelReason?: string;
     metadata?: Record<string, unknown>;
+    suppressFallback?: true;
   };
   /** Same-payload native settlement; resolved fields override this result before observation. */
   finalization?: Promise<ChannelDeliveryOutcome>;

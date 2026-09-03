@@ -30,6 +30,30 @@ function createDiagnosticFixture() {
 }
 
 describe("plugin registration diagnostics", () => {
+  it("retains fail-closed policy only for message_sending registrations", () => {
+    const { builder, createRecord } = createDiagnosticFixture();
+    const record = createRecord("outbound-policy");
+    const api = builder.createApi(record, { config: {} });
+
+    api.on("message_sending", () => undefined, { failurePolicy: "fail-closed" });
+    // @ts-expect-error Untyped JavaScript plugins can pass this option to unsupported hooks.
+    api.on("message_received", () => undefined, { failurePolicy: "fail-closed" });
+
+    expect(builder.registry.typedHooks).toEqual([
+      expect.objectContaining({
+        hookName: "message_sending",
+        failurePolicy: "fail-closed",
+      }),
+      expect.not.objectContaining({ failurePolicy: expect.anything() }),
+    ]);
+    expect(builder.registry.diagnostics).toEqual([
+      expect.objectContaining({
+        level: "warn",
+        message: 'typed hook "message_received" ignores failure policy',
+      }),
+    ]);
+  });
+
   it("preserves ordered severity and call-time provenance across registrars and rollback", () => {
     const { builder, createRecord } = createDiagnosticFixture();
     const alpha = createRecord("alpha");

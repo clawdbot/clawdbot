@@ -548,6 +548,32 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(result.noVisibleReplyFallbackDelivered).toBe(true);
   });
 
+  it("does not synthesize a fallback after terminal reply-hook cancellation", async () => {
+    setNoAbort();
+    const deliver = vi.fn(async () => {});
+    const dispatcher = createReplyDispatcher({
+      deliver,
+      beforeDeliver: async (payload) => {
+        setReplyPayloadMetadata(payload, { replyHookSuppressesFallback: true });
+        return null;
+      },
+    });
+    const replyResolver = vi.fn(async () => ({ text: "SKIP_RELAY" }));
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ ChatType: "direct" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(deliver).not.toHaveBeenCalled();
+    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
+    expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
+  });
+
   it("reports queue-cap rejection instead of a temporary model failure", async () => {
     setNoAbort();
     diagnosticMocks.logMessageDispatchCompleted.mockClear();

@@ -583,6 +583,7 @@ describe("routeReply", () => {
           index: 0,
           status: "suppressed",
           reason: "cancelled_by_reply_payload_sending_hook",
+          hookEffect: { suppressFallback: true },
         });
         return [];
       },
@@ -598,6 +599,7 @@ describe("routeReply", () => {
       ok: true,
       delivered: false,
       suppressed: true,
+      suppressFallback: true,
       reason: "cancelled_by_reply_payload_sending_hook",
     });
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);

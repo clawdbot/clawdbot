@@ -828,6 +828,7 @@ export async function prepareCliRunContext(
       return await resolvePromptBuildHookResult({
         config: runConfig,
         prompt: params.prompt,
+        transcriptPrompt: params.transcriptPrompt ?? params.prompt,
         messages: await loadOpenClawHistoryMessages(),
         hookCtx: promptBuildHookContext,
         hookRunner: promptBuildHookRunner,
@@ -1784,6 +1785,9 @@ export async function prepareCliRunContext(
     if (!skipsTurnPreparation) {
       try {
         const hookResult = promptBuildHookResult;
+        if (hookResult?.prompt !== undefined) {
+          preparedPrompt = hookResult.prompt;
+        }
         const prependContext = [
           hookResult?.prependContext,
           authorizedPromptBuildResult?.prependContext,

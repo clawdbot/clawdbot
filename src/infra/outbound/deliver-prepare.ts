@@ -174,6 +174,7 @@ export async function prepareOutboundPayloadBatch(
         sourceIndex,
         status: "suppressed",
         reason: "cancelled_by_reply_payload_sending_hook",
+        ...(replyHookResult.suppressFallback ? { hookEffect: { suppressFallback: true } } : {}),
       });
       continue;
     }
@@ -192,6 +193,7 @@ export async function prepareOutboundPayloadBatch(
         replyToId: resolveCurrentReplyTo(replyPayload).replyToId,
         threadId: params.threadId,
         sessionKey: sessionKeyForHooks,
+        gatewayClientScopes: params.gatewayClientScopes,
       });
     } catch (error) {
       // Modifier handlers are fail-open. Only a host invariant failure can

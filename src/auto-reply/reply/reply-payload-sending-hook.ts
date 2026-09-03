@@ -4,7 +4,7 @@ import type {
   PluginHookReplyPayloadSendingContext,
   PluginHookReplyUsageState,
 } from "../../plugins/hook-types.js";
-import { copyReplyPayloadMetadata } from "../reply-payload.js";
+import { copyReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
 
@@ -36,6 +36,9 @@ export async function runReplyPayloadSendingHook(params: {
   );
 
   if (result?.cancel) {
+    if (params.kind === "final" && result.suppressFallback === true) {
+      setReplyPayloadMetadata(params.payload, { replyHookSuppressesFallback: true });
+    }
     return null;
   }
   const payload = (result?.payload as ReplyPayload | undefined) ?? params.payload;

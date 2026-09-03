@@ -16,6 +16,7 @@ export function createSuppressedChannelDeliveryResult(params: {
   reason: NonNullable<ChannelDeliveryResult["suppression"]>["reason"];
   cancelReason?: string;
   metadata?: Record<string, unknown>;
+  suppressFallback?: true;
 }): ChannelDeliveryResult {
   return {
     visibleReplySent: false,
@@ -23,6 +24,7 @@ export function createSuppressedChannelDeliveryResult(params: {
       reason: params.reason,
       ...(params.cancelReason ? { cancelReason: params.cancelReason } : {}),
       ...(params.metadata ? { metadata: params.metadata } : {}),
+      ...(params.suppressFallback ? { suppressFallback: true } : {}),
     },
   };
 }

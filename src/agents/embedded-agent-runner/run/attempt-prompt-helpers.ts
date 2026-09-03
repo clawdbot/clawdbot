@@ -96,6 +96,7 @@ export function forgetPromptBuildDrainCacheForRun(runId: string | undefined): vo
 export async function resolvePromptBuildHookResult(params: {
   config: OpenClawConfig;
   prompt: string;
+  transcriptPrompt?: string;
   messages: unknown[];
   hookCtx: PluginHookAgentContext;
   hookRunner?: PromptBuildHookRunner | null;
@@ -157,6 +158,9 @@ export async function resolvePromptBuildHookResult(params: {
         .runBeforePromptBuild(
           {
             prompt: params.prompt,
+            ...(params.transcriptPrompt !== undefined
+              ? { transcriptPrompt: params.transcriptPrompt }
+              : {}),
             messages: params.messages,
           },
           params.hookCtx,
@@ -167,6 +171,7 @@ export async function resolvePromptBuildHookResult(params: {
         })
     : undefined;
   return {
+    ...(promptBuildResult?.prompt !== undefined ? { prompt: promptBuildResult.prompt } : {}),
     systemPrompt: promptBuildResult?.systemPrompt,
     ...(promptBuildResult?.toolsAllow !== undefined
       ? { toolsAllow: promptBuildResult.toolsAllow }
