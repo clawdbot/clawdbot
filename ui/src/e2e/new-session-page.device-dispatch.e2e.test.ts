@@ -21,6 +21,7 @@ const gitRepository = {
   branches: [{ kind: "local", name: "main" }],
   defaultBranch: "main",
   repositoryStatus: "git",
+  allocationStatus: "available",
 };
 
 suite.define(() => {
@@ -431,6 +432,7 @@ suite.define(() => {
         workspace: WORKSPACE,
         workspaceGit: true,
         methodResponses: {
+          "worktrees.branches": gitRepository,
           "environments.list": {
             environments: [
               {

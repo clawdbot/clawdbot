@@ -262,6 +262,7 @@ suite.define(() => {
           branches: [{ kind: "local", name: "main" }],
           defaultBranch: "main",
           repositoryStatus: "git",
+          allocationStatus: "available",
         },
         "sessions.create": { key: sessionKey, runStarted: true, runId },
         "chat.startup": history,

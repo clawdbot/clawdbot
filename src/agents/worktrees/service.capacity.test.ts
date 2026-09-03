@@ -115,6 +115,28 @@ describe("ManagedWorktreeService capacity", () => {
     expect(service.listRegistryRecords()).toEqual([]);
   });
 
+  it("matches allocation status to the caller's setup-script authority", async () => {
+    const script = path.join(repo, ".openclaw", "worktree-setup.sh");
+    await fs.mkdir(path.dirname(script));
+    await fs.writeFile(script, "#!/bin/sh\n", { mode: 0o755 });
+    availableBytes = 18 * GiB;
+
+    await expect(
+      service.listRepositoryBranches(repo, {
+        includeAllocationStatus: true,
+        baseRef: "HEAD",
+        runSetupScript: false,
+      }),
+    ).resolves.toMatchObject({ allocationStatus: "available" });
+    await expect(
+      service.listRepositoryBranches(repo, {
+        includeAllocationStatus: true,
+        baseRef: "HEAD",
+        runSetupScript: true,
+      }),
+    ).resolves.toMatchObject({ allocationStatus: "insufficient-space" });
+  });
+
   it("requires a readable capacity sample before creating a checkout", async () => {
     vi.mocked(fsSync.statfsSync).mockImplementation(() => {
       throw new Error("volume unavailable");
@@ -124,6 +146,78 @@ describe("ManagedWorktreeService capacity", () => {
     ).rejects.toThrow(/determine.*disk space|disk space.*unavailable/i);
     expect(service.listRegistryRecords()).toEqual([]);
     expect(await git(repo, "branch", "--list", "openclaw/unknown-space")).toBe("");
+  });
+
+  it.each([
+    { available: 100, status: "available" },
+    { available: 1, status: "insufficient-space" },
+  ])(
+    "reports $status allocation status with $available GiB available",
+    async ({ available, status }) => {
+      availableBytes = available * GiB;
+
+      await expect(
+        service.listRepositoryBranches(repo, {
+          includeRepositoryStatus: true,
+          includeAllocationStatus: true,
+          baseRef: "HEAD",
+        }),
+      ).resolves.toMatchObject({ repositoryStatus: "git", allocationStatus: status });
+    },
+  );
+
+  it("keeps repository status discovery local-only", async () => {
+    const realRun = commandExec.runCommandWithTimeout;
+    const run = vi
+      .spyOn(commandExec, "runCommandWithTimeout")
+      .mockImplementation((argv, options) => realRun(argv, options));
+
+    await expect(
+      service.listRepositoryBranches(repo, { includeRepositoryStatus: true }),
+    ).resolves.toMatchObject({ repositoryStatus: "git" });
+    expect(run.mock.calls.some(([argv]) => argv.includes("fetch"))).toBe(false);
+  });
+
+  it("estimates allocation for the selected base ref", async () => {
+    await git(repo, "checkout", "-b", "large-base");
+    await fs.writeFile(path.join(repo, "large.bin"), Buffer.alloc(8 * 1024 ** 2));
+    await git(repo, "add", "large.bin");
+    await git(repo, "commit", "-m", "large base");
+    await git(repo, "checkout", "main");
+    availableBytes = 16 * GiB + 12 * 1024 ** 2;
+
+    await expect(
+      service.listRepositoryBranches(repo, {
+        includeAllocationStatus: true,
+        baseRef: "main",
+      }),
+    ).resolves.toMatchObject({ allocationStatus: "available" });
+    await expect(
+      service.listRepositoryBranches(repo, {
+        includeAllocationStatus: true,
+        baseRef: "large-base",
+      }),
+    ).resolves.toMatchObject({ allocationStatus: "insufficient-space" });
+  });
+
+  it("fails closed when allocation preflight omits its base ref", async () => {
+    await expect(
+      service.listRepositoryBranches(repo, { includeAllocationStatus: true }),
+    ).resolves.toMatchObject({ allocationStatus: "unavailable" });
+  });
+
+  it("reports unavailable allocation status when disk capacity cannot be read", async () => {
+    vi.mocked(fsSync.statfsSync).mockImplementation(() => {
+      throw new Error("volume unavailable");
+    });
+
+    await expect(
+      service.listRepositoryBranches(repo, {
+        includeRepositoryStatus: true,
+        includeAllocationStatus: true,
+        baseRef: "HEAD",
+      }),
+    ).resolves.toMatchObject({ repositoryStatus: "git", allocationStatus: "unavailable" });
   });
 
   it("creates beyond 100 live checkouts without removing prior worktrees", async () => {

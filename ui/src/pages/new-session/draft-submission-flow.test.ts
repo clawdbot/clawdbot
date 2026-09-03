@@ -279,7 +279,12 @@ describe("DraftSubmissionFlow", () => {
       },
       request: async (method) =>
         method === "worktrees.branches"
-          ? { repositoryStatus: "git", branches: ["main"], headBranch: "main" }
+          ? {
+              repositoryStatus: "git",
+              branches: ["main"],
+              headBranch: "main",
+              allocationStatus: "available",
+            }
           : method === "worktrees.create"
             ? { path: "/repo/worktrees/native" }
             : { sessionId: "native-worktree" },
@@ -288,6 +293,9 @@ describe("DraftSubmissionFlow", () => {
     place.selectWorktree(true);
     place.setWorktreeName("native");
     place.setBaseRef("main");
+    await vi.waitFor(() =>
+      expect(place.repository).toMatchObject({ kind: "git", allocationStatus: "available" }),
+    );
     await flow.submit();
     expect(request).toHaveBeenCalledWith("worktrees.create", {
       repoRoot: "/repo",

@@ -52,6 +52,7 @@ suite.define(() => {
           branches: [{ kind: "local", name: "main" }],
           defaultBranch: "main",
           repositoryStatus: "git",
+          allocationStatus: "available",
         },
       },
     });
@@ -134,6 +135,7 @@ suite.define(() => {
           branches: [{ kind: "local", name: "main" }],
           defaultBranch: "main",
           repositoryStatus: "git",
+          allocationStatus: "available",
         },
         "sessions.create": { key: sessionKey },
         "sessions.dispatch": {
@@ -345,6 +347,7 @@ suite.define(() => {
           branches: [{ kind: "local", name: "main" }],
           defaultBranch: "main",
           repositoryStatus: "git",
+          allocationStatus: "available",
         },
         "chat.history": {
           messages: [

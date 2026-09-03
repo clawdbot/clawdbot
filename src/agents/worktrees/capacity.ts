@@ -8,6 +8,16 @@ import { requireGit } from "./git.js";
 const GiB = 1024 ** 3;
 export const WORKTREE_SETUP_HEADROOM_BYTES = 4 * GiB;
 
+export class WorktreeDiskSpaceError extends Error {
+  constructor(
+    readonly kind: "unavailable" | "insufficient",
+    message: string,
+  ) {
+    super(message);
+    this.name = "WorktreeDiskSpaceError";
+  }
+}
+
 /** Admission estimates allocations, not a quota on arbitrary repository scripts or other writers. */
 export function requireWorktreeDiskSpace(
   demands: readonly { path: string; bytes: number }[],
@@ -21,11 +31,20 @@ export function requireWorktreeDiskSpace(
   for (const demand of demands) {
     const space = tryReadDiskSpace(demand.path);
     if (!space || space.totalBytes === null) {
-      throw new Error(
+      throw new WorktreeDiskSpaceError(
+        "unavailable",
         `Cannot determine disk space near ${demand.path}; check the volume and retry ${purpose}.`,
       );
     }
-    const device = statSync(space.checkedPath).dev;
+    let device: number;
+    try {
+      device = statSync(space.checkedPath).dev;
+    } catch {
+      throw new WorktreeDiskSpaceError(
+        "unavailable",
+        `Cannot determine disk space near ${demand.path}; check the volume and retry ${purpose}.`,
+      );
+    }
     const existing = volumes.get(device);
     if (existing) {
       existing.available = Math.min(existing.available, space.availableBytes);
@@ -46,7 +65,8 @@ export function requireWorktreeDiskSpace(
       : Math.max(4 * GiB, Math.min(volume.total / 10, 16 * GiB));
     const required = reserve + volume.bytes;
     if (!Number.isSafeInteger(Math.ceil(required)) || volume.available < required) {
-      throw new Error(
+      throw new WorktreeDiskSpaceError(
+        "insufficient",
         `Insufficient disk space near ${volume.path} for ${purpose}: ${formatDiskSpaceBytes(volume.available)} available; approximately ${formatDiskSpaceBytes(required)} required including safety reserve. Free caches or archive/remove unused worktrees, then retry.`,
       );
     }

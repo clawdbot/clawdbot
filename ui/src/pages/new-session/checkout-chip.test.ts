@@ -80,7 +80,7 @@ describe("Checkout chip state", () => {
     ({ worktree, remotePlacement }) => {
       const container = document.createElement("div");
       const onSelectWorktree = vi.fn();
-      const onBaseRefInput = vi.fn();
+      const onBaseRefChange = vi.fn();
       const onWorktreeNameInput = vi.fn();
       render(
         renderCheckoutChip({
@@ -102,7 +102,8 @@ describe("Checkout chip state", () => {
           onPopoverHide: () => undefined,
           onPopoverAfterHide: () => undefined,
           onSelectWorktree,
-          onBaseRefInput,
+          onManageWorktrees: () => undefined,
+          onBaseRefChange,
           onWorktreeNameInput,
         }),
         container,
@@ -138,10 +139,10 @@ describe("Checkout chip state", () => {
         expect(baseRef.value).toBe("main");
         expect(name.placeholder).toBe("Named from the session title");
         baseRef.value = " release ";
-        baseRef.dispatchEvent(new Event("input"));
+        baseRef.dispatchEvent(new Event("change"));
         name.value = " checkout-proof ";
         name.dispatchEvent(new Event("input"));
-        expect(onBaseRefInput).toHaveBeenCalledWith("release");
+        expect(onBaseRefChange).toHaveBeenCalledWith("release");
         expect(onWorktreeNameInput).toHaveBeenCalledWith("checkout-proof");
         expect(container.textContent).toContain(
           "Creates branch openclaw/<name> in a separate checkout.",
@@ -152,6 +153,61 @@ describe("Checkout chip state", () => {
       expect(container.textContent?.includes("Syncs OpenClaw to the selected runner")).toBe(
         remotePlacement,
       );
+    },
+  );
+  it.each(["insufficient-space", "unavailable"] as const)(
+    "blocks worktree selection when allocation is %s",
+    (status) => {
+      const container = document.createElement("div");
+      const onSelectWorktree = vi.fn();
+      const onManageWorktrees = vi.fn();
+      const onBaseRefChange = vi.fn();
+      render(
+        renderCheckoutChip({
+          state: { label: "feature" },
+          remotePlacement: false,
+          folderLabel: "OpenClaw",
+          worktree: false,
+          worktreeAvailable: true,
+          allocationBlockedReason:
+            status === "insufficient-space"
+              ? "No space for a worktree"
+              : "Worktree capacity unknown",
+          branches: { repoRoot: "/repo", branches: [], headBranch: "feature" },
+          branchesLoading: false,
+          baseRef: "main",
+          worktreeName: "",
+          submitting: false,
+          pendingPlacement: false,
+          popoverOpen: true,
+          popoverHiding: false,
+          onGuardTransition: () => undefined,
+          onPopoverShow: () => undefined,
+          onPopoverHide: () => undefined,
+          onPopoverAfterHide: () => undefined,
+          onSelectWorktree,
+          onManageWorktrees,
+          onBaseRefChange,
+          onWorktreeNameInput: () => undefined,
+        }),
+        container,
+      );
+
+      expect(container.querySelector(".new-session-page__capacity-warning")?.textContent).toContain(
+        status === "insufficient-space" ? "No space for a worktree" : "Worktree capacity unknown",
+      );
+      const isolated = container.querySelector<HTMLButtonElement>('[data-value="worktree"]')!;
+      expect(isolated.disabled).toBe(true);
+      isolated.click();
+      expect(onSelectWorktree).not.toHaveBeenCalled();
+      const fields = container.querySelectorAll<HTMLLabelElement>(".new-session-page__menu-field");
+      expect(fields).toHaveLength(1);
+      const baseRef = fields[0]!.querySelector("input")!;
+      baseRef.value = " local-branch ";
+      baseRef.dispatchEvent(new Event("change"));
+      expect(onBaseRefChange).toHaveBeenCalledWith("local-branch");
+      container.querySelector<HTMLButtonElement>(".new-session-page__capacity-warning")!.click();
+      expect(onManageWorktrees).toHaveBeenCalledOnce();
     },
   );
 });

@@ -681,6 +681,7 @@ export {
   WorktreesBranchesParamsSchema,
   WorktreeBranchSchema,
   WorktreeRepositoryStatusSchema,
+  WorktreeAllocationStatusSchema,
   WorktreesBranchesResultSchema,
   FsDirEntrySchema,
   FsListDirParamsSchema,

@@ -11,12 +11,14 @@ import type {
   WorkerExecutionMode,
   WorkerSlotSummary,
 } from "../../../../packages/gateway-protocol/src/schema/environments.ts";
+import type { WorktreesBranchesResult } from "../../../../packages/gateway-protocol/src/schema/worktrees.ts";
 
 export type DraftBranches = {
   repoRoot: string;
   branches: Array<{ name: string; kind: "local" | "remote" }>;
   defaultBranch?: string;
   headBranch?: string;
+  allocationStatus?: WorktreesBranchesResult["allocationStatus"];
 };
 
 export type DraftRepositoryState =

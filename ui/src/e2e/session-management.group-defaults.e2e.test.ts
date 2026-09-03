@@ -17,6 +17,7 @@ suite.define(() => {
       branches: [{ kind: "local", name: "main" }],
       defaultBranch: "main",
       repositoryStatus: "git",
+      allocationStatus: "available",
     };
     const context = await suite.browser.newContext({
       locale: "en-US",
@@ -381,6 +382,7 @@ suite.define(() => {
           branches: [{ kind: "local", name: "main" }],
           defaultBranch: "main",
           repositoryStatus: "git",
+          allocationStatus: "available",
         },
       },
       sessionGroups: ["Client work"],

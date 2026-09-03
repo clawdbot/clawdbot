@@ -65,12 +65,14 @@ export type ManagedWorktreeBranch = {
 };
 
 type ManagedWorktreeRepositoryStatus = "git" | "not_git" | "unavailable";
+export type ManagedWorktreeAllocationStatus = "available" | "insufficient-space" | "unavailable";
 
 export type ManagedWorktreeBranchesResult = {
   branches: ManagedWorktreeBranch[];
   defaultBranch?: string;
   headBranch?: string;
   repositoryStatus?: ManagedWorktreeRepositoryStatus;
+  allocationStatus?: ManagedWorktreeAllocationStatus;
 };
 
 export type ManagedWorktreeGcResult = {

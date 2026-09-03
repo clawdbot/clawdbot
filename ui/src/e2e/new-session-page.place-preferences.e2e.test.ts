@@ -12,6 +12,7 @@ const GIT_BRANCHES = {
   branches: [{ kind: "local", name: "main" }],
   defaultBranch: "main",
   repositoryStatus: "git",
+  allocationStatus: "available",
 };
 const REGISTERED_PROJECT = {
   id: "registered",

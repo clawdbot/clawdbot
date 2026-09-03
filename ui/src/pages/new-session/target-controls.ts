@@ -16,6 +16,7 @@ import { renderProjectChip, resolveProjectChip } from "./project-chip.ts";
 import { resolveCloudPlacementDisabledReason } from "./submit-gates.ts";
 import { renderNewSessionTerminalHost } from "./terminal-start.ts";
 import { renderWhereChip, resolveWhereChip } from "./where-chip.ts";
+import { worktreeAllocationBlockedReason } from "./worktree-allocation.ts";
 
 type DraftAgent = GatewayAgentRow;
 
@@ -81,6 +82,8 @@ export function renderNewSessionPlaceControls({
         workspaceRoots: place.knownWorkspaceRoots(),
         isAdmin: place.isAdmin(),
       });
+  const allocationStatus = branches?.allocationStatus;
+  const allocationBlockedReason = worktreeAllocationBlockedReason(allocationStatus);
   const whereState = resolveWhereChip({
     environments: place.canWrite() ? gateway.environments : [],
     cloudProfiles,
@@ -90,7 +93,9 @@ export function renderNewSessionPlaceControls({
     autoDevice: place.autoDevice,
     devicePlacement: place.devicePlacementRuntime()?.devicePlacement,
     deviceDisabledReason:
-      place.modelControl.devicePlacementUnsupportedReason() ?? gateway.deviceCatalogDisabledReason,
+      place.modelControl.devicePlacementUnsupportedReason() ??
+      gateway.deviceCatalogDisabledReason ??
+      allocationBlockedReason,
   });
   const projectState = resolveProjectChip({
     folder: place.folder,
@@ -213,6 +218,7 @@ export function renderNewSessionPlaceControls({
         folderLabel: projectState.label,
         worktree: place.worktree,
         worktreeAvailable: place.worktreeAvailable(),
+        allocationBlockedReason,
         repositoryUnavailable: place.repository.kind === "unavailable",
         branches,
         branchesLoading: place.repository.kind === "checking",
@@ -222,7 +228,8 @@ export function renderNewSessionPlaceControls({
         pendingPlacement,
         ...browser.popoverCallbacks("checkout"),
         onSelectWorktree: (value) => place.selectWorktree(value),
-        onBaseRefInput: (baseRef) => place.setBaseRef(baseRef),
+        onManageWorktrees: () => context?.navigate("worktrees"),
+        onBaseRefChange: (baseRef) => place.setBaseRef(baseRef),
         onWorktreeNameInput: (worktreeName) => place.setWorktreeName(worktreeName),
       })
     : nothing}`;

@@ -138,11 +138,16 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
       if (!repoRoot) {
         return;
       }
-      const result = params.includeRepositoryStatus
-        ? await service.listRepositoryBranches(repoRoot, {
-            includeRepositoryStatus: true,
-          })
-        : await service.listRepositoryBranches(repoRoot);
+      const scopes = Array.isArray(opts.client?.connect.scopes) ? opts.client.connect.scopes : [];
+      const result =
+        params.includeRepositoryStatus || params.includeAllocationStatus
+          ? await service.listRepositoryBranches(repoRoot, {
+              ...(params.includeRepositoryStatus ? { includeRepositoryStatus: true } : {}),
+              ...(params.includeAllocationStatus ? { includeAllocationStatus: true } : {}),
+              ...(params.baseRef ? { baseRef: params.baseRef } : {}),
+              runSetupScript: scopes.includes(ADMIN_SCOPE),
+            })
+          : await service.listRepositoryBranches(repoRoot);
       respond(true, result, undefined);
     },
     "worktrees.gc": async ({ params, respond, context }) => {

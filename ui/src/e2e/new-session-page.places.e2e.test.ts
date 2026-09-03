@@ -149,6 +149,7 @@ suite.define(() => {
           defaultBranch: "main",
           headBranch: "main",
           repositoryStatus: "git",
+          allocationStatus: "available",
         },
         "fs.listDir": {
           cases: [
@@ -523,6 +524,7 @@ suite.define(() => {
           branches: [{ kind: "local", name: "main" }],
           defaultBranch: "main",
           repositoryStatus: "git",
+          allocationStatus: "available",
         },
         "sessions.create": { key: "agent:main:project-e2e" },
       },
@@ -540,8 +542,14 @@ suite.define(() => {
       );
       expect(await trigger.getAttribute("data-project-id")).toBe("recorded-openclaw");
       await expect
-        .poll(async () => (await gateway.getRequests("worktrees.branches")).at(-1)?.params)
-        .toEqual({ repoRoot: "/recorded/openclaw", includeRepositoryStatus: true });
+        .poll(async () =>
+          (await gateway.getRequests("worktrees.branches")).some(
+            (request) =>
+              (request.params as Record<string, unknown>).repoRoot === "/recorded/openclaw" &&
+              (request.params as Record<string, unknown>).includeRepositoryStatus === true,
+          ),
+        )
+        .toBe(true);
 
       await page.locator("#new-session-checkout-trigger").click();
       await page
@@ -584,6 +592,7 @@ suite.define(() => {
           branches: [{ kind: "local", name: "main" }],
           defaultBranch: "main",
           repositoryStatus: "git",
+          allocationStatus: "available",
         },
       },
     });

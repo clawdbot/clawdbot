@@ -35,6 +35,50 @@ suite.define(() => {
     }
   });
 
+  it("disables device and automatic placement when worktree capacity is insufficient", async () => {
+    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      workspace: WORKSPACE,
+      workspaceGit: true,
+      methodResponses: {
+        "environments.list": {
+          environments: [
+            {
+              id: "node:runner",
+              type: "node",
+              label: "Build runner",
+              status: "available",
+              sessionHost: true,
+              workerSlots: { total: 1, available: 1 },
+            },
+          ],
+          profiles: [],
+        },
+        "worktrees.branches": {
+          branches: [],
+          repositoryStatus: "git",
+          defaultBranch: "main",
+          allocationStatus: "insufficient-space",
+        },
+      },
+    });
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      await gateway.waitForRequest("worktrees.branches");
+      await page.locator("#new-session-where-trigger").click();
+
+      for (const value of ["auto-device", "device:runner"]) {
+        const row = page.locator(`[data-value="${value}"]`);
+        await row.waitFor();
+        await expect.poll(() => row.isDisabled()).toBe(true);
+        await expect.poll(() => tooltipTitleText(row)).toBe("No space for a worktree");
+      }
+    } finally {
+      await context.close();
+    }
+  });
+
   it("shows advertised cloud machines after selecting a profile", async () => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();
@@ -57,7 +101,11 @@ suite.define(() => {
             },
           ],
         },
-        "worktrees.branches": { branches: [], repositoryStatus: "git" },
+        "worktrees.branches": {
+          branches: [],
+          repositoryStatus: "git",
+          allocationStatus: "available",
+        },
       },
     });
     try {
@@ -125,7 +173,11 @@ suite.define(() => {
             },
           ],
         },
-        "worktrees.branches": { branches: [], repositoryStatus: "git" },
+        "worktrees.branches": {
+          branches: [],
+          repositoryStatus: "git",
+          allocationStatus: "available",
+        },
       },
     });
     try {
@@ -212,7 +264,11 @@ suite.define(() => {
               },
             ],
           },
-          "worktrees.branches": { branches: [], repositoryStatus: "git" },
+          "worktrees.branches": {
+            branches: [],
+            repositoryStatus: "git",
+            allocationStatus: "available",
+          },
         },
       });
       try {

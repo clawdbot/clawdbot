@@ -28,16 +28,19 @@ export function resolveCheckoutChip(params: {
   };
 }
 
-function renderWorktreeFields(params: {
-  branches: DraftBranches | null;
-  branchesLoading: boolean;
-  baseRef: string;
-  worktreeName: string;
-  submitting: boolean;
-  pendingPlacement: boolean;
-  onBaseRefInput: (baseRef: string) => void;
-  onWorktreeNameInput: (name: string) => void;
-}) {
+function renderWorktreeFields(
+  params: {
+    branches: DraftBranches | null;
+    branchesLoading: boolean;
+    baseRef: string;
+    worktreeName: string;
+    submitting: boolean;
+    pendingPlacement: boolean;
+    onBaseRefChange: (baseRef: string) => void;
+    onWorktreeNameInput: (name: string) => void;
+  },
+  showWorktreeDetails: boolean,
+) {
   return html`
     <label class="new-session-page__menu-field">
       <span>${t("newSession.worktreeBaseRef")}</span>
@@ -49,9 +52,9 @@ function renderWorktreeFields(params: {
           ? t("common.loading")
           : (params.branches?.defaultBranch ?? t("newSession.worktreeBaseRef"))}
         .value=${params.baseRef}
-        @input=${(event: Event) => {
+        @change=${(event: Event) => {
           if (event.currentTarget instanceof HTMLInputElement) {
-            params.onBaseRefInput(event.currentTarget.value.trim());
+            params.onBaseRefChange(event.currentTarget.value.trim());
           }
         }}
       />
@@ -61,21 +64,23 @@ function renderWorktreeFields(params: {
         )}
       </datalist>
     </label>
-    <label class="new-session-page__menu-field">
-      <span>${t("newSession.worktreeName")}</span>
-      <input
-        type="text"
-        ?disabled=${params.submitting || params.pendingPlacement}
-        placeholder=${t("newSession.worktreeNamePlaceholder")}
-        .value=${params.worktreeName}
-        @input=${(event: Event) => {
-          if (event.currentTarget instanceof HTMLInputElement) {
-            params.onWorktreeNameInput(event.currentTarget.value.trim());
-          }
-        }}
-      />
-    </label>
-    <div class="new-session-page__menu-note">${t("newSession.worktreeBranchNote")}</div>
+    ${showWorktreeDetails
+      ? html`<label class="new-session-page__menu-field">
+            <span>${t("newSession.worktreeName")}</span>
+            <input
+              type="text"
+              ?disabled=${params.submitting || params.pendingPlacement}
+              placeholder=${t("newSession.worktreeNamePlaceholder")}
+              .value=${params.worktreeName}
+              @input=${(event: Event) => {
+                if (event.currentTarget instanceof HTMLInputElement) {
+                  params.onWorktreeNameInput(event.currentTarget.value.trim());
+                }
+              }}
+            />
+          </label>
+          <div class="new-session-page__menu-note">${t("newSession.worktreeBranchNote")}</div>`
+      : nothing}
   `;
 }
 
@@ -85,6 +90,7 @@ export function renderCheckoutChip(params: {
   folderLabel: string;
   worktree: boolean;
   worktreeAvailable: boolean;
+  allocationBlockedReason?: string;
   repositoryUnavailable?: boolean;
   branches: DraftBranches | null;
   branchesLoading: boolean;
@@ -99,7 +105,8 @@ export function renderCheckoutChip(params: {
   onPopoverHide: () => void;
   onPopoverAfterHide: () => void;
   onSelectWorktree: (value: boolean) => void;
-  onBaseRefInput: (baseRef: string) => void;
+  onManageWorktrees: () => void;
+  onBaseRefChange: (baseRef: string) => void;
   onWorktreeNameInput: (name: string) => void;
 }) {
   return html`
@@ -120,6 +127,11 @@ export function renderCheckoutChip(params: {
       >
         <span class="new-session-page__target-icon" aria-hidden="true">${icons.gitBranch}</span>
         <span class="new-session-page__trigger-label">${params.state.label}</span>
+        ${params.allocationBlockedReason
+          ? html`<span class="new-session-page__capacity-badge"
+              >${params.allocationBlockedReason}</span
+            >`
+          : nothing}
         <span
           class="new-session-page__trigger-chevron new-session-page__trigger-chevron--desktop"
           aria-hidden="true"
@@ -164,18 +176,31 @@ export function renderCheckoutChip(params: {
             icon: icons.gitBranch,
             sub: t("newSession.checkoutWorktreeSub"),
             checked: params.worktree,
-            disabled: !params.worktreeAvailable,
-            title: params.worktreeAvailable
-              ? undefined
-              : params.repositoryUnavailable
-                ? t("newSession.gitCheckUnavailable")
-                : t("newSession.worktreeUnavailable"),
+            disabled: !params.worktreeAvailable || Boolean(params.allocationBlockedReason),
+            title: params.allocationBlockedReason
+              ? params.allocationBlockedReason
+              : params.worktreeAvailable
+                ? undefined
+                : params.repositoryUnavailable
+                  ? t("newSession.gitCheckUnavailable")
+                  : t("newSession.worktreeUnavailable"),
             onSelect: () => params.onSelectWorktree(true),
             keepOpen: true,
           },
           params.submitting,
         )}
-        ${params.worktree ? renderWorktreeFields(params) : nothing}
+        ${params.allocationBlockedReason
+          ? html`<button
+              class="new-session-page__capacity-warning"
+              type="button"
+              @click=${params.onManageWorktrees}
+            >
+              ${params.allocationBlockedReason}. ${t("worktrees.title")}
+            </button>`
+          : nothing}
+        ${params.worktree || params.allocationBlockedReason
+          ? renderWorktreeFields(params, params.worktree)
+          : nothing}
         ${params.remotePlacement
           ? html`<div class="new-session-page__menu-note">
               ${t("newSession.placementSyncsFolder", { folder: params.folderLabel })}

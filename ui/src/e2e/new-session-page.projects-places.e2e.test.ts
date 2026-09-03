@@ -64,6 +64,7 @@ suite.define(() => {
           branches: [{ kind: "local", name: "main" }],
           defaultBranch: "main",
           repositoryStatus: "git",
+          allocationStatus: "available",
         },
       },
     });
@@ -324,6 +325,7 @@ suite.define(() => {
                 branches: [{ kind: "local", name: "main" }],
                 defaultBranch: "main",
                 repositoryStatus: "git",
+                allocationStatus: "available",
               },
             },
             {

@@ -95,6 +95,12 @@ public enum WorktreeRepositoryStatus: String, Codable, Sendable {
     case unavailable = "unavailable"
 }
 
+public enum WorktreeAllocationStatus: String, Codable, Sendable {
+    case available = "available"
+    case insufficientSpace = "insufficient-space"
+    case unavailable = "unavailable"
+}
+
 public enum NodePresenceAliveReason: String, Codable, Sendable {
     case background = "background"
     case silentPush = "silent_push"
@@ -4207,18 +4213,26 @@ public struct WorktreeBranch: Codable, Sendable {
 public struct WorktreesBranchesParams: Codable, Sendable {
     public let reporoot: String
     public let includerepositorystatus: Bool?
+    public let includeallocationstatus: Bool?
+    public let baseref: String?
 
     public init(
         reporoot: String,
-        includerepositorystatus: Bool? = nil)
+        includerepositorystatus: Bool? = nil,
+        includeallocationstatus: Bool? = nil,
+        baseref: String? = nil)
     {
         self.reporoot = reporoot
         self.includerepositorystatus = includerepositorystatus
+        self.includeallocationstatus = includeallocationstatus
+        self.baseref = baseref
     }
 
     private enum CodingKeys: String, CodingKey {
         case reporoot = "repoRoot"
         case includerepositorystatus = "includeRepositoryStatus"
+        case includeallocationstatus = "includeAllocationStatus"
+        case baseref = "baseRef"
     }
 }
 
@@ -4227,17 +4241,20 @@ public struct WorktreesBranchesResult: Codable, Sendable {
     public let defaultbranch: String?
     public let headbranch: String?
     public let repositorystatus: WorktreeRepositoryStatus?
+    public let allocationstatus: WorktreeAllocationStatus?
 
     public init(
         branches: [WorktreeBranch],
         defaultbranch: String? = nil,
         headbranch: String? = nil,
-        repositorystatus: WorktreeRepositoryStatus? = nil)
+        repositorystatus: WorktreeRepositoryStatus? = nil,
+        allocationstatus: WorktreeAllocationStatus? = nil)
     {
         self.branches = branches
         self.defaultbranch = defaultbranch
         self.headbranch = headbranch
         self.repositorystatus = repositorystatus
+        self.allocationstatus = allocationstatus
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -4245,6 +4262,7 @@ public struct WorktreesBranchesResult: Codable, Sendable {
         case defaultbranch = "defaultBranch"
         case headbranch = "headBranch"
         case repositorystatus = "repositoryStatus"
+        case allocationstatus = "allocationStatus"
     }
 }
 

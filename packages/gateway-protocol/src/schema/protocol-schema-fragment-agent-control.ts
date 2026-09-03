@@ -81,6 +81,7 @@ export const AgentControlProtocolSchemas = {
   WorktreesGcResult: worktrees.WorktreesGcResultSchema,
   WorktreeBranch: worktrees.WorktreeBranchSchema,
   WorktreeRepositoryStatus: worktrees.WorktreeRepositoryStatusSchema,
+  WorktreeAllocationStatus: worktrees.WorktreeAllocationStatusSchema,
   WorktreesBranchesParams: worktrees.WorktreesBranchesParamsSchema,
   WorktreesBranchesResult: worktrees.WorktreesBranchesResultSchema,
   FsDirEntry: fsSchemas.FsDirEntrySchema,

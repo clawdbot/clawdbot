@@ -265,6 +265,7 @@ suite.define(() => {
           branches: [{ kind: "local", name: "main" }],
           defaultBranch: "main",
           repositoryStatus: "git",
+          allocationStatus: "available",
         },
       },
     });
@@ -355,6 +356,7 @@ suite.define(() => {
           branches: [{ kind: "local", name: "main" }],
           defaultBranch: "main",
           repositoryStatus: "git",
+          allocationStatus: "available",
         },
         "worktrees.create": {
           id: "terminal-e2e",
@@ -493,6 +495,7 @@ suite.define(() => {
           branches: [{ kind: "local", name: "main" }],
           defaultBranch: "main",
           repositoryStatus: "git",
+          allocationStatus: "available",
         },
         "sessions.catalog.startTerminal": {
           __mockError: { code: "INVALID_REQUEST", message: serverMessage },
@@ -627,6 +630,7 @@ suite.define(() => {
           branches: [{ kind: "local", name: "main" }],
           defaultBranch: "main",
           repositoryStatus: "git",
+          allocationStatus: "available",
         },
       },
     });
@@ -701,6 +705,7 @@ suite.define(() => {
           branches: [{ kind: "local", name: "main" }],
           defaultBranch: "main",
           repositoryStatus: "git",
+          allocationStatus: "available",
         },
         "sessions.catalog.list": {
           catalogs: [
@@ -873,6 +878,7 @@ suite.define(() => {
           branches: [{ kind: "local", name: "main" }],
           defaultBranch: "main",
           repositoryStatus: "git",
+          allocationStatus: "available",
         },
         "sessions.create": { key: "agent:research:manual-reconnect" },
       },
@@ -893,7 +899,11 @@ suite.define(() => {
       const message = page.locator(".new-session-page__message");
       await message.fill("keep my selected agent");
       const agentRequestsBefore = (await gateway.getRequests("agents.list")).length;
-      const branchRequestsBefore = (await gateway.getRequests("worktrees.branches")).length;
+      const repositoryStatusRequests = async () =>
+        (await gateway.getRequests("worktrees.branches")).filter((request) =>
+          requestHasParam(request, "includeRepositoryStatus", true),
+        );
+      const branchRequestsBefore = (await repositoryStatusRequests()).length;
 
       await gateway.setOnline(false);
       await waitForControlUiGatewayReconnecting(page);
@@ -930,9 +940,9 @@ suite.define(() => {
         page.locator("#new-session-project-trigger .new-session-page__trigger-label"),
       ).toBe("research-next");
       await expect
-        .poll(async () => (await gateway.getRequests("worktrees.branches")).length)
+        .poll(async () => (await repositoryStatusRequests()).length)
         .toBe(branchRequestsBefore + 1);
-      expect((await gateway.getRequests("worktrees.branches")).at(-1)?.params).toEqual({
+      expect((await repositoryStatusRequests()).at(-1)?.params).toEqual({
         repoRoot: REFRESHED_RESEARCH_WORKSPACE,
         includeRepositoryStatus: true,
       });
@@ -949,25 +959,28 @@ suite.define(() => {
       await expect.poll(() => baseInput.inputValue()).toBe("main");
       await page.keyboard.press("Escape");
 
+      const refreshedRepositoryStatusParams = {
+        repoRoot: REFRESHED_RESEARCH_WORKSPACE,
+        includeRepositoryStatus: true,
+      };
       await gateway.deferNext("worktrees.branches");
-      const branchesBeforeSameWorkspaceReconnect = (await gateway.getRequests("worktrees.branches"))
-        .length;
+      const branchesBeforeSameWorkspaceReconnect = (await repositoryStatusRequests()).length;
       await gateway.setOnline(false);
       await waitForControlUiGatewayReconnecting(page);
       await gateway.setOnline(true);
       await waitForControlUiGatewayReady(page);
 
       await expect
-        .poll(async () => (await gateway.getRequests("worktrees.branches")).length)
+        .poll(async () => (await repositoryStatusRequests()).length)
         .toBe(branchesBeforeSameWorkspaceReconnect + 1);
-      expect((await gateway.getRequests("worktrees.branches")).at(-1)?.params).toEqual({
-        repoRoot: REFRESHED_RESEARCH_WORKSPACE,
-        includeRepositoryStatus: true,
-      });
+      expect((await repositoryStatusRequests()).at(-1)?.params).toEqual(
+        refreshedRepositoryStatusParams,
+      );
       expect(await baseInput.inputValue()).toBe("");
       expect(await baseInput.getAttribute("placeholder")).toBe("Loading…");
       await placeTrigger.click();
       await baseInput.fill("feature-choice");
+      await baseInput.press("Tab");
       await gateway.resolveDeferred("worktrees.branches", {
         branches: [{ kind: "local", name: "beta" }],
         defaultBranch: "beta",

@@ -44,6 +44,8 @@ export class DraftRepositoryController {
   private baseRefOverride: string | undefined;
   private repositoryValue: DraftRepositoryState = { kind: "idle" };
   private requestToken = 0;
+  private allocationRequestToken = 0;
+  private allocationPending = false;
   private preferredWorktreeRestore = false;
   private worktreeSelectedByUser = false;
   private detailsSelectedByUser = false;
@@ -71,6 +73,33 @@ export class DraftRepositoryController {
     return this.repositoryValue;
   }
 
+  allocationStatus() {
+    return this.repositoryValue.kind === "git" ? this.repositoryValue.allocationStatus : undefined;
+  }
+
+  allocationAvailable(): boolean {
+    const state = this.repositoryValue;
+    return state.kind !== "git" || state.allocationStatus === "available";
+  }
+
+  placementRestoreAvailable(
+    destinationAvailable: boolean,
+    projectReady = true,
+  ): boolean | undefined {
+    if (!destinationAvailable) {
+      return false;
+    }
+    if (
+      !projectReady ||
+      !this.matchesCurrentRepo() ||
+      this.repositoryValue.kind === "checking" ||
+      this.allocationPending
+    ) {
+      return undefined;
+    }
+    return this.available() && this.allocationAvailable();
+  }
+
   get preferenceReady(): boolean {
     return !this.preferredWorktreeRestore;
   }
@@ -80,6 +109,7 @@ export class DraftRepositoryController {
   }
 
   adoptPreference(preference: NewSessionPreference | null) {
+    const previousBaseRef = this.baseRefOverride ?? "";
     if (!this.worktreeSelectedByUser) {
       this.worktreeValue = false;
       this.preferredWorktreeRestore = preference?.worktree === true;
@@ -88,11 +118,19 @@ export class DraftRepositoryController {
       this.baseRefOverride = preference?.baseRef || undefined;
       this.worktreeNameValue = preference?.worktreeName ?? "";
     }
+    const baseRefChanged = (this.baseRefOverride ?? "") !== previousBaseRef;
     if (!this.matchesCurrentRepo()) {
       // Retire the old folder's RPC before it can consume the new preference.
       this.invalidate();
-    } else if (this.repositoryValue.kind !== "checking") {
+    } else if (this.repositoryValue.kind === "checking") {
+      if (baseRefChanged) {
+        this.load();
+      }
+    } else {
       this.adoptResolvedRepository(this.repositoryValue);
+      if (baseRefChanged) {
+        this.refreshAllocationStatus();
+      }
     }
   }
 
@@ -115,6 +153,8 @@ export class DraftRepositoryController {
 
   invalidate() {
     this.requestToken += 1;
+    this.allocationRequestToken += 1;
+    this.allocationPending = false;
     this.repositoryValue = { kind: "idle" };
   }
 
@@ -138,7 +178,11 @@ export class DraftRepositoryController {
   }
 
   select(value: boolean) {
-    if (this.worktreeValue === value || this.read().remotePlacement) {
+    if (
+      this.worktreeValue === value ||
+      this.read().remotePlacement ||
+      (value && !this.allocationAvailable())
+    ) {
       return;
     }
     this.selectWorktree(value, false);
@@ -160,6 +204,62 @@ export class DraftRepositoryController {
     this.detailsSelectedByUser = true;
     this.callbacks.persistPreference({ baseRef });
     this.callbacks.requestUpdate();
+  }
+
+  refreshAllocationStatus() {
+    const state = this.repositoryValue;
+    if (state.kind === "checking") {
+      this.load();
+      return;
+    }
+    const snapshot = this.read();
+    const client = snapshot.gateway?.client;
+    if (state.kind !== "git" || snapshot.gateway?.phase !== "connected" || !client) {
+      return;
+    }
+    const requestId = ++this.allocationRequestToken;
+    const repoRoot = state.repoRoot;
+    const baseRef = this.baseRef;
+    this.allocationPending = true;
+    this.repositoryValue = { ...state, allocationStatus: "unavailable" };
+    this.callbacks.requestUpdate();
+    void client
+      .request<WorktreesBranchesResult>("worktrees.branches", {
+        repoRoot,
+        includeAllocationStatus: true,
+        ...(baseRef ? { baseRef } : {}),
+      })
+      .then((result) => {
+        const current = this.repositoryValue;
+        if (
+          requestId !== this.allocationRequestToken ||
+          current.kind !== "git" ||
+          current.repoRoot !== repoRoot ||
+          this.baseRef !== baseRef
+        ) {
+          return;
+        }
+        this.allocationPending = false;
+        this.repositoryValue = {
+          ...current,
+          allocationStatus: result.allocationStatus ?? "unavailable",
+        };
+        this.callbacks.requestUpdate();
+      })
+      .catch(() => {
+        const current = this.repositoryValue;
+        if (
+          requestId !== this.allocationRequestToken ||
+          current.kind !== "git" ||
+          current.repoRoot !== repoRoot ||
+          this.baseRef !== baseRef
+        ) {
+          return;
+        }
+        this.allocationPending = false;
+        this.repositoryValue = { ...current, allocationStatus: "unavailable" };
+        this.callbacks.requestUpdate();
+      });
   }
 
   setWorktreeName(worktreeName: string, submitting: boolean) {
@@ -194,6 +294,8 @@ export class DraftRepositoryController {
 
   load() {
     const requestId = ++this.requestToken;
+    this.allocationRequestToken += 1;
+    this.allocationPending = false;
     const snapshot = this.read();
     const discovery = initialRepositoryState(snapshot);
     if (discovery.kind !== "checking") {
@@ -204,17 +306,19 @@ export class DraftRepositoryController {
       return this.adoptResolvedRepository({ kind: "idle" });
     }
     const { repoRoot } = discovery;
+    const baseRef = this.baseRefOverride ?? "";
     this.repositoryValue = discovery;
     void client
       .request<WorktreesBranchesResult>("worktrees.branches", {
         repoRoot,
         includeRepositoryStatus: true,
+        ...(baseRef ? { baseRef } : {}),
       })
       .then((result) => {
-        if (requestId !== this.requestToken) {
+        if (requestId !== this.requestToken || (this.baseRefOverride ?? "") !== baseRef) {
           return;
         }
-        this.adoptResolvedRepository(
+        const resolved: ResolvedRepository =
           result?.repositoryStatus === "git"
             ? {
                 kind: "git",
@@ -222,12 +326,16 @@ export class DraftRepositoryController {
                 branches: result.branches,
                 ...(result.defaultBranch ? { defaultBranch: result.defaultBranch } : {}),
                 ...(result.headBranch ? { headBranch: result.headBranch } : {}),
+                allocationStatus: "unavailable",
               }
-            : { kind: result?.repositoryStatus === "not_git" ? "direct" : "unavailable", repoRoot },
-        );
+            : { kind: result?.repositoryStatus === "not_git" ? "direct" : "unavailable", repoRoot };
+        this.adoptResolvedRepository(resolved);
+        if (resolved.kind === "git") {
+          this.refreshAllocationStatus();
+        }
       })
       .catch(() => {
-        if (requestId !== this.requestToken) {
+        if (requestId !== this.requestToken || (this.baseRefOverride ?? "") !== baseRef) {
           return;
         }
         this.adoptResolvedRepository({ kind: "unavailable", repoRoot });

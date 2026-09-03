@@ -67,6 +67,7 @@ suite.define(() => {
           branches: [{ kind: "local", name: "main" }],
           defaultBranch: "main",
           repositoryStatus: "git",
+          allocationStatus: "available",
         },
         "sessions.dispatch": {
           placement: { state: "active", environmentId: "worker-create-recovery" },
@@ -184,6 +185,7 @@ suite.define(() => {
           branches: [{ kind: "local", name: "main" }],
           defaultBranch: "main",
           repositoryStatus: "git",
+          allocationStatus: "available",
         },
       },
     });
@@ -307,6 +309,7 @@ suite.define(() => {
             branches: [{ kind: "local", name: "main" }],
             defaultBranch: "main",
             repositoryStatus: "git",
+            allocationStatus: "available",
           },
           "sessions.patch": { ok: true },
           "sessions.delete": { deleted: true },
@@ -488,6 +491,7 @@ suite.define(() => {
           branches: [{ kind: "local", name: "main" }],
           defaultBranch: "main",
           repositoryStatus: "git",
+          allocationStatus: "available",
         },
         "sessions.create": { key: sessionKey, sessionId: "session-storage-recovery" },
         "sessions.dispatch": {

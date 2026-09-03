@@ -128,7 +128,7 @@ describe("DraftSubmissionFlow submit gates", () => {
       folder: "/workspace",
       worktree: true,
     });
-    let resolveBranches!: (value: unknown) => void;
+    const branchResolvers: Array<(value: unknown) => void> = [];
     const fixture = createDraftFixture({
       scopes: ["operator.admin", "operator.read", "operator.write"],
       agents: [
@@ -142,7 +142,7 @@ describe("DraftSubmissionFlow submit gates", () => {
       request: (method) => {
         if (method === "worktrees.branches") {
           return new Promise((resolve) => {
-            resolveBranches = resolve;
+            branchResolvers.push(resolve);
           });
         }
         return Promise.resolve({});
@@ -161,12 +161,60 @@ describe("DraftSubmissionFlow submit gates", () => {
     expect(context.sessions.createResult).not.toHaveBeenCalled();
     expect(flow.blockedSubmitNotice()).toBe(flow.submitDisabledReason());
 
-    resolveBranches({ repositoryStatus: "git", branches: ["main"], defaultBranch: "main" });
+    branchResolvers.shift()!({
+      repositoryStatus: "git",
+      branches: ["main"],
+      defaultBranch: "main",
+    });
+    await vi.waitFor(() => expect(branchResolvers).toHaveLength(1));
+    branchResolvers.shift()!({ allocationStatus: "available" });
     await vi.waitFor(() => expect(flow.canSubmit()).toBe(true));
     // The transient gate lifted; the notice retires itself.
     expect(flow.blockedSubmitNotice()).toBeUndefined();
     expect(flow.submitDisabledReason()).toBeUndefined();
   });
+
+  it.each([
+    {
+      status: "insufficient-space",
+      reason: "No space for a worktree",
+    },
+    { status: "unavailable", reason: "Worktree capacity unknown" },
+  ] as const)(
+    "blocks a selected worktree when allocation is $status",
+    async ({ status, reason }) => {
+      patchNewSessionPreference("ws://gateway.example", "main", {
+        folder: "/workspace",
+        worktree: true,
+      });
+      const fixture = createDraftFixture({
+        scopes: ["operator.admin", "operator.read", "operator.write"],
+        agents: [
+          {
+            id: "main",
+            workspace: "/workspace",
+            workspaceGit: true,
+            model: { primary: "openai/gpt-5.6-luna" },
+          },
+        ],
+        request: async (method) =>
+          method === "worktrees.branches"
+            ? {
+                repositoryStatus: "git",
+                branches: [{ name: "main", kind: "local" }],
+                defaultBranch: "main",
+                allocationStatus: status,
+              }
+            : {},
+      });
+      fixture.flow.setMessage("start something");
+
+      await vi.waitFor(() =>
+        expect(fixture.flow.submitBlock()).toEqual({ gate: "worktree-capacity", reason }),
+      );
+      expect(fixture.flow.canSubmit()).toBe(false);
+    },
+  );
 
   it("does not raise a notice for the silent empty-draft gate", async () => {
     const fixture = createDraftFixture();

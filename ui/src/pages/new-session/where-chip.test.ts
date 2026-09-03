@@ -170,6 +170,57 @@ describe("Where chip", () => {
     expect(device?.title).toBe("This runtime does not support paired devices");
   });
 
+  it("disables device and automatic placement when worktree allocation is blocked", () => {
+    const reason = "Not enough disk space is available for a new worktree.";
+    const state = resolveWhereChip({
+      environments: [
+        {
+          id: "node:macbook",
+          type: "node",
+          label: "MacBook",
+          status: "available",
+          sessionHost: true,
+          workerSlots: { total: 1, available: 1 },
+        },
+      ],
+      cloudProfiles: [],
+      cloudProfileId: "",
+      deviceId: "",
+      deviceDisabledReason: reason,
+    });
+    const container = document.createElement("div");
+    render(
+      renderWhereChip({
+        state,
+        gatewayName: "",
+        cloudProfileId: "",
+        deviceId: "",
+        worktreeAvailable: true,
+        submitting: false,
+        pendingPlacement: false,
+        popoverOpen: true,
+        popoverHiding: false,
+        isAdmin: true,
+        onGuardTransition: vi.fn(),
+        onPopoverShow: vi.fn(),
+        onPopoverHide: vi.fn(),
+        onPopoverAfterHide: vi.fn(),
+        onSelectDevice: vi.fn(),
+        onSelectAutoDevice: vi.fn(),
+        onSelectCloudProfile: vi.fn(),
+        onConnectMachine: vi.fn(),
+      }),
+      container,
+    );
+
+    for (const value of ["auto-device", "device:macbook"]) {
+      const row = container.querySelector<HTMLButtonElement>(`[data-value="${value}"]`);
+      expect(row?.disabled).toBe(true);
+      expect(row?.title).toBe(reason);
+      expect(row?.textContent).toContain(reason);
+    }
+  });
+
   it("omits the devices section entirely when no devices are paired", () => {
     const state = resolveWhereChip({
       environments: [],

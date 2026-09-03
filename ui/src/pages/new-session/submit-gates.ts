@@ -22,6 +22,7 @@ import type {
   SubmissionOutcomeReason,
 } from "./session-placement-recovery-state.ts";
 import { readNewSessionTerminalStartAccess } from "./terminal-start.ts";
+import { worktreeAllocationBlockedReason } from "./worktree-allocation.ts";
 
 registerNewSessionSetupEnglish();
 
@@ -47,6 +48,7 @@ type ReasonedSubmitGate =
   | "device-runtime"
   | "cloud"
   | "worktree-unavailable"
+  | "worktree-capacity"
   | "worktree-name"
   | "terminal-capabilities"
   | "mentions-unsupported"
@@ -66,6 +68,12 @@ export function resolveCloudPlacementDisabledReason(place: DraftPlaceState): str
   const runtimeReason = place.modelControl.cloudRuntimeUnsupportedReason();
   if (runtimeReason) {
     return runtimeReason;
+  }
+  const capacityReason = worktreeAllocationBlockedReason(
+    place.repository.kind === "git" ? place.repository.allocationStatus : undefined,
+  );
+  if (capacityReason) {
+    return capacityReason;
   }
   if (place.repository.kind === "checking") {
     return t("newSession.checkingGit");
@@ -313,6 +321,14 @@ export function resolveNewSessionSubmitBlock(
           ? t("newSession.checkingGit")
           : t("newSession.worktreeUnavailable"),
     };
+  }
+  if (place.worktree) {
+    const capacityReason = worktreeAllocationBlockedReason(
+      place.repository.kind === "git" ? place.repository.allocationStatus : undefined,
+    );
+    if (capacityReason) {
+      return { gate: "worktree-capacity", reason: capacityReason };
+    }
   }
   if (place.worktree && !isWorktreeNameValid(place.worktreeName)) {
     return { gate: "worktree-name", reason: t("newSession.worktreeNameInvalid") };

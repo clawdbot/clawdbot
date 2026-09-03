@@ -55,6 +55,7 @@ export const LOCAL_GIT_WORKSPACE_RESPONSES = {
     branches: [{ kind: "local", name: "main" }],
     defaultBranch: "main",
     repositoryStatus: "git",
+    allocationStatus: "available",
   },
 };
 export const PICKED = "/home/peter/openclaw/packages";

@@ -21,6 +21,8 @@ const enNewSessionSetup = {
     deviceCapacityUnavailable:
       "Worker capacity is unavailable. Restart the device session host and try again.",
     deviceNoSlots: "No worker slots are available. Wait for a slot or pick another device.",
+    capacityFull: "No space for a worktree",
+    capacityUnknown: "Worktree capacity unknown",
     connectMachineTitle: "Connect a machine",
     connectMachineDescription: "Run this command on the machine you want to connect.",
     connectMachineGenerating: "Creating a secure connection link…",

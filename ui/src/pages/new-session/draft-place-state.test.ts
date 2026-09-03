@@ -25,10 +25,11 @@ function createRepositoryFixture(
   const requestUpdate = vi.fn();
   const persistPreference = vi.fn();
   const readPreference = vi.fn<() => NewSessionPreference>(() => ({ worktree: true }));
-  const request = vi.fn<(method: string) => Promise<unknown>>(async (method) =>
-    method === "fs.listDir"
-      ? { path: "/plain", entries: [] }
-      : { repositoryStatus: options.unavailable ? "unavailable" : "not_git", branches: [] },
+  const request = vi.fn<(method: string, params?: Record<string, unknown>) => Promise<unknown>>(
+    async (method) =>
+      method === "fs.listDir"
+        ? { path: "/plain", entries: [] }
+        : { repositoryStatus: options.unavailable ? "unavailable" : "not_git", branches: [] },
   );
   const context = {
     gateway: {
@@ -136,6 +137,138 @@ describe("DraftPlaceState repository selection", () => {
     },
   );
 
+  it("fails closed while refreshing allocation capacity for the committed base ref", async () => {
+    const { state, request } = createRepositoryFixture({ workspaceGit: true });
+    const refresh = createDeferred<WorktreesBranchesResult>();
+    request.mockImplementation(async (method, params) => {
+      if (method !== "worktrees.branches") {
+        return method === "fs.listDir" ? { path: "/workspace", entries: [] } : {};
+      }
+      if (params?.includeRepositoryStatus) {
+        return {
+          repositoryStatus: "git",
+          branches: [
+            { name: "main", kind: "local" },
+            { name: "large-base", kind: "local" },
+          ],
+          defaultBranch: "main",
+        };
+      }
+      return params?.baseRef === "large-base"
+        ? refresh.promise
+        : { branches: [], allocationStatus: "available" };
+    });
+    state.adoptAgentDefaults();
+    await vi.waitFor(() => expect(state.repository.kind).toBe("git"));
+
+    state.setBaseRef("large-base");
+    expect(state.repository).toMatchObject({ kind: "git", allocationStatus: "unavailable" });
+    refresh.resolve({
+      repositoryStatus: "git",
+      branches: [],
+      allocationStatus: "insufficient-space",
+    });
+
+    await vi.waitFor(() =>
+      expect(state.repository).toMatchObject({
+        kind: "git",
+        allocationStatus: "insufficient-space",
+      }),
+    );
+    expect(request).toHaveBeenLastCalledWith("worktrees.branches", {
+      repoRoot: "/workspace",
+      includeAllocationStatus: true,
+      baseRef: "large-base",
+    });
+  });
+
+  it("restarts pending discovery when the capacity base changes", async () => {
+    const { state, request } = createRepositoryFixture({ workspaceGit: true });
+    const initial = createDeferred<WorktreesBranchesResult>();
+    const rediscovery = createDeferred<WorktreesBranchesResult>();
+    const refreshed = createDeferred<WorktreesBranchesResult>();
+    request.mockImplementation(async (method, params) => {
+      if (method !== "worktrees.branches") {
+        return {};
+      }
+      if (params?.includeAllocationStatus) {
+        return refreshed.promise;
+      }
+      return params?.baseRef === "large-base" ? rediscovery.promise : initial.promise;
+    });
+
+    state.adoptAgentDefaults();
+    expect(state.repository.kind).toBe("checking");
+    state.setBaseRef("large-base");
+    expect(request).toHaveBeenLastCalledWith("worktrees.branches", {
+      repoRoot: "/workspace",
+      includeRepositoryStatus: true,
+      baseRef: "large-base",
+    });
+
+    initial.resolve({ repositoryStatus: "git", branches: [], defaultBranch: "main" });
+    await Promise.resolve();
+    expect(state.repository.kind).toBe("checking");
+
+    rediscovery.resolve({ repositoryStatus: "git", branches: [], defaultBranch: "main" });
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenLastCalledWith("worktrees.branches", {
+        repoRoot: "/workspace",
+        includeAllocationStatus: true,
+        baseRef: "large-base",
+      }),
+    );
+    refreshed.resolve({
+      branches: [],
+      allocationStatus: "insufficient-space",
+    });
+    await vi.waitFor(() =>
+      expect(state.repository).toMatchObject({
+        kind: "git",
+        allocationStatus: "insufficient-space",
+      }),
+    );
+  });
+
+  it("rejects device and automatic placement when allocation is unavailable", async () => {
+    const { state, request, persistPreference } = createRepositoryFixture({ workspaceGit: true });
+    request.mockImplementation(async (method, params) =>
+      method === "worktrees.branches" && params?.includeRepositoryStatus
+        ? { repositoryStatus: "git", branches: [], defaultBranch: "main" }
+        : { branches: [], allocationStatus: "insufficient-space" },
+    );
+
+    state.adoptAgentDefaults();
+    await vi.waitFor(() =>
+      expect(state.repository).toMatchObject({
+        kind: "git",
+        allocationStatus: "insufficient-space",
+      }),
+    );
+
+    state.selectDevice("desktop");
+    state.selectDevice("", true);
+
+    expect(state.deviceId).toBe("");
+    expect(state.autoDevice).toBe(false);
+    expect(persistPreference).not.toHaveBeenCalledWith(
+      "main",
+      "/workspace",
+      expect.objectContaining({ where: expect.anything() }),
+    );
+  });
+
+  it("fails closed when repository discovery omits allocation capacity", async () => {
+    const { state, request } = createRepositoryFixture({ workspaceGit: true });
+    request.mockResolvedValue({ repositoryStatus: "git", branches: [], defaultBranch: "main" });
+
+    state.adoptAgentDefaults();
+
+    await vi.waitFor(() =>
+      expect(state.repository).toMatchObject({ kind: "git", allocationStatus: "unavailable" }),
+    );
+  });
+
   it("preserves edited details when identity preferences arrive after discovery", async () => {
     const { state, request, readPreference } = createRepositoryFixture({ workspaceGit: true });
     request.mockResolvedValue({ repositoryStatus: "git", branches: [], defaultBranch: "main" });
@@ -153,6 +286,46 @@ describe("DraftPlaceState repository selection", () => {
 
     expect(state.baseRef).toBe("my-branch");
     expect(state.worktreeName).toBe("my-checkout");
+  });
+
+  it("refreshes allocation when delayed identity preferences replace the base ref", async () => {
+    const { state, request, readPreference } = createRepositoryFixture({ workspaceGit: true });
+    const savedBaseAllocation = createDeferred<WorktreesBranchesResult>();
+    request.mockImplementation(async (method, params) => {
+      if (method !== "worktrees.branches") {
+        return {};
+      }
+      if (params?.includeRepositoryStatus) {
+        return { repositoryStatus: "git", branches: [], defaultBranch: "main" };
+      }
+      return params?.baseRef === "saved-branch"
+        ? savedBaseAllocation.promise
+        : { branches: [], allocationStatus: "available" };
+    });
+
+    state.adoptAgentDefaults();
+    await vi.waitFor(() =>
+      expect(state.repository).toMatchObject({ kind: "git", allocationStatus: "available" }),
+    );
+
+    readPreference.mockReturnValue({ worktree: true, baseRef: "saved-branch" });
+    state.adoptAgentDefaults();
+
+    expect(state.baseRef).toBe("saved-branch");
+    expect(state.repository).toMatchObject({ kind: "git", allocationStatus: "unavailable" });
+    expect(request).toHaveBeenLastCalledWith("worktrees.branches", {
+      repoRoot: "/workspace",
+      includeAllocationStatus: true,
+      baseRef: "saved-branch",
+    });
+
+    savedBaseAllocation.resolve({ branches: [], allocationStatus: "insufficient-space" });
+    await vi.waitFor(() =>
+      expect(state.repository).toMatchObject({
+        kind: "git",
+        allocationStatus: "insufficient-space",
+      }),
+    );
   });
 
   it.each([false, true])(
@@ -176,10 +349,46 @@ describe("DraftPlaceState repository selection", () => {
       await vi.waitFor(() => expect(state.repository.kind).toBe("git"));
       expect(state.baseRef).toBe(edited ? "my-branch" : "release/next");
       expect(request.mock.calls.filter(([method]) => method === "worktrees.branches")).toHaveLength(
-        1,
+        edited ? 4 : 3,
       );
     },
   );
+
+  it("waits for allocation discovery before restoring a saved cloud preference", async () => {
+    const { state, request, readPreference } = createRepositoryFixture({ workspaceGit: true });
+    const allocation = createDeferred<WorktreesBranchesResult>();
+    request.mockImplementation(async (method, params) => {
+      if (method !== "worktrees.branches") {
+        return {};
+      }
+      return params?.includeRepositoryStatus
+        ? { repositoryStatus: "git", branches: [], defaultBranch: "main" }
+        : allocation.promise;
+    });
+    readPreference.mockReturnValue({ where: { kind: "cloud", id: "aws" } });
+
+    state.adoptAgentDefaults();
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenLastCalledWith("worktrees.branches", {
+        repoRoot: "/workspace",
+        includeAllocationStatus: true,
+        baseRef: "main",
+      }),
+    );
+    state.restorePreferenceSelections();
+    expect(state.placementPreferenceReady).toBe(false);
+    expect(state.cloudProfileId).toBe("");
+
+    allocation.resolve({ branches: [], allocationStatus: "available" });
+    await vi.waitFor(() =>
+      expect(state.repository).toMatchObject({ kind: "git", allocationStatus: "available" }),
+    );
+    state.restorePreferenceSelections();
+
+    expect(state.placementPreferenceReady).toBe(true);
+    expect(state.cloudProfileId).toBe("aws");
+    expect(state.worktree).toBe(true);
+  });
 
   it.each([false, true])(
     "finishes restoring a saved cloud preference for a non-Git workspace (unavailable: %s)",

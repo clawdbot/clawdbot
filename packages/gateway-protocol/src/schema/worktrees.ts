@@ -64,15 +64,19 @@ export const WorktreesRemoveResultSchema = closedObject({
   snapshotError: Type.Optional(NonEmptyString),
 });
 
-const WORKTREE_REPOSITORY_STATUSES = ["git", "not_git", "unavailable"] as const;
-// Keep a flat string enum for native enum generation; the schema test pins
+// Keep flat string enums for native enum generation; the schema test pins
 // TypeBox Value.Check rejection of unknown members on our supported version.
 export const WorktreeRepositoryStatusSchema = Type.String({
-  enum: [...WORKTREE_REPOSITORY_STATUSES],
+  enum: ["git", "not_git", "unavailable"],
+});
+export const WorktreeAllocationStatusSchema = Type.String({
+  enum: ["available", "insufficient-space", "unavailable"],
 });
 export const WorktreesBranchesParamsSchema = closedObject({
   repoRoot: NonEmptyString,
   includeRepositoryStatus: Type.Optional(Type.Boolean()),
+  includeAllocationStatus: Type.Optional(Type.Boolean()),
+  baseRef: Type.Optional(NonEmptyString),
 });
 export const WorktreeBranchSchema = closedObject({
   name: NonEmptyString,
@@ -83,6 +87,7 @@ export const WorktreesBranchesResultSchema = closedObject({
   defaultBranch: Type.Optional(NonEmptyString),
   headBranch: Type.Optional(NonEmptyString),
   repositoryStatus: Type.Optional(WorktreeRepositoryStatusSchema),
+  allocationStatus: Type.Optional(WorktreeAllocationStatusSchema),
 });
 
 export const WorktreesRestoreParamsSchema = closedObject({ id: NonEmptyString });
@@ -105,6 +110,7 @@ export type WorktreesRestoreParams = Static<typeof WorktreesRestoreParamsSchema>
 export type WorktreesGcParams = Static<typeof WorktreesGcParamsSchema>;
 export type WorktreesGcResult = Static<typeof WorktreesGcResultSchema>;
 export type WorktreeBranch = Static<typeof WorktreeBranchSchema>;
-export type WorktreeRepositoryStatus = (typeof WORKTREE_REPOSITORY_STATUSES)[number];
+export type WorktreeRepositoryStatus = "git" | "not_git" | "unavailable";
+export type WorktreeAllocationStatus = "available" | "insufficient-space" | "unavailable";
 export type WorktreesBranchesParams = Static<typeof WorktreesBranchesParamsSchema>;
 export type WorktreesBranchesResult = Static<typeof WorktreesBranchesResultSchema>;

@@ -55,11 +55,19 @@ describe("managed worktree protocol schemas", () => {
   it("accepts branch listing payloads and snapshot errors", () => {
     expect(validateWorktreesBranchesParams({ repoRoot: "/repo" })).toBe(true);
     expect(
-      validateWorktreesBranchesParams({ repoRoot: "/repo", includeRepositoryStatus: true }),
+      validateWorktreesBranchesParams({
+        repoRoot: "/repo",
+        includeAllocationStatus: true,
+        baseRef: "origin/main",
+      }),
     ).toBe(true);
     expect(
       validateWorktreesBranchesParams({ repoRoot: "/repo", includeRepositoryStatus: false }),
     ).toBe(true);
+    expect(
+      validateWorktreesBranchesParams({ repoRoot: "/repo", includeAllocationStatus: false }),
+    ).toBe(true);
+    expect(validateWorktreesBranchesParams({ repoRoot: "/repo", baseRef: "" })).toBe(false);
     expect(validateWorktreesBranchesParams({})).toBe(false);
     expect(
       Value.Check(WorktreesBranchesResultSchema, {
@@ -86,8 +94,22 @@ describe("managed worktree protocol schemas", () => {
     ).toBe(true);
     expect(
       Value.Check(WorktreesBranchesResultSchema, {
+        branches: [{ name: "main", kind: "local" }],
+        repositoryStatus: "git",
+        allocationStatus: "insufficient-space",
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(WorktreesBranchesResultSchema, {
         branches: [],
         repositoryStatus: "unknown",
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(WorktreesBranchesResultSchema, {
+        branches: [],
+        repositoryStatus: "git",
+        allocationStatus: "full",
       }),
     ).toBe(false);
     expect(
