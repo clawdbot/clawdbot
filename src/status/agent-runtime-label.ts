@@ -24,6 +24,11 @@ const AGENT_RUNTIME_LABELS: Readonly<Record<string, string>> = {
   "google-gemini-cli": "Gemini CLI",
 };
 
+/** Renders one runtime id with the operator-facing vocabulary, sanitizing unknown ids. */
+function formatAgentRuntimeLabel(runtime: string): string {
+  return AGENT_RUNTIME_LABELS[runtime] ?? sanitizeTerminalText(runtime);
+}
+
 type AgentRuntimeLabelArgs = {
   config?: OpenClawConfig;
   sessionEntry?: Pick<
@@ -90,16 +95,22 @@ export function resolveAgentRuntimeLabel(args: AgentRuntimeLabelArgs): string {
   // but only a model-selection-locked session treats it as an active routing pin.
   // Keep those meanings visibly distinct so ordinary history cannot be mistaken
   // for the runtime that owns the next turn.
+  // Retired runtime ids stay in old session entries forever: an upgraded session
+  // still persists `agentHarnessId: "codex-cli"` while the live runtime resolves to
+  // `codex`, and AGENT_RUNTIME_LABELS deliberately renders both as "OpenAI Codex".
+  // Comparing raw ids there reports `OpenAI Codex (previous runtime: OpenAI Codex)`
+  // — a runtime transition that never happened. Two ids the operator sees under one
+  // name are one runtime for this annotation's purpose, so compare what is rendered.
+  const recordedLabel = recordedRuntime ? formatAgentRuntimeLabel(recordedRuntime) : undefined;
   if (
     !recordedRuntime ||
     isDefaultAgentRuntimeId(recordedRuntime) ||
-    recordedRuntime === normalizeOptionalAgentRuntimeId(described.runtime)
+    recordedRuntime === normalizeOptionalAgentRuntimeId(described.runtime) ||
+    recordedLabel === described.label
   ) {
     return described.label;
   }
   const relationship =
     args.sessionEntry?.modelSelectionLocked === true ? "session pin" : "previous runtime";
-  return `${described.label} (${relationship}: ${
-    AGENT_RUNTIME_LABELS[recordedRuntime] ?? sanitizeTerminalText(recordedRuntime)
-  })`;
+  return `${described.label} (${relationship}: ${recordedLabel})`;
 }

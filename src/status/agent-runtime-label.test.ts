@@ -103,6 +103,29 @@ describe("resolveAgentRuntimeLabel", () => {
       expected: "OpenAI Codex",
     },
     {
+      // Upgraded sessions still persist the retired `codex-cli` id (exercised in
+      // doctor-session-state-providers.test.ts). It renders as "OpenAI Codex",
+      // exactly like the current `codex` id, so treating the pair as a transition
+      // produced "OpenAI Codex (previous runtime: OpenAI Codex)".
+      name: "a retired codex-cli pin is not reported as a transition to codex",
+      args: { sessionEntry: { agentHarnessId: "codex-cli" }, resolvedHarness: "codex" },
+      expected: "OpenAI Codex",
+    },
+    {
+      name: "a locked retired codex-cli pin is not reported as a session pin either",
+      args: {
+        sessionEntry: { agentHarnessId: "codex-cli", modelSelectionLocked: true },
+        resolvedHarness: "codex",
+      },
+      expected: "OpenAI Codex",
+    },
+    {
+      // The alias must not swallow a genuine transition away from Codex.
+      name: "a retired codex-cli pin still reports a real transition",
+      args: { sessionEntry: { agentHarnessId: "codex-cli" }, resolvedHarness: "claude-cli" },
+      expected: "Claude CLI (previous runtime: OpenAI Codex)",
+    },
+    {
       name: "an auto pin carries no runtime ownership to report",
       args: { sessionEntry: { agentHarnessId: "auto" }, resolvedHarness: "codex" },
       expected: "OpenAI Codex",
