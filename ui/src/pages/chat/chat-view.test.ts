@@ -4882,10 +4882,7 @@ describe("chat slash menu accessibility", () => {
     expect(draft).toBe("Please use $weather ");
   });
 
-  it.each([
-    ["reset", "/reset"],
-    ["exec gateway", "/exec gateway"],
-  ])("executes inline /%s like its standalone command", (typedCommand, dispatchedCommand) => {
+  it("executes an inline /reset like its standalone command", () => {
     let draft = "";
     const onDraftChange = vi.fn((next: string) => {
       draft = next;
@@ -4894,10 +4891,30 @@ describe("chat slash menu accessibility", () => {
     const onSlashCommand = vi.fn();
     const { container } = createReactiveDraftHarness({ onDraftChange, onSend, onSlashCommand });
 
-    inputDraftAtEnd(container, `Please /${typedCommand}`);
+    inputDraftAtEnd(container, "Please /reset");
     keydownComposer(container, "Enter");
 
-    expect(onSlashCommand).toHaveBeenCalledExactlyOnceWith(dispatchedCommand);
+    expect(onSlashCommand).toHaveBeenCalledExactlyOnceWith("/reset");
+    expect(draft).toBe("Please ");
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(draft);
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("serializes a selected inline /exec host argument canonically", () => {
+    let draft = "";
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
+    });
+    const onSend = vi.fn();
+    const onSlashCommand = vi.fn();
+    const { container } = createReactiveDraftHarness({ onDraftChange, onSend, onSlashCommand });
+
+    inputDraftAtEnd(container, "Please /exec");
+    keydownComposer(container, "Tab");
+    keydownComposer(container, "ArrowDown");
+    keydownComposer(container, "Enter");
+
+    expect(onSlashCommand).toHaveBeenCalledExactlyOnceWith("/exec host=gateway");
     expect(draft).toBe("Please ");
     expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(draft);
     expect(onSend).not.toHaveBeenCalled();
