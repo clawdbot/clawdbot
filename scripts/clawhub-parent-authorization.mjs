@@ -137,7 +137,9 @@ export function clawHubIdentityFromEnvironment(env) {
 // layout; anything else keeps the per-artifact directory contract.
 export function resolvePackedClawHubArtifactDir({ directory, artifactName, matrixSize }) {
   const nested = join(directory, artifactName);
-  if (existsSync(nested) || matrixSize !== 1) return nested;
+  if (existsSync(nested) || matrixSize !== 1) {
+    return nested;
+  }
   return directory;
 }
 
