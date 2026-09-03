@@ -1,3 +1,4 @@
+import { codePointCountExceeds, sliceCodePoints } from "@openclaw/normalization-core/code-points";
 /** Maximum prompt cache key length accepted by OpenAI-compatible request metadata. */
 export const OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH = 64;
 
@@ -6,9 +7,7 @@ export function clampOpenAIPromptCacheKey(key: string | undefined): string | und
   if (key === undefined) {
     return undefined;
   }
-  const chars = Array.from(key);
-  if (chars.length <= OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH) {
-    return key;
-  }
-  return chars.slice(0, OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH).join("");
+  return codePointCountExceeds(key, OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH)
+    ? sliceCodePoints(key, 0, OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH)
+    : key;
 }

@@ -1,3 +1,4 @@
+import { countCodePoints } from "@openclaw/normalization-core/code-points";
 const ASCII_SHORTCUT_KEY = /^[a-z0-9]$/;
 const PHYSICAL_LETTER_KEY = /^Key([A-Z])$/;
 const PHYSICAL_DIGIT_KEY = /^Digit([0-9])$/;
@@ -37,7 +38,7 @@ export function resolveAsciiShortcutKey(event: KeyboardEvent): string | null {
   if (ASCII_SHORTCUT_KEY.test(key)) {
     return key;
   }
-  if (event.altKey || event.key === "Dead" || Array.from(event.key).length !== 1) {
+  if (event.altKey || event.key === "Dead" || countCodePoints(event.key) !== 1) {
     return null;
   }
 
