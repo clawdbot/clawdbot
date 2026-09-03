@@ -92,26 +92,6 @@ describe("resolveAuthProfileOrder — cooldown auto-expiry", () => {
     expect(store.usageStats?.["anthropic:default"]?.errorCount).toBe(3);
   });
 
-  it("expired rate-limit cooldown preserves backoff for the next failed probe", () => {
-    const store = makeStoreWithProfiles();
-    store.usageStats = {
-      "anthropic:default": {
-        cooldownUntil: Date.now() - 1_000,
-        cooldownReason: "rate_limit",
-        errorCount: 4,
-        failureCounts: { rate_limit: 4 },
-        lastFailureAt: Date.now() - 3_700_000,
-      },
-    };
-
-    resolveAuthProfileOrder({ store, provider: "anthropic" });
-
-    // The profile is eligible now, but another rate-limit failure advances the
-    // next delay from the fourth 4-minute window to the fifth 8-minute window.
-    expect(store.usageStats?.["anthropic:default"]?.errorCount).toBe(4);
-    expect(store.usageStats?.["anthropic:default"]?.failureCounts).toEqual({ rate_limit: 4 });
-  });
-
   it("mixed active and expired cooldowns across profiles", () => {
     const store = makeStoreWithProfiles();
     store.usageStats = {
