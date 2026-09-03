@@ -322,7 +322,7 @@ if (declarationBudget.shouldFail) {
           queue.push(fullPath);
           continue;
         }
-        if (!entry.isFile() || !entry.name.endsWith(".d.ts")) {
+        if (!entry.isFile() || !/\.d\.(?:ts|mts|cts)$/u.test(entry.name)) {
           continue;
         }
         const sourceText = readFileSync(fullPath, "utf8");

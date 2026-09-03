@@ -81,15 +81,10 @@ export async function publishStagedDeclarations(
     for (const file of files) {
       const relative = portableRelativePath(source.output, file);
       const target = path.join(staging, relative);
-      const raw = fs.readFileSync(file);
-      // Strip undeclared bundler helpers (for example __exportAll) before the
-      // staged bytes become the published declaration identity.
-      const isDeclaration =
-        relative.endsWith(".d.ts") || relative.endsWith(".d.mts") || relative.endsWith(".d.cts");
-      const sanitizedText = isDeclaration
-        ? sanitizeBundlerHelperDtsExports(raw.toString("utf8")).sourceText
-        : raw.toString("utf8");
-      const bytes = Buffer.from(sanitizedText, "utf8");
+      const raw = fs.readFileSync(file, "utf8");
+      // Strip generated bundler helpers before staged bytes become the published
+      // declaration identity.
+      const bytes = Buffer.from(sanitizeBundlerHelperDtsExports(raw).sourceText, "utf8");
       // Shared chunks may be identical across groups. A differing owner must
       // fail before publication; last-writer-wins can corrupt nominal identity.
       if (fs.existsSync(target)) {

@@ -43,6 +43,32 @@ describe("sanitizeBundlerHelperDtsExports", () => {
     expect(sanitizeBundlerHelperDtsExports(source).sourceText).toBe(source);
   });
 
+  it("keeps a directly imported __exportAll binding", () => {
+    const source = [
+      'import { __exportAll } from "./helper.js";',
+      "export { __exportAll as ud };",
+      "",
+    ].join("\n");
+    expect(findUndeclaredBundlerHelperDtsExports(source)).toEqual([]);
+    expect(sanitizeBundlerHelperDtsExports(source).sourceText).toBe(source);
+  });
+
+  it("removes generated helper aliases from mixed imports", () => {
+    const source = [
+      'import { keep as k, ud as __exportAll } from "./helper.js";',
+      "export { keep as k };",
+      "",
+    ].join("\n");
+    const sanitized = sanitizeBundlerHelperDtsExports(source);
+    expect(sanitized.sourceText).toContain('import { keep as k } from "./helper.js";');
+    expect(sanitized.sourceText).not.toContain("__exportAll");
+
+    const onlyHelper = sanitizeBundlerHelperDtsExports(
+      'import { ud as __exportAll } from "./helper.js";\nexport {};\n',
+    );
+    expect(onlyHelper.sourceText).not.toContain("__exportAll");
+  });
+
   it("clears the published 2026.8.2 undeclared __exportAll export shape", () => {
     const source = readFileSync(fixturePath, "utf8");
     expect(source).toContain("__exportAll as ud");
