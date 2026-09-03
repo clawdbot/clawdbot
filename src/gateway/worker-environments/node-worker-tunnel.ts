@@ -421,9 +421,11 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
           });
           const result = await raceNodeWorkerOperation(operation, signal);
           if (!result.ok) {
-            throw new Error(
-              `node worker environment stop failed (${result.error?.code ?? "UNAVAILABLE"})`,
-            );
+            const code = result.error?.code ?? "UNAVAILABLE";
+            const message = `node worker environment stop failed (${code})`;
+            throw RETRYABLE_TRANSPORT_CODES.has(code)
+              ? new WorkerTunnelOwnerDisconnectedError(message)
+              : new Error(message);
           }
         }
       } catch (error) {

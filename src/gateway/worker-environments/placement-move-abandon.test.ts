@@ -178,6 +178,25 @@ describe("offline device placement abandonment", () => {
     },
   );
 
+  it("abandons a device whose supervisor proof disappears after discovery", async () => {
+    const { harness, active, environments, reconnect, invoke } = await deviceTeardown(false);
+    reconnect();
+    invoke.mockResolvedValueOnce({
+      ok: false,
+      error: { code: "PRIVATE_DIALECT_UNAVAILABLE" },
+    });
+
+    await expect(harness.service.move(requestFor(active))).resolves.toMatchObject({
+      state: "local",
+    });
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(environments.get(active.environmentId)).toMatchObject({
+      state: "failed",
+      leaseId: null,
+      lastError: FORCED_WORKER_ABANDONMENT_ERROR,
+    });
+  });
+
   it("force destroys an unreachable device and accepts its already fenced placement for abandonment", async () => {
     const { harness, active, environments } = await deviceTeardown(false);
     const respond = vi.fn();
