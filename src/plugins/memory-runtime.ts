@@ -1,4 +1,6 @@
 // Runtime bridge for plugin-owned memory hooks and state.
+import { homedir } from "node:os";
+import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
@@ -93,6 +95,18 @@ function resolveMemoryRuntimeWorkspaceDir(
   cfg: OpenClawConfig,
   agentId: string,
 ): string | undefined {
+  // When the system agent is configured with an explicit default workspace,
+  // use that workspace directly so the shared memory database is keyed from
+  // the canonical workspace path rather than a per-agent subdirectory.
+  const systemAgentId = String(cfg.agents?.defaults?.systemAgent?.agentId || "").trim();
+  const defaultWorkspace = String(cfg.agents?.defaults?.workspace || "").trim();
+  if (systemAgentId && defaultWorkspace && agentId === systemAgentId) {
+    if (defaultWorkspace === "~") return resolveUserPath(homedir());
+    if (defaultWorkspace.startsWith("~/"))
+      return resolveUserPath(path.join(homedir(), defaultWorkspace.slice(2)));
+    return resolveUserPath(defaultWorkspace);
+  }
+
   const dir = resolveAgentWorkspaceDir(cfg, agentId);
   if (typeof dir !== "string" || !dir.trim()) {
     return undefined;
