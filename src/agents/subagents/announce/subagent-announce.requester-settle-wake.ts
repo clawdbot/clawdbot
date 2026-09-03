@@ -4,6 +4,7 @@
  * Lifecycle owns the persisted outbox state on retained subagent run rows;
  * this module selects a drained wave and delivers its synthesized wake.
  */
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { logWarn } from "../../../logger.js";
@@ -49,6 +50,8 @@ export type RequesterSettleWakeBatchState = Omit<RequesterSettleWakeState, "reti
 const REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS = 3;
 const REQUESTER_SETTLE_WAKE_MAX_AMBIGUOUS_REPLAYS = 3;
 const REQUESTER_SETTLE_WAKE_MAX_DEFERRALS = 10;
+const REQUESTER_SETTLE_WAKE_ROUTE_NOTICE_MAX_CHARS = 1_024;
+const ROUTE_NOTICE_TRUNCATION = "\n[model-route changes truncated]";
 const REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS = [30_000, 120_000] as const;
 const activeRequesterSettleWakeBatches = new Set<string>();
 
@@ -384,20 +387,34 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
     return false;
   }
 
-  const findings = buildChildCompletionFindings(
-    dedupeLatestChildCompletionRows(
-      filterCurrentDirectChildCompletionRows(settledBatch, {
-        requesterSessionKey,
-        requesterAgentId,
-        getLatestSubagentRunByChildSessionKey,
-      }),
-    ),
+  const completionRows = dedupeLatestChildCompletionRows(
+    filterCurrentDirectChildCompletionRows(settledBatch, {
+      requesterSessionKey,
+      requesterAgentId,
+      getLatestSubagentRunByChildSessionKey,
+    }),
   );
+  const findings = buildChildCompletionFindings(completionRows);
   const requesterSessionOrigin = normalizeDeliveryContext(params.requesterOrigin);
   const directOrigin = resolveAnnounceOrigin(requesterEntry, requesterSessionOrigin);
-  const terminalReply = currentSettledEntry.completion?.terminalReply;
+  // The scheduling row need not be the rerouted child. Keep every current
+  // child's producer-owned notice, with stable bytes and one batch-wide cap.
+  const routeNotices = [
+    ...new Set(
+      completionRows.flatMap(({ completion }) => {
+        const reply = completion?.terminalReply;
+        return reply?.disposition === "visible" && reply.modelRouteChange
+          ? [reply.modelRouteChange]
+          : [];
+      }),
+    ),
+  ]
+    .toSorted()
+    .join("\n");
   const modelRouteChange =
-    terminalReply?.disposition === "visible" ? terminalReply.modelRouteChange : undefined;
+    routeNotices.length > REQUESTER_SETTLE_WAKE_ROUTE_NOTICE_MAX_CHARS
+      ? `${truncateUtf16Safe(routeNotices, REQUESTER_SETTLE_WAKE_ROUTE_NOTICE_MAX_CHARS - ROUTE_NOTICE_TRUNCATION.length)}${ROUTE_NOTICE_TRUNCATION}`
+      : routeNotices;
   const completionChannel = normalizeMessageChannel(directOrigin?.channel);
   const wakeMessage = buildRequesterSettleWakeMessage({
     findings,

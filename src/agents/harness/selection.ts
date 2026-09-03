@@ -363,12 +363,6 @@ function selectAgentHarnessDecision(
   });
 }
 
-export async function runAgentHarnessAttempt(
-  params: EmbeddedRunAttemptParams,
-): Promise<EmbeddedRunAttemptResult> {
-  return runSelectedAgentHarnessAttempt(params);
-}
-
 /** Runs the selected harness's fail-closed settled-turn finalization operation. */
 export async function runAgentHarnessSettledTurnFinalization(
   params: EmbeddedRunAttemptParams,
@@ -401,14 +395,33 @@ export async function runAgentHarnessSettledTurnFinalization(
   );
 }
 
-async function runSelectedAgentHarnessAttempt(
+export async function runAgentHarnessAttempt(
   params: EmbeddedRunAttemptParams,
+  nativeSessionRuntime?: import("../embedded-agent-runner/run/model-setup.js").PreparedNativeSessionRuntime,
 ): Promise<EmbeddedRunAttemptResult> {
   let internalParams = params as EmbeddedRunAttemptParams & {
     systemAgentTool?: SystemAgentToolOptions;
   };
-  const selection = selectPreparedAgentHarness(params);
+  if (nativeSessionRuntime) {
+    await nativeSessionRuntime.assertCurrent();
+  }
+  // A bound native connection owns the real route. Outer model config cannot
+  // redirect its transcript or credentials through a second support decision.
+  const selection =
+    nativeSessionRuntime?.auth === "native"
+      ? buildSelectionDecision({
+          harness: nativeSessionRuntime.harness,
+          policy: { runtime: nativeSessionRuntime.harness.id, runtimeSource: "model" },
+          selectedReason: "forced_plugin",
+          candidates: [],
+        })
+      : selectPreparedAgentHarness(params);
   const harness = selection.harness;
+  if (nativeSessionRuntime && harness !== nativeSessionRuntime.harness) {
+    throw new AgentHarnessPreflightError(
+      "Native session runtime changed before dispatch. Reattach the original native session before retrying.",
+    );
+  }
   if (internalParams.contextEngineLogicalTurnLease) {
     selectContextEngineForTranscriptHost({
       lease: internalParams.contextEngineLogicalTurnLease,
@@ -443,6 +456,9 @@ async function runSelectedAgentHarnessAttempt(
         ),
       ]
     : [];
+  if (nativeSessionRuntime) {
+    await nativeSessionRuntime.assertCurrent();
+  }
   const attemptParams = withoutHarnessSetupAuthority(internalParams);
   const pluginAttempt = withoutInternalHarnessAuthority(
     attemptParams,

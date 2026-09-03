@@ -12,12 +12,7 @@ import { verifyDeviceToken } from "../infra/device-pairing-tokens.js";
 import { listDevicePairing } from "../infra/device-pairing.js";
 import { verifyPairingToken } from "../infra/pairing-token.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
-import {
-  ensureProfileForEmail,
-  ensureProfileForTailscaleIdentity,
-  getUserProfileDisplay,
-  getUserProfileListItem,
-} from "../state/user-profiles.js";
+import { getUserProfileListItem } from "../state/user-profiles.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
@@ -38,7 +33,11 @@ import {
   listControlUiPluginTabAuthGrants,
   type ControlUiPluginTabAuthGrant,
 } from "./control-ui-plugin-tabs.js";
-import { createAuthenticatedGitHubIdentitySync } from "./github-user-identity.js";
+import {
+  resolveAuthenticatedHttpUserProfile,
+  resolveHttpProfile,
+  usesSharedSecretGatewayMethod,
+} from "./http-auth-user-profile.js";
 import { sendGatewayAuthFailure, sendJson, sendMissingScopeForbidden } from "./http-common.js";
 import {
   prepareGatewayIngressAttribution,
@@ -49,7 +48,6 @@ import {
   CLI_DEFAULT_OPERATOR_SCOPES,
   authorizeOperatorScopesForMethod,
 } from "./method-scopes.js";
-import { resolveOperatorRolePolicyForProfile } from "./operator-role-policy.js";
 import { resolveBrowserOriginPolicy } from "./origin-check.js";
 import { withSerializedCredentialFallbackAttempt } from "./rate-limit-attempt-serialization.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
@@ -86,6 +84,7 @@ export type AuthorizedGatewayHttpRequest = {
   trustDeclaredOperatorScopes: boolean;
   authenticatedUserProfile?: GatewayClient["authenticatedUserProfile"];
   operatorRolePolicy?: GatewayOperatorRoleDefinition;
+  operatorRoleActor?: { kind: "system" };
   controlUiPluginGrants?: ControlUiPluginTabAuthGrant[];
   controlUiPluginGrant?: ControlUiPluginTabAuthGrant;
 };
@@ -142,62 +141,6 @@ export function resolveHttpBrowserOriginPolicy(
 
 function usesSharedSecretHttpAuth(auth: SharedSecretGatewayAuth | undefined): boolean {
   return auth?.mode === "token" || auth?.mode === "password";
-}
-
-function usesSharedSecretGatewayMethod(method: GatewayAuthResult["method"] | undefined): boolean {
-  return method === "token" || method === "password";
-}
-
-async function resolveAuthenticatedHttpUserProfile(params: {
-  authResult: GatewayAuthResult;
-  cfg: OpenClawConfig;
-  req: IncomingMessage;
-}): Promise<AuthenticatedHttpUserProfile> {
-  const authenticatedUserId = normalizeOptionalString(params.authResult.user);
-  const rolesConfigured = Boolean(params.cfg.gateway?.roles);
-  if (!authenticatedUserId) {
-    if (!rolesConfigured || usesSharedSecretGatewayMethod(params.authResult.method)) {
-      return {};
-    }
-    throw new Error("operator role policies require a verified durable user profile");
-  }
-  try {
-    const syncGitHubIdentity = createAuthenticatedGitHubIdentitySync({
-      authResult: params.authResult,
-      authConfig: params.cfg.gateway?.auth,
-      requestHeaders: params.req.headers,
-      preferCachedIdentity: !rolesConfigured,
-    });
-    const profile = syncGitHubIdentity
-      ? await syncGitHubIdentity()
-      : params.authResult.tailscaleIdentity
-        ? ensureProfileForTailscaleIdentity(params.authResult.tailscaleIdentity)
-        : ensureProfileForEmail(authenticatedUserId);
-    const profileId = "profileId" in profile ? profile.profileId : profile.id;
-    return resolveHttpProfile(profileId, profile.updatedAt, params.cfg);
-  } catch (error) {
-    // Attribution enriches authenticated requests; only configured roles make
-    // durable profile resolution a prerequisite for authorization.
-    if (rolesConfigured) {
-      throw error;
-    }
-    return {};
-  }
-}
-
-function resolveHttpProfile(profileId: string, updatedAt: number, cfg: OpenClawConfig) {
-  const display = getUserProfileDisplay(profileId);
-  const operatorRolePolicy = resolveOperatorRolePolicyForProfile(display.id, cfg);
-  return {
-    authenticatedUserProfile: {
-      profileId: display.id,
-      displayName: display.displayName,
-      avatarRevision: display.avatarRevision,
-      hasAvatar: display.hasAvatar,
-      updatedAt,
-    },
-    ...(operatorRolePolicy ? { operatorRolePolicy } : {}),
-  };
 }
 
 export function applyHttpOperatorRoleScopeCeiling<Scope extends string>(
@@ -626,6 +569,10 @@ async function checkGatewayHttpRequestAuthWith(
       // must opt in explicitly if they want to treat that shared-secret path as a
       // full trusted-operator surface.
       trustDeclaredOperatorScopes: !usesSharedSecretGatewayMethod(authResult.method),
+      // Shared-secret authority belongs to authentication, independently of profile attribution.
+      ...(usesSharedSecretGatewayMethod(authResult.method)
+        ? { operatorRoleActor: { kind: "system" as const } }
+        : {}),
       ...authenticatedProfile,
     },
   };

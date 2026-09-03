@@ -592,66 +592,89 @@ async function createLeasedLifecycleWireClient(
 }
 
 describe("Codex app-server thread lifecycle bindings", () => {
-  it("resumes idle A with current policy while B stays active and catalog leases come and go", async () => {
-    const sessionFile = path.join(tempDir, "parallel-policy.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const threadId = "parallel-policy-a";
-    const siblingId = "parallel-policy-b";
-    const fixture = await createLeasedCodexLifecycleHarness({
-      agentDir: path.join(tempDir, "agent"),
-      respond: async (method) => {
-        if (method === "thread/resume") {
-          const reader = await getLeasedSharedCodexAppServerClient(fixture.acquireOptions);
-          try {
-            await reader.request("thread/read", { threadId: siblingId, includeTurns: false });
-          } finally {
-            releaseLeasedSharedCodexAppServerClient(reader);
+  it.each([false, true])(
+    "resumes idle A with current policy while B stays active and catalog leases come and go (native model: %s)",
+    async (nativeModelOwned) => {
+      const sessionFile = path.join(tempDir, "parallel-policy.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace");
+      const threadId = "parallel-policy-a";
+      const siblingId = "parallel-policy-b";
+      const fixture = await createLeasedCodexLifecycleHarness({
+        agentDir: path.join(tempDir, "agent"),
+        respond: async (method) => {
+          if (method === "thread/resume") {
+            const reader = await getLeasedSharedCodexAppServerClient(fixture.acquireOptions);
+            try {
+              await reader.request("thread/read", { threadId: siblingId, includeTurns: false });
+            } finally {
+              releaseLeasedSharedCodexAppServerClient(reader);
+            }
+            return threadStartResult(threadId);
           }
-          return threadStartResult(threadId);
-        }
-        throw new Error(`unexpected method: ${method}`);
-      },
-    });
-    fixture.seed(threadStartResult(threadId), { loaded: true, subscribed: false });
-    const siblingResponse = threadStartResult(siblingId);
-    fixture.seed(
-      {
-        ...siblingResponse,
-        thread: { ...siblingResponse.thread, status: { type: "active", activeFlags: [] } },
-      },
-      { loaded: true, subscribed: true },
-    );
-    await writeCodexAppServerBinding(sessionFile, { threadId, cwd: workspaceDir });
-    const sibling = await getLeasedSharedCodexAppServerClient(fixture.acquireOptions);
-    const siblingClaim = await claimCodexAppServerLiveThread(sibling, siblingId);
-    try {
-      const resumed = await startOrResumeThread({
-        client: fixture.client,
-        params: createParams(sessionFile, workspaceDir),
-        cwd: workspaceDir,
-        dynamicTools: [],
-        appServer: createThreadLifecycleAppServerOptions(),
-        userMcpServersEnabled: false,
-        developerInstructions: "current A policy",
+          throw new Error(`unexpected method: ${method}`);
+        },
       });
-      expect(resumed).toMatchObject({ threadId, lifecycle: { action: "resumed" } });
-      expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe(threadId);
-      const injection = fixture.request.mock.calls.find(
-        ([method]) => method === "thread/inject_items",
+      fixture.seed(threadStartResult(threadId), { loaded: true, subscribed: false });
+      const siblingResponse = threadStartResult(siblingId);
+      fixture.seed(
+        {
+          ...siblingResponse,
+          thread: { ...siblingResponse.thread, status: { type: "active", activeFlags: [] } },
+        },
+        { loaded: true, subscribed: true },
       );
-      expect(JSON.stringify(injection?.[1])).toContain("current A policy");
-      expect(siblingClaim).toBeDefined();
-      expect(() => siblingClaim!.assertCurrent()).not.toThrow();
-      await expect(
-        sibling.request("thread/read", { threadId: siblingId, includeTurns: false }),
-      ).resolves.toMatchObject({ thread: { status: { type: "active" } } });
-      expect(fixture.request.mock.calls.some(([method]) => method === "thread/start")).toBe(false);
-      expect(fixture.client.getCloseError()).toBeUndefined();
-    } finally {
-      await siblingClaim?.release(siblingId);
-      releaseLeasedSharedCodexAppServerClient(sibling);
-    }
-  });
+      const nativeModel = threadStartResult(threadId);
+      await writeCodexAppServerBinding(sessionFile, {
+        threadId,
+        cwd: workspaceDir,
+        preserveNativeModel: nativeModelOwned ? true : undefined,
+        ...(nativeModelOwned
+          ? { model: nativeModel.model, modelProvider: nativeModel.modelProvider }
+          : {}),
+      });
+      const params = createParams(sessionFile, workspaceDir);
+      if (nativeModelOwned) {
+        params.expectedSessionRuntimeOwnership = {
+          model: "native",
+          auth: "host",
+          modelRef: { model: nativeModel.model, provider: nativeModel.modelProvider },
+        };
+      }
+      const sibling = await getLeasedSharedCodexAppServerClient(fixture.acquireOptions);
+      const siblingClaim = await claimCodexAppServerLiveThread(sibling, siblingId);
+      try {
+        const resumed = await startOrResumeThread({
+          client: fixture.client,
+          params,
+          cwd: workspaceDir,
+          dynamicTools: [],
+          appServer: createThreadLifecycleAppServerOptions(),
+          userMcpServersEnabled: false,
+          developerInstructions: "current A policy",
+        });
+        expect(resumed).toMatchObject({ threadId, lifecycle: { action: "resumed" } });
+        const binding = await readCodexAppServerBinding(sessionFile);
+        expect(binding?.threadId).toBe(threadId);
+        expect(binding?.preserveNativeModel).toBe(nativeModelOwned ? true : undefined);
+        const injection = fixture.request.mock.calls.find(
+          ([method]) => method === "thread/inject_items",
+        );
+        expect(JSON.stringify(injection?.[1])).toContain("current A policy");
+        expect(siblingClaim).toBeDefined();
+        expect(() => siblingClaim!.assertCurrent()).not.toThrow();
+        await expect(
+          sibling.request("thread/read", { threadId: siblingId, includeTurns: false }),
+        ).resolves.toMatchObject({ thread: { status: { type: "active" } } });
+        expect(fixture.request.mock.calls.some(([method]) => method === "thread/start")).toBe(
+          false,
+        );
+        expect(fixture.client.getCloseError()).toBeUndefined();
+      } finally {
+        await siblingClaim?.release(siblingId);
+        releaseLeasedSharedCodexAppServerClient(sibling);
+      }
+    },
+  );
 
   it("accounts for 100 seeded rounds across eight native thread owners without leaked or stale claims", async () => {
     const fixture = await createLeasedCodexLifecycleHarness({
@@ -1735,7 +1758,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
                 })
               : withCodexAppServerThreadMutation(fixture.threadId, () =>
                   testCodexAppServerBindingStore.withLease(fixture.identity, async () => {
-                    const binding = await testCodexAppServerBindingStore.read(fixture.identity);
+                    const binding = testCodexAppServerBindingStore.read(fixture.identity);
                     if (binding) {
                       await releaseCodexAppServerBindingSubscription(binding, {
                         allowUntracked: true,
@@ -1773,20 +1796,37 @@ describe("Codex app-server thread lifecycle bindings", () => {
   );
 
   it.each([
-    { pending: true, change: "delete" },
-    { pending: false, change: "delete" },
-    { pending: false, change: "replace-client" },
-    { pending: false, change: "replace-thread" },
+    { pending: true, change: "delete", nativeModelOwned: false },
+    { pending: false, change: "delete", nativeModelOwned: false },
+    { pending: false, change: "replace-client", nativeModelOwned: false },
+    { pending: false, change: "replace-thread", nativeModelOwned: false },
+    { pending: false, change: "delete", nativeModelOwned: true },
+    { pending: false, change: "replace-client", nativeModelOwned: true },
+    { pending: false, change: "replace-thread", nativeModelOwned: true },
   ])(
-    "rejects a changed binding queued for preparation ($change, manual intent: $pending)",
-    async ({ pending, change }) => {
+    "rejects a changed binding queued for preparation ($change, manual intent: $pending, native model: $nativeModelOwned)",
+    async ({ pending, change, nativeModelOwned }) => {
       const fixture = await createManualResumeFixture();
+      const nativeModel = threadStartResult(fixture.threadId);
       if (!pending) {
         await testCodexAppServerBindingStore.mutate(fixture.identity, {
           kind: "patch",
           threadId: fixture.threadId,
-          patch: { pendingResumeConfiguration: undefined },
+          patch: {
+            pendingResumeConfiguration: undefined,
+            preserveNativeModel: nativeModelOwned ? true : undefined,
+            ...(nativeModelOwned
+              ? { model: nativeModel.model, modelProvider: nativeModel.modelProvider }
+              : {}),
+          },
         });
+      }
+      if (nativeModelOwned) {
+        fixture.common.params.expectedSessionRuntimeOwnership = {
+          model: "native",
+          auth: "host",
+          modelRef: { model: nativeModel.model, provider: nativeModel.modelProvider },
+        };
       }
       const entered = createDeferred<void>();
       const release = createDeferred<void>();
@@ -1795,10 +1835,11 @@ describe("Codex app-server thread lifecycle bindings", () => {
         await release.promise;
       });
       await entered.promise;
+      const readBinding = testCodexAppServerBindingStore.read.bind(testCodexAppServerBindingStore);
       const read = vi.spyOn(testCodexAppServerBindingStore, "read");
       const pendingRead = createDeferred<void>();
-      read.mockImplementationOnce(async () => {
-        const binding = await readCodexAppServerBinding(fixture.sessionFile);
+      read.mockImplementationOnce((identity) => {
+        const binding = readBinding(identity);
         pendingRead.resolve();
         return binding;
       });
@@ -1822,7 +1863,11 @@ describe("Codex app-server thread lifecycle bindings", () => {
               },
         );
         release.resolve();
-        await expect(starting).rejects.toThrow("acquiring thread lifecycle ownership");
+        await expect(starting).rejects.toThrow(
+          nativeModelOwned && change === "delete"
+            ? "native session ownership is missing or changed"
+            : "acquiring thread lifecycle ownership",
+        );
         expect(fixture.request.mock.calls.map(([method]) => method)).toEqual([
           "thread/read",
           "thread/resume",
@@ -2983,36 +3028,58 @@ describe("Codex app-server thread lifecycle bindings", () => {
   });
 
   it.each([
-    { name: "legacy managed file", layer: { name: { type: "legacyManagedConfigTomlFromFile" } } },
-    { name: "legacy managed MDM", layer: { name: { type: "legacyManagedConfigTomlFromMdm" } } },
-    { name: "unknown future", layer: { name: { type: "futureManaged" } } },
-    { name: "malformed", layer: { name: {} } },
-  ])("fails closed on $name config layers before OpenClaw thread/start", async ({ layer }) => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const params = createParams(sessionFile, workspaceDir);
-    params.toolsAllow = ["openclaw"];
-    const request = vi.fn(async (method: string) => {
-      if (method === "config/read") {
-        return { config: {}, layers: [layer] };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
+    {
+      expectedError:
+        'Codex restricted tool surface cannot override config layer legacyManagedConfigTomlFromFile; migrate /etc/codex/managed_config.toml to /etc/codex/requirements.toml before running restricted or isolated turns. For ChatGPT-only authentication, use allowed_login_methods = ["chatgpt"] in /etc/codex/requirements.toml.',
+      name: "legacy managed file",
+      layer: {
+        name: {
+          file: "/etc/codex/managed_config.toml",
+          type: "legacyManagedConfigTomlFromFile",
+        },
+      },
+    },
+    {
+      expectedError:
+        'Codex restricted tool surface cannot override config layer legacyManagedConfigTomlFromMdm; replace the legacy MDM payload with base64-encoded TOML requirements in the com.openai.codex managed preference requirements_toml_base64 before running restricted or isolated turns. For ChatGPT-only authentication, include allowed_login_methods = ["chatgpt"] in that TOML payload.',
+      name: "legacy managed MDM",
+      layer: { name: { type: "legacyManagedConfigTomlFromMdm" } },
+    },
+    {
+      expectedError: /config layer/u,
+      name: "unknown future",
+      layer: { name: { type: "futureManaged" } },
+    },
+    { expectedError: /config layers/u, name: "malformed", layer: { name: {} } },
+  ])(
+    "fails closed on $name config layers before OpenClaw thread/start",
+    async ({ expectedError, layer }) => {
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace");
+      const params = createParams(sessionFile, workspaceDir);
+      params.toolsAllow = ["openclaw"];
+      const request = vi.fn(async (method: string) => {
+        if (method === "config/read") {
+          return { config: {}, layers: [layer] };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
 
-    await expect(
-      startOrResumeThread({
-        client: { request } as never,
-        params,
-        cwd: workspaceDir,
-        dynamicTools: [createNamedDynamicTool("openclaw")],
-        appServer: createThreadLifecycleAppServerOptions(),
-        nativeCodeModeEnabled: false,
-        userMcpServersEnabled: false,
-        hostSystemAgentActive: true,
-      }),
-    ).rejects.toThrow(/config layer|config layers/u);
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["config/read"]);
-  });
+      await expect(
+        startOrResumeThread({
+          client: { request } as never,
+          params,
+          cwd: workspaceDir,
+          dynamicTools: [createNamedDynamicTool("openclaw")],
+          appServer: createThreadLifecycleAppServerOptions(),
+          nativeCodeModeEnabled: false,
+          userMcpServersEnabled: false,
+          hostSystemAgentActive: true,
+        }),
+      ).rejects.toThrow(expectedError);
+      expect(request.mock.calls.map(([method]) => method)).toEqual(["config/read"]);
+    },
+  );
 
   it.each(["hooks", "managed_hooks"] as const)(
     "fails closed on non-empty %s requirements before OpenClaw thread/start",
@@ -3182,6 +3249,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     "code_mode",
     "code_mode_only",
     "computer_use",
+    "context_management",
     "current_time_reminder",
     "default_mode_request_user_input",
     "deferred_executor",

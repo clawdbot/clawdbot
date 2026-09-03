@@ -10,7 +10,7 @@ import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
-import { clearConfigCache, getRuntimeConfig, setRuntimeConfigSnapshot } from "../config/config.js";
+import { clearConfigCache, getRuntimeConfig } from "../config/config.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   listSessionEntriesReadOnly,
@@ -306,24 +306,26 @@ describe("Browser Talk consult target handoff", () => {
           ? {}
           : { [canonicalKey]: { sessionId, updatedAt: Date.now(), status: "done" } },
       });
-      setRuntimeConfigSnapshot({
-        ...previousConfig,
-        agents: {
-          ownership: "explicit",
-          entries: { primary: {}, voice: {} },
-          defaults: {
-            ...previousConfig.agents?.defaults,
-            ...(entry.fixed ? { sessionStore: { agentId } } : {}),
+      await prepareGatewayReplyRuntimeForTest({
+        force: true,
+        config: {
+          ...previousConfig,
+          agents: {
+            ownership: "explicit",
+            entries: { primary: {}, voice: {} },
+            defaults: {
+              ...previousConfig.agents?.defaults,
+              ...(entry.fixed ? { sessionStore: { agentId } } : {}),
+            },
+          },
+          talk: { agentId: "voice" },
+          session: {
+            ...(entry.mainKey ? { mainKey: entry.mainKey } : {}),
+            ...(entry.global ? { scope: "global" } : {}),
+            ...(entry.fixed ? { store: storePath } : {}),
           },
         },
-        talk: { agentId: "voice" },
-        session: {
-          ...(entry.mainKey ? { mainKey: entry.mainKey } : {}),
-          ...(entry.global ? { scope: "global" } : {}),
-          ...(entry.fixed ? { store: storePath } : {}),
-        },
       });
-      await prepareGatewayReplyRuntimeForTest({ force: true });
       voiceSessionId = createOrResumeClientVoiceSession({ agentId, sessionKey, origin: "client" });
       if (!entry.fresh) {
         await rpc("talk.client.transcript", {

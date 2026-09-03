@@ -318,6 +318,8 @@ export type CodexAppServerClientOptions = {
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
   onStartedClient?: (client: CodexAppServerClient) => void;
   abandonSignal?: AbortSignal;
+  /** Caller authority for startup of an isolated, caller-owned client. */
+  assertCurrent?: () => void;
 };
 
 /** Factory used by attempt startup and side turns to acquire a leased client. */
@@ -928,6 +930,7 @@ function createSharedCodexAppServerClientStartup(params: {
 export async function createIsolatedCodexAppServerClient(
   options?: CodexAppServerClientOptions,
 ): Promise<CodexAppServerClient> {
+  options?.assertCurrent?.();
   if (options?.abandonSignal?.aborted) {
     throw new CodexAppServerStartupError("aborted", "codex app-server initialize aborted");
   }
@@ -968,6 +971,7 @@ export async function createIsolatedCodexAppServerClient(
     config: options?.config,
     timeoutMs: resolveRemainingAcquireTimeout(timeoutMs, acquireStartedAt),
     abandonSignal: options?.abandonSignal,
+    assertCurrent: options?.assertCurrent,
     onStartedClient: (client) => {
       trackIsolatedCodexAppServerClient(client);
       options?.onStartedClient?.(client);
@@ -1002,6 +1006,7 @@ async function startInitializedCodexAppServerClient(params: {
   abandonSignal?: AbortSignal;
   onStartedClient?: (client: CodexAppServerClient) => void;
   onInitializedClient?: () => void;
+  assertCurrent?: () => void;
 }): Promise<CodexAppServerClient> {
   const acquireStartedAt = Date.now();
   const timeoutMs = params.timeoutMs ?? 0;
@@ -1017,6 +1022,7 @@ async function startInitializedCodexAppServerClient(params: {
           )
         : undefined);
     const assertDesktopGenerationCurrent = () => {
+      params.assertCurrent?.();
       if (params.abandonSignal?.aborted) {
         throw new CodexAppServerStartupError("aborted", "codex app-server initialize aborted");
       }

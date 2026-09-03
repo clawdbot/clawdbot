@@ -312,6 +312,13 @@ export const ModelsAuthLogoutParamsSchema = closedObject({
   agentId: Type.Optional(Type.String()),
 });
 
+/** Sets or clears the preferred auth-profile order for one provider and agent. */
+export const ModelsAuthOrderSetParamsSchema = closedObject({
+  provider: NonEmptyString,
+  profileIds: Type.Optional(Type.Array(NonEmptyString, { minItems: 1, uniqueItems: true })),
+  agentId: Type.Optional(Type.String()),
+});
+
 /** Model catalog result. */
 export const ModelCatalogProviderOutcomeSchema = closedObject({
   provider: NonEmptyString,
@@ -1426,6 +1433,7 @@ export type ModelCatalogProviderOutcome = Static<typeof ModelCatalogProviderOutc
 export type ModelsListResult = Static<typeof ModelsListResultSchema>;
 export type ModelsAuthStatusParams = Static<typeof ModelsAuthStatusParamsSchema>;
 export type ModelsAuthLogoutParams = Static<typeof ModelsAuthLogoutParamsSchema>;
+export type ModelsAuthOrderSetParams = Static<typeof ModelsAuthOrderSetParamsSchema>;
 export type AuthProbeStatus = Static<typeof AuthProbeStatusSchema>;
 export type ModelsProbeParams = Static<typeof ModelsProbeParamsSchema>;
 export type ModelsProbeTargetResult = Static<typeof ModelsProbeTargetResultSchema>;

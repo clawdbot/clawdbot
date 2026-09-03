@@ -206,7 +206,7 @@ export async function runCodexAppServerSideQuestion(
     agentId: params.agentId,
     config: params.cfg,
   });
-  const binding = await options.bindingStore.read(bindingIdentity);
+  const binding = options.bindingStore.read(bindingIdentity);
   if (!binding?.threadId) {
     throw new Error(
       "Codex /btw needs an active Codex thread. Send a normal message first, then try /btw again.",
@@ -763,7 +763,7 @@ export async function runCodexAppServerSideQuestion(
               requestOptions(),
             );
             params.hostCapabilities.assertActive();
-            if (!isDeepStrictEqual(await options.bindingStore.read(bindingIdentity), binding)) {
+            if (!isDeepStrictEqual(options.bindingStore.read(bindingIdentity), binding)) {
               throw new Error("Codex side-question binding changed before fork");
             }
             params.hostCapabilities.assertActive();

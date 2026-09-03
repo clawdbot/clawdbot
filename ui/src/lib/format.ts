@@ -5,7 +5,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   resolveCompactDurationParts,
   resolveSingleUnitDurationParts,
-  type DurationUnit,
+  type DurationPart,
 } from "../../../src/infra/format-time/format-duration-internal.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { formatUiError } from "./format-error.ts";
@@ -30,7 +30,7 @@ type FormatRelativeTimestampOptions = {
   suffix?: boolean;
 };
 
-function formatUnit(value: number | bigint, unit: DurationUnit): string {
+export function formatUnit({ value, unit }: DurationPart): string {
   return new Intl.NumberFormat(i18n.getLocale(), {
     style: "unit",
     unit,
@@ -56,12 +56,10 @@ export function formatTimeAgo(
   }
 
   const { value, unit } = bucketRelativeTimeMs(durationMs);
-  if (unit === "second") {
-    if (options.suffix !== false) {
-      return t("common.justNow");
-    }
+  if (unit === "second" && options.suffix !== false) {
+    return t("common.justNow");
   }
-  return options.suffix === false ? formatUnit(value, unit) : formatRelative(-value, unit);
+  return options.suffix === false ? formatUnit({ value, unit }) : formatRelative(-value, unit);
 }
 
 export function formatRelativeTimestamp(
@@ -78,7 +76,7 @@ export function formatRelativeTimestamp(
   const { value, unit } = bucketRelativeTimeMs(Math.abs(diff));
   if (unit === "second") {
     if (options.suffix === false) {
-      return formatUnit(value, unit);
+      return formatUnit({ value, unit });
     }
     return isPast ? t("common.justNow") : formatRelative(value, unit);
   }
@@ -96,22 +94,18 @@ export function formatRelativeTimestamp(
   }
 
   const signedValue = isPast ? -value : value;
-  return options.suffix === false ? formatUnit(value, unit) : formatRelative(signedValue, unit);
+  return options.suffix === false ? formatUnit({ value, unit }) : formatRelative(signedValue, unit);
 }
 
 export function formatDurationCompact(ms?: number | null): string | undefined {
-  return resolveCompactDurationParts(ms)
-    ?.map(({ value, unit }) => formatUnit(value, unit))
-    .join(" ");
+  return resolveCompactDurationParts(ms)?.map(formatUnit).join(" ");
 }
 
 export function formatDurationHuman(ms?: number | null, fallback = t("common.na")): string {
   if (ms == null || !Number.isFinite(ms) || ms < 0) {
     return fallback;
   }
-  return resolveSingleUnitDurationParts(ms)
-    .map(({ value, unit }) => formatUnit(value, unit))
-    .join(" ");
+  return resolveSingleUnitDurationParts(ms).map(formatUnit).join(" ");
 }
 
 export function formatUnknownText(

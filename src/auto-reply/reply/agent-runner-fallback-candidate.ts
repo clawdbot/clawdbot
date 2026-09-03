@@ -1,4 +1,3 @@
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { markAutoFallbackPrimaryProbe } from "../../agents/agent-scope.js";
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
@@ -10,6 +9,7 @@ import { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js"
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import { prepareGitHubPublicationAvailability } from "../../gateway/github-publication-availability.js";
 import { CommandLane } from "../../process/lanes.js";
+import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import type { AgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { resolveFallbackCandidateRun, resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import { runCliFallbackCandidate } from "./agent-runner-cli-candidate.js";
@@ -93,9 +93,9 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
       entry: activeEntry,
       cfg: params.runtimeConfig,
     });
+    const pinnedHarnessId = resolveSessionPinnedHarnessId(activeEntry);
     const locksPersistedHarness =
-      activeEntry?.modelSelectionLocked === true &&
-      normalizeLowercaseStringOrEmpty(activeEntry.agentHarnessId) === sessionRuntimeOverride;
+      pinnedHarnessId !== undefined && pinnedHarnessId === sessionRuntimeOverride;
     const selectedAuthProfile = resolveRunAuthProfile(candidateRun, provider, {
       config: params.runtimeConfig,
     });

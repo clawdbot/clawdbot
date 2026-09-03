@@ -6,11 +6,6 @@
   --community-invite-fade-opacity-70-current: 60%;
   --community-invite-fade-opacity-88-current: 80%;
   --community-invite-photo-base-shade-current: rgb(0 0 0 / 30%);
-
-  position: relative;
-  z-index: 1;
-  flex: 0 0 auto;
-  margin-inline: calc(-1 * var(--sidebar-pad-x));
 }
 
 :root[data-theme-mode="light"] .sidebar-shell__invite {

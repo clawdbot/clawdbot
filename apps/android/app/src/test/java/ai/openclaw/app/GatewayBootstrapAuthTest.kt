@@ -61,6 +61,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -493,25 +494,6 @@ class GatewayBootstrapAuthTest {
   }
 
   @Test
-  fun nodeConnectStartsOperatorAfterBootstrapHandoffWhenOperatorWasConnecting() {
-    val (app, prefs, runtime) = gatewayFixture()
-    val deviceId = DeviceIdentityStore.withPrefs(app, prefs).loadOrCreate().deviceId
-    val endpoint = gatewayEndpoint()
-    DeviceAuthStore(prefs).saveToken(endpoint.stableId, deviceId, "operator", "bootstrap-operator-token")
-
-    writeField(runtime, "operatorStatusText", "Connecting…")
-    invokeMaybeStartOperatorSessionAfterNodeConnect(
-      runtime = runtime,
-      endpoint = endpoint,
-      auth = auth(bootstrapToken = "setup-bootstrap-token"),
-    )
-
-    val desired = desiredConnection(runtime, "operatorSession")
-    assertNotNull(desired)
-    assertNull(readField<String?>(desired!!, "bootstrapToken"))
-  }
-
-  @Test
   fun resolveGatewayConnectAuth_prefersExplicitSetupAuthOverStoredPrefs() {
     val (_, prefs, runtime) = gatewayFixture()
     val endpoint = GatewayEndpoint.manual("gateway.example", 18789)
@@ -745,7 +727,7 @@ class GatewayBootstrapAuthTest {
     val (runtime, prefs) = createNeutralizedRuntime()
     armSavedActiveManualGateway(prefs)
     val endpoint = gatewayEndpoint()
-    writeField(runtime, "connectedEndpoint", endpoint)
+    runtime.connect(endpoint)
 
     runtime.setCameraEnabled(true)
 
@@ -774,14 +756,11 @@ class GatewayBootstrapAuthTest {
     shadowOf(app).denyPermissions(Manifest.permission.CAMERA)
     val (runtime, prefs) = createNeutralizedRuntime()
     armSavedActiveManualGateway(prefs)
-    writeField(
-      runtime,
-      "connectedEndpoint",
-      gatewayEndpoint(),
-    )
+    runtime.connect(gatewayEndpoint())
+    val original = waitForDesiredConnection(runtime, "nodeSession")
 
     runtime.refreshNodePermissionSurface()
-    assertNull(desiredConnection(runtime, "nodeSession"))
+    assertSame(original, desiredConnection(runtime, "nodeSession"))
 
     shadowOf(app).grantPermissions(Manifest.permission.CAMERA)
     runtime.refreshNodePermissionSurface()
@@ -975,14 +954,9 @@ class GatewayBootstrapAuthTest {
         }
         val callback =
           workers.async {
-            val method =
-              runtime.javaClass.getDeclaredMethod(
-                "maybeStartOperatorSessionAfterNodeConnect",
-                GatewayEndpoint::class.java,
-                NodeRuntime.GatewayConnectAuth::class.java,
-              )
+            val method = runtime.javaClass.getDeclaredMethod("runGatewayConnectOperation", Function0::class.java)
             method.isAccessible = true
-            method.invoke(runtime, endpoint, auth)
+            method.invoke(runtime, { Unit })
           }
         withTimeout(1_000) { callback.await() }
         releaseLock.complete(Unit)
@@ -1488,21 +1462,6 @@ class GatewayBootstrapAuthTest {
       Thread.sleep(10)
     }
     error("Expected desired connection for $sessionFieldName")
-  }
-
-  private fun invokeMaybeStartOperatorSessionAfterNodeConnect(
-    runtime: NodeRuntime,
-    endpoint: GatewayEndpoint,
-    auth: NodeRuntime.GatewayConnectAuth,
-  ) {
-    val method =
-      runtime.javaClass.getDeclaredMethod(
-        "maybeStartOperatorSessionAfterNodeConnect",
-        GatewayEndpoint::class.java,
-        NodeRuntime.GatewayConnectAuth::class.java,
-      )
-    method.isAccessible = true
-    method.invoke(runtime, endpoint, auth)
   }
 
   private fun writeField(

@@ -2,23 +2,7 @@
 import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { QaTransportState } from "./qa-transport.js";
 import type { QaScenarioFlow, QaSeedScenarioWithSource } from "./scenario-catalog.js";
-
-type QaSuiteStep = {
-  name: string;
-  run: () => Promise<string | void>;
-};
-
-type QaSuiteScenarioResult = {
-  name: string;
-  status: "pass" | "fail" | "skip";
-  steps: Array<{
-    name: string;
-    status: "pass" | "fail" | "skip";
-    details?: string;
-  }>;
-  details?: string;
-  modelSwitchEvidence?: Record<string, unknown>;
-};
+import type { QaSuiteScenarioResult, QaSuiteStep, QaSuiteStepOutcome } from "./suite-types.js";
 
 type QaFlowApi = Record<string, unknown> & {
   signal?: AbortSignal;
@@ -96,6 +80,16 @@ function formatFlowDetails(details: unknown) {
     return String(details);
   }
   return JSON.stringify(details, null, 2);
+}
+
+function resolveFlowResultRttMs(result: unknown) {
+  if (!isPlainObject(result)) {
+    return undefined;
+  }
+  const timing = isPlainObject(result.timing) ? result.timing : undefined;
+  const measurement = isPlainObject(result.rttMeasurement) ? result.rttMeasurement : undefined;
+  const rttMs = timing?.rttMs ?? measurement?.finalMatchedReplyRttMs ?? result.rttMs;
+  return typeof rttMs === "number" && Number.isFinite(rttMs) && rttMs > 0 ? rttMs : undefined;
 }
 
 function getPathWithParent(
@@ -396,12 +390,24 @@ export async function runScenarioFlow(params: {
       for (const action of step.actions) {
         await runFlowAction(action, params.api, vars);
       }
-      if (!step.detailsExpr) {
+      if (!step.detailsExpr && !step.resultExpr) {
         return undefined;
       }
       throwIfFlowAborted(params.api);
       try {
-        return formatFlowDetails(await evalExpr(step.detailsExpr, params.api, vars));
+        const details = step.detailsExpr
+          ? formatFlowDetails(await evalExpr(step.detailsExpr, params.api, vars))
+          : undefined;
+        const rttMs = step.resultExpr
+          ? resolveFlowResultRttMs(await evalExpr(step.resultExpr, params.api, vars))
+          : undefined;
+        if (rttMs === undefined) {
+          return details === undefined ? undefined : { details };
+        }
+        return {
+          ...(details === undefined ? {} : { details }),
+          timing: { rttMs },
+        } satisfies QaSuiteStepOutcome;
       } finally {
         throwIfFlowAborted(params.api);
       }

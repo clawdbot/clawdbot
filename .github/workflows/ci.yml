@@ -2304,6 +2304,38 @@ jobs:
           path: .local/gateway-watch-regression/
           retention-days: 7
 
+  control-ui-performance:
+    permissions:
+      contents: read
+    needs: [preflight]
+    if: needs.preflight.outputs.run_build_artifacts == 'true' || needs.preflight.outputs.run_ui_tests == 'true'
+    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    timeout-minutes: 15
+    env:
+      CHECKOUT_BASE_SHA: ${{ needs.preflight.outputs.diff_base_revision }}
+      COMPATIBILITY_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
+    steps:
+      - *linux_node_checkout_step
+      - name: Setup Node environment
+        uses: ./.ci-harness/.github/actions/setup-node-env
+        with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
+          install-bun: "false"
+          dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && runner.environment == 'self-hosted' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+
+      - name: Check Control UI performance against base
+        shell: bash
+        run: |
+          set -euo pipefail
+          if node -e 'process.exit(require("./package.json").scripts?.["ui:check-performance:base"] ? 0 : 1)'; then
+            pnpm ui:check-performance:base "$CHECKOUT_BASE_SHA"
+          elif [[ "$COMPATIBILITY_TARGET" == "true" ]]; then
+            echo "Skipping separate Control UI performance check: unavailable on the selected compatibility target; its artifact build retains its historical policy." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "ui:check-performance:base is required for non-compatibility targets." >&2
+            exit 1
+          fi
+
   native-i18n:
     permissions:
       contents: read
@@ -2504,10 +2536,10 @@ jobs:
       - *cache_playwright_chromium
       - *install_playwright_chromium
 
-      - name: Build Control UI bundle for real-Gateway tests
-        run: |
-          pnpm build qaRuntime
-          pnpm ui:build
+      - name: Build runtime and Control UI artifacts for real-Gateway tests
+        env:
+          OPENCLAW_BUILD_PRIVATE_QA: "1"
+        run: pnpm build:ci-artifacts
 
       - name: Test Control UI suites with a real Gateway
         env:
@@ -2522,8 +2554,10 @@ jobs:
           ui/src/e2e/usage-sessions-owner-attribution.e2e.test.ts
           ui/src/e2e/logs-lifecycle.e2e.test.ts
           ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts
+          ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts
           ui/src/e2e/session-progress-hovercard.real-gateway.e2e.test.ts
           extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts
+          extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts
           extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts
 
       - name: Upload sanitized Control UI real-Gateway proof
@@ -5260,6 +5294,7 @@ jobs:
       - security-fast
       - pnpm-store-warmup
       - build-artifacts
+      - control-ui-performance
       - native-i18n
       - checks-ui
       - checks-ui-e2e
@@ -5301,6 +5336,7 @@ jobs:
             security-fast=${{ needs.security-fast.result }}|true
             pnpm-store-warmup=${{ needs.pnpm-store-warmup.result }}|${{ (needs.preflight.outputs.run_node == 'true' || needs.preflight.outputs.run_check_docs == 'true') && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid' || (!(github.repository == 'openclaw/openclaw' && github.event_name == 'push' && github.ref == 'refs/heads/main') && !(github.repository == 'openclaw/openclaw' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && needs.preflight.outputs.run_node == 'true'))) }}
             build-artifacts=${{ needs.build-artifacts.result }}|${{ needs.preflight.outputs.run_build_artifacts }}
+            control-ui-performance=${{ needs.control-ui-performance.result }}|${{ needs.preflight.outputs.run_build_artifacts == 'true' || needs.preflight.outputs.run_ui_tests == 'true' }}
             native-i18n=${{ needs.native-i18n.result }}|${{ needs.preflight.outputs.run_native_i18n }}
             checks-ui=${{ needs.checks-ui.result }}|${{ needs.preflight.outputs.run_ui_tests }}
             checks-ui-e2e=${{ needs.checks-ui-e2e.result }}|${{ needs.preflight.outputs.run_ui_tests == 'true' && needs.preflight.outputs.compatibility_target != 'true' }}

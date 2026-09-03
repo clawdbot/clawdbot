@@ -1,8 +1,9 @@
 ---
-summary: "How session ownership and presence work when several people operate one agent"
+summary: "How session ownership, presence, and human mentions work when several people operate one agent"
 read_when:
   - You share one OpenClaw agent with other operators
   - You want to hand a session to another person or agent, or filter sessions by owner
+  - You want to mention a teammate or find mentions addressed to you
   - You are deciding whether one shared agent provides enough isolation
 title: "Multi-user mode"
 ---
@@ -30,7 +31,7 @@ Gateway profile display names and avatars are resolved from the current profile 
 In the Control UI, the session context menu (kebab or right-click on a sidebar row, and the same menu on the chat header) offers:
 
 - **Assign to me**: take responsibility for the session yourself.
-- **Assign to…**: pick from a submenu of known people and configured agents.
+- **Assign to…**: pick any registered person or configured agent, including offline teammates and people who have not owned a session. Choices refresh when you open the menu and do not depend on session filters or archive status.
 
 Agents can reassign ownership with the [`sessions` tool](/concepts/session-tool#managing-session-settings-and-groups) using `action: "assign_owner"` with `ownerType` (`"human"` or `"agent"`) and `ownerId`, targeting the current session by default or another visible session via `sessionKey`.
 
@@ -74,6 +75,24 @@ People presence is shared with operators who have read access (`operator.read`, 
 
 The Gateway also filters watched-session references for each recipient using `sessions.list` visibility rules, across connect snapshots, presence RPC responses, and events. Hidden or missing references are omitted without counts or placeholders; opening someone's card never borrows that person's session access.
 
+## Mentioning people
+
+In a normal Control UI chat, type `@` and select a person from the picker. The composer shows **Will notify** with your selected recipients. You can select up to ten mentions per message. Typing or pasting `@name` without selecting a person sends ordinary text and does not notify anyone. **Remove mention** clears the recipient selections while keeping the message text.
+
+The picker includes known Gateway profiles eligible to read the session, including people who are offline. Its online indicator is only a connection hint, not an eligibility requirement. Sign in with a durable Gateway profile to use human mentions. A mention never adds session membership, changes visibility, or grants access; the Gateway rechecks the recipient's current access when creating and displaying it.
+
+Mentions work for ordinary messages, queued or steered input, and the first message of a new session, including a remotely placed session. They are unavailable in incognito, Goal, catalog, suggestion-only, command-send, or terminal-launch modes. If selected mentions remain after switching to an unsupported mode, the composer blocks the send and asks you to remove them or return to a normal chat. It does not silently discard selected recipients.
+
+## Temporary mentions Inbox
+
+Open **Inbox → Mentions** to see messages addressed to your signed-in profile across accessible agents. Opening a mention opens its session without dismissing it. Select **Dismiss** to remove the entry from your Inbox; that change follows the same profile across connected browsers, without deleting the chat message.
+
+Mentions are kept in Gateway memory for **up to seven days**, with at most **100 entries per profile**. Older entries can be evicted earlier by capacity limits. Refreshing or reconnecting to the same running Gateway reloads its current Inbox. A Gateway restart, including one during an upgrade, clears it. Old transcript messages do not repopulate the Inbox after restart. This is a temporary attention list, not a durable notification archive or delivery guarantee.
+
+Human mentions add no SQLite tables, columns, or schema migration. The Inbox and its dismissals stay in memory; mention annotations use the existing message JSON, and notification preferences use existing preference records.
+
+The Inbox works without browser notification permission. For optional alerts while away from the Control UI, enable **Someone mentions me** in [Notifications](/web/notifications#receive-human-mention-alerts). See [WebChat](/web/webchat#human-mention-delivery) for the send and retry contract.
+
 ## Agent-spawned sessions
 
 Sessions an agent creates with `sessions_spawn` (`visible: true`) are attributed to the requesting agent: the creator and initial owner is the agent itself, and the sidebar shows the agent's configured identity name and avatar rather than an internal session key.
@@ -83,6 +102,8 @@ The accepted spawn result doubles as a receipt: it includes the child session ke
 ## Identity-scoped convenience state
 
 When a connection has a durable Gateway profile, new-session preferences and picker recents follow that person across browsers. Preferences remain per agent, while recents are derived only from sessions that person created. Connections without a durable identity keep browser-local preferences and derive recents from the loaded session roster.
+
+Single-user Gateways give unidentified operators one shared owner profile, including device-token reconnects. With `gateway.roles` configured, this applies only to token/password connections. Devices using that profile share its identity and preferences; use per-person sign-in to distinguish teammates. See [Gateway profiles](/concepts/user-model#gateway-profile-and-github-credit).
 
 This state improves continuity; it is not an authorization or isolation boundary. Operator scopes still control actions, and a shared Gateway remains one trust domain for sessions, tools, credentials, and files.
 

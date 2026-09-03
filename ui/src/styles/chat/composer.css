@@ -2155,7 +2155,8 @@
 }
 
 .agent-chat__input:has(> .slash-menu) {
-  z-index: 5;
+  /* Lift the menu's stacking context above floating notices so options remain clickable. */
+  z-index: 25;
 }
 
 /* Standalone command menus stay compact in base.css. Inside the composer the

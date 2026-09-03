@@ -1,5 +1,3 @@
-// Community invite card, anchored above the sidebar footer. It never dims the
-// app or traps focus; Shadow DOM keeps it off the startup CSS budget.
 import { css, html } from "lit";
 import { property } from "lit/decorators.js";
 import { inferControlUiPublicAssetPath } from "../app/public-assets.ts";

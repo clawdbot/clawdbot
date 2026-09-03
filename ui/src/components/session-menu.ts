@@ -17,7 +17,7 @@ import {
   compactSessionMenuViewForValue,
   type CompactSessionMenuView,
 } from "./session-menu-compact.ts";
-import type { SessionOwnerOption } from "./session-owner-chip.ts";
+import type { SessionCreatedActor } from "./session-owner-chip.ts";
 
 /**
  * Worktree-session extras resolved lazily by the menu host after open.
@@ -62,9 +62,7 @@ class SessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) deleteAllowed = false;
   @property({ attribute: false }) cloudWorkerStopAllowed = false;
   @property({ attribute: false }) groups: readonly string[] = [];
-  @property({ attribute: false }) ownerOptions: readonly SessionOwnerOption[] = [];
-  @property({ attribute: false }) selfOwner: SessionOwnerOption | null = null;
-  @property({ attribute: false }) currentOwnerId: string | null = null;
+  @property({ attribute: false }) currentOwner: SessionCreatedActor | null = null;
   @property({ attribute: false }) work: SessionMenuWork | null = null;
   @property({ attribute: false }) workboard: { captured: boolean; busy: boolean } | null = null;
   @property({ attribute: false }) onAction: (action: SessionMenuAction) => void = () => {};
@@ -86,9 +84,7 @@ class SessionMenu extends OpenClawLightDomElement {
       archiveAllowed: this.archiveAllowed,
       deleteAllowed: this.deleteAllowed,
       groups: this.groups,
-      ownerOptions: this.ownerOptions,
-      selfOwner: this.selfOwner,
-      currentOwnerId: this.currentOwnerId,
+      currentOwner: this.currentOwner,
       worktreePath: this.work?.worktreePath ?? null,
     }),
     (action) => this.onAction(action),
@@ -203,6 +199,7 @@ class SessionMenu extends OpenClawLightDomElement {
         placement="bottom-start"
         .distance=${0}
         aria-label=${menuLabel}
+        @wa-show=${this.managementActions.loadOwners}
         @wa-select=${this.handleSelect}
         @wa-after-hide=${this.handleAfterHide}
       >

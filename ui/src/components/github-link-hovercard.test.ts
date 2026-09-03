@@ -5,6 +5,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { i18n } from "../i18n/index.ts";
 import { GitHubLinkHovercardProvider } from "./github-link-hovercard.runtime.ts";
+import { LazyHovercardBootstrap } from "./lazy-hovercard-registration.ts";
 
 // Mirrors CLOSE_DELAY_MS in the runtime, like the 250ms open delay used below.
 const GITHUB_HOVERCARD_CLOSE_DELAY_MS = 120;
@@ -18,6 +19,7 @@ customElements.define(
 
 type GitHubLinkHovercardProviderElement = HTMLElement & {
   client: GatewayBrowserClient | null;
+  agentId?: string;
 };
 
 function createLink(href: string, label = "GitHub item") {
@@ -538,6 +540,73 @@ describe("openclaw-github-link-hovercard-provider", () => {
     expect(document.querySelector(".github-link-hovercard")?.textContent).toContain(
       "GitHub preview unavailable",
     );
+    expect(hovercard()?.querySelector(".github-link-hovercard__error")?.textContent).toBe(
+      "Not Found",
+    );
+  });
+
+  it("discards cached and pending previews when the selected agent changes", async () => {
+    const { anchor, provider } = createIssueLink();
+    const request = vi.fn().mockResolvedValue(issuePreviewResponse());
+    provider.client = { request } as unknown as GatewayBrowserClient;
+    provider.agentId = "first-agent";
+    await hover(anchor);
+
+    expect(request.mock.calls[0]?.[1]).toMatchObject({ agentId: "first-agent" });
+    provider.agentId = "second-agent";
+    expect(hovercard()).toBeNull();
+    await hover(anchor);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls[1]?.[1]).toMatchObject({ agentId: "second-agent" });
+
+    let resolvePending!: (value: unknown) => void;
+    const nextRequest = vi.fn().mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvePending = resolve;
+        }),
+    );
+    provider.client = { request: nextRequest } as unknown as GatewayBrowserClient;
+    expect(hovercard()).toBeNull();
+    await hover(anchor);
+    provider.agentId = "third-agent";
+    resolvePending(issuePreviewResponse());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(hovercard()).toBeNull();
+  });
+
+  it("uses the latest dependencies assigned before its lazy definition finishes", async () => {
+    const tag = `test-github-lazy-upgrade-${crypto.randomUUID()}`;
+    const loaded = createDeferred<CustomElementConstructor>();
+    const bootstrap = new LazyHovercardBootstrap<GitHubLinkHovercardProvider>({
+      tag,
+      load: () => loaded.promise,
+    });
+    const provider = document.createElement(tag) as GitHubLinkHovercardProvider;
+    const anchor = document.createElement("a");
+    anchor.href = ISSUE_HREF;
+    provider.append(anchor);
+    document.body.append(provider);
+    const staleRequest = vi.fn();
+    provider.client = { request: staleRequest } as unknown as GatewayBrowserClient;
+    provider.agentId = "first-agent";
+
+    const definition = bootstrap.define();
+    const request = vi.fn().mockResolvedValue(issuePreviewResponse());
+    provider.client = { request } as unknown as GatewayBrowserClient;
+    provider.agentId = "second-agent";
+    loaded.resolve(class extends GitHubLinkHovercardProvider {});
+    await definition;
+    await provider.updateComplete;
+    await hover(anchor);
+
+    expect(staleRequest).not.toHaveBeenCalled();
+    expect(request.mock.calls[0]?.[1]).toMatchObject({ agentId: "second-agent" });
+    expect(hovercard()?.textContent).toContain("Keep hover previews reachable");
+    provider.agentId = "third-agent";
+    expect(hovercard()).toBeNull();
+    await hover(anchor);
+    expect(request.mock.calls[1]?.[1]).toMatchObject({ agentId: "third-agent" });
   });
 
   it.each([

@@ -1,5 +1,6 @@
 // Explicit schema exports keep public protocol changes reviewable.
 export * from "./schema/sessions-goal.js";
+export * from "./schema/human-mentions.js";
 export * from "./public-schema-push.js";
 export * from "./public-schema-users.js";
 export {
@@ -83,6 +84,8 @@ export {
   WorkerEnvironmentStateSchema,
   WorkerTunnelStatusSchema,
   WorkerDesktopAppIdSchema,
+  RequiredNodeCommandStateSchema,
+  RequiredNodeCommandSchema,
   WorkerEnvironmentMetadataSchema,
   EnvironmentSummarySchema,
   EnvironmentsCreateParamsSchema,
@@ -150,6 +153,7 @@ export {
   NodePresenceAlivePayloadSchema,
   NodePresenceAliveReasonSchema,
   NodePresenceActivityPayloadSchema,
+  NodeHostStatsPayloadSchema,
   NodePendingDrainParamsSchema,
   NodePendingDrainResultSchema,
   NodePendingEnqueueParamsSchema,
@@ -491,6 +495,7 @@ export {
   PluginsUninstallParamsSchema,
   PluginsUninstallResultSchema,
   ModelsAuthLogoutParamsSchema,
+  ModelsAuthOrderSetParamsSchema,
   ModelsAuthStatusParamsSchema,
   ModelsListParamsSchema,
   AuthProbeStatusSchema,

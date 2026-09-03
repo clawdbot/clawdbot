@@ -9,6 +9,7 @@ import {
   CHAT_INPUT_RUN_ID_MAX_CHARS,
 } from "./chat-history-constants.js";
 import { closedObject } from "./closed-object.js";
+import { HumanMentionsSchema } from "./human-mentions.js";
 import { ChatSendSessionKeyString, InputProvenanceSchema, NonEmptyString } from "./primitives.js";
 import { SessionPermissionModeSchema, SessionToolOverridesSchema } from "./sessions-row.js";
 
@@ -222,6 +223,7 @@ export const ChatSendParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   sessionId: Type.Optional(NonEmptyString),
   message: Type.String(),
+  mentions: Type.Optional(HumanMentionsSchema),
   intent: Type.Optional(ChatSendIntentSchema),
   thinking: Type.Optional(Type.String()),
   fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto")])),

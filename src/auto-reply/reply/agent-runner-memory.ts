@@ -62,6 +62,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveMemoryFlushPlan, type MemoryFlushPlan } from "../../plugins/memory-state.js";
 import { CommandLane } from "../../process/lanes.js";
 import { isIncognitoSessionKey, isUnscopedSessionKeySentinel } from "../../routing/session-key.js";
+import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { formatTokenCount } from "../../utils/token-format.js";
 import type { TemplateContext } from "../templating.js";
@@ -227,7 +228,11 @@ type FollowupRuntimeParams = {
   followupRun: FollowupRun;
   sessionEntry?: Pick<
     SessionEntry,
-    "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked" | "sessionId"
+    | "agentHarnessId"
+    | "agentRuntimeOverride"
+    | "modelSelectionLocked"
+    | "pluginOwnerId"
+    | "sessionId"
   >;
   sessionKey?: string;
   agentHarnessId?: string;
@@ -1556,7 +1561,7 @@ export async function runMemoryFlushIfNeeded(params: {
             ...embeddedContext,
             ...senderContext,
             ...runBaseParams,
-            agentHarnessId: sessionRuntimeOverride,
+            agentHarnessId: resolveSessionPinnedHarnessId(activeSessionEntry),
             agentHarnessRuntimeOverride: sessionRuntimeOverride,
             sandboxSessionKey: params.runtimePolicySessionKey,
             allowGatewaySubagentBinding: true,

@@ -36,6 +36,7 @@ type GatewayRequest = Omit<CallGatewayOptions, "params"> & {
 
 let lifecycleHandler: ((event: LifecycleEvent) => void) | undefined;
 let agentCallGates = new Map<string, Promise<void>>();
+let releaseAgentCallGate: (() => void) | undefined;
 let chatHistoryBySessionKey = new Map<string, Array<Record<string, unknown>>>();
 let sessionStore: Record<string, SessionStoreEntry> = {};
 let rejectNextRequesterWake = false;
@@ -53,7 +54,12 @@ const callGatewayMock = vi.fn(async (request: GatewayRequest) => {
     if (gate) {
       await gate;
     }
-    return { result: { payloads: [{ text: "completion delivered" }] } };
+    return {
+      result: {
+        payloads: [{ text: "completion delivered" }],
+        deliveryStatus: { status: "sent", resultCount: 1 },
+      },
+    };
   }
   return {};
 });
@@ -164,7 +170,11 @@ describe("requester settle wake product flow", () => {
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    // Failed assertions must also release the delivery owned by this test.
+    releaseAgentCallGate?.();
+    releaseAgentCallGate = undefined;
+    await vi.advanceTimersByTimeAsync(0);
     lifecycleHandler = undefined;
     subagentAnnounceDeliveryTesting.setDepsForTest();
     subagentAnnounceOutputTesting.setDepsForTest();
@@ -205,13 +215,16 @@ describe("requester settle wake product flow", () => {
     throw new Error(`expected ${expectedCount} agent calls, got ${getAgentCalls().length}`);
   };
 
-  const waitForDeliveredCleanup = async (runId: string) => {
+  const waitForDeliveredCleanup = async (
+    runId: string,
+    options?: { allowPendingRequesterSettleWake?: boolean },
+  ) => {
     for (let attempt = 0; attempt < 80; attempt += 1) {
       const run = registry.getSubagentRunByRunId(runId);
       if (
         run?.delivery?.status === "delivered" &&
         typeof run.cleanupCompletedAt === "number" &&
-        run.requesterSettleWake === undefined
+        (options?.allowPendingRequesterSettleWake === true || run.requesterSettleWake === undefined)
       ) {
         return;
       }
@@ -294,15 +307,15 @@ describe("requester settle wake product flow", () => {
     await spawnVisibleChild({ ...alpha, requesterTurnRunId });
     await spawnVisibleChild({ ...beta, requesterTurnRunId });
 
-    let releaseBetaDelivery: (() => void) | undefined;
     agentCallGates.set(
       beta.childSessionKey,
       new Promise<void>((resolve) => {
-        releaseBetaDelivery = resolve;
+        releaseAgentCallGate = resolve;
       }),
     );
     emitCompleted(alpha.runId, alpha.childSessionKey, "alpha complete");
     await waitForAgentCallCount(1);
+    await waitForDeliveredCleanup(alpha.runId, { allowPendingRequesterSettleWake: true });
     const modelRouteChange = "Model route changed: requested/model → actual/model.";
     emitCompleted(beta.runId, beta.childSessionKey, "beta complete", modelRouteChange);
     await waitForAgentCallCount(2);
@@ -353,10 +366,8 @@ describe("requester settle wake product flow", () => {
         },
       }),
     );
-    await vi.advanceTimersByTimeAsync(0);
-    await flushAsync();
-
     await waitForAgentCallCount(rejectRequesterWake ? 2 : 3);
+    await waitForDeliveredCleanup(alpha.runId);
     expect(getRequesterWakeCalls()).toHaveLength(rejectRequesterWake ? 0 : 1);
     if (!rejectRequesterWake) {
       const wakeMessage = getRequesterWakeCalls()[0]?.params?.message;
@@ -373,7 +384,7 @@ describe("requester settle wake product flow", () => {
     }
 
     agentCallGates.delete(beta.childSessionKey);
-    releaseBetaDelivery?.();
+    releaseAgentCallGate?.();
     await waitForDeliveredCleanup(alpha.runId);
     await waitForDeliveredCleanup(beta.runId);
     await registry.testing.sweepOnceForTests();

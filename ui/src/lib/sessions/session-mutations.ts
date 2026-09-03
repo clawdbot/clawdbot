@@ -28,6 +28,8 @@ import type { SessionRefreshOutcome } from "./session-roster-refresh.ts";
 
 /** The Gateway's single pin fact: `pinned` is a projection of `pinnedAt`. */
 type SessionPinFields = { pinned: boolean; pinnedAt: number | undefined };
+/** `canonical` is what the Gateway confirmed; `previous` is the value the intent replaced. */
+type PendingRowPatch<T> = { token: symbol; previous: T; next: T; canonical: T };
 
 type SessionMutationsHost = {
   connection: SessionConnectionOwner;
@@ -43,6 +45,73 @@ type SessionMutationsHost = {
   retirePullRequestSummary: (key: string) => void;
 };
 
+function createOptimisticRowPatches<T>(
+  host: Pick<SessionMutationsHost, "publishedRow" | "redecorateLists">,
+  fields: {
+    read: (row: GatewaySessionRow | undefined) => T;
+    write: (row: GatewaySessionRow, next: T) => GatewaySessionRow;
+  },
+) {
+  const pending = new Map<string, PendingRowPatch<T>>();
+  return {
+    start(key: string, next: T): symbol {
+      const token = Symbol("session-row-patch");
+      const current = pending.get(key);
+      pending.set(key, {
+        token,
+        previous: current ? current.previous : fields.read(host.publishedRow(key)),
+        next,
+        canonical: next,
+      });
+      host.redecorateLists();
+      return token;
+    },
+    confirm(key: string, token: symbol, confirmed: T): void {
+      const current = pending.get(key);
+      if (!current) {
+        return;
+      }
+      if (current.token === token) {
+        current.canonical = confirmed;
+      } else {
+        current.previous = confirmed;
+      }
+    },
+    settle(key: string, token: symbol, completed: boolean, connectionCurrent: boolean): void {
+      const current = pending.get(key);
+      if (!current || current.token !== token) {
+        return;
+      }
+      if (connectionCurrent) {
+        // Decoration writes the intent into the published snapshot, so releasing
+        // it cannot restore a value it overwrote. Project the settled truth once
+        // more first, or a canonical row that disagrees with the optimistic
+        // value stays hidden until an unrelated update arrives.
+        current.next = completed ? current.canonical : current.previous;
+        host.redecorateLists();
+      }
+      pending.delete(key);
+    },
+    apply(result: SessionsListResult | null): SessionsListResult | null {
+      if (!result || pending.size === 0) {
+        return result;
+      }
+      let changed = false;
+      const sessions = result.sessions.map((row) => {
+        const patch = pending.get(row.key);
+        if (!patch) {
+          return row;
+        }
+        const next = fields.write(row, patch.next);
+        changed ||= next !== row;
+        return next;
+      });
+      return changed ? { ...result, sessions } : result;
+    },
+    clear: () => pending.clear(),
+  };
+}
+
 export function createSessionMutations(host: SessionMutationsHost) {
   const pendingModelPatches = new Map<
     string,
@@ -51,10 +120,6 @@ export function createSessionMutations(host: SessionMutationsHost) {
       previous: { value: string | null | undefined; created: boolean };
       revision: number;
     }
-  >();
-  const pendingPinPatches = new Map<
-    string,
-    { token: symbol; previous: SessionPinFields; next: SessionPinFields }
   >();
   const archiveState = createSessionArchiveState(host.publishedRow, () =>
     host.publish({ ...host.readState() }),
@@ -131,6 +196,16 @@ export function createSessionMutations(host: SessionMutationsHost) {
     pinned
       ? { pinned: true, pinnedAt: pinnedAt ?? Date.now() }
       : { pinned: false, pinnedAt: undefined };
+
+  const optimisticPins = createOptimisticRowPatches(host, {
+    read: (row) => pinRowFields(row?.pinned === true, row?.pinnedAt),
+    // Once the Gateway agrees on `pinned`, its own timestamp wins again.
+    write: (row, next) => ((row.pinned === true) === next.pinned ? row : { ...row, ...next }),
+  });
+  const optimisticUnread = createOptimisticRowPatches(host, {
+    read: (row) => row?.unread,
+    write: (row, unread) => (row.unread === unread ? row : { ...row, unread }),
+  });
 
   const retireModelOverride = (key: string) => {
     const normalizedKey = key.trim();
@@ -264,34 +339,31 @@ export function createSessionMutations(host: SessionMutationsHost) {
       modelPatchRevision = pendingModelPatches.get(normalizedKey)?.revision ?? 0;
     };
     const nextPinned = patchParams.pinned === true;
-    const pinPatchToken = Symbol("session-pin-patch");
-    let pinPatchStarted = false;
+    let pinPatchToken: symbol | null = null;
     // Sidebar rows read `pinned` straight off the snapshot, so a pin/unpin has
     // no visible outcome until this flip; the Gateway patch and its list
     // refresh confirm it afterwards.
     const startPinPatch = () => {
-      if (patchParams.pinned === undefined || pinPatchStarted) {
+      if (patchParams.pinned === undefined || pinPatchToken) {
         return;
       }
-      const pendingPinPatch = pendingPinPatches.get(normalizedKey);
-      // The baseline comes from wherever the row is published: a sidebar on
-      // `archived`/`all` renders its own snapshot, and inferring `previous`
-      // from the primary state alone would roll such a row back to a guess.
       const row = host.publishedRow(normalizedKey);
-      pinPatchStarted = true;
-      const next = pinRowFields(nextPinned, row?.pinnedAt);
-      // `previous` chains through an in-flight pin so a rollback lands on the
-      // last Gateway-confirmed value instead of an older operation's guess.
-      pendingPinPatches.set(normalizedKey, {
-        token: pinPatchToken,
-        previous: pendingPinPatch?.previous ?? pinRowFields(row?.pinned === true, row?.pinnedAt),
-        next,
-      });
-      host.redecorateLists();
+      pinPatchToken = optimisticPins.start(normalizedKey, pinRowFields(nextPinned, row?.pinnedAt));
+    };
+    let unreadPatchToken: symbol | null = null;
+    const startUnreadPatch = () => {
+      // Mark-unread needs the Gateway-issued marker before an active pane can
+      // distinguish the explicit reminder from new activity. Reads are safe
+      // to project immediately because their observed marker remains attached.
+      if (patchParams.unread !== false || unreadPatchToken) {
+        return;
+      }
+      unreadPatchToken = optimisticUnread.start(normalizedKey, false);
     };
     const startOptimisticPatch = () => {
       startModelPatch();
       startPinPatch();
+      startUnreadPatch();
     };
     if (!options.waitFor) {
       startOptimisticPatch();
@@ -339,32 +411,47 @@ export function createSessionMutations(host: SessionMutationsHost) {
     // The Gateway stamps `pinnedAt` with its own clock, so the baseline is a
     // round trip off — accurate enough to order a row it just pinned.
     const confirmPinPatch = () => {
-      const pendingPinPatch = pendingPinPatches.get(normalizedKey);
-      if (pinPatchStarted && pendingPinPatch && pendingPinPatch.token !== pinPatchToken) {
-        pendingPinPatch.previous = pinRowFields(nextPinned, undefined);
+      if (pinPatchToken) {
+        optimisticPins.confirm(normalizedKey, pinPatchToken, pinRowFields(nextPinned, undefined));
       }
     };
     const settlePinPatch = (completed: boolean) => {
-      const pendingPinPatch = pendingPinPatches.get(normalizedKey);
-      if (!pinPatchStarted || !pendingPinPatch) {
-        return;
+      if (pinPatchToken) {
+        optimisticPins.settle(
+          normalizedKey,
+          pinPatchToken,
+          completed,
+          host.connection.isCurrent(scope),
+        );
       }
-      if (pendingPinPatch.token !== pinPatchToken) {
-        // A newer pin intent owns this row; republishing it is the canonical
-        // overlay's job and its baseline moved at confirmation time.
-        return;
+    };
+    // A conditional read acknowledgement settles successfully without applying
+    // when a newer manual mark-unread owns the row: the Gateway returns that
+    // entry with its marker intact and broadcasts no change. A present marker
+    // is unread by definition, so it is the value this intent settles to.
+    const confirmUnreadPatch = (entry: SessionPatchResult["entry"] | undefined) => {
+      if (unreadPatchToken) {
+        optimisticUnread.confirm(
+          normalizedKey,
+          unreadPatchToken,
+          entry?.markedUnreadAt !== undefined,
+        );
       }
-      if (!completed && host.connection.isCurrent(scope)) {
-        // Roll back through the same overlay that published the intent so the
-        // primary state and every filtered snapshot land on one value.
-        pendingPinPatch.next = pendingPinPatch.previous;
-        host.redecorateLists();
+    };
+    const settleUnreadPatch = (completed: boolean) => {
+      if (unreadPatchToken) {
+        optimisticUnread.settle(
+          normalizedKey,
+          unreadPatchToken,
+          completed,
+          host.connection.isCurrent(scope),
+        );
       }
-      pendingPinPatches.delete(normalizedKey);
     };
     const settleOptimisticPatch = (completed: boolean) => {
       settleModelOverride(completed);
       settlePinPatch(completed);
+      settleUnreadPatch(completed);
     };
     try {
       if (options.waitFor) {
@@ -438,6 +525,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
         archiveState.clear(normalizedKey);
       }
       confirmPinPatch();
+      confirmUnreadPatch(result?.entry);
       // Commit and list reconciliation are separate outcomes. Callers must not
       // turn a failed refresh into an apparent rollback of the committed patch.
       let refreshOutcome: SessionRefreshOutcome = { status: "refreshed" };
@@ -536,27 +624,11 @@ export function createSessionMutations(host: SessionMutationsHost) {
     assignOwner,
     patchRowLocal,
     /**
-     * Re-asserts in-flight pin intents over canonical Gateway rows: every
-     * `sessions.changed` payload and list refresh carries the server's pin
-     * state, which is the pre-click value until this operation's patch lands.
+     * Re-asserts in-flight row intents over Gateway events and list refreshes,
+     * which carry the pre-mutation value until the patch lands.
      */
-    applyPendingPins(result: SessionsListResult | null): SessionsListResult | null {
-      if (!result || pendingPinPatches.size === 0) {
-        return result;
-      }
-      let changed = false;
-      const sessions = result.sessions.map((row) => {
-        const pendingPinPatch = pendingPinPatches.get(row.key);
-        // Once the Gateway agrees on `pinned`, its own `pinnedAt` wins again.
-        // A row predating a rapid unpin/repin can keep the older stamp for the
-        // patch window; that beats overwriting confirmed stamps with our clock.
-        if (!pendingPinPatch || (row.pinned === true) === pendingPinPatch.next.pinned) {
-          return row;
-        }
-        changed = true;
-        return { ...row, ...pendingPinPatch.next };
-      });
-      return changed ? { ...result, sessions } : result;
+    applyPendingRows(result: SessionsListResult | null): SessionsListResult | null {
+      return optimisticUnread.apply(optimisticPins.apply(result));
     },
     applyConfirmedArchives: archiveState.apply,
     observeArchiveState: archiveState.observe,
@@ -578,10 +650,11 @@ export function createSessionMutations(host: SessionMutationsHost) {
     retireConnection() {
       pendingCreatedModelOverrides.clear();
       pendingModelPatches.clear();
-      // Pin intents live inside `result`, which the replacement connection
+      // Row intents live inside `result`, which the replacement connection
       // rehydrates wholesale; only the model-override side map outlives that
       // replacement, so it is the one that needs an explicit rollback below.
-      pendingPinPatches.clear();
+      optimisticPins.clear();
+      optimisticUnread.clear();
       archiveState.clearAll();
       preparedWorkSessionKeys.clear();
       const state = host.readState();
@@ -590,7 +663,8 @@ export function createSessionMutations(host: SessionMutationsHost) {
     dispose() {
       pendingCreatedModelOverrides.clear();
       pendingModelPatches.clear();
-      pendingPinPatches.clear();
+      optimisticPins.clear();
+      optimisticUnread.clear();
       archiveState.clearAll();
       preparedWorkSessionKeys.clear();
     },

@@ -4,6 +4,7 @@ import {
   type ControlUiFocusLocation,
 } from "@openclaw/session-url-contract";
 import type { RouteLocation } from "@openclaw/uirouter";
+import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import {
   createApplicationRouter,
@@ -283,6 +284,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     agents,
     overlays,
     scopeUpgrade,
+    connectionBootstrap,
   });
   // App-updater interlock: writing config (or restarting the gateway) while
   // the updater runs can corrupt the install; pause config writes until the
@@ -344,11 +346,37 @@ export function bootstrapApplication(): ApplicationRuntime {
       : null;
   let lastPostConnectClient: GatewayBrowserClient | null = null;
   let lastRecoveryClient: GatewayBrowserClient | null = null;
+  let browserBootstrapAttempted = Boolean(
+    hasPendingGateway || startup.nativeClient || startup.pendingBootstrapToken,
+  );
+  const initialConnectionRevision = gateway.connectionRevision;
   const stopPostConnect = gateway.subscribe((snapshot) => {
     connectionBootstrap.synchronize({
       client: snapshot.client,
       connected: snapshot.phase === "connected",
     });
+    if (snapshot.phase === "connected") {
+      browserBootstrapAttempted = true;
+    }
+    if (
+      !browserBootstrapAttempted &&
+      snapshot.phase === "stopped" &&
+      (snapshot.lastErrorCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISSING ||
+        snapshot.lastErrorCode === ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING)
+    ) {
+      browserBootstrapAttempted = true;
+      // Recovery stays off the startup path; loading it cannot revive a replaced connection.
+      startupLifecycle.trackDisposer(
+        import("./browser-bootstrap.runtime.ts").then(({ startBrowserBootstrapRecovery }) =>
+          gateway.snapshot.client === snapshot.client &&
+          gateway.connectionRevision === initialConnectionRevision &&
+          !startupLifecycle.signal.aborted
+            ? startBrowserBootstrapRecovery(gateway, basePath)
+            : () => {},
+        ),
+        () => {},
+      );
+    }
     if (snapshot.phase !== "connected" || !snapshot.client) {
       lastPostConnectClient = null;
       lastRecoveryClient = null;
@@ -475,7 +503,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       void navigateWithMode(routeId, options, "replace");
     },
     revalidate: (routeId) => router.revalidate(context, routeId),
-    preload: (routeId, options) => router.preloadLocation(routeLocation(routeId, options), context),
+    preload: (routeId) => router.preloadLocation(locationForRoute(routeId, basePath), context),
   };
   return {
     context,

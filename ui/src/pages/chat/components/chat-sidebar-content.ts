@@ -6,10 +6,8 @@ import { isStaleChunkImportError } from "../../../app/stale-chunk-reload.ts";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import { renderLazyViewError } from "../../../components/lazy-view-error.ts";
-import {
-  handleMarkdownCodeBlockClick,
-  markdownCodeBlocks,
-} from "../../../components/markdown-code-blocks.ts";
+import { markdownBlocks } from "../../../components/markdown-blocks.ts";
+import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
 import {
   markdownFileLinkFromEvent,
   markdownFileLinkFromKeyboardEvent,
@@ -407,7 +405,7 @@ export function renderSidebarPanel(
   return html`
     <div
       class=${fillHost ? "sidebar-panel-host--fill" : ""}
-      ${markdownCodeBlocks()}
+      ${markdownBlocks()}
       @click=${props.onClick}
       @keydown=${props.onKeydown}
     >

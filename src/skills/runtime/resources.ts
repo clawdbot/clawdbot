@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { Value } from "typebox/value";
 import {
@@ -10,7 +11,7 @@ import {
   type SkillResourceDelivery,
 } from "../../../packages/gateway-protocol/src/schema/skill-resources.js";
 import { isMissingPathError } from "../../infra/errors.js";
-import { ensureAbsoluteDirectory } from "../../infra/fs-safe.js";
+import { removeTemporaryArtifacts } from "../../infra/temp-artifact-cleanup.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   prepareSkillBundle,
@@ -172,12 +173,12 @@ export async function prepareSkillResourceDelivery(
   return delivery;
 }
 
-/** Worker owns both the directory and cleanup; resource bytes never enter project reconciliation. */
+/** Owns private turn inputs independently of credential-bearing worker state. */
 export async function materializeSkillResources(
   delivery: SkillResourceDelivery,
-  stateDir: string,
   assertCurrent: () => void,
 ): Promise<{
+  directory: string;
   snapshot: SkillSnapshot;
   rewriteReferences: (text: string) => string;
   cleanup: () => Promise<void>;
@@ -199,14 +200,8 @@ export async function materializeSkillResources(
     throw new Error("Skill resource integrity or delivery limit check failed.");
   }
   assertCurrent();
-  const parent = path.join(stateDir, "skill-resources");
-  const ensured = await ensureAbsoluteDirectory(parent, { mode: 0o700 });
-  if (!ensured.ok) {
-    throw ensured.error;
-  }
-  assertCurrent();
-  const directory = await fs.mkdtemp(path.join(parent, "turn-"));
-  const cleanup = () => fs.rm(directory, { recursive: true, force: true });
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-resources-"));
+  const cleanup = () => removeTemporaryArtifacts(directory, "Materialized skill");
   try {
     const pathMappings: Array<[string, string]> = [];
     const resolvedSkills: NonNullable<SkillSnapshot["resolvedSkills"]> = [];
@@ -241,6 +236,7 @@ export async function materializeSkillResources(
     }
     assertCurrent();
     return {
+      directory,
       snapshot: {
         skills: resolvedSkills.map((skill) => ({ name: skill.name, skillKey: skill.name })),
         resolvedSkills,

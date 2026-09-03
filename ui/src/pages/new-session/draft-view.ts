@@ -2,11 +2,10 @@ import { html, nothing, type TemplateResult } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
 import { t } from "../../i18n/index.ts";
+import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { renderChatPermissionPicker } from "../chat/components/chat-permission-picker.ts";
 import type { NewSessionDictationControl } from "./composer-dictation-control.ts";
-import { renderDraftError } from "./composer.ts";
-import { isWorktreeNameValid } from "./create-params.ts";
-import { renderNewSessionDraftComposer } from "./draft-composer.ts";
+import { renderNewSessionDraftComposer, renderNewSessionDraftErrors } from "./draft-composer.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
 import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
@@ -24,7 +23,7 @@ export function renderNewSessionDraftView(options: {
   isCatalogTarget: boolean;
   renderTargetBar: () => TemplateResult;
   requestUpdate: () => void;
-  onMessage: (message: string) => void;
+  onMessage: (message: string, mentions?: readonly HumanMention[]) => void;
   onOpenImage: (item: ImageLightboxItem) => void;
 }) {
   const {
@@ -41,7 +40,6 @@ export function renderNewSessionDraftView(options: {
     onMessage,
     onOpenImage,
   } = options;
-  const worktreeNameInvalid = place.worktree && !isWorktreeNameValid(place.worktreeName);
   const capabilities = submission.capabilities;
   const preferences = context?.theme.settings;
   const voiceControl = dictation.render(draftOwnerKey, preferences?.realtimeTalkInputDeviceId);
@@ -62,29 +60,7 @@ export function renderNewSessionDraftView(options: {
         titlePreparation.setComposing(false);
       }}
     >
-      ${renderTargetBar()}
-      ${worktreeNameInvalid ? renderDraftError(t("newSession.worktreeNameInvalid")) : nothing}
-      ${isCatalogTarget && capabilities.toolOverrides
-        ? renderDraftError(t("newSession.terminalCapabilityOverridesUnsupported"), {
-            label: t("common.reset"),
-            onClick: () => capabilities.setToolOverrides(null),
-          })
-        : nothing}
-      ${submission.submissionOutcomeUnknown
-        ? renderDraftError(
-            t(
-              submission.submissionOutcomeUnknown === "gateway-changed"
-                ? "newSession.createOutcomeUnknown"
-                : "newSession.placementSetupInterrupted",
-            ),
-            submission.pendingPlacement.sessionKey
-              ? {
-                  label: t("common.reset"),
-                  onClick: () => submission.clearPendingPlacementRecovery(),
-                }
-              : undefined,
-          )
-        : nothing}
+      ${renderTargetBar()} ${renderNewSessionDraftErrors(place, submission, isCatalogTarget)}
       ${renderNewSessionDraftComposer({
         agent: place.selectedAgent(),
         agentId: place.agentId,
@@ -99,6 +75,8 @@ export function renderNewSessionDraftView(options: {
         isCatalogTarget,
         draftOwnerKey,
         message: submission.message,
+        mentions: submission.mentions,
+        getMentions: () => submission.mentions,
         visibility: submission.visibility,
         draftAvailable: capabilities.canStartAsDraft(context),
         ...capabilities.composerProps(context, gateway, place.agentId),

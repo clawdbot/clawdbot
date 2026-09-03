@@ -365,6 +365,7 @@ export async function handleAbortChat(host: ChatAbortHost, opts?: ChatAbortOptio
   }
   if (!opts?.preserveDraft) {
     host.chatMessage = "";
+    host.chatMentions = [];
     resetChatInputHistoryNavigation(host);
   }
   if (pendingAbort) {

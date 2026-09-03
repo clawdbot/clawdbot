@@ -959,12 +959,28 @@ describe("runNodeHost", () => {
 
   it.each([
     ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH,
+    ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING,
     ConnectErrorDetailCodes.CLIENT_VERSION_MISMATCH,
     ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED,
   ])("closes MCP clients before exiting on terminal reconnect pause %s", async (detailCode) => {
-    await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
-      "event loop readiness timeout",
+    let resolveReadiness:
+      | ((value: { ready: false; aborted: false; elapsedMs: number }) => void)
+      | undefined;
+    mocks.startGatewayClientWhenEventLoopReady.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveReadiness = resolve;
+      }),
     );
+    let resolveMcpClose: (() => void) | undefined;
+    mocks.closeMcpManager.mockImplementationOnce(
+      () =>
+        new Promise<undefined>((resolve) => {
+          resolveMcpClose = () => resolve(undefined);
+        }),
+    );
+    const running = runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 });
+    const stopped = expect(running).rejects.toThrow("event loop readiness timeout");
+    await vi.waitFor(() => expect(startNodeHostMcpManager).toHaveBeenCalled());
     const exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
     try {
       lastCapturedOptions()?.onReconnectPaused?.({
@@ -974,10 +990,18 @@ describe("runNodeHost", () => {
       });
       await vi.waitFor(() => {
         expect(mocks.closeMcpManager).toHaveBeenCalledOnce();
-        expect(exit).toHaveBeenCalledWith(1);
       });
       expect(mocks.capturedGatewayClients[0]?.stop).toHaveBeenCalled();
+      expect(exit).not.toHaveBeenCalled();
+
+      resolveMcpClose?.();
+      await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(1));
+
+      resolveReadiness?.({ ready: false, aborted: false, elapsedMs: 0 });
+      await stopped;
     } finally {
+      resolveMcpClose?.();
+      resolveReadiness?.({ ready: false, aborted: false, elapsedMs: 0 });
       exit.mockRestore();
     }
   });

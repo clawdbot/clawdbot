@@ -27,11 +27,7 @@ import {
 import { isSystemAgentInferenceUnavailableError } from "../../system-agent/inference-error.js";
 import { buildNewAgentWelcome } from "../../system-agent/new-agent-welcome.js";
 import { buildOnboardingWelcome } from "../../system-agent/onboarding-welcome.js";
-import {
-  appendTranscriptReset,
-  appendTranscriptTurn,
-  readTranscriptTail,
-} from "../../system-agent/transcript-store.js";
+import { appendTranscriptReset, readTranscriptTail } from "../../system-agent/transcript-store.js";
 import { resolveUserPath } from "../../utils.js";
 import { WizardSession } from "../../wizard/session.js";
 import { listVisiblePendingApprovalRequests } from "./approval-shared.js";
@@ -46,16 +42,13 @@ import {
   SetupAdmissionBusyError,
 } from "./setup-admission.js";
 import type { GatewaySystemAgentSession as SystemAgentChatSession } from "./shared-types.js";
-import {
-  getSystemAgentSessionQueue,
-  prepareDelegatedSystemAgentApproval,
-} from "./system-agent-approval.js";
+import { prepareDelegatedSystemAgentApproval } from "./system-agent-approval.js";
 import { sanitizeSystemAgentChatParams } from "./system-agent-chat-params.js";
 import {
-  buildDelegatedApprovalPendingReply,
   buildSystemAgentChatResult,
   buildSystemAgentRejoinResult,
   getSystemAgentChatInputError,
+  persistSystemAgentEngineHistory,
   runSystemAgentChatInput,
 } from "./system-agent-chat-turn.js";
 import {
@@ -120,15 +113,6 @@ async function evictOldestSession(
     }
     await oldest?.engine.dispose();
     sessions.delete(oldestKey);
-  }
-}
-
-function persistEngineHistory(engine: SystemAgentChatSession["engine"], startIndex: number): void {
-  const at = Date.now();
-  for (const turn of engine.historySince(startIndex)) {
-    // Engine history is authoritative here: sensitive user text has already
-    // been replaced by the mask marker before it crosses this boundary.
-    appendTranscriptTurn({ ...turn, at });
   }
 }
 
@@ -387,288 +371,276 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, inputError));
       return;
     }
-    await runSystemAgentGatewayTask(async () => {
+    const pending = await runSystemAgentGatewayTask(async () => {
       const sessions = context.systemAgentSessions;
       const sessionId = params.sessionId;
-      // Initialization, resets, and turns share one per-session queue. Without
-      // it, concurrent first messages can create competing engines and lose
-      // conversation state when the later initializer replaces the first.
-      await getSystemAgentSessionQueue(sessions).enqueue(sessionId, async () => {
-        const ownerKey = resolveSystemAgentSessionOwnerKey({
-          delegation: params.delegation,
-          client,
+      // Initialization, resets, turns, and approval application share this task owner.
+      const ownerKey = resolveSystemAgentSessionOwnerKey({
+        delegation: params.delegation,
+        client,
+      });
+      if (!ownerKey) {
+        if (isGatewayClientProfilePending(client)) {
+          respond(false, undefined, authenticatedProfileUnavailableError());
+          return undefined;
+        }
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "OpenClaw caller identity unavailable."),
+        );
+        return undefined;
+      }
+      const boundSession = sessions.get(sessionId);
+      if (boundSession && boundSession.ownerKey !== ownerKey) {
+        // Structured invalidation details let clients with a persisted id mint a
+        // fresh one instead of retry-looping against the foreign live session.
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "OpenClaw session belongs to another caller.", {
+            details: buildSystemAgentSessionInvalidatedErrorDetails(),
+          }),
+        );
+        return undefined;
+      }
+      if (params.reset) {
+        const existing = sessions.get(sessionId);
+        // Persist the reset first; a failed write must leave the live session intact.
+        appendTranscriptReset();
+        sessions.delete(sessionId);
+        if (existing?.pendingApproval) {
+          context.systemAgentApprovalManager?.expire(existing.pendingApproval.id, "session-reset");
+        }
+        await existing?.engine.dispose();
+      }
+      let session = sessions.get(sessionId);
+      if ((params.wizardAnswer !== undefined || params.wizardCancel !== undefined) && !session) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            params.wizardCancel !== undefined
+              ? "No active OpenClaw chat session is awaiting that wizard cancel."
+              : "No active OpenClaw chat session is awaiting that wizard answer.",
+            { details: buildSystemAgentSessionInvalidatedErrorDetails() },
+          ),
+        );
+        return undefined;
+      }
+      let greetingAuditSequence: number | undefined;
+      const welcomeOnly =
+        params.wizardAnswer === undefined &&
+        params.wizardCancel === undefined &&
+        (params.message === undefined || !params.message.trim());
+      if (!session) {
+        const { verifySystemAgentInferenceWithFallback } =
+          await import("../../system-agent/inference-fallback.js");
+        const inference = await verifySystemAgentInferenceWithFallback({
+          ...(params.delegation ? { requestingAgentId: params.delegation.agentId } : {}),
+          runtime: defaultRuntime,
         });
-        if (!ownerKey) {
-          if (isGatewayClientProfilePending(client)) {
-            respond(false, undefined, authenticatedProfileUnavailableError());
-            return;
-          }
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "OpenClaw caller identity unavailable."),
-          );
-          return;
-        }
-        const boundSession = sessions.get(sessionId);
-        if (boundSession && boundSession.ownerKey !== ownerKey) {
-          // Structured invalidation details let clients with a persisted id mint a
-          // fresh one instead of retry-looping against the foreign live session.
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "OpenClaw session belongs to another caller.", {
-              details: buildSystemAgentSessionInvalidatedErrorDetails(),
-            }),
-          );
-          return;
-        }
-        if (params.reset) {
-          const existing = sessions.get(sessionId);
-          // Persist the reset first; a failed write must leave the live session intact.
-          appendTranscriptReset();
-          sessions.delete(sessionId);
-          if (existing?.pendingApproval) {
-            context.systemAgentApprovalManager?.expire(
-              existing.pendingApproval.id,
-              "session-reset",
-            );
-          }
-          await existing?.engine.dispose();
-        }
-        let session = sessions.get(sessionId);
-        if ((params.wizardAnswer !== undefined || params.wizardCancel !== undefined) && !session) {
+        if (!inference.ok) {
           respond(
             false,
             undefined,
             errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              params.wizardCancel !== undefined
-                ? "No active OpenClaw chat session is awaiting that wizard cancel."
-                : "No active OpenClaw chat session is awaiting that wizard answer.",
-              { details: buildSystemAgentSessionInvalidatedErrorDetails() },
+              ErrorCodes.UNAVAILABLE,
+              `OpenClaw requires working inference: ${inference.error}`,
+              {
+                details: buildSystemAgentInferenceUnavailableErrorDetails(),
+              },
             ),
           );
-          return;
+          return undefined;
         }
-        let greetingAuditSequence: number | undefined;
-        const welcomeOnly =
-          params.wizardAnswer === undefined &&
-          params.wizardCancel === undefined &&
-          (params.message === undefined || !params.message.trim());
-        if (!session) {
-          const { verifySystemAgentInferenceWithFallback } =
-            await import("../../system-agent/inference-fallback.js");
-          const inference = await verifySystemAgentInferenceWithFallback({
-            ...(params.delegation ? { requestingAgentId: params.delegation.agentId } : {}),
-            runtime: defaultRuntime,
-          });
-          if (!inference.ok) {
-            respond(
-              false,
-              undefined,
-              errorShape(
-                ErrorCodes.UNAVAILABLE,
-                `OpenClaw requires working inference: ${inference.error}`,
-                {
-                  details: buildSystemAgentInferenceUnavailableErrorDetails(),
-                },
-              ),
-            );
-            return;
-          }
-          // The gateway surface must never install/restart its own daemon; the
-          // engine's setup path honors this via surface: "gateway".
-          const engine = new SystemAgentChatEngine({
-            surface: "gateway",
-            verifiedInference: inference.binding,
-            operatorApprovalOnly: params.delegation !== undefined,
-            ...(params.delegation?.agentId ? { requesterAgentId: params.delegation.agentId } : {}),
-          });
-          // `reset: true` keeps the durable logbook but deliberately starts
-          // model context clean; only ordinary fresh sessions receive its tail.
-          if (!params.reset) {
-            engine.seedHistory(
-              readTranscriptTail(SYSTEM_AGENT_SEED_HISTORY_LIMIT, { afterLastReset: true }).map(
-                ({ role, text }) => ({ role, text }),
-              ),
-            );
-          }
-          const welcomeHistoryStart = engine.historyLength();
-          let persistWelcome = !welcomeOnly;
-          let welcome: string;
-          let welcomeQuestion: SystemAgentChatQuestion | undefined;
-          try {
-            if (params.welcomeVariant === "onboarding") {
-              const onboardingWelcome = await buildOnboardingWelcome({ engine });
-              welcome = onboardingWelcome.text;
-              welcomeQuestion = onboardingWelcome.question;
-            } else if (params.welcomeVariant === "new-agent") {
-              welcome = buildNewAgentWelcome({ engine });
-            } else {
-              const overview = await engine.loadOverview();
-              const facts = loadSystemAgentGreetingFacts();
-              greetingAuditSequence = facts.auditSequence;
-              persistWelcome ||= facts.recentExternalEdit;
-              welcome = (
-                await resolveSystemAgentGreeting({
-                  overview,
-                  facts,
-                  planner: (plannerParams) => engine.planGreeting(plannerParams),
-                  allowInference: welcomeOnly,
-                })
-              ).text;
-              welcomeQuestion = buildSystemAgentGreetingQuestion(overview, facts);
-              engine.noteAssistantMessage(welcome);
-            }
-          } catch (error) {
-            await engine.dispose().catch(() => undefined);
-            if (!isSystemAgentInferenceUnavailableError(error)) {
-              throw error;
-            }
-            respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, error.message));
-            return;
-          }
-          // Passive welcomes are ephemeral; an external-edit alert must survive
-          // before delivery acknowledges the audit cursor that would hide it.
-          if (persistWelcome) {
-            persistEngineHistory(engine, welcomeHistoryStart);
-          }
-          await evictOldestSession(sessions, context);
-          session = {
-            engine,
-            welcome,
-            ...(welcomeQuestion ? { welcomeQuestion } : {}),
-            ...(greetingAuditSequence !== undefined
-              ? { welcomeAuditSequence: greetingAuditSequence }
-              : {}),
-            lastUsedAt: Date.now(),
-            ownerKey,
-          };
-          sessions.set(sessionId, session);
-          if (welcomeOnly) {
-            respond(
-              true,
-              {
-                sessionId,
-                reply: session.welcome,
-                action: "none",
-                ...(session.welcomeQuestion ? { question: session.welcomeQuestion } : {}),
-              },
-              undefined,
-            );
-            acknowledgeDeliveredSystemAgentWelcome(session);
-            return;
-          }
-        }
-        session.lastUsedAt = Date.now();
-        // Inline check (not `welcomeOnly`) so TS narrows params.message below.
-        if (
-          params.wizardAnswer === undefined &&
-          params.wizardCancel === undefined &&
-          (params.message === undefined || !params.message.trim())
-        ) {
-          respond(
-            true,
-            buildSystemAgentRejoinResult({
-              sessionId,
-              welcome: session.welcome,
-              ...(session.welcomeQuestion ? { welcomeQuestion: session.welcomeQuestion } : {}),
-              engine: session.engine,
-            }),
-            undefined,
+        // The gateway surface must never install/restart its own daemon; the
+        // engine's setup path honors this via surface: "gateway".
+        const engine = new SystemAgentChatEngine({
+          surface: "gateway",
+          verifiedInference: inference.binding,
+          operatorApprovalOnly: params.delegation !== undefined,
+          ...(params.delegation?.agentId ? { requesterAgentId: params.delegation.agentId } : {}),
+        });
+        // `reset: true` keeps the durable logbook but deliberately starts
+        // model context clean; only ordinary fresh sessions receive its tail.
+        if (!params.reset) {
+          engine.seedHistory(
+            readTranscriptTail(SYSTEM_AGENT_SEED_HISTORY_LIMIT, { afterLastReset: true }).map(
+              ({ role, text }) => ({ role, text }),
+            ),
           );
-          acknowledgeDeliveredSystemAgentWelcome(session);
-          return;
         }
-        const historyStart = session.engine.historyLength();
-        let reply: Awaited<ReturnType<SystemAgentChatEngine["handle"]>>;
-        let resolveProposal:
-          | Awaited<ReturnType<typeof prepareDelegatedSystemAgentApproval>>
-          | undefined;
+        const welcomeHistoryStart = engine.historyLength();
+        let persistWelcome = !welcomeOnly;
+        let welcome: string;
+        let welcomeQuestion: SystemAgentChatQuestion | undefined;
         try {
-          if (params.delegation) {
-            resolveProposal = await prepareDelegatedSystemAgentApproval({
-              context,
-              sessions,
-              session,
-              sessionId,
-              delegation: params.delegation,
-            });
+          if (params.welcomeVariant === "onboarding") {
+            const onboardingWelcome = await buildOnboardingWelcome({ engine });
+            welcome = onboardingWelcome.text;
+            welcomeQuestion = onboardingWelcome.question;
+          } else if (params.welcomeVariant === "new-agent") {
+            welcome = buildNewAgentWelcome({ engine });
+          } else {
+            const overview = await engine.loadOverview();
+            const facts = loadSystemAgentGreetingFacts();
+            greetingAuditSequence = facts.auditSequence;
+            persistWelcome ||= facts.recentExternalEdit;
+            welcome = (
+              await resolveSystemAgentGreeting({
+                overview,
+                facts,
+                planner: (plannerParams) => engine.planGreeting(plannerParams),
+                allowInference: welcomeOnly,
+              })
+            ).text;
+            welcomeQuestion = buildSystemAgentGreetingQuestion(overview, facts);
+            engine.noteAssistantMessage(welcome);
           }
-          const turnReply = await runSystemAgentChatInput({
-            engine: session.engine,
-            input: params,
-          });
-          if (!turnReply) {
-            respond(
-              false,
-              undefined,
-              errorShape(ErrorCodes.INVALID_REQUEST, "OpenClaw chat input is missing."),
-            );
-            return;
-          }
-          reply = turnReply;
         } catch (error) {
-          persistEngineHistory(session.engine, historyStart);
-          if (error instanceof SystemAgentWizardAnswerError) {
-            respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
-            return;
-          }
+          await engine.dispose().catch(() => undefined);
           if (!isSystemAgentInferenceUnavailableError(error)) {
             throw error;
           }
-          // A failed inference turn invalidates this conversation. Remove the
-          // exact engine before cleanup so a retry must pass the live gate and
-          // cannot resume partial proposal or CLI-session state.
-          // Initialization failures stay unmarked because no live session existed.
-          if (sessions.get(sessionId)?.engine === session.engine) {
-            sessions.delete(sessionId);
-          }
-          try {
-            await session.engine.dispose();
-          } catch {
-            // The inference error is authoritative; cleanup stays best-effort.
-          }
+          respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, error.message));
+          return undefined;
+        }
+        // Passive welcomes are ephemeral; an external-edit alert must survive
+        // before delivery acknowledges the audit cursor that would hide it.
+        if (persistWelcome) {
+          persistSystemAgentEngineHistory(engine, welcomeHistoryStart);
+        }
+        await evictOldestSession(sessions, context);
+        session = {
+          engine,
+          welcome,
+          ...(welcomeQuestion ? { welcomeQuestion } : {}),
+          ...(greetingAuditSequence !== undefined
+            ? { welcomeAuditSequence: greetingAuditSequence }
+            : {}),
+          lastUsedAt: Date.now(),
+          ownerKey,
+        };
+        sessions.set(sessionId, session);
+        if (welcomeOnly) {
           respond(
-            false,
+            true,
+            {
+              sessionId,
+              reply: session.welcome,
+              action: "none",
+              ...(session.welcomeQuestion ? { question: session.welcomeQuestion } : {}),
+            },
             undefined,
-            errorShape(ErrorCodes.UNAVAILABLE, error.message, {
-              details: buildSystemAgentSessionInvalidatedErrorDetails(),
-            }),
           );
-          return;
+          acknowledgeDeliveredSystemAgentWelcome(session);
+          return undefined;
         }
-        let proposalId: string | undefined;
-        if (resolveProposal) {
-          const proposal = session.engine.getPendingOperatorProposal();
-          if (proposal) {
-            const resolution = await resolveProposal(proposal);
-            if (resolution.kind === "completed") {
-              reply = resolution.reply;
-            } else {
-              proposalId = resolution.id;
-            }
-          }
-        }
-        persistEngineHistory(session.engine, historyStart);
-        const pendingReply = proposalId
-          ? buildDelegatedApprovalPendingReply({
-              cfg: context.getRuntimeConfig?.() ?? {},
-              manager: context.systemAgentApprovalManager!,
-              approvalId: proposalId,
-            })
-          : undefined;
+      }
+      session.lastUsedAt = Date.now();
+      // Inline check (not `welcomeOnly`) so TS narrows params.message below.
+      if (
+        params.wizardAnswer === undefined &&
+        params.wizardCancel === undefined &&
+        (params.message === undefined || !params.message.trim())
+      ) {
         respond(
           true,
-          buildSystemAgentChatResult({
+          buildSystemAgentRejoinResult({
             sessionId,
-            reply: pendingReply ? { ...reply, text: pendingReply } : reply,
-            proposalId,
+            welcome: session.welcome,
+            ...(session.welcomeQuestion ? { welcomeQuestion: session.welcomeQuestion } : {}),
+            engine: session.engine,
           }),
           undefined,
         );
-      });
+        acknowledgeDeliveredSystemAgentWelcome(session);
+        return undefined;
+      }
+      const historyStart = session.engine.historyLength();
+      let reply: Awaited<ReturnType<SystemAgentChatEngine["handle"]>>;
+      let resolveProposal:
+        | Awaited<ReturnType<typeof prepareDelegatedSystemAgentApproval>>
+        | undefined;
+      try {
+        if (params.delegation) {
+          resolveProposal = await prepareDelegatedSystemAgentApproval({
+            context,
+            sessions,
+            session,
+            sessionId,
+            delegation: params.delegation,
+          });
+        }
+        const turnReply = await runSystemAgentChatInput({
+          engine: session.engine,
+          input: params,
+        });
+        if (!turnReply) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, "OpenClaw chat input is missing."),
+          );
+          return undefined;
+        }
+        reply = turnReply;
+      } catch (error) {
+        persistSystemAgentEngineHistory(session.engine, historyStart);
+        if (error instanceof SystemAgentWizardAnswerError) {
+          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
+          return undefined;
+        }
+        if (!isSystemAgentInferenceUnavailableError(error)) {
+          throw error;
+        }
+        // A failed inference turn invalidates this conversation. Remove the
+        // exact engine before cleanup so a retry must pass the live gate and
+        // cannot resume partial proposal or CLI-session state.
+        // Initialization failures stay unmarked because no live session existed.
+        if (sessions.get(sessionId)?.engine === session.engine) {
+          sessions.delete(sessionId);
+        }
+        try {
+          await session.engine.dispose();
+        } catch {
+          // The inference error is authoritative; cleanup stays best-effort.
+        }
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, error.message, {
+            details: buildSystemAgentSessionInvalidatedErrorDetails(),
+          }),
+        );
+        return undefined;
+      }
+      let pendingApproval: SystemAgentChatSession["pendingApproval"];
+      if (resolveProposal) {
+        const proposal = session.engine.getPendingOperatorProposal();
+        if (proposal) {
+          const resolution = await resolveProposal(proposal);
+          if (resolution.kind === "completed") {
+            reply = resolution.reply;
+          } else {
+            pendingApproval = resolution;
+          }
+        }
+      }
+      persistSystemAgentEngineHistory(session.engine, historyStart);
+      if (pendingApproval) {
+        return pendingApproval;
+      }
+      respond(true, buildSystemAgentChatResult({ sessionId, reply }), undefined);
+      return undefined;
     });
+    // Human waiting must retain the requesting tool, but release the task queue:
+    // the approval owner reenters it to apply the exact proposal.
+    if (pending) {
+      const reply = await pending.completion;
+      respond(true, buildSystemAgentChatResult({ sessionId: params.sessionId, reply }), undefined);
+    }
   },
 };

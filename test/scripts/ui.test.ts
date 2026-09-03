@@ -300,7 +300,7 @@ describe("scripts/ui windows spawn behavior", () => {
     { noPnpm: false, failValidator: "check-control-ui-precompressed-assets.mts" },
     { noPnpm: true, failValidator: "check-control-ui-performance.mts" },
   ])(
-    "keeps standalone UI validators off disk caches (noPnpm=$noPnpm, failure=$failValidator)",
+    "reports budgets and enforces asset validity off disk caches (noPnpm=$noPnpm, failure=$failValidator)",
     ({ noPnpm, failValidator }) => {
       const tempDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ui-cache-")));
       const tempRoot = path.join(tempDir, "temp");
@@ -360,8 +360,10 @@ require("node:module").syncBuiltinESMExports();
           `
 enum Transformed { Value = "transformed" }
 const validator = process.argv[2];
-console.log(JSON.stringify({ validator, transformed: Transformed.Value }));
-process.exitCode = validator === ${JSON.stringify(failValidator)} ? 17 : 0;
+const reportOnly = process.argv.includes("--report-only");
+console.log(JSON.stringify({ validator, transformed: Transformed.Value, reportOnly }));
+process.exitCode = validator === ${JSON.stringify(failValidator)} ? 17
+  : validator === "check-control-ui-performance.mts" && !reportOnly ? 1 : 0;
 `,
         );
         // Run the native launcher, intercept only the build, then replay each real
@@ -381,10 +383,11 @@ childProcess.spawnSync = function(command, args, options) {
     assert.deepEqual(args.slice(1), ${JSON.stringify(noPnpm ? ["build"] : ["run", "build"])});
     return { status: 0 };
   }
-  const validator = path.basename(args.at(-1));
+  const validator = path.basename(args[2]);
   if (!validators.includes(validator)) throw new Error("Unexpected UI subprocess");
+  assert.deepEqual(args.slice(3), validator === "check-control-ui-performance.mts" ? ["--report-only"] : []);
   assert.equal(options.env.TSX_DISABLE_CACHE, undefined);
-  return spawnSync(command, [...args.slice(0, -1), ${JSON.stringify(fixture)}, validator], options);
+  return spawnSync(command, [...args.slice(0, 2), ${JSON.stringify(fixture)}, validator, ...args.slice(3)], options);
 };
 require("node:module").syncBuiltinESMExports();
 `,
@@ -443,7 +446,11 @@ require("node:module").syncBuiltinESMExports();
             .split("\n")
             .map((line) => JSON.parse(line)),
         ).toEqual(
-          expectedValidators.map((validator) => ({ validator, transformed: "transformed" })),
+          expectedValidators.map((validator) => ({
+            validator,
+            transformed: "transformed",
+            reportOnly: validator === "check-control-ui-performance.mts",
+          })),
         );
         for (const cacheRoot of cacheRoots) {
           expect(fs.readdirSync(cacheRoot)).toEqual(["0-sentinel"]);

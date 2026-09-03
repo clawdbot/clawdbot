@@ -234,7 +234,7 @@ suite.define(() => {
     }
   });
 
-  it("opens the confirmed session before roster or reference lookup completes and preserves effort", async () => {
+  it("commits the confirmed session URL before Chat loads and animates only the ready composer", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -341,6 +341,9 @@ suite.define(() => {
       await gateway.waitForRequest("sessions.list", { after: listRequestsBeforeSubmit });
       await expect.poll(() => chatModuleRequested).toBe(true);
 
+      expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(SESSION_KEY));
+      expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.resolve")).toHaveLength(0);
       expect(await submittedPrompt.isVisible()).toBe(true);
       expect(await submittedPrompt.count()).toBe(1);
       await captureProof(page, "01-chat-route-preparing.png");
@@ -695,7 +698,8 @@ suite.define(() => {
             await acceptedMarkdown
               .getByRole("button", { name: "Expand table", exact: true })
               .click();
-            const expandedTable = page.getByRole("dialog", { name: "Expanded table", exact: true });
+            const expandedTable = page.locator("openclaw-modal-dialog.markdown-table-modal");
+            await page.getByRole("dialog", { name: "Expanded table", exact: true }).waitFor();
             await expandedTable.getByRole("cell", { name: "Ready", exact: true }).waitFor();
             await expandedTable
               .getByRole("button", { name: "Close expanded table", exact: true })

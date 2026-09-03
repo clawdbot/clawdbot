@@ -465,7 +465,7 @@ interface AgentsApi {
   run<T>(prompt: string, options: AgentRunOptions & { schema: AgentJsonSchema }): Promise<T>;
 }
 
-/** Spawn collector agents concurrently. */
+/** Spawn collector agents concurrently; requests queue when bridge slots are full. */
 declare const agents: Readonly<AgentsApi>;
 /** Publish a phase heading for this swarm. */
 declare function phase(title: string): void;

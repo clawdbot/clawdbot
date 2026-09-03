@@ -3606,7 +3606,8 @@ describe("CLI attempt execution", () => {
 
     const codexArg = firstEmbeddedAgentArg();
     expectRecordFields(codexArg, {
-      agentHarnessId: "codex",
+      agentHarnessId: undefined,
+      agentHarnessRuntimeOverride: "codex",
       prompt: `commit from Codex\n\n${attribution}`,
       transcriptPrompt: "commit from Codex",
     });
@@ -4133,7 +4134,8 @@ describe("CLI attempt execution", () => {
     expectMockArgFields(runEmbeddedAgentMock, {
       provider: "anthropic",
       model: "claude-opus-4-7",
-      agentHarnessId: "openclaw",
+      agentHarnessId: undefined,
+      agentHarnessRuntimeOverride: "openclaw",
       prompt: "raw prompt",
       messageChannel: "discord",
       messageProvider: "discord-voice",
@@ -4558,52 +4560,57 @@ describe("embedded attempt harness pinning", () => {
 
     expectMockArgFields(runEmbeddedAgentMock, {
       provider: "openai",
-      agentHarnessId: "openclaw",
+      agentHarnessId: undefined,
       agentHarnessRuntimeOverride: "openclaw",
     });
   });
 
-  it("honors an explicit OpenClaw session runtime override", async () => {
-    const sessionEntry = makeSessionEntry("explicit-openclaw-session", {
-      agentRuntimeOverride: "openclaw",
-      agentHarnessId: "codex",
-    });
-    const modelThinkingCapability = {
-      provider: "openai",
-      modelId: "gpt-5.6-sol",
-      agentRuntime: "openclaw",
-      route: {
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-      },
-      compat: {
-        thinkingFormat: "openai",
-        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
-      },
-    } as const;
-    runEmbeddedAgentMock.mockResolvedValueOnce({
-      meta: { durationMs: 1 },
-    } satisfies EmbeddedAgentRunResult);
+  it.each([undefined, "model-owner"])(
+    "honors a runtime request without promoting observations to a pin (owner %s)",
+    async (pluginOwnerId) => {
+      const sessionEntry = makeSessionEntry("explicit-openclaw-session", {
+        agentRuntimeOverride: "openclaw",
+        agentHarnessId: "codex",
+        modelSelectionLocked: pluginOwnerId !== undefined,
+        pluginOwnerId,
+      });
+      const modelThinkingCapability = {
+        provider: "openai",
+        modelId: "gpt-5.6-sol",
+        agentRuntime: "openclaw",
+        route: {
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+        },
+        compat: {
+          thinkingFormat: "openai",
+          supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+        },
+      } as const;
+      runEmbeddedAgentMock.mockResolvedValueOnce({
+        meta: { durationMs: 1 },
+      } satisfies EmbeddedAgentRunResult);
 
-    await runHarnessAttempt({
-      modelOverride: "gpt-5.6-sol",
-      modelThinkingCapability,
-      sessionEntry,
-      agentHarnessRuntimeOverride: "openclaw",
-      resolvedThinkLevel: "max",
-      runId: "run-explicit-openclaw-runtime",
-      sessionHasHistory: true,
-    });
+      await runHarnessAttempt({
+        modelOverride: "gpt-5.6-sol",
+        modelThinkingCapability,
+        sessionEntry,
+        agentHarnessRuntimeOverride: "openclaw",
+        resolvedThinkLevel: "max",
+        runId: "run-explicit-openclaw-runtime",
+        sessionHasHistory: true,
+      });
 
-    expectMockArgFields(runEmbeddedAgentMock, {
-      provider: "openai",
-      model: "gpt-5.6-sol",
-      modelThinkingCapability,
-      agentHarnessId: "openclaw",
-      agentHarnessRuntimeOverride: "openclaw",
-      thinkLevel: "max",
-    });
-  });
+      expectMockArgFields(runEmbeddedAgentMock, {
+        provider: "openai",
+        model: "gpt-5.6-sol",
+        modelThinkingCapability,
+        agentHarnessId: undefined,
+        agentHarnessRuntimeOverride: "openclaw",
+        thinkLevel: "max",
+      });
+    },
+  );
 
   it("routes explicit OpenAI native runs with legacy Codex OAuth through OpenClaw", async () => {
     const sessionEntry = makeSessionEntry("explicit-agent-codex-oauth-session", {
@@ -4633,10 +4640,35 @@ describe("embedded attempt harness pinning", () => {
     expectMockArgFields(runEmbeddedAgentMock, {
       provider: "openai",
       model: "gpt-5.4",
-      agentHarnessId: "openclaw",
+      agentHarnessId: undefined,
       agentHarnessRuntimeOverride: "openclaw",
       authProfileId: "openai:work",
       authProfileIdSource: "user",
+    });
+  });
+
+  it("keeps a plugin-owned CLI request on the CLI path after usage records its runtime", async () => {
+    const sessionEntry = makeSessionEntry("plugin-cli-session", {
+      pluginOwnerId: "cli-owner",
+      modelSelectionLocked: true,
+      agentRuntimeOverride: "claude-cli",
+      agentHarnessId: "claude-cli",
+    });
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("continued"));
+
+    await runHarnessAttempt({
+      providerOverride: "anthropic",
+      modelOverride: "claude-sonnet-4-6",
+      sessionEntry,
+      agentHarnessRuntimeOverride: "claude-cli",
+      runId: "plugin-cli-continuation",
+    });
+
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expectMockArgFields(runCliAgentMock, {
+      provider: "claude-cli",
+      modelProvider: "anthropic",
+      model: "claude-sonnet-4-6",
     });
   });
 

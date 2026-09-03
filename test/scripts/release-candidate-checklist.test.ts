@@ -653,19 +653,10 @@ describe("release candidate checklist", () => {
 
   it("infers validation profiles from candidate tags", () => {
     expect(parseArgs(["--tag", "v2026.5.14-beta.3"]).releaseProfile).toBe("beta");
-    expect(parseArgs(["--tag", "v2026.5.14", "--windows-node-tag", "v0.6.3"]).releaseProfile).toBe(
-      "stable",
+    expect(parseArgs(["--tag", "v2026.5.14"]).releaseProfile).toBe("stable");
+    expect(parseArgs(["--tag", "v2026.5.14", "--release-profile", "full"]).releaseProfile).toBe(
+      "full",
     );
-    expect(
-      parseArgs([
-        "--tag",
-        "v2026.5.14",
-        "--windows-node-tag",
-        "v0.6.3",
-        "--release-profile",
-        "full",
-      ]).releaseProfile,
-    ).toBe("full");
   });
 
   it("defaults beta and alpha Parallels to postpublish confidence", () => {
@@ -1515,10 +1506,26 @@ describe("release candidate checklist", () => {
     ).toThrow("8-character lowercase digest");
   });
 
-  it("requires and carries an exact Windows Node tag for stable release candidates", () => {
-    expect(() => parseArgs(["--tag", "v2026.5.14"])).toThrow(
-      "stable release candidates require --windows-node-tag",
-    );
+  it("prints a stable publish command without Windows promotion inputs", () => {
+    const options = parseArgs([
+      "--tag",
+      "v2026.5.14",
+      "--npm-dist-tag",
+      "latest",
+      "--full-release-run",
+      "111",
+      "--npm-preflight-run",
+      "222",
+    ]);
+    const command = buildPublishCommand({ ...options, fullReleaseRunAttempt: 1 });
+
+    expect(command).toContain("'tag=v2026.5.14'");
+    expect(command).toContain("'npm_dist_tag=latest'");
+    expect(command).toContain("'publish_openclaw_npm=true'");
+    expect(command).not.toContain("windows_node_");
+  });
+
+  it("carries the optional exact Windows Node tag and digests for stable candidates", () => {
     expect(() => parseArgs(["--tag", "v2026.5.14", "--windows-node-tag", "latest"])).toThrow(
       "--windows-node-tag must be an explicit version tag, not latest",
     );

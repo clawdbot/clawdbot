@@ -8,7 +8,9 @@ import type {
   RouterHistory,
 } from "@openclaw/uirouter";
 import {
+  activityPersonFromPath,
   agentRouteFromPath,
+  INTERNAL_ACTIVITY_PATH_PARAM,
   INTERNAL_AGENT_PATH_PARAM,
   INTERNAL_MEMORY_PATH_PARAM,
   INTERNAL_PLUGINS_PATH_PARAM,
@@ -120,8 +122,8 @@ export function createApplicationRouter(): ApplicationRouter {
   const router = createRouter<RouteId, ApplicationContext<RouteId>, AppRouteModule>({
     routes: appRoutes,
   });
-  // The shared router intentionally matches exact paths only. Workboard ids,
-  // hub tabs, and session refs are runtime data, so the app owns those paths.
+  // The shared router intentionally matches exact paths only. People, Workboard
+  // ids, hub tabs, and session refs are runtime data, so the app owns those paths.
   return {
     ...router,
     routeIdFromPath,
@@ -131,6 +133,9 @@ export function createApplicationRouter(): ApplicationRouter {
 type DynamicRoute = readonly [routeId: RouteId, searchKey: string, searchValue: string];
 
 function dynamicRouteFromPath(pathname: string, basePath: string): DynamicRoute | null {
+  if (activityPersonFromPath(pathname, basePath)) {
+    return ["activity", INTERNAL_ACTIVITY_PATH_PARAM, pathname];
+  }
   const agentRoute = agentRouteFromPath(pathname, basePath);
   if (agentRoute) {
     return ["agents", INTERNAL_AGENT_PATH_PARAM, pathname];

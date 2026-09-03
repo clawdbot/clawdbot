@@ -369,7 +369,7 @@ describe("Codex app inventory across physical process restart", () => {
       createProcess,
       readBinding: () => bindingStore.read(identity),
       replaceBinding: async (threadId: string) => {
-        const current = await bindingStore.read(identity);
+        const current = bindingStore.read(identity);
         if (!current) {
           throw new Error("fixture binding missing");
         }
@@ -458,7 +458,7 @@ describe("Codex app inventory across physical process restart", () => {
           apps: { [appId]: { tools: { list: { enabled: true, approval_mode: "prompt" } } } },
         });
       }
-      expect((await f.readBinding())?.pluginAppPolicyContext?.apps[appId]).toMatchObject({
+      expect(f.readBinding()?.pluginAppPolicyContext?.apps[appId]).toMatchObject({
         allowDestructiveActions: false,
       });
       const scopedReads = f.calls
@@ -492,7 +492,7 @@ describe("Codex app inventory across physical process restart", () => {
     const boundary = f.calls.length;
     const second = await f.process.run();
     expect(second.pluginAppPolicyContext?.apps).not.toHaveProperty(appId);
-    expect((await f.readBinding())?.pluginAppPolicyContext?.apps).not.toHaveProperty(appId);
+    expect(f.readBinding()?.pluginAppPolicyContext?.apps).not.toHaveProperty(appId);
     const reads = f.calls
       .slice(boundary)
       .filter((call) => ["app/installed", "app/read"].includes(call.method));
@@ -531,13 +531,13 @@ describe("Codex app inventory across physical process restart", () => {
     "rejects active inherited MCP servers on a scheduled %s continuation",
     async (lifecycle) => {
       const f = await continuation(true, lifecycle);
-      const previousBinding = await f.readBinding();
+      const previousBinding = f.readBinding();
       f.process.faults.activeInheritedMcp = true;
       const boundary = f.calls.length;
       await expect(f.process.run()).rejects.toThrow(
         "restricted-tool-surface MCP attestation found active server inherited",
       );
-      expect(await f.readBinding()).toEqual(previousBinding);
+      expect(f.readBinding()).toEqual(previousBinding);
       expect(f.process.subscribedThreads.has(f.first.threadId)).toBe(false);
       expect(f.process.loadedThreads.has(f.first.threadId)).toBe(true);
       expect(f.calls.slice(boundary).some((call) => call.method === "thread/start")).toBe(false);
@@ -546,12 +546,12 @@ describe("Codex app inventory across physical process restart", () => {
 
   it("fences warm ownership revoked during restricted MCP attestation", async () => {
     const f = await continuation(true, "warm");
-    const previousBinding = await f.readBinding();
+    const previousBinding = f.readBinding();
     f.process.faults.beforeMcpAttestation = async () => {
       f.process.notify({ method: "thread/closed", params: { threadId: f.first.threadId } });
     };
     await expect(f.process.run()).rejects.toThrow("Codex warm thread ownership changed");
-    expect(await f.readBinding()).toEqual(previousBinding);
+    expect(f.readBinding()).toEqual(previousBinding);
   });
 
   it.each([
@@ -561,7 +561,7 @@ describe("Codex app inventory across physical process restart", () => {
     { lifecycle: "warm", fault: "replacement" },
   ])("fences $fault during $lifecycle loaded-thread admission", async ({ lifecycle, fault }) => {
     const f = await continuation(false, lifecycle);
-    const previousBinding = await f.readBinding();
+    const previousBinding = f.readBinding();
     const entered = createDeferred<void>();
     const release = createDeferred<void>();
     const replacementId = "00000000-0000-4000-8000-000000000099";
@@ -584,7 +584,7 @@ describe("Codex app inventory across physical process restart", () => {
     }
     release.resolve();
     await rejected;
-    expect(await f.readBinding()).toEqual(
+    expect(f.readBinding()).toEqual(
       fault === "abort" ? previousBinding : { ...previousBinding, threadId: replacementId },
     );
     expect(f.process.subscribedThreads.has(f.first.threadId)).toBe(false);
@@ -595,11 +595,11 @@ describe("Codex app inventory across physical process restart", () => {
     "attests provisional apps on the %s loaded thread",
     async (lifecycle) => {
       const f = await continuation(false, lifecycle);
-      const previousBinding = await f.readBinding();
+      const previousBinding = f.readBinding();
       f.process.disabledThreadApps.add(f.first.threadId);
       const boundary = f.calls.length;
       await expect(f.process.run()).rejects.toThrow("did not expose admitted apps");
-      expect(await f.readBinding()).toEqual(previousBinding);
+      expect(f.readBinding()).toEqual(previousBinding);
       expect(f.process.subscribedThreads.has(f.first.threadId)).toBe(false);
       expect(f.calls.slice(boundary).some((call) => call.method === "thread/start")).toBe(false);
     },
@@ -609,14 +609,14 @@ describe("Codex app inventory across physical process restart", () => {
     "preserves the durable binding when the %s client closes during inventory",
     async (lifecycle) => {
       const f = await continuation(false, lifecycle);
-      const previousBinding = await f.readBinding();
+      const previousBinding = f.readBinding();
       f.process.faults.beforeInventory = async () => {
         f.process.faults.beforeInventory = undefined;
         f.process.close(new Error("codex app-server client is closed"));
       };
       const boundary = f.process.request.mock.calls.length;
       await expect(f.process.run()).rejects.toThrow();
-      expect(await f.readBinding()).toEqual(previousBinding);
+      expect(f.readBinding()).toEqual(previousBinding);
       expect(
         f.process.request.mock.calls.slice(boundary).some(([method]) => method === "thread/start"),
       ).toBe(false);
@@ -627,7 +627,7 @@ describe("Codex app inventory across physical process restart", () => {
     "retires the %s client when denied admission cannot unsubscribe",
     async (lifecycle) => {
       const f = await continuation(true, lifecycle);
-      const previousBinding = await f.readBinding();
+      const previousBinding = f.readBinding();
       f.process.threadToolRevocations.add(f.first.threadId);
       f.process.faults.unsubscribe = new Error("unsubscribe unavailable");
       const boundary = f.calls.length;
@@ -643,7 +643,7 @@ describe("Codex app inventory across physical process restart", () => {
           : { name: "CodexAppServerUnsafeSubscriptionError" },
       );
       expect(f.process.abandonClient).toHaveBeenCalledOnce();
-      expect(await f.readBinding()).toEqual(previousBinding);
+      expect(f.readBinding()).toEqual(previousBinding);
       expect(f.calls.slice(boundary).some((call) => call.method === "thread/start")).toBe(false);
     },
   );
