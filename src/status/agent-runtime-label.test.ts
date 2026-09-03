@@ -113,6 +113,18 @@ describe("resolveAgentRuntimeLabel", () => {
       expected: "OpenAI Codex",
     },
     {
+      name: "a plugin-owned locked harness remains previous runtime history",
+      args: {
+        sessionEntry: {
+          agentHarnessId: "openclaw",
+          modelSelectionLocked: true,
+          pluginOwnerId: "model-owner",
+        },
+        resolvedHarness: "codex",
+      },
+      expected: "OpenAI Codex (previous runtime: OpenClaw Default)",
+    },
+    {
       name: "a retired codex-cli pin still reports a real transition",
       args: { sessionEntry: { agentHarnessId: "codex-cli" }, resolvedHarness: "claude-cli" },
       expected: "Claude CLI (previous runtime: OpenAI Codex)",

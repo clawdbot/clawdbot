@@ -12,6 +12,7 @@ import {
 import { isCliProvider, type CliProviderClassifier } from "../agents/model-selection.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveSessionPinnedHarnessId } from "../sessions/agent-harness-session-key.js";
 
 // Status runtime labels turn harness/provider/session state into a short
 // operator-facing name, sanitizing any persisted ACP/backend text.
@@ -32,6 +33,7 @@ type AgentRuntimeLabelArgs = {
     | "agentHarnessId"
     | "modelProvider"
     | "modelSelectionLocked"
+    | "pluginOwnerId"
     | "providerOverride"
   >;
   resolvedHarness?: string;
@@ -80,7 +82,8 @@ export function resolveAgentRuntimeLabel(args: AgentRuntimeLabelArgs): string {
   if (!recordedRuntime || isDefaultAgentRuntimeId(recordedRuntime) || recordedLabel === label) {
     return label;
   }
-  const relationship =
-    args.sessionEntry?.modelSelectionLocked === true ? "session pin" : "previous runtime";
+  const relationship = resolveSessionPinnedHarnessId(args.sessionEntry)
+    ? "session pin"
+    : "previous runtime";
   return `${label} (${relationship}: ${recordedLabel})`;
 }
