@@ -14,7 +14,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { detectChangedScope } from "../../scripts/ci-changed-scope.mjs";
-import { isDirectRunPath } from "../../scripts/lib/direct-run.mjs";
+import { isDirectRunPath, isDirectRunUrl } from "../../scripts/lib/direct-run.mjs";
 import * as managedChild from "../../scripts/lib/managed-child-process.mts";
 import { isProcessAlive, waitForDead, waitForPidFile } from "../helpers/process-wait.js";
 import { createDeferred } from "../helpers/promise.js";
@@ -473,6 +473,21 @@ process.exitCode = child.status ?? 1;
         "win32",
       ),
     ).toBe(true);
+  });
+
+  it.each([
+    [
+      "drive",
+      "C:\\repo\\scripts\\android-app-i18n.ts",
+      "file:///C:/repo/scripts/android-app-i18n.ts",
+    ],
+    [
+      "UNC",
+      "\\\\server\\share\\scripts\\android-app-i18n.ts",
+      "file://server/share/scripts/android-app-i18n.ts",
+    ],
+  ])("matches Windows %s module URLs", (_kind, directPath, moduleUrl) => {
+    expect(isDirectRunUrl(directPath, moduleUrl, "win32")).toBe(true);
   });
 
   it.each(DIRECT_RUN_SCRIPTS)("uses the canonical guard in %s", (script) => {

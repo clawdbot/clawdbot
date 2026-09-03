@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { completeSimple, type AssistantMessage, type Model } from "openclaw/plugin-sdk/llm";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { sliceUtf16Safe } from "../packages/normalization-core/src/utf16-slice.ts";
@@ -35,6 +35,7 @@ import {
   type LocaleMeta,
   type TranslationBatchItem,
 } from "./lib/control-ui-i18n-sync-plan.ts";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { toErrorObject as toLintErrorObject } from "./lib/error-format.mts";
 import { sleep } from "./lib/sleep.mjs";
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
@@ -1337,12 +1338,7 @@ async function main() {
   }
 }
 
-function isCliEntrypoint() {
-  const entrypoint = process.argv[1];
-  return Boolean(entrypoint && import.meta.url === pathToFileURL(path.resolve(entrypoint)).href);
-}
-
-if (isCliEntrypoint()) {
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   await main().catch((error: unknown) => {
     console.error(formatErrorMessage(error));
     process.exit(1);

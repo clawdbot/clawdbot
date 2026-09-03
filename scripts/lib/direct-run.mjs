@@ -31,5 +31,9 @@ export function isDirectRunPath(directPath, modulePath, platform = process.platf
  * @returns {boolean}
  */
 export function isDirectRunUrl(directPath, moduleUrl, platform = process.platform) {
-  return isDirectRunPath(directPath, fileURLToPath(moduleUrl), platform);
+  return isDirectRunPath(
+    directPath,
+    fileURLToPath(moduleUrl, platform === "win32" ? { windows: true } : undefined),
+    platform,
+  );
 }

@@ -6,7 +6,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import {
   buildScriptEvidenceSummary,
@@ -18,6 +17,7 @@ import {
 import type { AgentExecEnvelope } from "../src/commands/agent-exec-result.ts";
 import { requireOptionArgument } from "./lib/arg-utils.mts";
 import { previewForDevToolLog, redactJsonValueForDevToolLog } from "./lib/dev-tooling-safety.ts";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
 
 export { validateQaEvidenceSummaryJson };
 
@@ -1440,11 +1440,6 @@ async function main(): Promise<void> {
   }
 }
 
-function isCliEntrypoint(): boolean {
-  const entrypoint = process.argv[1];
-  return Boolean(entrypoint && import.meta.url === pathToFileURL(path.resolve(entrypoint)).href);
-}
-
-if (isCliEntrypoint()) {
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   await main();
 }

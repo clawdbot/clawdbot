@@ -2,8 +2,8 @@
 import { promises as fs } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import type ts from "typescript";
+import { isDirectRunUrl } from "./direct-run.mjs";
 
 const require = createRequire(import.meta.url);
 let tsCache: typeof ts | undefined;
@@ -223,11 +223,7 @@ export function collectCallExpressionLines(
 }
 
 function isDirectExecution(importMetaUrl: string) {
-  const entry = process.argv[1];
-  if (!entry) {
-    return false;
-  }
-  return path.resolve(entry) === fileURLToPath(importMetaUrl);
+  return isDirectRunUrl(process.argv[1], importMetaUrl);
 }
 
 /**

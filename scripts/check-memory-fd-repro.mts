@@ -7,13 +7,13 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { pathToFileURL } from "node:url";
 import { safeParseJson } from "../packages/normalization-core/src/json-coercion.ts";
 import { resolveTimerTimeoutMs } from "../packages/normalization-core/src/number-coercion.ts";
 import { asNullableRecord as asRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import { readNonBlankString } from "../packages/normalization-core/src/string-coerce.ts";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mts";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { parseStrictNonNegativeDecimal as parseNonNegativeInteger } from "./lib/numeric-options.mjs";
 
 const ISSUE_FILE_COUNTS = [
@@ -897,12 +897,7 @@ async function main() {
   }
 }
 
-function isMainModule() {
-  const entrypoint = process.argv[1];
-  return Boolean(entrypoint && import.meta.url === pathToFileURL(path.resolve(entrypoint)).href);
-}
-
-if (isMainModule()) {
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   main().catch((error: unknown) => {
     console.error(
       `[memory-fd-repro] failed: ${error instanceof Error ? error.message : String(error)}`,

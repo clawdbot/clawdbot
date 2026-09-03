@@ -2,7 +2,8 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
 
 const ROOT = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const I18N_ASSETS_DIR = path.join(ROOT, "ui/src/i18n/.i18n");
@@ -354,12 +355,7 @@ function usage() {
   ].join("\n");
 }
 
-function isCliEntrypoint() {
-  const entrypoint = process.argv[1];
-  return Boolean(entrypoint && import.meta.url === pathToFileURL(path.resolve(entrypoint)).href);
-}
-
-if (isCliEntrypoint()) {
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   const cliArgs = process.argv.slice(2);
   if (cliArgs.includes("--help") || cliArgs.includes("-h")) {
     process.stdout.write(`${usage()}\n`);
