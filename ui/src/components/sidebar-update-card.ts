@@ -4,7 +4,6 @@ import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import {
   hasNativeUpdateBridge,
   NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT,
-  NATIVE_UPDATE_DECLINED_EVENT,
 } from "../app/native-link-routing.ts";
 import { confirmAndStartUpdate, type UpdateProgress } from "../app/update-confirmation.ts";
 import type { ApplicationStatusBanner } from "../app/update-overlay-helpers.ts";
@@ -38,10 +37,8 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) onHoldUpdate: () => Promise<boolean> = async () => false;
   @property({ attribute: false }) onReviewUpdate: () => void = () => undefined;
   @property({ attribute: false }) onDismiss: (() => void) | undefined = undefined;
-  @property({ attribute: false }) recoverNativeDecline = true;
   @state() private holdingCampaignId: string | null = null;
   @state() private nativeUpdateAvailable = hasNativeUpdateBridge();
-  private nativeUpdateDeclined = false;
   private readonly countdownPolling = new PollController(
     this,
     1_000,
@@ -50,35 +47,16 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
   );
 
   private readonly handleNativeUpdateAvailabilityChanged = () => {
-    this.nativeUpdateDeclined = false;
     this.nativeUpdateAvailable = hasNativeUpdateBridge();
-  };
-
-  // The Mac app only declines an update it was already handed, so this is the
-  // tail of a confirmed click. Re-confirming here would ask twice for one action.
-  private readonly handleNativeUpdateDeclined = () => {
-    this.nativeUpdateDeclined = true;
-    this.nativeUpdateAvailable = false;
-    if (
-      (this.updateAvailable || this.updateSchedule?.campaign) &&
-      !this.updateBusy &&
-      this.canUpdate &&
-      !this.refreshRequired
-    ) {
-      this.onUpdate();
-    }
   };
 
   override connectedCallback() {
     super.connectedCallback();
-    this.nativeUpdateAvailable = !this.nativeUpdateDeclined && hasNativeUpdateBridge();
+    this.nativeUpdateAvailable = hasNativeUpdateBridge();
     window.addEventListener(
       NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT,
       this.handleNativeUpdateAvailabilityChanged,
     );
-    if (this.recoverNativeDecline) {
-      window.addEventListener(NATIVE_UPDATE_DECLINED_EVENT, this.handleNativeUpdateDeclined);
-    }
   }
 
   override disconnectedCallback() {
@@ -86,9 +64,6 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
       NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT,
       this.handleNativeUpdateAvailabilityChanged,
     );
-    if (this.recoverNativeDecline) {
-      window.removeEventListener(NATIVE_UPDATE_DECLINED_EVENT, this.handleNativeUpdateDeclined);
-    }
     super.disconnectedCallback();
   }
 
@@ -131,7 +106,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
       updateSchedule: this.updateSchedule,
       // Read the bridge at click time: a Mac app that installed it
       // after the last availability event still owns this update.
-      viaNativeApp: !this.nativeUpdateDeclined && hasNativeUpdateBridge(),
+      viaNativeApp: hasNativeUpdateBridge(),
     });
   };
 
@@ -204,9 +179,9 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     >
       <summary class="sidebar-issues-panel__summary" data-issue-row-focus>
         <span
-          class="sidebar-issues-panel__icon ${summary.critical
-            ? "sidebar-issues-panel__icon--critical"
-            : ""}"
+          class="sidebar-issues-panel__icon ${
+            summary.critical ? "sidebar-issues-panel__icon--critical" : ""
+          }"
           aria-hidden="true"
           >${summary.icon}</span
         >
@@ -214,21 +189,23 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
           <span class="sidebar-issues-panel__entity" title=${summary.title}>${summary.title}</span>
           <span class="sidebar-issues-panel__state" title=${summary.detail}>${summary.detail}</span>
         </span>
-        ${this.onDismiss
-          ? html`<button
-              type="button"
-              class="sidebar-issues-panel__dismiss"
-              aria-label=${t("attention.dismissItem", { item: summary.title })}
-              title=${t("attention.dismissItem", { item: summary.title })}
-              @click=${(event: Event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                this.onDismiss?.();
-              }}
-            >
-              ${icons.x}
-            </button>`
-          : nothing}
+        ${
+          this.onDismiss
+            ? html`<button
+                type="button"
+                class="sidebar-issues-panel__dismiss"
+                aria-label=${t("attention.dismissItem", { item: summary.title })}
+                title=${t("attention.dismissItem", { item: summary.title })}
+                @click=${(event: Event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  this.onDismiss?.();
+                }}
+              >
+                ${icons.x}
+              </button>`
+            : nothing
+        }
         <span class="sidebar-issues-panel__chevron" aria-hidden="true">${icons.chevronRight}</span>
       </summary>
       <div class="sidebar-issues-panel__body sidebar-update-issue__body">
@@ -265,16 +242,18 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
         >
           ${t("updates.reviewUpdate")}
         </button>
-        ${showHold && campaign
-          ? html`<button
-              class="sidebar-update-card__hold"
-              type="button"
-              ?disabled=${this.holdingCampaignId === campaign.id}
-              @click=${() => this.holdUpdate(campaign.id)}
-            >
-              ${t("updates.holdOneHour")}
-            </button>`
-          : nothing}
+        ${
+          showHold && campaign
+            ? html`<button
+                class="sidebar-update-card__hold"
+                type="button"
+                ?disabled=${this.holdingCampaignId === campaign.id}
+                @click=${() => this.holdUpdate(campaign.id)}
+              >
+                ${t("updates.holdOneHour")}
+              </button>`
+            : nothing
+        }
       </div>
     </div>`;
   }
@@ -364,36 +343,44 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
         aria-live=${campaign ? nothing : "polite"}
       >
         ${this.renderStatus()}
-        ${actionable
-          ? html`<div class="sidebar-update-card__actions">
-              ${this.canUpdate
-                ? updateAction
-                : html`<openclaw-tooltip open-on-click .content=${t("updates.adminRequired")}>
-                    ${updateAction}
-                  </openclaw-tooltip>`}
-              ${showHold && campaign
-                ? html`
-                    <button
-                      class="sidebar-update-card__hold"
-                      type="button"
-                      ?disabled=${this.holdingCampaignId === campaign.id}
-                      @click=${() => this.holdUpdate(campaign.id)}
-                    >
-                      ${t("updates.holdOneHour")}
-                    </button>
-                  `
-                : nothing}
-            </div>`
-          : nothing}
-        ${statusBanner
-          ? html`<button
-              class="sidebar-update-card__review"
-              type="button"
-              @click=${this.onReviewUpdate}
-            >
-              ${t("updates.reviewUpdate")}
-            </button>`
-          : nothing}
+        ${
+          actionable
+            ? html`<div class="sidebar-update-card__actions">
+                ${
+                  this.canUpdate
+                    ? updateAction
+                    : html`<openclaw-tooltip open-on-click .content=${t("updates.adminRequired")}>
+                        ${updateAction}
+                      </openclaw-tooltip>`
+                }
+                ${
+                  showHold && campaign
+                    ? html`
+                        <button
+                          class="sidebar-update-card__hold"
+                          type="button"
+                          ?disabled=${this.holdingCampaignId === campaign.id}
+                          @click=${() => this.holdUpdate(campaign.id)}
+                        >
+                          ${t("updates.holdOneHour")}
+                        </button>
+                      `
+                    : nothing
+                }
+              </div>`
+            : nothing
+        }
+        ${
+          statusBanner
+            ? html`<button
+                class="sidebar-update-card__review"
+                type="button"
+                @click=${this.onReviewUpdate}
+              >
+                ${t("updates.reviewUpdate")}
+              </button>`
+            : nothing
+        }
       </div>
     `;
   }

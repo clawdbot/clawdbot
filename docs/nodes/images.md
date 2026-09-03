@@ -87,7 +87,7 @@ image destinations retain their URL punctuation.
 - Images: up to `channels.whatsapp.mediaMaxMb` (default 50MB) after optimization.
 - Audio/video: 16MB cap (shared default; overridden by `mediaMaxMb` when sending through WhatsApp).
 - Documents: 100MB cap (shared default; overridden by `mediaMaxMb` when sending through WhatsApp).
-- Oversize or unreadable media produces a clear error in logs, and the reply is skipped.
+- Oversize or unreadable media produces a clear error in logs, and the reply is skipped. Size errors use readable byte units rather than rounding fractional caps to a whole MB.
 
 **Media understanding caps (transcription/description)**
 

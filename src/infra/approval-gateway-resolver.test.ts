@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 // Covers approval resolution over the gateway client.
 import type { ApprovalResolveResult } from "../../packages/gateway-protocol/src/index.js";
@@ -29,14 +30,6 @@ const recordedApproval = {
 vi.mock("../gateway/operator-approvals-client.js", () => ({
   withOperatorApprovalsGatewayClient: hoisted.withOperatorApprovalsGatewayClient,
 }));
-
-function requireFirstMockCall<T>(mock: { mock: { calls: T[][] } }): T[] {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error("expected gateway client call");
-  }
-  return call;
-}
 
 function withApprovalAccountContext<T>(run: () => T): T {
   return withGatewayNativeApprovalRuntime(
@@ -73,8 +66,9 @@ describe("resolveApprovalOverGateway", () => {
     });
 
     expect(hoisted.withOperatorApprovalsGatewayClient).toHaveBeenCalledTimes(1);
-    const [gatewayClientOptions, gatewayClientRunner] = requireFirstMockCall(
-      hoisted.withOperatorApprovalsGatewayClient,
+    const [gatewayClientOptions, gatewayClientRunner] = expectDefined(
+      hoisted.withOperatorApprovalsGatewayClient.mock.calls[0],
+      "gateway client call",
     );
     expect(gatewayClientOptions).toEqual({
       config: { gateway: { auth: { token: "cfg-token" } } },
@@ -155,8 +149,9 @@ describe("resolveApprovalOverGateway", () => {
         senderId: "owner",
       });
 
-      const [gatewayClientOptions] = requireFirstMockCall(
-        hoisted.withOperatorApprovalsGatewayClient,
+      const [gatewayClientOptions] = expectDefined(
+        hoisted.withOperatorApprovalsGatewayClient.mock.calls[0],
+        "gateway client call",
       );
       expect(gatewayClientOptions).toMatchObject({
         clientDisplayName: `${label} approval (owner)`,
@@ -175,7 +170,10 @@ describe("resolveApprovalOverGateway", () => {
       senderId: "owner",
     });
 
-    const [gatewayClientOptions] = requireFirstMockCall(hoisted.withOperatorApprovalsGatewayClient);
+    const [gatewayClientOptions] = expectDefined(
+      hoisted.withOperatorApprovalsGatewayClient.mock.calls[0],
+      "gateway client call",
+    );
     expect(gatewayClientOptions).toMatchObject({
       clientDisplayName: "external-chat approval (owner)",
     });

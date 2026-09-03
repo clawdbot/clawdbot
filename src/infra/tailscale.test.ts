@@ -200,6 +200,24 @@ describe("tailscale helpers", () => {
     expect(exec).toHaveBeenCalledTimes(2);
   });
 
+  it("bypasses existing whois results when the cache TTL is zero", async () => {
+    const exec = vi
+      .fn()
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify({ UserProfile: { LoginName: "before@example.com" } }),
+      })
+      .mockRejectedValueOnce(new Error("no longer authorized"));
+
+    await expect(readTailscaleWhoisIdentity("100.64.0.13", exec)).resolves.toEqual({
+      login: "before@example.com",
+    });
+    await expect(
+      readTailscaleWhoisIdentity("100.64.0.13", exec, { cacheTtlMs: 0, errorTtlMs: 0 }),
+    ).resolves.toBeNull();
+
+    expect(exec).toHaveBeenCalledTimes(2);
+  });
+
   it("does not cache whois results when the cache expiry would exceed Date range", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(8_640_000_000_000_000));

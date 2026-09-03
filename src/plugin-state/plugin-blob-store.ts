@@ -1,5 +1,5 @@
 // Public facade for plugin-scoped SQLite blob storage.
-import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
+import { coerceRequiredSqliteNumber, normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
@@ -180,7 +180,7 @@ function storedInfoToEntryInfo<TMetadata>(
   return {
     key: row.entry_key,
     metadata: parseMetadata(row.metadata_json, operation, env) as TMetadata,
-    sizeBytes: Number(row.size_bytes),
+    sizeBytes: coerceRequiredSqliteNumber(row.size_bytes),
     createdAt: normalizeSqliteNumber(row.created_at) ?? 0,
     ...(expiresAt != null ? { expiresAt } : {}),
   };

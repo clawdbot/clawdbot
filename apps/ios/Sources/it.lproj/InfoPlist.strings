@@ -8,6 +8,10 @@
 "NSCameraUsageDescription" = "OpenClaw usa la fotocamera quando scansioni un codice QR di configurazione del Gateway o chiedi al Gateway associato o all'assistente di acquisire una foto o un breve video da questo iPhone, ad esempio per connetterti al Gateway o mostrare all'assistente un documento, lo schermo di un dispositivo o uno spazio di lavoro.";
 /* OpenClaw source: "OpenClaw uses your contacts so you can search and reference people while using the assistant." */
 "NSContactsUsageDescription" = "OpenClaw usa i tuoi contatti per permetterti di cercare e fare riferimento alle persone mentre usi l'assistente.";
+/* OpenClaw source: "OpenClaw reads your steps, sleep, resting heart rate, and workouts from the Apple Health app to create summaries you request and send them through your Gateway to your configured AI provider." */
+"NSHealthShareUsageDescription" = "OpenClaw legge i dati relativi a passi, sonno, frequenza cardiaca a riposo e allenamenti dall'app Salute di Apple per creare i riepiloghi richiesti e inviarli tramite il tuo Gateway al provider di IA configurato.";
+/* OpenClaw source: "OpenClaw does not write to the Apple Health app. It uses read-only data to create summaries you request and send them through your Gateway to your configured AI provider." */
+"NSHealthUpdateUsageDescription" = "OpenClaw non scrive nell'app Salute di Apple. Utilizza dati di sola lettura per creare i riepiloghi richiesti e inviarli tramite il tuo Gateway al provider di IA configurato.";
 /* OpenClaw source: "OpenClaw discovers and connects to your OpenClaw gateway on the local network." */
 "NSLocalNetworkUsageDescription" = "OpenClaw rileva e si connette al tuo gateway OpenClaw sulla rete locale.";
 /* OpenClaw source: "OpenClaw can share your location in the background when you enable Always." */
@@ -18,10 +22,6 @@
 "NSMicrophoneUsageDescription" = "OpenClaw usa il microfono per chat in tempo reale, attivazione vocale, push-to-talk e note vocali.";
 /* OpenClaw source: "OpenClaw may use motion data to support device-aware interactions and automations." */
 "NSMotionUsageDescription" = "OpenClaw può usare i dati di movimento per supportare interazioni e automazioni consapevoli del dispositivo.";
-/* OpenClaw source: "OpenClaw reads your steps, sleep, resting heart rate, and workouts from the Apple Health app to create summaries you request and send them through your Gateway to your configured AI provider." */
-"NSHealthShareUsageDescription" = "OpenClaw legge i dati relativi a passi, sonno, frequenza cardiaca a riposo e allenamenti dall'app Salute di Apple per creare i riepiloghi richiesti e inviarli tramite il tuo Gateway al provider di IA configurato.";
-/* OpenClaw source: "OpenClaw does not write to the Apple Health app. It uses read-only data to create summaries you request and send them through your Gateway to your configured AI provider." */
-"NSHealthUpdateUsageDescription" = "OpenClaw non scrive nell'app Salute di Apple. Utilizza dati di sola lettura per creare i riepiloghi richiesti e inviarli tramite il tuo Gateway al provider di IA configurato.";
 /* OpenClaw source: "OpenClaw lets your assistant read photos you allow and lets you choose photos to share." */
 "NSPhotoLibraryUsageDescription" = "OpenClaw consente al tuo assistente di leggere le foto che autorizzi e ti permette di scegliere le foto da condividere.";
 /* OpenClaw source: "OpenClaw uses your reminders to list, add, and complete tasks when you enable reminders access." */

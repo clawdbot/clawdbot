@@ -9,7 +9,7 @@ import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type { SessionEntry as StoredSessionEntry } from "../config/sessions.js";
-import { resolveSessionAuthProfileOverrideSource } from "../config/sessions/auth-profile-override-provenance.js";
+import { resolveCollapsedSessionAuthPinSource } from "../config/sessions/auth-profile-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
 import type {
@@ -100,13 +100,6 @@ function collectTextContent(content: Array<{ type?: string; text?: string }>): s
     .join("");
 }
 
-function collectThinkingContent(content: Array<{ type?: string; thinking?: string }>): string {
-  return content
-    .filter((part): part is { type: "thinking"; thinking: string } => part.type === "thinking")
-    .map((part) => part.thinking)
-    .join("");
-}
-
 function buildBtwSystemPrompt(): string {
   return [
     "You are answering an ephemeral /btw side question about the current conversation.",
@@ -129,7 +122,7 @@ function resolveReturnedAuthProfileSource(
   if (sessionEntry?.authProfileOverride?.trim() !== authProfileId) {
     return "auto";
   }
-  return resolveSessionAuthProfileOverrideSource(sessionEntry);
+  return resolveCollapsedSessionAuthPinSource(sessionEntry);
 }
 
 // Planning and immediate resolution share one scoped snapshot so provider
@@ -150,6 +143,7 @@ function resolveBtwAuthProfileStore(params: {
   if (isOpenAIProvider(params.provider)) {
     return {
       store: ensureAuthProfileStore(params.agentDir, {
+        profileId: params.authProfileId,
         externalCliProviderIds: ["openai"],
         allowKeychainPrompt: false,
       }),
@@ -170,11 +164,13 @@ function resolveBtwAuthProfileStore(params: {
   let store: AuthProfileStore;
   if (externalCliAuthScope.providerIds) {
     store = ensureAuthProfileStore(params.agentDir, {
+      profileId: params.authProfileId,
       externalCliProviderIds: externalCliAuthScope.providerIds,
       allowKeychainPrompt: false,
     });
   } else {
     store = ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
+      profileId: params.authProfileId,
       allowKeychainPrompt: false,
     });
     externalCliAuthScope = resolveExternalCliAuthOverlayScopeFromSelection({
@@ -188,6 +184,7 @@ function resolveBtwAuthProfileStore(params: {
     });
     if (externalCliAuthScope.providerIds) {
       store = ensureAuthProfileStore(params.agentDir, {
+        profileId: params.authProfileId,
         externalCliProviderIds: externalCliAuthScope.providerIds,
         allowKeychainPrompt: false,
       });
@@ -1376,8 +1373,8 @@ export async function runBtwSideQuestion(
       }
 
       if (event.type === "thinking_delta") {
-        reasoningText += event.delta;
         if (params.resolvedReasoningLevel !== "off") {
+          reasoningText += event.delta;
           await params.opts?.onReasoningStream?.({ text: reasoningText, isReasoning: true });
         }
         continue;
@@ -1399,13 +1396,8 @@ export async function runBtwSideQuestion(
     }
 
     const finalMessage = finalEvent?.type === "done" ? finalEvent.message : undefined;
-    if (finalMessage) {
-      if (!sawTextEvent) {
-        answerText = collectTextContent(finalMessage.content);
-      }
-      if (!reasoningText) {
-        collectThinkingContent(finalMessage.content);
-      }
+    if (finalMessage && !sawTextEvent) {
+      answerText = collectTextContent(finalMessage.content);
     }
 
     const answer = answerText.trim();

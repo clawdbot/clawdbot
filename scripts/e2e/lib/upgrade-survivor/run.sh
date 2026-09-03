@@ -36,9 +36,18 @@ case "$LIVE_OPENAI" in
     ;;
 esac
 export GATEWAY_AUTH_TOKEN_REF="upgrade-survivor-token"
-export OPENAI_API_KEY="sk-openclaw-upgrade-survivor"
-export DISCORD_BOT_TOKEN="upgrade-survivor-discord-token"
-export TELEGRAM_BOT_TOKEN="123456:upgrade-survivor-telegram-token"
+if [ "$SCENARIO" = "mobile-pairing-reconnect" ]; then
+  export GATEWAY_AUTH_PASSWORD_REF="$(
+    node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("hex"))'
+  )"
+fi
+if [ "$SCENARIO" = "watchos-direct-node" ] || [ "$SCENARIO" = "mobile-pairing-reconnect" ]; then
+  unset OPENAI_API_KEY DISCORD_BOT_TOKEN TELEGRAM_BOT_TOKEN
+else
+  export OPENAI_API_KEY="sk-openclaw-upgrade-survivor"
+  export DISCORD_BOT_TOKEN="upgrade-survivor-discord-token"
+  export TELEGRAM_BOT_TOKEN="123456:upgrade-survivor-telegram-token"
+fi
 if [ "$SCENARIO" = "feishu-channel" ]; then
   export FEISHU_APP_SECRET="upgrade-survivor-feishu-secret"
 fi
@@ -54,6 +63,7 @@ RUNTIME_ROOT="$OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT"
 STATE_HOME_ROOT="${OPENCLAW_UPGRADE_SURVIVOR_STATE_HOME_ROOT:-$RUNTIME_ROOT/state-home}"
 mkdir -p "$ARTIFACT_ROOT"
 mkdir -p "$RUNTIME_ROOT"
+chmod 700 "$RUNTIME_ROOT"
 export TMPDIR="${OPENCLAW_UPGRADE_SURVIVOR_TMPDIR:-$RUNTIME_ROOT/tmp}"
 export OPENCLAW_TEST_STATE_TMPDIR="${OPENCLAW_UPGRADE_SURVIVOR_TEST_STATE_TMPDIR:-$RUNTIME_ROOT/state-tmp}"
 mkdir -p "$TMPDIR" "$OPENCLAW_TEST_STATE_TMPDIR"
@@ -94,6 +104,8 @@ baseline_version=""
 baseline_version_expected="0"
 candidate_version=""
 installed_version=""
+candidate_install_mode="updater"
+HISTORICAL_MOBILE_PAIRING_CANDIDATE_SHA="ea806575e6450e4d1efdfc72c19f04be982a1b9b"
 start_seconds=""
 status_seconds=""
 healthz_seconds=""
@@ -128,6 +140,35 @@ SYSTEMCTL_SHIM_LOG="$ARTIFACT_ROOT/systemctl-shim.log"
 SYSTEMCTL_SHIM_PID_FILE="$ARTIFACT_ROOT/systemctl-shim.pid"
 SYSTEMCTL_SHIM_DAEMON_LOG="$ARTIFACT_ROOT/systemctl-shim-gateway.log"
 CONFIG_COVERAGE_JSON="$ARTIFACT_ROOT/config-recipe.json"
+WATCH_RUNTIME_ROOT="$RUNTIME_ROOT/watchos-direct-node"
+WATCH_STATE_JSON="$WATCH_RUNTIME_ROOT/state.json"
+WATCH_SETUP_JSON="$WATCH_RUNTIME_ROOT/setup.json"
+WATCH_NODES_JSON="$WATCH_RUNTIME_ROOT/nodes.json"
+WATCH_DEVICES_JSON="$WATCH_RUNTIME_ROOT/devices.json"
+WATCH_BASELINE_CONNECT_JSON="$ARTIFACT_ROOT/watchos-baseline-connect.json"
+WATCH_BASELINE_STATE_JSON="$ARTIFACT_ROOT/watchos-baseline-state.json"
+WATCH_CANDIDATE_CONNECT_JSON="$ARTIFACT_ROOT/watchos-candidate-connect.json"
+WATCH_CANDIDATE_STATE_JSON="$ARTIFACT_ROOT/watchos-candidate-state.json"
+WATCH_RESTART_CONNECT_JSON="$ARTIFACT_ROOT/watchos-restart-connect.json"
+WATCH_RESTART_STATE_JSON="$ARTIFACT_ROOT/watchos-restart-state.json"
+WATCH_TLS_ROOT="$WATCH_RUNTIME_ROOT/tls"
+WATCH_TLS_CA_KEY="$WATCH_TLS_ROOT/ca-key.pem"
+WATCH_TLS_CA_CERT="$WATCH_TLS_ROOT/ca-cert.pem"
+WATCH_TLS_SERVER_KEY="$WATCH_TLS_ROOT/server-key.pem"
+WATCH_TLS_SERVER_CSR="$WATCH_TLS_ROOT/server.csr"
+WATCH_TLS_SERVER_CERT="$WATCH_TLS_ROOT/server-cert.pem"
+WATCH_TLS_SERVER_EXT="$WATCH_TLS_ROOT/server.ext"
+WATCH_GATEWAY_WS_URL="wss://localhost:18789"
+WATCH_GATEWAY_HTTP_URL="https://localhost:18789"
+MOBILE_PAIRING_ROOT="$RUNTIME_ROOT/mobile-pairing"
+MOBILE_PAIRING_QR_JSON="$MOBILE_PAIRING_ROOT/qr.json"
+MOBILE_PAIRING_QR_ERR="$MOBILE_PAIRING_ROOT/qr.err"
+MOBILE_PAIRING_CREDENTIALS="$MOBILE_PAIRING_ROOT/credentials.json"
+MOBILE_PAIRING_BASELINE_EVIDENCE="$ARTIFACT_ROOT/mobile-pairing-baseline.json"
+MOBILE_PAIRING_CANDIDATE_FIRST_EVIDENCE="$ARTIFACT_ROOT/mobile-pairing-candidate-first.json"
+MOBILE_PAIRING_CANDIDATE_RESTART_EVIDENCE="$ARTIFACT_ROOT/mobile-pairing-candidate-restart.json"
+MOBILE_PAIRING_FINAL_EVIDENCE="$ARTIFACT_ROOT/mobile-pairing-final.json"
+HISTORICAL_PACKAGE_REPLACEMENT_EVIDENCE="$ARTIFACT_ROOT/historical-package-replacement.json"
 export OPENCLAW_UPGRADE_SURVIVOR_CONFIG_COVERAGE_JSON="$CONFIG_COVERAGE_JSON"
 rm -f "$SUMMARY_JSON" "$CONFIG_COVERAGE_JSON"
 : >"$PHASE_LOG"
@@ -213,6 +254,7 @@ write_summary() {
     SUMMARY_BASELINE_VERSION="$baseline_version" \
     SUMMARY_CANDIDATE_VERSION="$candidate_version" \
     SUMMARY_INSTALLED_VERSION="$installed_version" \
+    SUMMARY_CANDIDATE_INSTALL_MODE="$candidate_install_mode" \
     SUMMARY_SCENARIO="$SCENARIO" \
     SUMMARY_UPDATE_RESTART_MODE="$UPDATE_RESTART_MODE" \
     SUMMARY_UPDATE_REPAIR_REQUIRED="$update_repair_required" \
@@ -225,6 +267,13 @@ write_summary() {
     SUMMARY_STATUS_SECONDS="$status_seconds" \
     SUMMARY_FAILURE_PHASE="$FAILURE_PHASE" \
     SUMMARY_CONFIG_COVERAGE="$CONFIG_COVERAGE_JSON" \
+    SUMMARY_WATCH_BASELINE_CONNECT="$WATCH_BASELINE_CONNECT_JSON" \
+    SUMMARY_WATCH_BASELINE_STATE="$WATCH_BASELINE_STATE_JSON" \
+    SUMMARY_WATCH_CANDIDATE_CONNECT="$WATCH_CANDIDATE_CONNECT_JSON" \
+    SUMMARY_WATCH_CANDIDATE_STATE="$WATCH_CANDIDATE_STATE_JSON" \
+    SUMMARY_WATCH_RESTART_CONNECT="$WATCH_RESTART_CONNECT_JSON" \
+    SUMMARY_WATCH_RESTART_STATE="$WATCH_RESTART_STATE_JSON" \
+    SUMMARY_HISTORICAL_PACKAGE_REPLACEMENT="$HISTORICAL_PACKAGE_REPLACEMENT_EVIDENCE" \
     node <<'NODE'
 const fs = require("node:fs");
 const phaseLog = process.env.SUMMARY_PHASE_LOG;
@@ -253,6 +302,7 @@ const summary = {
     version: process.env.SUMMARY_CANDIDATE_VERSION || null,
   },
   installedVersion: process.env.SUMMARY_INSTALLED_VERSION || null,
+  candidateInstallMode: process.env.SUMMARY_CANDIDATE_INSTALL_MODE || "updater",
   updateRestartMode: process.env.SUMMARY_UPDATE_RESTART_MODE || "manual",
   updateRecovery: process.env.SUMMARY_UPDATE_REPAIR_REQUIRED === "1" ? "capability-consent" : null,
   updateRestartSource: process.env.SUMMARY_UPDATE_RESTART_SOURCE || null,
@@ -268,6 +318,35 @@ const summary = {
   recovery: process.env.SUMMARY_SCENARIO === "recovery-cleanup"
     ? readJsonOrNull(require("node:path").join(require("node:path").dirname(process.env.SUMMARY_JSON), "recovery-evidence.json"))
     : undefined,
+  watchosDirectNode: process.env.SUMMARY_SCENARIO === "watchos-direct-node"
+    ? {
+        contract: {
+          signature: "v3",
+          clientId: "openclaw-watchos",
+          clientMode: "node",
+          protocolRange: [4, 4],
+          stableInstanceId: "watchos-upgrade-survivor",
+          bootstrapAuthField: "bootstrapToken",
+          reconnectAuthField: "deviceToken",
+        },
+        baseline: {
+          connect: readJsonOrNull(process.env.SUMMARY_WATCH_BASELINE_CONNECT),
+          state: readJsonOrNull(process.env.SUMMARY_WATCH_BASELINE_STATE),
+        },
+        candidate: {
+          connect: readJsonOrNull(process.env.SUMMARY_WATCH_CANDIDATE_CONNECT),
+          state: readJsonOrNull(process.env.SUMMARY_WATCH_CANDIDATE_STATE),
+        },
+        restart: {
+          connect: readJsonOrNull(process.env.SUMMARY_WATCH_RESTART_CONNECT),
+          state: readJsonOrNull(process.env.SUMMARY_WATCH_RESTART_STATE),
+        },
+      }
+    : undefined,
+  historicalPackageReplacement:
+    process.env.SUMMARY_CANDIDATE_INSTALL_MODE === "historical-package-replacement"
+      ? readJsonOrNull(process.env.SUMMARY_HISTORICAL_PACKAGE_REPLACEMENT)
+      : undefined,
   failure: process.env.SUMMARY_STATUS === "passed"
     ? null
     : {
@@ -294,6 +373,74 @@ stop_gateway() {
     fi
   fi
   rm -f "$SYSTEMCTL_SHIM_PID_FILE"
+}
+
+watchos_gateway_call() {
+  local method="$1"
+  local params="$2"
+  local output="$3"
+  openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw gateway call "$method" \
+    --url "$WATCH_GATEWAY_WS_URL" \
+    --token "$GATEWAY_AUTH_TOKEN_REF" \
+    --params "$params" \
+    --timeout 20000 \
+    --json >"$output"
+  chmod 600 "$output"
+}
+
+watchos_assert_gateway_state() {
+  local label="$1"
+  local output="$2"
+  watchos_gateway_call node.list '{}' "$WATCH_NODES_JSON"
+  watchos_gateway_call device.pair.list '{}' "$WATCH_DEVICES_JSON"
+  node scripts/e2e/lib/upgrade-survivor/watchos-direct-node.mjs assert-state \
+    --state "$WATCH_STATE_JSON" \
+    --nodes "$WATCH_NODES_JSON" \
+    --devices "$WATCH_DEVICES_JSON" \
+    --out "$output" \
+    --label "$label"
+}
+
+watchos_connect() {
+  local mode="$1"
+  local credential="$2"
+  local output="$3"
+  local label="$4"
+  local args=(
+    scripts/e2e/lib/upgrade-survivor/watchos-direct-node.mjs
+    connect
+    --mode "$mode"
+    --state "$WATCH_STATE_JSON"
+    --out "$output"
+    --label "$label"
+  )
+  if [ "$mode" = "bootstrap" ]; then
+    args+=(--credential "$credential")
+  fi
+  openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" \
+    node "${args[@]}"
+}
+
+watchos_pair_baseline() {
+  mkdir -p "$WATCH_RUNTIME_ROOT"
+  chmod 700 "$WATCH_RUNTIME_ROOT"
+  start_gateway
+  watchos_gateway_call device.pair.setupCode \
+    '{"includeQr":false,"bootstrapProfile":"node","publicUrl":"wss://localhost:18789"}' \
+    "$WATCH_SETUP_JSON"
+  watchos_connect bootstrap "$WATCH_SETUP_JSON" "$WATCH_BASELINE_CONNECT_JSON" baseline
+  watchos_assert_gateway_state baseline "$WATCH_BASELINE_STATE_JSON"
+  stop_gateway
+}
+
+watchos_reconnect_candidate() {
+  watchos_connect device "$WATCH_STATE_JSON" "$WATCH_CANDIDATE_CONNECT_JSON" candidate
+  watchos_assert_gateway_state candidate "$WATCH_CANDIDATE_STATE_JSON"
+}
+
+watchos_reconnect_restarted_candidate() {
+  watchos_connect device "$WATCH_STATE_JSON" "$WATCH_RESTART_CONNECT_JSON" restart
+  watchos_assert_gateway_state restart "$WATCH_RESTART_STATE_JSON"
 }
 
 cleanup() {
@@ -363,6 +510,15 @@ phase() {
   [ "$phase_status" -eq 0 ] || return "$phase_status"
   json_event "$name" passed
   CURRENT_PHASE=""
+}
+
+companion_survivor_scenario() {
+  [ "$SCENARIO" = "watchos-direct-node" ] || [ "$SCENARIO" = "mobile-pairing-reconnect" ]
+}
+
+run_plugin_fixture_phase() {
+  companion_survivor_scenario && return 0
+  phase "$@"
 }
 
 package_root() {
@@ -865,12 +1021,144 @@ apply_baseline_config_recipe() {
     --baseline-version "$baseline_version"
 }
 
+configure_watchos_tls_fixture() {
+  [ "${SCENARIO:-}" = "watchos-direct-node" ] || return 0
+  command -v openssl >/dev/null || {
+    echo "watchOS direct-node survivor requires openssl" >&2
+    return 1
+  }
+  mkdir -p "$WATCH_TLS_ROOT"
+  chmod 700 "$WATCH_TLS_ROOT"
+  openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 1 \
+    -subj "/CN=OpenClaw watchOS survivor CA" \
+    -addext "basicConstraints=critical,CA:TRUE" \
+    -addext "keyUsage=critical,keyCertSign,cRLSign" \
+    -keyout "$WATCH_TLS_CA_KEY" \
+    -out "$WATCH_TLS_CA_CERT" >/dev/null 2>&1
+  openssl req -newkey rsa:2048 -nodes -sha256 \
+    -subj "/CN=localhost" \
+    -keyout "$WATCH_TLS_SERVER_KEY" \
+    -out "$WATCH_TLS_SERVER_CSR" >/dev/null 2>&1
+  printf '%s\n' \
+    "basicConstraints=critical,CA:FALSE" \
+    "subjectAltName=DNS:localhost,IP:127.0.0.1" \
+    "keyUsage=critical,digitalSignature,keyEncipherment" \
+    "extendedKeyUsage=serverAuth" >"$WATCH_TLS_SERVER_EXT"
+  openssl x509 -req \
+    -in "$WATCH_TLS_SERVER_CSR" \
+    -CA "$WATCH_TLS_CA_CERT" \
+    -CAkey "$WATCH_TLS_CA_KEY" \
+    -CAcreateserial \
+    -days 1 \
+    -sha256 \
+    -extfile "$WATCH_TLS_SERVER_EXT" \
+    -out "$WATCH_TLS_SERVER_CERT" >/dev/null 2>&1
+  chmod 600 "$WATCH_TLS_CA_KEY" "$WATCH_TLS_CA_CERT" "$WATCH_TLS_SERVER_KEY" \
+    "$WATCH_TLS_SERVER_CSR" "$WATCH_TLS_SERVER_CERT" "$WATCH_TLS_SERVER_EXT"
+  local tls_config
+  tls_config="$(
+    node -e '
+      process.stdout.write(JSON.stringify({
+        enabled: true,
+        autoGenerate: false,
+        certPath: process.argv[1],
+        keyPath: process.argv[2],
+      }));
+    ' "$WATCH_TLS_SERVER_CERT" "$WATCH_TLS_SERVER_KEY"
+  )"
+  openclaw config set gateway.tls "$tls_config" --strict-json >/dev/null
+  export NODE_EXTRA_CA_CERTS="$WATCH_TLS_CA_CERT"
+}
+
 validate_baseline_config() {
   if ! openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw config validate >"$BASELINE_CONFIG_VALIDATE_LOG" 2>&1; then
     echo "generated baseline config failed baseline validation" >&2
     openclaw_e2e_print_log "$BASELINE_CONFIG_VALIDATE_LOG" >&2
     return 1
   fi
+}
+
+run_mobile_pairing_client() {
+  openclaw_e2e_run_script_entrypoint \
+    scripts/e2e/lib/upgrade-survivor/mobile-pairing-client \
+    "$@"
+}
+
+bootstrap_mobile_pairing() {
+  if [ "$SCENARIO" != "mobile-pairing-reconnect" ]; then
+    return 0
+  fi
+  mkdir -p "$MOBILE_PAIRING_ROOT"
+  chmod 700 "$MOBILE_PAIRING_ROOT"
+  : >"$MOBILE_PAIRING_QR_JSON"
+  : >"$MOBILE_PAIRING_QR_ERR"
+  chmod 600 "$MOBILE_PAIRING_QR_JSON" "$MOBILE_PAIRING_QR_ERR"
+  local qr_status=0
+  openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" \
+    openclaw qr --json --url ws://127.0.0.1:18789 \
+    >"$MOBILE_PAIRING_QR_JSON" 2>"$MOBILE_PAIRING_QR_ERR" || qr_status=$?
+  if [ "$qr_status" -ne 0 ]; then
+    rm -f "$MOBILE_PAIRING_QR_JSON" "$MOBILE_PAIRING_QR_ERR"
+    echo "baseline mobile pairing QR bootstrap failed" >&2
+    return "$qr_status"
+  fi
+  start_gateway
+  local bootstrap_status=0
+  run_mobile_pairing_client bootstrap \
+    --package-root "$(package_root)" \
+    --qr-json "$MOBILE_PAIRING_QR_JSON" \
+    --credentials "$MOBILE_PAIRING_CREDENTIALS" \
+    --evidence "$MOBILE_PAIRING_BASELINE_EVIDENCE" || bootstrap_status=$?
+  local stop_status=0
+  stop_gateway || stop_status=$?
+  rm -f "$MOBILE_PAIRING_QR_JSON" "$MOBILE_PAIRING_QR_ERR"
+  if [ "$bootstrap_status" -ne 0 ]; then
+    return "$bootstrap_status"
+  fi
+  return "$stop_status"
+}
+
+mobile_pairing_expects_node_surface_reapproval() {
+  case "$baseline_version" in
+    2026.7.1 | 2026.7.1-*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+verify_mobile_pairing() {
+  local phase_name="$1"
+  local evidence_file="$2"
+  local expect_known_node_surface_reapproval="false"
+  if mobile_pairing_expects_node_surface_reapproval; then
+    expect_known_node_surface_reapproval="true"
+  fi
+  run_mobile_pairing_client verify \
+    --package-root "$(package_root)" \
+    --credentials "$MOBILE_PAIRING_CREDENTIALS" \
+    --evidence "$evidence_file" \
+    --phase "$phase_name" \
+    --expect-known-node-surface-reapproval "$expect_known_node_surface_reapproval"
+}
+
+verify_mobile_pairing_once() {
+  local phase_name="$1"
+  local evidence_file="$2"
+  if [ "$SCENARIO" != "mobile-pairing-reconnect" ]; then
+    return 0
+  fi
+  start_gateway || return "$?"
+  local verify_status=0
+  verify_mobile_pairing "$phase_name" "$evidence_file" || verify_status=$?
+  local stop_status=0
+  stop_gateway || stop_status=$?
+  if [ "$verify_status" -ne 0 ]; then
+    return "$verify_status"
+  fi
+  return "$stop_status"
 }
 
 source scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh
@@ -979,6 +1267,16 @@ resolve_candidate_version() {
     node scripts/e2e/lib/package-compat.mjs "$candidate_version"
   )"
   export OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT
+}
+
+resolve_candidate_install_mode() {
+  candidate_install_mode="updater"
+  if [ "$SCENARIO" = "mobile-pairing-reconnect" ] &&
+    [ "$baseline_version" = "2026.7.1" ] &&
+    [ "$candidate_version" = "2026.8.1" ] &&
+    [ "${OPENCLAW_DOCKER_E2E_SELECTED_SHA:-}" = "$HISTORICAL_MOBILE_PAIRING_CANDIDATE_SHA" ]; then
+    candidate_install_mode="historical-package-replacement"
+  fi
 }
 
 candidate_update_spec() {
@@ -1090,6 +1388,123 @@ update_candidate() {
   fi
 }
 
+replace_historical_mobile_pairing_candidate() {
+  local update_spec
+  update_spec="$(candidate_update_spec)"
+  local live_package
+  live_package="$(package_root)"
+  local npm_prefix
+  npm_prefix="$(dirname "$(dirname "$(dirname "$live_package")")")"
+  local install_status=0
+
+  if [ "$live_package" != "$npm_prefix/lib/node_modules/openclaw" ]; then
+    echo "historical package replacement could not derive the npm prefix" >&2
+    return 1
+  fi
+  echo "Replacing baseline $baseline_spec with candidate $CANDIDATE_KIND:$update_spec through npm without updater or Doctor"
+  openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" \
+    npm install -g --prefix "$npm_prefix" "$update_spec" --no-fund --no-audit \
+    >"$UPDATE_ERR" 2>&1 || install_status=$?
+  if [ "$install_status" -ne 0 ]; then
+    echo "historical mobile pairing package replacement failed" >&2
+    openclaw_e2e_print_log "$UPDATE_ERR" >&2
+    return "$install_status"
+  fi
+
+  installed_version="$(read_installed_version)"
+  if [ "$installed_version" != "$candidate_version" ]; then
+    echo "historical package replacement did not leave the candidate installed: $installed_version" >&2
+    return 1
+  fi
+  UPDATE_BEFORE_VERSION="$baseline_version" \
+    UPDATE_AFTER_VERSION="$installed_version" \
+    node <<'NODE' >"$UPDATE_JSON"
+const result = {
+  status: "ok",
+  mode: "historical-package-replacement",
+  before: { version: process.env.UPDATE_BEFORE_VERSION },
+  after: { version: process.env.UPDATE_AFTER_VERSION },
+  updaterRun: false,
+  doctorRun: false,
+};
+process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+NODE
+  chmod 600 "$UPDATE_JSON" "$UPDATE_ERR"
+}
+
+update_candidate_for_install_mode() {
+  case "$candidate_install_mode" in
+    updater)
+      update_candidate
+      ;;
+    historical-package-replacement)
+      replace_historical_mobile_pairing_candidate
+      ;;
+    *)
+      echo "unknown candidate install mode: $candidate_install_mode" >&2
+      return 1
+      ;;
+  esac
+}
+
+assert_historical_package_replacement_prestart() {
+  CONFIG_PATH="$OPENCLAW_CONFIG_PATH" \
+    UPDATE_PATH="$UPDATE_JSON" \
+    EVIDENCE_PATH="$HISTORICAL_PACKAGE_REPLACEMENT_EVIDENCE" \
+    BASELINE_VERSION="$baseline_version" \
+    CANDIDATE_VERSION="$candidate_version" \
+    node <<'NODE'
+const fs = require("node:fs");
+const config = JSON.parse(fs.readFileSync(process.env.CONFIG_PATH, "utf8"));
+const update = JSON.parse(fs.readFileSync(process.env.UPDATE_PATH, "utf8"));
+if (
+  update.status !== "ok" ||
+  update.mode !== "historical-package-replacement" ||
+  update.updaterRun !== false ||
+  update.doctorRun !== false
+) {
+  throw new Error("historical package replacement evidence changed");
+}
+if (!Object.hasOwn(config.meta ?? {}, "lastTouchedAt")) {
+  throw new Error("historical package replacement did not preserve the baseline metadata defect");
+}
+const evidence = {
+  mode: "historical-package-replacement",
+  baselineVersion: process.env.BASELINE_VERSION,
+  candidateVersion: process.env.CANDIDATE_VERSION,
+  updaterRun: false,
+  doctorRunBeforeCandidateStart: false,
+  legacyLastTouchedAtPresentBeforeCandidateStart: true,
+  legacyLastTouchedAtPresentAfterCandidateStart: null,
+  candidateStartupRepairObserved: null,
+};
+fs.writeFileSync(process.env.EVIDENCE_PATH, `${JSON.stringify(evidence, null, 2)}\n`, {
+  mode: 0o600,
+});
+fs.chmodSync(process.env.EVIDENCE_PATH, 0o600);
+NODE
+}
+
+assert_historical_package_replacement_startup_repair() {
+  CONFIG_PATH="$OPENCLAW_CONFIG_PATH" \
+    EVIDENCE_PATH="$HISTORICAL_PACKAGE_REPLACEMENT_EVIDENCE" \
+    node <<'NODE'
+const fs = require("node:fs");
+const config = JSON.parse(fs.readFileSync(process.env.CONFIG_PATH, "utf8"));
+if (Object.hasOwn(config.meta ?? {}, "lastTouchedAt")) {
+  throw new Error("candidate startup did not repair retired meta.lastTouchedAt");
+}
+const evidence = JSON.parse(fs.readFileSync(process.env.EVIDENCE_PATH, "utf8"));
+evidence.legacyLastTouchedAtPresentAfterCandidateStart = false;
+evidence.candidateStartupRepairObserved = true;
+fs.writeFileSync(process.env.EVIDENCE_PATH, `${JSON.stringify(evidence, null, 2)}\n`, {
+  mode: 0o600,
+});
+fs.chmodSync(process.env.EVIDENCE_PATH, 0o600);
+NODE
+  assert_survival
+}
+
 assert_root_managed_vps_cli_usable() {
   if [ "$ROOT_MANAGED_VPS" != "1" ]; then
     return 0
@@ -1112,22 +1527,7 @@ run_doctor() {
   fi
 }
 
-repair_fixture_plugin_consent() {
-  if [ "$update_repair_required" = "1" ]; then
-    # Migration assertions run first: explicit fixture consent must not conceal a
-    # broken doctor migration. The candidate owns staged-artifact acceptance.
-    if ! openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw update repair \
-      --accept-capabilities --yes --no-restart --json >"$REPAIR_JSON" 2>"$ARTIFACT_ROOT/repair.err"; then
-      echo "openclaw update repair failed" >&2
-      openclaw_e2e_print_log "$ARTIFACT_ROOT/repair.err" >&2
-      openclaw_e2e_print_log "$REPAIR_JSON" >&2
-      return 1
-    fi
-    node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-repair-json "$REPAIR_JSON"
-    node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
-      assert-recovered-plugin-installs "$UPDATE_JSON" "$candidate_version" "$initial_update_observation_root" "$baseline_version"
-    assert_survival
-  fi
+repair_update_restart_auth() {
   if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
     # Start is preparation only. The following updater must replace this exact
     # supervisor itself; its existing replacement and auth assertions remain required.
@@ -1147,6 +1547,25 @@ repair_fixture_plugin_consent() {
         assert-recovered-plugin-installs "$UPDATE_JSON" "$candidate_version" "$initial_update_observation_root" "$baseline_version"
     fi
   fi
+}
+
+repair_fixture_plugin_consent() {
+  if [ "$update_repair_required" = "1" ]; then
+    # Migration assertions run first: explicit fixture consent must not conceal a
+    # broken doctor migration. The candidate owns staged-artifact acceptance.
+    if ! openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw update repair \
+      --accept-capabilities --yes --no-restart --json >"$REPAIR_JSON" 2>"$ARTIFACT_ROOT/repair.err"; then
+      echo "openclaw update repair failed" >&2
+      openclaw_e2e_print_log "$ARTIFACT_ROOT/repair.err" >&2
+      openclaw_e2e_print_log "$REPAIR_JSON" >&2
+      return 1
+    fi
+    node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-repair-json "$REPAIR_JSON"
+    node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
+      assert-recovered-plugin-installs "$UPDATE_JSON" "$candidate_version" "$initial_update_observation_root" "$baseline_version"
+    assert_survival
+  fi
+  repair_update_restart_auth || return "$?"
   if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ]; then
     phase assert-prepublish-recovery-requests assert_prepublish_plugin_install
   fi
@@ -1195,8 +1614,12 @@ probe_gateway_endpoint() {
   local out_file="$3"
   local start_epoch
   local end_epoch
+  local gateway_http_url="http://127.0.0.1:18789"
+  if [ "${SCENARIO:-}" = "watchos-direct-node" ]; then
+    gateway_http_url="$WATCH_GATEWAY_HTTP_URL"
+  fi
   local args=(
-    --base-url "http://127.0.0.1:18789"
+    --base-url "$gateway_http_url"
     --path "$path"
     --expect "$expect_kind"
   )
@@ -1223,7 +1646,11 @@ start_gateway() {
   start_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
   env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD openclaw gateway --port "$port" --bind loopback --allow-unconfigured >"$GATEWAY_LOG" 2>&1 &
   gateway_pid="$!"
-  openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 360 "$port" || return "$?"
+  local readiness_mode="strict"
+  if [ "${SCENARIO:-}" = "watchos-direct-node" ]; then
+    readiness_mode="legacy-ready-log-ok"
+  fi
+  openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 360 "$port" "$readiness_mode" || return "$?"
   ready_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
   start_seconds=$(((ready_epoch - start_epoch + 999) / 1000))
   if [ "$start_seconds" -gt "$budget" ]; then
@@ -1247,12 +1674,20 @@ check_gateway_probes() {
 
 check_gateway_status() {
   local port=18789
+  local gateway_ws_url="ws://127.0.0.1:$port"
+  if [ "${SCENARIO:-}" = "watchos-direct-node" ]; then
+    gateway_ws_url="$WATCH_GATEWAY_WS_URL"
+  fi
   local budget
   budget="$(openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS 30)"
   local status_start
   local status_end
   status_start="$(node -e "process.stdout.write(String(Date.now()))")"
-  if ! openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw gateway status --url "ws://127.0.0.1:$port" --token "$GATEWAY_AUTH_TOKEN_REF" --require-rpc --timeout 30000 --json >"$STATUS_JSON" 2>"$STATUS_ERR"; then
+  local auth_args=(--token "$GATEWAY_AUTH_TOKEN_REF")
+  if [ "$SCENARIO" = "mobile-pairing-reconnect" ]; then
+    auth_args=(--password "$GATEWAY_AUTH_PASSWORD_REF")
+  fi
+  if ! openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw gateway status --url "$gateway_ws_url" "${auth_args[@]}" --require-rpc --timeout 30000 --json >"$STATUS_JSON" 2>"$STATUS_ERR"; then
     echo "gateway status failed" >&2
     openclaw_e2e_print_log "$STATUS_ERR" >&2
     openclaw_e2e_print_log "$GATEWAY_LOG" >&2
@@ -1309,17 +1744,26 @@ phase reset-run-state reset_run_state
 phase install-baseline install_baseline
 phase initialize-state initialize_state
 phase apply-baseline-config-recipe apply_baseline_config_recipe
+if [ "$SCENARIO" = "watchos-direct-node" ]; then
+  phase configure-watchos-tls configure_watchos_tls_fixture
+fi
 phase validate-baseline-config validate_baseline_config
 phase resolve-candidate resolve_candidate_version
-phase configure-clawhub-fixture configure_clawhub_fixture
+phase resolve-candidate-install-mode resolve_candidate_install_mode
+if companion_survivor_scenario; then
+  unset OPENCLAW_CLAWHUB_URL CLAWHUB_URL
+else
+  phase configure-clawhub-fixture configure_clawhub_fixture
+fi
 phase prepare-update-restart-probe prepare_update_restart_probe
+phase bootstrap-mobile-pairing bootstrap_mobile_pairing
 # Start the published baseline before adding migration specimens: its startup
 # guards correctly reject them, and baseline Doctor would consume candidate proof.
 phase seed-state seed_state
-phase install-baseline-plugin-dependencies install_baseline_plugin_dependencies
-phase seed-legacy-plugin-dependency-debris seed_legacy_plugin_dependency_debris
-phase assert-legacy-plugin-dependency-debris assert_legacy_plugin_dependency_debris_present
-phase seed-source-only-plugin-shadow seed_source_only_plugin_shadow
+run_plugin_fixture_phase install-baseline-plugin-dependencies install_baseline_plugin_dependencies
+run_plugin_fixture_phase seed-legacy-plugin-dependency-debris seed_legacy_plugin_dependency_debris
+run_plugin_fixture_phase assert-legacy-plugin-dependency-debris assert_legacy_plugin_dependency_debris_present
+run_plugin_fixture_phase seed-source-only-plugin-shadow seed_source_only_plugin_shadow
 if [ "$SCENARIO" = "sqlite-volume" ]; then
   phase seed-baseline-shared-state node scripts/e2e/lib/upgrade-survivor/sqlite-volume-shared-state.mjs \
     seed-baseline-plugin-state "$(package_root)"
@@ -1327,10 +1771,13 @@ if [ "$SCENARIO" = "sqlite-volume" ]; then
   phase validate-volume-baseline-config validate_baseline_config
 fi
 phase assert-baseline assert_baseline_state
+if [ "$SCENARIO" = "watchos-direct-node" ]; then
+  phase watchos-baseline-pair watchos_pair_baseline
+fi
 if [ "$SCENARIO" = "recovery-cleanup" ]; then
   phase seed-recovery-state node scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs seed
 fi
-phase seed-legacy-runtime-deps-symlink seed_legacy_runtime_deps_symlink
+run_plugin_fixture_phase seed-legacy-runtime-deps-symlink seed_legacy_runtime_deps_symlink
 if [ "$SCENARIO" = "recovery-cleanup" ]; then
   if [ "$CANDIDATE_KIND" != "tarball" ]; then
     echo "recovery-cleanup requires one packed candidate tarball" >&2
@@ -1338,26 +1785,42 @@ if [ "$SCENARIO" = "recovery-cleanup" ]; then
   fi
   phase recovery-package-evidence node scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs packages "$baseline_spec" "$CANDIDATE_SPEC"
 fi
-phase configure-plugin-registry configure_plugin_registry
-phase update-candidate update_candidate
-# A standalone Doctor pass would conceal missing migrations in the updater.
-phase assert-automatic-migration assert_survival
+run_plugin_fixture_phase configure-plugin-registry configure_plugin_registry
+phase update-candidate update_candidate_for_install_mode
+if [ "$candidate_install_mode" = "historical-package-replacement" ]; then
+  phase assert-historical-package-replacement-prestart \
+    assert_historical_package_replacement_prestart
+else
+  # A standalone Doctor pass would conceal missing migrations in the updater.
+  phase assert-automatic-migration assert_survival
+fi
+phase mobile-pairing-candidate-first verify_mobile_pairing_once \
+  candidate-first "$MOBILE_PAIRING_CANDIDATE_FIRST_EVIDENCE"
+if [ "$candidate_install_mode" = "historical-package-replacement" ]; then
+  phase assert-historical-package-replacement-startup-repair \
+    assert_historical_package_replacement_startup_repair
+fi
+phase mobile-pairing-candidate-restart verify_mobile_pairing_once \
+  candidate-restart "$MOBILE_PAIRING_CANDIDATE_RESTART_EVIDENCE"
 if [ "$SCENARIO" = "recovery-cleanup" ]; then
   phase assert-recovery-migration node scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs migrated
 fi
 if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ]; then
-  phase assert-prepublish-requests assert_prepublish_plugin_install 1
+  run_plugin_fixture_phase assert-prepublish-requests assert_prepublish_plugin_install 1
 fi
 phase root-managed-vps-cli-usable assert_root_managed_vps_cli_usable
-phase assert-legacy-plugin-dependency-debris-before-doctor assert_legacy_plugin_dependency_debris_before_doctor
+run_plugin_fixture_phase assert-legacy-plugin-dependency-debris-before-doctor assert_legacy_plugin_dependency_debris_before_doctor
 if [ "$SCENARIO" != "sqlite-volume" ] && [ "$SCENARIO" != "recovery-cleanup" ]; then
   phase doctor run_doctor
 fi
-phase assert-legacy-plugin-dependency-debris-cleaned assert_legacy_plugin_dependency_debris_cleaned
-phase assert-legacy-runtime-deps-symlink-repaired assert_legacy_runtime_deps_symlink_repaired
+run_plugin_fixture_phase assert-legacy-plugin-dependency-debris-cleaned assert_legacy_plugin_dependency_debris_cleaned
+run_plugin_fixture_phase assert-legacy-runtime-deps-symlink-repaired assert_legacy_runtime_deps_symlink_repaired
 phase validate-post-doctor-config validate_post_doctor_config
 phase assert-survival assert_survival
-phase fixture-plugin-consent repair_fixture_plugin_consent
+run_plugin_fixture_phase fixture-plugin-consent repair_fixture_plugin_consent
+if companion_survivor_scenario; then
+  repair_update_restart_auth
+fi
 if [ "$SCENARIO" = "recovery-cleanup" ]; then
   phase recovery-custom-restore node scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs custom-restore
 fi
@@ -1369,6 +1832,24 @@ fi
 phase gateway-start ensure_gateway_started
 phase gateway-probes check_gateway_probes
 phase gateway-status check_gateway_status
+if [ "$SCENARIO" = "watchos-direct-node" ]; then
+  phase watchos-candidate-reconnect watchos_reconnect_candidate
+  phase gateway-stop stop_gateway
+  phase gateway-restart start_gateway
+  phase gateway-restart-probes check_gateway_probes
+  phase gateway-restart-status check_gateway_status
+  phase watchos-restart-reconnect watchos_reconnect_restarted_candidate
+  phase assert-restarted-survival assert_survival
+fi
+if [ "$SCENARIO" = "mobile-pairing-reconnect" ]; then
+  phase mobile-pairing-final verify_mobile_pairing final "$MOBILE_PAIRING_FINAL_EVIDENCE"
+  phase mobile-pairing-credential-continuity \
+    node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-mobile-pairing-evidence \
+    "$MOBILE_PAIRING_BASELINE_EVIDENCE" \
+    "$MOBILE_PAIRING_CANDIDATE_FIRST_EVIDENCE" \
+    "$MOBILE_PAIRING_CANDIDATE_RESTART_EVIDENCE" \
+    "$MOBILE_PAIRING_FINAL_EVIDENCE"
+fi
 if [ "$SCENARIO" = "recovery-cleanup" ]; then
   phase recovery-live node scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs live
   phase gateway-stop stop_gateway

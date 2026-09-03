@@ -138,6 +138,7 @@ describe("board gateway runtime boundaries", () => {
     const gatewayContext = {
       broadcast,
       getGatewayMethodRegistry: () => methodRegistry,
+      getSessionEventSubscriberConnIds: () => new Set<string>(),
       getRuntimeConfig: () => ({
         agents: { list: [{ id: "main" }] },
         tools: { exec: { mode: "ask" } },

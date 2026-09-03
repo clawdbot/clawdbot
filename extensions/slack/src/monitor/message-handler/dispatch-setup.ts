@@ -173,11 +173,8 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
 
   const typingTarget = statusThreadTs ? `${message.channel}/${statusThreadTs}` : message.channel;
   const typingReaction = ctx.typingReaction;
-  // Slack clears the assistant thread status as soon as the app puts anything
-  // in the thread, then renders its own rotating "agent working" row for every
-  // later status write. Once this turn has visible output, the keepalive would
-  // paint that duplicate row under the streamed card, so it must go quiet.
-  // Installed by the dispatcher, which owns the delivered/preview facts.
+  // Session status is a state write, not a typing keepalive. Start it once
+  // before visible output; the dispatcher owns the delivered/preview gate.
   const threadStatusGate = { hasVisibleOutput: () => false };
   const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
     cfg,
@@ -187,12 +184,14 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     transformReplyPayload: sanitizeSlackMonitorReplyPayload,
     typing: {
       start: async () => {
-        if (!threadStatusGate.hasVisibleOutput()) {
+        if (!didSetStatus && !threadStatusGate.hasVisibleOutput()) {
           didSetStatus = true;
-          await ctx.setSlackThreadStatus({
+          await ctx.setSlackSessionStatus({
             channelId: message.channel,
             threadTs: statusThreadTs,
-            status: "is typing...",
+            status: "processing",
+            // Initialize new sessions with core's derived label; later title changes use rename.
+            title: prepared.sessionDisplayName ?? prepared.ctxPayload.ThreadLabel,
             eventScope: prepared.eventScope,
           });
         }
@@ -209,10 +208,10 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
       stop: async () => {
         if (didSetStatus) {
           didSetStatus = false;
-          await ctx.setSlackThreadStatus({
+          await ctx.setSlackSessionStatus({
             channelId: message.channel,
             threadTs: statusThreadTs,
-            status: "",
+            status: "active",
             eventScope: prepared.eventScope,
           });
         }

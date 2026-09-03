@@ -6,6 +6,7 @@ import {
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { isIncognitoSessionKey } from "../incognito-session.js";
 import type { CodexAppServerClient } from "./client.js";
+import { CODEX_SESSION_OVERRIDABLE_LAYER_TYPES } from "./config-layer-policy.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import {
   isMessageOnlyCodexSourceReply,
@@ -76,8 +77,8 @@ const CODEX_DELEGATION_DISABLED_THREAD_CONFIG: JsonObject = {
   "features.multi_agent_v2": false,
 };
 
-// Exact Codex 0.149 registry features that can expose a model-visible tool or
-// host capability. One list owns both the thread deny patch and requirement pin rejection.
+// Registry features can expose tools directly or re-enable their owning feature.
+// One list owns both the thread deny patch and requirement pin rejection.
 const CODEX_RING_ZERO_RESTRICTED_FEATURES = new Set([
   "apps",
   "artifact",
@@ -88,6 +89,7 @@ const CODEX_RING_ZERO_RESTRICTED_FEATURES = new Set([
   "code_mode",
   "code_mode_only",
   "computer_use",
+  "context_management",
   "current_time_reminder",
   "default_mode_request_user_input",
   "deferred_executor",
@@ -143,16 +145,6 @@ const CODEX_RING_ZERO_RESTRICTED_FEATURE_ALIASES = new Map<string, string>([
   ["memory_tool", "memories"],
   ["telepathy", "chronicle"],
   ["codex_hooks", "hooks"],
-]);
-
-const CODEX_RING_ZERO_OVERRIDABLE_LAYER_TYPES = new Set([
-  "packagedDefaults",
-  "mdm",
-  "system",
-  "enterpriseManaged",
-  "user",
-  "project",
-  "sessionFlags",
 ]);
 
 export type CodexThreadConfigurationContext = CodexThreadPromptContext &
@@ -546,11 +538,15 @@ export async function readCodexInheritedMcpServerNames(
       layer.name.type === "legacyManagedConfigTomlFromFile" ||
       layer.name.type === "legacyManagedConfigTomlFromMdm"
     ) {
+      const migrationGuidance =
+        layer.name.type === "legacyManagedConfigTomlFromFile"
+          ? 'migrate /etc/codex/managed_config.toml to /etc/codex/requirements.toml before running restricted or isolated turns. For ChatGPT-only authentication, use allowed_login_methods = ["chatgpt"] in /etc/codex/requirements.toml'
+          : 'replace the legacy MDM payload with base64-encoded TOML requirements in the com.openai.codex managed preference requirements_toml_base64 before running restricted or isolated turns. For ChatGPT-only authentication, include allowed_login_methods = ["chatgpt"] in that TOML payload';
       throw new Error(
-        `Codex restricted tool surface cannot override config layer ${layer.name.type}`,
+        `Codex restricted tool surface cannot override config layer ${layer.name.type}; ${migrationGuidance}.`,
       );
     }
-    if (!CODEX_RING_ZERO_OVERRIDABLE_LAYER_TYPES.has(layer.name.type)) {
+    if (!CODEX_SESSION_OVERRIDABLE_LAYER_TYPES.has(layer.name.type)) {
       throw new Error(
         `Codex restricted tool surface does not recognize config layer ${layer.name.type}`,
       );

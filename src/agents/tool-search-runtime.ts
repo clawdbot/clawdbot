@@ -506,11 +506,12 @@ export class ToolSearchRuntime {
     );
 
   namespaceEntries = () =>
-    resolveCatalog(this.ctx).entries.map((entry) =>
-      Object.assign(compactToolSearchCatalogEntry(entry), {
-        ...(entry.mcp ? { mcp: entry.mcp } : {}),
-        parameters: entry.parameters ?? {},
-      }),
+    // Snapshot host metadata without rendering hints or retaining the executable tool.
+    resolveCatalog(this.ctx).entries.map(
+      ({ tool: _tool, outputSchema: _outputSchema, ...entry }) => {
+        entry.parameters ??= {};
+        return entry;
+      },
     );
 
   describe = async (id: string, options?: CatalogVisibilityOptions & UnknownToolErrorOptions) => {

@@ -1194,7 +1194,9 @@ describe("Slack live QA runtime helpers", () => {
       observationScenarioId: "slack-progress-commentary-verbose-dedupe",
       observationScenarioTitle: "Slack commentary dedupe",
       sentTs: "1.000000",
-      settleMs: 10,
+      // The observer re-polls only while the settle window is open; keep it well above one
+      // poll's wall time so a loaded runner still reaches the second observation.
+      settleMs: 500,
       sutIdentity: { userId: "U999999999" },
       threadTs: "1.000000",
     });

@@ -228,6 +228,31 @@ const resolveProviderDeprecatedAuthProfileIdsMock = vi.hoisted(() =>
   ),
 );
 
+const resolveProviderSyntheticAuthMock = vi.hoisted(
+  () =>
+    (params: {
+      provider: string;
+      context: { providerConfig?: { api?: string; baseUrl?: string; models?: unknown[] } };
+    }) => {
+      if (params.provider !== "demo-local") {
+        return undefined;
+      }
+      const providerConfig = params.context.providerConfig;
+      const hasMeaningfulConfig =
+        Boolean(providerConfig?.api?.trim()) ||
+        Boolean(providerConfig?.baseUrl?.trim()) ||
+        (Array.isArray(providerConfig?.models) && providerConfig.models.length > 0);
+      if (!hasMeaningfulConfig) {
+        return undefined;
+      }
+      return {
+        apiKey: "demo-local",
+        source: `models.providers.${params.provider} (synthetic local key)`,
+        mode: "api-key" as const,
+      };
+    },
+);
+
 vi.mock("../plugins/provider-external-auth.js", () => ({
   resolveExternalAuthProfilesWithPlugins: () => [],
 }));
@@ -245,27 +270,11 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   formatProviderAuthProfileApiKeyWithPlugin: async () => undefined,
   refreshProviderOAuthCredentialWithPlugin: async () => null,
   resolveProviderDeprecatedAuthProfileIds: resolveProviderDeprecatedAuthProfileIdsMock,
-  resolveProviderSyntheticAuthWithPlugin: (params: {
-    provider: string;
-    context: { providerConfig?: { api?: string; baseUrl?: string; models?: unknown[] } };
-  }) => {
-    if (params.provider !== "demo-local") {
-      return undefined;
-    }
-    const providerConfig = params.context.providerConfig;
-    const hasMeaningfulConfig =
-      Boolean(providerConfig?.api?.trim()) ||
-      Boolean(providerConfig?.baseUrl?.trim()) ||
-      (Array.isArray(providerConfig?.models) && providerConfig.models.length > 0);
-    if (!hasMeaningfulConfig) {
-      return undefined;
-    }
-    return {
-      apiKey: "demo-local",
-      source: `models.providers.${params.provider} (synthetic local key)`,
-      mode: "api-key" as const,
-    };
-  },
+  prepareProviderExternalAuthWithPlugin: async () => undefined,
+  prepareProviderSyntheticAuthWithPlugin: async (
+    params: Parameters<typeof resolveProviderSyntheticAuthMock>[0],
+  ) => resolveProviderSyntheticAuthMock(params),
+  resolveProviderSyntheticAuthWithPlugin: resolveProviderSyntheticAuthMock,
   shouldDeferProviderSyntheticProfileAuthWithPlugin: (params: {
     provider: string;
     context: { resolvedApiKey?: string };

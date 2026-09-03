@@ -36,7 +36,7 @@ function collectPages(entry: unknown, pages: string[] = []): string[] {
 }
 
 describe("docs-sync-publish", () => {
-  it("executes the copied MDX checker runtime closure", () => {
+  it("executes the copied MDX checker and shared anchor runtime closures", () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docs-sync-runtime-"));
     const publishRoot = path.join(tempRoot, "publish");
     const clawhubRoot = path.join(tempRoot, "clawhub");
@@ -64,6 +64,46 @@ describe("docs-sync-publish", () => {
         [path.join(publishRoot, ".openclaw-sync", "check-docs-mdx.mjs"), minimalMdx],
         { cwd: publishRoot, stdio: "pipe" },
       );
+      const anchors = execFileSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          String.raw`
+        import assert from 'node:assert/strict';
+        import { parseDocsDocument } from './.openclaw-sync/lib/docs-markdown.mjs';
+        import { resolveRedirects } from './.openclaw-sync/lib/docs-redirects.mjs';
+        const redirect = (source, destination) => resolveRedirects({
+          redirects: [{ source, destination }], pages: [], localeCodes: ['en'], prefixes: [], publicPath: x => x,
+        });
+        const rejected = [...Array.from({ length: 33 }, (_, code) => String.fromCharCode(code)), '<', '>', '\\', '*'];
+        for (const character of rejected) {
+          assert.throws(() => redirect('/a' + character + 'b', 'https://example.com/valid'), /Unsafe redirect path/);
+          for (const prefix of ['/', 'https://example.com/']) {
+            assert.throws(() => redirect('/from', prefix + 'a' + character + 'b.png'), /Unsupported redirect destination/);
+          }
+        }
+        for (const route of ['/a:b', '/a%2Fb', '/a%5Cb', '/a/%2e%2e/b', '/a/%2E/b', '/bad%zz']) {
+          assert.throws(() => redirect(route, 'https://example.com/valid'), /Unsafe redirect path/);
+          assert.throws(() => redirect('/from', route + '.png'), /Unsafe redirect path/);
+        }
+        for (const [source, destination] of [
+          ['/日本語/🦞', '/目標.png'],
+          ['/encoded%20%00%3C%3E%2A%3A', '/encoded%20%00%3C%3E%2A%3A.png'],
+          ['/nonbreaking\u00a0space', '/nonbreaking\u00a0space.png'],
+          ['/del\u007fbyte', '/del\u007fbyte.png'],
+          ['/query', '/image.png?q=a:b#c:d'],
+          ['/external', 'https://example.com/a:b/%2F?q=é#章'],
+        ]) {
+          assert.deepEqual(redirect(source, destination), [{ source, destination }]);
+        }
+        console.log(JSON.stringify(parseDocsDocument('## agents.defaults.cwd').ids));
+        console.log(resolveRedirects({redirects: [], pages: [], localeCodes: ['en'], prefixes: [], publicPath: x => x}).length);
+      `,
+        ],
+        { cwd: publishRoot, encoding: "utf8" },
+      );
+      expect(anchors).toBe('["agents.defaults.cwd","agents-defaults-cwd"]\n0\n');
     } finally {
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }

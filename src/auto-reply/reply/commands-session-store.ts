@@ -42,7 +42,8 @@ export async function persistCommandSession(params: PersistSessionEntryParams): 
   const sessionEntry = params.sessionEntry;
   const creatingSession = params.allowCreateSessionEntry === true;
   const initialEntry = params.initialSessionEntry ?? { ...sessionEntry };
-  sessionEntry.updatedAt = Date.now();
+  // Keep command bookkeeping aligned with the pending-reset write boundary.
+  sessionEntry.updatedAt = !creatingSession && initialEntry.updatedAt === 0 ? 0 : Date.now();
   params.sessionStore[params.sessionKey] = sessionEntry;
   if (params.storePath) {
     // Slash commands mutate one known session entry; skipping global session
@@ -95,7 +96,8 @@ export async function persistAbortTargetEntry(params: {
 
   entry.abortedLastRun = true;
   applyAbortCutoffToSessionEntry(entry, abortCutoff);
-  entry.updatedAt = Date.now();
+  // Abort bookkeeping does not satisfy the pending reset.
+  entry.updatedAt = entry.updatedAt === 0 ? 0 : Date.now();
   sessionStore[key] = entry;
 
   if (storePath) {
@@ -104,7 +106,7 @@ export async function persistAbortTargetEntry(params: {
       (nextEntry) => {
         nextEntry.abortedLastRun = true;
         applyAbortCutoffToSessionEntry(nextEntry, abortCutoff);
-        nextEntry.updatedAt = Date.now();
+        nextEntry.updatedAt = nextEntry.updatedAt === 0 ? 0 : Date.now();
         return nextEntry;
       },
       {

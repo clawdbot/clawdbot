@@ -86,6 +86,18 @@ if ! openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm 
   exit 1
 fi
 package_version="$(node -p "JSON.parse(require(\"node:fs\").readFileSync(\"/tmp/npm-prefix/lib/node_modules/openclaw/package.json\", \"utf8\")).version")"
+# npm global tarball installs can retain the host platform package even with
+# --omit=optional. Relocate any such package so this lane deterministically
+# exercises the optional-free JavaScript fallback promised by that install mode.
+fs_safe_scope=/tmp/npm-prefix/lib/node_modules/openclaw/node_modules/@openclaw
+for platform_package in "$fs_safe_scope"/fs-safe-*; do
+  if [ -d "$platform_package" ]; then
+    mv "$platform_package" "$platform_package.omitted"
+  fi
+done
+node scripts/docker/verify-fs-safe-native.mjs \
+  --package-root /tmp/npm-prefix/lib/node_modules/openclaw \
+  --mode fallback
 OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT="$(
   node scripts/e2e/lib/package-compat.mjs "$package_version"
 )"

@@ -55,13 +55,11 @@ async function missing(file: string): Promise<boolean> {
 async function createPackageTarball(
   dir: string,
   buildInfo?: string | { commit: string },
+  version = "2026.8.1",
 ): Promise<string> {
   const root = path.join(dir, "package");
   await mkdir(path.join(root, "dist"), { recursive: true });
-  await writeFile(
-    path.join(root, "package.json"),
-    JSON.stringify({ name: "openclaw", version: "2026.8.1" }),
-  );
+  await writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw", version }));
   if (buildInfo !== undefined) {
     await writeFile(
       path.join(root, "dist", "build-info.json"),
@@ -369,6 +367,74 @@ describe("resolve-openclaw-package-candidate", () => {
       ),
     ).resolves.toBe(path.join(dir, "openclaw-current.tgz"));
     await expect(readFile(path.join(dir, "openclaw-current.tgz"), "utf8")).resolves.toBe("package");
+  });
+
+  it("keeps the first packed identity when a moving npm tag changes", async () => {
+    const dir = autoTempDirs.make("openclaw-package-moving-tag-");
+    const binDir = path.join(dir, "bin");
+    const outputDir = path.join(dir, "output");
+    const firstTarball = await createPackageTarball(path.join(dir, "first"), undefined, "2026.8.1");
+    const secondTarball = await createPackageTarball(
+      path.join(dir, "second"),
+      undefined,
+      "2026.9.1",
+    );
+    const countPath = path.join(dir, "pack-count");
+    await mkdir(binDir);
+    await writeFile(
+      path.join(binDir, "npm"),
+      `#!/bin/sh
+set -e
+count="$(cat "$FAKE_PACK_COUNT" 2>/dev/null || printf 0)"
+count=$((count + 1))
+printf '%s' "$count" > "$FAKE_PACK_COUNT"
+source="$FAKE_FIRST_TARBALL"
+version=2026.8.1
+if [ "$count" -gt 1 ]; then
+  source="$FAKE_SECOND_TARBALL"
+  version=2026.9.1
+fi
+cp "$source" "$FAKE_PACK_OUTPUT/openclaw-$version.tgz"
+printf '[{"filename":"openclaw-%s.tgz"}]\\n' "$version"
+`,
+    );
+    await chmod(path.join(binDir, "npm"), 0o755);
+    await mkdir(outputDir);
+    const runner = resolveNpmPackageCandidatePackRunner("openclaw@beta", outputDir, {
+      env: {
+        ...process.env,
+        FAKE_FIRST_TARBALL: firstTarball,
+        FAKE_PACK_COUNT: countPath,
+        FAKE_PACK_OUTPUT: outputDir,
+        FAKE_SECOND_TARBALL: secondTarball,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      },
+      execPath: path.join(binDir, "node"),
+      existsSync: () => false,
+      platform: process.platform,
+    });
+
+    const packOutput = await runCommandForTest(runner.command, runner.args, {
+      capture: true,
+      env: runner.env,
+    });
+    const candidate = await moveNewestPackedTarballForTest(
+      outputDir,
+      packOutput,
+      "openclaw-current.tgz",
+    );
+    const packageJson = await new Promise<string>((resolve, reject) => {
+      execFile("tar", ["-xOf", candidate, "package/package.json"], (error, stdout) => {
+        if (error) {
+          reject(toLintErrorObject(error, "Non-Error rejection"));
+          return;
+        }
+        resolve(stdout);
+      });
+    });
+
+    expect(JSON.parse(packageJson)).toMatchObject({ name: "openclaw", version: "2026.8.1" });
+    await expect(readFile(countPath, "utf8")).resolves.toBe("1");
   });
 
   it("reads npm 12 name-keyed package candidate filenames", async () => {

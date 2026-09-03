@@ -350,12 +350,13 @@ function createPreparedSlackMessage(params?: {
     sessionKey: string;
     lastRoutePolicy: "main" | "session";
   }>;
-  setSlackThreadStatus?: (params: {
+  setSlackSessionStatus?: (params: {
     channelId: string;
     threadTs?: string;
     status: string;
-    loadingMessages?: string[];
+    title?: string;
   }) => Promise<void>;
+  sessionDisplayName?: string;
   typingReaction?: string;
   ackReactionMessageTs?: string;
   ackReactionPromise?: Promise<boolean> | null;
@@ -394,7 +395,7 @@ function createPreparedSlackMessage(params?: {
       channelHistories: new Map(),
       allowFrom: [],
       dispatchReplyFromConfig: params?.dispatchReplyFromConfig,
-      setSlackThreadStatus: params?.setSlackThreadStatus ?? (async () => undefined),
+      setSlackSessionStatus: params?.setSlackSessionStatus ?? (async () => undefined),
     },
     account: {
       accountId: "default",
@@ -418,6 +419,7 @@ function createPreparedSlackMessage(params?: {
       MessageThreadId: THREAD_TS,
       ...params?.ctxPayload,
     },
+    sessionDisplayName: params?.sessionDisplayName,
     turn: {
       storePath: "/tmp/slack-sessions.json",
       record: {},
@@ -998,12 +1000,6 @@ vi.mock("../replies.js", async (importOriginal) => ({
   }),
   deliverReplies: deliverRepliesMock,
   readSlackReplyBlocks: () => mockedSlackReplyBlocks,
-  resolveDeliveredSlackReplyThreadTs: (params: {
-    replyToMode: "off" | "first" | "all" | "batched";
-    payloadReplyToId?: string;
-    replyThreadTs?: string;
-  }) =>
-    (params.replyToMode === "off" ? undefined : params.payloadReplyToId) ?? params.replyThreadTs,
   resolveSlackThreadTs: () => mockedReplyThreadTs,
 }));
 
@@ -1941,28 +1937,70 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(capturedReplyOptions?.disableBlockStreaming).toBe(true);
   });
 
-  it("stops refreshing Slack thread status once the turn has visible output", async () => {
-    const setSlackThreadStatus = vi.fn(async () => undefined);
+  it.each([
+    { sessionDisplayName: "Thread research", title: "Thread research" },
+    { sessionDisplayName: undefined, title: "Derived thread label" },
+  ])(
+    "sets processing with $title once before output and active at idle",
+    async ({ sessionDisplayName, title }) => {
+      const draftStream = createDraftStreamStub();
+      draftStream.messageId = () => undefined;
+      createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+      const setSlackSessionStatus = vi.fn(async () => undefined);
+      mockedReplyOptionEvents = [
+        {
+          kind: "checkpoint",
+          run: async () => {
+            const typing = requireCapturedTyping();
+            await typing.start();
+            await typing.start();
+            await typing.stop?.();
+          },
+        },
+      ];
+      await dispatchPreparedSlackMessage(
+        createPreparedSlackMessage({
+          setSlackSessionStatus,
+          sessionDisplayName,
+          ctxPayload: { ThreadLabel: "Derived thread label" },
+        }),
+      );
+      expect(setSlackSessionStatus.mock.calls).toEqual([
+        [
+          {
+            channelId: "C123",
+            threadTs: THREAD_TS,
+            status: "processing",
+            title,
+            eventScope: undefined,
+          },
+        ],
+        [{ channelId: "C123", threadTs: THREAD_TS, status: "active", eventScope: undefined }],
+      ]);
+    },
+  );
 
-    await dispatchPreparedSlackMessage(createPreparedSlackMessage({ setSlackThreadStatus }));
+  it("does not restart Slack session status once the turn has visible output", async () => {
+    const setSlackSessionStatus = vi.fn(async () => undefined);
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage({ setSlackSessionStatus }));
 
     const typing = requireCapturedTyping();
-    setSlackThreadStatus.mockClear();
-    // Slack already dropped the status when the reply landed; a keepalive tick
-    // here would paint its own rotating "agent working" row under that reply.
+    setSlackSessionStatus.mockClear();
+    // Status is turn-owned state; late typing callbacks cannot restart it.
     await typing.start();
 
-    expect(setSlackThreadStatus).not.toHaveBeenCalled();
+    expect(setSlackSessionStatus).not.toHaveBeenCalled();
   });
 
   it("keeps Slack typing callbacks when channel replies are message-tool-only", async () => {
-    const setSlackThreadStatus = vi.fn(async () => undefined);
+    const setSlackSessionStatus = vi.fn(async () => undefined);
 
     await dispatchPreparedSlackMessage(
       createPreparedSlackMessage({
         cfg: { messages: { groupChat: { visibleReplies: "message_tool" } } },
         ctxPayload: { ChatType: "channel" },
-        setSlackThreadStatus,
+        setSlackSessionStatus,
         typingReaction: "hourglass_flowing_sand",
       }),
     );
@@ -2155,7 +2193,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
 
     expect(draftUpdateTexts(draftStream)).toContain(
-      "Shelling\n\n• ran &lt;!here&gt; &lt;@U123&gt; \\*bold\\* \\`code\\` &amp; done",
+      "Shelling\n\n• ran &lt;!here&gt; &lt;@U123&gt; *bold* `code` &amp; done",
     );
   });
 
@@ -2731,6 +2769,21 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
         "Approval required: run checks; approval requested",
         "complete",
       ),
+    ]);
+    expectNativeStreamText(`\n${FINAL_REPLY_TEXT}`);
+  });
+
+  it("settles failed command attention as recovered after a successful final reply", async () => {
+    await dispatchNativeProgressScenario({
+      finalPayload: { text: FINAL_REPLY_TEXT },
+      events: [
+        { kind: "command_output", phase: "end", name: "Bash", title: "run checks", exitCode: 1 },
+      ],
+    });
+
+    expect(collectNativeTaskUpdates().filter((task) => task.id === "openclaw_attention")).toEqual([
+      taskUpdate("openclaw_attention", "Bash — exit 1", "error"),
+      taskUpdate("openclaw_attention", "Recovered: Bash — exit 1", "complete"),
     ]);
     expectNativeStreamText(`\n${FINAL_REPLY_TEXT}`);
   });
@@ -4315,10 +4368,26 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       }),
     );
 
-    expectLastDraftUpdateText(draftStream, "_I’m using the `monorepo` skill on Linux x86\\_64._");
+    expectLastDraftUpdateText(draftStream, "_I’m using the `monorepo` skill on Linux x86_64._");
   });
 
-  it("escapes Slack mentions and formatting in commentary without losing outer italics or inline code", async () => {
+  it("renders italic draft commentary with inline code and neutralized mentions", async () => {
+    const { normalizeSlackOutboundText } =
+      await vi.importActual<typeof import("../../format.js")>("../../format.js");
+    const { formatSlackProgressDraftLine } = await import("./dispatch-progress-card.js");
+    normalizeSlackOutboundTextMock.mockImplementation(normalizeSlackOutboundText);
+    try {
+      expect(
+        formatSlackProgressDraftLine("_Check *x* with `src/one.ts` for <@U123> & <!channel>_"),
+      ).toBe("_Check x with `src/one.ts` for &lt;@U123&gt; &amp; &lt;!channel&gt;_");
+    } finally {
+      normalizeSlackOutboundTextMock.mockImplementation((value: string) => value.trim());
+    }
+  });
+
+  it("escapes Slack mentions and renders commentary without losing outer italics or inline code", async () => {
+    const { normalizeSlackOutboundText } =
+      await vi.importActual<typeof import("../../format.js")>("../../format.js");
     const draftStream = createDraftStreamStub();
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
     mockedSlackStreamingMode = "progress";
@@ -4333,20 +4402,25 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       },
     ];
 
-    await dispatchPreparedSlackMessage(
-      createPreparedSlackMessage({
-        accountConfig: {
-          streaming: {
-            mode: "progress",
-            progress: { label: false, commentary: true, toolProgress: false },
-          },
-        },
-      }),
+    await normalizeSlackOutboundTextMock.withImplementation(
+      normalizeSlackOutboundText,
+      async () => {
+        await dispatchPreparedSlackMessage(
+          createPreparedSlackMessage({
+            accountConfig: {
+              streaming: {
+                mode: "progress",
+                progress: { label: false, commentary: true, toolProgress: false },
+              },
+            },
+          }),
+        );
+      },
     );
 
     expectLastDraftUpdateText(
       draftStream,
-      "_checking &lt;@U123&gt; in &lt;#C123&gt; and &lt;!channel&gt; with \\*urgent\\* \\_context\\_ `src/one.ts`_",
+      "_checking &lt;@U123&gt; in &lt;#C123&gt; and &lt;!channel&gt; with urgent context `src/one.ts`_",
     );
   });
 

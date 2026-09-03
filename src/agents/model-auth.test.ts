@@ -86,9 +86,16 @@ vi.mock("../plugins/provider-external-auth.js", () => ({
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => {
-  return {
+  const nativeAuth = {
+    apiKey: "native-cli-access-token",
+    source: "Native CLI auth",
+    mode: "oauth" as const,
+  };
+  const providerRuntime = {
     buildProviderMissingAuthMessageWithPlugin: () => undefined,
     resolveProviderDeprecatedAuthProfileIds: () => [],
+    prepareProviderExternalAuthWithPlugin: async (params: { provider: string }) =>
+      params.provider === "native-cli" ? nativeAuth : undefined,
     shouldDeferProviderSyntheticProfileAuthWithPlugin: (params: {
       context?: { resolvedApiKey?: string };
     }) => params.context?.resolvedApiKey === "synthetic-defer",
@@ -149,13 +156,6 @@ vi.mock("../plugins/provider-runtime.js", () => {
         }
         return undefined;
       }
-      if (params.provider === "native-cli") {
-        return {
-          apiKey: "native-cli-access-token",
-          source: "Native CLI auth",
-          mode: "oauth" as const,
-        };
-      }
       const effectiveApi = params.modelApi ?? params.context.providerConfig?.api;
       if (
         effectiveApi === "ollama" &&
@@ -170,6 +170,14 @@ vi.mock("../plugins/provider-runtime.js", () => {
       }
       return undefined;
     },
+  };
+  return {
+    ...providerRuntime,
+    prepareProviderSyntheticAuthWithPlugin: async (
+      params: Parameters<typeof providerRuntime.resolveProviderSyntheticAuthWithPlugin>[0],
+    ) =>
+      (await providerRuntime.prepareProviderExternalAuthWithPlugin(params)) ??
+      providerRuntime.resolveProviderSyntheticAuthWithPlugin(params),
   };
 });
 
@@ -1578,9 +1586,9 @@ describe("resolveApiKeyForProviderCore", () => {
     ).rejects.toThrow('No API key found for provider "plugin-web"');
   });
 
-  it("reuses plugin-owned native CLI auth", async () => {
-    const resolved = await resolveApiKeyForProviderCore({
-      provider: "native-cli",
+  it.each([
+    {
+      name: "with config",
       cfg: {
         agents: {
           defaults: {
@@ -1590,6 +1598,12 @@ describe("resolveApiKeyForProviderCore", () => {
           },
         },
       },
+    },
+    { name: "without config", cfg: undefined },
+  ])("returns prepared native CLI auth $name", async ({ cfg }) => {
+    const resolved = await resolveApiKeyForProviderCore({
+      provider: "native-cli",
+      ...(cfg ? { cfg } : {}),
       store: { version: 1, profiles: {} },
     });
 

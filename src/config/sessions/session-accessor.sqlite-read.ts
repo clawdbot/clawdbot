@@ -5,6 +5,7 @@ import {
   iterateSqliteQuerySync,
   prepareSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { extractAssistantPhaseText } from "../../shared/chat-message-content.js";
 import { isTranscriptOnlyOpenClawAssistantModel } from "../../shared/transcript-only-openclaw-assistant.js";
@@ -24,7 +25,6 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
 import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
-import { coerceSqliteNumber } from "./session-accessor.sqlite-normalize.js";
 import {
   getSessionKysely,
   resolveSqliteTranscriptReadScope,
@@ -178,7 +178,7 @@ export function loadTranscriptEventRowsAfterSeqSync(
   }
   return executeSqliteQuerySync(database.db, query.orderBy("seq", "asc")).rows.map((row) => ({
     event: JSON.parse(row.event_json) as TranscriptEvent,
-    seq: coerceSqliteNumber(row.seq),
+    seq: sqliteNumber(row.seq),
   }));
 }
 
@@ -201,7 +201,7 @@ export function readTranscriptEventAtSeqSync(
   return row
     ? {
         event: JSON.parse(row.event_json) as TranscriptEvent,
-        seq: coerceSqliteNumber(row.seq),
+        seq: sqliteNumber(row.seq),
       }
     : undefined;
 }
@@ -257,7 +257,7 @@ export function readTranscriptEventRows(
   ).rows;
   return rows.map((row) => ({
     eventJson: row.event_json,
-    seq: coerceSqliteNumber(row.seq),
+    seq: sqliteNumber(row.seq),
   }));
 }
 
@@ -276,9 +276,9 @@ export function readTranscriptStorageRows(
       .orderBy("seq", "asc"),
   ).rows;
   return rows.map((row) => ({
-    createdAt: coerceSqliteNumber(row.created_at),
+    createdAt: sqliteNumber(row.created_at),
     eventJson: row.event_json,
-    seq: coerceSqliteNumber(row.seq),
+    seq: sqliteNumber(row.seq),
   }));
 }
 
@@ -472,7 +472,7 @@ export async function findTranscriptEvent(
 }
 
 export function findTranscriptEventInDatabase(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,
   match: (event: TranscriptEvent) => boolean,
 ): { event: TranscriptEvent } | undefined {

@@ -92,7 +92,7 @@ vi.mock("../../plugins/provider-external-auth.js", () => ({
 vi.mock("../../plugins/provider-runtime.js", () => ({
   buildProviderMissingAuthMessageWithPlugin: () => undefined,
   resolveProviderDeprecatedAuthProfileIds: () => [],
-  resolveProviderSyntheticAuthWithPlugin: () => undefined,
+  prepareProviderSyntheticAuthWithPlugin: async () => undefined,
   shouldDeferProviderSyntheticProfileAuthWithPlugin: () => false,
 }));
 

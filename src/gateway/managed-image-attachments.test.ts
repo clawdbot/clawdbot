@@ -57,9 +57,9 @@ const resolveSessionHistoryTranscriptPathMock = vi.fn();
 const getRuntimeConfigMock = vi.fn(() => ({}));
 const probePlaybackMediaFileDescriptorMock = vi.fn(async () => ({ durationMs: 1000 }));
 const resolvePlaybackModeForSourceMock = vi.fn<PlaybackModeForSourceResolver>();
-const resolvePlaybackTranscodeMock = vi.fn(
-  async (): Promise<PlaybackTranscodeResolution> => ({ kind: "passthrough" }),
-);
+const resolvePlaybackTranscodeMock = vi.fn(async (): Promise<PlaybackTranscodeResolution> => ({
+  kind: "passthrough",
+}));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 beforeEach(() => {

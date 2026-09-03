@@ -864,106 +864,21 @@ verify_android_release_asset_contract() {
   echo "- Android APK asset contract: verified" >> "${GITHUB_STEP_SUMMARY}"
 }
 
-verify_windows_release_asset_contract() {
-  local actual_companion_assets actual_digest asset_name expected_companion_assets expected_digest expected_hash expected_installer_names manifest_dir manifest_json manifest_path release_json
-  # Add future promoted installer names, such as MSIX x64/ARM64, here.
-  local -a installer_assets=(
-    "OpenClawCompanion-Setup-x64.exe"
-    "OpenClawCompanion-Setup-arm64.exe"
-  )
-  local -a required_assets=(
-    "${installer_assets[@]}"
-    "OpenClawCompanion-SHA256SUMS.txt"
-  )
-
-  release_json="$(gh release view "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --json assets,url)" || return 1
-  expected_companion_assets="$(printf '%s\n' "${required_assets[@]}" | jq -R . | jq -sc 'sort')"
-  actual_companion_assets="$(printf '%s' "${release_json}" | jq -c '
-    [.assets[]? | select(.name | startswith("OpenClawCompanion-")) | .name] | sort
-  ')"
-  if [[ "${actual_companion_assets}" != "${expected_companion_assets}" ]]; then
-    echo "Stable release OpenClawCompanion asset names do not exactly match the current contract." >&2
-    return 1
-  fi
-  for asset_name in "${required_assets[@]}"; do
-    if ! printf '%s' "${release_json}" | jq -e --arg name "${asset_name}" 'any(.assets[]?; .name == $name)' >/dev/null; then
-      echo "Stable release is missing required Windows asset ${asset_name}." >&2
-      return 1
-    fi
-  done
-
-  manifest_dir="${RUNNER_TEMP}/openclaw-windows-release-contract"
-  manifest_path="${manifest_dir}/OpenClawCompanion-SHA256SUMS.txt"
-  rm -rf "${manifest_dir}"
-  mkdir -p "${manifest_dir}"
-  gh release download "${RELEASE_TAG}" \
-    --repo "$GITHUB_REPOSITORY" \
-    --pattern "OpenClawCompanion-SHA256SUMS.txt" \
-    --dir "${manifest_dir}" || return 1
-  if ! manifest_json="$(jq -Rsc '
-    split("\n") as $lines |
-    (if $lines[-1] == "" then $lines[0:-1] else $lines end) |
-    map(sub("\r$"; "")) |
-    if all(.[]; test("^(?<hash>[a-f0-9]{64})  (?<name>[^/\\\\]+)$"))
-    then map(capture("^(?<hash>[a-f0-9]{64})  (?<name>[^/\\\\]+)$"))
-    else error("malformed Windows checksum manifest entry")
-    end
-  ' "${manifest_path}")"; then
-    echo "Stable release Windows checksum manifest contains malformed entries." >&2
-    return 1
-  fi
-  expected_installer_names="$(printf '%s\n' "${installer_assets[@]}" | jq -R . | jq -sc 'sort')"
-  if ! printf '%s' "${manifest_json}" | jq -e --argjson expected "${expected_installer_names}" '
-    length == ($expected | length) and
-    ([.[].name] | sort) == $expected and
-    ([.[].name] | unique | length) == length
-  ' >/dev/null; then
-    echo "Stable release Windows checksum manifest does not exactly match the installer asset contract." >&2
-    return 1
-  fi
-  for asset_name in "${installer_assets[@]}"; do
-    expected_digest="$(printf '%s' "${WINDOWS_NODE_INSTALLER_DIGESTS}" | jq -r --arg name "${asset_name}" '.[$name] // empty')"
-    actual_digest="$(printf '%s' "${release_json}" | jq -r --arg name "${asset_name}" '.assets[]? | select(.name == $name) | .digest // empty')"
-    if [[ -z "${expected_digest}" || "${actual_digest}" != "${expected_digest}" ]]; then
-      echo "Stable release Windows asset ${asset_name} does not match its pinned digest." >&2
-      return 1
-    fi
-    expected_hash="${expected_digest#sha256:}"
-    if ! printf '%s' "${manifest_json}" | jq -e --arg name "${asset_name}" --arg hash "${expected_hash}" '
-      any(.[]; .name == $name and .hash == $hash)
-    ' >/dev/null; then
-      echo "Stable release Windows checksum manifest does not match pinned digest for ${asset_name}." >&2
-      return 1
-    fi
-  done
-  echo "- Windows Hub asset contract: verified" >> "$GITHUB_STEP_SUMMARY"
-}
-
 promote_windows_release_assets() {
-  if ! is_stable_release; then
+  if ! is_stable_release || [[ -z "${WINDOWS_NODE_TAG}" && -z "${WINDOWS_NODE_INSTALLER_DIGESTS}" ]]; then
     return 0
   fi
-  if [[ -z "${WINDOWS_NODE_INSTALLER_DIGESTS// }" ]]; then
-    echo "Stable release is missing prevalidated Windows installer digests." >&2
+  if [[ -z "${WINDOWS_NODE_TAG}" || -z "${WINDOWS_NODE_INSTALLER_DIGESTS}" ]]; then
+    echo "Windows promotion requires both an exact source tag and approved installer digests." >&2
     return 1
   fi
-  # Retry-safe: the asset contract is the done-condition, so a prior
-  # publish run's verified promotion is reused instead of re-running
-  # the Windows child workflow.
-  if verify_windows_release_asset_contract >/dev/null 2>&1; then
-    echo "- Windows Hub promotion: assets already promoted and verified; skipping dispatch" >> "$GITHUB_STEP_SUMMARY"
-    return 0
-  fi
-
   windows_node_run_id="$(dispatch_workflow windows-node-release.yml \
     -f tag="${RELEASE_TAG}" \
     -f windows_node_tag="${WINDOWS_NODE_TAG}" \
-    -f expected_installer_digests="${WINDOWS_NODE_INSTALLER_DIGESTS}")"
-  # Promotion runs in a background subshell; hand the run id to the
-  # parent shell for the release proof links.
-  printf '%s' "${windows_node_run_id}" > "${RUNNER_TEMP}/windows-node-run-id.txt"
-  echo "- Windows Node release run ID: \`${windows_node_run_id}\`" >> "$GITHUB_STEP_SUMMARY"
-  wait_for_run windows-node-release.yml "${windows_node_run_id}" "${PARENT_WORKFLOW_SHA}"
+    -f expected_installer_digests="${WINDOWS_NODE_INSTALLER_DIGESTS}")" || return 1
+  # Native promotion owns its terminal evidence; do not join it back into
+  # the npm/Docker publisher after the GitHub release has been finalized.
+  echo "- Windows Hub: detached; completion and failure evidence at https://github.com/${GITHUB_REPOSITORY}/actions/runs/${windows_node_run_id}" >> "$GITHUB_STEP_SUMMARY"
 }
 
 promote_android_release_asset() {
@@ -1238,7 +1153,7 @@ verify_published_release() {
 }
 
 append_release_proof_to_github_release() {
-  local release_version proof_file notes_file metadata_file evidence_path tarball integrity telegram_line clawhub_line clawhub_bootstrap_line clawhub_runtime_state_path android_line windows_line
+  local release_version proof_file notes_file metadata_file evidence_path tarball integrity telegram_line clawhub_line clawhub_bootstrap_line clawhub_runtime_state_path android_line
 
   release_version="${RELEASE_TAG#v}"
   proof_file="${RUNNER_TEMP}/release-verification.md"
@@ -1248,8 +1163,8 @@ append_release_proof_to_github_release() {
   tarball="$(jq -er '.openclawNpmTarball | select(type == "string" and length > 0)' "${evidence_path}")"
   integrity="$(jq -er '.openclawNpmIntegrity | select(type == "string" and length > 0)' "${evidence_path}")"
 
-  if [[ "$(jq -r '.telegramWaiver // ""' "${evidence_path}")" == "2026.8.1-owner-approved" ]]; then
-    telegram_line="- Telegram integration checks: waived by the release owner for 2026.8.1 (source QA, Package Acceptance, published-package E2E); not run."
+  if [[ "$(jq -r '.telegramWaiver // ""' "${evidence_path}")" == "${release_version}-owner-approved" ]]; then
+    telegram_line="- Telegram integration checks: waived by the release owner for ${release_version} (source QA, Package Acceptance, published-package E2E); not run."
   elif [[ -n "${NPM_TELEGRAM_RUN_ID// }" ]]; then
     telegram_line="- npm Telegram beta E2E: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${NPM_TELEGRAM_RUN_ID}"
   else
@@ -1259,10 +1174,6 @@ append_release_proof_to_github_release() {
   write_clawhub_runtime_state "${clawhub_runtime_state_path}"
   clawhub_line="$(jq -r '.proofLines.normal' "${clawhub_runtime_state_path}")"
   clawhub_bootstrap_line="$(jq -r '.proofLines.bootstrap' "${clawhub_runtime_state_path}")"
-  windows_line=""
-  if [[ -n "${windows_node_run_id// }" ]]; then
-    windows_line="- Windows Hub promotion: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${windows_node_run_id} from openclaw/openclaw-windows-node@${WINDOWS_NODE_TAG}"
-  fi
   android_line="${android_release_note}"
   proof_label="full release validation"
   proof_run_id="${FULL_RELEASE_VALIDATION_RUN_ID}"
@@ -1288,7 +1199,6 @@ append_release_proof_to_github_release() {
     CLAWHUB_BOOTSTRAP_LINE="${clawhub_bootstrap_line}" \
     TELEGRAM_LINE="${telegram_line}" \
     ANDROID_LINE="${android_line}" \
-    WINDOWS_LINE="${windows_line}" \
     node --input-type=module <<'NODE'
 import { writeFileSync } from "node:fs";
 
@@ -1320,7 +1230,6 @@ const section = [
     : []),
   process.env.TELEGRAM_LINE,
   ...(process.env.ANDROID_LINE ? [process.env.ANDROID_LINE] : []),
-  ...(process.env.WINDOWS_LINE ? [process.env.WINDOWS_LINE] : []),
 ].join("\n");
 
 writeFileSync(proofFile, section);

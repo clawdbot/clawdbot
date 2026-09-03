@@ -204,11 +204,13 @@ export async function finalizeNodeAdoptedSession(params: {
           throw changedError();
         }
         if (current.initializing !== true) {
-          return { archivedAt: undefined };
+          return { archivedAt: undefined, archivedBy: undefined, archiveReason: undefined };
         }
         const codex = isRecord(entry.pluginExtensions?.codex) ? entry.pluginExtensions.codex : {};
         return {
           archivedAt: undefined,
+          archivedBy: undefined,
+          archiveReason: undefined,
           pluginExtensions: {
             ...entry.pluginExtensions,
             codex: { ...codex, sessionCatalog: params.marker },

@@ -16,8 +16,9 @@ export async function clearCodexBindingAfterInvalidImagePayload(
   bindingStore: CodexAppServerBindingStore,
   identity: CodexAppServerBindingIdentity,
   fields: { phase: string; threadId?: string; turnId?: string; error?: string },
+  expected?: EmbeddedRunAttemptParams["expectedSessionRuntimeOwnership"],
 ): Promise<void> {
-  const currentBinding = await bindingStore.read(identity);
+  const currentBinding = bindingStore.read(identity);
   const expectedThreadId = fields.threadId ?? currentBinding?.threadId;
   if (!expectedThreadId) {
     return;
@@ -29,9 +30,9 @@ export async function clearCodexBindingAfterInvalidImagePayload(
     );
     return;
   }
-  if (currentBinding?.connectionScope === "supervision") {
+  if (expected || currentBinding?.connectionScope === "supervision") {
     embeddedAgentLog.warn(
-      "codex app-server image payload error detected for supervised thread; preserving native binding",
+      "codex app-server image payload error detected for native-owned thread; preserving binding",
       fields,
     );
     return;

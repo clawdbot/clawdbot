@@ -341,6 +341,38 @@ describe("printCronList", () => {
     expectLogsToInclude(logs, "malformed-job");
   });
 
+  it.each([
+    {
+      schedule: { kind: "every", everyMs: 90_001 },
+      expected: "every 1m 30s 1ms",
+    },
+    {
+      schedule: { kind: "cron", expr: "* * * * *", staggerMs: 1_001 },
+      expected: "cron * * * * * (stagger 1s 1ms)",
+    },
+  ] as const)(
+    "preserves configured duration precision in list and show: $expected",
+    ({ schedule, expected }) => {
+      const job = createBaseJob({ schedule, state: {} });
+      const list = createRuntimeLogCapture();
+      printCronList([job], list.runtime);
+      expectLogsToInclude(list.logs, expected);
+
+      const show = createRuntimeLogCapture();
+      printCronShow(job, show.runtime);
+      expectLogsToInclude(show.logs, `schedule: ${expected}`);
+    },
+  );
+
+  it("preserves configured duration precision near the timestamp limit", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    printCronShow(
+      createBaseJob({ schedule: { kind: "every", everyMs: 8_639_999_999_999_999 }, state: {} }),
+      runtime,
+    );
+    expectLogsToInclude(logs, "schedule: every 99999999d 23h 59m 59s 999ms");
+  });
+
   it("shows stagger label for cron schedules", () => {
     const { logs, runtime } = createRuntimeLogCapture();
     const job = createBaseJob({
@@ -947,8 +979,8 @@ describe("parsePositiveCronDurationMs", () => {
   it("rejects durations that overflow to a non-finite millisecond value (#83906)", () => {
     // A finite mantissa can still overflow once multiplied by a large unit factor.
     expect(parsePositiveCronDurationMs(`1${"0".repeat(302)}d`)).toBeNull();
-    // A large-but-finite result is still accepted.
-    expect(parsePositiveCronDurationMs(`9${"0".repeat(15)}ms`)).toBe(9_000_000_000_000_000);
+    expect(parsePositiveCronDurationMs("8640000000000000ms")).toBe(8_640_000_000_000_000);
+    expect(parsePositiveCronDurationMs("8640000000000001ms")).toBeNull();
   });
 });
 

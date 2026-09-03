@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import type { WorkerProvider } from "../../plugins/types.js";
+import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
 import { requireProviderOperationTimeoutMs } from "./service-validation.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
@@ -55,12 +56,14 @@ export function createWorkerProviderOwnerLifecycle(
     // Fence admission without erasing the attachment needed to stop a retained node worker.
     // A crash or failed stop leaves the exact scope available for teardown replay.
     store.revokeEnvironmentCredential(record.environmentId);
-    // Only a dedicated node lease makes provider teardown proof of worker termination.
-    // Shared or unknown host isolation still requires the exact worker's stop acknowledgement.
+    // Shared hosts require an exact stop acknowledgement unless the operator explicitly
+    // abandons a paired device; only dedicated leases have provider-owned physical teardown.
+    const abandon =
+      reason === "operator-abandon" && record.providerId === DEVICE_WORKER_PROVIDER_ID;
     await tunnels?.stop(
       record.environmentId,
       record.ownerEpoch,
-      record.nodeDeviceId !== null && record.sharedHost === false ? reason : undefined,
+      abandon || (record.nodeDeviceId !== null && record.sharedHost === false) ? reason : undefined,
     );
     return requireCurrentOwner(record);
   };

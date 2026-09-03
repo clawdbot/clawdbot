@@ -25,11 +25,17 @@ import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-trans
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import { hashCliImageTurnEntryId } from "../cli-image-turn-correlation.js";
-import { findCliMaxTurnsError } from "../failover-error.js";
+import { findCliTerminalStopError } from "../failover-error.js";
 import { getCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
-import { executePreparedCliRun } from "./execute.js";
-import { createManagedRun, supervisorSpawnMock } from "./execute.test-support.js";
+import { executePreparedCliRun as executePreparedCliRunImpl } from "./execute.js";
+import {
+  createManagedRun,
+  supervisorSpawnMock,
+  wrapPreparedCliRunWithTestAdmission,
+} from "./execute.test-support.js";
 import type { PreparedCliRunContext } from "./types.js";
+
+const executePreparedCliRun = wrapPreparedCliRunWithTestAdmission(executePreparedCliRunImpl);
 
 // Gateway unit coverage owns quiet-admission timing. These integration cases only
 // need to drain calls already in flight, so skip the repeated 250 ms quiet window.
@@ -642,6 +648,57 @@ describe("executePreparedCliRun supervisor output capture", () => {
     });
   });
 
+  it("surfaces a Claude hook-stopped terminal result through the output error path", async () => {
+    const stdout = `${JSON.stringify({
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      session_id: "claude-hook-stopped",
+      stop_reason: "tool_use",
+      terminal_reason: "hook_stopped",
+      result: "",
+      num_turns: 4,
+      permission_denials: [],
+    })}\n`;
+
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      input.onStdout?.(stdout);
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: input.captureOutput === false ? "" : stdout,
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    await expect(
+      executePreparedCliRun(
+        buildPreparedCliRunContext({
+          output: "jsonl",
+          provider: "claude-cli",
+          runId: "run-hook-stopped",
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "FailoverError",
+      message:
+        "Claude CLI ended the turn without a reply (terminal_reason: hook_stopped, stop_reason: tool_use). " +
+        "OpenClaw run: run-hook-stopped. OpenClaw session: session-1. " +
+        "Claude session: claude-hook-stopped. Tool actions may already have run; verify their effects before retrying. " +
+        "A Claude Code hook stopped this turn; user-scope hooks (including plugin hooks) " +
+        "apply to headless runs — move or disable that hook.",
+      reason: "unknown",
+      code: "cli_turn_stopped",
+      rawError:
+        "Claude CLI ended the turn without a reply (terminal_reason: hook_stopped, stop_reason: tool_use).",
+    });
+  });
+
   it("surfaces Claude max-turn results with run and session recovery context", async () => {
     const stdout = `${JSON.stringify({
       type: "result",
@@ -817,7 +874,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
       expect.objectContaining({ code: "cli_max_turns" }),
       persistenceError,
     ]);
-    expect(findCliMaxTurnsError(failure)).toMatchObject({ code: "cli_max_turns" });
+    expect(findCliTerminalStopError(failure)).toMatchObject({ code: "cli_max_turns" });
     expect(persistCliSessionForkSuccessor).toHaveBeenCalledWith("fork-successor");
     expect(restoreCliSessionFork).toHaveBeenCalledTimes(1);
   });

@@ -2728,9 +2728,14 @@ struct OnboardingAISetupTests {
     @Test func `failed pending verification keeps activation lease before deadline`() async throws {
         let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingPendingVerificationFailureTests"))
         markPending(defaults)
+        let retryGate = AISetupRequestGate()
         let url = try #require(URL(string: "ws://example.invalid"))
-        let harness = AISetupHarness(url: url) { _, request, _ in
-            request.method == "openclaw.setup.verify" ? rejectedSetupVerificationResponse(id: request.id) : nil
+        let harness = AISetupHarness(url: url) { _, request, recorder in
+            guard request.method == "openclaw.setup.verify" else { return nil }
+            if await recorder.snapshot().methods.count == 2 {
+                await retryGate.wait()
+            }
+            return rejectedSetupVerificationResponse(id: request.id)
         }
         let model = harness.model(defaults: defaults)
 
@@ -2752,7 +2757,9 @@ struct OnboardingAISetupTests {
         #expect(model.detectError == nil)
         #expect(OnboardingController.shared.busyReason == "OpenClaw is testing your AI connection.")
 
-        await settleQueuedAISetupTasks()
+        await retryGate.waitUntilStarted()
+        await retryGate.release()
+        await waitForAISetupState { model.phase != .detecting }
 
         #expect(model.phase == .ready)
         #expect(model.detectError?.detail == "expired login")
@@ -2763,9 +2770,11 @@ struct OnboardingAISetupTests {
     @Test func `completed activation receipt survives verification transport failure`() async throws {
         let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingCompletedVerificationRetryTests"))
         let recorder = AISetupRequestRecorder()
+        let retryGate = AISetupRequestGate()
         let session = makeAISetupRequestSession(recorder: recorder) { task, request in
             guard request.method == "openclaw.setup.verify" else { return }
             let verifyCount = await recorder.snapshot().methods.count
+            if verifyCount == 2 { await retryGate.wait() }
             let response = verifyCount == 1
                 ? unavailableGatewayResponse(id: request.id)
                 : verifiedSetupResponse(id: request.id)
@@ -2797,8 +2806,10 @@ struct OnboardingAISetupTests {
         #expect(model.detectError == nil)
         #expect(OnboardingController.shared.busyReason == "OpenClaw is testing your AI connection.")
 
-        let requests = await waitForAISetupRequests(recorder, count: 2)
-        await settleQueuedAISetupTasks()
+        await retryGate.waitUntilStarted()
+        await retryGate.release()
+        await waitForAISetupState { model.phase != .detecting }
+        let requests = await recorder.snapshot()
 
         #expect(model.connected)
         #expect(OnboardingController.shared.busyReason == nil)

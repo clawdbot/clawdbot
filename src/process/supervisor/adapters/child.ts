@@ -82,6 +82,7 @@ function isServiceManagedRuntime(): boolean {
 }
 
 type ChildAdapterInput = {
+  assertCurrent?: () => void;
   /** Own a separately signalable tree whose private IPC channel gates worker startup. */
   ownedWorker?: true;
   /** Preserve the supplied environment exactly by skipping environment-mutating spawn wrappers. */
@@ -94,6 +95,7 @@ type ChildAdapterInput = {
   input?: string;
   stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
   secretInput?: SpawnSecretInput;
+  abortSignal?: AbortSignal;
 } & (
   | { argv: string[]; anchoredShellCommand?: never }
   | { argv?: never; anchoredShellCommand: string }
@@ -102,6 +104,7 @@ type ChildAdapterInput = {
 export async function createChildAdapter(params: ChildAdapterInput): Promise<WorkerChildAdapter> {
   if (params.anchoredShellCommand !== undefined) {
     return await createServiceChildRelayAdapter({
+      assertCurrent: params.assertCurrent,
       command: process.platform === "win32" ? params.anchoredShellCommand : "/bin/sh",
       args: process.platform === "win32" ? [] : ["-c", params.anchoredShellCommand],
       windowsShellCommand: process.platform === "win32" ? params.anchoredShellCommand : undefined,
@@ -109,6 +112,7 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
       env: params.env,
       stdinMode: "pipe-closed",
       oomScoreWrapperSelected: false,
+      abortSignal: params.abortSignal,
     });
   }
 
@@ -131,6 +135,7 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
     isServiceManagedRuntime()
   ) {
     return await createServiceChildRelayAdapter({
+      assertCurrent: params.assertCurrent,
       command: preparedSpawn.command,
       args: preparedSpawn.args,
       argv0: preparedSpawn.argv0,
@@ -140,6 +145,7 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
       input: params.input,
       secretInput: params.secretInput,
       oomScoreWrapperSelected: preparedSpawn.wrapped,
+      abortSignal: params.abortSignal,
     });
   }
 
@@ -166,6 +172,7 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
   };
 
   const spawned = await spawnWithFallback({
+    assertCurrent: params.assertCurrent,
     argv: [preparedSpawn.command, ...preparedSpawn.args],
     options,
     fallbacks:
@@ -180,9 +187,15 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
   });
 
   const child = spawned.child as ChildProcessWithoutNullStreams;
-  if (params.ownedWorker !== undefined && (!child.connected || !child.channel)) {
+  try {
+    // Startup acknowledgement may outlive the caller; withhold all private input if it did.
+    params.assertCurrent?.();
+    if (params.ownedWorker !== undefined && (!child.connected || !child.channel)) {
+      throw new Error("worker lifecycle IPC channel was not created");
+    }
+  } catch (error) {
     spawned.child.kill("SIGKILL");
-    throw new Error("worker lifecycle IPC channel was not created");
+    throw error;
   }
   if (params.onWorkerMessage) {
     child.on("message", (message) => {
@@ -390,7 +403,8 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
 
   if (params.secretInput) {
     try {
-      await secretDelivery?.deliverTo(spawned.child);
+      params.assertCurrent?.();
+      await secretDelivery?.deliverTo(spawned.child, { abortSignal: params.abortSignal });
     } catch (error) {
       spawned.child.kill("SIGKILL");
       throw error;

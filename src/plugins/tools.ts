@@ -667,13 +667,15 @@ function createCachedDescriptorPluginTool(params: {
   loadContext: ReturnType<typeof resolvePluginRuntimeLoadContext>;
   runtimeOptions: PluginLoadOptions["runtimeOptions"];
 }): AnyAgentTool {
-  const { descriptor } = params.descriptor;
+  const { descriptor, displaySummary, hideFromChannelProgress } = params.descriptor;
   const pluginId = descriptor.owner.kind === "plugin" ? descriptor.owner.pluginId : "";
   const toolName = descriptor.name;
   const tool: AnyAgentTool = {
     name: descriptor.name,
     label: descriptor.title ?? descriptor.name,
     description: descriptor.description,
+    ...(displaySummary ? { displaySummary } : {}),
+    ...(hideFromChannelProgress === true ? { hideFromChannelProgress } : {}),
     parameters: descriptor.inputSchema as never,
     ...(descriptor.outputSchema ? { outputSchema: descriptor.outputSchema as never } : {}),
     ...(params.descriptor.requiredClientCaps
@@ -758,9 +760,6 @@ function createCachedDescriptorPluginTool(params: {
       throw new Error(`plugin tool runtime missing (${pluginId}): ${toolName}`);
     },
   };
-  if (params.descriptor.displaySummary) {
-    tool.displaySummary = params.descriptor.displaySummary;
-  }
   setPluginToolMeta(tool, {
     pluginId,
     ...(params.plugin.kind ? { kind: params.plugin.kind } : {}),

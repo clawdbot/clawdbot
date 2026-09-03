@@ -29,6 +29,7 @@ import {
 } from "./run-attempt-state.js";
 import type { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
+import { assertCodexBindingMayBeReplaced } from "./session-binding.js";
 import { buildCodexUserPromptMessage } from "./transcript-mirror.js";
 import {
   createCodexUsageLimitPromptError,
@@ -109,11 +110,16 @@ export async function startCodexAttemptTurn(
       }) &&
       resourceState.restartContextEngineCodexThread
     ) {
-      embeddedAgentLog.warn(
-        "codex app-server context-engine turn overflowed on resume; retrying with fresh thread",
-        { threadId: resourceState.thread.threadId, error: formatErrorMessage(turnStartError) },
-      );
       try {
+        assertCodexBindingMayBeReplaced(
+          resourceState.thread,
+          "retrying an overflow on a fresh native thread",
+          params.expectedSessionRuntimeOwnership,
+        );
+        embeddedAgentLog.warn(
+          "codex app-server context-engine turn overflowed on resume; retrying with fresh thread",
+          { threadId: resourceState.thread.threadId, error: formatErrorMessage(turnStartError) },
+        );
         const clearedBinding = await bindingStore.mutate(bindingIdentity, {
           kind: "clear",
           threadId: resourceState.thread.threadId,
@@ -125,7 +131,7 @@ export async function startCodexAttemptTurn(
           );
         } else {
           resourceState.thread = await resourceState.restartContextEngineCodexThread();
-          const retryBinding = await bindingStore.read(bindingIdentity);
+          const retryBinding = bindingStore.read(bindingIdentity);
           if (
             retryBinding &&
             retryBinding.threadId === resourceState.thread.threadId &&
@@ -171,11 +177,12 @@ export async function startCodexAttemptTurn(
       });
       const message = usageLimitError?.message ?? formatErrorMessage(turnStartError);
       if (isInvalidCodexImagePayloadError(message)) {
-        await clearCodexBindingAfterInvalidImagePayload(bindingStore, bindingIdentity, {
-          phase: "turn_start",
-          threadId: resourceState.thread.threadId,
-          error: message,
-        });
+        await clearCodexBindingAfterInvalidImagePayload(
+          bindingStore,
+          bindingIdentity,
+          { phase: "turn_start", threadId: resourceState.thread.threadId, error: message },
+          params.expectedSessionRuntimeOwnership,
+        );
       }
       void emitCodexAppServerEvent(params, {
         stream: "codex_app_server.lifecycle",

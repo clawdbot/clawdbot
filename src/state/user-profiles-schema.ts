@@ -72,6 +72,19 @@ export class UserProfileNotFoundError extends Error {
   }
 }
 
+export class UserProfileOwnerError extends Error {
+  constructor(readonly code: "merge" | "role" | "repair-required") {
+    super(
+      code === "repair-required"
+        ? "the shared owner profile requires repair; run openclaw doctor --fix and reconnect"
+        : code === "merge"
+          ? "the shared owner profile cannot be merged; sign in with a personal identity instead"
+          : "the shared owner profile is not governed by operator roles",
+    );
+    this.name = "UserProfileOwnerError";
+  }
+}
+
 const ensuredDatabases = new WeakSet<DatabaseSync>();
 const roleEnsuredDatabases = new WeakSet<DatabaseSync>();
 

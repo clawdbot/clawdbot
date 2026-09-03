@@ -16,6 +16,8 @@ import {
   SessionWorktreeLifecycleError,
   synchronizeSessionWorktreeArchive,
 } from "../../sessions/session-worktree-lifecycle.js";
+import type { UserModelAccountSelection } from "../model-account-authority.js";
+import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
@@ -117,6 +119,7 @@ export async function prepareSessionPatchArchive(params: {
   cfg: OpenClawConfig;
   context: GatewayRequestContext;
   loadGatewayModelCatalog: () => Promise<ModelCatalogEntry[]>;
+  personalModelSelection?: UserModelAccountSelection;
   pluginOwnerId?: string;
   target: SessionPatchArchiveTarget;
 }): Promise<Result<SessionPatchArchivePreparation, ErrorShape>> {
@@ -196,6 +199,7 @@ export async function prepareSessionPatchArchive(params: {
   }
   const { freshResolved, fresh, freshCanonicalKey } = resolved.value;
   const assertCurrent = () => {
+    params.personalModelSelection?.assertCurrent();
     const authorizationError = params.commitGuard();
     if (authorizationError) {
       throw new SessionMutationAuthorizationChangedError(authorizationError);
@@ -218,6 +222,7 @@ export async function prepareSessionPatchArchive(params: {
     patch: target.fullPatch,
     archivedBy: target.archiveActor,
     loadGatewayModelCatalog: params.loadGatewayModelCatalog,
+    personalModelSelection: params.personalModelSelection,
   });
   if (!preview.ok) {
     return err(preview.error);
@@ -264,8 +269,11 @@ export async function prepareSessionPatchArchive(params: {
       ...(fresh.entry ? { entry: fresh.entry } : {}),
     });
   } catch (error) {
-    if (error instanceof SessionMutationAuthorizationChangedError) {
-      return err(error.error);
+    if (
+      error instanceof SessionMutationAuthorizationChangedError ||
+      error instanceof ModelAccountConnectAuthorityError
+    ) {
+      return err(unexpectedPatchError(target.key, error));
     }
     sessionLog.warn(
       `sessions.patch: archive drain failed for ${target.canonicalKey}: ${formatErrorMessage(error)}`,

@@ -20,7 +20,10 @@ import {
   type DeliveryContext,
   normalizeDeliveryContext,
 } from "../../../utils/delivery-context.shared.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../../../utils/message-channel.js";
+import {
+  isDeliverableMessageChannel,
+  normalizeMessageChannel,
+} from "../../../utils/message-channel.js";
 import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import {
   buildAnnounceIdFromChildRun,
@@ -99,7 +102,6 @@ function loadSubagentRegistryRuntime() {
   return subagentRegistryRuntimeLoader.load();
 }
 
-export { buildSubagentSystemPrompt } from "../spawn/subagent-system-prompt.js";
 export { captureSubagentCompletionReply } from "./subagent-announce-output.js";
 export type { SubagentRunOutcome } from "./subagent-announce-output.js";
 
@@ -113,19 +115,26 @@ function buildAnnounceReplyInstruction(params: {
   announceType: SubagentAnnounceType;
   expectsCompletionMessage?: boolean;
   stillRunning?: boolean;
+  modelRouteChange?: string;
+  preserveModelRouteNotice: boolean;
 }): string {
   if (params.stillRunning) {
     // The parent's next act decides whether this event is harmless or
     // destructive, so name the forbidden act rather than only the state.
     return `This ${params.announceType} has NOT finished — the wait above expired, the child did not. It is still running and still owns its session, working directory, and any branch or file it was given. Do not treat this as a result, do not report it as done or failed, and do not start a replacement or duplicate for the same work. Anything above is partial. Continue with other work; a further completion event will arrive when the child actually ends. Keep this internal context private (don't mention system/log/stats/session details or announce type). If there is nothing for the user right now, reply ONLY: ${SILENT_REPLY_TOKEN}.`;
   }
+  const modelRouteInstruction = !params.modelRouteChange
+    ? ""
+    : params.preserveModelRouteNotice
+      ? " Preserve any runtime-authored model-route change notice in your update."
+      : " Keep runtime-authored model-route change notices internal on this shared surface.";
   if (params.requesterIsSubagent) {
-    return `Convert this completion into a concise internal orchestration update for your parent agent in your own words. Keep this internal context private (don't mention system/log/stats/session details or announce type). If this result is duplicate or no update is needed, reply ONLY: ${SILENT_REPLY_TOKEN}.`;
+    return `Convert this completion into a concise internal orchestration update for your parent agent in your own words.${modelRouteInstruction} Keep this internal context private (don't mention system/log/stats/session details or announce type). If this result is duplicate or no update is needed, reply ONLY: ${SILENT_REPLY_TOKEN}.`;
   }
   if (params.expectsCompletionMessage) {
-    return `A completed ${params.announceType} is ready for parent review. Review/verify the result above before deciding whether the original task is done. If additional action is required, continue the task or record a follow-up; otherwise send a truthful user-facing update. Keep this internal context private (don't mention system/log/stats/session details or announce type). Reply ONLY: ${SILENT_REPLY_TOKEN} only when this exact result is already visible to the user in this same turn.`;
+    return `A completed ${params.announceType} is ready for parent review. Review/verify the result above before deciding whether the original task is done.${modelRouteInstruction} If additional action is required, continue the task or record a follow-up; otherwise send a truthful user-facing update. Keep this internal context private (don't mention system/log/stats/session details or announce type). Reply ONLY: ${SILENT_REPLY_TOKEN} only when this exact result is already visible to the user in this same turn.`;
   }
-  return `A completed ${params.announceType} is ready for parent review. Review/verify the result above before deciding whether the original task is done. If additional action is required, continue the task or record a follow-up; otherwise send a truthful user-facing update. Keep this internal context private (don't mention system/log/stats/session details or announce type), and do not copy the internal event text verbatim. Reply ONLY: ${SILENT_REPLY_TOKEN} if this exact result was already delivered to the user in this same turn.`;
+  return `A completed ${params.announceType} is ready for parent review. Review/verify the result above before deciding whether the original task is done.${modelRouteInstruction} If additional action is required, continue the task or record a follow-up; otherwise send a truthful user-facing update. Keep this internal context private (don't mention system/log/stats/session details or announce type), and do not copy the internal event text verbatim. Reply ONLY: ${SILENT_REPLY_TOKEN} if this exact result was already delivered to the user in this same turn.`;
 }
 
 function buildAnnounceSteerMessage(events: AgentInternalEvent[]): string {
@@ -531,12 +540,6 @@ export async function runSubagentAnnounceFlow(params: {
       }
     }
 
-    const replyInstruction = buildAnnounceReplyInstruction({
-      requesterIsSubagent,
-      announceType,
-      expectsCompletionMessage,
-      stillRunning,
-    });
     const candidateStatsLine = !childSessionEffectsAllowed()
       ? undefined
       : await buildCompactAnnounceStatsLine({
@@ -546,24 +549,6 @@ export async function runSubagentAnnounceFlow(params: {
           disposition,
         });
     const statsLine = childSessionEffectsAllowed() ? candidateStatsLine : undefined;
-    const internalEvents: AgentInternalEvent[] = [
-      {
-        type: "task_completion",
-        source: announceType === "cron job" ? "cron" : "subagent",
-        childSessionKey: params.childSessionKey,
-        childSessionId: announceSessionId,
-        announceType,
-        taskLabel,
-        status: outcome.status,
-        statusLabel,
-        disposition,
-        result: findings,
-        statsLine,
-        replyInstruction,
-      },
-    ];
-    const triggerMessage = buildAnnounceSteerMessage(internalEvents);
-
     // Send to the requester session. For nested subagents this is an internal
     // follow-up injection (deliver=false) so the orchestrator receives it.
     let directOrigin = targetRequesterOrigin;
@@ -590,6 +575,42 @@ export async function runSubagentAnnounceFlow(params: {
     const completionDirectOrigin = childSessionEffectsAllowed()
       ? candidateCompletionDirectOrigin
       : targetRequesterOrigin;
+    const completionChannel = normalizeMessageChannel(completionDirectOrigin?.channel);
+    const modelRouteChange =
+      params.terminalReply?.disposition === "visible"
+        ? params.terminalReply.modelRouteChange
+        : undefined;
+    const replyInstruction = buildAnnounceReplyInstruction({
+      requesterIsSubagent,
+      announceType,
+      expectsCompletionMessage,
+      stillRunning,
+      modelRouteChange,
+      // Nested and local operator parents may report the route fact. External
+      // channel parents receive it only as private orchestration context.
+      preserveModelRouteNotice:
+        requesterIsSubagent ||
+        !completionChannel ||
+        !isDeliverableMessageChannel(completionChannel),
+    });
+    const internalEvents: AgentInternalEvent[] = [
+      {
+        type: "task_completion",
+        source: announceType === "cron job" ? "cron" : "subagent",
+        childSessionKey: params.childSessionKey,
+        childSessionId: announceSessionId,
+        announceType,
+        taskLabel,
+        status: outcome.status,
+        statusLabel,
+        disposition,
+        result: findings,
+        modelRouteChange,
+        statsLine,
+        replyInstruction,
+      },
+    ];
+    const triggerMessage = buildAnnounceSteerMessage(internalEvents);
     const directIdempotencyKey = buildAnnounceIdempotencyKey(announceId);
     let deliveryResultReported = false;
     const reportDeliveryResult = (delivery: SubagentAnnounceDeliveryResult) => {
@@ -616,7 +637,6 @@ export async function runSubagentAnnounceFlow(params: {
       directOrigin,
       sourceSessionKey: params.childSessionKey,
       sourceRunId: params.childRunId,
-      sourceChannel: INTERNAL_MESSAGE_CHANNEL,
       sourceTool: "subagent_announce",
       isSourceSessionEffectsAllowed: completionDeliveryAllowed,
       isCompletionOwnedByRequesterYield: params.isCompletionOwnedByRequesterYield,

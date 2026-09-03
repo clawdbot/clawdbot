@@ -4,6 +4,7 @@ import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.systemagent.SystemAgentChatAccess
 import ai.openclaw.app.systemagent.SystemAgentChatMessage
+import ai.openclaw.app.systemagent.SystemAgentChatQuestion
 import ai.openclaw.app.systemagent.SystemAgentChatQuestionOption
 import ai.openclaw.app.systemagent.SystemAgentChatState
 import ai.openclaw.app.ui.design.ClawPanel
@@ -20,10 +21,12 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -35,8 +38,13 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
@@ -44,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import kotlinx.coroutines.launch
 
 @Composable
 internal fun SystemAgentSettingsScreen(
@@ -92,15 +101,17 @@ internal fun SystemAgentSettingsScreen(
 
       when (state.access) {
         SystemAgentChatAccess.Ready -> {
-          SystemAgentConversation(
-            state = state,
-            onInputChange = viewModel::setSystemAgentChatInput,
-            onSend = viewModel::sendSystemAgentChatInput,
-            onAnswer = viewModel::answerSystemAgentQuestion,
-            onSkip = viewModel::skipSystemAgentQuestion,
-            onRestart = viewModel::restartSystemAgentChat,
-            onOpenChat = viewModel::openSystemAgentChatHandoff,
-          )
+          key(state.sessionId) {
+            SystemAgentConversation(
+              state = state,
+              onInputChange = viewModel::setSystemAgentChatInput,
+              onSend = viewModel::sendSystemAgentChatInput,
+              onAnswer = viewModel::answerSystemAgentQuestion,
+              onSkip = viewModel::skipSystemAgentQuestion,
+              onRestart = viewModel::restartSystemAgentChat,
+              onOpenChat = viewModel::openSystemAgentChatHandoff,
+            )
+          }
         }
 
         else -> {
@@ -152,6 +163,23 @@ private fun SystemAgentAccessGate(state: SystemAgentChatState) {
   }
 }
 
+private sealed class SystemAgentConversationRow(
+  val key: String,
+) {
+  data object LiveEdge : SystemAgentConversationRow("system-agent-live-edge")
+
+  data object Working : SystemAgentConversationRow("system-agent-working")
+
+  data class Message(
+    val message: SystemAgentChatMessage,
+  ) : SystemAgentConversationRow(message.id)
+
+  data class Question(
+    val messageId: String,
+    val question: SystemAgentChatQuestion,
+  ) : SystemAgentConversationRow("question:$messageId")
+}
+
 @Composable
 private fun SystemAgentConversation(
   state: SystemAgentChatState,
@@ -162,25 +190,76 @@ private fun SystemAgentConversation(
   onRestart: () -> Unit,
   onOpenChat: () -> Unit,
 ) {
+  val listState = rememberLazyListState()
+  val scope = rememberCoroutineScope()
+  val showJumpToLatest by remember { derivedStateOf { listState.canScrollBackward } }
+  val rows =
+    buildList<SystemAgentConversationRow> {
+      add(SystemAgentConversationRow.LiveEdge)
+      if (state.sending) add(SystemAgentConversationRow.Working)
+      // Separate keys keep a retiring question from resizing its immutable message.
+      // Reversed item order keeps each question visually below its reply.
+      state.messages.asReversed().forEach { message ->
+        message.question?.takeIf { message.id !in state.dismissedQuestionIds && message.id !in state.retiredQuestionIds }?.let { question ->
+          add(SystemAgentConversationRow.Question(message.id, question))
+        }
+        add(SystemAgentConversationRow.Message(message))
+      }
+    }
+  // Preserve a visible message when its preceding transient anchor retires.
+  // Keep active navigation in charge; native requests can cancel a scroll.
+  SideEffect(rows) {
+    if (listState.isScrollInProgress) return@SideEffect
+    val visibleItems = listState.layoutInfo.visibleItemsInfo
+    val firstKey = visibleItems.firstOrNull { it.index == listState.firstVisibleItemIndex }?.key ?: return@SideEffect
+    if (rows.any { it.key == firstKey }) return@SideEffect
+    for (item in visibleItems) {
+      val index = rows.indexOfFirst { it is SystemAgentConversationRow.Message && it.key == item.key }
+      if (index >= 0) {
+        listState.requestScrollToItem(index, -item.offset)
+        break
+      }
+    }
+  }
   Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
     LazyColumn(
+      state = listState,
       modifier = Modifier.weight(1f),
+      reverseLayout = true,
       verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-      items(state.messages, key = { it.id }) { message ->
-        SystemAgentMessage(message = message)
-        message.question?.takeIf { message.id !in state.dismissedQuestionIds && message.id !in state.retiredQuestionIds }?.let { question ->
-          SystemAgentQuestionCard(
-            question = question,
-            enabled = !state.sending && state.errorText == null,
-            onAnswer = { option -> onAnswer(message.id, option.label) },
-            onSkip = { onSkip(message.id) },
-          )
+      items(rows, key = { it.key }) { row ->
+        when (row) {
+          SystemAgentConversationRow.LiveEdge -> {
+            // A positive-size live edge stays at index zero; native measurement skips zero-size items.
+            // Its stable key follows replies, while readers away from it keep their own message key.
+            Spacer(Modifier.height(1.dp))
+          }
+
+          SystemAgentConversationRow.Working -> {
+            Text(nativeString("OpenClaw is working…"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+          }
+
+          is SystemAgentConversationRow.Message -> {
+            SystemAgentMessage(message = row.message)
+          }
+
+          is SystemAgentConversationRow.Question -> {
+            SystemAgentQuestionCard(
+              question = row.question,
+              enabled = !state.sending && state.errorText == null,
+              onAnswer = { option -> onAnswer(row.messageId, option.label) },
+              onSkip = { onSkip(row.messageId) },
+            )
+          }
         }
       }
-      if (state.sending) {
-        item { Text(nativeString("OpenClaw is working…"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted) }
-      }
+    }
+    if (showJumpToLatest) {
+      ClawSecondaryButton(
+        text = nativeString("Jump to latest"),
+        onClick = { scope.launch { listState.animateScrollToItem(0) } },
+      )
     }
 
     state.errorText?.let { error ->
@@ -218,25 +297,26 @@ private fun SystemAgentConversation(
 @Composable
 private fun SystemAgentMessage(message: SystemAgentChatMessage) {
   val user = message.role == SystemAgentChatMessage.Role.User
-  Row(modifier = Modifier.fillMaxWidth()) {
-    if (user) Spacer(modifier = Modifier.weight(1f))
+  Row(
+    modifier = Modifier.fillMaxWidth(),
+    horizontalArrangement = if (user) Arrangement.End else Arrangement.Start,
+  ) {
     Text(
       text = message.text,
       style = ClawTheme.type.body,
       color = ClawTheme.colors.text,
       modifier =
         Modifier
-          .weight(if (user) 0.8f else 0.9f, fill = false)
+          .fillMaxWidth(if (user) 0.8f else 0.9f)
           .background(if (user) ClawTheme.colors.primary.copy(alpha = 0.14f) else ClawTheme.colors.surfaceRaised, RoundedCornerShape(14.dp))
           .padding(horizontal = 12.dp, vertical = 9.dp),
     )
-    if (!user) Spacer(modifier = Modifier.weight(1f))
   }
 }
 
 @Composable
 private fun SystemAgentQuestionCard(
-  question: ai.openclaw.app.systemagent.SystemAgentChatQuestion,
+  question: SystemAgentChatQuestion,
   enabled: Boolean,
   onAnswer: (SystemAgentChatQuestionOption) -> Unit,
   onSkip: () -> Unit,

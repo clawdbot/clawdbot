@@ -22,6 +22,7 @@ import {
   GATEWAY_STARTUP_PENDING_CLOSE_CAUSE,
   GATEWAY_STARTUP_RETRY_AFTER_MS,
 } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
+import { getRuntimeConfig } from "../../../config/io.js";
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import {
   isBrowserCopilotClient,
@@ -30,13 +31,17 @@ import {
 } from "../../../utils/message-channel.js";
 import { ControlUiGitHubError } from "../../control-ui-github-api.js";
 import type { OperatorScope } from "../../operator-scopes.js";
-import { checkBrowserOrigin, normalizeChromeExtensionOrigin } from "../../origin-check.js";
+import { normalizeChromeExtensionOrigin } from "../../origin-check.js";
 import { parseGatewayRole } from "../../role-policy.js";
 import { authenticatedProfileUnavailableError } from "../../server-methods/gateway-client-identity.js";
 import { formatForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
+import { checkGatewayWsBrowserOrigin } from "../ws-origin-policy.js";
 import { isNativeAppUiClient } from "./handshake-auth-helpers.js";
-import type { GatewayConnectPhaseContext } from "./message-handler-types.js";
+import type {
+  AuthenticatedGatewayConnect,
+  GatewayConnectPhaseContext,
+} from "./message-handler-types.js";
 
 function hasCredential(value: unknown): boolean {
   return typeof value === "string" && value.trim().length > 0;
@@ -157,6 +162,45 @@ export function resolveEffectiveConnectionScopes(params: {
   return { scopes, addedIdentityScopes };
 }
 
+export function rejectGatewayConnectOrigin(
+  context: GatewayConnectPhaseContext,
+  reason: string,
+): void {
+  const message =
+    "origin not allowed (open the Control UI from the gateway host or allow it in gateway.controlUi.allowedOrigins)";
+  context.markHandshakeFailure("origin-mismatch", {
+    origin: context.handler.requestOrigin ?? "n/a",
+    host: context.handler.requestHost ?? "n/a",
+    reason,
+  });
+  context.sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, message, {
+    details: { code: ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED, reason },
+  });
+  context.handler.close(1008, truncateCloseReason(message));
+}
+
+/** Recheck live authority after awaited work, before granting credentials or registering a client. */
+export function resolveGatewayConnectPolicyFailure(
+  context: GatewayConnectPhaseContext,
+  state: AuthenticatedGatewayConnect,
+): { kind: "auth" } | { kind: "origin"; reason: string } | undefined {
+  if (
+    state.sessionUsesSharedGatewayAuth &&
+    context.handler.getRequiredSharedGatewaySessionGeneration &&
+    state.sessionSharedGatewaySessionGeneration !==
+      context.handler.getRequiredSharedGatewaySessionGeneration()
+  ) {
+    return { kind: "auth" };
+  }
+  if (context.browserOrigin) {
+    const originCheck = checkGatewayWsBrowserOrigin(context.browserOrigin, getRuntimeConfig());
+    if (!originCheck.ok) {
+      return { kind: "origin", reason: originCheck.reason };
+    }
+  }
+  return undefined;
+}
+
 export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
   const {
     connId,
@@ -174,8 +218,7 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
     connectParams,
     configSnapshot,
     peerLabel,
-    isLocalClient,
-    enforceOriginCheckForAnyClient,
+    browserOrigin,
     clientLabel,
     markHandshakeFailure,
     sendHandshakeErrorResponse,
@@ -283,37 +326,10 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
   const isBrowserOperatorUi = isBrowserOperatorUiClient(connectParams.client);
   const isWebchat = isWebchatConnect(connectParams);
   const isNativeAppUi = isNativeAppUiClient(connectParams.client);
-  // Extension origins cannot match the gateway host. Admission validates their
-  // canonical shape; device approval binds the exact origin before token issue.
-  const hasCopilotExtensionOrigin = Boolean(browserCopilotOrigin);
-  if (
-    !hasCopilotExtensionOrigin &&
-    (enforceOriginCheckForAnyClient || isBrowserOperatorUi || isWebchat)
-  ) {
-    const hostHeaderOriginFallbackEnabled =
-      configSnapshot.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
-    const originCheck = checkBrowserOrigin({
-      requestHost,
-      origin: requestOrigin,
-      allowedOrigins: configSnapshot.gateway?.controlUi?.allowedOrigins,
-      allowHostHeaderOriginFallback: hostHeaderOriginFallbackEnabled,
-      isLocalClient,
-    });
+  if (browserOrigin) {
+    const originCheck = checkGatewayWsBrowserOrigin(browserOrigin, configSnapshot);
     if (!originCheck.ok) {
-      const errorMessage =
-        "origin not allowed (open the Control UI from the gateway host or allow it in gateway.controlUi.allowedOrigins)";
-      markHandshakeFailure("origin-mismatch", {
-        origin: requestOrigin ?? "n/a",
-        host: requestHost ?? "n/a",
-        reason: originCheck.reason,
-      });
-      sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, errorMessage, {
-        details: {
-          code: ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED,
-          reason: originCheck.reason,
-        },
-      });
-      close(1008, truncateCloseReason(errorMessage));
+      rejectGatewayConnectOrigin(context, originCheck.reason);
       return undefined;
     }
     if (originCheck.matchedBy === "host-header-fallback") {
@@ -321,11 +337,9 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
       logWsControl.warn(
         `security warning: websocket origin accepted via Host-header fallback conn=${connId} count=${originCheckMetrics.hostHeaderFallbackAccepted} host=${requestHost ?? "n/a"} origin=${requestOrigin ?? "n/a"}`,
       );
-      if (hostHeaderOriginFallbackEnabled) {
-        logGateway.warn(
-          "security metric: gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback accepted a websocket connect request",
-        );
-      }
+      logGateway.warn(
+        "security metric: gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback accepted a websocket connect request",
+      );
     }
   }
   return {

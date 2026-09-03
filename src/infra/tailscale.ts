@@ -646,14 +646,16 @@ export async function readTailscaleWhoisIdentity(
   if (!normalized) {
     return null;
   }
-  const now = Date.now();
-  const cached = readCachedWhois(normalized, now);
-  if (cached !== undefined) {
-    return cached;
-  }
-
   const cacheTtlMs = opts?.cacheTtlMs ?? 60_000;
   const errorTtlMs = opts?.errorTtlMs ?? 5_000;
+  const now = Date.now();
+  if (cacheTtlMs > 0) {
+    const cached = readCachedWhois(normalized, now);
+    if (cached !== undefined) {
+      return cached;
+    }
+  }
+
   try {
     const tailscaleBin = await getTailscaleBinary();
     const result = await exec(tailscaleBin, ["whois", "--json", normalized], {
@@ -662,10 +664,14 @@ export async function readTailscaleWhoisIdentity(
     });
     const parsed = result.stdout ? parsePossiblyNoisyJsonObject(result.stdout) : {};
     const identity = parseWhoisIdentity(parsed);
-    writeCachedWhois(normalized, identity, cacheTtlMs);
+    if (cacheTtlMs > 0) {
+      writeCachedWhois(normalized, identity, cacheTtlMs);
+    }
     return identity;
   } catch {
-    writeCachedWhois(normalized, null, errorTtlMs);
+    if (errorTtlMs > 0) {
+      writeCachedWhois(normalized, null, errorTtlMs);
+    }
     return null;
   }
 }

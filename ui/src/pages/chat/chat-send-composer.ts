@@ -1,7 +1,10 @@
-import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment, ChatQueueItem, HumanMention } from "../../lib/chat/chat-types.ts";
 import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
-import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
+import {
+  getChatAttachmentDataUrl,
+  releaseChatAttachmentPayloads,
+} from "./attachment-payload-store.ts";
 import {
   captureChatComposerMemoryFallbackOwnership,
   clearChatComposerMemoryFallback,
@@ -15,12 +18,83 @@ import {
 } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { resetChatInputHistoryNavigation } from "./input-history.ts";
+
+function attachmentSubmitSignature(attachment: ChatAttachment): string {
+  const dataUrl = getChatAttachmentDataUrl(attachment);
+  return JSON.stringify([
+    attachment.id,
+    attachment.mimeType,
+    attachment.fileName ?? "",
+    attachment.sizeBytes ?? 0,
+    dataUrl?.length ?? 0,
+    dataUrl?.slice(0, 64) ?? "",
+  ]);
+}
+
+export function chatSubmitKey(
+  host: ChatHost,
+  kind: "detached" | "local" | "message" | "queued-edit" | "goal",
+  message: string,
+  attachments: ChatAttachment[],
+  mentions?: readonly HumanMention[],
+): string {
+  return JSON.stringify([
+    kind,
+    host.sessionKey,
+    message.trim(),
+    mentions ?? [],
+    attachments.map(attachmentSubmitSignature),
+  ]);
+}
+
+export function clearSubmittedComposerState(
+  host: ChatHost,
+  submittedDraft: string,
+  submittedAttachments: ChatAttachment[],
+  submittedMentions: readonly HumanMention[] | undefined,
+  preserveBrowserAnnotations = false,
+) {
+  const attachmentsUnchanged =
+    host.chatAttachments.length === submittedAttachments.length &&
+    host.chatAttachments.every(
+      (attachment, index) =>
+        attachmentSubmitSignature(attachment) ===
+        attachmentSubmitSignature(submittedAttachments[index]!),
+    );
+  if (
+    host.chatMessage !== submittedDraft ||
+    JSON.stringify(host.chatMentions ?? []) !== JSON.stringify(submittedMentions ?? []) ||
+    !attachmentsUnchanged
+  ) {
+    return {};
+  }
+  host.chatMessage = "";
+  host.chatMentions = [];
+  host.chatAttachments = preserveBrowserAnnotations
+    ? host.chatAttachments.filter((attachment) => attachment.browserAnnotation)
+    : [];
+  resetChatInputHistoryNavigation(host);
+  return {
+    previousAttachments: submittedAttachments,
+    previousDraft: submittedDraft,
+    previousMentions: submittedMentions,
+  };
+}
+
+export function snapshotChatAttachments(attachments: readonly ChatAttachment[]): ChatAttachment[] {
+  return attachments.map((attachment) => {
+    const dataUrl = getChatAttachmentDataUrl(attachment);
+    return { ...attachment, ...(dataUrl ? { dataUrl } : {}) };
+  });
+}
 
 export type ChatCommandComposerRecovery = {
   client: ChatHost["client"];
   composer?: {
     attachments: ChatAttachment[];
     draft: string;
+    mentions?: readonly HumanMention[];
     fallbackOwnership?: ChatComposerMemoryFallbackOwnership;
   };
   connectionEpoch: ChatHost["connectionEpoch"];
@@ -38,7 +112,7 @@ function chatCommandRecoveryHost(host: ChatHost): ChatPageHost | undefined {
 export function captureChatCommandComposerRecovery(
   host: ChatHost,
   scope: StoredChatOutboxScope,
-  composer?: { draft: string; attachments: ChatAttachment[] },
+  composer?: { draft: string; mentions?: readonly HumanMention[]; attachments: ChatAttachment[] },
 ): ChatCommandComposerRecovery {
   const fallbackHost = chatCommandRecoveryHost(host);
   return {
@@ -54,6 +128,7 @@ export function captureChatCommandComposerRecovery(
                     scope,
                     {
                       message: composer.draft,
+                      mentions: composer.mentions,
                       attachments: composer.attachments,
                     },
                   ),
@@ -140,6 +215,7 @@ export function restoreFailedCommandComposer(
     }
     const ownership = retainChatComposerMemoryFallback(fallbackHost, recovery.scope, {
       message: composer.draft,
+      mentions: composer.mentions,
       attachments: composer.attachments,
     });
     composer.fallbackOwnership = ownership;
@@ -155,9 +231,11 @@ export function restoreFailedCommandComposer(
   const restorePlan = pendingComposerRestorePlan(host, {
     previousAttachments: composer.attachments,
     previousDraft: composer.draft,
+    previousMentions: composer.mentions,
   });
   if (restorePlan.willRestoreDraft) {
     host.chatMessage = composer.draft;
+    host.chatMentions = composer.mentions ?? [];
   }
   if (restorePlan.willRestoreAttachments) {
     host.chatAttachments = composer.attachments;
@@ -172,6 +250,7 @@ export function restoreFailedCommandComposer(
 type PendingComposerSnapshot = {
   previousAttachments?: ChatAttachment[];
   previousDraft?: string;
+  previousMentions?: readonly HumanMention[];
 };
 
 function strictComposerRestore(host: ChatHost, snapshot: PendingComposerSnapshot) {
@@ -198,6 +277,7 @@ export function cancelChatDelivery(
   const plan = removed ? strictComposerRestore(host, snapshot) : null;
   if (plan?.draft) {
     host.chatMessage = snapshot.previousDraft ?? "";
+    host.chatMentions = snapshot.previousMentions ?? [];
   }
   if (plan?.attachments) {
     host.chatAttachments = snapshot.previousAttachments ?? [];

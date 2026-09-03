@@ -12,12 +12,14 @@ import {
 } from "../plugins/runtime.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
 import { createGatewayKernel } from "./server-kernel.js";
+import type { GatewayClient } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 
 describe("createGatewayKernel", () => {
@@ -141,14 +143,18 @@ describe("createGatewayKernel", () => {
       },
     });
     const token = "gateway-kernel-direct-close-readiness-token";
+    const bootId = "gateway-kernel-direct-close";
     const configReloaderStop = createDeferred();
+    const updateCheckStopped = createDeferred();
     let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
+    let closing: Promise<void> | undefined;
     try {
       await state.writeConfig({
         gateway: { auth: { mode: "token", token }, controlUi: { enabled: false }, port },
       });
       state.applyEnv();
       kernel = await createGatewayKernel(port, {
+        bootId,
         auth: { mode: "token", token },
         bind: "loopback",
         controlUiEnabled: false,
@@ -159,26 +165,63 @@ describe("createGatewayKernel", () => {
       const { getStartup, getReadiness } = kernel.createHttpTransportOptions();
       expect(getStartup()).toMatchObject({ ok: true, status: "started" });
       expect(getReadiness()).toMatchObject({ ready: true, failing: [] });
+      const reader = {
+        connect: {
+          minProtocol: 1,
+          maxProtocol: 1,
+          client: { id: "openclaw-control-ui", version: "test", platform: "web", mode: "webchat" },
+          role: "operator",
+          scopes: ["operator.read"],
+        },
+        authenticatedUserProfile: {
+          profileId: ensureProfileForEmail("mention-reader@example.test").id,
+          displayName: "Reader",
+          hasAvatar: false,
+          updatedAt: 1,
+        },
+      } satisfies GatewayClient;
+      expect(kernel.gatewayRequestContext.mentionInbox?.list(reader)).toMatchObject({
+        ok: true,
+        value: { gatewayInstanceId: bootId, items: [] },
+      });
 
       const closeFirstStop = vi.fn(async () => {});
       kernel.kernel.swapBonjourStop(closeFirstStop);
       vi.spyOn(kernel.runtimeState.configReloader, "stop").mockReturnValue(
         configReloaderStop.promise,
       );
-      const closing = kernel.createCloseHandler()({ reason: "direct close readiness test" });
+      const stopUpdateCheck = vi
+        .spyOn(kernel.runtimeState, "stopGatewayUpdateCheck")
+        .mockReturnValue(updateCheckStopped.promise);
+      closing = kernel.createCloseHandler()({ reason: "direct close readiness test" });
 
       expect(getStartup()).toMatchObject({ ok: false, status: "draining" });
       expect(getReadiness()).toMatchObject({ ready: false, failing: ["gateway-draining"] });
+      expect(kernel.gatewayRequestContext.mentionInbox?.list(reader)).toMatchObject({
+        ok: false,
+        error: { code: "UNAVAILABLE" },
+      });
       configReloaderStop.resolve();
+      await vi.waitFor(() => expect(stopUpdateCheck).toHaveBeenCalled());
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(closeFirstStop).not.toHaveBeenCalled();
+      updateCheckStopped.resolve();
       await closing;
       expect(closeFirstStop).toHaveBeenCalledOnce();
       expect(kernel.runtimeState.bonjourStop).toBeNull();
     } finally {
       configReloaderStop.resolve();
+      updateCheckStopped.resolve();
       try {
-        await kernel?.closeOnStartupFailure();
+        await closing;
       } finally {
-        await state.cleanup();
+        try {
+          await kernel?.closeOnStartupFailure();
+        } finally {
+          await state.cleanup();
+        }
       }
     }
   });
@@ -524,6 +567,7 @@ describe("createGatewayKernel", () => {
         "startup.maintenance",
         "plugins.bootstrap",
         "gateway.kernel-state",
+        "node-desktop.runtime-import",
         "runtime.config",
         "control-ui.root",
         "terminal.launch-import",

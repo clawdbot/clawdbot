@@ -121,6 +121,12 @@ or mark the AppImage executable and run it directly. The AppImage runtime
 needs FUSE 2 (`sudo apt install libfuse2`, or `libfuse2t64` on Ubuntu 24.04+);
 without it, run the AppImage with `APPIMAGE_EXTRACT_AND_RUN=1`.
 
+Published AMD64 AppImages are built on Ubuntu 22.04 and require glibc 2.35 or
+newer plus a `libstdc++` that provides `GLIBCXX_3.4.30`. Ubuntu 22.04 and
+Debian 12 meet that ABI floor. RHEL 9 and Rocky Linux 9 ship glibc 2.34, so
+they cannot run the published AppImage. Extracting the AppImage does not bypass
+this requirement.
+
 ### Media codecs
 
 The companion uses GStreamer plugins for audio and video playback.
@@ -128,21 +134,26 @@ WebM/VP9, Opus, Vorbis, and WAV normally work through `plugins-good`.
 H.264/MP4, AAC, and MP3 require the `libav` and/or `plugins-bad` packages.
 The `.deb` uses the host's plugins and declares all three packages as
 dependencies. The AppImage bundles the GStreamer media framework and the
-plugins available on its Ubuntu build host. For a source build or when
-rebuilding either Linux bundle, install the packages explicitly:
+plugins required for those formats. For a source build or when rebuilding
+either Linux bundle, install the packages and inspection tool explicitly:
 
 ```bash
-sudo apt update && sudo apt install gstreamer1.0-libav gstreamer1.0-plugins-good gstreamer1.0-plugins-bad
+sudo apt update && sudo apt install gstreamer1.0-libav gstreamer1.0-plugins-good \
+  gstreamer1.0-plugins-bad gstreamer1.0-tools patchelf xdg-utils
 ```
 
-The released AppImage therefore carries the codecs installed by the release
-workflow instead of relying on GStreamer packages from the user's system.
+The packaging script stages only that media capability set before Tauri invokes
+linuxdeploy. This prevents optional host plugins from adding unrelated system
+libraries to the AppImage dependency closure.
 
 You can also build the same bundles from a source checkout:
 
 ```bash
+plugins=$(mktemp -d)
+apps/linux/scripts/stage-appimage-gstreamer.sh "$plugins"
 cd apps/linux/src-tauri
-pnpm dlx @tauri-apps/cli@2.11.4 build --bundles deb,appimage
+GSTREAMER_PLUGINS_DIR="$plugins" \
+  pnpm dlx @tauri-apps/cli@2.11.4 build --bundles deb,appimage
 ```
 
 The `Linux App` CI workflow uploads the same bundles as the

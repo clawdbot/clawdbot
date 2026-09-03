@@ -64,6 +64,8 @@ describe("buildDeveloperInstructions delegation guidance", () => {
     expect(instructions).toContain("## Delegation");
     expect(instructions).toContain("delegate via native `spawn_agent`");
     expect(instructions).toContain("spawn `sessions_spawn` with `visible=true`");
+    expect(instructions).toContain("Announcing spawns notify when the run ends");
+    expect(instructions).toContain("Collectors require explicit result collection instead.");
     expect(instructions.indexOf("## Delegation")).toBeGreaterThan(
       instructions.indexOf("When a native child's result belongs in a later turn"),
     );

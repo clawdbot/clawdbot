@@ -19,6 +19,68 @@ OpenClaw stores control-plane state in a global SQLite database and agent data i
 
 A few high-volume or lifecycle-specific features use dedicated SQLite stores, including the task registry and trajectory data.
 
+### Meeting transcript tables
+
+Meeting captures use three `STRICT` tables in the shared
+`state/openclaw.sqlite` database, separate from per-agent conversation transcripts.
+The transcript store (`src/transcripts/store.ts`) owns their reads and writes;
+`src/transcripts/sqlite-schema.ts` ensures the tables on first use. Markdown and
+JSON files under the transcripts directory are explicit exports, not runtime
+storage. See [Transcripts CLI](/cli/transcripts).
+
+#### `meeting_transcript_sessions`
+
+One row per capture identity. The primary key is `(session_id, started_at)`;
+`selector` is unique. Indexes support start-time, session-ID, slug, and export-key
+lookups.
+
+| Columns                                  | Type                                        | Purpose                                                                 |
+| ---------------------------------------- | ------------------------------------------- | ----------------------------------------------------------------------- |
+| `session_id`, `started_at`               | `TEXT NOT NULL`                             | Capture ID and original start time.                                     |
+| `selector`, `export_key`, `session_slug` | `TEXT NOT NULL`                             | Canonical selector and derived export identity.                         |
+| `provider_id`, `source_json`             | `TEXT NOT NULL`                             | Source provider and locator.                                            |
+| `title`, `stopped_at`, `metadata_json`   | Nullable `TEXT`                             | Display title, terminal time, and session metadata including ownership. |
+| `export_manifest_json`                   | `TEXT NOT NULL`, default `{}`               | Export artifact ownership manifest.                                     |
+| `export_pending_json`                    | `TEXT NOT NULL`, default `[]`               | Pending export artifacts.                                               |
+| `next_utterance_seq`                     | Nonnegative `INTEGER NOT NULL`, default `0` | Next append sequence.                                                   |
+| `created_at_ms`, `updated_at_ms`         | Nonnegative `INTEGER NOT NULL`              | Store timestamps.                                                       |
+
+Reopening an occupancy-driven capture clears `stopped_at` without changing the
+primary key, so the same meeting retains its utterances.
+
+#### `meeting_transcript_utterances`
+
+Append-ordered speech records. The primary key is
+`(session_id, session_started_at, sequence)`; the session pair references
+`meeting_transcript_sessions(session_id, started_at)` with `ON DELETE CASCADE`.
+
+| Columns                                  | Type                           | Purpose                                          |
+| ---------------------------------------- | ------------------------------ | ------------------------------------------------ |
+| `session_id`, `session_started_at`       | `TEXT NOT NULL`                | Owning capture identity.                         |
+| `sequence`                               | Nonnegative `INTEGER NOT NULL` | Stable append order within the capture.          |
+| `utterance_id`, `started_at`, `ended_at` | Nullable `TEXT`                | Provider utterance identity and timing.          |
+| `speaker_id`, `speaker_label`            | Nullable `TEXT`                | Provider speaker identity and display label.     |
+| `text`                                   | `TEXT NOT NULL`                | Captured transcript text.                        |
+| `final`                                  | Nullable `INTEGER`, `0` or `1` | Whether the provider marked the utterance final. |
+| `metadata_json`                          | Nullable `TEXT`                | Provider utterance metadata.                     |
+
+#### `meeting_transcript_summaries`
+
+One current summary per capture. The primary key is
+`(session_id, session_started_at)` and references the session primary key with
+`ON DELETE CASCADE`. At least one of `summary_json` or `markdown` must be non-null.
+
+| Columns                            | Type                           | Purpose                                                                                                     |
+| ---------------------------------- | ------------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| `session_id`, `session_started_at` | `TEXT NOT NULL`                | Owning capture identity.                                                                                    |
+| `generated_at`                     | Nullable `TEXT`                | Summary generation time.                                                                                    |
+| `summary_json`                     | Nullable `TEXT`                | Free-form summary, including participants, `source` (`model` or `heuristic`), and optional model reference. |
+| `markdown`                         | Nullable `TEXT`                | Rendered meeting notes.                                                                                     |
+| `utterance_count`                  | Nonnegative `INTEGER NOT NULL` | Number of utterances covered by the stored summary.                                                         |
+
+These are existing feature-local tables. Occupancy episodes and model-backed
+notes do not change their schema or database version.
+
 ## Versioning contract
 
 Each database records its schema in two places:
@@ -130,6 +192,16 @@ Disconnect removes usable local credentials and retains a secret-free disconnect
 Personal publication receipts remain for the logical session's lifetime. Archive/reset preserves receipts and invalidates incompatible unfinished work. Permanent session deletion fences execution and removes its personal receipts. There is no timed idempotency expiry, and deleting local state does not undo an already-created GitHub commit or pull request.
 
 See the accepted [personal GitHub ownership and publication design](https://github.com/openclaw/openclaw/issues/133590) and the operator-facing [GitHub connections guide](/concepts/user-model#github-connections).
+
+## Personal model accounts
+
+Personal model accounts use the existing `secret_store_entries` identity scope, keyed by the canonical Gateway profile. A versioned `model-accounts` record owns provider selections, while each `model-account:<profile-id>` record owns one inline OAuth or token credential and its usage state. Each record retains the existing 64 KiB secret-store limit; connecting more accounts or merging profiles does not combine credentials under one size limit. This adds no table, column, index, or schema version. Generic secret-list/read methods and profile preferences do not expose these records.
+
+The credential and its selected link commit in one synchronous transaction after the Gateway revalidates the initiating authorization. Runtime loads only an explicitly selected credential and routes refresh and usage updates to that same owner. Shared and agent-local auth saves exclude the reserved personal-profile namespace, including runtime snapshots and CLI mirrors.
+
+Unlink records an explicit disconnected selection and retains credentials used by existing session pins. A verified identity merge transfers only the live source's records, preserving the target's selections and disconnections while retaining old credential IDs for pinned sessions. Credentials stranded on an alias by an older build are not adopted at runtime. A compatible downgrade leaves private records outside the older shared-account pool; re-upgrade can use retained records, while accounts stranded by older identity merges need reconnecting.
+
+See [Per-person model accounts](/concepts/multi-user#per-person-model-accounts) for connection, cancellation, session billing, and unlink behavior.
 
 ## Review checkpoint for material changes
 

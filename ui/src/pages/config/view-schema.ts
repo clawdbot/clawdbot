@@ -105,11 +105,11 @@ export function renderUnsupportedPathSummary(paths: string[]) {
     <span class="config-content-callout__text">
       ${prefix}${paths
         .slice(0, 3)
-        .map(
-          (path, index) => html`${index > 0 ? ", " : ""}<code>${path}</code>`,
-        )}${suffix}${paths.length > 3
-        ? html` ${t("configView.formUnsafeMore", { count: String(paths.length - 3) })}`
-        : nothing}
+        .map((path, index) => html`${index > 0 ? ", " : ""}<code>${path}</code>`)}${suffix}${
+        paths.length > 3
+          ? html` ${t("configView.formUnsafeMore", { count: String(paths.length - 3) })}`
+          : nothing
+      }
     </span>
   `;
 }

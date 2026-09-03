@@ -44,8 +44,9 @@ struct SkillsSettings: View {
             let pushes = await GatewayConnection.shared.subscribe()
             let initialRefresh = Task { await self.model.refreshIfNeeded() }
             defer { initialRefresh.cancel() }
-            for await push in pushes {
+            for await delivery in pushes {
                 if Task.isCancelled { return }
+                guard delivery.isCurrent, let push = delivery.push else { continue }
                 self.model.handleGatewayPush(push)
             }
         }

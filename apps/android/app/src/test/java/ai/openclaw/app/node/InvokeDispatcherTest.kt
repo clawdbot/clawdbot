@@ -382,7 +382,6 @@ private fun newCameraHandler(appContext: Context): CameraHandler =
     appContext = appContext,
     camera = CameraCaptureManager(appContext),
     setCameraAudioCaptureActive = { true },
-    showCameraHud = { _, _, _ -> },
     invokeErrorFromThrowable = { err -> "UNAVAILABLE" to (err.message ?: "camera failed") },
   )
 

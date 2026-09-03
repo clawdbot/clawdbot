@@ -8,7 +8,7 @@ import type {
   CliBackendPlugin,
   CliBackendPreparedExecution,
 } from "openclaw/plugin-sdk/cli-backend";
-import { parseClaudeCliJsonlEvent } from "./cli-output.js";
+import { parseClaudeCliJsonlEvent, parseClaudeCliJsonlLifecycleEvent } from "./cli-output.js";
 import {
   CLAUDE_CLI_BACKEND_ID,
   CLAUDE_CLI_DEFAULT_MODEL_REF,
@@ -248,6 +248,7 @@ export function buildAnthropicCliBackend(
             ? {
                 async *execute(executionContext: CliBackendExecuteContext) {
                   const { executeClaudeAgentSdk } = await import("./agent-sdk.runtime.js");
+                  executionContext.assertCurrent?.();
                   yield* executeClaudeAgentSdk(executionContext, authInput?.secretInput);
                 },
               }
@@ -276,6 +277,7 @@ export function buildAnthropicCliBackend(
       return supportProbe ? supportProbe.then(prepare) : prepare();
     },
     parseJsonlEvent: parseClaudeCliJsonlEvent,
+    parseJsonlLifecycleEvent: parseClaudeCliJsonlLifecycleEvent,
     resolveExecutionArgs: (context) =>
       resolveClaudeCliExecutionArgs(context, {
         excludeDynamicSystemPromptSections: options.supportsDynamicSystemPromptSections?.(),

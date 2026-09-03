@@ -9,7 +9,6 @@
       "hasSubcommands": true
     }
   ],
-  "icon": "https://cdn.simpleicons.org/zoom",
   "enabledByDefault": true,
   "commandAliases": [{ "name": "zoommeetings" }],
   "activation": {

@@ -120,6 +120,7 @@ export class SystemAgentChatEngine {
     decision: "allow-once" | "allow-always" | "deny" | null,
     proposalHash: string,
     beforePersistentApply?: () => void,
+    terminalStatus?: "expired" | "cancelled",
   ): Promise<SystemAgentChatReply | null> {
     const turn = this.turnQueue.then(async () => {
       const reply = await this.router.resolveOperatorApproval(
@@ -127,6 +128,12 @@ export class SystemAgentChatEngine {
         proposalHash,
         beforePersistentApply,
       );
+      if (reply && terminalStatus && !reply.applied) {
+        reply.text = `OpenClaw change ${terminalStatus}. No change. Retry the request if it is still needed.`;
+      }
+      if (reply && decision === "allow-once" && !reply.applied) {
+        reply.text += " Check the current settings and OpenClaw status before retrying.";
+      }
       if (reply?.text) {
         this.history.push({ role: "assistant", text: reply.text });
       }

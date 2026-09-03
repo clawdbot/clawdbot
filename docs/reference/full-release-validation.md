@@ -14,6 +14,14 @@ whole release. Run release preparation before freezing the Code SHA; it
 refreshes Control UI locale output when the background bot has not landed it
 yet, then enforces the same strict zero-fallback check used by release CI.
 
+Linux (`ubuntu`) cross-OS fresh-install and upgrade lanes gate publication in
+the beta, stable, and full profiles. Windows and macOS cross-OS lanes run in
+parallel as **advisory** coverage: their pass/fail conclusions remain in the
+manifest and summary, but failures do not block Release Decision, npm publish,
+or `pnpm release:candidate`. Selected lanes still need terminal evidence.
+Normal CI, npm qualification, Docker, Package Acceptance, and the profile's
+performance and soak requirements keep their existing gates.
+
 Freeze the product-complete pre-changelog commit and its target context as the
 **Code SHA/ref**, and select one trusted workflow commit and context as the
 **Tooling SHA/ref**, then run:
@@ -227,7 +235,7 @@ The conceptual phases map to current inputs:
 For an actual beta package on its matching canonical release branch or beta
 tag, `all` with `release_profile=beta` and no soak records
 `coveragePolicy=npm-beta-v1`. It retains Linux, macOS, and Windows Node checks,
-Control UI, plugins, package integrity, install/update acceptance, cross-OS
+Control UI, plugins, package integrity, install/update acceptance, Linux cross-OS
 package checks, QA parity, core runtime-pair/restart proof, and runtime tool
 coverage. Native app qualification, product performance, and published-package
 Telegram confidence are deferred. Broad live/E2E and QA-live also remain outside
@@ -270,6 +278,11 @@ work after core publication completes. macOS retains its separate native
 validation, signing, notarization, and promotion gates. Stable npm publication
 still rejects evidence without soak and blocking product performance.
 
+macOS app signing, notarization, appcast publication, and Windows Hub asset
+promotion run in parallel with or after npm publication and never delay npm.
+Their own artifact validation and promotion gates still apply; Windows Hub
+assets remain required before the regular GitHub release leaves draft.
+
 Package Acceptance normally builds the candidate tarball from the resolved
 `ref`, including full-SHA runs dispatched with `pnpm ci:full-release`. After a
 beta publish, pass `release_package_spec=openclaw@YYYY.M.PATCH-beta.N` to reuse
@@ -305,10 +318,15 @@ keep Telegram selected by default. The existing
 deferral; it is rejected for `stable` and `full` and does not disable the focused
 `rerun_group=npm-telegram` workflow.
 
-Best effort is separate from an explicit omission. For the release owner's
-2026.8.1 exception, pass
-`-f telegram_waiver=2026.8.1-owner-approved`. This is accepted only when the
-actual target package is `2026.8.1` and the profile is `stable` or `full`.
+Best effort is separate from an explicit omission. The reviewed exceptions are
+`-f telegram_waiver=2026.8.1-owner-approved` and
+`-f telegram_waiver=2026.9.1-owner-approved`. Any future exception requires a
+reviewed code change; a matching `<target-version>-owner-approved` string alone
+is not authorization. The value must name the validated target's actual
+`package.json` version, the sealed candidate version must match, and the profile
+must be `stable` or `full`. Beta, prerelease, and unlisted targets are rejected.
+Package-spec overrides must be exactly `openclaw@<target-version>`; blank specs
+select the sealed candidate.
 It omits source Telegram QA, Package Acceptance Telegram E2E, and the
 published-package Telegram E2E; their evidence states **waived / not run**,
 never passed. Telegram unit tests and every other selected gate remain active,
@@ -509,7 +527,7 @@ artifact when package or Docker-facing stages need it.
 | Release target           | **Job:** `Resolve target ref`<br />**Backing workflow:** none<br />**Tests:** selected ref, optional expected Validation SHA, profile, concrete release-check groups, and focused live suite filter.<br />**Rerun:** select the concrete group for the failed surface.                                                                                                                                                                                                                                                                                                                                      |
 | Package artifact         | **Job:** `Prepare release package artifact`<br />**Backing workflow:** none<br />**Tests:** validates the umbrella's immutable package tuple, or packs one candidate tarball for a direct/focused Release Checks dispatch, then exposes it to downstream package-facing checks.<br />**Rerun:** the affected package, cross-OS, or live/E2E group.                                                                                                                                                                                                                                                          |
 | Install smoke            | **Job:** `Run install smoke`<br />**Backing workflow:** `Install Smoke`<br />**Tests:** full install path with root Dockerfile smoke image reuse, QR package install, root and gateway Docker smokes, installer Docker tests, and Bun global install plus CLI/local-agent/Gateway runtime smoke.<br />**Rerun:** `rerun_group=install-smoke`.                                                                                                                                                                                                                                                               |
-| Cross-OS                 | **Job:** `cross_os_release_checks`<br />**Backing workflow:** `OpenClaw Cross-OS Release Checks (Reusable)`<br />**Tests:** fresh and upgrade lanes on Linux, Windows, and macOS for the selected provider and mode, using the candidate tarball plus a baseline package.<br />**Rerun:** `rerun_group=cross-os`.                                                                                                                                                                                                                                                                                           |
+| Cross-OS                 | **Job:** `cross_os_release_checks`<br />**Backing workflow:** `OpenClaw Cross-OS Release Checks (Reusable)`<br />**Tests:** fresh and upgrade lanes on Linux, Windows, and macOS for the selected provider and mode, using the candidate tarball plus a baseline package. Linux gates publication; Windows/macOS are parallel advisory coverage with recorded pass/fail conclusions.<br />**Rerun:** `rerun_group=cross-os`.                                                                                                                                                                                |
 | Repo and live E2E        | **Job:** `Run repo/live E2E validation`<br />**Backing workflow:** `OpenClaw Live And E2E Checks (Reusable)`<br />**Tests:** repository E2E, live cache, OpenAI websocket streaming, native live provider and plugin shards, and Docker-backed live model/backend/gateway harnesses selected by `release_profile`.<br />**Runs:** `run_release_soak=true`, `release_profile=full`, or focused `rerun_group=live-e2e`.<br />**Rerun:** `rerun_group=live-e2e`, optionally with `live_suite_filter`.                                                                                                          |
 | Docker release path      | **Job:** `Run Docker release-path validation`<br />**Backing workflow:** `OpenClaw Live And E2E Checks (Reusable)`<br />**Tests:** release-path Docker chunks against the shared package artifact.<br />**Runs:** `run_release_soak=true`, `release_profile=full`, or focused `rerun_group=live-e2e`.<br />**Rerun:** `rerun_group=live-e2e`.                                                                                                                                                                                                                                                               |
 | Package Acceptance       | **Job:** `Run package acceptance`<br />**Backing workflow:** `Package Acceptance`<br />**Tests:** offline plugin package fixtures, plugin update, and published-upgrade survivor checks against the same tarball. The canonical mock-OpenAI Telegram package E2E is deferred for beta `all` without soak; explicit `package` and soak select it by default. Blocking release checks use the default latest published baseline; soak checks (`run_release_soak=true`) resolve the latest stable baseline once and run the reported-issue upgrade fixtures against it.<br />**Rerun:** `rerun_group=package`. |
@@ -621,7 +639,8 @@ expanded to every release-check lane, including package and Docker setup. Pick
 one concrete group after classifying the failed surface.
 The umbrella/controller also rejects `qa`; direct `OpenClaw Release Checks`
 dispatches may use it only as a deliberate manual aggregate of `qa-parity` and
-`qa-live`. Live, QA-live, and cross-OS filters must match their owning group.
+`qa-live`. Live and QA-live filters must match their owning group; cross-OS
+filters are also accepted for `all`.
 Mismatches fail before scheduling and never widen to an unfiltered run.
 Valid filter ids are defined in the reusable live/E2E workflow, including
 `docker-live-models`, `live-gateway-docker`,
@@ -638,8 +657,15 @@ The `live-gateway-advisory-docker` handle is an aggregate rerun handle for its
 three provider shards, so it still fans out to all advisory Docker gateway jobs.
 
 Use `cross_os_suite_filter` with `rerun_group=cross-os` when one cross-OS lane
-failed. The filter accepts an OS id, a suite id, or an OS/suite pair, for
-example `windows/packaged-upgrade`, `windows`, or `packaged-fresh`. Cross-OS
+failed. The filter accepts comma-separated OS ids, suite ids, or OS/suite pairs,
+for example `windows/packaged-upgrade`, `windows`, or `packaged-fresh`.
+All-group runs accept the same selections: `-f cross_os_suite_filter=ubuntu,macos`
+excludes Windows while retaining every Linux suite. `npm-stable-v1` and
+`npm-beta-v1` still qualify when advisory OS lanes are omitted, provided all
+three Linux suites (`packaged-fresh`, `installer-fresh`, and `packaged-upgrade`)
+remain selected and the other policy requirements hold. Omitted lanes are not
+run, never passed. Focused reruns remain focused evidence, not publication
+authorization. Cross-OS
 summaries include per-phase timings for packaged upgrade lanes, and long-running
 commands print heartbeat lines so a stuck update is visible before the job
 timeout.
@@ -669,6 +695,12 @@ harness/tooling/provenance, infrastructure/credential, or wrapper. Only a
 confirmed product failure changes the Code SHA. Use one diagnosis, one fix when
 needed, and one narrow retry, then reassess; do not automatically rerun `all`.
 Narrow evidence is not publish authorization by itself.
+
+Read the **advisory** entries in `release-ci-summary` alongside Release Decision.
+The manifest records each selected Windows/macOS cross-OS lane's advisory
+classification and actual conclusion; an advisory failure can coexist with a
+passing release decision. Keep its diagnostic artifacts for follow-up rather
+than reporting that lane as passed.
 
 For a regular release, record both Code SHA and Release SHA, the reuse policy
 and changed-path set, the green Code SHA parent run, and the lightweight Release
