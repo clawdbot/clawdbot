@@ -281,6 +281,7 @@ async function planWorkshopRelocation(
             destinationSkillDir: target.skillDir,
             destinationSkillFile: target.skillFile,
             config,
+            env,
           }))
         ) {
           plan.staleReason =
@@ -456,7 +457,14 @@ async function relocateLegacyWorkshopTargets(
     await persistUpdates(move.updates);
   }
   await persistUpdates(plan.updates);
-  const backupMigration = await migrateLegacyCollectionBackups(config, env);
+  const workshopSkillRelocations = new Map(
+    plan.moves.map((move) => [path.resolve(move.source), path.resolve(move.destination)]),
+  );
+  const backupMigration = await migrateLegacyCollectionBackups(
+    config,
+    env,
+    workshopSkillRelocations,
+  );
   return {
     movedSkills: plan.moves.filter((move) => !move.adopted).length,
     retargetedProposals,

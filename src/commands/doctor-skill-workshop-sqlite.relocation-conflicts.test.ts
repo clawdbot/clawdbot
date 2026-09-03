@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { applySkillProposal, proposeCreateSkill } from "../skills/workshop/service.js";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import { hashSkillProposalContent, importLegacySkillProposal } from "../skills/workshop/store.js";
 import * as workshopStore from "../skills/workshop/store.js";
@@ -366,6 +367,65 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
         target: { skillDir: legacySkillDir, skillFile: record.target.skillFile },
       },
     );
+  });
+
+  it("adopts a real applied proposal after an interrupted relocation", async () => {
+    const workspaceDir = await fs.realpath(
+      await tempDirs.make("openclaw-workshop-real-adoption-workspace-"),
+    );
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      config: {},
+      agentId: "main",
+      env: testState.env,
+      name: "real-adoption",
+      description: "Real applied proposal",
+      content: "# Real adoption\n",
+    });
+    const applied = await applySkillProposal({
+      workspaceDir,
+      config: {},
+      agentId: "main",
+      env: testState.env,
+      proposalId: proposal.record.id,
+      expectedRevisionHash: proposal.revisionHash,
+    });
+    await expect(fs.access(applied.record.target.skillFile)).resolves.toBeUndefined();
+    const legacySkillDir = path.join(workspaceDir, "skills", "real-adoption");
+    const legacyRecord = {
+      ...applied.record,
+      target: {
+        ...applied.record.target,
+        skillDir: legacySkillDir,
+        skillFile: path.join(legacySkillDir, "SKILL.md"),
+        source: "openclaw-workspace",
+      },
+    } satisfies SkillProposalRecord;
+    await workshopStore.updateSkillProposalRecord({
+      record: legacyRecord,
+      store: { env: testState.env },
+    });
+    // The applied service result is already at the destination. Repointing the
+    // persisted legacy target leaves the interrupted-move state: source absent,
+    // destination present.
+
+    const result = await migrateLegacySkillWorkshopProposals({
+      config: {},
+      env: testState.env,
+    });
+
+    expect(result.changes.join("\n")).toContain(
+      "Relocated 0 Skill Workshop skills, retargeted 1 proposal, marked 0 stale",
+    );
+    await expect(
+      readSkillProposalRecord(applied.record.id, { env: testState.env }),
+    ).resolves.toMatchObject({
+      status: "applied",
+      target: {
+        skillFile: applied.record.target.skillFile,
+        source: "openclaw-workshop",
+      },
+    });
   });
 
   it("adopts a skill moved before its proposal persistence and converges on rerun", async () => {

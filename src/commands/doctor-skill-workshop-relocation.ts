@@ -5,7 +5,8 @@ import { readWorkspaceSkillFile } from "../skills/lifecycle/workspace-skill-writ
 import { resolveSkillManifestMetadata } from "../skills/loading/frontmatter.js";
 import { readSkillFrontmatterSafe } from "../skills/loading/local-loader.js";
 import { resolveSkillDiscoveryLimits } from "../skills/loading/skill-root-discovery.js";
-import { hashSkillProposalContent } from "../skills/workshop/store.js";
+import { stripProposalFrontmatterForSkill } from "../skills/workshop/frontmatter.js";
+import { hashSkillProposalContent, readSkillProposal } from "../skills/workshop/store.js";
 import type { SkillProposalRecord } from "../skills/workshop/types.js";
 import { inferWorkspaceOwnerAgentId } from "./doctor-skill-workshop-collection-backups.js";
 
@@ -46,6 +47,7 @@ export async function verifyRelocationDestination(params: {
   destinationSkillDir: string;
   destinationSkillFile: string;
   config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
 }): Promise<boolean> {
   const content = await readWorkspaceSkillFile(params.destinationSkillFile);
   const frontmatter = readSkillFrontmatterSafe({
@@ -57,9 +59,27 @@ export async function verifyRelocationDestination(params: {
   const skillKey = frontmatter
     ? (resolveSkillManifestMetadata(frontmatter)?.skillKey ?? name)?.trim()
     : undefined;
+  let appliedContentHash = params.record.draftHash;
+  try {
+    const proposal = await readSkillProposal(
+      params.record.id,
+      { config: params.config, env: params.env },
+      {},
+      { config: params.config, reconcile: false },
+    );
+    if (proposal) {
+      appliedContentHash = hashSkillProposalContent(
+        stripProposalFrontmatterForSkill(proposal.content),
+      );
+    }
+  } catch {
+    // Legacy SQLite rows can have no proposal bundle. Their only available
+    // content fact is the stored hash, which older migration fixtures used for
+    // the applied file bytes.
+  }
   return (
     content !== null &&
-    hashSkillProposalContent(content) === params.record.draftHash &&
+    hashSkillProposalContent(content) === appliedContentHash &&
     name === params.record.target.skillKey &&
     skillKey === params.record.target.skillKey
   );
