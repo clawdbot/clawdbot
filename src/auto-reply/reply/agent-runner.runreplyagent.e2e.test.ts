@@ -4345,16 +4345,15 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const onPendingContinuation = vi.fn();
     const { run } = createMinimalRun({ opts: { onPendingContinuation } });
 
-    await expect(run()).resolves.toMatchObject({
+    const result = await run();
+    expect(result).toMatchObject({
       text: "I’m continuing this work and will send the result when it is ready.",
       replyToId: "msg",
     });
     expect(onPendingContinuation).toHaveBeenCalledOnce();
-    expect(onPendingContinuation.mock.calls[0]?.[0]).toMatchObject({
-      statusPayload: {
-        text: "I’m continuing this work and will send the result when it is ready.",
-      },
-    });
+    expect(
+      getReplyPayloadMetadata(requireRecord(result, "continuation status"))?.continuationStatus,
+    ).toBe(true);
   });
 
   it("delivers an explicit yield acknowledgment after accepting a child spawn", async () => {
