@@ -1,3 +1,4 @@
+import type { ConversationListItem } from "@openclaw/gateway-protocol";
 import { nothing } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -16,6 +17,8 @@ type CronTestPage = HTMLElement & {
   render: () => typeof nothing;
   cron: CronState;
   cronModelSuggestions: string[];
+  deliveryTargets: string[];
+  patchForm: (patch: Partial<CronState["cronForm"]>) => void;
 };
 
 function waitForCronPage(assertion: () => void) {
@@ -943,6 +946,92 @@ describe("CronPage editor state sync", () => {
 });
 
 describe("CronPage lifecycle", () => {
+  it("loads configured conversation targets for the selected announce channel", async () => {
+    const fallbackRequest = createRequest();
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "conversations.list") {
+        return {
+          conversations: [
+            {
+              conversationRef: "conv_telegram_configured_group",
+              channel: "telegram",
+              accountId: "default",
+              kind: "group",
+              target: "-1009876543210",
+              label: "Configured group",
+              firstSeenAt: 0,
+              lastSeenAt: 0,
+            },
+          ],
+        };
+      }
+      return fallbackRequest(method);
+    });
+    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
+    const page = createPage(createContext(gateway, "writer"));
+
+    await waitForCronPage(() => expect(page.cron.connected).toBe(true));
+    page.patchForm({ deliveryMode: "announce", deliveryChannel: "telegram" });
+
+    await waitForCronPage(() => expect(page.deliveryTargets).toHaveLength(1));
+    expect(request).toHaveBeenCalledWith("conversations.list", {
+      agentId: "writer",
+      channel: "telegram",
+      limit: 100,
+    });
+    expect(page.deliveryTargets).toEqual(["-1009876543210"]);
+  });
+
+  it("rejects conversation targets from an earlier channel selection", async () => {
+    const telegram = createDeferred<{ conversations: ConversationListItem[] }>();
+    const fallbackRequest = createRequest();
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "conversations.list") {
+        const channel = (params as { channel: string }).channel;
+        if (channel === "telegram") {
+          return telegram.promise;
+        }
+        return {
+          conversations: [
+            {
+              conversationRef: "conv_discord_current",
+              channel: "discord",
+              accountId: "default",
+              kind: "channel",
+              target: "channel:current",
+              firstSeenAt: 0,
+              lastSeenAt: 0,
+            },
+          ],
+        };
+      }
+      return fallbackRequest(method);
+    });
+    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
+    const page = createPage(createContext(gateway, "writer"));
+
+    await waitForCronPage(() => expect(page.cron.connected).toBe(true));
+    page.patchForm({ deliveryMode: "announce", deliveryChannel: "telegram" });
+    page.patchForm({ deliveryChannel: "discord" });
+    await waitForCronPage(() => expect(page.deliveryTargets).toEqual(["channel:current"]));
+
+    telegram.resolve({
+      conversations: [
+        {
+          conversationRef: "conv_telegram_stale",
+          channel: "telegram",
+          accountId: "default",
+          kind: "group",
+          target: "-100stale",
+          firstSeenAt: 0,
+          lastSeenAt: 0,
+        },
+      ],
+    });
+    await Promise.resolve();
+    expect(page.deliveryTargets).toEqual(["channel:current"]);
+  });
+
   it("registers idempotently when the module is evaluated again", async () => {
     const registered = customElements.get("openclaw-cron-page");
     expect(registered).toBeDefined();

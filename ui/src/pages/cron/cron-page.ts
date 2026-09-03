@@ -1,4 +1,5 @@
 import { consume } from "@lit/context";
+import type { ConversationListResult } from "@openclaw/gateway-protocol";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { AgentsListResult, CronJob, CronScratchGetResult } from "../../api/types.ts";
@@ -54,6 +55,7 @@ class CronPage extends OpenClawLightDomElement {
   @state() private cron = createInitialCronState();
   @state() private agentsList: AgentsListResult | null = null;
   @state() private cronModelSuggestions: string[] = [];
+  @state() private deliveryTargets: string[] = [];
   @state() private listTab: CronListTab = "tasks";
   @state() private detailTab: CronDetailTab = "settings";
   @state() private heartbeatScratch = "";
@@ -63,6 +65,7 @@ class CronPage extends OpenClawLightDomElement {
   private highlightedRunId: string | null = null;
   private pendingRunScroll = false;
   private modelSuggestionsState: CronState | null = null;
+  private deliveryConversationsRequest = 0;
   private heartbeatScratchRequest = 0;
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
@@ -141,6 +144,8 @@ class CronPage extends OpenClawLightDomElement {
     this.agentsList = connected ? this.context.agents.state.agentsList : null;
     this.cronModelSuggestions = [];
     this.modelSuggestionsState = null;
+    this.deliveryConversationsRequest += 1;
+    this.deliveryTargets = [];
   }
 
   private syncAgentsState() {
@@ -293,7 +298,58 @@ class CronPage extends OpenClawLightDomElement {
     }
     this.cron.cronForm = normalizeCronFormState({ ...this.cron.cronForm, ...patch }, patch);
     this.cron.cronFieldErrors = validateCronForm(this.cron.cronForm);
+    if (
+      "deliveryMode" in patch ||
+      "deliveryChannel" in patch ||
+      "deliveryAccountId" in patch ||
+      "agentId" in patch
+    ) {
+      void this.loadDeliveryConversations();
+    }
     this.requestCronUpdate();
+  }
+
+  private async loadDeliveryConversations(cronState: CronState = this.cron) {
+    const requestId = ++this.deliveryConversationsRequest;
+    const client = cronState.client;
+    const mode = cronState.cronForm.deliveryMode;
+    const channel = cronState.cronForm.deliveryChannel.trim();
+    const agentId = cronState.cronForm.agentId.trim() || cronState.cronAgentId?.trim() || "";
+    if (!this.canManageCron || !client || mode !== "announce" || !agentId || channel === "last") {
+      this.deliveryTargets = [];
+      return;
+    }
+    const connectionScope = this.gateway.capture();
+    if (!connectionScope) {
+      this.deliveryTargets = [];
+      return;
+    }
+    const isCurrent = () =>
+      requestId === this.deliveryConversationsRequest &&
+      this.cron === cronState &&
+      this.gateway.isCurrent(connectionScope);
+    try {
+      const result = await client.request<ConversationListResult>("conversations.list", {
+        agentId,
+        channel,
+        limit: 100,
+      });
+      if (isCurrent()) {
+        const accountId =
+          cronState.cronForm.deliveryAccountId.trim() ||
+          this.context.channels.state.channelsSnapshot?.channelDefaultAccountId?.[channel] ||
+          "default";
+        this.deliveryTargets = result.conversations
+          .filter((conversation) => conversation.accountId === accountId)
+          .map((conversation) => conversation.target);
+      }
+    } catch (error) {
+      if (isCurrent()) {
+        this.deliveryTargets = [];
+        cronState.cronError = `Could not load recipient suggestions: ${formatUiError(error)}`;
+        this.requestCronUpdate(cronState);
+      }
+    }
   }
 
   private selectJob(job: CronJob, runId: string | null = null) {
@@ -306,6 +362,7 @@ class CronPage extends OpenClawLightDomElement {
     }
     this.cron.cronCreateOpen = false;
     startCronEdit(this.cron, job);
+    void this.loadDeliveryConversations();
     this.requestCronUpdate();
     if (job.payload?.kind === "heartbeat") {
       void this.loadHeartbeatScratch(this.cron, job.id, this.heartbeatScratchRequest);
@@ -379,6 +436,7 @@ class CronPage extends OpenClawLightDomElement {
     this.pendingRouteData = null;
     // A clone is a prefilled create: the editor submits cron.add, not update.
     startCronClone(this.cron, job);
+    void this.loadDeliveryConversations();
     this.cron.cronCreateOpen = true;
     this.requestCronUpdate();
   }
@@ -481,6 +539,7 @@ class CronPage extends OpenClawLightDomElement {
       cron: this.cron,
       agentsList: this.agentsList,
       modelSuggestions: this.cronModelSuggestions,
+      conversationTargets: this.deliveryTargets,
     });
     const canManage = this.canManageCron;
     return html`

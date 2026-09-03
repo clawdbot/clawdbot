@@ -77,9 +77,14 @@ describe("buildCronSuggestions", () => {
       cron,
       agentsList: null,
       modelSuggestions: [],
+      conversationTargets: ["-1009876543210"],
     });
 
-    expect(suggestions.deliveryToSuggestions).toEqual(scenario.recipients);
+    expect(suggestions.deliveryToSuggestions).toEqual(
+      scenario.mode === "webhook"
+        ? scenario.recipients
+        : [...scenario.recipients, "-1009876543210"].sort(),
+    );
     expect(suggestions.accountTargets).toEqual(scenario.accounts);
   });
 });

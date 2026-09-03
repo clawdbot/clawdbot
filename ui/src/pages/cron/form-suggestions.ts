@@ -18,6 +18,7 @@ export function buildCronSuggestions(params: {
   cron: CronState;
   agentsList: AgentsListResult | null;
   modelSuggestions: string[];
+  conversationTargets?: readonly string[];
 }) {
   const configValue = currentConfigObject(params.runtimeConfig);
   const channel = params.cron.cronForm.deliveryChannel.trim() || "last";
@@ -44,9 +45,10 @@ export function buildCronSuggestions(params: {
         : "";
     }),
   ]);
-  const deliveryTargets = normalizeSortedUniqueTrimmedStringList(
-    params.cron.cronJobs.map((job) => job.delivery?.to),
-  );
+  const deliveryTargets = normalizeSortedUniqueTrimmedStringList([
+    ...params.cron.cronJobs.map((job) => job.delivery?.to),
+    ...(params.conversationTargets ?? []),
+  ]);
   const accountTargets = (
     channel === "last"
       ? Object.values(params.channels.channelsSnapshot?.channelAccounts ?? {}).flat()
