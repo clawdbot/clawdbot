@@ -40,7 +40,7 @@ const timer = setInterval(() => {
   }
   clearInterval(timer);
   Date.now = () => originalNow() + offsetMs;
-  process.stdout.write(`[clock-shift] offsetMs=${offsetMs}` + String.fromCharCode(10));
+  process.stdout.write("[clock-shift] offsetMs=" + offsetMs + String.fromCharCode(10));
 }, 10);
 timer.unref();
 `;
