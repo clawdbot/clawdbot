@@ -62,6 +62,8 @@ Select `openai/gpt-6-astra` with an OpenAI API-key profile or a ChatGPT/Codex
 subscription that has access to Astra. Access is rolling out; a successful
 account catalog remains authoritative, so adding model support does not grant
 access to an account that has not received it.
+If ChatGPT/Codex catalog discovery is unavailable, the offline fallback list
+omits Astra until account discovery succeeds.
 
 ```bash
 openclaw models set openai/gpt-6-astra
