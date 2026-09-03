@@ -635,6 +635,26 @@ export function appendUpdateGenerationReceipt(
   };
 }
 
+/** Parser-only append path for already-decoded receipts whose object identity must be retained. */
+export function appendDecodedUpdateGenerationReceipt(
+  record: UpdateGenerationTransactionRecord | null,
+  receipt: UpdateGenerationTransactionReceipt,
+): UpdateGenerationTransactionRecord {
+  assertReceiptTransition(record, receipt);
+  if (!record) {
+    if (receipt.kind !== "intent") {
+      throw new Error("Unreachable update generation receipt state");
+    }
+    return {
+      formatVersion: 2,
+      transactionId: receipt.transactionId,
+      namespaceKey: receipt.namespaceKey,
+      receipts: [receipt],
+    };
+  }
+  return { ...record, receipts: [...record.receipts, receipt] };
+}
+
 export function projectUpdateGenerationTransaction(
   record: UpdateGenerationTransactionRecord,
 ): UpdateGenerationProjection {

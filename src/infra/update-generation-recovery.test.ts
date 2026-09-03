@@ -803,6 +803,97 @@ describe("update generation recovery transition matrix", () => {
     );
   });
 
+  it("builds recovery broker requests only from the pre-await authenticated record", async () => {
+    const previous = selection("a");
+    let record = append(
+      null,
+      receipt("intent", 0, {
+        namespaceKey: "openclaw-global-owner",
+        serviceBefore: { managed: true, running: true, enabled: true },
+        previousSelection: null,
+        previousPackageVersion: null,
+        stableBindingAlreadyVerified: false,
+        brokerId: "test-broker",
+        brokerRevision: null,
+      }),
+    );
+    record = append(
+      record,
+      receipt("generation-materialization-intent", 1, {
+        role: "previous",
+        sourceArtifactId: "original-source",
+        generationId: previous.generationId,
+        manifest: manifest("a"),
+        packageVersion: "1.0.0",
+        entrypointRelativePath: previous.entrypointRelativePath,
+      }),
+    );
+    const broker = createTestReplayableConfinedFilesystem();
+
+    const pending = reconcilePendingUpdateGenerationBrokerMutation({
+      record,
+      filesystem: broker.filesystem,
+    });
+    const aliasedIntent = record.receipts.at(-1);
+    if (!aliasedIntent || aliasedIntent.kind !== "generation-materialization-intent") {
+      throw new Error("expected aliased materialization intent");
+    }
+    aliasedIntent.sourceArtifactId = "mutated-after-call";
+    const reconciled = await pending;
+
+    expect(reconciled?.request.kind).toBe("materialize-generation");
+    if (reconciled?.request.kind === "materialize-generation") {
+      expect(reconciled.request.sourceArtifactId).toBe("original-source");
+    }
+  });
+
+  it("adjudicates only from pre-await authenticated record and observation snapshots", async () => {
+    const previous = selection("a");
+    const record = append(
+      null,
+      receipt("intent", 0, {
+        namespaceKey: "openclaw-global-owner",
+        serviceBefore: { managed: true, running: true, enabled: true },
+        previousSelection: previous,
+        previousPackageVersion: "1.0.0",
+        stableBindingAlreadyVerified: true,
+        brokerId: "test-broker",
+        brokerRevision: null,
+      }),
+    );
+    const valid = await authenticateTestRecoveryObservation({
+      record,
+      physical: physical({
+        selector: previous,
+        generations: [previous],
+        bindingConverged: true,
+        serviceState: { running: true, enabled: true },
+      }),
+    });
+    const aliasedObservation = structuredClone(valid.observation);
+    const aliasedRuntime = structuredClone(valid.runtime);
+
+    const pending = adjudicateAuthenticatedUpdateGenerationTransaction(
+      record,
+      valid.filesystem,
+      aliasedObservation,
+      aliasedRuntime,
+    );
+    const intentReceipt = record.receipts[0];
+    if (intentReceipt?.kind !== "intent" || !intentReceipt.previousSelection) {
+      throw new Error("expected a prior generation intent");
+    }
+    intentReceipt.previousSelection.generationId = "c".repeat(32);
+    aliasedObservation.selector = null;
+    aliasedObservation.generations = [];
+    aliasedRuntime.bindingConverged = false;
+
+    await expect(pending).resolves.toMatchObject({
+      action: "resume-materialization",
+      role: "candidate",
+    });
+  });
+
   it("binds authenticated recovery observations to the exact projected broker revision", async () => {
     const previous = selection("a");
     const record = append(
@@ -840,12 +931,12 @@ describe("update generation recovery transition matrix", () => {
       {
         label: "broker",
         identityOverrides: { brokerId: "other-broker" },
-        message: "different update broker",
+        message: "outside the confined provider scope",
       },
       {
         label: "namespace",
         identityOverrides: { namespaceKey: "other-namespace" },
-        message: "different generation namespace",
+        message: "outside the confined provider scope",
       },
       {
         label: "transaction",

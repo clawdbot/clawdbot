@@ -1,14 +1,17 @@
 /** Injected persistence boundary for the authoritative update transaction ledger. */
 import { isDeepStrictEqual } from "node:util";
 import type { UpdateGenerationConfinedFilesystem } from "./update-generation-confined-filesystem.js";
-import { parseAuthenticatedUpdateGenerationTransactionRecord } from "./update-generation-contract-parser.js";
+import {
+  parseAuthenticatedUpdateGenerationTransactionRecord,
+  parseUpdateGenerationTransactionReceipt,
+  type AuthenticatedUpdateGenerationTransactionRecord,
+} from "./update-generation-contract-parser.js";
 import {
   appendUpdateGenerationReceipt,
   projectUpdateGenerationTransaction,
   type UpdateGenerationTransactionReceipt,
   type UpdateGenerationTransactionRecord,
 } from "./update-generation-contract.js";
-import { brokerReceiptsInEvidence } from "./update-generation-evidence.js";
 
 export type UpdateGenerationTransactionSnapshot = {
   /** Opaque revision owned by the authoritative update ledger. */
@@ -48,17 +51,18 @@ export type UpdateGenerationLedgerHook = {
 export async function authenticateUpdateGenerationTransactionRecord(
   filesystem: UpdateGenerationConfinedFilesystem,
   record: UpdateGenerationTransactionRecord,
-): Promise<void> {
+): Promise<AuthenticatedUpdateGenerationTransactionRecord> {
   const authenticated = await parseAuthenticatedUpdateGenerationTransactionRecord(
     record,
     async (brokerReceipt) => {
-      await filesystem.authenticate(brokerReceipt);
+      return await filesystem.authenticate(brokerReceipt);
     },
   );
   const intent = projectUpdateGenerationTransaction(authenticated).intent;
   if (intent.brokerId !== filesystem.brokerId || intent.namespaceKey !== filesystem.namespaceKey) {
     throw new Error("Generation transaction is outside the confined provider scope");
   }
+  return authenticated;
 }
 
 export async function persistUpdateGenerationReceipt(params: {
@@ -70,79 +74,94 @@ export async function persistUpdateGenerationReceipt(params: {
   if (!params.filesystem) {
     throw new Error("Generation state machine requires a confined filesystem provider");
   }
-  if (params.snapshot) {
-    await authenticateUpdateGenerationTransactionRecord(params.filesystem, params.snapshot.record);
-  }
-  if ("evidence" in params.receipt) {
-    for (const brokerReceipt of brokerReceiptsInEvidence(params.receipt.evidence)) {
-      await params.filesystem.authenticate(brokerReceipt);
-    }
-  }
+  const receipt = parseUpdateGenerationTransactionReceipt(params.receipt);
+  const expectedLedgerRevision = params.snapshot?.revision ?? null;
+  const snapshot = params.snapshot
+    ? Object.freeze({
+        revision: params.snapshot.revision,
+        record: await authenticateUpdateGenerationTransactionRecord(
+          params.filesystem,
+          params.snapshot.record,
+        ),
+      })
+    : null;
   if (
-    params.snapshot &&
-    params.receipt.kind === "intent" &&
-    params.snapshot.record.namespaceKey !== params.receipt.namespaceKey
+    snapshot &&
+    receipt.kind === "intent" &&
+    snapshot.record.namespaceKey !== receipt.namespaceKey
   ) {
     throw new Error("Update generation ledger snapshot belongs to a different namespace");
   }
-  const replay = params.snapshot?.record.receipts.find(
-    (receipt) => receipt.receiptId === params.receipt.receiptId,
+  const replay = snapshot?.record.receipts.find(
+    (persisted) => persisted.receiptId === receipt.receiptId,
   );
   if (replay) {
-    if (!isDeepStrictEqual(replay, params.receipt)) {
+    if (!isDeepStrictEqual(replay, receipt)) {
       throw new Error("Update generation receipt id was replayed with different content");
     }
-    if (!params.snapshot) {
+    if (!snapshot) {
       throw new Error("Update generation receipt replay is missing its ledger snapshot");
     }
-    return params.snapshot;
+    return snapshot;
   }
-  let priorRecord: UpdateGenerationTransactionRecord | null = params.snapshot?.record ?? null;
-  if (params.receipt.kind === "intent" && priorRecord) {
+  let priorRecord: UpdateGenerationTransactionRecord | null = snapshot?.record ?? null;
+  if (receipt.kind === "intent" && priorRecord) {
     const priorProjection = projectUpdateGenerationTransaction(priorRecord);
     if (priorProjection.latest.kind !== "cleanup-completed") {
       throw new Error("A new update generation transaction requires completed prior cleanup");
     }
-    if (params.receipt.transactionId === priorRecord.transactionId) {
+    if (receipt.transactionId === priorRecord.transactionId) {
       throw new Error("A new update generation transaction requires a unique transaction id");
     }
     if (
-      params.receipt.brokerId !== priorProjection.intent.brokerId ||
-      params.receipt.brokerRevision !== priorProjection.brokerRevision
+      receipt.brokerId !== priorProjection.intent.brokerId ||
+      receipt.brokerRevision !== priorProjection.brokerRevision
     ) {
       throw new Error("A new generation transaction must continue its broker revision chain");
     }
     priorRecord = null;
   }
-  const nextRecord = appendUpdateGenerationReceipt(priorRecord, params.receipt);
-  await authenticateUpdateGenerationTransactionRecord(params.filesystem, nextRecord);
+  const nextRecord = await authenticateUpdateGenerationTransactionRecord(
+    params.filesystem,
+    appendUpdateGenerationReceipt(priorRecord, receipt),
+  );
+  const canonicalReceipt = nextRecord.receipts.at(-1);
+  if (!canonicalReceipt || canonicalReceipt.receiptId !== receipt.receiptId) {
+    throw new Error("Authenticated update generation record lost its appended receipt");
+  }
   const result = await params.ledger.compareAndSwap({
     namespaceKey: nextRecord.namespaceKey,
-    expectedRevision: params.snapshot?.revision ?? null,
-    receipt: params.receipt,
+    expectedRevision: expectedLedgerRevision,
+    receipt: canonicalReceipt,
     nextRecord,
   });
   if (result.status === "conflict") {
     throw new Error("Authoritative update ledger revision changed during generation transaction");
   }
-  if (!result.snapshot.revision.trim()) {
+  const resultStatus = result.status;
+  const resultRevision = result.snapshot.revision;
+  if (!resultRevision.trim()) {
     throw new Error("Authoritative update ledger returned an invalid revision");
   }
-  await authenticateUpdateGenerationTransactionRecord(params.filesystem, result.snapshot.record);
+  const resultRecord = await authenticateUpdateGenerationTransactionRecord(
+    params.filesystem,
+    result.snapshot.record,
+  );
+  const authenticatedResult = Object.freeze({ revision: resultRevision, record: resultRecord });
   if (
-    result.snapshot.record.namespaceKey !== nextRecord.namespaceKey ||
-    result.snapshot.record.transactionId !== nextRecord.transactionId
+    resultRecord.namespaceKey !== nextRecord.namespaceKey ||
+    resultRecord.transactionId !== nextRecord.transactionId
   ) {
     throw new Error("Authoritative update ledger returned a different transaction namespace");
   }
-  const persistedReceipt = result.snapshot.record.receipts.find(
-    (receipt) => receipt.receiptId === params.receipt.receiptId,
+  const persistedReceipt = resultRecord.receipts.find(
+    (persisted) => persisted.receiptId === canonicalReceipt.receiptId,
   );
-  if (!persistedReceipt || !isDeepStrictEqual(persistedReceipt, params.receipt)) {
+  if (!persistedReceipt || !isDeepStrictEqual(persistedReceipt, canonicalReceipt)) {
     throw new Error("Authoritative update ledger replayed different receipt content");
   }
-  if (result.status === "stored" && !isDeepStrictEqual(result.snapshot.record, nextRecord)) {
+  if (resultStatus === "stored" && !isDeepStrictEqual(resultRecord, nextRecord)) {
     throw new Error("Authoritative update ledger stored an unexpected transaction record");
   }
-  return result.snapshot;
+  return authenticatedResult;
 }

@@ -123,8 +123,11 @@ export async function reconcilePendingUpdateGenerationBrokerMutation(params: {
   if (!params.filesystem) {
     throw new Error("Generation state machine requires a confined filesystem provider");
   }
-  await authenticateUpdateGenerationTransactionRecord(params.filesystem, params.record);
-  const request = buildPendingUpdateGenerationBrokerRequest(params.record);
+  const authenticatedRecord = await authenticateUpdateGenerationTransactionRecord(
+    params.filesystem,
+    params.record,
+  );
+  const request = buildPendingUpdateGenerationBrokerRequest(authenticatedRecord);
   if (!request) {
     return null;
   }
@@ -253,31 +256,42 @@ export async function adjudicateUpdateGenerationTransaction(
   if (!filesystem) {
     throw new Error("Generation state machine requires a confined filesystem provider");
   }
-  const state = projectUpdateGenerationTransaction(record);
-  if (observation.brokerId !== state.intent.brokerId) {
+  const runtimeObservation: UpdateGenerationRuntimeObservation = Object.freeze({
+    bindingConverged: runtime.bindingConverged,
+    serviceState: runtime.serviceState
+      ? Object.freeze({
+          running: runtime.serviceState.running,
+          enabled: runtime.serviceState.enabled,
+        })
+      : null,
+  });
+  const [authenticatedRecord, authenticatedObservation] = await Promise.all([
+    authenticateUpdateGenerationTransactionRecord(filesystem, record),
+    filesystem.authenticate(observation),
+  ]);
+  const state = projectUpdateGenerationTransaction(authenticatedRecord);
+  if (authenticatedObservation.brokerId !== state.intent.brokerId) {
     throw new Error("Recovery observation belongs to a different update broker");
   }
-  if (observation.namespaceKey !== state.intent.namespaceKey) {
+  if (authenticatedObservation.namespaceKey !== state.intent.namespaceKey) {
     throw new Error("Recovery observation belongs to a different generation namespace");
   }
-  if (observation.transactionId !== state.intent.transactionId) {
+  if (authenticatedObservation.transactionId !== state.intent.transactionId) {
     throw new Error("Recovery observation belongs to a different generation transaction");
   }
-  if (observation.previousRevision !== state.brokerRevision) {
+  if (authenticatedObservation.previousRevision !== state.brokerRevision) {
     throw new Error("Recovery observation does not continue the projected broker revision");
   }
-  if (state.brokerOperationIds.has(observation.operationId)) {
+  if (state.brokerOperationIds.has(authenticatedObservation.operationId)) {
     throw new Error("Recovery observation replays a completed broker operation id");
   }
-  await authenticateUpdateGenerationTransactionRecord(filesystem, record);
-  await filesystem.authenticate(observation);
   const physical: UpdateGenerationPhysicalState = {
-    selector: observation.selector,
-    selectorDurable: observation.selectorDurable,
-    generations: observation.generations,
-    retainedPair: observation.retainedPair,
-    bindingConverged: runtime.bindingConverged,
-    serviceState: runtime.serviceState,
+    selector: authenticatedObservation.selector,
+    selectorDurable: authenticatedObservation.selectorDurable,
+    generations: authenticatedObservation.generations,
+    retainedPair: authenticatedObservation.retainedPair,
+    bindingConverged: runtimeObservation.bindingConverged,
+    serviceState: runtimeObservation.serviceState,
   };
   const pendingFailure = state.latest.kind === "failure" ? state.latest : null;
   const latest = pendingFailure ? state.latestTransition : state.latest;
