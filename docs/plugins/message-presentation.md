@@ -157,8 +157,9 @@ Button semantics:
   cancelled, Telegram, Discord and Slack edit the delivered message, remove its
   actions, and append the terminal status; LINE cannot edit a message it already
   delivered, so a tap that arrives after the question ended is answered with a
-  notice instead. LINE draws at most four controls on one card, so a question
-  needing more degrades to label text. WhatsApp, Signal, and iMessage render up
+  notice instead. LINE draws at most four controls on one card, so the fifth —
+  the **Other…** entry beside four options — falls into the card's own text
+  rather than becoming a button. WhatsApp, Signal, and iMessage render up
   to four single-select choices as `1️⃣` through `4️⃣` reactions. Other question
   shapes degrade to label text, and the user can answer with a plain-text
   reply.
@@ -167,7 +168,7 @@ Button semantics:
   visible text. A channel can omit this one native control while keeping
   declared-choice controls native when it cannot target a text composer safely.
   Telegram maps it to **Other…** and Force Reply. LINE renders it as a postback
-  control that moves the question onto its free-text path without answering it.
+  control that leaves the question open and asks for a typed answer.
   Discord and Slack keep the visible text route.
 - `action.type: "url"` opens a normal link.
 - `action.type: "web-app"` launches a channel-native web app. Set `url` for a
