@@ -20,7 +20,11 @@ import type {
   PreparedMemoryPromptSection,
 } from "./registry-contribution-types.js";
 import type { PluginRegistry } from "./registry-types.js";
-import { requireActivePluginRegistry, resolveDirectPluginRegistrationOwner } from "./runtime.js";
+import {
+  getPluginRegistrationContext,
+  requireActivePluginRegistry,
+  resolveDirectPluginRegistrationOwner,
+} from "./runtime.js";
 
 const log = createSubsystemLogger("plugins/memory-state");
 
@@ -104,6 +108,11 @@ export function registerMemoryCapability(
   requestedPluginId: string,
   capability: MemoryPluginCapability,
 ): void {
+  const registrar = getPluginRegistrationContext()?.registerMemoryCapability;
+  if (registrar) {
+    registrar(capability);
+    return;
+  }
   const pluginId = resolveDirectPluginRegistrationOwner(requestedPluginId) ?? requestedPluginId;
   const registry = requireActivePluginRegistry();
   registry.memoryCapabilities.push({ pluginId, capability });

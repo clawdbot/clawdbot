@@ -43,7 +43,7 @@ import {
   globalAfterAll1,
 } from "./loader.test-harness.js";
 import { getActiveMemorySearchManagerCore } from "./memory-runtime.js";
-import { resolveMemoryCapabilityRegistration } from "./memory-state.js";
+import { registerMemoryCapability, resolveMemoryCapabilityRegistration } from "./memory-state.js";
 
 afterEach(globalAfterEach0);
 afterAll(globalAfterAll1);
@@ -530,18 +530,21 @@ describe("loadOpenClawPlugins", () => {
     runRegistryScenarios(scenarios, ({ loadRegistry }) => loadRegistry());
   });
 
-  it("routes indexing I/O to the configured memory slot owner", async () => {
+  it("routes direct-facade indexing I/O to the configured memory slot owner", async () => {
     const traceKey = "openclaw.test.memory-slot-runtime-owner";
+    const facadeKey = "openclaw.test.register-memory-capability";
     const trace: string[] = [];
     (globalThis as Record<PropertyKey, unknown>)[Symbol.for(traceKey)] = trace;
-    const runtimePluginBody = (id: string, includeRecall: boolean) => `
+    (globalThis as Record<PropertyKey, unknown>)[Symbol.for(facadeKey)] = registerMemoryCapability;
+    const runtimePluginBody = (id: string, includeRecall: boolean, direct: boolean) => `
       const trace = globalThis[Symbol.for(${JSON.stringify(traceKey)})];
       const id = ${JSON.stringify(id)};
+      ${direct ? `const registerMemoryCapability = globalThis[Symbol.for(${JSON.stringify(facadeKey)})];` : ""}
       module.exports = {
         id,
         kind: "memory",
         register(api) {
-          api.registerMemoryCapability({
+          const capability = {
             runtime: {
               async getMemorySearchManager() {
                 trace.push(id + ":manager");
@@ -559,14 +562,15 @@ describe("loadOpenClawPlugins", () => {
             },
             ${includeRecall ? 'deterministicRecallToolName: "memory_search", supportsPrivateTranscriptRecall: true,' : ""}
             promptBuilder: () => [id + " prompt"],
-          });
+          };
+          ${direct ? "registerMemoryCapability(id, capability);" : "api.registerMemoryCapability(capability);"}
         },
       };`;
 
     try {
       const selected = writePlugin({
         id: "memory-lancedb",
-        body: runtimePluginBody("memory-lancedb", false),
+        body: runtimePluginBody("memory-lancedb", false, true),
       });
       updatePluginManifest(selected, {
         kind: "memory",
@@ -579,7 +583,7 @@ describe("loadOpenClawPlugins", () => {
         id: "memory-core",
         dir: sidecarDir,
         filename: "index.cjs",
-        body: runtimePluginBody("memory-core", true),
+        body: runtimePluginBody("memory-core", true, false),
       });
       updatePluginManifest(sidecar, { kind: "memory" });
       process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
@@ -609,6 +613,7 @@ describe("loadOpenClawPlugins", () => {
       expect(trace).toEqual(["memory-lancedb:manager", "memory-lancedb:sync:post-compaction"]);
     } finally {
       delete (globalThis as Record<PropertyKey, unknown>)[Symbol.for(traceKey)];
+      delete (globalThis as Record<PropertyKey, unknown>)[Symbol.for(facadeKey)];
     }
   });
 
