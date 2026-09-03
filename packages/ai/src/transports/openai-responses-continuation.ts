@@ -2,7 +2,6 @@ import { stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ResponseInput, ResponseOutputItem } from "openai/resources/responses/responses.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
-import { registerSessionResourceCleanup } from "../session-resources.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import { sha256Hex } from "./transport-utils.js";
 
@@ -215,13 +214,14 @@ export function claimOpenAIResponsesHttpContinuation(
   };
 }
 
-registerSessionResourceCleanup((sessionId) => {
-  for (const [key, entry] of httpContinuationEntries) {
-    if (!sessionId || entry.sessionId === sessionId) {
-      if (entry.kind === "ready") {
-        clearTimeout(entry.idleTimer);
-      }
-      httpContinuationEntries.delete(key);
-    }
-  }
-});
+// Deliberately NOT registered against registerSessionResourceCleanup: that hook
+// fires from AgentSession.dispose() after every run attempt, not only at genuine
+// conversation end -- registering here would wipe a just-committed ready entry
+// before the *next* turn of the same ongoing session ever gets to reuse it,
+// silently defeating HTTP continuation for every multi-turn conversation (the
+// per-attempt dispose cadence is correct for openai-responses-websocket.ts's live
+// socket, whose own registration this pattern was copied from, but wrong for this
+// cache, which is keyed by the stable cross-turn sessionId on purpose). This
+// module's own idle TTL (HTTP_CONTINUATION_IDLE_TTL_MS) and aggregate byte cap
+// (MAX_HTTP_CONTINUATION_RETAINED_BYTES) already bound its lifetime and memory
+// footprint without needing an external disposal signal.

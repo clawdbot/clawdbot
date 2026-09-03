@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanupSessionResources } from "../session-resources.js";
 import {
   claimOpenAIResponsesHttpContinuation,
@@ -68,6 +68,17 @@ function nextRequest(phase = "final_answer"): ResponsesContinuationRequest {
   };
 }
 
+// This module's continuation cache is process-global and no longer wired to
+// any per-test/per-session reset signal (see openai-responses-continuation.ts
+// -- the removed registerSessionResourceCleanup call is exactly the per-attempt
+// wipe this fix eliminates in production). Each test gets its own sessionId
+// instead, so cases never share cache entries and need no cross-test reset.
+let currentTestSessionId = "unset";
+let testSessionCounter = 0;
+beforeEach(() => {
+  currentTestSessionId = `session-${++testSessionCounter}`;
+});
+
 function claim(params: {
   sessionId?: string;
   authorization?: string;
@@ -75,7 +86,7 @@ function claim(params: {
   request?: ResponsesContinuationRequest;
 }) {
   return claimOpenAIResponsesHttpContinuation({
-    sessionId: params.sessionId ?? "session-1",
+    sessionId: params.sessionId ?? currentTestSessionId,
     apiKey: "api-key",
     baseUrl: "https://api.openai.com/v1",
     headers: {
@@ -90,7 +101,6 @@ function claim(params: {
 }
 
 afterEach(() => {
-  cleanupSessionResources();
   vi.useRealTimers();
 });
 
@@ -343,16 +353,29 @@ describe("OpenAI Responses continuation", () => {
     expect(claim({ request: nextRequest() })?.request.previous_response_id).toBe("resp_owner");
   });
 
-  it("prevents cleanup-time claims from resurrecting session state", () => {
-    const stale = claim({});
-    cleanupSessionResources("session-1");
-    stale?.commit(continuationState().lastRequest, {
-      id: "resp_stale",
+  it("survives the generic per-run-attempt session cleanup signal", () => {
+    // AgentSession.dispose() -- which calls cleanupSessionResources(sessionId)
+    // -- runs after EVERY embedded run attempt, not only at genuine
+    // conversation end (see attempt-subscription-cleanup.ts). A ready
+    // continuation entry has to survive that per-attempt signal, or the
+    // *next* turn of the same ongoing conversation never finds it and HTTP
+    // continuation silently never engages across separate turns, even though
+    // it works fine within a single run's own tool-calling loop. Only
+    // registerSessionResourceCleanup consumers still tied to that signal
+    // (e.g. openai-responses-websocket.ts's live socket) should react to it;
+    // this module intentionally does not.
+    const first = claim({});
+    first?.commit(continuationState().lastRequest, {
+      id: "resp_1",
       output: continuationState().lastResponseItems,
     });
 
+    // Simulates AgentSession.dispose() firing between two separate turns of
+    // the same conversation, both keyed by the same sessionId.
+    cleanupSessionResources(currentTestSessionId);
+
     const next = claim({ request: nextRequest() });
-    expect(next?.request.previous_response_id).toBeUndefined();
+    expect(next?.request.previous_response_id).toBe("resp_1");
     next?.release();
   });
 
