@@ -607,7 +607,7 @@ suite.define(() => {
     await openChatSidePanelType(page, "Side chat");
     const panel = page.getByRole("region", { name: "Side panel" });
     await panel.getByRole("button", { name: "Expand side panel" }).click();
-    await panel.getByRole("button", { name: "Restore side panel" }).waitFor();
+    await panel.getByRole("button", { name: "Collapse" }).waitFor();
 
     const shellControls = page.locator(
       ".macos-titlebar-controls button:visible, .sidebar-attention--floating button:visible",
