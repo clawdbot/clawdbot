@@ -14,7 +14,10 @@ import {
   ensureCodexPluginActivation,
   type CodexPluginActivationResult,
 } from "./plugin-activation.js";
-import { clearPersistedAppApprovalOverrides } from "./plugin-app-approval-overrides.js";
+import {
+  clearPersistedAppApprovalOverrides,
+  type CodexAppApprovalOverrideDiagnostic,
+} from "./plugin-app-approval-overrides.js";
 import {
   readCodexPluginInventory,
   type CodexPluginInventory,
@@ -75,13 +78,13 @@ export type PluginAppPolicyContext = {
 type CodexPluginThreadConfigDiagnostic =
   | CodexPluginInventoryDiagnostic
   | CodexPluginThreadAppAdmissionDiagnostic
+  | CodexAppApprovalOverrideDiagnostic
   | {
       code:
         | "account_app_ownership_unavailable"
         | "plugin_activation_failed"
         | "plugin_config_timeout"
-        | "app_not_ready"
-        | "approval_overrides_clear_failed";
+        | "app_not_ready";
       plugin?: ResolvedCodexPluginPolicy;
       message: string;
     };

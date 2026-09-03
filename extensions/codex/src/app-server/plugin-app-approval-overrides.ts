@@ -1,7 +1,12 @@
 import type { ResolvedCodexPluginPolicy } from "./config.js";
 import type { CodexPluginOwnedApp, CodexPluginRuntimeRequest } from "./plugin-inventory.js";
-import type { CodexPluginThreadConfig } from "./plugin-thread-config.js";
 import { isJsonObject, type CodexConfigEdit, type JsonObject } from "./protocol.js";
+
+export type CodexAppApprovalOverrideDiagnostic = {
+  code: "approval_overrides_clear_failed";
+  plugin?: ResolvedCodexPluginPolicy;
+  message: string;
+};
 
 export async function clearPersistedAppApprovalOverrides(params: {
   request: CodexPluginRuntimeRequest;
@@ -9,7 +14,7 @@ export async function clearPersistedAppApprovalOverrides(params: {
   config: JsonObject;
   plugin?: ResolvedCodexPluginPolicy;
   app: CodexPluginOwnedApp;
-  diagnostics: CodexPluginThreadConfig["diagnostics"];
+  diagnostics: Pick<CodexAppApprovalOverrideDiagnostic[], "push">;
 }): Promise<boolean> {
   try {
     const overrideKeyPaths = readPersistedAppApprovalOverrideKeyPaths(params.config, params.app);
