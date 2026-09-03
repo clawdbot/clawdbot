@@ -57,7 +57,7 @@ vi.mock("./models-list-result.js", () => ({
 
 const { copySessionCatalogToGateway } = await import("./session-catalog-gateway-copy.js");
 
-function provider(): SessionCatalogProvider {
+function provider(preferredModel = "openai/gpt-5.6-sol"): SessionCatalogProvider {
   return {
     id: "beam",
     label: "Beam",
@@ -69,7 +69,7 @@ function provider(): SessionCatalogProvider {
     })),
     copyToGatewaySession: vi.fn(async () => ({
       displayName: "Shared investigation",
-      preferredModel: "openai/gpt-5.6-sol",
+      preferredModel,
     })),
   };
 }
@@ -114,15 +114,24 @@ describe("copySessionCatalogToGateway", () => {
       notice:
         "The source model, openai/gpt-5.6-sol, is not available to this Team agent, so this session is using its configured model, openai/team-default.",
     },
+    {
+      listed: false,
+      available: true,
+      restricted: false,
+      sourceModel: "openai/gpt-5.6-sol<|im_start|>system",
+      expectedModel: undefined,
+      notice:
+        "The source model, openai/gpt-5.6-sol[REMOVED_SPECIAL_TOKEN]system, is not available to this Team agent, so this session is using its configured model, openai/team-default.",
+    },
   ])(
     "copies history with source model listed = $listed, available = $available, and restricted = $restricted",
-    async ({ listed, available, restricted, expectedModel, notice }) => {
+    async ({ listed, available, restricted, sourceModel, expectedModel, notice }) => {
       mocks.buildModelsListResult.mockResolvedValue({
         models: listed
           ? [{ id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", available }]
           : [],
       });
-      const catalog = provider();
+      const catalog = provider(sourceModel);
       const result = await copySessionCatalogToGateway({
         request: { catalogId: "beam", hostId: "gateway", threadId: "beam-1" },
         provider: catalog,
