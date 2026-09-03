@@ -1,7 +1,6 @@
 /** Tests provider discovery normalization, grouping, and manifest contribution handling. */
 import { describe, expect, it } from "vitest";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.js";
-import type { ProviderCatalogOutcome } from "./provider-catalog.types.js";
 import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
@@ -152,9 +151,8 @@ describe("runProviderCatalog", () => {
       label: "OpenAI",
       auth: [],
       catalog: {
-        run: async (ctx) => {
+        run: async () => {
           await Promise.resolve();
-          ctx.resolveProviderAuth("openai");
           return {
             providers: {},
             outcomes: [
@@ -177,12 +175,7 @@ describe("runProviderCatalog", () => {
       workspaceDir: "/tmp/openclaw-workspace",
       env: {},
       resolveProviderApiKey: () => ({ apiKey: undefined }),
-      resolveProviderAuth: () => ({
-        apiKey: "selected-key",
-        mode: "api_key",
-        profileId: "openai:chatgpt",
-        source: "profile",
-      }),
+      resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
       reportCatalogOutcome: (outcome) => outcomes.push(outcome),
     });
 
@@ -196,50 +189,8 @@ describe("runProviderCatalog", () => {
     ]);
   });
 
-  it("rejects catalog outcomes attributed to a different selected profile", async () => {
-    const outcomes: ProviderCatalogOutcome[] = [];
-    const provider: ProviderPlugin = {
-      id: "openai",
-      label: "OpenAI",
-      auth: [],
-      catalog: {
-        run: async (ctx) => {
-          ctx.resolveProviderAuth("proof-alias");
-          return {
-            providers: {},
-            outcomes: [
-              {
-                provider: "openai",
-                profileId: "openai:profile-a",
-                status: "auth-rejected",
-              },
-            ],
-          };
-        },
-      },
-    };
-
-    await expect(
-      runProviderCatalog({
-        provider,
-        config: {},
-        env: {},
-        resolveProviderApiKey: () => ({ apiKey: undefined }),
-        resolveProviderAuth: () => ({
-          apiKey: "selected-key",
-          mode: "api_key",
-          profileId: "openai:profile-b",
-          source: "profile",
-        }),
-        resolveProviderAuthProviderId: (providerId) =>
-          providerId === "proof-alias" ? "openai" : (providerId ?? "openai"),
-        reportCatalogOutcome: (outcome) => outcomes.push(outcome),
-      }),
-    ).rejects.toThrow("did not match the selected authentication profile");
-    expect(outcomes).toEqual([]);
-  });
-
-  it("rejects profile-scoped outcomes after ambiguous profile selection", async () => {
+  it("preserves provider-owned profile outcomes after multiple auth probes", async () => {
+    const outcomes: Array<{ profileId?: string; status: string }> = [];
     const provider: ProviderPlugin = {
       id: "openai",
       label: "OpenAI",
@@ -263,23 +214,26 @@ describe("runProviderCatalog", () => {
     };
     let authCall = 0;
 
-    await expect(
-      runProviderCatalog({
-        provider,
-        config: {},
-        env: {},
-        resolveProviderApiKey: () => ({ apiKey: undefined }),
-        resolveProviderAuth: () => {
-          authCall += 1;
-          return {
-            apiKey: `selected-key-${authCall}`,
-            mode: "api_key",
-            profileId: `openai:profile-${authCall === 1 ? "a" : "b"}`,
-            source: "profile",
-          };
-        },
-      }),
-    ).rejects.toThrow("did not match the selected authentication profile");
+    await runProviderCatalog({
+      provider,
+      config: {},
+      env: {},
+      resolveProviderApiKey: () => ({ apiKey: undefined }),
+      resolveProviderAuth: () => {
+        authCall += 1;
+        return {
+          apiKey: `selected-key-${authCall}`,
+          mode: "api_key",
+          profileId: `openai:profile-${authCall === 1 ? "a" : "b"}`,
+          source: "profile",
+        };
+      },
+      reportCatalogOutcome: (outcome) => outcomes.push(outcome),
+    });
+
+    expect(outcomes).toEqual([
+      { provider: "openai", profileId: "openai:profile-b", status: "ready" },
+    ]);
   });
 
   it.each([
@@ -295,18 +249,14 @@ describe("runProviderCatalog", () => {
         label: "OpenAI",
         auth: [],
         catalog: {
-          run: async (ctx) => {
-            ctx.resolveProviderAuth("openai");
-            ctx.resolveProviderAuth("azure-openai");
-            return {
-              providers: {},
-              outcomes: [
-                { provider: "openai", profileId: "openai:private", status: "auth-rejected" },
-                { provider: "azure-openai", profileId: "azure-openai:selected", status: "ready" },
-                { provider: "unrelated", status: "unavailable" },
-              ],
-            };
-          },
+          run: async () => ({
+            providers: {},
+            outcomes: [
+              { provider: "openai", profileId: "openai:private", status: "auth-rejected" },
+              { provider: "azure-openai", profileId: "azure-openai:selected", status: "ready" },
+              { provider: "unrelated", status: "unavailable" },
+            ],
+          }),
         },
       };
 
@@ -316,12 +266,7 @@ describe("runProviderCatalog", () => {
         config: {},
         env: {},
         resolveProviderApiKey: () => ({ apiKey: undefined }),
-        resolveProviderAuth: (providerId) => ({
-          apiKey: "selected-key",
-          mode: "api_key",
-          profileId: providerId === "azure-openai" ? "azure-openai:selected" : "openai:private",
-          source: "profile",
-        }),
+        resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
         reportCatalogOutcome: (outcome) => outcomes.push(outcome.provider),
       });
 
