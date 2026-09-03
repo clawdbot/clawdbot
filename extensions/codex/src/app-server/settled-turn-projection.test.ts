@@ -29,6 +29,17 @@ function toolResult(
   });
 }
 
+const OVERLENGTH_CALL_ID = `${"a".repeat(82)}1`;
+
+function projectedCallIds(messages: AgentMessage[]): string[] {
+  return projectSettledCodexMessages(messages)
+    .filter(
+      (item): item is { call_id: string } =>
+        typeof (item as { call_id?: unknown }).call_id === "string",
+    )
+    .map((item) => item.call_id);
+}
+
 describe("projectSettledCodexMessages", () => {
   it("projects a canonical completed tool exchange without exposing reasoning", () => {
     expect(
@@ -86,6 +97,38 @@ describe("projectSettledCodexMessages", () => {
         output: "Telegram delivery complete.",
       },
     ]);
+  });
+
+  it("rewrites overlength call ids once per projection and keeps the pair deterministic", () => {
+    const firstIds = projectedCallIds([
+      toolCall(OVERLENGTH_CALL_ID),
+      toolResult(OVERLENGTH_CALL_ID),
+    ]);
+    const secondIds = projectedCallIds([
+      toolCall(OVERLENGTH_CALL_ID),
+      toolResult(OVERLENGTH_CALL_ID),
+    ]);
+
+    expect(OVERLENGTH_CALL_ID).toHaveLength(83);
+    expect(firstIds).toHaveLength(2);
+    expect(firstIds[0]).toMatch(/^call_[A-Za-z0-9_-]{1,59}$/);
+    expect(firstIds[0]?.length).toBeLessThanOrEqual(64);
+    expect(firstIds[1]).toBe(firstIds[0]);
+    expect(secondIds).toEqual(firstIds);
+  });
+
+  it("does not collide distinct overlength call ids within one projection", () => {
+    const ids = projectedCallIds([
+      toolCall(OVERLENGTH_CALL_ID),
+      toolResult(OVERLENGTH_CALL_ID),
+      toolCall(`${"a".repeat(82)}2`),
+      toolResult(`${"a".repeat(82)}2`),
+    ]);
+
+    expect(ids).toHaveLength(4);
+    expect(ids[0]).toBe(ids[1]);
+    expect(ids[2]).toBe(ids[3]);
+    expect(ids[0]).not.toBe(ids[2]);
   });
 
   it("projects dotted namespaced tool names recorded from Codex MCP calls", () => {
@@ -312,23 +355,40 @@ describe("projectSettledCodexMessages", () => {
   });
 
   it.each([
-    { name: "orphan result", messages: [toolResult()] },
-    { name: "missing result", messages: [toolCall()] },
-    { name: "duplicate call id", messages: [toolCall(), toolCall(), toolResult()] },
+    {
+      name: "orphan result",
+      messages: [toolResult()],
+      error: "ambiguous tool transcript",
+    },
+    {
+      name: "missing result",
+      messages: [toolCall(OVERLENGTH_CALL_ID)],
+      error: "incomplete tool transcript",
+    },
+    {
+      name: "duplicate call id",
+      messages: [
+        toolCall(OVERLENGTH_CALL_ID),
+        toolCall(OVERLENGTH_CALL_ID),
+        toolResult(OVERLENGTH_CALL_ID),
+      ],
+      error: "duplicate tool call",
+    },
     {
       name: "tool-name mismatch",
       messages: [
-        toolCall(),
+        toolCall(OVERLENGTH_CALL_ID),
         message({
           role: "toolResult",
-          toolCallId: "call-1",
+          toolCallId: OVERLENGTH_CALL_ID,
           toolName: "different",
           content: [{ type: "text", text: "done" }],
         }),
       ],
+      error: "ambiguous tool transcript",
     },
-  ])("fails closed for $name", ({ messages }) => {
-    expect(() => projectSettledCodexMessages(messages)).toThrow(/Codex settled-turn projection/u);
+  ])("fails closed for $name", ({ messages, error }) => {
+    expect(() => projectSettledCodexMessages(messages)).toThrow(error);
   });
 
   it("preserves valid image tool results as bounded non-vision evidence", () => {

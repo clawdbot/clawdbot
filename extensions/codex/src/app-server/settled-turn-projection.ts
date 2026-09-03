@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { JsonValue } from "./protocol.js";
@@ -7,6 +8,7 @@ import { readUpstreamUserText } from "./upstream-prompt-provenance.js";
 const MAX_RESPONSE_ITEMS = 200;
 const MAX_PROJECTION_BYTES = 512 * 1024;
 const MAX_TEXT_BYTES = 64 * 1024;
+const OPENAI_RESPONSES_CALL_ID_MAX_LENGTH = 64;
 // Projected names replay as function_call history items, which Codex
 // thread/inject_items deserializes as free-form strings (ResponseItem::FunctionCall).
 // Codex records MCP and connector calls under dotted namespaced ids
@@ -54,6 +56,30 @@ function requireCallId(value: unknown): string {
     throw new Error("Codex settled-turn projection found an invalid tool call id");
   }
   return callId;
+}
+
+function createProjectedCallIdResolver(): (id: string) => string {
+  // Core createOpenAIResponsesToolCallIdResolver is not exported through the
+  // plugin SDK, so this projection keeps a local copy of its call_id rewrite.
+  const rewrittenByOriginalId = new Map<string, string>();
+
+  return (id) => {
+    const rewritten = rewrittenByOriginalId.get(id);
+    if (rewritten) {
+      return rewritten;
+    }
+    if (id.length <= OPENAI_RESPONSES_CALL_ID_MAX_LENGTH) {
+      return id;
+    }
+    const hashSuffix = `_${createHash("sha256").update(id).digest("hex").slice(0, 10)}`;
+    const maxTailLength = OPENAI_RESPONSES_CALL_ID_MAX_LENGTH - "call_".length;
+    const rawTail = id.startsWith("call_") ? id.slice("call_".length) : id;
+    const safeTail = rawTail.replace(/[^A-Za-z0-9_-]/gu, "_").replace(/^_+|_+$/gu, "");
+    const clippedBase = safeTail.slice(0, Math.max(1, maxTailLength - hashSuffix.length));
+    const normalized = `call_${`${clippedBase || "id"}${hashSuffix}`.slice(0, maxTailLength)}`;
+    rewrittenByOriginalId.set(id, normalized);
+    return normalized;
+  };
 }
 
 function requireToolName(value: unknown): string {
@@ -129,6 +155,7 @@ function projectUserMessage(message: Extract<AgentMessage, { role: "user" }>): J
 
 function* projectAssistantMessage(
   message: Extract<AgentMessage, { role: "assistant" }>,
+  resolveCallId: (id: string) => string,
 ): Generator<ProjectedResponseItem> {
   const values: unknown =
     typeof message.content === "string"
@@ -151,7 +178,7 @@ function* projectAssistantMessage(
       continue;
     }
     if (value.type === "toolCall") {
-      const id = requireCallId(value.id ?? value.toolCallId);
+      const id = resolveCallId(requireCallId(value.id ?? value.toolCallId));
       const name = requireToolName(value.name ?? value.toolName);
       yield {
         call: { id, name },
@@ -174,11 +201,14 @@ function* projectAssistantMessage(
   }
 }
 
-function projectToolResult(message: Extract<AgentMessage, { role: "toolResult" }>): {
+function projectToolResult(
+  message: Extract<AgentMessage, { role: "toolResult" }>,
+  resolveCallId: (id: string) => string,
+): {
   item: JsonValue;
   result: ProjectedToolReference;
 } {
-  const id = requireCallId(message.toolCallId);
+  const id = resolveCallId(requireCallId(message.toolCallId));
   const name = requireToolName(message.toolName);
   if (!Array.isArray(message.content)) {
     throw new Error("Codex settled-turn projection found unsupported tool result content");
@@ -235,13 +265,16 @@ function projectToolResult(message: Extract<AgentMessage, { role: "toolResult" }
   };
 }
 
-function* projectMessage(message: AgentMessage): Generator<ProjectedResponseItem> {
+function* projectMessage(
+  message: AgentMessage,
+  resolveCallId: (id: string) => string,
+): Generator<ProjectedResponseItem> {
   if (message.role === "user") {
     yield { item: projectUserMessage(message) };
   } else if (message.role === "assistant") {
-    yield* projectAssistantMessage(message);
+    yield* projectAssistantMessage(message, resolveCallId);
   } else if (message.role === "toolResult") {
-    yield projectToolResult(message);
+    yield projectToolResult(message, resolveCallId);
   } else {
     throw new Error(`Codex settled-turn projection does not support role ${message.role}`);
   }
@@ -252,9 +285,10 @@ export function projectSettledCodexMessages(messages: Iterable<AgentMessage>): J
   const items: JsonValue[] = [];
   const calls = new Map<string, string>();
   const results = new Set<string>();
+  const resolveCallId = createProjectedCallIdResolver();
   let bytes = 0;
   for (const message of messages) {
-    for (const { item, call, result } of projectMessage(message)) {
+    for (const { item, call, result } of projectMessage(message, resolveCallId)) {
       if (call) {
         if (calls.has(call.id)) {
           throw new Error("Codex settled-turn projection found a duplicate tool call");
