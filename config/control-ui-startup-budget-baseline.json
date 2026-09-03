@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 349249,
-  "reason": "Control UI locale refresh (#136659) and chat face switch/visibility menu additions (#136646-#136650) add 581 B (0.17%) over the 348668 B baseline; observed 349249 B on main-based PR builds exceeded the 349244 B enforcement limit by 5 B; fixed 358400 B cap and existing allowances retained",
+  "startupJsGzipBytes": 349565,
+  "reason": "Integrated Control UI and dependency changes since the 348668 B baseline, including chat face/visibility, locale, first-render, Meetings, and Appearance work, now measure 349565 B (+897 B, 0.26%); an independent exact-head build measured 349533 B (32 B lower, within the 64 B build-variance allowance); fixed 358400 B cap and existing allowances retained",
   "updatedAt": "2026-09-03"
 }
