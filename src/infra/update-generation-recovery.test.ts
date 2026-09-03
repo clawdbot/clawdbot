@@ -343,6 +343,16 @@ describe("update generation recovery transition matrix", () => {
       physical: physical({
         selector: candidate,
         generations: [previous, candidate],
+        parentDirectoryDurable: false,
+        bindingConverged: true,
+      }),
+      action: "inconsistent",
+    });
+    await expectRecovery({
+      record,
+      physical: physical({
+        selector: candidate,
+        generations: [previous, candidate],
         bindingConverged: true,
       }),
       action: "record-candidate-selected",
@@ -354,6 +364,16 @@ describe("update generation recovery transition matrix", () => {
       physical: physical({
         selector: candidate,
         generations: [candidate],
+        bindingConverged: true,
+      }),
+      action: "inconsistent",
+    });
+    await expectRecovery({
+      record,
+      physical: physical({
+        selector: candidate,
+        generations: [previous, candidate],
+        parentDirectoryDurable: false,
         bindingConverged: true,
       }),
       action: "inconsistent",
@@ -407,6 +427,16 @@ describe("update generation recovery transition matrix", () => {
         bindingConverged: true,
       }),
       action: "stabilize-selector",
+    });
+    await expectRecovery({
+      record,
+      physical: physical({
+        selector: previous,
+        generations: [previous, candidate],
+        parentDirectoryDurable: false,
+        bindingConverged: true,
+      }),
+      action: "inconsistent",
     });
     await expectRecovery({
       record,

@@ -2,6 +2,7 @@ import type {
   UpdateGenerationAuthenticatedBrokerReceiptOf,
   UpdateGenerationBrokerRequest,
   UpdateGenerationConfinedFilesystem,
+  UpdateGenerationRetainedPair,
 } from "./update-generation-confined-filesystem.js";
 import { buildUpdateGenerationBrokerOperationId } from "./update-generation-confined-filesystem.js";
 /** Crash recovery decisions for durable generation-addressed updates. */
@@ -23,6 +24,7 @@ type UpdateGenerationPhysicalState = {
     /** Required before acknowledging a materialization intent. */
     parentDirectoryDurable?: boolean;
   }>;
+  retainedPair: UpdateGenerationRetainedPair | null;
   bindingConverged: boolean;
   /** Required to accept a terminal success or rollback receipt. */
   serviceState?: { running: boolean; enabled?: boolean } | null;
@@ -190,11 +192,17 @@ function durableGenerationPairMatchesPhysical(
 ): boolean {
   const previous = state.baselineSelection ?? state.intent.previousSelection;
   const candidate = state.candidateSelection ?? state.generations.candidate;
+  const retainedSelections = physical.retainedPair
+    ? [physical.retainedPair.selected, physical.retainedPair.rollback]
+    : [];
   return Boolean(
     previous &&
     candidate &&
-    observedGenerationMatches(physical, previous.generationId, previous.manifestSha256) &&
-    observedGenerationMatches(physical, candidate.generationId, candidate.manifestSha256),
+    physical.retainedPair &&
+    retainedSelections.some((selection) => selectionsEqual(selection, previous)) &&
+    retainedSelections.some((selection) => selectionsEqual(selection, candidate)) &&
+    observedGenerationMatches(physical, previous.generationId, previous.manifestSha256, true) &&
+    observedGenerationMatches(physical, candidate.generationId, candidate.manifestSha256, true),
   );
 }
 
@@ -267,6 +275,7 @@ export async function adjudicateUpdateGenerationTransaction(
     selector: observation.selector,
     selectorDurable: observation.selectorDurable,
     generations: observation.generations,
+    retainedPair: observation.retainedPair,
     bindingConverged: runtime.bindingConverged,
     serviceState: runtime.serviceState,
   };
