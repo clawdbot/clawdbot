@@ -31,6 +31,7 @@ import { deleteSubagentSessionForCleanup } from "../subagents/registry/subagent-
 import { getSubagentDepthFromSessionStore } from "../subagents/spawn/subagent-depth.js";
 import { resolveSubagentSpawnOwnership } from "../subagents/spawn/subagent-spawn-ownership.js";
 import { resolveConfiguredSubagentRunTimeoutSeconds } from "../subagents/spawn/subagent-spawn-plan.js";
+import { resolveSubagentThinkingOverride } from "../subagents/spawn/subagent-spawn-thinking.js";
 import { resolveSubagentTargetPolicy } from "../subagents/spawn/subagent-target-policy.js";
 import { normalizeToolModelOverride, readToolStringParam, ToolInputError } from "./common.js";
 import {
@@ -233,6 +234,19 @@ export async function maybeSpawnVisibleSession(params: {
   }
   const resolvedModel =
     modelOverride ?? resolveSubagentSpawnModelSelection({ cfg, agentId: targetAgentId });
+  const thinkingPlan = resolveSubagentThinkingOverride({
+    cfg,
+    requesterAgentConfig: resolveAgentConfig(cfg, requesterAgentId),
+    targetAgentConfig: resolveAgentConfig(cfg, targetAgentId),
+    callerThinkingRaw: params.options?.requesterThinkingLevel,
+  });
+  if (thinkingPlan.status === "error") {
+    return {
+      status: "error",
+      error: `Invalid configured subagent thinking level "${thinkingPlan.thinkingCandidateRaw}".`,
+    };
+  }
+  const resolvedThinkingLevel = thinkingPlan.initialSessionPatch.thinkingLevel;
   const runTimeoutSeconds = resolveConfiguredSubagentRunTimeoutSeconds({
     cfg,
     runTimeoutSeconds: params.runTimeoutSeconds,
@@ -327,6 +341,7 @@ export async function maybeSpawnVisibleSession(params: {
         // sessions.create persists the group under the legacy wire field `category`.
         ...(group ? { category: group } : {}),
         model: resolvedModel,
+        ...(resolvedThinkingLevel ? { thinkingLevel: resolvedThinkingLevel } : {}),
         task: params.task,
         parentSessionKey: requesterKey,
         // Declared spawn lineage: without it the child persists as a depth-0 root

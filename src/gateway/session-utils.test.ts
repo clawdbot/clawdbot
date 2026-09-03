@@ -2363,6 +2363,53 @@ describe("gateway session utils", () => {
     });
   });
 
+  test("projects a visible child's persisted model, runtime, and thinking consistently", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-sol" },
+          thinkingDefault: "xhigh",
+          models: {
+            "openai/gpt-5.6-luna": {
+              params: { thinking: "off" },
+              agentRuntime: { id: "openclaw" },
+            },
+          },
+        },
+        list: [
+          {
+            id: "main",
+            models: {
+              "openai/gpt-5.6-luna": { agentRuntime: { id: "codex" } },
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "agent:main:dashboard:child",
+      entry: {
+        sessionId: "visible-child",
+        parentSessionKey: "agent:main:main",
+        providerOverride: "openai",
+        modelOverride: "gpt-5.6-luna",
+        modelOverrideSource: "user",
+        thinkingLevel: "max",
+      } as SessionEntry,
+    });
+
+    expect(row).toMatchObject({
+      modelProvider: "openai",
+      model: "gpt-5.6-luna",
+      thinkingLevel: "max",
+      agentRuntime: { id: "codex" },
+    });
+  });
+
   test("buildGatewaySessionRow classifies session keys and chat types", () => {
     const projectKind = (key: string, entry?: SessionEntry) =>
       buildGatewaySessionRow({

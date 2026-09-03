@@ -1060,6 +1060,48 @@ describe("sessions_spawn tool", () => {
     expect(mockCallArg(callGateway, 0, 1, "sessions.create")).not.toHaveProperty("fork");
   });
 
+  it("persists configured subagent thinking for visible sessions", async () => {
+    const callGateway = vi.fn(async () => ({
+      key: "agent:main:dashboard:child",
+      runStarted: true,
+      runId: "run-visible",
+    }));
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      requesterThinkingLevel: "xhigh",
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.6-sol" },
+            thinkingDefault: "xhigh",
+            subagents: {
+              model: "openai/gpt-5.6-luna",
+              thinking: "max",
+            },
+          },
+          list: [{ id: "main" }],
+        },
+      },
+      callGateway: callGateway as never,
+      registerRun: vi.fn(),
+      countActiveRuns: () => 0,
+    });
+
+    await tool.execute("visible-thinking", {
+      task: "inspect issue",
+      visible: true,
+    });
+
+    expect(callGateway).toHaveBeenCalledWith(
+      "sessions.create",
+      expect.objectContaining({
+        agentId: "main",
+        model: "openai/gpt-5.6-luna",
+        thinkingLevel: "max",
+      }),
+    );
+  });
+
   it("rejects cross-agent visible transcript forks", async () => {
     const callGateway = vi.fn();
     const tool = createSessionsSpawnTool({
