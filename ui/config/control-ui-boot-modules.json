@@ -376,6 +376,7 @@
   "node_modules/typebox/build/system/memory/clone.mjs",
   "node_modules/typebox/build/system/memory/create.mjs",
   "node_modules/typebox/build/system/memory/discard.mjs",
+  "node_modules/typebox/build/system/memory/freeze.mjs",
   "node_modules/typebox/build/system/memory/metrics.mjs",
   "node_modules/typebox/build/system/memory/update.mjs",
   "node_modules/typebox/build/system/settings/settings.mjs",

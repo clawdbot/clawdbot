@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { canonicalAsciiJson } from "./lib/canonical-json.mjs";
+import { canonicalAsciiJson, compareAscii } from "./lib/canonical-json.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import {
   normalizeUpgradeSurvivorBaselineSpec,
@@ -28,8 +28,6 @@ const REPOSITORY_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
 const WORKFLOW_PATH_PATTERN = /^\.github\/workflows\/[A-Za-z0-9_.-]+\.ya?ml$/u;
 const RELEASE_PROFILES = new Set(["minimum", "beta", "stable", "full"]);
 const SHARED_IMAGE_POLICIES = new Set(["existing-only", "no-push-artifact"]);
-const compareAscii = (left, right) => (left < right ? -1 : left > right ? 1 : 0);
-
 function fail(message) {
   throw new Error(message);
 }

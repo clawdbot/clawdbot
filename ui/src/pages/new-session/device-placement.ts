@@ -1,7 +1,10 @@
 import { t } from "../../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import type { DraftEnvironment } from "./discovery.ts";
 import { environmentMenuFacts, MAX_PLACE_MENU_FACTS } from "./place-facts.ts";
 import { disambiguate } from "./place-labels.ts";
+
+registerNewSessionSetupEnglish();
 
 export type DevicePlacementOption = Readonly<
   {

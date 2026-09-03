@@ -46,16 +46,16 @@ The environment adds a 2 px top stripe, an agent-avatar ring, label pills in the
 
 ## New session names
 
-In **New session**, pausing typing for one second prepares a suggested name using
-only the selected agent's utility model. The composer discloses that unsent draft
-text is sent to the title provider. Preparation starts after at least 12 characters
+In **New session**, pausing typing for one second prepares a session name in the
+background using only the selected agent's utility model. Preparation sends unsent
+draft text to that provider before submission. It starts after at least 12 characters
 and sends at most the first 1,000 characters; it does not send attachments.
 
 Preparation is disabled in incognito and for slash commands. Edits replace stale
-suggestions, and only one request runs at a time. A missing or failed utility model
+prepared names, and only one request runs at a time. A missing or failed utility model
 does not fall back to the primary model or prevent you from starting the session.
 
-**Start session** uses a matching suggestion if it is ready. Otherwise, normal
+**Start session** uses a matching prepared name if it is ready. Otherwise, normal
 initial naming runs after submission; Start never waits for the speculative call.
 This is creation-only: later messages do not regenerate an existing session's
 name. Explicit worktree names are preserved, and typing never creates a worktree
@@ -437,7 +437,7 @@ This label does not change which request the approval buttons resolve.
     - A saved assistant answer replaces its live stream without waiting for the run to finish. Refreshing history or reconnecting while that reply finishes does not add another copy of the saved answer. Later streamed continuations remain visible. Remote workspace reconciliation can keep the working indicator and Stop control active after the answer appears; a later reconciliation failure remains visible beside the answer.
     - Scroll up to read earlier messages without following incoming output. Use the down-arrow button to return to the latest message. Scrolling manually interrupts that movement or a restored scroll position; messages continue to reserve their space as full text, images, and tool output load.
     - Links to `github.com` in chat messages — yours and the agent's — carry a small GitHub mark before their text, whether the message wrote a bare URL, a `[#3434](…)` shorthand, or any other label. The mark is drawn from the bundled icon set, never fetched from the network, and is decorative only: it is skipped for image-only links such as badges, never appears inside code spans or code blocks, is not read by screen readers, and is not part of copied text.
-    - Hovering or keyboard-focusing a public GitHub issue or pull request link shows its state, title, author, recent activity, comments, and change statistics. The connected Gateway fetches and caches public metadata without changing the link target, including when the UI uses a remote Gateway. It uses the explicit Control UI GitHub credential, then the shared Gateway process-environment fallback, after confirming the repository is public; without either, it uses GitHub's anonymous API with a longer cache. It never uses an agent GitHub identity.
+    - Hovering or keyboard-focusing a public GitHub issue or pull request link shows its state, title, author, recent activity, comments, and change statistics. The connected Gateway fetches and caches public metadata without changing the link target, including when the UI uses a remote Gateway. The card's title and repository reference open the exact link you hovered or focused, including comment fragments and query parameters, even when another link to the same item has already filled the cache. It uses the explicit Control UI GitHub credential, then the shared Gateway process-environment fallback, after confirming the repository is public; without either, it uses GitHub's anonymous API with a longer cache. It never uses an agent GitHub identity.
     - Talk through browser realtime sessions. OpenAI supports browser WebRTC and Gateway-relayed provider WebSockets, Google Live uses a constrained one-use browser token over WebSocket, and backend-only realtime voice plugins use Gateway relay. Video-capable browser sessions can choose a device-local camera in Settings or flip cameras from the live preview; the browser captures JPEG frames for the realtime provider without streaming camera video through the Gateway. Client-owned provider sessions start with `talk.client.create`; Gateway relay sessions start with `talk.session.create`. The relay keeps provider credentials on the Gateway while the browser streams microphone PCM through `talk.session.appendAudio`, forwards provider delegations or `openclaw_agent_consult` tool calls through Gateway policy and the larger configured OpenClaw model, and routes active-run voice steering through `talk.client.steer` or `talk.session.steer`. Browser WebRTC GPT-Live delegates on the Gateway-owned sideband, but each delegation has the same spoken-confirmation gate and browser-owned `talk.client.steer` lifecycle; a newer spoken task can also supersede the running delegation. Gateway-relayed GPT-Live uses the normal relay consult and steering path. Configure the realtime provider, model, and speaker voice on **Settings → Talk**, whose pickers come from `talk.catalog` and show whether the selection is ready to use.
     - Stream tool calls and live tool output cards in Chat (agent events). Tool activity renders as kind-aware rows: shell commands show the syntax-highlighted command with terminal-style output; supported edit and write calls show bounded inline diffs with source syntax highlighting, line numbers when available, and `+added -removed` stats; and consecutive calls collapse into a summary such as "Ran 13 commands, read 6 files, edited 9 files". While a run is live, the newest running call names the group header. Expand a row to inspect its remaining arguments and raw output.
     - Tool activity counts distinct calls, not start/update/result events, repeated history or live projections, or Gateway observation RPCs. Nested calls count independently, even when their names and arguments match. File summaries count distinct file paths; expand the activity to see each call.
@@ -449,7 +449,7 @@ This label does not change which request the approval buttons resolve.
   <Accordion title="Channels, sessions, memory">
     - Channels: built-in plus bundled/external plugin channels status, QR login, and per-channel config (`channels.status`, `web.login.*`, `config.patch`).
     - Channel probe refreshes keep the previous snapshot visible while slow provider checks finish, and label partial snapshots when a probe or audit exceeds its UI budget.
-    - Threads (a workspace page at `/sessions`, with a **Worktrees** tab alongside it): list configured-agent sessions by default, pin frequent sessions, rename them, archive or restore sessions, fall back from stale unconfigured agent session keys, and apply per-session model/thinking/fast/verbose/trace/reasoning overrides (`sessions.list`, `sessions.patch`). A three-way **Active / Archived / All** filter controls both this page and the sidebar; All dims archived rows and labels them explicitly. Archived sessions keep their transcripts, are never auto-pruned, and remain shelved until explicitly unarchived or deleted. Rows show an unread dot for active sessions with activity since they were last read, with mark-unread/mark-read actions (`sessions.patch { unread }`), and a Fork action that branches the transcript into a new session (`sessions.create { parentSessionKey, fork: true }`). Overview tiles above the table summarize the loaded roster (session count, live runs, unread sessions, total tokens, and archived count when available), each row carries a kind glyph with a live-run dot, status renders as a plain dot plus label, and the Tokens column shows a context-window usage meter when the session reports token and context sizes. Row management actions live in a per-row menu (kebab button or right-click) mirroring the sidebar's session menu, and the row drawer carries the agent runtime and run duration alongside the other session details.
+    - Threads (a workspace page at `/sessions`, with a **Worktrees** tab alongside it): list configured-agent sessions by default, pin frequent sessions, rename them, archive or restore sessions, fall back from stale unconfigured agent session keys, and apply per-session model/thinking/fast/verbose/trace/reasoning overrides (`sessions.list`, `sessions.patch`). A three-way **Active / Archived / All** filter controls both this page and the sidebar; All dims archived rows and labels them explicitly. Archived sessions keep their transcripts and remain shelved until explicitly unarchived or deleted. Sessions archived automatically at the active-session cap can also be deleted automatically when the session store exceeds its disk budget; manually archived and legacy sessions stay protected. Rows show an unread dot for active sessions with activity since they were last read, with mark-unread/mark-read actions (`sessions.patch { unread }`), and a Fork action that branches the transcript into a new session (`sessions.create { parentSessionKey, fork: true }`). Overview tiles above the table summarize the loaded roster (session count, live runs, unread sessions, total tokens, and archived count when available), each row carries a kind glyph with a live-run dot, status renders as a plain dot plus label, and the Tokens column shows a context-window usage meter when the session reports token and context sizes. Row management actions live in a per-row menu (kebab button or right-click) mirroring the sidebar's session menu, and the row drawer carries the agent runtime and run duration alongside the other session details.
     - Native Claude and Codex sidebar catalogs stream one host at a time, then reconcile after node connectivity changes, on page focus, and at most every 30 seconds while visible. Catalog changes trigger a faster follow-up pass, so sessions created in the native tools appear without reloading the Control UI. Claude Desktop rows also retain their local custom-group label when present; OpenClaw reads that mapping from Desktop's local store and never writes it.
     - Session grouping: a Group by control organizes the sessions table into sections by custom groups, channel, kind, agent, or date. Custom groups persist per session via `sessions.patch` (`category`), so sessions started from message channels (Discord, Telegram, WhatsApp, ...) can be categorized too; assign groups by dragging rows onto a section, or with the per-row group selector, and create groups with the New group action.
     - Memory (a tab on the Agents page, scoped to the selected agent): dreaming status, enable/disable toggle, and Dream Diary reader (`doctor.memory.status`, `doctor.memory.dreamDiary`, `config.patch`). When the `memory-wiki` plugin is enabled, the Diary view adds **Imported Insights** and **Memory Wiki** sub-tabs that browse imported source chats and the compiled wiki — clustered synthesis, entity, and concept pages plus annotated sources and reports, with claims, open questions, contradictions, and inline page previews (`wiki.importInsights`, `wiki.overview`, `wiki.get`).
@@ -505,6 +505,7 @@ This label does not change which request the approval buttons resolve.
   </Accordion>
   <Accordion title="Debug, logs, update">
     - Debug: status/health/models snapshots, event log, manual RPC calls, and a System busyness overlay with live CPU, memory, and event-loop delay graphs (`status`, `health`, `models.list`).
+    - Lane tables omit disabled, empty lanes, including `hook-dispatch` when HTTP hooks are off. Disabled lanes remain visible while work is running or queued.
     - The event log includes Control UI refresh/RPC timings, slow chat/config render timings, and browser responsiveness entries for long animation frames or long tasks when the browser exposes those PerformanceObserver entry types.
     - Logs: live tail of gateway file logs with filter/export (`logs.tail`).
     - Update: run a package/git update plus restart (`update.run`) with a restart report, then poll `update.status` after reconnect to verify the running gateway version.
@@ -519,6 +520,7 @@ This label does not change which request the approval buttons resolve.
     - Webhook mode uses `delivery.mode = "webhook"` with `delivery.to` set to a valid HTTP(S) webhook URL.
     - For main-session tasks, webhook and none delivery modes are available.
     - Advanced edit controls include delete-after-run, clear agent override, cron exact/stagger options, agent model/thinking overrides, and best-effort delivery toggles.
+    - Saved interval labels retain millisecond precision: a 90-second interval displays as `Every 1m 30s`. Repeat and stagger inputs accept decimal amounts that resolve to whole milliseconds; editing a cron expression preserves its stagger window.
     - Form validation is inline with field-level errors; invalid values disable the save button until fixed.
     - Set `cron.webhookToken` to send a dedicated bearer token; if omitted, the webhook is sent without an auth header.
     - `cron.webhook` is a retired legacy fallback rejected by current config validation. Run `openclaw doctor --fix` to migrate stored jobs that still use `notify: true` to explicit per-job webhook or completion delivery and remove the old key.
@@ -602,6 +604,30 @@ Approval and message-delivery links use the `approval-decision:` and `message-de
 Run inspection requires `operator.read` and a Gateway that advertises `audit.run.inspect`. Execution identity collection is off by default; enable `logging.audit.executionIdentity`, restart the Gateway, and record a new run when you need this evidence. Retained contexts are limited to 30 days and 100,000 rows. A known run can therefore report unavailable or expired identity evidence, and a run reference can be ambiguous when it correlates more than one execution. The UI does not guess between executions: choose a returned candidate to navigate to `/activity?view=run&execution=<percent-encoded-execution-id>` and query that exact execution.
 
 The audit ledger is best-effort operational evidence, not a lossless compliance archive. A missing or expired record does not prove that a run or action did not occur. The inspector never displays prompt or message text, command bodies, arguments, file paths, credentials, environment values, raw source identifiers, or arbitrary plugin data. See [Audit history](/gateway/audit) for collection, privacy, retention, and CLI inspection details.
+
+## Meetings page
+
+Open **Meetings** from the sidebar's Pages menu to read durable meeting notes
+across the Gateway. The page lists up to 200 recent captures, grouped by local
+day with newest meetings first. Rows show the title, provider, start time,
+duration or **In progress** state, participants, utterance count, and a short
+overview when notes are available. Captures with zero utterances remain in the
+list with muted styling and **No speech captured** instead of an overview.
+Use **Refresh** to reload the list.
+
+Select a meeting to read its notes. When recorded, **Notes: model** or
+**Notes: heuristic** identifies the summary source. The canonical notes include
+the speaker-labeled **Transcript** at the end, after decisions, action items,
+and risks. A meeting can appear before it has notes, including while capture
+is active.
+
+Meetings reads the same shared SQLite records as `openclaw transcripts`, through
+the read-only `transcripts.list` and `transcripts.get` RPCs. Both require
+`operator.read` within one trusted Gateway domain; the page is not restricted to
+the selected agent's captures. It does not start capture or regenerate notes.
+Discord voice and the Google Meet, Microsoft Teams, and Zoom meeting plugins
+populate this store. See [Transcripts CLI](/cli/transcripts) for capture setup,
+agent reads, and exports.
 
 ## Operator terminal
 

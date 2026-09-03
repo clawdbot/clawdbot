@@ -80,6 +80,7 @@ import type { InternalSessionEntry as SessionEntry } from "./types.js";
 async function withCommittedHistoryMaintenance<T>(
   { agentId, storePath }: { agentId?: string; storePath: string },
   run: (recordCommit: (database: OpenClawAgentDatabase) => void) => Promise<T>,
+  options: { scheduleNext?: boolean } = {},
 ): Promise<T> {
   let committed = false;
   try {
@@ -91,7 +92,7 @@ async function withCommittedHistoryMaintenance<T>(
   } finally {
     // A partial commit still needs maintenance, but only after archive publication and
     // lifecycle-owner cleanup finish. Rejected preparation or rollback creates no pressure.
-    if (committed) {
+    if (committed && options.scheduleNext !== false) {
       kickSessionHistoryDiskBudgetMaintenance({ agentId, storePath, force: true });
     }
   }
@@ -604,6 +605,26 @@ export async function deleteSessionEntryLifecycle(
   params: DeleteSessionEntryLifecycleParams,
 ): Promise<DeleteSessionEntryLifecycleResult> {
   return await deleteSqliteSessionEntryLifecycleInternal(params, false);
+}
+
+/** Disk-budget owner: delete one exact archived row without recursively scheduling another pass. */
+export async function deleteDiskBudgetSessionEntryLifecycle(
+  params: DeleteSessionEntryLifecycleParams,
+): Promise<DeleteSessionEntryLifecycleResult> {
+  const agentId = params.agentId ?? parseAgentSessionKey(params.target.canonicalKey)?.agentId;
+  const resolved = resolveSqliteStoreScope(params.storePath, { agentId });
+  return await withCommittedHistoryMaintenance(
+    params,
+    async (recordCommit) =>
+      await deleteSqliteSessionEntryLifecycleLocked(
+        resolved,
+        params,
+        false,
+        undefined,
+        recordCommit,
+      ),
+    { scheduleNext: false },
+  );
 }
 
 /** Rolls back one exact locked row created by failed trusted harness initialization. */

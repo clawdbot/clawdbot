@@ -287,6 +287,7 @@ export async function projectSessionsPatchEntry(params: {
       // Archived sessions leave the active quick-access set in the same write.
       if (next.archivedAt === undefined) {
         next.archivedAt = now;
+        next.archiveReason = "manual";
         if (params.archivedBy) {
           next.archivedBy = params.archivedBy;
         } else {
@@ -297,6 +298,7 @@ export async function projectSessionsPatchEntry(params: {
     } else {
       delete next.archivedAt;
       delete next.archivedBy;
+      delete next.archiveReason;
     }
   }
 

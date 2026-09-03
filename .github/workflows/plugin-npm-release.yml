@@ -377,6 +377,7 @@ jobs:
           fi
 
           cat .local/plugin-npm-release-plan.json
+          jq -r '.warnings[]? | "- Warning: \(.)"' .local/plugin-npm-release-plan.json >> "$GITHUB_STEP_SUMMARY"
 
           candidate_count="$(jq -r '.candidates | length' .local/plugin-npm-release-plan.json)"
           selection_count="$(jq -r '.all | length' .local/plugin-npm-release-plan.json)"

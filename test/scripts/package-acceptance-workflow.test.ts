@@ -523,6 +523,7 @@ function runFullReleaseTargetIdentityValidation(params: {
   releaseProfile?: string;
   runReleaseSoak?: string;
   rerunGroup?: string;
+  crossOsSuiteFilter?: string;
 }) {
   const step = workflowStep(
     workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "resolve_target"),
@@ -615,6 +616,7 @@ printf '%s\\n' "$value"
       RELEASE_PROFILE: params.releaseProfile ?? "beta",
       RUN_RELEASE_SOAK: params.runReleaseSoak ?? "false",
       RERUN_GROUP: params.rerunGroup ?? "all",
+      CROSS_OS_SUITE_FILTER: params.crossOsSuiteFilter ?? "",
       SKIP_PACKAGE_TELEGRAM_E2E: "false",
       TARGET_CONTEXT_REF: params.targetContextRef ?? "",
       TARGET_REF: params.targetRef,
@@ -2436,6 +2438,91 @@ describe("package acceptance workflow", () => {
     expect(moved.status).toBe(1);
     expect(moved.stderr).toContain(
       "SHA-pinned release-publish tag does not resolve to the OpenClaw npm workflow SHA",
+    );
+  });
+
+  it.each([
+    [PLUGIN_NPM_RELEASE_WORKFLOW, "preview_plugins_npm", "Resolve plugin release plan"],
+    [PLUGIN_CLAWHUB_RELEASE_WORKFLOW, "preview_plugins_clawhub", "Resolve plugin release plan"],
+    [RELEASE_PUBLISH_WORKFLOW, "publish", "Resolve ClawHub release plan"],
+    [
+      ".github/workflows/plugin-clawhub-new.yml",
+      "resolve_bootstrap_plan",
+      "Resolve plugin bootstrap plan",
+    ],
+  ])("keeps plugin freshness warnings visible without blocking %s", (workflow, job, step) => {
+    const root = tempDirs.make("plugin-plan-warnings-");
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "node"), '#!/bin/sh\ncat "$MOCK_PLUGIN_PLAN"\n', { mode: 0o755 });
+    const parentPlan = workflow === RELEASE_PUBLISH_WORKFLOW;
+    if (parentPlan) {
+      const helperDir = join(root, ".release-harness/scripts/lib");
+      mkdirSync(helperDir, { recursive: true });
+      writeFileSync(
+        join(helperDir, "release-publish-children.sh"),
+        "resolve_child_workflow_ref() { printf '%s\\n' \"release-publish/aaaaaaaaaaaa-1\"; }\n",
+      );
+    }
+    const plugin = {
+      packageName: "@openclaw/example",
+      packageDir: "extensions/example",
+      version: "2026.9.1",
+      channel: "stable",
+      publishTag: "latest",
+    };
+    const warning =
+      '@openclaw/example@2026.9.1: example-runtime pinned "1.2.3", npm latest is "1.2.4".';
+    const planPath = join(root, "plan.json");
+    writeFileSync(
+      planPath,
+      JSON.stringify({
+        all: [plugin],
+        candidates: [plugin],
+        bootstrapCandidates: [plugin],
+        missingTrustedPublisher: [],
+        skippedPublished: [],
+        warnings: [warning],
+        bootstrap: { shouldDispatch: false },
+      }),
+    );
+    const script = workflowStep(workflowJob(workflow, job), step).run;
+    if (!script) {
+      throw new Error(`Missing plugin plan step in ${workflow}`);
+    }
+    const summaryPath = join(root, "summary.md");
+    const result = spawnSync("bash", ["-c", script], {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        PATH: `${bin}:${process.env.PATH}`,
+        MOCK_PLUGIN_PLAN: planPath,
+        GITHUB_OUTPUT: join(root, "output"),
+        GITHUB_STEP_SUMMARY: summaryPath,
+        GITHUB_WORKSPACE: root,
+        RUNNER_TEMP: root,
+        GITHUB_SHA: "a".repeat(40),
+        GITHUB_RUN_ID: "1",
+        GITHUB_RUN_ATTEMPT: "1",
+        WORKFLOW_FULL_REF: "refs/heads/main",
+        PARENT_WORKFLOW_BRANCH: "main",
+        PARENT_WORKFLOW_FULL_REF: "refs/heads/main",
+        RELEASE_TAG: "v2026.9.1",
+        TARGET_SHA: "b".repeat(40),
+        PLUGIN_PUBLISH_SCOPE: "all-publishable",
+        PLUGINS: "",
+        PUBLISH_SCOPE: "all-publishable",
+        RELEASE_PLUGINS: plugin.packageName,
+        BASE_REF: "",
+        NPM_DIST_TAG: "default",
+        PREFLIGHT_ONLY: "false",
+      },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(summaryPath, "utf8")).toBe(`- Warning: ${warning}\n`);
+    expect(result.stdout).toContain(plugin.packageName);
+    expect(readFileSync(join(root, "output"), "utf8")).toContain(
+      parentPlan ? "bootstrap_should_dispatch=false" : "candidate_count=1",
     );
   });
 
@@ -6910,13 +6997,15 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
 
   it.each([
     { label: "canonical beta", scope: "npm-beta" },
+    { label: "Linux-only beta", crossOsSuiteFilter: "ubuntu", scope: "npm-beta" },
     { label: "beta soak", runReleaseSoak: "true", scope: "full" },
     { label: "focused beta CI", rerunGroup: "ci", scope: "full" },
     { label: "stable profile", releaseProfile: "stable", scope: "full" },
     { label: "stable version", version: "2026.8.1", scope: "full" },
     { label: "main beta profile", targetRef: "main", scope: "full" },
     {
-      label: "canonical stable",
+      label: "canonical stable with Windows omitted",
+      crossOsSuiteFilter: "ubuntu,macos",
       releaseProfile: "stable",
       version: "2026.8.1",
       runReleaseSoak: "true",
@@ -6967,6 +7056,25 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       expect(result.output).toContain(
         `skip_package_telegram_e2e=${overrides.runReleaseSoak === "true" || overrides.rerunGroup === "ci" || overrides.releaseProfile === "stable" ? "false" : "true"}\n`,
       );
+    },
+  );
+
+  it.each([
+    ["beta", "2026.8.1-beta.3", "false"],
+    ["stable", "2026.8.1", "true"],
+  ])(
+    "rejects %s qualification when the cross-OS selection omits Linux coverage",
+    (releaseProfile, version, runReleaseSoak) => {
+      const result = runFullReleaseTargetIdentityValidation({
+        targetRef: "release/2026.8.1",
+        releaseProfile,
+        version,
+        runReleaseSoak,
+        crossOsSuiteFilter: "windows,macos,ubuntu/packaged-fresh",
+      });
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("Linux");
+      expect(result.output).not.toContain("coverage_policy=");
     },
   );
 
@@ -7627,7 +7735,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(filterValidator).toContain(
       "Repo live_suite_filter selectors require rerun_group=live-e2e",
     );
-    expect(filterValidator).toContain("cross_os_suite_filter requires rerun_group=cross-os");
+    expect(filterValidator).toContain("cross_os_suite_filter requires rerun_group=all or cross-os");
     expect(workflow).toContain("live_suite_filter explicitly requested disabled QA live lane(s)");
     expect(workflow).toContain("OPENCLAW_RELEASE_QA_*_LIVE_CI_ENABLED");
     expect(workflow).not.toContain(
@@ -9809,12 +9917,13 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
 
   it("loads the strict release validator from the isolated trusted tooling bundle", () => {
     const root = tempDirs.make("release-validation-tooling-");
-    mkdirSync(join(root, "lib"));
+    mkdirSync(join(root, "lib", "cross-os-release-checks"), { recursive: true });
     for (const source of [
       "scripts/release-ci-summary.mjs",
       "scripts/full-release-validation-policy.mjs",
       "scripts/full-release-candidate-contract.mjs",
       "scripts/lib/canonical-json.mjs",
+      "scripts/lib/cross-os-release-checks/suite-filter.mjs",
       "scripts/lib/plain-gh.mjs",
       "scripts/lib/release-context.mjs",
       "scripts/lib/release-version.mjs",

@@ -8,6 +8,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { AcpRuntimeError } from "../acp/runtime/errors.js";
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
+import { createDispatchReplyOperationCoordinator } from "../auto-reply/reply/dispatch-from-config.lifecycle.js";
 import { createAcpSessionMeta } from "../auto-reply/reply/test-fixtures/acp-runtime.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import {
@@ -93,6 +94,7 @@ describe("Gateway ACP completion ownership", () => {
     text?: string;
     transform?: (payload: ReplyPayload) => ReplyPayload | null;
     live?: boolean;
+    lifecycle?: boolean;
     bound?: boolean;
     media?: boolean;
     cancel?: boolean;
@@ -132,6 +134,7 @@ describe("Gateway ACP completion ownership", () => {
     { name: "suppressed runtime timeout", timeout: true, transform: () => null },
     { name: "persistence errors", persistFail: true },
     { name: "native cancellation", cancel: true },
+    { name: "native cancellation through lifecycle", cancel: true, live: true, lifecycle: true },
     { name: "explicit abort", cancel: true, rpcAbort: true },
     {
       name: "persistence failure after explicit abort",
@@ -226,6 +229,17 @@ describe("Gateway ACP completion ownership", () => {
         dispatcher,
         replyOptions: inboundReplyOptions,
         dispatchReplyFromConfig: async ({ ctx: finalized, replyOptions }) => {
+          const hookDispatcher = scenario.lifecycle
+            ? createDispatchReplyOperationCoordinator({
+                agentId: "main",
+                cfg,
+                ctx: finalized,
+                dispatcher,
+                operationSessionStoreEntry: { storePath },
+                replyOptions,
+                resolveOperationExpectedSessionId: () => sessionId,
+              }).dispatchHookDispatcher
+            : dispatcher;
           if (scenario.media) {
             dispatcher.appendBeforeDeliver?.((payload) => ({
               ...payload,
@@ -256,7 +270,7 @@ describe("Gateway ACP completion ownership", () => {
                   ...(scenario.live ? { stream: { deliveryMode: "live" } } : {}),
                 },
               },
-              dispatcher,
+              dispatcher: hookDispatcher,
               recordProcessed: () => {},
               markIdle: () => {},
             },
@@ -411,6 +425,18 @@ describe("Gateway ACP completion ownership", () => {
                   scenario.persistFail ? ["user"] : ["user", "assistant"],
                 ).flat(),
           );
+        if (scenario.cancel && !scenario.rpcAbort) {
+          const assistant = messages.findLast((message) => message.role === "assistant");
+          expect.soft(assistant, temperature).toMatchObject({
+            idempotencyKey: runId,
+            model: "acp-runtime",
+            stopReason: "aborted",
+          });
+          expect.soft(extractFirstTextBlock(assistant), temperature).toBe("same accepted reply");
+          expect.soft(finals[0]?.payload?.message, temperature).toMatchObject({
+            stopReason: "aborted",
+          });
+        }
         if (scenario.media) {
           const assistant = messages.findLast((message) => message.role === "assistant");
           expect

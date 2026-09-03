@@ -407,7 +407,6 @@ export const validateSessionGitHubPublishParams = compile(S.SessionGitHubPublish
 export const validateSessionGitHubOptionsParams = compile(S.SessionGitHubOptionsParamsSchema);
 export const validateSessionGitHubStatusParams = compile(S.SessionGitHubStatusParamsSchema);
 export const validateSessionGitHubConfirmParams = compile(S.SessionGitHubConfirmParamsSchema);
-export const validateWorkerGitHubPublishParams = compile(S.WorkerGitHubPublishParamsSchema);
 export const validateToolsEffectiveParams = compile(S.ToolsEffectiveParamsSchema);
 export const validateToolsInvokeParams = compile(S.ToolsInvokeParamsSchema);
 export const validateSkillsBinsParams = compile(S.SkillsBinsParamsSchema);
@@ -509,3 +508,6 @@ export const validateUpdateRunParams = compile(S.UpdateRunParamsSchema);
 export const validateUiCommandParams = compile(S.UiCommandParamsSchema);
 export const validateWebLoginStartParams = compile(S.WebLoginStartParamsSchema);
 export const validateWebLoginWaitParams = compile(S.WebLoginWaitParamsSchema);
+
+export const validateTranscriptsListParams = compile(S.TranscriptsListParamsSchema);
+export const validateTranscriptsGetParams = compile(S.TranscriptsGetParamsSchema);

@@ -52,10 +52,9 @@ function issuePreviewResponse(overrides: Record<string, unknown> = {}) {
 
 function createIssueLink(response: Record<string, unknown> = issuePreviewResponse()) {
   const link = createLink(ISSUE_HREF, "#99815");
-  link.provider.client = {
-    request: vi.fn().mockResolvedValue(response),
-  } as unknown as GatewayBrowserClient;
-  return link;
+  const request = vi.fn().mockResolvedValue(response);
+  link.provider.client = { request } as unknown as GatewayBrowserClient;
+  return { ...link, request };
 }
 
 function titleLinkInCard(): HTMLAnchorElement | null {
@@ -289,6 +288,44 @@ describe("openclaw-github-link-hovercard-provider", () => {
     await hover(anchor);
     expect(request).toHaveBeenCalledTimes(1);
   });
+
+  it.each(
+    ["pull", "issue"].flatMap((kind) => ["base", "comment"].map((first) => ({ kind, first }))),
+  )(
+    "keeps cached $kind preview links on the current anchor ($first first)",
+    async ({ kind, first }) => {
+      const surface = kind === "pull" ? "pull" : "issues";
+      const baseHref = `https://github.com/openclaw/openclaw/${surface}/99815`;
+      const commentHref = `${baseHref}#issuecomment-123`;
+      const variantHref = `https://github.com/OpenClaw/OpenClaw/${surface}/99815/?view=activity#issuecomment-456`;
+      const { anchor, provider } = createLink(baseHref);
+      const request = vi.fn().mockResolvedValue(issuePreviewResponse({ kind }));
+      provider.client = { request } as unknown as GatewayBrowserClient;
+      const comment = document.createElement("a");
+      comment.href = commentHref;
+      comment.textContent = "Comment permalink";
+      const variant = document.createElement("a");
+      variant.href = variantHref;
+      variant.textContent = "Alternate permalink";
+      provider.append(comment, variant);
+      const sequence =
+        first === "base" ? [anchor, comment, variant, anchor] : [comment, anchor, variant, anchor];
+
+      for (const current of sequence) {
+        await hover(current);
+        expect(titleLinkInCard()?.href).toBe(current.href);
+        expect(
+          hovercard()?.querySelector<HTMLAnchorElement>(".github-link-hovercard__repo")?.href,
+        ).toBe(current.href);
+        expect(
+          hovercard()?.querySelector<HTMLAnchorElement>(".github-link-hovercard__author")?.href,
+        ).toBe("https://github.com/octocat");
+        expect(request).toHaveBeenCalledTimes(1);
+        leave(current);
+        await vi.advanceTimersByTimeAsync(GITHUB_HOVERCARD_CLOSE_DELAY_MS);
+      }
+    },
+  );
 
   it.each(["immediate rejection", "late rejection", "late success"])(
     "reopens an abandoned request without poisoning its replacement cache: %s",
@@ -561,8 +598,14 @@ describe("openclaw-github-link-hovercard-provider", () => {
   });
 
   it("rerenders an open preview when the locale changes", async () => {
-    const { anchor } = createIssueLink(issuePreviewResponse({ comments: 1 }));
+    const { anchor, provider, request } = createIssueLink(issuePreviewResponse({ comments: 1 }));
     await hover(anchor);
+    leave(anchor);
+    await vi.advanceTimersByTimeAsync(GITHUB_HOVERCARD_CLOSE_DELAY_MS);
+    const comment = document.createElement("a");
+    comment.href = `${ISSUE_HREF}#issuecomment-123`;
+    provider.append(comment);
+    await hover(comment);
 
     i18n.registerTranslation("pt-BR", {
       githubPreview: {
@@ -590,5 +633,10 @@ describe("openclaw-github-link-hovercard-provider", () => {
     expect(card?.textContent).toContain("Aberto");
     expect(card?.textContent).toContain("1 comentário");
     expect(card?.getAttribute("aria-label")).toContain("por octocat");
+    expect(titleLinkInCard()?.href).toBe(comment.href);
+    expect(card?.querySelector<HTMLAnchorElement>(".github-link-hovercard__repo")?.href).toBe(
+      comment.href,
+    );
+    expect(request).toHaveBeenCalledTimes(1);
   });
 });

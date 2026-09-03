@@ -479,6 +479,7 @@ type EmbeddedAttemptPromptContext = {
 };
 
 export function prepareEmbeddedAttemptPromptContext(input: {
+  appendOnlyRuntimeContext?: boolean;
   attempt: PromptContextAttempt;
   boundaryTimezone?: string;
   includeBoundaryTimestamp: boolean;
@@ -634,6 +635,7 @@ export function prepareEmbeddedAttemptPromptContext(input: {
     ? [...sessionMessages, runtimeContextMessageForCurrentTurn]
     : sessionMessages;
   const hookMessagesForCurrentPrompt = normalizeMessagesForCurrentPromptBoundary({
+    appendOnlyRuntimeContext: input.appendOnlyRuntimeContext,
     messages: messagesForCurrentPrompt,
     prompt: promptForModel,
     ...(input.boundaryTimezone ? { timezone: input.boundaryTimezone } : {}),
@@ -655,6 +657,7 @@ export function prepareEmbeddedAttemptPromptContext(input: {
     };
   }
   const llmBoundaryPromptForPrecheck = normalizeCurrentPromptTextForLlmBoundary({
+    appendOnlyRuntimeContext: input.appendOnlyRuntimeContext,
     prompt: promptForModel,
     ...(input.boundaryTimezone ? { timezone: input.boundaryTimezone } : {}),
     ...(input.includeBoundaryTimestamp ? {} : { includeTimestamp: false }),

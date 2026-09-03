@@ -395,6 +395,7 @@ describe("Control UI E2E resource ownership", () => {
     const realGateway = [
       "agent-file-lifecycle.real-gateway",
       "control-ui-auth-transports",
+      "cron-duration-save.real-gateway",
       "logs-lifecycle",
       "mcp-app-conformance",
       "session-progress-hovercard.real-gateway",

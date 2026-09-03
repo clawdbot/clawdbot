@@ -19,6 +19,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "incognito",
   "archivedAt",
   "archivedBy",
+  "archiveReason",
   "pinnedAt",
   "lastReadAt",
   "agentStatus",
