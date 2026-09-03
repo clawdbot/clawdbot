@@ -118,6 +118,7 @@ describe("session auth-profile rotation", () => {
         [OAUTH_PROFILE_ID]: {
           cooldownUntil: Date.now() + 60_000,
           cooldownReason: "rate_limit",
+          failureCounts: { rate_limit: 1 },
         },
       };
       const sessionEntry: SessionEntry = {
@@ -135,6 +136,7 @@ describe("session auth-profile rotation", () => {
       authStoreMocks.state.store.usageStats[OAUTH_PROFILE_ID] = {
         cooldownUntil: Date.now() - 1,
         cooldownReason: "rate_limit",
+        failureCounts: { rate_limit: 1 },
       };
 
       expect(await resolveSession({ agentDir, sessionEntry, sessionStore, cfg })).toBe(
@@ -158,6 +160,30 @@ describe("session auth-profile rotation", () => {
       const sessionStore = { "agent:main:main": sessionEntry };
 
       expect(await resolveSession({ agentDir, sessionEntry, sessionStore })).toBe(
+        API_PRIMARY_PROFILE_ID,
+      );
+      expect(sessionEntry.authProfileOverride).toBe(API_PRIMARY_PROFILE_ID);
+    });
+  });
+
+  it("does not reverse an automatic compaction rotation on the next resolution", async () => {
+    await withAuthState(async (state) => {
+      const agentDir = state.agentDir();
+      await fs.mkdir(agentDir, { recursive: true });
+      configureMixedOpenAiAuthStore();
+      authStoreMocks.state.store.order = undefined;
+      const cfg = {
+        auth: { order: { openai: [OAUTH_PROFILE_ID, API_PRIMARY_PROFILE_ID] } },
+      };
+      const sessionEntry = createAutomaticSessionEntry({
+        model: OPENAI_MODEL_ID,
+        authProfileOverride: API_PRIMARY_PROFILE_ID,
+        compactionCount: 1,
+        authProfileOverrideCompactionCount: 1,
+      });
+      const sessionStore = { "agent:main:main": sessionEntry };
+
+      expect(await resolveSession({ agentDir, sessionEntry, sessionStore, cfg })).toBe(
         API_PRIMARY_PROFILE_ID,
       );
       expect(sessionEntry.authProfileOverride).toBe(API_PRIMARY_PROFILE_ID);

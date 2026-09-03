@@ -382,7 +382,11 @@ async function resolveSessionAuthProfileOverride(params: {
             const currentOrderIndex = resolution.profileIds.indexOf(current);
             return currentOrderIndex > 0 ? resolution.profileIds.slice(0, currentOrderIndex) : [];
           })
-          .find((profileId) => !isProfileUnavailableForSessionModel(profileId))
+          .find(
+            (profileId) =>
+              (store.usageStats?.[profileId]?.failureCounts?.rate_limit ?? 0) > 0 &&
+              !isProfileUnavailableForSessionModel(profileId),
+          )
       : undefined;
   const shouldRotateCurrent =
     Boolean(current) &&
