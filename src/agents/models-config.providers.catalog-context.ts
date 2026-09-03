@@ -59,7 +59,7 @@ export async function prepareProviderCatalogRun(
 ): Promise<Parameters<typeof runProviderCatalog>[0] & { timeoutMs?: number | null }> {
   const { authStore, ...catalogParams } = params;
   if (
-    params.provider.catalog?.prepareAuthProfiles !== "oauth" ||
+    !params.provider.auth.some((method) => method.kind === "oauth") ||
     (params.providerIds !== undefined &&
       !params.providerIds.some((providerId) =>
         matchesProviderPluginRef(params.provider, providerId),
@@ -67,6 +67,8 @@ export async function prepareProviderCatalogRun(
   ) {
     return catalogParams;
   }
+  // Preparation stays internal and provider-generic. The helper exits before
+  // materialization unless this catalog's selected credential is expiring OAuth.
   const { prepareProviderCatalogOAuthAuth } =
     await import("./models-config.providers.discovery-auth.runtime.js");
   return {

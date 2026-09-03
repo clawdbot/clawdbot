@@ -1,6 +1,3 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIProvider } from "../extensions/openai/api.js";
@@ -9,6 +6,7 @@ import { planOpenClawModelsJson } from "../src/agents/models-config.plan.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import type { ProviderCatalogOutcome } from "../src/plugins/provider-catalog.types.js";
 import type { ProviderPlugin } from "../src/plugins/types.js";
+import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 type ResolveProviderApiKey =
   (typeof import("../src/plugin-sdk/provider-auth-runtime.js"))["resolveApiKeyForProvider"];
@@ -19,6 +17,7 @@ const discovery = vi.hoisted(() => ({
   resolveProviderApiKey: vi.fn(),
   originalResolveProviderApiKey: undefined as unknown as ResolveProviderApiKey,
 }));
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../src/plugins/provider-discovery.runtime.js", () => ({
   resolvePluginDiscoveryProvidersRuntime: () => discovery.providers,
@@ -48,18 +47,17 @@ function configureRuntimeAuthMock() {
 describe("OpenAI model discovery auth order", () => {
   let agentDir: string;
 
-  beforeEach(async () => {
-    agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openai-profile-order-"));
+  beforeEach(() => {
+    agentDir = tempDirs.make("openai-profile-order-");
     discovery.providers = [buildOpenAIProvider()];
     configureRuntimeAuthMock();
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     clearLiveCatalogCacheForTests();
     vi.restoreAllMocks();
     discovery.providers = [];
     discovery.rejectedRuntimeProfiles.clear();
-    await fs.rm(agentDir, { recursive: true, force: true });
   });
 
   it("publishes only the configured first profile's account catalog", async () => {
