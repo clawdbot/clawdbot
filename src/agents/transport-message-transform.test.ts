@@ -166,6 +166,28 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
         canonicalModelId: "claude-fable-5",
       },
     },
+    // Fable 5.1 binding is one-way: nothing else reads its blocks (live: model_binding_mismatch).
+    {
+      source: { provider: "anthropic", model: "claude-fable-5-1" },
+      target: { provider: "anthropic", model: "claude-opus-5" },
+    },
+    {
+      source: { provider: "anthropic", model: "claude-fable-5-1" },
+      target: { provider: "anthropic", model: "claude-sonnet-5" },
+    },
+    {
+      source: { provider: "anthropic", model: "claude-fable-5-1" },
+      target: { provider: "anthropic", model: "claude-fable-5" },
+    },
+    {
+      source: { provider: "anthropic", model: "claude-opus-5" },
+      target: { provider: "anthropic", model: "claude-sonnet-5" },
+    },
+    // Non-Claude Anthropic-compatible sources never ride the Fable 5.1 read path.
+    {
+      source: { provider: "kimi-coding", model: "kimi-k2-thinking" },
+      target: { provider: "anthropic", model: "claude-fable-5-1" },
+    },
   ])("drops model-bound thinking for Fable/Mythos switches", ({ source, target }) => {
     const result = transformTransportMessages(
       [
@@ -193,6 +215,53 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
     expect(result[0]).toMatchObject({
       role: "assistant",
       content: [{ type: "text", text: "visible answer" }],
+    });
+  });
+
+  // Live-verified 2026-09-02 with thinking-binding-controls: these replays return
+  // input_transformations: [] on claude-fable-5-1, so the earlier reasoning stays usable.
+  it.each([
+    { source: { provider: "anthropic", model: "claude-opus-5" } },
+    { source: { provider: "anthropic", model: "claude-sonnet-5" } },
+    { source: { provider: "anthropic", model: "claude-opus-4-8" } },
+    { source: { provider: "anthropic", model: "claude-fable-5" } },
+    {
+      source: {
+        provider: "microsoft-foundry",
+        model: "prod-primary",
+        responseModel: "claude-opus-5",
+      },
+    },
+  ])("keeps readable Claude thinking when moving onto Fable 5.1", ({ source }) => {
+    const result = transformTransportMessages(
+      [
+        {
+          role: "assistant",
+          provider: source.provider,
+          api: "anthropic-messages",
+          model: source.model,
+          responseModel: source.responseModel,
+          stopReason: "stop",
+          timestamp: Date.now(),
+          content: [
+            {
+              type: "thinking",
+              thinking: "earlier reasoning",
+              thinkingSignature: "sig_readable",
+            },
+            { type: "text", text: "visible answer" },
+          ],
+        },
+      ] as Context["messages"],
+      makeModel("anthropic-messages", "anthropic", "claude-fable-5-1"),
+    );
+
+    expect(result[0]).toMatchObject({
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "earlier reasoning", thinkingSignature: "sig_readable" },
+        { type: "text", text: "visible answer" },
+      ],
     });
   });
 

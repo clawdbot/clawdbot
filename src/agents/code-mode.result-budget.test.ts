@@ -28,6 +28,7 @@ import { createAgentHarnessToolSurfaceRuntimeCore } from "./harness/tool-surface
 import { projectMcpCallToolResult } from "./mcp-content.js";
 import { Agent, type AgentMessage, type AgentToolResult } from "./runtime/index.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
+import { agentSessionQueuePromptContext } from "./sessions/agent-session-prompting.js";
 import { SessionManager } from "./sessions/session-manager.js";
 import { createReadTool } from "./sessions/tools/read.js";
 import type { ReadToolContinuation } from "./sessions/tools/tool-contracts.js";
@@ -98,6 +99,7 @@ async function dispatch(
     contextWindowTokens,
   });
   const activeSession = {
+    [agentSessionQueuePromptContext]: () => () => undefined,
     agent,
     get messages() {
       return agent.state.messages;

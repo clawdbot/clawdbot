@@ -254,6 +254,11 @@ is always emitted at `info` level regardless of
 `OPENCLAW_DEBUG_MODEL_TRANSPORT`, so basic model transport hygiene is visible
 without debug flags.
 
+`[anthropic] replayed thinking dropped: N block(s)` is a warning when Anthropic
+reports dropping invalidated thinking from replay. It includes the mismatch
+reasons and up to five affected message paths, not the thinking content. No
+debug flag is required.
+
 ### Trace correlation
 
 File logs are JSONL. When a log call carries a valid diagnostic trace context,
