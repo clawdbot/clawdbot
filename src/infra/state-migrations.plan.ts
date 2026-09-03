@@ -129,6 +129,7 @@ export async function readLegacyStateMigrationPlanConfig(params: {
   env: NodeJS.ProcessEnv;
 }): Promise<{
   config: OpenClawConfig;
+  configIncludedPaths: string[];
   configDigest?: string;
   rootDigest?: string;
   warnings: string[];
@@ -161,8 +162,13 @@ export async function readLegacyStateMigrationPlanConfig(params: {
     const rootHash = snapshot.hash;
     if (!rootHash) {
       warnings.push(`Could not hash snapshot config: ${params.configPath}`);
-      return { config: snapshot.sourceConfig, warnings };
+      return { config: snapshot.sourceConfig, configIncludedPaths: [], warnings };
     }
+    const configIncludedPaths = [
+      ...new Set(snapshot.includedPaths?.map((inputPath) => path.resolve(inputPath)) ?? []),
+    ]
+      .filter((includePath) => includePath !== path.resolve(snapshot.path))
+      .toSorted();
     const includes = Object.entries(writeOptions.includeFileHashesForWrite ?? {})
       .map(([includePath, includeHash]) => ({
         path: path.resolve(includePath),
@@ -174,14 +180,16 @@ export async function readLegacyStateMigrationPlanConfig(params: {
       configDigest: digest({
         root: { path: path.resolve(snapshot.path), hash: rootHash },
         includes,
+        inputPaths: [path.resolve(snapshot.path), ...configIncludedPaths],
         resolved: snapshot.sourceConfig,
       }),
+      configIncludedPaths,
       rootDigest: `sha256:${rootHash}`,
       warnings,
     };
   } catch (error) {
     warnings.push(`Could not inspect snapshot config: ${formatErrorMessage(error)}`);
-    return { config: {}, warnings };
+    return { config: {}, configIncludedPaths: [], warnings };
   }
 }
 

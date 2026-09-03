@@ -140,6 +140,7 @@ describe("runDoctorConfigPreflight state migration input", () => {
 
     expect(autoMigrateLegacyState).toHaveBeenCalledWith({
       cfg: { gateway: { mode: "local", port: 19091 } },
+      configIncludedPaths: [],
       env: process.env,
       recoverCorruptTargetStore: true,
       doctorOnlyStateMigrations: undefined,
@@ -206,6 +207,7 @@ describe("runDoctorConfigPreflight state migration input", () => {
 
   it("runs plugin state migrations with resolved legacy config before config repair removes retired paths", async () => {
     const parsedConfig = { $include: "memory-search.json" };
+    const includedPaths = ["/tmp/base.json", "/tmp/memory-search.json"];
     const resolvedConfig = {
       cron: { webhook: "https://example.invalid/cron-finished" },
       memory: {
@@ -227,6 +229,7 @@ describe("runDoctorConfigPreflight state migration input", () => {
       config: resolvedConfig,
       sourceConfig: resolvedConfig,
       parsed: parsedConfig,
+      includedPaths,
       legacyIssues: [
         {
           path: "memory.search.store.path",
@@ -275,6 +278,7 @@ describe("runDoctorConfigPreflight state migration input", () => {
         }),
       }),
       pluginDoctorConfig: resolvedConfig,
+      configIncludedPaths: includedPaths,
       env: process.env,
       recoverCorruptTargetStore: undefined,
       doctorOnlyStateMigrations: undefined,

@@ -212,11 +212,13 @@ describe("legacy state migration caller mode", () => {
 
   it("binds plan targets and identity to every resolved copied config input", async () => {
     const fixture = await makeFixture();
+    const intermediatePath = path.join(fixture.root, "planner-base.json");
     const includePath = path.join(fixture.root, "planner-agents.json");
     const configFor = (agentId: string): OpenClawConfig => ({
       agents: { ownership: "explicit", entries: { [agentId]: {} } },
     });
-    fs.writeFileSync(fixture.configPath, '{"$include":"./planner-agents.json"}\n');
+    fs.writeFileSync(fixture.configPath, '{"$include":"./planner-base.json"}\n');
+    fs.writeFileSync(intermediatePath, '{"$include":"./planner-agents.json"}\n');
     fs.writeFileSync(includePath, `${JSON.stringify(configFor("atlas"))}\n`);
 
     const first = await planLegacyStateMigrationsReadOnly({
@@ -229,7 +231,31 @@ describe("legacy state migration caller mode", () => {
       },
       env: fixture.env,
     });
+    expect(first.warnings).toEqual([]);
     const firstAgentStep = first.steps.find((step) => step.id === "acp-session-metadata");
+    const configIncludedPaths = [
+      ...new Set([
+        includePath,
+        intermediatePath,
+        fs.realpathSync(includePath),
+        fs.realpathSync(intermediatePath),
+      ]),
+    ].toSorted();
+    const configSources = [fixture.configPath, ...configIncludedPaths].map((inputPath) => ({
+      kind: "path" as const,
+      path: inputPath,
+    }));
+    for (const stepId of [
+      "config-machine-state",
+      "agent-migration-targets",
+      "plugin-migration-preparation",
+      "orphan-session-keys",
+      "migration-detection",
+    ]) {
+      expect
+        .soft(first.steps.find((step) => step.id === stepId)?.source)
+        .toEqual(expect.arrayContaining(configSources));
+    }
     expect.soft(firstAgentStep?.target).toEqual([
       {
         kind: "path",
@@ -279,6 +305,26 @@ describe("legacy state migration caller mode", () => {
       },
       { kind: "sqlite", path: resolveOpenClawStateSqlitePath(fixture.env) },
     ]);
+
+    const execution = await autoMigrateLegacyState({
+      cfg: configFor("beacon"),
+      configIncludedPaths,
+      doctorOnlyStateMigrations: true,
+      env: fixture.env,
+      homedir: () => fixture.homeDir,
+      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+    });
+    for (const stepId of [
+      "config-machine-state",
+      "agent-migration-targets",
+      "plugin-migration-preparation",
+      "orphan-session-keys",
+      "migration-detection",
+    ]) {
+      expect
+        .soft(execution.stepReceipts.find((receipt) => receipt.id === stepId)?.source)
+        .toEqual(second.steps.find((step) => step.id === stepId)?.source);
+    }
   });
 
   it("keeps the adjacent automatic-only step out of a Doctor plan", async () => {

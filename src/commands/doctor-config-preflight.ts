@@ -505,6 +505,7 @@ export async function runDoctorConfigPreflight(
               autoMigrateLegacyState({
                 cfg: migrationConfig,
                 ...(pluginDoctorConfig ? { pluginDoctorConfig } : {}),
+                configIncludedPaths: snapshot.includedPaths ?? [],
                 env: process.env,
                 log: migrationLog,
                 recoverCorruptTargetStore: options.recoverCorruptTargetStore,

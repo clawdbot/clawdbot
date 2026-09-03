@@ -913,6 +913,7 @@ function createStateSchemaMigrationStep(params: {
 
 function createAgentTargetDiscoveryStep(params: {
   configPath: string;
+  configIncludedPaths: readonly string[];
   stateDir: string;
   env: NodeJS.ProcessEnv;
   run: LegacyStateMigrationStep["run"];
@@ -922,7 +923,7 @@ function createAgentTargetDiscoveryStep(params: {
     id: "agent-migration-targets",
     phase: "shared",
     source: [
-      { kind: "path", path: params.configPath },
+      ...createConfigMigrationSources(params.configPath, params.configIncludedPaths),
       {
         kind: "sqlite",
         path: resolveOpenClawStateSqlitePath({
@@ -943,6 +944,7 @@ function createAgentTargetDiscoveryStep(params: {
 function createConfigMachineStateStep(params: {
   config: OpenClawConfig;
   configPath: string;
+  configIncludedPaths: readonly string[];
   stateDir: string;
   env: NodeJS.ProcessEnv;
 }): LegacyStateMigrationStep {
@@ -950,7 +952,7 @@ function createConfigMachineStateStep(params: {
   return {
     id: "config-machine-state",
     phase: "shared",
-    source: [{ kind: "path", path: params.configPath }],
+    source: createConfigMigrationSources(params.configPath, params.configIncludedPaths),
     target: [{ kind: "sqlite", path: resolveOpenClawStateSqlitePath(stateEnv) }],
     requiredness: "conditional",
     reversibility: "checkpoint-required",
@@ -960,6 +962,7 @@ function createConfigMachineStateStep(params: {
 
 function createMigrationDetectionStep(params: {
   configPath: string;
+  configIncludedPaths: readonly string[];
   stateDir: string;
   run: LegacyStateMigrationStep["run"];
   refusal?: PreparedLegacyStateMigrationStep["refusal"];
@@ -968,7 +971,7 @@ function createMigrationDetectionStep(params: {
     id: "migration-detection",
     phase: "shared",
     source: [
-      { kind: "path", path: params.configPath },
+      ...createConfigMigrationSources(params.configPath, params.configIncludedPaths),
       { kind: "path", path: params.stateDir },
     ],
     target: [],
@@ -981,6 +984,7 @@ function createMigrationDetectionStep(params: {
 
 function createPluginMigrationPreparationStep(params: {
   configPath: string;
+  configIncludedPaths: readonly string[];
   pluginIds: readonly string[];
   run: LegacyStateMigrationStep["run"];
   refusal?: PreparedLegacyStateMigrationStep["refusal"];
@@ -989,7 +993,7 @@ function createPluginMigrationPreparationStep(params: {
     id: "plugin-migration-preparation",
     phase: "shared",
     source: [
-      { kind: "path", path: params.configPath },
+      ...createConfigMigrationSources(params.configPath, params.configIncludedPaths),
       ...params.pluginIds.map(
         (pluginId): LegacyStateMigrationEndpoint => ({
           kind: "owner",
@@ -1018,6 +1022,18 @@ function uniqueMigrationEndpoints(
     seen.add(key);
     return true;
   });
+}
+
+function createConfigMigrationSources(
+  configPath: string,
+  includedPaths: readonly string[],
+): LegacyStateMigrationEndpoint[] {
+  return uniqueMigrationEndpoints(
+    [configPath, ...includedPaths].map((inputPath) => ({
+      kind: "path" as const,
+      path: path.resolve(inputPath),
+    })),
+  );
 }
 
 function inspectOrphanSessionStoreEndpoints(params: {
@@ -1057,6 +1073,7 @@ function buildLegacyStateMigrationPreludeSteps(params: {
   mode: LegacyStateMigrationMode;
   config: OpenClawConfig;
   configPath: string;
+  configIncludedPaths: readonly string[];
   stateDir: string;
   env: NodeJS.ProcessEnv;
   homedir: () => string;
@@ -1072,10 +1089,7 @@ function buildLegacyStateMigrationPreludeSteps(params: {
     kind: "sqlite",
     path: resolveOpenClawStateSqlitePath(stateEnv),
   };
-  const configSource: LegacyStateMigrationEndpoint = {
-    kind: "path",
-    path: params.configPath,
-  };
+  const configSources = createConfigMigrationSources(params.configPath, params.configIncludedPaths);
   const agentPersistence = uniqueMigrationEndpoints([
     stateDatabase,
     { kind: "path", path: path.join(params.stateDir, "agents") },
@@ -1180,7 +1194,7 @@ function buildLegacyStateMigrationPreludeSteps(params: {
   steps.push(
     sharedStep(
       "orphan-session-keys",
-      uniqueMigrationEndpoints([configSource, ...orphanTargets]),
+      uniqueMigrationEndpoints([...configSources, ...orphanTargets]),
       orphanTargets,
       () =>
         orphanSessionStores.warnings.length > 0
@@ -1831,11 +1845,13 @@ export async function planLegacyStateMigrationsReadOnly(params: {
     createConfigMachineStateStep({
       config: configBefore.config,
       configPath: snapshot.configPath,
+      configIncludedPaths: configBefore.configIncludedPaths,
       stateDir: snapshot.stateDir,
       env,
     }),
     createAgentTargetDiscoveryStep({
       configPath: snapshot.configPath,
+      configIncludedPaths: configBefore.configIncludedPaths,
       stateDir: snapshot.stateDir,
       env,
       refusal: agentTargetRefusal,
@@ -1848,6 +1864,7 @@ export async function planLegacyStateMigrationsReadOnly(params: {
       mode: params.mode,
       config: configBefore.config,
       configPath: snapshot.configPath,
+      configIncludedPaths: configBefore.configIncludedPaths,
       stateDir: snapshot.stateDir,
       env,
       homedir: () => snapshot.homeDir,
@@ -1860,6 +1877,7 @@ export async function planLegacyStateMigrationsReadOnly(params: {
         ? {
             pluginPreparation: createPluginMigrationPreparationStep({
               configPath: snapshot.configPath,
+              configIncludedPaths: configBefore.configIncludedPaths,
               pluginIds,
               refusal: pluginPreparationRefusal,
               run: () => ({
@@ -1872,6 +1890,7 @@ export async function planLegacyStateMigrationsReadOnly(params: {
     }),
     createMigrationDetectionStep({
       configPath: snapshot.configPath,
+      configIncludedPaths: configBefore.configIncludedPaths,
       stateDir: snapshot.stateDir,
       refusal:
         detected.warnings.length > 0
@@ -2158,6 +2177,8 @@ export async function runLegacyStateMigrations(params: {
 export async function autoMigrateLegacyState(params: {
   cfg: OpenClawConfig;
   pluginDoctorConfig?: OpenClawConfig;
+  /** Include inputs captured by the config snapshot that produced cfg. */
+  configIncludedPaths?: readonly string[];
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
   log?: MigrationLogger;
@@ -2197,6 +2218,7 @@ export async function autoMigrateLegacyState(params: {
   }
   autoMigrateChecked.add(checkKey);
   const pluginDoctorConfig = params.pluginDoctorConfig ?? params.cfg;
+  const configIncludedPaths = params.configIncludedPaths ?? [];
   const configuredPluginIds =
     mode === "doctor" ? collectRelevantDoctorPluginIds(pluginDoctorConfig) : [];
 
@@ -2253,6 +2275,7 @@ export async function autoMigrateLegacyState(params: {
       createConfigMachineStateStep({
         config: pluginDoctorConfig,
         configPath,
+        configIncludedPaths,
         stateDir,
         env,
       }),
@@ -2280,6 +2303,7 @@ export async function autoMigrateLegacyState(params: {
     [
       createAgentTargetDiscoveryStep({
         configPath,
+        configIncludedPaths,
         stateDir,
         env,
         run: () => {
@@ -2332,6 +2356,7 @@ export async function autoMigrateLegacyState(params: {
   let sessionStoreOwnership: SessionStoreOwnership | undefined;
   const pluginPreparation = createPluginMigrationPreparationStep({
     configPath,
+    configIncludedPaths,
     pluginIds: configuredPluginIds,
     run: async () => {
       pluginSessionStoreAgentIds = listPluginDoctorSessionStoreAgentIds({
@@ -2364,6 +2389,7 @@ export async function autoMigrateLegacyState(params: {
     mode,
     config: params.cfg,
     configPath,
+    configIncludedPaths,
     stateDir,
     env,
     homedir,
@@ -2470,6 +2496,7 @@ export async function autoMigrateLegacyState(params: {
     mode,
     config: params.cfg,
     configPath,
+    configIncludedPaths,
     stateDir,
     env,
     homedir,
@@ -2502,6 +2529,7 @@ export async function autoMigrateLegacyState(params: {
     [
       createMigrationDetectionStep({
         configPath,
+        configIncludedPaths,
         stateDir,
         run: async () => {
           detected = await detectLegacyStateMigrations({
