@@ -84,6 +84,7 @@ suite.define(() => {
                 identity: { name: "Approval proof" },
                 tools: {
                   ...cfg.agents?.entries?.qa?.tools,
+                  exec: { ...cfg.agents?.entries?.qa?.tools?.exec, mode: "ask" },
                   alsoAllow: ["openclaw"],
                 },
               },
@@ -143,7 +144,7 @@ suite.define(() => {
             });
           });
           await page.addInitScript(
-            ({ gatewayUrl, token }) => {
+            ({ gatewayUrl, token, sessionKey: expectedSessionKey }) => {
               const proofWindow = window as Window & {
                 __OPENCLAW_APPROVAL_UI_SEQUENCE__?: string[];
                 __OPENCLAW_APPROVAL_FALLBACK_OBSERVED__?: boolean;
@@ -196,7 +197,7 @@ suite.define(() => {
                       }
                       if (
                         frame.event === "agent" &&
-                        frame.payload?.sessionKey === sessionKey &&
+                        frame.payload?.sessionKey === expectedSessionKey &&
                         frame.payload.stream === "tool" &&
                         frame.payload.data?.phase === "result" &&
                         frame.payload.data.name === "openclaw"
