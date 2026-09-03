@@ -4,7 +4,6 @@ import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion"
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   resolveCompactDurationParts,
-  resolveExactDurationParts,
   resolveSingleUnitDurationParts,
   type DurationPart,
 } from "../../../src/infra/format-time/format-duration-internal.ts";
@@ -31,7 +30,7 @@ type FormatRelativeTimestampOptions = {
   suffix?: boolean;
 };
 
-function formatUnit({ value, unit }: DurationPart): string {
+export function formatUnit({ value, unit }: DurationPart): string {
   return new Intl.NumberFormat(i18n.getLocale(), {
     style: "unit",
     unit,
@@ -57,10 +56,8 @@ export function formatTimeAgo(
   }
 
   const { value, unit } = bucketRelativeTimeMs(durationMs);
-  if (unit === "second") {
-    if (options.suffix !== false) {
-      return t("common.justNow");
-    }
+  if (unit === "second" && options.suffix !== false) {
+    return t("common.justNow");
   }
   return options.suffix === false ? formatUnit({ value, unit }) : formatRelative(-value, unit);
 }
@@ -102,10 +99,6 @@ export function formatRelativeTimestamp(
 
 export function formatDurationCompact(ms?: number | null): string | undefined {
   return resolveCompactDurationParts(ms)?.map(formatUnit).join(" ");
-}
-
-export function formatDurationExact(ms?: number | null, fallback = t("common.na")): string {
-  return resolveExactDurationParts(ms)?.map(formatUnit).join(" ") ?? fallback;
 }
 
 export function formatDurationHuman(ms?: number | null, fallback = t("common.na")): string {
