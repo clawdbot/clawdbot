@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { WorkerSshEndpoint } from "../../plugins/types.js";
 import {
@@ -68,6 +69,77 @@ describe("worker SSH preparation", () => {
 
     expect((await fs.readdir(os.tmpdir())).filter((entry) => entry.startsWith(prefix))).toEqual([]);
   });
+
+  it.each([
+    { closeAfter: "write:identity", expectedEffects: ["write:identity"] },
+    {
+      closeAfter: "chmod:identity",
+      expectedEffects: ["write:identity", "chmod:identity"],
+    },
+    {
+      closeAfter: "write:known_hosts",
+      expectedEffects: ["write:identity", "chmod:identity", "write:known_hosts"],
+    },
+  ])(
+    "stops SSH materialization after authority closes during $closeAfter",
+    async ({ closeAfter, expectedEffects }) => {
+      const prefix = `openclaw-worker-authority-effect-${process.pid}-`;
+      const originalWriteFile = fs.writeFile.bind(fs);
+      const originalChmod = fs.chmod.bind(fs);
+      const effects: string[] = [];
+      let authorityActive = true;
+      const recordEffect = (operation: "write" | "chmod", file: unknown) => {
+        if (typeof file !== "string") {
+          throw new Error("expected SSH scratch-file path");
+        }
+        const effect = `${operation}:${path.basename(file)}`;
+        effects.push(effect);
+        return effect;
+      };
+      const writeFile = vi
+        .spyOn(fs, "writeFile")
+        .mockImplementation(async (file, data, options) => {
+          const effect = recordEffect("write", file);
+          await originalWriteFile(file, data, options);
+          if (effect === closeAfter) {
+            authorityActive = false;
+          }
+        });
+      const chmod = vi.spyOn(fs, "chmod").mockImplementation(async (file, mode) => {
+        const effect = recordEffect("chmod", file);
+        await originalChmod(file, mode);
+        if (effect === closeAfter) {
+          authorityActive = false;
+        }
+      });
+
+      try {
+        await expect(
+          prepareWorkerSsh({
+            assertCurrent: () => {
+              if (!authorityActive) {
+                throw new Error("worker authority closed");
+              }
+            },
+            ssh: SSH,
+            pinnedHostKey: SSH.hostKey,
+            resolveIdentity: async () => ({ kind: "material", contents: "secret-key" }),
+            temporaryDirectoryPrefix: prefix,
+          }),
+        ).rejects.toThrow("worker authority closed");
+
+        expect(effects).toEqual(expectedEffects);
+      } finally {
+        writeFile.mockRestore();
+        chmod.mockRestore();
+        await Promise.all(
+          (await fs.readdir(os.tmpdir()))
+            .filter((entry) => entry.startsWith(prefix))
+            .map((entry) => fs.rm(path.join(os.tmpdir(), entry), { recursive: true, force: true })),
+        );
+      }
+    },
+  );
 
   it("adapts pinned endpoint identity and every advertised port for sandbox SSH", () => {
     expect(

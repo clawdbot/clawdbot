@@ -180,12 +180,15 @@ export async function prepareWorkerSsh(params: {
       }
       identityPath = path.join(temporaryDir, "identity");
       await fs.writeFile(identityPath, normalizedContents, { mode: 0o600 });
+      params.assertCurrent?.();
       await fs.chmod(identityPath, 0o600);
+      params.assertCurrent?.();
     }
 
     const knownHostsPath = path.join(temporaryDir, "known_hosts");
     // The isolated file contains only trusted provisioning output; SSH never learns the first key.
     await fs.writeFile(knownHostsPath, knownHosts, { mode: 0o600 });
+    params.assertCurrent?.();
     let disposed = false;
     let selectedPort = endpoint.port;
     return {
