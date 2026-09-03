@@ -3927,7 +3927,7 @@ ui/src/lib/board/widget-bridge.ts	3
 ui/src/lib/board/widget-sandbox-host.ts	1
 ui/src/lib/board/widgets/workboard-card.ts	3
 ui/src/lib/board/widgets/workboard-widget.ts	2
-ui/src/lib/channels/index.ts	3
+ui/src/lib/channels/index.ts	0
 ui/src/lib/chat/message-extract.ts	7
 ui/src/lib/chat/message-normalizer.ts	2
 ui/src/lib/chat/outbox-store-codec.ts	1
