@@ -93,6 +93,14 @@ describe("route-args", () => {
     });
   });
 
+  it("defers command options placed before status or health to Commander", () => {
+    expect(parseStatusRouteArgs(["node", "openclaw", "--json", "status"])).toBeNull();
+    expect(parseHealthRouteArgs(["node", "openclaw", "--timeout", "5000", "health"])).toBeNull();
+    expect(
+      parseStatusRouteArgs(["node", "openclaw", "--profile", "work", "status", "--json"]),
+    ).toMatchObject({ json: true });
+  });
+
   it.each([
     {
       name: "health unknown flag",
