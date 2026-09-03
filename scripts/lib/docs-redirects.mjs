@@ -154,9 +154,7 @@ function redirectSource(value) {
 }
 
 function redirectDestination(value) {
-  // Reject control bytes before interpolating a redirect into generated HTML.
-  // eslint-disable-next-line no-control-regex
-  if (typeof value !== "string" || /[\u0000-\u0020<>\\]/u.test(value) || value.includes("*")) {
+  if (typeof value !== "string" || hasUnsafeRedirectCharacters(value)) {
     throw new Error(`Unsupported redirect destination: ${value}`);
   }
   if (/^(https?:)?\/\//u.test(value)) {
@@ -171,9 +169,7 @@ function redirectDestination(value) {
 }
 
 function validatePath(value) {
-  // Reject control bytes and path metacharacters before materializing a route.
-  // eslint-disable-next-line no-control-regex
-  if (/[\u0000-\u0020<>\\*:]/u.test(value)) {
+  if (hasUnsafeRedirectCharacters(value) || value.includes(":")) {
     throw new Error(`Unsafe redirect path: ${value}`);
   }
   for (const segment of value.split("/")) {
@@ -187,4 +183,12 @@ function validatePath(value) {
       throw new Error(`Unsafe redirect path: ${value}`);
     }
   }
+}
+
+function hasUnsafeRedirectCharacters(value) {
+  // Reject raw C0/space and HTML/path metacharacters before URL normalization
+  // or generated HTML can change their meaning.
+  return [...value].some(
+    (character) => character.charCodeAt(0) <= 0x20 || "<>\\*".includes(character),
+  );
 }
