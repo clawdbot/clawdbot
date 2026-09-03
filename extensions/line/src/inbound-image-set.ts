@@ -124,10 +124,13 @@ export function createLineImageSetIngressBuffer<TEvent, TLifecycle>(): {
   // A set whose parts straddle the wait is delivered in pieces, and the pieces
   // already handed over are not missing from the send. Message ids, not a count:
   // a piece whose turn failed is redelivered, and counting it twice would report
-  // fewer missing parts than there are. Each entry carries its own removal timer,
-  // so a set nobody finishes cannot accumulate here — and a piece that arrives
-  // after that timer, or after a restart, is counted against the total on its
-  // own again, which reports more missing than there are rather than fewer.
+  // fewer missing parts than there are. Each entry carries its own removal timer
+  // (five windows), so a set nobody finishes cannot accumulate here. Three things
+  // drop the carry — that timer, a restart, and a round that was not short, since
+  // only a short one writes it back — and after any of them a later piece counts
+  // against the total on its own, reporting more missing rather than fewer. It
+  // reports fewer only when a delivered piece never reached the model, which
+  // takes a short round and a failed one together.
   const deliveredBySet = new Map<
     string,
     { messageIds: Set<string>; timer?: ReturnType<typeof setTimeout> }
