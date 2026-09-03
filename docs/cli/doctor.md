@@ -86,6 +86,17 @@ If migration or config repair cannot finish, Doctor leaves the stopped service
 stopped and reports an incomplete repair. Resolve the reported blocker, rerun
 `openclaw doctor --fix`, then start the service through its owner.
 
+## Remote Gateway recovery
+
+With `gateway.mode: "remote"`, a failed Gateway health check does not trigger
+local service install, start, restart, or bootstrap prompts. Check the remote
+URL, credentials, and SSH tunnel or network connection. If the Gateway itself
+needs recovery, run service commands on the host that runs it. A loopback remote
+URL can be an SSH tunnel; it does not make the Gateway a local service.
+
+See [Remote access](/gateway/remote) for connection checks. Other Doctor config
+and state checks still follow the selected posture above.
+
 ## Control UI assets
 
 For source installs, Doctor can build missing Control UI assets or rebuild stale
