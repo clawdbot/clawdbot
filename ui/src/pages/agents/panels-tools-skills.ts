@@ -23,14 +23,13 @@ import {
 import type { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
 import { renderGitHubIdentity } from "../../features/github-connections/github-identity-view.ts";
 import { t } from "../../i18n/index.ts";
+import { resolveAgentConfig, resolveAgentSkillsFilter } from "../../lib/agents/display.ts";
 import {
   type AgentToolEntry,
   type AgentToolSection,
-  resolveAgentConfig,
-  resolveAgentSkillsFilter,
   resolveToolProfileOptions,
   resolveToolSections,
-} from "../../lib/agents/display.ts";
+} from "../../lib/agents/tool-catalog.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import type { SkillGroup } from "../../lib/skills-grouping.ts";

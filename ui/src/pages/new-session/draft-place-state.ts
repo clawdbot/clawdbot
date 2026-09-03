@@ -617,8 +617,8 @@ export class DraftPlaceState {
     this.callbacks.requestUpdate();
   }
 
-  toggleWorktree() {
-    this.repositoryState.toggle();
+  selectWorktree(value: boolean) {
+    this.repositoryState.select(value);
   }
 
   setBaseRef(baseRef: string) {

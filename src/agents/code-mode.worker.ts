@@ -208,6 +208,7 @@ async function createVm(input: CodeModeWorkerPayload, bridge: BridgeState): Prom
         ["__openclawNamespaces", input.namespaces],
         ["__openclawApiFiles", input.apiFiles ?? []],
         ["__openclawSwarmEnabled", input.swarmEnabled === true],
+        ["__openclawMaxPendingToolCalls", input.config.maxPendingToolCalls],
       ] as const) {
         vm.hostToHandle(value).consume((handle) => vm.global.setProp(name, handle));
       }

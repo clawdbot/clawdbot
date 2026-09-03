@@ -546,8 +546,12 @@ export async function readCodexInheritedMcpServerNames(
       layer.name.type === "legacyManagedConfigTomlFromFile" ||
       layer.name.type === "legacyManagedConfigTomlFromMdm"
     ) {
+      const migrationGuidance =
+        layer.name.type === "legacyManagedConfigTomlFromFile"
+          ? 'migrate /etc/codex/managed_config.toml to /etc/codex/requirements.toml before running restricted or isolated turns. For ChatGPT-only authentication, use allowed_login_methods = ["chatgpt"] in /etc/codex/requirements.toml'
+          : 'replace the legacy MDM payload with base64-encoded TOML requirements in the com.openai.codex managed preference requirements_toml_base64 before running restricted or isolated turns. For ChatGPT-only authentication, include allowed_login_methods = ["chatgpt"] in that TOML payload';
       throw new Error(
-        `Codex restricted tool surface cannot override config layer ${layer.name.type}`,
+        `Codex restricted tool surface cannot override config layer ${layer.name.type}; ${migrationGuidance}.`,
       );
     }
     if (!CODEX_RING_ZERO_OVERRIDABLE_LAYER_TYPES.has(layer.name.type)) {

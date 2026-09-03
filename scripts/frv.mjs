@@ -459,7 +459,8 @@ export function createClient(repository, dependencies = {}) {
   const apiJson = dependencies.apiJson ?? ((path) => ghJson(repository, path));
   const apiText =
     dependencies.apiText ??
-    ((path, jq) => readFreshGhApi(repository, path, jq ? ["--paginate", "--jq", jq] : []));
+    ((path, jq, extraArgs = []) =>
+      readFreshGhApi(repository, path, [...(jq ? ["--paginate", "--jq", jq] : []), ...extraArgs]));
   const mutate = dependencies.mutate ?? ((args) => execGh(args));
   const rerun = (runId, action) =>
     mutate(["api", "-X", "POST", `repos/${repository}/actions/runs/${runId}/${action}`]);
@@ -524,7 +525,9 @@ export function createClient(repository, dependencies = {}) {
         : [];
     },
     getJobLog(jobId) {
-      return apiText(`actions/jobs/${jobId}/logs`);
+      // Octopool's gh shim refuses log bodies with terminal escape sequences even off a TTY;
+      // real gh ignores the flag off-TTY, so the controller works with either binary.
+      return apiText(`actions/jobs/${jobId}/logs`, undefined, ["--allow-escape-sequences"]);
     },
     rerunFailed: (runId) => rerun(runId, "rerun-failed-jobs"),
     rerunParent: (runId) => rerun(runId, "rerun"),

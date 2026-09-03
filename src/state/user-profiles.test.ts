@@ -722,23 +722,29 @@ describe("user profiles", () => {
     ]);
   });
 
-  it("adopts a Tailscale name only while the display-name slot is empty", () => {
-    const options = stateOptions();
-    const profile = ensureProfileForTailscaleIdentity(
-      { login: "ada@github", name: "Ada Provider" },
-      options,
-    );
+  it.each([null, "", " \t "])(
+    "adopts a Tailscale name only into an empty slot: %s",
+    (emptyName) => {
+      const options = stateOptions();
+      const profile = ensureProfileForTailscaleIdentity(
+        { login: "ada@github", name: "Ada Provider" },
+        options,
+      );
 
-    setDisplayName(profile.id, null, options);
-    expect(
-      ensureProfileForTailscaleIdentity({ login: "ada@github", name: "Ada Adopted" }, options),
-    ).toMatchObject({ displayName: "Ada Adopted" });
+      setDisplayName(profile.id, emptyName, options);
+      expect(
+        ensureProfileForTailscaleIdentity({ login: "ada@github", name: "Ada Adopted" }, options),
+      ).toMatchObject({ displayName: "Ada Adopted" });
 
-    setDisplayName(profile.id, "User Chosen", options);
-    expect(
-      ensureProfileForTailscaleIdentity({ login: "ada@github", name: "Provider Changed" }, options),
-    ).toMatchObject({ displayName: "User Chosen" });
-  });
+      setDisplayName(profile.id, "User Chosen", options);
+      expect(
+        ensureProfileForTailscaleIdentity(
+          { login: "ada@github", name: "Provider Changed" },
+          options,
+        ),
+      ).toMatchObject({ displayName: "User Chosen" });
+    },
+  );
 
   it("moves aliases and leaves an aliasless source profile as a one-hop tombstone", () => {
     const options = stateOptions();

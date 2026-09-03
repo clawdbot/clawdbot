@@ -20,7 +20,7 @@ import { projectCloneInput, type DraftRemoteProject } from "./project-chip.ts";
 import { recentPlaces, type RecentPlaceSource } from "./recent-places.ts";
 
 const PROJECT_SEARCH_DEBOUNCE_MS = 300;
-type DraftPickerKind = "where" | "project" | "detail";
+type DraftPickerKind = "where" | "project" | "checkout";
 
 type DraftPlaceBrowserSnapshot = Readonly<{
   context: ApplicationContext | undefined;
@@ -350,7 +350,7 @@ export class DraftPlaceBrowser {
 
   close() {
     this.resetBrowser(true);
-    for (const kind of ["where", "project", "detail"] as const) {
+    for (const kind of ["where", "project", "checkout"] as const) {
       const popover = this.callbacks.querySelector(`.new-session-page__${kind}-popover`) as
         | (HTMLElement & { open: boolean })
         | null;

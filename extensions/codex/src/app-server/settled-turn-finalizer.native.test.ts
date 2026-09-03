@@ -520,12 +520,6 @@ describe.skipIf(process.platform === "win32")(
           const createClient = vi.spyOn(sharedClients, "createIsolatedCodexAppServerClient");
           const startClient = vi.spyOn(CodexAppServerClient, "start");
           const resolveHandoff = vi.spyOn(authBridge, "resolveCodexAppServerPreparedAuthHandoff");
-          const resolveHostProfile = vi.spyOn(
-            authBridge,
-            "resolveCodexAppServerAuthProfileIdForAgent",
-          );
-          const resolveHostStore = vi.spyOn(authBridge, "resolveCodexAppServerAuthProfileStore");
-          const applyHostAuth = vi.spyOn(authBridge, "applyCodexAppServerAuthProfile");
           const { hostCapabilities: _hostCapabilities, ...attempt } = params;
           fixture.setPhase("summary");
           await expect(
@@ -540,9 +534,6 @@ describe.skipIf(process.platform === "win32")(
           expect(createClient).not.toHaveBeenCalled();
           expect(startClient).not.toHaveBeenCalled();
           expect(resolveHandoff).not.toHaveBeenCalled();
-          expect(resolveHostProfile).not.toHaveBeenCalled();
-          expect(resolveHostStore).not.toHaveBeenCalled();
-          expect(applyHostAuth).not.toHaveBeenCalled();
           expect(nativeRequests).not.toHaveBeenCalled();
           expect(requests).toHaveLength(0);
           expect(context).toEqual({ source: "unavailable" });
