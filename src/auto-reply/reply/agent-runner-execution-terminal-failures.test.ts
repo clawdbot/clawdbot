@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createCliTimeoutError } from "../../agents/cli-runner/no-output-timeout-policy.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import {
   formatBillingErrorMessage,
@@ -720,18 +721,17 @@ describe("executeAgentTurn: terminal failures", () => {
 
   it("explains that CLI background tasks share the timed-out parent process", () => {
     const payload = buildKnownAgentRunFailureReplyPayload({
-      err: new FailoverError("CLI exceeded timeout (600s) and was terminated.", {
-        reason: "timeout",
-        provider: "claude-cli",
-        code: "cli_overall_timeout",
-        cliTimeout: {
+      err: createCliTimeoutError(
+        { provider: "claude-cli" },
+        {
           mode: "overall",
           timeoutSeconds: 600,
           observedActivity: true,
           activeToolCount: 1,
           backgroundTaskCount: 1,
         },
-      }),
+        "cli_overall_timeout",
+      ),
       sessionCtx: createMinimalRunAgentTurnParams().sessionCtx,
       resolvedVerboseLevel: "off",
     });

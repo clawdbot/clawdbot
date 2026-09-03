@@ -359,6 +359,34 @@ describe("connection live-text delivery", () => {
     },
   );
 
+  it.each([false, true])(
+    "preserves slow-consumer closure with nonzero transport backlog (coalesce=%s)",
+    (coalesce) => {
+      const peer = createBufferedPeer("backlogged", MAX_BUFFERED_BYTES - 4096);
+      const { broadcast } = createGatewayBroadcaster({ clients: new Set([peer.client]) });
+      const group = {};
+      const payload = text("x".repeat(3072));
+      broadcast("tick", {});
+      for (const key of ["first", "second"]) {
+        broadcast(
+          "agent",
+          payload,
+          coalesce ? { liveText: { group, coalesce: { key, merge: replaceText } } } : undefined,
+        );
+      }
+      broadcast("chat", text("final"), coalesce ? { liveText: { group } } : undefined);
+
+      expect(peer.frames.map(({ event, seq }) => ({ event, seq }))).toEqual([
+        { event: "tick", seq: 1 },
+        { event: "agent", seq: 2 },
+        { event: "agent", seq: 3 },
+      ]);
+      expect(peer.socket.bufferedAmount).toBeGreaterThan(MAX_BUFFERED_BYTES);
+      expect(peer.socket.close).toHaveBeenCalledExactlyOnceWith(1008, "slow consumer");
+      expect(peer.socket.terminate).toHaveBeenCalledOnce();
+    },
+  );
+
   it("flushes the affected group instead of retaining more than the existing byte limit", () => {
     const peer = createPeer("bounded");
     const { broadcast } = createGatewayBroadcaster({ clients: new Set([peer.client]) });

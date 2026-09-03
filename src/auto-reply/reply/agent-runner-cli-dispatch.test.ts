@@ -3,9 +3,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
+import { createCliTimeoutError } from "../../agents/cli-runner/no-output-timeout-policy.js";
 import { clearCliSessionInStore } from "../../agents/cli-session-store.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
-import { FailoverError } from "../../agents/failover-error.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
@@ -597,7 +597,16 @@ describe("runCliAgentWithLifecycle", () => {
       }
     });
     cliDispatchState.runCliAgentMock.mockRejectedValueOnce(
-      new FailoverError("CLI produced no output", { reason: "timeout" }),
+      createCliTimeoutError(
+        { provider: "claude-cli", model: "claude", sessionId: "session-1" },
+        {
+          mode: "no-output",
+          timeoutSeconds: 1,
+          observedActivity: false,
+          activeToolCount: 0,
+          backgroundTaskCount: 0,
+        },
+      ),
     );
 
     await expect(
