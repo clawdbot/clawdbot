@@ -91,7 +91,7 @@ export async function executeSkillCollectionReconcile(params: {
   workspaceDir: string;
   readSkillHashes: ReadonlyMap<string, string>;
   context?: SkillCollectionReconcileContext;
-  config?: OpenClawConfig;
+  config: OpenClawConfig;
   agentId?: string;
   env?: NodeJS.ProcessEnv;
 }) {
@@ -129,11 +129,11 @@ export async function executeSkillCollectionReconcile(params: {
 
 export async function executeSkillCollectionRestore(params: {
   workspaceDir: string;
-  config?: OpenClawConfig;
+  config: OpenClawConfig;
   agentId?: string;
   env?: NodeJS.ProcessEnv;
 }) {
-  if (!params.config || !params.agentId) {
+  if (!params.agentId) {
     throw new ToolInputError(
       "Skill Workshop restore requires the active agent configuration and id",
     );
@@ -153,7 +153,7 @@ export async function executeSkillCollectionRestore(params: {
 export function executeSkillCollectionHistory(
   params: {
     workspaceDir: string;
-    config?: OpenClawConfig;
+    config: OpenClawConfig;
     agentId?: string;
     env?: NodeJS.ProcessEnv;
   },

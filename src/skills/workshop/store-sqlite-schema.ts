@@ -24,6 +24,9 @@ export type SkillWorkshopStoreOptions = {
   agentId?: string;
   config?: OpenClawConfig;
 };
+export type SkillWorkshopDirectoryStoreOptions = SkillWorkshopStoreOptions & {
+  config: OpenClawConfig;
+};
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS skill_workshop_proposals (

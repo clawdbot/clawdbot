@@ -1,9 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  clearRuntimeConfigSnapshot,
-  getRuntimeConfig,
-  setRuntimeConfigSnapshot,
-} from "../../config/config.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH } from "../../infra/plugin-approvals.js";
 import {
   createOpenClawTestState,
@@ -25,9 +20,14 @@ const pendingApprovalConfig = {
 
 const resolveSkillWorkshopToolApproval = (
   params: Parameters<typeof resolveSkillWorkshopToolApprovalImpl>[0],
-) => resolveSkillWorkshopToolApprovalImpl({ agentId: "main", ...params });
+) =>
+  resolveSkillWorkshopToolApprovalImpl({
+    agentId: "main",
+    config: pendingApprovalConfig,
+    ...params,
+  });
 const proposeCreateSkill = (params: Parameters<typeof proposeCreateSkillImpl>[0]) =>
-  proposeCreateSkillImpl({ agentId: "main", ...params });
+  proposeCreateSkillImpl({ config: {}, agentId: "main", ...params });
 
 beforeEach(async () => {
   testState = await createOpenClawTestState({
@@ -37,7 +37,6 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  clearRuntimeConfigSnapshot();
   await testState.cleanup();
   await tempDirs.cleanup();
 });
@@ -193,15 +192,6 @@ describe("resolveSkillWorkshopToolApproval", () => {
     );
   });
 
-  it("allows lifecycle actions without approval by default", async () => {
-    await expect(
-      resolveSkillWorkshopToolApproval({
-        toolName: "skill_workshop",
-        toolParams: { action: "apply", proposal_id: "weather-20260530-a1b2c3d4e5" },
-      }),
-    ).resolves.toBeUndefined();
-  });
-
   it("requires pending approval before restoring a skill collection", async () => {
     const result = await resolveSkillWorkshopToolApproval({
       toolName: "skill_workshop",
@@ -221,57 +211,7 @@ describe("resolveSkillWorkshopToolApproval", () => {
     });
   });
 
-  it("uses runtime config when lifecycle hook config is absent", async () => {
-    setRuntimeConfigSnapshot({
-      skills: {
-        workshop: {
-          approvalPolicy: "auto",
-        },
-      },
-    });
-
-    await expect(
-      resolveSkillWorkshopToolApproval({
-        toolName: "skill_workshop",
-        toolParams: { action: "apply", proposal_id: "weather-20260530-a1b2c3d4e5" },
-      }),
-    ).resolves.toBeUndefined();
-  });
-
-  it("keeps the default auto policy when runtime config loading throws", async () => {
-    const sharedAgentDir = testState.agentDir("shared");
-    await testState.writeConfig({
-      agents: {
-        list: [
-          { id: "alpha", agentDir: sharedAgentDir },
-          { id: "beta", agentDir: sharedAgentDir },
-        ],
-      },
-    });
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-
-    try {
-      expect(() => getRuntimeConfig()).toThrow(/duplicate agentDir/i);
-      await expect(
-        resolveSkillWorkshopToolApproval({
-          toolName: "skill_workshop",
-          toolParams: { action: "quarantine", proposal_id: "weather-20260530-a1b2c3d4e5" },
-        }),
-      ).resolves.toBeUndefined();
-    } finally {
-      consoleError.mockRestore();
-    }
-  });
-
-  it("keeps explicit lifecycle hook config ahead of runtime config", async () => {
-    setRuntimeConfigSnapshot({
-      skills: {
-        workshop: {
-          approvalPolicy: "auto",
-        },
-      },
-    });
-
+  it("uses the supplied lifecycle hook config", async () => {
     const result = await resolveSkillWorkshopToolApproval({
       toolName: "skill_workshop",
       toolParams: { action: "reject", proposal_id: "weather-20260530-a1b2c3d4e5" },

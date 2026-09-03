@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { applySkillProposal, proposeCreateSkill } from "../../skills/workshop/service.js";
 import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -9,8 +10,12 @@ import { createSkillWorkshopTool as createSkillWorkshopToolImpl } from "./skill-
 
 const tempDirs = createTrackedTempDirs();
 const cleanups: Array<() => Promise<void>> = [];
-const createSkillWorkshopTool = (options: Parameters<typeof createSkillWorkshopToolImpl>[0]) =>
-  createSkillWorkshopToolImpl({ config: {}, agentId: "main", ...options });
+const createSkillWorkshopTool = (
+  options: Omit<Parameters<typeof createSkillWorkshopToolImpl>[0], "config" | "agentId"> & {
+    config?: OpenClawConfig;
+    agentId?: string;
+  },
+) => createSkillWorkshopToolImpl({ config: {}, agentId: "main", ...options });
 
 afterEach(async () => {
   await Promise.all(cleanups.splice(0).map(async (cleanup) => await cleanup()));
@@ -31,6 +36,7 @@ describe("skill_workshop collection restore", () => {
       workspaceDir,
       env: testState.env,
       agentId: "main",
+      config: {},
       name: "duplicate",
       description: "Duplicate procedure",
       content: "# Duplicate procedure\n",
@@ -39,6 +45,7 @@ describe("skill_workshop collection restore", () => {
       workspaceDir,
       env: testState.env,
       agentId: "main",
+      config: {},
       proposalId: proposal.record.id,
       expectedRevisionHash: proposal.revisionHash,
     });

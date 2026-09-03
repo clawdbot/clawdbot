@@ -126,17 +126,36 @@ vi.mock("./store-sqlite-transition.js", async (importOriginal) => {
   };
 });
 
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  evaluateSkillProposal,
-  inspectSkillProposal,
-  listSkillProposalEvents,
-  proposeCreateSkill,
-  reviseSkillProposal,
+  evaluateSkillProposal as evaluateSkillProposalImpl,
+  inspectSkillProposal as inspectSkillProposalImpl,
+  listSkillProposalEvents as listSkillProposalEventsImpl,
+  proposeCreateSkill as proposeCreateSkillImpl,
+  reviseSkillProposal as reviseSkillProposalImpl,
 } from "./service.js";
 import type { SkillProposalReadResult } from "./types.js";
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
+const workshopConfig: OpenClawConfig = {};
+type OptionalWorkshopConfig<T> = Omit<T, "config"> & { config?: OpenClawConfig };
+const evaluateSkillProposal = (
+  input: OptionalWorkshopConfig<Parameters<typeof evaluateSkillProposalImpl>[0]>,
+) => evaluateSkillProposalImpl({ config: workshopConfig, ...input });
+const inspectSkillProposal = (
+  proposalId: string,
+  options?: OptionalWorkshopConfig<Parameters<typeof inspectSkillProposalImpl>[1]>,
+) => inspectSkillProposalImpl(proposalId, { config: workshopConfig, agentId: "main", ...options });
+const listSkillProposalEvents = (
+  input: OptionalWorkshopConfig<Parameters<typeof listSkillProposalEventsImpl>[0]>,
+) => listSkillProposalEventsImpl({ config: workshopConfig, ...input });
+const proposeCreateSkill = (
+  input: OptionalWorkshopConfig<Parameters<typeof proposeCreateSkillImpl>[0]>,
+) => proposeCreateSkillImpl({ config: workshopConfig, ...input });
+const reviseSkillProposal = (
+  input: OptionalWorkshopConfig<Parameters<typeof reviseSkillProposalImpl>[0]>,
+) => reviseSkillProposalImpl({ config: workshopConfig, ...input });
 
 beforeAll(async () => {
   testState = await createOpenClawTestState({

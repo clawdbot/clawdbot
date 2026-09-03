@@ -31,7 +31,7 @@ import {
 import { readWritableWorkshopSkill } from "./workspace-skill-read.js";
 
 type SkillWorkshopWorkspaceOptions = {
-  config?: OpenClawConfig;
+  config: OpenClawConfig;
   agentId?: string;
 };
 
@@ -95,7 +95,7 @@ export async function proposeCreateSkill(
   const agentId = requireWorkshopAgentId(input.agentId);
   const target = resolveSkillProposalTarget({
     skillName: name,
-    config: input.config ?? {},
+    config: input.config,
     agentId,
     ...(input.env ? { env: input.env } : {}),
   });

@@ -46,11 +46,15 @@ describe("listWritableWorkshopSkillSummaries", () => {
     );
     await writeSkill(baseDir, "declared-name");
 
-    expect(listWritableWorkshopSkillSummaries({ agentId: "main", env: testState.env })).toEqual([
-      expect.objectContaining({ name: "declared-name", baseDir }),
-    ]);
+    expect(
+      listWritableWorkshopSkillSummaries({ config: {}, agentId: "main", env: testState.env }),
+    ).toEqual([expect.objectContaining({ name: "declared-name", baseDir })]);
     await expect(
-      readWritableWorkshopSkill("declared-name", { agentId: "main", env: testState.env }),
+      readWritableWorkshopSkill("declared-name", {
+        config: {},
+        agentId: "main",
+        env: testState.env,
+      }),
     ).resolves.toMatchObject({
       skillKey: "declared-name",
       baseDir,
@@ -82,10 +86,20 @@ describe("listWritableWorkshopSkillSummaries", () => {
     }
     await writeSkill(path.join(workshopDir, "delta"), "delta", "x".repeat(2_000));
 
-    const names = (config: Parameters<typeof listWritableWorkshopSkillSummaries>[0]) =>
-      listWritableWorkshopSkillSummaries({ agentId: "main", ...config, env: testState.env }).map(
-        (skill) => skill.name,
-      );
+    const names = (
+      config?: Omit<
+        Parameters<typeof listWritableWorkshopSkillSummaries>[0],
+        "config" | "agentId" | "env"
+      > & {
+        config?: Parameters<typeof listWritableWorkshopSkillSummaries>[0]["config"];
+      },
+    ) =>
+      listWritableWorkshopSkillSummaries({
+        config: {},
+        agentId: "main",
+        ...config,
+        env: testState.env,
+      }).map((skill) => skill.name);
     expect(names({})).toEqual(["alpha", "beta", "delta", "gamma"]);
     expect(names({ config: { skills: { limits: { maxSkillsLoadedPerSource: 2 } } } })).toEqual([
       "alpha",
@@ -95,6 +109,7 @@ describe("listWritableWorkshopSkillSummaries", () => {
     expect(names(sizeLimited)).toEqual(["alpha", "beta", "gamma"]);
     await expect(
       readWritableWorkshopSkill("delta", {
+        config: {},
         agentId: "main",
         ...sizeLimited,
         env: testState.env,
@@ -110,7 +125,7 @@ describe("listWritableWorkshopSkillSummaries", () => {
     await fs.symlink(outsideDir, path.join(workshopDir, "outside"), "dir");
 
     expect(
-      listWritableWorkshopSkillSummaries({ agentId: "main", env: testState.env }).map(
+      listWritableWorkshopSkillSummaries({ config: {}, agentId: "main", env: testState.env }).map(
         (skill) => skill.name,
       ),
     ).toEqual(["inside"]);

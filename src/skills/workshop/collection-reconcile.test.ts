@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -21,10 +22,10 @@ import { listSkillCollectionReviewOutcomes } from "./collection-review-state.js"
 import { stageSkillCollectionDrop } from "./collection-rollback.js";
 import { readSkillProposalTargetTreeSha256 } from "./proposal-bundle.js";
 import {
-  applySkillProposal,
-  inspectSkillProposal,
-  listSkillProposals,
-  proposeCreateSkill,
+  applySkillProposal as applySkillProposalImpl,
+  inspectSkillProposal as inspectSkillProposalImpl,
+  listSkillProposals as listSkillProposalsImpl,
+  proposeCreateSkill as proposeCreateSkillImpl,
 } from "./service.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
 import { withSkillCollectionLock } from "./target-lock.js";
@@ -61,12 +62,28 @@ const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
 let workspaceDir: string;
 let skillsRoot: string;
+const workshopConfig: OpenClawConfig = {};
+type OptionalWorkshopConfig<T> = Omit<T, "config"> & { config?: OpenClawConfig };
 
 const listWritableSkillCollection = (
-  options?: Parameters<typeof listWritableSkillCollectionImpl>[0],
-) => listWritableSkillCollectionImpl({ config: {}, agentId: "main", ...options });
-const reconcileSkillCollection = (params: Parameters<typeof reconcileSkillCollectionImpl>[0]) =>
-  reconcileSkillCollectionImpl({ config: {}, agentId: "main", ...params });
+  options?: OptionalWorkshopConfig<Parameters<typeof listWritableSkillCollectionImpl>[0]>,
+) => listWritableSkillCollectionImpl({ config: workshopConfig, agentId: "main", ...options });
+const reconcileSkillCollection = (
+  params: OptionalWorkshopConfig<Parameters<typeof reconcileSkillCollectionImpl>[0]>,
+) => reconcileSkillCollectionImpl({ config: workshopConfig, agentId: "main", ...params });
+const listSkillProposals = (
+  options?: OptionalWorkshopConfig<Parameters<typeof listSkillProposalsImpl>[0]>,
+) => listSkillProposalsImpl({ config: workshopConfig, agentId: "main", ...options });
+const inspectSkillProposal = (
+  proposalId: string,
+  options?: OptionalWorkshopConfig<Parameters<typeof inspectSkillProposalImpl>[1]>,
+) => inspectSkillProposalImpl(proposalId, { config: workshopConfig, agentId: "main", ...options });
+const applySkillProposal = (
+  input: OptionalWorkshopConfig<Parameters<typeof applySkillProposalImpl>[0]>,
+) => applySkillProposalImpl({ config: workshopConfig, agentId: "main", ...input });
+const proposeCreateSkill = (
+  input: OptionalWorkshopConfig<Parameters<typeof proposeCreateSkillImpl>[0]>,
+) => proposeCreateSkillImpl({ config: workshopConfig, agentId: "main", ...input });
 
 beforeEach(async () => {
   copyDirectoryBefore.mockReset();

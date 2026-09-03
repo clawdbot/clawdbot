@@ -76,10 +76,10 @@ export type SkillProposalApplyTransitionDependencies = {
   isCreateTargetConflict: (error: unknown) => boolean;
   readRequiredProposal: (
     proposalId: string,
-    env?: NodeJS.ProcessEnv,
-    agentId?: string,
-    readOptions?: {
-      config?: OpenClawConfig;
+    env: NodeJS.ProcessEnv | undefined,
+    agentId: string | undefined,
+    readOptions: {
+      config: OpenClawConfig;
       reconcile?: boolean;
     },
   ) => Promise<SkillProposalReadResult>;
@@ -111,9 +111,9 @@ export async function applySkillProposalTransition(
   input: SkillProposalActionInput,
   dependencies: SkillProposalApplyTransitionDependencies,
 ): Promise<SkillProposalApplyResult> {
-  const recoveryReadOptions = input.config ? { config: input.config } : undefined;
+  const recoveryReadOptions = { config: input.config };
   const lockedReadOptions = {
-    ...(input.config ? { config: input.config } : {}),
+    config: input.config,
     reconcile: false,
   };
   const initial = await dependencies.readRequiredProposal(
@@ -134,7 +134,7 @@ export async function applySkillProposalTransition(
     evaluated = await dependencies.evaluateSkillProposal({
       workspaceDir: input.workspaceDir,
       ...(input.agentId ? { agentId: input.agentId } : {}),
-      ...(input.config ? { config: input.config } : {}),
+      config: input.config,
       ...(input.eventActor ? { eventActor: input.eventActor } : {}),
       ...(input.env ? { env: input.env } : {}),
       proposalId: input.proposalId,
@@ -213,7 +213,7 @@ export async function applySkillProposalTransition(
       if (!input.agentId) {
         throw new Error("Skill Workshop requires the active agent id.");
       }
-      const skillsRoot = resolveWorkshopSkillsDir(input.config ?? {}, input.agentId, input.env);
+      const skillsRoot = resolveWorkshopSkillsDir(input.config, input.agentId, input.env);
       assertInsideSkillsRoot(skillsRoot, record.target.skillFile, "skill file");
       assertInsideSkillsRoot(skillsRoot, record.target.skillDir, "skill directory");
       if (record.evaluation?.id !== evaluated.evaluation.id) {
@@ -601,7 +601,7 @@ async function recoverAfterApplyCommitFailure(params: {
   mutation: PreparedWorkspaceSkillMutation;
   env?: NodeJS.ProcessEnv;
   agentId?: string;
-  config?: OpenClawConfig;
+  config: OpenClawConfig;
 }): Promise<SkillProposalEvent | null> {
   const committed = readCommittedSkillProposalTransition({
     record: params.applied,
@@ -661,11 +661,11 @@ function requiredApplyStatus(outcome: SkillProposalApplyOutcome): SkillProposalS
 function storeOptions(
   env: NodeJS.ProcessEnv | undefined,
   agentId: string | undefined,
-  config: OpenClawConfig | undefined,
+  config: OpenClawConfig,
 ): SkillWorkshopStoreOptions {
   return {
     ...(env ? { env } : {}),
     ...(agentId ? { agentId } : {}),
-    ...(config ? { config } : {}),
+    config,
   };
 }

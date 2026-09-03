@@ -24,19 +24,23 @@ import type { SkillProposalManifest, SkillProposalReadResult } from "./types.js"
 type SkillProposalScopeOptions = {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
-  config?: OpenClawConfig;
+  config: OpenClawConfig;
 };
 
 type RequiredProposalReadOptions = {
-  config?: OpenClawConfig;
+  config: OpenClawConfig;
   reconcile?: boolean;
 };
 
-function storeOptions(env?: NodeJS.ProcessEnv, agentId?: string, config?: OpenClawConfig) {
+function storeOptions(
+  env: NodeJS.ProcessEnv | undefined,
+  agentId: string | undefined,
+  config: OpenClawConfig,
+) {
   return {
     ...(env ? { env } : {}),
     ...(agentId ? { agentId } : {}),
-    ...(config ? { config } : {}),
+    config,
   };
 }
 
@@ -44,7 +48,7 @@ function workshopSkillsDir(options: SkillProposalScopeOptions): string {
   if (!options.agentId) {
     throw new Error("Skill Workshop requires the active agent id.");
   }
-  return resolveWorkshopSkillsDir(options.config ?? {}, options.agentId, options.env);
+  return resolveWorkshopSkillsDir(options.config, options.agentId, options.env);
 }
 
 function proposalScope(options: SkillProposalScopeOptions) {
@@ -52,7 +56,7 @@ function proposalScope(options: SkillProposalScopeOptions) {
 }
 
 export async function listSkillProposals(
-  options: SkillProposalScopeOptions = {},
+  options: SkillProposalScopeOptions,
 ): Promise<SkillProposalManifest> {
   const store = storeOptions(options.env, options.agentId, options.config);
   const scope = proposalScope(options);
@@ -65,7 +69,7 @@ export async function listSkillProposals(
     }
     let read: SkillProposalReadResult | null;
     try {
-      read = await readSkillProposal(proposal.id, store, scope);
+      read = await readSkillProposal(proposal.id, store, scope, { config: options.config });
     } catch (error) {
       if (!(error instanceof SkillProposalDraftMissingError)) {
         throw error;
@@ -95,7 +99,9 @@ export async function getSkillProposalRunProgress(
   const ids: string[] = [];
   let mutationCount = 0;
   for (const proposal of manifest.proposals) {
-    const record = await readSkillProposalRecord(proposal.id, store, options);
+    const record = await readSkillProposalRecord(proposal.id, store, options, {
+      config: options.config,
+    });
     if (!record) {
       continue;
     }
@@ -109,12 +115,13 @@ export async function getSkillProposalRunProgress(
 
 export async function inspectSkillProposal(
   proposalId: string,
-  options: SkillProposalScopeOptions = {},
+  options: SkillProposalScopeOptions,
 ): Promise<SkillProposalReadResult | null> {
   const read = await readSkillProposal(
     proposalId,
     storeOptions(options.env, options.agentId, options.config),
     proposalScope(options),
+    { config: options.config },
   );
   if (!read) {
     return null;
@@ -124,7 +131,7 @@ export async function inspectSkillProposal(
 
 export async function resolvePendingSkillProposal(input: {
   agentId?: string;
-  config?: OpenClawConfig;
+  config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   proposalId?: string;
   name?: string;
@@ -186,9 +193,9 @@ export async function resolvePendingSkillProposal(input: {
 
 export async function readRequiredProposal(
   proposalId: string,
-  env?: NodeJS.ProcessEnv,
-  agentId?: string,
-  readOptions: RequiredProposalReadOptions = {},
+  env: NodeJS.ProcessEnv | undefined,
+  agentId: string | undefined,
+  readOptions: RequiredProposalReadOptions,
 ): Promise<SkillProposalReadResult> {
   const read = await readSkillProposal(
     proposalId,
@@ -215,7 +222,10 @@ async function reconcilePendingCreateProposal(
   const reconciled = await withSkillProposalCommitLock(
     read.record,
     async () => {
-      const current = await readSkillProposal(read.record.id, store, scope, { reconcile: false });
+      const current = await readSkillProposal(read.record.id, store, scope, {
+        config: options.config,
+        reconcile: false,
+      });
       if (!current || current.record.kind !== "create" || current.record.status !== "pending") {
         return { read: current ?? read };
       }
@@ -233,7 +243,7 @@ async function reconcilePendingCreateProposal(
         input: {
           workspaceDir: workshopDir,
           ...(options.agentId ? { agentId: options.agentId } : {}),
-          ...(options.config ? { config: options.config } : {}),
+          config: options.config,
           eventActor: { type: "system" },
           ...(options.env ? { env: options.env } : {}),
         },

@@ -61,22 +61,26 @@ export {
 } from "./service-query.js";
 export { evaluateSkillProposal, listSkillProposalEvents } from "./service-evaluation.js";
 
-function proposalStoreOptions(env: NodeJS.ProcessEnv | undefined, agentId: string | undefined) {
+function proposalStoreOptions(
+  env: NodeJS.ProcessEnv | undefined,
+  agentId: string | undefined,
+  config: OpenClawConfig,
+) {
   if (!agentId) {
     throw new Error("Skill Workshop requires the active agent id.");
   }
-  return { ...(env ? { env } : {}), agentId };
+  return { ...(env ? { env } : {}), agentId, config };
 }
 
 function workshopSkillsDir(input: {
-  config?: OpenClawConfig;
+  config: OpenClawConfig;
   agentId?: string;
   env?: NodeJS.ProcessEnv;
 }): string {
   if (!input.agentId) {
     throw new Error("Skill Workshop requires the active agent id.");
   }
-  return resolveWorkshopSkillsDir(input.config ?? {}, input.agentId, input.env);
+  return resolveWorkshopSkillsDir(input.config, input.agentId, input.env);
 }
 
 const APPLY_TRANSITION_DEPENDENCIES = {
@@ -212,7 +216,7 @@ export async function reviseSkillProposal(
         ...(input.correlationId ? { correlationId: input.correlationId } : {}),
         occurredAt: now,
       }),
-      store: proposalStoreOptions(input.env, input.agentId),
+      store: proposalStoreOptions(input.env, input.agentId, input.config),
     });
     return {
       read: {
@@ -258,9 +262,9 @@ async function markProposal(
   const scope = input.agentId ? { agentId: input.agentId } : {};
   const initial = await readSkillProposalRecord(
     input.proposalId,
-    proposalStoreOptions(input.env, input.agentId),
+    proposalStoreOptions(input.env, input.agentId, input.config),
     scope,
-    input.config ? { config: input.config } : undefined,
+    { config: input.config },
   );
   if (!initial) {
     throw new Error(`Skill proposal not found: ${input.proposalId}`);
@@ -270,9 +274,9 @@ async function markProposal(
     async () => {
       const current = await readSkillProposalRecord(
         input.proposalId,
-        proposalStoreOptions(input.env, input.agentId),
+        proposalStoreOptions(input.env, input.agentId, input.config),
         scope,
-        { reconcile: false },
+        { config: input.config, reconcile: false },
       );
       if (!current) {
         throw new Error(`Skill proposal not found: ${input.proposalId}`);
@@ -307,11 +311,11 @@ async function markProposal(
           ...(input.correlationId ? { correlationId: input.correlationId } : {}),
           occurredAt: now,
         }),
-        store: proposalStoreOptions(input.env, input.agentId),
+        store: proposalStoreOptions(input.env, input.agentId, input.config),
       });
       return { record, event };
     },
-    proposalStoreOptions(input.env, input.agentId),
+    proposalStoreOptions(input.env, input.agentId, input.config),
   );
   if (result.event) {
     await dispatchSkillProposalChanged({
@@ -331,9 +335,9 @@ async function withPendingSkillProposalRevision<T>(
   >,
   fn: (read: SkillProposalReadResult) => Promise<T>,
 ): Promise<T> {
-  const recoveryReadOptions = input.config ? { config: input.config } : undefined;
+  const recoveryReadOptions = { config: input.config };
   const lockedReadOptions = {
-    ...(input.config ? { config: input.config } : {}),
+    config: input.config,
     reconcile: false,
   };
   const initial = await readRequiredProposal(
@@ -362,7 +366,7 @@ async function withPendingSkillProposalRevision<T>(
       }
       return await fn(read);
     },
-    proposalStoreOptions(input.env, input.agentId),
+    proposalStoreOptions(input.env, input.agentId, input.config),
   );
 }
 

@@ -510,25 +510,23 @@ async function readLegacyRollback(
   }
 }
 
-async function verifyImportedProposal(params: {
-  env: NodeJS.ProcessEnv;
-  record: SkillProposalRecord;
-  rollback?: SkillProposalRollback;
-}): Promise<void> {
+async function verifyImportedProposal(
+  config: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  record: SkillProposalRecord,
+  rollback?: SkillProposalRollback,
+): Promise<void> {
   const imported = (
-    await readSkillProposal(params.record.id, { env: params.env }, {}, { reconcile: false })
+    await readSkillProposal(record.id, { config, env }, {}, { config, reconcile: false })
   )?.record;
   if (
     !imported ||
-    imported.draftHash !== params.record.draftHash ||
-    imported.target.skillFile !== params.record.target.skillFile
+    imported.draftHash !== record.draftHash ||
+    imported.target.skillFile !== record.target.skillFile
   ) {
     throw new Error("SQLite verification failed");
   }
-  if (
-    params.rollback &&
-    !(await readSkillProposalRollback(params.record.id, { env: params.env }))
-  ) {
+  if (rollback && !(await readSkillProposalRollback(record.id, { env }))) {
     throw new Error("SQLite rollback verification failed");
   }
 }
@@ -576,7 +574,7 @@ async function migrateProposal(params: {
     ownerAgentId,
     store: { env: params.env },
   });
-  await verifyImportedProposal({ env: params.env, record: record.value, rollback });
+  await verifyImportedProposal(params.config, params.env, record.value, rollback);
   if (rollback) {
     await params.stateRoot.remove(`${proposalDir}/rollback.json`);
   }
@@ -656,6 +654,8 @@ async function importLegacySkillProposalSidecars(params: {
     .toSorted((left, right) => left.localeCompare(right));
   const warnings: string[] = [];
   const changes: string[] = [];
+  const readStore = { config: params.config, env };
+  const readOptions = { config: params.config, reconcile: false };
   let migrated = 0;
   for (const proposalId of proposalIds) {
     const proposalDir = `${PROPOSALS_DIR}/${proposalId}`;
@@ -673,7 +673,7 @@ async function importLegacySkillProposalSidecars(params: {
         warnings.push(`Failed to migrate Skill Workshop proposal ${proposalId}: ${String(error)}`);
         continue;
       }
-      if (await readSkillProposalRecord(proposalId, { env }, {}, { reconcile: false })) {
+      if (await readSkillProposalRecord(proposalId, readStore, {}, readOptions)) {
         continue;
       }
       try {

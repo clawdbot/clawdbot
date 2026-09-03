@@ -13,7 +13,7 @@ import { hashSkillProposalContent } from "./proposal-hash.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
 import { readStoredProposal } from "./store-sqlite-record.js";
 import { clearSkillProposalRollback, readSkillProposalRollback } from "./store-sqlite-rollback.js";
-import type { SkillWorkshopStoreOptions } from "./store-sqlite-schema.js";
+import type { SkillWorkshopDirectoryStoreOptions } from "./store-sqlite-schema.js";
 import { commitPendingSkillProposalTransition } from "./store-sqlite-transition.js";
 import { withSkillProposalCommitLock } from "./target-lock.js";
 import type { SkillProposalRecord, SkillProposalRollback } from "./types.js";
@@ -22,7 +22,7 @@ export async function reconcileInterruptedSkillProposalApply(params: {
   record: SkillProposalRecord;
   expectedRecordJson: string;
   draftContent: string;
-  store?: SkillWorkshopStoreOptions;
+  store: SkillWorkshopDirectoryStoreOptions;
 }): Promise<boolean> {
   return await withSkillProposalCommitLock(
     params.record,
@@ -116,11 +116,11 @@ export async function reconcileInterruptedSkillProposalApply(params: {
   ).catch(() => false);
 }
 
-function resolveStoreWorkshopSkillsDir(store: SkillWorkshopStoreOptions | undefined): string {
-  if (!store?.agentId) {
+function resolveStoreWorkshopSkillsDir(store: SkillWorkshopDirectoryStoreOptions): string {
+  if (!store.agentId) {
     throw new Error("Skill Workshop recovery requires the active agent id.");
   }
-  return resolveWorkshopSkillsDir(store.config ?? {}, store.agentId, store.env);
+  return resolveWorkshopSkillsDir(store.config, store.agentId, store.env);
 }
 
 type SkillProposalRecoverySupportFile = {

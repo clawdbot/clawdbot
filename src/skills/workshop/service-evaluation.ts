@@ -203,7 +203,7 @@ export async function evaluateSkillProposal(
 export function listSkillProposalEvents(
   input: SkillProposalEventsListInput,
 ): SkillProposalEventsListResult {
-  return readSkillProposalEvents(input, storeOptions(input.env));
+  return readSkillProposalEvents(input, storeOptions(input.env, input.agentId, input.config));
 }
 
 export function assertExpectedRevisionHash(actual: string, expected?: string): void {
@@ -357,12 +357,12 @@ function boundedOptional(value: string | undefined, maxLength: number): string |
 
 function storeOptions(
   env: NodeJS.ProcessEnv | undefined,
-  agentId?: string,
-  config?: OpenClawConfig,
+  agentId: string | undefined,
+  config: OpenClawConfig,
 ) {
   return {
     ...(env ? { env } : {}),
     ...(agentId ? { agentId } : {}),
-    ...(config ? { config } : {}),
+    config,
   };
 }

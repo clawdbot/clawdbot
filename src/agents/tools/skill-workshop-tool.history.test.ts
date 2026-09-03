@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { recordSkillCollectionReviewHistory } from "../../skills/workshop/collection-review-state.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
@@ -7,8 +8,12 @@ import { createSkillWorkshopTool as createSkillWorkshopToolImpl } from "./skill-
 const tempDirs = createTrackedTempDirs();
 const cleanups: Array<() => Promise<void>> = [];
 
-const createSkillWorkshopTool = (options: Parameters<typeof createSkillWorkshopToolImpl>[0]) =>
-  createSkillWorkshopToolImpl({ config: {}, agentId: "main", ...options });
+const createSkillWorkshopTool = (
+  options: Omit<Parameters<typeof createSkillWorkshopToolImpl>[0], "config" | "agentId"> & {
+    config?: OpenClawConfig;
+    agentId?: string;
+  },
+) => createSkillWorkshopToolImpl({ config: {}, agentId: "main", ...options });
 
 afterEach(async () => {
   await Promise.all(cleanups.splice(0).map(async (cleanup) => await cleanup()));

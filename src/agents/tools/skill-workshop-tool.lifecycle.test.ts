@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listSkillProposalEvents } from "../../skills/workshop/service.js";
 import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
 import { readSkillProposalRecord } from "../../skills/workshop/store.js";
@@ -13,11 +14,20 @@ import { createSkillWorkshopTool as createSkillWorkshopToolImpl } from "./skill-
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
-const createSkillWorkshopTool = (options: Parameters<typeof createSkillWorkshopToolImpl>[0]) =>
-  createSkillWorkshopToolImpl({ config: {}, agentId: "main", ...options });
+const createSkillWorkshopTool = (
+  options: Omit<Parameters<typeof createSkillWorkshopToolImpl>[0], "config" | "agentId"> & {
+    config?: OpenClawConfig;
+    agentId?: string;
+  },
+) => createSkillWorkshopToolImpl({ config: {}, agentId: "main", ...options });
 
 async function proposalDraftPath(proposalId: string): Promise<string> {
-  const record = await readSkillProposalRecord(proposalId, { env: testState.env });
+  const record = await readSkillProposalRecord(
+    proposalId,
+    { config: {}, env: testState.env },
+    {},
+    { config: {} },
+  );
   if (!record) {
     throw new Error(`expected stored proposal ${proposalId}`);
   }
@@ -89,10 +99,16 @@ describe("skill_workshop terminal lifecycle", () => {
           }),
         ).resolves.toMatchObject({ details: { id: details.id, status: expectedStatus } });
         await expect(
-          readSkillProposalRecord(details.id, { env: testState.env }),
+          readSkillProposalRecord(
+            details.id,
+            { config: {}, env: testState.env },
+            {},
+            { config: {} },
+          ),
         ).resolves.toMatchObject({ status: expectedStatus });
         expect(
           listSkillProposalEvents({
+            config: {},
             proposalId: details.id,
             env: testState.env,
           }).events.at(-1)?.type,

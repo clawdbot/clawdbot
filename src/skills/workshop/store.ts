@@ -45,6 +45,7 @@ import {
   ensureSkillWorkshopSchema,
   openSkillWorkshopStore,
   type SkillProposalRow,
+  type SkillWorkshopDirectoryStoreOptions,
   type SkillWorkshopDatabase,
   type SkillWorkshopStoreOptions,
 } from "./store-sqlite-schema.js";
@@ -81,7 +82,7 @@ type SkillProposalLookupScope = {
 };
 
 type SkillProposalReadOptions = {
-  config?: OpenClawConfig;
+  config: OpenClawConfig;
   reconcile?: boolean;
 };
 
@@ -179,9 +180,9 @@ export class SkillProposalDraftMissingError extends Error {
 
 export async function readSkillProposal(
   proposalId: string,
-  options: SkillWorkshopStoreOptions = {},
-  scope: SkillProposalLookupScope = {},
-  readOptions: SkillProposalReadOptions = {},
+  options: SkillWorkshopDirectoryStoreOptions,
+  scope: SkillProposalLookupScope,
+  readOptions: SkillProposalReadOptions,
 ): Promise<SkillProposalReadResult | null> {
   let stored = readStoredProposal(proposalId, options);
   if (!stored || !isStoredProposalVisible(stored.row, scope)) {
@@ -189,7 +190,7 @@ export async function readSkillProposal(
   }
   const scopedOptions = {
     ...options,
-    ...(readOptions.config ? { config: readOptions.config } : {}),
+    config: readOptions.config,
     ...(scope.agentId
       ? { agentId: scope.agentId }
       : stored.row.owner_agent_id
@@ -219,9 +220,9 @@ export async function readSkillProposal(
 
 export async function readSkillProposalRecord(
   proposalId: string,
-  options: SkillWorkshopStoreOptions = {},
-  scope: SkillProposalLookupScope = {},
-  readOptions: SkillProposalReadOptions = {},
+  options: SkillWorkshopDirectoryStoreOptions,
+  scope: SkillProposalLookupScope,
+  readOptions: SkillProposalReadOptions,
 ): Promise<SkillProposalRecord | null> {
   let stored = readStoredProposal(proposalId, options);
   if (!stored || !isStoredProposalVisible(stored.row, scope)) {
@@ -229,7 +230,7 @@ export async function readSkillProposalRecord(
   }
   const scopedOptions = {
     ...options,
-    ...(readOptions.config ? { config: readOptions.config } : {}),
+    config: readOptions.config,
     ...(scope.agentId
       ? { agentId: scope.agentId }
       : stored.row.owner_agent_id
@@ -423,7 +424,7 @@ function listStoredProposals(
 }
 
 export async function readSkillProposalManifest(
-  options: SkillWorkshopStoreOptions = {},
+  options: SkillWorkshopDirectoryStoreOptions,
   scope: SkillProposalLookupScope = {},
 ): Promise<SkillProposalManifest> {
   const before = listStoredProposals(options, scope);
@@ -453,7 +454,7 @@ export async function readSkillProposalManifest(
 
 async function reconcileInterruptedApply(
   proposalId: string,
-  options: SkillWorkshopStoreOptions,
+  options: SkillWorkshopDirectoryStoreOptions,
 ): Promise<boolean> {
   const stored = readStoredProposal(proposalId, options);
   if (!stored || stored.record.status !== "pending") {

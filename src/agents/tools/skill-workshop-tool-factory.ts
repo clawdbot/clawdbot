@@ -6,7 +6,7 @@ import { createSkillWorkshopTool } from "./skill-workshop-tool.js";
 
 export function createConfiguredSkillWorkshopTool(params: {
   workspaceDir: string;
-  config?: OpenClawConfig;
+  config: OpenClawConfig;
   agentId: string;
   sessionKey?: string;
   runId?: string;

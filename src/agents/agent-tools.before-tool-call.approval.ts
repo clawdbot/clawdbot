@@ -539,10 +539,16 @@ export async function resolveSkillWorkshopApprovalForFinalParams(params: {
   ctx?: HookContext;
   signal?: AbortSignal;
 }): Promise<HookOutcome | undefined> {
+  if (params.toolName !== "skill_workshop") {
+    return undefined;
+  }
+  if (!params.ctx?.config) {
+    throw new Error("Skill Workshop tool calls require the active agent configuration.");
+  }
   const result = await resolveSkillWorkshopToolApproval({
     toolName: params.toolName,
     toolParams: isPlainObject(params.params) ? params.params : {},
-    ...(params.ctx?.config ? { config: params.ctx.config } : {}),
+    config: params.ctx.config,
     ...(params.ctx?.workspaceDir ? { workspaceDir: params.ctx.workspaceDir } : {}),
   });
   return await resolveBeforeToolCallApprovalOutcome({

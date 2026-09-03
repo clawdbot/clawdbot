@@ -145,7 +145,7 @@ describeLive("Skill Workshop history scan live OpenAI eval", () => {
     });
     expect(ideas).toBe(1);
     expect(recoveryCompletionIdeas).toBe(1);
-    const afterRecovery = await listSkillProposals();
+    const afterRecovery = await listSkillProposals({ config: liveConfig(), agentId: "main" });
     expect(afterRecovery.proposals).toHaveLength(1);
     expect(afterRecovery.proposals[0]).toMatchObject({ status: "pending" });
 
@@ -175,6 +175,8 @@ describeLive("Skill Workshop history scan live OpenAI eval", () => {
     });
     expect(routineIdeas).toBe(0);
     expect(routineCompletionIdeas).toBe(0);
-    expect(await listSkillProposals()).toEqual(afterRecovery);
+    expect(await listSkillProposals({ config: liveConfig(), agentId: "main" })).toEqual(
+      afterRecovery,
+    );
   }, 240_000);
 });

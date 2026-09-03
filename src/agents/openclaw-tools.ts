@@ -483,7 +483,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
       sessionAgentId,
       config: resolvedConfig,
     }),
-    ...(options?.sandboxed && !options.skillWorkshop?.libraryAuthoring
+    ...((options?.sandboxed && !options.skillWorkshop?.libraryAuthoring) || !resolvedConfig
       ? []
       : [
           createConfiguredSkillWorkshopTool({

@@ -135,7 +135,7 @@ function bindProposalRevisionConstraint(
 type SkillWorkshopToolOptions = {
   libraryAuthoring?: import("../../skills/library/authoring.js").SkillLibraryAuthoringCapability;
   workspaceDir: string;
-  config?: OpenClawConfig;
+  config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   agentId?: string;
   origin?: SkillProposalOrigin;
@@ -432,6 +432,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           workspaceDir: options.workspaceDir,
           agentId: options.agentId,
           eventActor: skillWorkshopAgentEventActor(options.agentId),
+          config: options.config,
           env: options.env,
           proposalId: readLifecycleProposalIdParam(params),
           expectedRevisionHash: readToolStringParam(params, "expected_revision_hash"),
@@ -448,6 +449,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           workspaceDir: options.workspaceDir,
           agentId: options.agentId,
           eventActor: skillWorkshopAgentEventActor(options.agentId),
+          config: options.config,
           env: options.env,
           proposalId: readLifecycleProposalIdParam(params),
           expectedRevisionHash: readToolStringParam(params, "expected_revision_hash"),
@@ -644,6 +646,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
               }),
               name: readToolStringParam(params, "name"),
               workspaceDir: options.workspaceDir,
+              config: options.config,
               agentId: options.agentId,
               env: options.env,
             });

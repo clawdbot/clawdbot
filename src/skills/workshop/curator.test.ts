@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasInternalDiagnosticEventInterest } from "../../infra/diagnostic-event-listener-presence.js";
 import {
   emitDiagnosticEvent,
@@ -16,9 +17,20 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { getSkillCuratorStatus, registerSkillUsageTracking } from "./curator.js";
-import { applySkillProposal, proposeCreateSkill } from "./service.js";
+import {
+  applySkillProposal as applySkillProposalImpl,
+  proposeCreateSkill as proposeCreateSkillImpl,
+} from "./service.js";
 
 let testState: OpenClawTestState;
+const workshopConfig: OpenClawConfig = {};
+type OptionalWorkshopConfig<T> = Omit<T, "config"> & { config?: OpenClawConfig };
+const applySkillProposal = (
+  input: OptionalWorkshopConfig<Parameters<typeof applySkillProposalImpl>[0]>,
+) => applySkillProposalImpl({ config: workshopConfig, ...input });
+const proposeCreateSkill = (
+  input: OptionalWorkshopConfig<Parameters<typeof proposeCreateSkillImpl>[0]>,
+) => proposeCreateSkillImpl({ config: workshopConfig, ...input });
 
 beforeEach(async () => {
   resetDiagnosticEventsForTest();

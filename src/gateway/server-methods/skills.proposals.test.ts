@@ -3,6 +3,7 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
 import { readSkillProposalEvents } from "../../skills/workshop/store-evaluation.js";
@@ -99,8 +100,12 @@ vi.mock("./chat-send-handler.js", () => ({
 
 const { skillsHandlers } = await import("./skills.js");
 
-function callHandler(method: string, params: Record<string, unknown>) {
-  return callGatewayHandler(skillsHandlers, method, params);
+function callHandler(
+  method: string,
+  params: Record<string, unknown>,
+  options?: Parameters<typeof callGatewayHandler>[3],
+) {
+  return callGatewayHandler(skillsHandlers, method, params, options);
 }
 
 describe("skills proposal gateway handlers", () => {
@@ -258,6 +263,52 @@ describe("skills proposal gateway handlers", () => {
     );
   });
 
+  it("inspects and applies proposals in a configured agent directory", async () => {
+    const agentDir = await tempDirs.make("openclaw-skills-proposals-gateway-agent-dir-");
+    const config = {
+      agents: { entries: { main: { default: true, agentDir } } },
+    };
+    const context = { getRuntimeConfig: () => config };
+    const create = await callHandler(
+      "skills.proposals.create",
+      {
+        name: "Configured Gateway Skill",
+        description: "Use the configured Workshop directory.",
+        content: "# Configured Gateway Skill\n\nUse the configured directory.\n",
+      },
+      { context },
+    );
+    expect(create.ok).toBe(true);
+    const proposalId = asNullableRecord(asNullableRecord(create.response)?.record)?.id;
+    if (typeof proposalId !== "string") {
+      throw new Error("Gateway proposal creation did not return an id.");
+    }
+
+    const inspect = await callHandler("skills.proposals.inspect", { proposalId }, { context });
+    expect(inspect).toMatchObject({ ok: true, response: { record: { id: proposalId } } });
+    const revisionHash = asNullableRecord(inspect.response)?.revisionHash;
+    if (typeof revisionHash !== "string") {
+      throw new Error("Gateway proposal inspection did not return a revision hash.");
+    }
+
+    const apply = await callHandler(
+      "skills.proposals.apply",
+      { proposalId, expectedRevisionHash: revisionHash },
+      { context },
+    );
+    expect(apply).toMatchObject({ ok: true, response: { record: { status: "applied" } } });
+    await expect(
+      fs.readFile(
+        path.join(
+          resolveWorkshopSkillsDir(config, "main", testState.env),
+          "configured-gateway-skill",
+          "SKILL.md",
+        ),
+        "utf8",
+      ),
+    ).resolves.toContain("Use the configured directory.");
+  });
+
   it("returns the stored review outcomes from curator status", async () => {
     writeConfigMachineState(
       "skills.curatorState",
@@ -405,6 +456,7 @@ describe("skills proposal gateway handlers", () => {
       workspaceDir: mocks.workspaceDir,
       agentId: "main",
       eventActor: { type: "gateway" },
+      config: {},
       proposalId: "proposal-1",
       expectedRevisionHash: revisionHash,
       correlationId: "correlation-1",
@@ -422,6 +474,7 @@ describe("skills proposal gateway handlers", () => {
     });
     expect(mocks.listSkillProposalEvents).toHaveBeenCalledWith({
       agentId: "main",
+      config: {},
       proposalId: "proposal-1",
       afterSequence: 7,
       limit: 5,

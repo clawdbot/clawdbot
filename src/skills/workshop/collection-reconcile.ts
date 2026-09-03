@@ -64,7 +64,7 @@ import {
 
 /** The editable collection is the active agent's Workshop directory. */
 export function listWritableSkillCollection(
-  options: WorkshopSkillReadOptions = {},
+  options: WorkshopSkillReadOptions,
 ): WritableSkillCollectionEntry[] {
   return listWritableWorkshopSkillSummaries(options).map((skill) => ({
     name: skill.name,
@@ -79,7 +79,7 @@ export async function reconcileSkillCollection(params: {
   plan: readonly SkillCollectionPlanEntry[];
   readSkillHashes: ReadonlyMap<string, string>;
   readSkillTreeHashes: ReadonlyMap<string, string>;
-  config?: OpenClawConfig;
+  config: OpenClawConfig;
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   assertCurrent?: () => void;
@@ -87,7 +87,7 @@ export async function reconcileSkillCollection(params: {
   if (!params.agentId) {
     throw new Error("Skill Workshop collection review requires the active agent id.");
   }
-  const config = params.config ?? {};
+  const config = params.config;
   const agentId = params.agentId;
   const skillsRoot = resolveWorkshopSkillsDir(config, agentId, params.env);
   const commit = await withSkillCollectionLock(
@@ -416,7 +416,7 @@ async function prepareWrites(params: {
   skillsRoot: string;
   current: readonly WritableSkillCollectionEntry[];
   plan: readonly SkillCollectionPlanEntry[];
-  config?: OpenClawConfig;
+  config: OpenClawConfig;
 }): Promise<PreparedWorkspaceSkillMutation[]> {
   const workshop = resolveSkillWorkshopConfig(params.config);
   const currentByName = new Map(params.current.map((skill) => [skill.name, skill]));

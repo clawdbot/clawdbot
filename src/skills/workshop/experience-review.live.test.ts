@@ -203,14 +203,17 @@ describeLive("skill experience review live OpenAI eval", () => {
       const runId = `live-${name}`;
       const messages = build();
       const reviewCandidate = await candidate(runId, messages, { turnAborted });
-      const before = await listSkillProposals();
+      const before = await listSkillProposals({ config: reviewCandidate.config, agentId: "main" });
       const startedAt = Date.now();
       const observation = await observeExperienceReview(() =>
         runSkillExperienceReview(reviewCandidate, {
-          getCurrentConfig: () => reviewCandidate.config ?? {},
+          getCurrentConfig: () => reviewCandidate.config,
         }),
       );
-      const { proposals } = await listSkillProposals();
+      const { proposals } = await listSkillProposals({
+        config: reviewCandidate.config,
+        agentId: "main",
+      });
       const progress = await getSkillProposalRunProgress({ runId });
       const outcomes = Object.values(readSkillReviewOutcomes().experienceReviews);
       expect(outcomes).toHaveLength(1);

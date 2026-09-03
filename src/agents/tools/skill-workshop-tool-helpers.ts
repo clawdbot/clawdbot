@@ -167,7 +167,7 @@ export function readLifecycleProposalIdParam(params: Record<string, unknown>): s
 export async function readProposalForInspect(
   params: Record<string, unknown>,
   workspaceDir: string,
-  config?: OpenClawConfig,
+  config: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
   agentId?: string,
 ): Promise<SkillProposalReadResult> {

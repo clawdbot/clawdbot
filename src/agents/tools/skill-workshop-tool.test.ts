@@ -12,7 +12,6 @@ import {
 } from "../../skills/workshop/service.js";
 import { SKILL_AUTHORING_STANDARDS_PROMPT } from "../../skills/workshop/skill-authoring-standards.js";
 import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
-import { readSkillProposalRecord } from "../../skills/workshop/store.js";
 import { withSkillCollectionLock } from "../../skills/workshop/target-lock.js";
 import type { SkillWorkshopProposalMutationBudget } from "../../skills/workshop/types.js";
 import {
@@ -23,12 +22,17 @@ import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { createOpenClawTools } from "../openclaw-tools.js";
 import { listCoreToolSections } from "../tool-catalog.js";
 import { createSkillWorkshopTool as createSkillWorkshopToolImpl } from "./skill-workshop-tool.js";
+import { readSkillWorkshopTestProposalRecord } from "./skill-workshop-tool.test-support.js";
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
 let stateDir = "";
-const createSkillWorkshopTool = (options: Parameters<typeof createSkillWorkshopToolImpl>[0]) =>
-  createSkillWorkshopToolImpl({ config: {}, agentId: "main", ...options });
+const createSkillWorkshopTool = (
+  options: Omit<Parameters<typeof createSkillWorkshopToolImpl>[0], "config" | "agentId"> & {
+    config?: Parameters<typeof createSkillWorkshopToolImpl>[0]["config"];
+    agentId?: string;
+  },
+) => createSkillWorkshopToolImpl({ config: {}, agentId: "main", ...options });
 
 async function writeWorkshopSkills(
   skills: ReadonlyArray<{ name: string; description: string; body?: string }>,
@@ -52,7 +56,10 @@ async function proposalArtifactPath(
   relativePath: string,
   options: { stateDir?: string; env?: NodeJS.ProcessEnv } = {},
 ): Promise<string> {
-  const record = await readSkillProposalRecord(proposalId, options.env ? { env: options.env } : {});
+  const record = await readSkillWorkshopTestProposalRecord(
+    proposalId,
+    options.env ? { env: options.env } : {},
+  );
   if (!record) {
     throw new Error(`expected stored proposal ${proposalId}`);
   }
@@ -87,6 +94,7 @@ describe("skill_workshop tool", () => {
       workspaceDir,
       env: testState.env,
       agentId: "main",
+      config: {},
       name: "duplicate",
       description: "Duplicate procedure",
       content: "# duplicate\n",
@@ -95,6 +103,7 @@ describe("skill_workshop tool", () => {
       workspaceDir,
       env: testState.env,
       agentId: "main",
+      config: {},
       proposalId: seeded.record.id,
       expectedRevisionHash: seeded.revisionHash,
     });
@@ -274,7 +283,9 @@ describe("skill_workshop tool", () => {
       },
     });
     expect(
-      listSkillProposalEvents({ proposalId: details.id }).events.map((event) => event.actor),
+      listSkillProposalEvents({ config: {}, proposalId: details.id }).events.map(
+        (event) => event.actor,
+      ),
     ).toEqual([
       { type: "agent", id: "main" },
       { type: "agent", id: "main" },
@@ -602,7 +613,7 @@ describe("skill_workshop tool", () => {
         .then((buffer) => buffer.at(-1)),
     ).resolves.toBe(0x0a);
     await expect(
-      readSkillProposalRecord((result.details as { id: string }).id),
+      readSkillWorkshopTestProposalRecord((result.details as { id: string }).id),
     ).resolves.toMatchObject({
       origin: {
         agentId: "main",
@@ -660,7 +671,7 @@ describe("skill_workshop tool", () => {
       ),
     ).resolves.toContain('version: "v2"');
     await expect(
-      readSkillProposalRecord((result.details as { id: string }).id),
+      readSkillWorkshopTestProposalRecord((result.details as { id: string }).id),
     ).resolves.toMatchObject({ origin: reviewerOrigin });
 
     const listed = await tool.execute("call-3", {

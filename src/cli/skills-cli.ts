@@ -491,6 +491,7 @@ async function runSkillProposalApply(
     return await withOfflineGatewayLock(resolved.config, err, async () => {
       const reviewedProposal = await inspectSkillProposal(proposalId, {
         agentId: resolved.agentId,
+        config: resolved.config,
       });
       if (!reviewedProposal) {
         throw new Error(`Skill proposal not found: ${proposalId}`, { cause: err });
@@ -1043,8 +1044,8 @@ export function registerSkillsCli(program: Command) {
       runWorkshopAction(
         opts,
         command,
-        async ({ agentId }) => {
-          const proposal = await inspectSkillProposal(proposalId, { agentId });
+        async ({ agentId, config }) => {
+          const proposal = await inspectSkillProposal(proposalId, { agentId, config });
           if (!proposal) {
             throw new Error(`Skill proposal not found: ${proposalId}`);
           }
@@ -1193,9 +1194,11 @@ export function registerSkillsCli(program: Command) {
           runWorkshopAction(
             opts,
             command,
-            async ({ agentId, workspaceDir }) => {
+            async ({ agentId, config, workspaceDir }) => {
               const reviewed =
-                name === "reject" ? await inspectSkillProposal(proposalId, { agentId }) : undefined;
+                name === "reject"
+                  ? await inspectSkillProposal(proposalId, { agentId, config })
+                  : undefined;
               if (name === "reject" && !reviewed) {
                 throw new Error(`Skill proposal not found: ${proposalId}`);
               }
@@ -1203,6 +1206,7 @@ export function registerSkillsCli(program: Command) {
                 agentId,
                 eventActor: { type: "system", id: "cli" },
                 workspaceDir,
+                config,
                 proposalId,
                 ...(reviewed ? { expectedRevisionHash: reviewed.revisionHash } : {}),
                 reason: opts.reason,

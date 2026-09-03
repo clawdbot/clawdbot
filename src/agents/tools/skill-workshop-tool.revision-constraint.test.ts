@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -9,8 +10,12 @@ import { createSkillWorkshopTool as createSkillWorkshopToolImpl } from "./skill-
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
-const createSkillWorkshopTool = (options: Parameters<typeof createSkillWorkshopToolImpl>[0]) =>
-  createSkillWorkshopToolImpl({ config: {}, agentId: "main", ...options });
+const createSkillWorkshopTool = (
+  options: Omit<Parameters<typeof createSkillWorkshopToolImpl>[0], "config" | "agentId"> & {
+    config?: OpenClawConfig;
+    agentId?: string;
+  },
+) => createSkillWorkshopToolImpl({ config: {}, agentId: "main", ...options });
 
 beforeEach(async () => {
   testState = await createOpenClawTestState({

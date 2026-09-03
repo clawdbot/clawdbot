@@ -32,6 +32,9 @@ async function runCoreAgentEndSideEffects(params: AgentEndSideEffectsParams): Pr
   if (!params.ctx.foregroundPromptContext) {
     return;
   }
+  if (!params.ctx.config) {
+    return;
+  }
   const ctx = { ...params.ctx, foregroundPromptContext: params.ctx.foregroundPromptContext };
   try {
     const { scheduleSkillExperienceReview } =
@@ -40,7 +43,7 @@ async function runCoreAgentEndSideEffects(params: AgentEndSideEffectsParams): Pr
       event: params.event,
       ctx,
       usedSkills,
-      ...(params.ctx.config ? { config: params.ctx.config } : {}),
+      config: params.ctx.config,
     });
   } catch (error) {
     // Side effects are observational; failures must not change the completed run result.

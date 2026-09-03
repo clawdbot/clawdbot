@@ -106,7 +106,7 @@ describe("doctor Skill Workshop SQLite migration", () => {
     });
     expect(first.changes.join("\n")).toContain("marked 1 stale");
     await expect(
-      readSkillProposalRecord(proposalId, { env: testState.env }),
+      readSkillProposalRecord(proposalId, { config: {}, env: testState.env }, {}, { config: {} }),
     ).resolves.toMatchObject({
       status: "stale",
       statusReason: "Skill Workshop no longer edits skills outside its own directory.",

@@ -152,6 +152,7 @@ describe("Skill Workshop SQLite store", () => {
 
     expect(
       listSkillProposalEvents({
+        config: workshopConfig,
         proposalId: proposal.record.id,
       }).events[1],
     ).toMatchObject({
@@ -217,6 +218,7 @@ describe("Skill Workshop SQLite store", () => {
     }
 
     const firstPage = listSkillProposalEvents({
+      config: workshopConfig,
       proposalId: proposal.record.id,
       limit: 200,
     });
@@ -226,6 +228,7 @@ describe("Skill Workshop SQLite store", () => {
       2 * 1024 * 1024 + 1_024,
     );
     const secondPage = listSkillProposalEvents({
+      config: workshopConfig,
       proposalId: proposal.record.id,
       afterSequence: firstPage.nextSequence,
       limit: 200,
@@ -250,6 +253,7 @@ describe("Skill Workshop SQLite store", () => {
 
     expect(() =>
       listSkillProposalEvents({
+        config: workshopConfig,
         proposalId: proposal.record.id,
       }),
     ).toThrow(/Stored Skill Workshop event .* cannot be replayed safely/);

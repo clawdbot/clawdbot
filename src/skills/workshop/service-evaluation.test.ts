@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginHookSkillProposalEvaluateEvent } from "../../plugins/hook-types.js";
 import {
   createOpenClawTestState,
@@ -24,22 +25,43 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
 import { buildSkillProposalEvaluationBundles } from "./proposal-bundle.js";
 import { SkillProposalRevisionChangedError } from "./service-evaluation.js";
 import {
-  applySkillProposal,
-  evaluateSkillProposal,
+  applySkillProposal as applySkillProposalImpl,
+  evaluateSkillProposal as evaluateSkillProposalImpl,
   inspectSkillProposal as inspectSkillProposalImpl,
-  listSkillProposalEvents,
-  proposeCreateSkill,
-  proposeUpdateSkill,
-  reviseSkillProposal,
+  listSkillProposalEvents as listSkillProposalEventsImpl,
+  proposeCreateSkill as proposeCreateSkillImpl,
+  proposeUpdateSkill as proposeUpdateSkillImpl,
+  reviseSkillProposal as reviseSkillProposalImpl,
 } from "./service.js";
 import { prepareSkillProposalSupportFiles } from "./store.js";
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
+const workshopConfig: OpenClawConfig = {};
+type OptionalWorkshopConfig<T> = Omit<T, "config"> & { config?: OpenClawConfig };
+
+const applySkillProposal = (
+  input: OptionalWorkshopConfig<Parameters<typeof applySkillProposalImpl>[0]>,
+) => applySkillProposalImpl({ config: workshopConfig, ...input });
+const evaluateSkillProposal = (
+  input: OptionalWorkshopConfig<Parameters<typeof evaluateSkillProposalImpl>[0]>,
+) => evaluateSkillProposalImpl({ config: workshopConfig, ...input });
 const inspectSkillProposal = (
   proposalId: string,
-  options: Parameters<typeof inspectSkillProposalImpl>[1] = {},
-) => inspectSkillProposalImpl(proposalId, { config: {}, agentId: "main", ...options });
+  options?: OptionalWorkshopConfig<Parameters<typeof inspectSkillProposalImpl>[1]>,
+) => inspectSkillProposalImpl(proposalId, { config: workshopConfig, agentId: "main", ...options });
+const listSkillProposalEvents = (
+  input: OptionalWorkshopConfig<Parameters<typeof listSkillProposalEventsImpl>[0]>,
+) => listSkillProposalEventsImpl({ config: workshopConfig, ...input });
+const proposeCreateSkill = (
+  input: OptionalWorkshopConfig<Parameters<typeof proposeCreateSkillImpl>[0]>,
+) => proposeCreateSkillImpl({ config: workshopConfig, ...input });
+const proposeUpdateSkill = (
+  input: OptionalWorkshopConfig<Parameters<typeof proposeUpdateSkillImpl>[0]>,
+) => proposeUpdateSkillImpl({ config: workshopConfig, ...input });
+const reviseSkillProposal = (
+  input: OptionalWorkshopConfig<Parameters<typeof reviseSkillProposalImpl>[0]>,
+) => reviseSkillProposalImpl({ config: workshopConfig, ...input });
 
 beforeAll(async () => {
   testState = await createOpenClawTestState({

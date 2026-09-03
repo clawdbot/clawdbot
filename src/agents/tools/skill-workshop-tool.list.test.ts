@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { writeSkill } from "../../skills/test-support/e2e-test-helpers.js";
 import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
 import { readSkillProposalRecord } from "../../skills/workshop/store.js";
@@ -12,8 +13,12 @@ import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { createSkillWorkshopTool as createSkillWorkshopToolImpl } from "./skill-workshop-tool.js";
 
 const commitLockState = vi.hoisted(() => ({ active: false, calls: 0 }));
-const createSkillWorkshopTool = (options: Parameters<typeof createSkillWorkshopToolImpl>[0]) =>
-  createSkillWorkshopToolImpl({ config: {}, agentId: "main", ...options });
+const createSkillWorkshopTool = (
+  options: Omit<Parameters<typeof createSkillWorkshopToolImpl>[0], "config" | "agentId"> & {
+    config?: OpenClawConfig;
+    agentId?: string;
+  },
+) => createSkillWorkshopToolImpl({ config: {}, agentId: "main", ...options });
 
 vi.mock("../../skills/workshop/target-lock.js", () => ({
   withSkillCollectionLock: async (fn: () => Promise<unknown>) => await fn(),
@@ -66,7 +71,12 @@ describe("skill_workshop list", () => {
       proposal_content: "# Missing Draft\n",
     });
     const proposalId = (created.details as { id: string }).id;
-    const record = await readSkillProposalRecord(proposalId, { env: testState.env });
+    const record = await readSkillProposalRecord(
+      proposalId,
+      { config: {}, env: testState.env },
+      {},
+      { config: {} },
+    );
     if (!record) {
       throw new Error(`expected stored proposal ${proposalId}`);
     }

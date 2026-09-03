@@ -8,7 +8,7 @@ import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import {
   hashSkillProposalContent,
   importLegacySkillProposal,
-  readSkillProposalRecord,
+  readSkillProposalRecord as readSkillProposalRecordImpl,
   readSkillProposalRollback,
 } from "../skills/workshop/store.js";
 import * as workshopStore from "../skills/workshop/store.js";
@@ -35,6 +35,9 @@ import {
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
+
+const readSkillProposalRecord = (proposalId: string, options: { env?: NodeJS.ProcessEnv } = {}) =>
+  readSkillProposalRecordImpl(proposalId, { config: {}, ...options }, {}, { config: {} });
 
 function seedLegacyV15ProposalRows(
   env: NodeJS.ProcessEnv,

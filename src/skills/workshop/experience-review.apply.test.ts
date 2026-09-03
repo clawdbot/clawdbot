@@ -445,6 +445,11 @@ describe("experience review auto apply", () => {
     "$name",
     async ({ result, error }) => {
       const workspaceDir = await tempDirs.make("openclaw-experience-auto-apply-workspace-");
+      const agentDir = await tempDirs.make("openclaw-experience-auto-apply-agent-dir-");
+      const config = {
+        agents: { entries: { main: { default: true, agentDir } } },
+        skills: { workshop: { autonomous: { mode: "auto" as const } } },
+      };
       const foregroundPromptCacheKey = resolveSessionBoundaryPromptCacheKey({
         api: "openai-responses",
         boundaryCount: 0,
@@ -490,11 +495,11 @@ describe("experience review auto apply", () => {
             reasoningLevel: "on",
           },
         },
-        config: { skills: { workshop: { autonomous: { mode: "auto" } } } },
+        config,
       };
 
       const review = runSkillExperienceReview(candidate, {
-        getCurrentConfig: () => candidate.config ?? {},
+        getCurrentConfig: () => config,
       });
       if (error) {
         await expect(review).rejects.toThrow(error);
@@ -509,7 +514,7 @@ describe("experience review auto apply", () => {
         status: error ? "pending" : "applied",
       });
       const skillFile = path.join(
-        resolveWorkshopSkillsDir({}, "main", testState.env),
+        resolveWorkshopSkillsDir(config, "main", testState.env),
         "deployment-preflight",
         "SKILL.md",
       );

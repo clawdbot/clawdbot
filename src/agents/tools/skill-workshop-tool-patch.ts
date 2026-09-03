@@ -84,7 +84,7 @@ function prepareSkillPatch(params: {
 
 export async function executePrepareSkillPatch(params: {
   workspaceDir: string;
-  config?: OpenClawConfig;
+  config: OpenClawConfig;
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   toolParams: Record<string, unknown>;

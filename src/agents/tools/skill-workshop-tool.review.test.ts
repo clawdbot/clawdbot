@@ -3,7 +3,9 @@
 import { writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { inspectSkillProposal } from "../../skills/workshop/service.js";
 import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
 import type { SkillWorkshopProposalMutationBudget } from "../../skills/workshop/types.js";
@@ -16,8 +18,12 @@ import { createSkillWorkshopTool as createSkillWorkshopToolImpl } from "./skill-
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
-const createSkillWorkshopTool = (options: Parameters<typeof createSkillWorkshopToolImpl>[0]) =>
-  createSkillWorkshopToolImpl({ config: {}, agentId: "main", ...options });
+const createSkillWorkshopTool = (
+  options: Omit<Parameters<typeof createSkillWorkshopToolImpl>[0], "config" | "agentId"> & {
+    config?: OpenClawConfig;
+    agentId?: string;
+  },
+) => createSkillWorkshopToolImpl({ config: {}, agentId: "main", ...options });
 
 beforeEach(async () => {
   testState = await createOpenClawTestState({
@@ -149,6 +155,39 @@ describe("skill_workshop review mode", () => {
       skillKey: "weather-planner",
     });
     expect(proposalMutationBudget.remaining).toBe(0);
+  });
+
+  it("selects a pending proposal for revision from a configured agent directory", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-review-agent-dir-");
+    const agentDir = await tempDirs.make("openclaw-skill-workshop-review-agent-state-");
+    const config = { agents: { entries: { main: { default: true, agentDir } } } };
+    const foregroundTool = createSkillWorkshopTool({ workspaceDir, config });
+    const created = await foregroundTool.execute("create-configured", {
+      action: "create",
+      name: "Configured Review Skill",
+      description: "Revise a proposal selected from the configured directory.",
+      proposal_content: "# Configured Review Skill\n\nOriginal content.\n",
+    });
+    const createdId = asNullableRecord(created.details)?.id;
+    if (typeof createdId !== "string") {
+      throw new Error("Tool proposal creation did not return an id.");
+    }
+
+    const reviewTool = createSkillWorkshopTool({
+      workspaceDir,
+      config,
+      proposalOnly: true,
+      updateProposals: true,
+      proposalMutationBudget: { remaining: 1 },
+    });
+    const revised = await reviewTool.execute("revise-configured", {
+      action: "revise",
+      name: "Configured Review Skill",
+      proposal_content: "# Configured Review Skill\n\nRevised content.\n",
+    });
+    expect(revised.details).toMatchObject({ id: createdId, status: "pending" });
+    const inspected = await inspectSkillProposal(createdId, { agentId: "main", config });
+    expect(inspected?.content).toContain("Revised content.");
   });
 
   it("composes patch proposals by replacing the quoted span of the live body", async () => {
@@ -452,7 +491,10 @@ describe("skill_workshop review mode", () => {
       new_string: newString,
     });
     expect(patched.details).toMatchObject({ status: "pending", kind: "update" });
-    const inspected = await inspectSkillProposal((patched.details as { id: string }).id, {});
+    const inspected = await inspectSkillProposal((patched.details as { id: string }).id, {
+      config: {},
+      agentId: "main",
+    });
     expect(inspected?.content).toContain(newString);
     expect(inspected?.content).not.toContain(oldString);
     await expect(
