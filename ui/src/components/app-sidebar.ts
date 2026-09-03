@@ -591,14 +591,12 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
                   className: "sidebar-session-error sidebar-session-catalog-error",
                 })}
           </div>
-          ${this.communityInviteVisible
-            ? html`<div class="sidebar-shell__invite">
-                <openclaw-community-invite-card
+          <div class="sidebar-shell__invite">
+            ${this.communityInviteVisible
+              ? html`<openclaw-community-invite-card
                   .onDismiss=${this.dismissCommunityInvite}
-                ></openclaw-community-invite-card>
-              </div>`
-            : nothing}
-          <div class="sidebar-shell__footer">
+                ></openclaw-community-invite-card>`
+              : nothing}
             <openclaw-lobster-pet
               .seed=${lobsterPetSeed(this.sessionKey)}
               .mode=${resolveLobsterPetMode(
@@ -611,6 +609,8 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
               .gatewayVersion=${this.gatewayVersion}
               .onVisitsDisabled=${this.refreshAppearanceSettings}
             ></openclaw-lobster-pet>
+          </div>
+          <div class="sidebar-shell__footer">
             ${this.devGitBranch
               ? html`<openclaw-tooltip .content=${this.devGitBranch}>
                   <div class="sidebar-footer-branch">
