@@ -2,6 +2,7 @@ import type { Result } from "@openclaw/normalization-core/result";
 import type { TSchema } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginToolMcpMeta } from "../plugins/tool-metadata.js";
+import type { McpToolCatalogDiagnostic } from "./agent-bundle-mcp-types.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import type { CodeModeSkill } from "./code-mode-skills.js";
 import type { AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
@@ -116,6 +117,12 @@ export type ToolSearchCatalogEntry = {
 
 export type ToolSearchCatalogSession = {
   entries: ToolSearchCatalogEntry[];
+  /**
+   * Servers whose catalog load failed, as recorded by the MCP runtime for this
+   * run's materialization. Their tools are absent from `entries`; without this
+   * fact a lookup miss is indistinguishable from an invented tool id.
+   */
+  mcpDiagnostics?: readonly McpToolCatalogDiagnostic[];
   counterScope: string;
   searchCount: number;
   describeCount: number;
@@ -166,6 +173,7 @@ export type ToolSearchCatalogCompactionParams = {
   catalogRef?: ToolSearchCatalogRef;
   toolHookContext?: HookContext;
   toolExecutionAllow?: readonly string[];
+  mcpDiagnostics?: readonly McpToolCatalogDiagnostic[];
   isVisibleControlTool: (tool: AnyAgentTool) => boolean;
   isVisibleCatalogTool?: (tool: AnyAgentTool) => boolean;
   shouldCatalogTool?: (tool: AnyAgentTool) => boolean;

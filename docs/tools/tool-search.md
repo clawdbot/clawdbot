@@ -480,6 +480,12 @@ Tool Search should fail closed:
 
 - if a tool is not in the effective policy, search should not return it
 - if a selected tool becomes unavailable, `tool_call` should fail
+- if a configured MCP server failed to connect or list its tools when the run
+  started, its tools are absent from the catalog; `tool_search` results then
+  carry an `unavailableMcpServers` entry naming that server and its redacted
+  failure, and `tool_describe` / `tool_call` for one of its ids report the
+  outage instead of an unknown tool, so the model stops searching for tools
+  that cannot appear
 - if policy or approval blocks execution, the call result should report that
   block instead of bypassing it
 - if the code bridge cannot create an isolated runtime, use `mode: "tools"` or

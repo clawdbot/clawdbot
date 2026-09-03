@@ -1,0 +1,195 @@
+import { expectDefined } from "@openclaw/normalization-core";
+import { describe, expect, it } from "vitest";
+import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
+import type { McpToolCatalog, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import {
+  applyToolSearchCatalog,
+  createToolSearchCatalogRef,
+  createToolSearchTools,
+  TOOL_CALL_RAW_TOOL_NAME,
+  TOOL_DESCRIBE_RAW_TOOL_NAME,
+  TOOL_SEARCH_CODE_MODE_TOOL_NAME,
+  TOOL_SEARCH_RAW_TOOL_NAME,
+} from "./tool-search.js";
+import type { AnyAgentTool } from "./tools/common.js";
+
+// Operator-facing launch detail must never reach model text; only the server
+// name and the redacted failure message may.
+const LAUNCH_SUMMARY = "launch-summary-secret";
+const FAILURE_MESSAGE = "connect ECONNREFUSED 127.0.0.1:5230";
+
+function makeRuntime(catalog: McpToolCatalog): SessionMcpRuntime {
+  return {
+    sessionId: "session-tool-search-mcp-unavailable",
+    workspaceDir: "/tmp",
+    configFingerprint: "fingerprint",
+    createdAt: 0,
+    lastUsedAt: 0,
+    markUsed: () => {},
+    getCatalog: async () => catalog,
+    peekCatalog: () => catalog,
+    callTool: async () => ({ content: [{ type: "text", text: "ok" }] }),
+    dispose: async () => {},
+  };
+}
+
+/** One healthy server ("notes") plus one whose catalog load failed ("memos"). */
+function makeOutageCatalog(): McpToolCatalog {
+  return {
+    version: 1,
+    generatedAt: 0,
+    servers: {
+      notes: {
+        serverName: "notes",
+        launchSummary: "notes",
+        toolCount: 1,
+        supportsParallelToolCalls: false,
+      },
+    },
+    tools: [
+      {
+        serverName: "notes",
+        safeServerName: "notes",
+        toolName: "list",
+        description: "List saved notes",
+        inputSchema: { type: "object", properties: {} },
+        fallbackDescription: "List saved notes",
+      },
+    ],
+    diagnostics: [
+      {
+        serverName: "memos",
+        safeServerName: "memos",
+        launchSummary: LAUNCH_SUMMARY,
+        message: FAILURE_MESSAGE,
+      },
+    ],
+  };
+}
+
+async function createControls(catalog: McpToolCatalog, mode: "tools" | "code" = "tools") {
+  const materialized = await materializeBundleMcpToolsForRun({ runtime: makeRuntime(catalog) });
+  const config = { tools: { toolSearch: { enabled: true, mode } } };
+  const catalogRef = createToolSearchCatalogRef();
+  const controls = createToolSearchTools({ config, catalogRef });
+  applyToolSearchCatalog({
+    tools: [...controls, ...materialized.tools],
+    config,
+    catalogRef,
+    mcpDiagnostics: materialized.diagnostics,
+  });
+  const control = (name: string): AnyAgentTool =>
+    expectDefined(
+      controls.find((tool) => tool.name === name),
+      `${name} control`,
+    );
+  return { control, materialized };
+}
+
+describe("Tool Search with an unavailable MCP server", () => {
+  it("names the failed server in tool_search results instead of returning a bare miss", async () => {
+    const { control } = await createControls(makeOutageCatalog());
+    const search = control(TOOL_SEARCH_RAW_TOOL_NAME);
+
+    const miss = await search.execute("search-miss", { query: "memos" });
+    expect(miss.details).toEqual({
+      candidates: [],
+      unavailableMcpServers: [{ server: "memos", error: FAILURE_MESSAGE }],
+      note: expect.stringContaining("memos"),
+    });
+
+    const hit = await search.execute("search-hit", { query: "list saved notes" });
+    expect(hit.details).toMatchObject({
+      candidates: [expect.objectContaining({ id: "mcp:notes:notes__list" })],
+      unavailableMcpServers: [{ server: "memos", error: FAILURE_MESSAGE }],
+    });
+
+    const batch = await search.execute("search-batch", {
+      queries: [{ query: "memos" }, { query: "list saved notes" }],
+    });
+    expect(batch.details).toMatchObject({
+      results: [
+        { query: "memos", candidates: [] },
+        {
+          query: "list saved notes",
+          candidates: [expect.objectContaining({ name: "notes__list" })],
+        },
+      ],
+      unavailableMcpServers: [{ server: "memos", error: FAILURE_MESSAGE }],
+    });
+
+    for (const result of [miss, hit, batch]) {
+      expect(JSON.stringify(result)).not.toContain(LAUNCH_SUMMARY);
+    }
+  });
+
+  it.each([
+    { label: "catalog id", id: "mcp:memos:memos__read_note" },
+    { label: "tool name", id: "memos__read_note" },
+  ])("reports the outage for a $label lookup on the failed server", async ({ id }) => {
+    const { control } = await createControls(makeOutageCatalog());
+
+    for (const name of [TOOL_CALL_RAW_TOOL_NAME, TOOL_DESCRIBE_RAW_TOOL_NAME]) {
+      const error = await control(name)
+        .execute(`lookup-${name}`, { id, args: {} })
+        .then(
+          () => undefined,
+          (caught: unknown) => caught as Error,
+        );
+      expect(error?.message).toContain('MCP server "memos"');
+      expect(error?.message).toContain(FAILURE_MESSAGE);
+      expect(error?.message).not.toContain("Unknown tool id");
+      expect(error?.message).not.toContain(LAUNCH_SUMMARY);
+    }
+  });
+
+  it("keeps the generic unknown-tool recovery for servers without a recorded failure", async () => {
+    const { control } = await createControls(makeOutageCatalog());
+
+    await expect(
+      control(TOOL_CALL_RAW_TOOL_NAME).execute("lookup-other", {
+        id: "mcp:other:other__read",
+        args: {},
+      }),
+    ).rejects.toThrow("Unknown tool id: mcp:other:other__read");
+  });
+
+  it("keeps plain results when no MCP server failed", async () => {
+    const healthy = makeOutageCatalog();
+    delete healthy.diagnostics;
+    const { control, materialized } = await createControls(healthy);
+    expect(materialized.diagnostics).toBeUndefined();
+
+    const miss = await control(TOOL_SEARCH_RAW_TOOL_NAME).execute("search-miss", {
+      query: "memos",
+    });
+    expect(miss.details).toEqual([]);
+    await expect(
+      control(TOOL_CALL_RAW_TOOL_NAME).execute("lookup-missing", {
+        id: "mcp:memos:memos__read_note",
+        args: {},
+      }),
+    ).rejects.toThrow("Unknown tool id: mcp:memos:memos__read_note");
+  });
+
+  it("surfaces the outage to code mode calls", async () => {
+    const { control } = await createControls(makeOutageCatalog(), "code");
+
+    const result = await control(TOOL_SEARCH_CODE_MODE_TOOL_NAME).execute("code-mode-outage", {
+      code: `
+        try {
+          await openclaw.tools.call("mcp:memos:memos__read_note", {});
+          return "no error";
+        } catch (error) {
+          return String(error?.message ?? error);
+        }
+      `,
+    });
+
+    expect(result.details).toMatchObject({
+      ok: true,
+      value: expect.stringContaining('MCP server "memos"'),
+    });
+    expect(JSON.stringify(result)).not.toContain(LAUNCH_SUMMARY);
+  });
+});

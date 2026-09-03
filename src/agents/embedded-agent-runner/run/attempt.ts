@@ -238,7 +238,7 @@ export async function runEmbeddedAttempt(
     );
     bundleMcpRuntime = preparedBundleTools.bundleMcpRuntime;
     bundleLspRuntime = preparedBundleTools.bundleLspRuntime;
-    const { clientTools, uncompactedEffectiveTools } = preparedBundleTools;
+    const { clientTools, mcpDiagnostics, uncompactedEffectiveTools } = preparedBundleTools;
     // Catalog preparation registers global run state before tool projection and
     // diagnostics, so arm cleanup before either can fail and leak the catalog.
     toolSearchCatalogApplied = toolSearchCatalogRef !== undefined;
@@ -247,7 +247,7 @@ export async function runEmbeddedAttempt(
         attempt: params,
         setup,
         preparedToolBase,
-        bundleTools: { clientTools, uncompactedEffectiveTools },
+        bundleTools: { clientTools, mcpDiagnostics, uncompactedEffectiveTools },
         runTrace,
         abortSignal: runAbortController.signal,
         executeCodeModeTool: (toolParams) => {

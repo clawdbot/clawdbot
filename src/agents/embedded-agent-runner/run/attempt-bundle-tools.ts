@@ -243,6 +243,11 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       bundleLspRuntime,
       bundleMcpRuntime,
       clientTools,
+      // `bundleMcpRuntime` is the materializeBundleMcpToolsForRun result, whose
+      // `diagnostics` records which configured servers failed this run's catalog
+      // load. Carry that fact with the tools it explains so the Tool Search
+      // catalog can name an outage instead of reporting a bare miss.
+      mcpDiagnostics: bundleMcpRuntime?.diagnostics,
       tools,
       uncompactedEffectiveTools,
       refreshTools: () => {

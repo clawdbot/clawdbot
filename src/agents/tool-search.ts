@@ -24,6 +24,10 @@ import {
   applyToolSchemaDirectoryCatalog,
   MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS,
 } from "./tool-search-directory.js";
+import {
+  describeUnavailableMcpServers,
+  type UnavailableMcpServersNote,
+} from "./tool-search-lookup-miss.js";
 import { readToolSearchRequest } from "./tool-search-request.js";
 import {
   formatToolSearchControlError,
@@ -148,10 +152,13 @@ function compactBatchCandidate(candidate: ToolSearchCandidate): ToolSearchCandid
   };
 }
 
-function boundToolSearchBatchResponse(results: ToolSearchBatchGroup[]): {
+function boundToolSearchBatchResponse(
+  results: ToolSearchBatchGroup[],
+  outage: UnavailableMcpServersNote | undefined,
+): {
   results: ToolSearchBatchGroup[];
   truncated?: true;
-} {
+} & Partial<UnavailableMcpServersNote> {
   const bounded: ToolSearchBatchGroup[] = results.map((result) => {
     const candidates = result.candidates
       .map(compactBatchCandidate)
@@ -164,7 +171,13 @@ function boundToolSearchBatchResponse(results: ToolSearchBatchGroup[]): {
     };
   });
   let truncated = bounded.some((result) => result.truncated);
-  const render = () => ({ results: bounded, ...(truncated ? { truncated: true as const } : {}) });
+  // The outage note is bounded on its own and never trimmed: it is the fact
+  // that stops a model from re-searching for tools that cannot appear.
+  const render = () => ({
+    results: bounded,
+    ...(truncated ? { truncated: true as const } : {}),
+    ...outage,
+  });
   while (JSON.stringify(render(), null, 2).length > MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS) {
     let removable: ToolSearchBatchGroup | undefined;
     for (const group of bounded) {
@@ -216,6 +229,7 @@ export function applyToolSearchCatalog(params: {
   runId?: string;
   catalogRef?: ToolSearchCatalogRef;
   toolHookContext?: HookContext;
+  mcpDiagnostics?: Parameters<typeof applyToolCatalogCompaction>[0]["mcpDiagnostics"];
   shouldCatalogTool?: (tool: AnyAgentTool) => boolean;
   directToolNames?: Iterable<string>;
 }) {
@@ -345,9 +359,13 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       execute: async (_toolCallId: string, args: unknown): Promise<AgentToolResult<unknown>> => {
         const request = readToolSearchRequest(args, config);
         if (request.kind === "single") {
-          return jsonResult(
-            await runtime.search(request.search.query, { limit: request.search.limit }),
-          );
+          const candidates = await runtime.search(request.search.query, {
+            limit: request.search.limit,
+          });
+          // A plain array stays the no-outage shape; the recorded failed servers
+          // ride alongside the candidates only when the MCP runtime reported one.
+          const outage = describeUnavailableMcpServers(resolveCatalog(ctx));
+          return jsonResult(outage ? { candidates, ...outage } : candidates);
         }
         const results = await Promise.all(
           request.searches.map(async (search) => ({
@@ -355,7 +373,9 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
             candidates: await runtime.search(search.query, { limit: search.limit }),
           })),
         );
-        return jsonResult(boundToolSearchBatchResponse(results));
+        return jsonResult(
+          boundToolSearchBatchResponse(results, describeUnavailableMcpServers(resolveCatalog(ctx))),
+        );
       },
     },
     {

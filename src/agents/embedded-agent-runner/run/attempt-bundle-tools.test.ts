@@ -290,6 +290,25 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     );
   });
 
+  it("carries recorded MCP catalog failures alongside the materialized tools", async () => {
+    const input = createInput([], []);
+    input.attempt.config = { plugins: { enabled: false } };
+    const diagnostics = [
+      {
+        serverName: "memos",
+        safeServerName: "memos",
+        launchSummary: "memos",
+        message: "connect ECONNREFUSED",
+      },
+    ];
+    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue({});
+    mocks.materializeBundleMcpToolsForRun.mockResolvedValue({ tools: [], diagnostics });
+
+    const result = await prepareEmbeddedAttemptBundleTools(input);
+
+    expect(result.mcpDiagnostics).toBe(diagnostics);
+  });
+
   it("never exposes client functions when the attempt disables every tool", async () => {
     const input = createInput([], []);
     input.attempt.disableTools = true;
