@@ -59,8 +59,15 @@ function requireCallId(value: unknown): string {
 }
 
 function createProjectedCallIdResolver(): (id: string) => string {
-  // Core createOpenAIResponsesToolCallIdResolver is not exported through the
-  // plugin SDK, so this projection keeps a local copy of its call_id rewrite.
+  // Core's createOpenAIResponsesToolCallIdResolver is not exported through the
+  // plugin SDK, so this projection mirrors its rewrite locally. The trigger is
+  // deliberately narrower than core's: core rewrites any id failing
+  // /^call_[A-Za-z0-9_-]{1,59}$/ and splits call_id|fc_id pairings, while this
+  // rewrites on length > 64 only -- the bound OpenAI actually rejects, and the
+  // only one this projection can hit (it emits call_id, never an item id).
+  // Widening it to core's shape would rewrite ids that replay correctly today
+  // (e.g. "call-1"), changing model-visible ids and invalidating prompt caches.
+  // Weigh that before swapping in core's resolver if it is ever exported.
   const rewrittenByOriginalId = new Map<string, string>();
 
   return (id) => {
