@@ -163,9 +163,10 @@ const {
         warnings: [],
       },
     })),
-    textToSpeechStreamMock: vi.fn(
-      async (): Promise<unknown> => ({ success: false, error: "stream unavailable" }),
-    ),
+    textToSpeechStreamMock: vi.fn(async (): Promise<unknown> => ({
+      success: false,
+      error: "stream unavailable",
+    })),
     textToSpeechMock: vi.fn(async () => ({ success: true, audioPath: "/tmp/voice.mp3" })),
     logVerboseMock: vi.fn() as Mock,
     loggerWarnMock: vi.fn() as Mock,

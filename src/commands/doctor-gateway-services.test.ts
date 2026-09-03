@@ -1950,6 +1950,11 @@ describe("maybeRepairGatewayServiceConfig", () => {
         await runRepair({ gateway: {} });
 
         expectNoteContaining("resolves to a source checkout", "Gateway service config");
+        expectNoteContaining(
+          "Run `openclaw gateway install --force` from the intended package install to replace the gateway service definition.",
+          "Gateway service config",
+        );
+        expectNoNoteContaining("openclaw doctor --fix", "Gateway service config");
         expect(mocks.install).not.toHaveBeenCalled();
       } finally {
         await fs.rm(root, { recursive: true, force: true });
@@ -2181,7 +2186,7 @@ describe("maybeScanExtraGatewayServices", () => {
     );
   });
 
-  it("keeps legacy gateway services warning-level", () => {
+  it("keeps legacy gateway services warning-level with guided cleanup advice", () => {
     expect(
       extraGatewayServiceToHealthFinding({
         platform: "linux",
@@ -2196,6 +2201,8 @@ describe("maybeScanExtraGatewayServices", () => {
         severity: "warning",
         source: "linux",
         target: "openclaw-gateway.service",
+        fixHint:
+          "Run `openclaw doctor` interactively to review legacy gateway services and confirm supported cleanup.",
       }),
     );
   });
@@ -2251,23 +2258,8 @@ describe("maybeScanExtraGatewayServices", () => {
       },
     ]);
 
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-    const prompter = {
-      confirm: vi.fn(),
-      confirmAutoFix: vi.fn(),
-      confirmAggressiveAutoFix: vi.fn(),
-      confirmRuntimeRepair: vi.fn().mockResolvedValue(true),
-      select: vi.fn(),
-      shouldRepair: false,
-      shouldForce: false,
-      repairMode: {
-        shouldRepair: false,
-        shouldForce: false,
-        nonInteractive: false,
-        canPrompt: true,
-        updateInProgress: false,
-      },
-    };
+    const runtime = makeDoctorIo();
+    const prompter = makeDoctorPrompts();
 
     await maybeScanExtraGatewayServices({ deep: false }, runtime, prompter);
 
@@ -2277,8 +2269,8 @@ describe("maybeScanExtraGatewayServices", () => {
       stdout: process.stdout,
     });
     expectNoteContaining("clawdbot-gateway.service", "Legacy gateway removed");
-    expect(runtime.log).toHaveBeenCalledWith(
-      "Legacy gateway services removed. Installing OpenClaw gateway next.",
+    expect(runtime.log).not.toHaveBeenCalledWith(
+      expect.stringContaining("Installing OpenClaw gateway next."),
     );
   });
 
@@ -2298,8 +2290,8 @@ describe("maybeScanExtraGatewayServices", () => {
       expect(rename).toHaveBeenCalledTimes(1);
       expectNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway removed");
       expectNoNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway cleanup skipped");
-      expect(runtime.log).toHaveBeenCalledWith(
-        "Legacy gateway services removed. Installing OpenClaw gateway next.",
+      expect(runtime.log).not.toHaveBeenCalledWith(
+        expect.stringContaining("Installing OpenClaw gateway next."),
       );
     },
   );

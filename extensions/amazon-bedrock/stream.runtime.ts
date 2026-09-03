@@ -177,9 +177,7 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
     // Claude classifiers may refuse after partial output. Hold every event until
     // messageStop proves the response is safe to expose.
     const refusalBuffer = usesClaudeStreamingRefusalBedrockContract(model)
-      ? createDeferredEventBuffer<AssistantMessageEvent>(stream, () =>
-          notifyLlmRequestActivity(options.signal),
-        )
+      ? createDeferredEventBuffer<AssistantMessageEvent>(stream)
       : undefined;
     const eventSink = refusalBuffer ?? stream;
 
@@ -308,6 +306,7 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
 
       let sawMessageStop = false;
       for await (const item of { [Symbol.asyncIterator]: () => responseIterator }) {
+        notifyLlmRequestActivity(options.signal);
         if (item.messageStart) {
           if (item.messageStart.role !== ConversationRole.ASSISTANT) {
             throw new Error(

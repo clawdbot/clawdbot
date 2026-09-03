@@ -6,6 +6,7 @@ export {
   resolveProcessExitCode,
   runCommandBuffered,
   runCommandWithTimeout,
+  runUtf8CommandWithTimeout,
   runExec,
   shouldSpawnWithShell,
   type SpawnResult,

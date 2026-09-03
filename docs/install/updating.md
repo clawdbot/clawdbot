@@ -453,6 +453,11 @@ sent by the daily check and optional anonymous feature statistics.
 Disabling checks also cancels unfinished discovery and its campaign; a late
 response from the previous settings cannot start an update afterward.
 
+Gateway shutdown or replacement cancels unfinished update discovery and waits
+for its Git processes and temporary preflight cleanup to settle. Updates already
+handed off to the managed service updater remain under that separate updater’s
+control.
+
 The gateway also logs an update hint on startup (disable with
 `update.checkOnStart: false`). Stored extended-stable selections use this
 read-only hint path and the existing 24-hour hint interval, but never invoke

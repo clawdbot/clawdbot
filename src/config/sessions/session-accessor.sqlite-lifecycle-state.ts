@@ -3,6 +3,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
+  sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
@@ -301,16 +302,14 @@ export function readSessionGenerationIdsForKeys(
   keys: Iterable<string>,
   options: { exactStoredKeys?: boolean } = {},
 ): string[] {
-  const sessionKeys = uniqueStrings(
-    [...keys].map((key) => (options.exactStoredKeys ? key : key.trim())),
-  );
-  if (sessionKeys.length === 0) {
-    return [];
-  }
+  const sessionKeys = [...keys].map((key) => (options.exactStoredKeys ? key : key.trim()));
   const db = getSessionKysely(database.db);
   return executeSqliteQuerySync(
     database.db,
-    db.selectFrom("session_windows").select("session_id").where("session_key", "in", sessionKeys),
+    db
+      .selectFrom("session_windows")
+      .select("session_id")
+      .where("session_key", "in", sqliteStringSet(sessionKeys)),
   ).rows.map((row) => row.session_id);
 }
 

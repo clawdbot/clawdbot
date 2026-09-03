@@ -1,6 +1,6 @@
 /** Cancellation binds session incarnations and retains exact durable dispatch fences. */
 import { readFileSync, writeFileSync } from "node:fs";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { onSubagentRegistryPersisted } from "../../agents/subagents/registry/subagent-registry-state.js";
@@ -14,6 +14,7 @@ import { enqueueSwarmRun, releaseSwarmRun } from "../../agents/subagents/swarm/s
 import { getRuntimeConfig } from "../../config/config.js";
 import { loadExactSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import * as sessionLifecycle from "../../sessions/session-lifecycle-admission.js";
 import {
@@ -31,6 +32,11 @@ import { sessionMutationHandlers } from "./sessions-mutations.js";
 
 const fixture = useChatAbortRegistryFixture();
 const parentKey = "agent:main:main";
+
+afterEach(() => {
+  clearAgentRunContext("active");
+  clearAgentRunContext("ended");
+});
 
 function abortParent() {
   const context = createChatAbortContext({
@@ -81,6 +87,12 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
         collect: true,
         expectsCompletionMessage: false,
       });
+      // Running fixture turns need real ownership so cold lifecycle setup cannot
+      // let the registry sweeper mistake them for lost executions.
+      registerAgentRunContext(runId, {
+        sessionKey: childSessionKey,
+        sessionId: `${runId}-session`,
+      });
     }
     const ended = subagentRuns.get("ended")!;
     if (completed) {
@@ -91,6 +103,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
         data: { phase: "end", endedAt: Date.now() },
       });
       await vi.waitFor(() => expect(ended.execution.status).toBe("terminal"));
+      clearAgentRunContext("ended");
       await settleSubagentRegistryPersistenceWork();
       expect(ended.endedReason).toBe("subagent-complete");
     }

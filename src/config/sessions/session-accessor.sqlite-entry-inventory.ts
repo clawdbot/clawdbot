@@ -1,4 +1,4 @@
-import { iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { iterateSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import {
@@ -21,9 +21,6 @@ export function readSessionEntryStore(
   if (options.allowCanonicalRepair !== true) {
     assertCanonicalSqliteSessionKeysCurrent(database);
   }
-  if (options.sessionKeys?.length === 0) {
-    return {};
-  }
   const db = getSessionKysely(database.db);
   let query = db.selectFrom("session_nodes").selectAll();
   if (options.includeArchived === false) {
@@ -31,9 +28,10 @@ export function readSessionEntryStore(
   }
   const rows = iterateSqliteQuerySync(
     database.db,
-    (options.sessionKeys ? query.where("session_key", "in", options.sessionKeys) : query).orderBy(
-      "session_key",
-    ),
+    (options.sessionKeys
+      ? query.where("session_key", "in", sqliteStringSet(options.sessionKeys))
+      : query
+    ).orderBy("session_key"),
   );
   const store: Record<string, SessionEntry> = {};
   for (const row of rows) {

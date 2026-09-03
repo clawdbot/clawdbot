@@ -18,13 +18,11 @@ import type { HealthCheck, HealthFinding, HealthRepairEffect } from "./health-ch
 const mocks = vi.hoisted(() => ({
   loadModelCatalog: vi.fn(async () => []),
   detectExtraGatewayServiceIssues: vi.fn(async (): Promise<readonly { label: string }[]> => []),
-  extraGatewayServiceToHealthFinding: vi.fn(
-    (service: { label: string }): HealthFinding => ({
-      checkId: "core/doctor/gateway-services/extra",
-      severity: "warning",
-      message: service.label,
-    }),
-  ),
+  extraGatewayServiceToHealthFinding: vi.fn((service: { label: string }): HealthFinding => ({
+    checkId: "core/doctor/gateway-services/extra",
+    severity: "warning",
+    message: service.label,
+  })),
   extraGatewayServiceToRepairEffects: vi.fn((): readonly HealthRepairEffect[] => []),
   callGateway: vi.fn(),
   collectClawStateHealthFindings: vi.fn(

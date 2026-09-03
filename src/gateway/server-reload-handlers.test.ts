@@ -2771,9 +2771,9 @@ describe("gateway hot reload superseded tail recovery", () => {
   it("rearms detached stale-tail recovery against an already accepted config", async () => {
     vi.useFakeTimers();
     const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
-    const prepareRuntimeConfig = vi.fn(
-      async (): Promise<OpenClawConfig> => ({ logging: { level: "debug" } }),
-    );
+    const prepareRuntimeConfig = vi.fn(async (): Promise<OpenClawConfig> => ({
+      logging: { level: "debug" },
+    }));
     const handlers = createReloadHandlersForTest(
       undefined,
       undefined,

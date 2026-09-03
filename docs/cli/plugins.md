@@ -469,9 +469,11 @@ Updates apply to tracked plugin installs in the managed plugin index and tracked
 
     The narrow exception is a trusted official package completing a catalog-declared plugin id replacement. That update starts from the catalog package selector so the renamed manifest can replace the legacy id.
 
-    During `update <id> --dry-run`, exact pinned npm installs stay pinned. If OpenClaw can also resolve the package's registry default line and that default line is newer than the installed pinned version, the dry run reports the pin and prints the explicit `@latest` package update command to follow the registry default line.
+    Exact pinned npm installs stay pinned during targeted and bulk updates, including dry runs. If OpenClaw can resolve a newer release on the package's registry default line, it reports the pin and prints an explicit package update command to replace it. Official plugins still follow the configured core-channel compatibility policy after the selector changes.
 
     Bulk `openclaw plugins update --all` also preserves ordinary exact pins and explicit tags. Floating trusted official records follow the current registry-channel policy. Doctor separately refreshes stale official runtime plugins bound to the current OpenClaw release cohort, keeping the recorded registry and recording an exact replacement version when the previous npm record was pinned.
+
+    Older official-plugin syncs could record an exact version automatically. That record is indistinguishable from an intentional user pin, so OpenClaw reports newer releases without silently unpinning it. Use the printed package command when you want to change the recorded selector.
 
     For npm installs, you can also pass an explicit npm package spec with a dist-tag or exact version. OpenClaw resolves that package name back to the tracked plugin record, updates that installed plugin, and records the new npm spec for future id-based updates.
 

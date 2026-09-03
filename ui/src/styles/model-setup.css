@@ -280,7 +280,7 @@
 }
 
 :root[data-theme-mode="light"] .model-setup-provider-select__trigger {
-  background: white;
+  background: var(--bg-elevated);
 }
 
 .model-setup-provider-select__trigger:focus-visible {
@@ -334,9 +334,17 @@
 }
 
 .model-setup-provider-select__option {
+  --wa-color-neutral-fill-normal: var(--bg-hover);
+
+  padding: 6px 8px;
+  border-radius: var(--menu-item-radius);
   color: var(--text);
   font: inherit;
   font-size: 13px;
+}
+
+.model-setup-provider-select__option[data-selected] {
+  background: var(--menu-selected);
 }
 
 .model-setup-provider-select__option::part(label) {
