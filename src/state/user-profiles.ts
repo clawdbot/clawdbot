@@ -72,7 +72,7 @@ type UserProfileAvatarError =
   | { code: "avatar_too_large"; maxBytes: number }
   | { code: "unsupported_avatar_mime"; mime: string };
 
-export { GATEWAY_OWNER_PROFILE_ID, UserProfileNotFoundError };
+export { UserProfileNotFoundError };
 
 type UserProfileListRow = Pick<
   UserProfileRow,

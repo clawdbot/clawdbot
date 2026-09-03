@@ -590,7 +590,12 @@ export function resolveRequiredNodeCommandAuthority(params: {
     ) {
       continue;
     }
-    if (declaredCommands.has(command) && !effectiveCommands.has(command)) {
+    // Hot policy reload removes effective commands without changing their pairing grant.
+    if (
+      declaredCommands.has(command) &&
+      !effectiveCommands.has(command) &&
+      params.allowlist.has(command)
+    ) {
       return { command, state: "pending-approval" };
     }
     if (declaredCommands.has(command) || withheldCommands.has(command)) {
