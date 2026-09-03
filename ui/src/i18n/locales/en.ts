@@ -508,6 +508,7 @@ export const en: TranslationMap & {
     bodyGreeting: "Or just say hi.",
     action: "Join us on Discord",
     dismissForever: "Dismiss and don't show again",
+    dismissFailed: "Invitation dismissed, but your preference couldn't be saved.",
   },
   updates: {
     adminRequired: "Administrator access is required to change update settings or start an update.",

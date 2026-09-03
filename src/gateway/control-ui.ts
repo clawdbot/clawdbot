@@ -913,6 +913,7 @@ export async function handleControlUiHttpRequest(
       automaticallyFetchFavicons: config?.gateway?.controlUi?.automaticallyFetchFavicons !== false,
       seamColor: config?.ui?.seamColor,
       environment: config?.gateway?.controlUi?.environment,
+      communityInvite: config?.gateway?.controlUi?.communityInvite !== false,
       terminalEnabled,
       cliAgentsEnabled: config?.gateway?.cliAgents?.enabled === true,
       pluginFrameGrants: pluginFrameGrants.map(({ pluginId, path: grantPath, match }) => ({

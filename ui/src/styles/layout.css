@@ -1148,12 +1148,18 @@ openclaw-settings-save-indicator:empty {
   padding-right: var(--sidebar-pad-x);
 }
 
+/* The lobster uses this ledge even when the invitation is disabled. */
+.sidebar-shell__invite {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 auto;
+  margin-inline: calc(-1 * var(--sidebar-pad-x));
+}
+
 /* Chrome, not content: the strip bleeds past both shell gutters. Negating the
    bottom one puts the divider on the settings takeover's line and lets the
    symmetric block padding center the row in the band it leaves. */
 .sidebar-shell__footer {
-  /* Positioned ledge for resident sidebar surfaces such as the lobster pet. */
-  position: relative;
   flex-shrink: 0;
   min-height: var(--shell-sidebar-footer-height);
   margin-inline: calc(-1 * var(--sidebar-pad-x));
