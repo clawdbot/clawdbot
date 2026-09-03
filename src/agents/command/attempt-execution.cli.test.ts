@@ -33,6 +33,7 @@ import { resetGeneratedMediaTaskActivityForTests } from "../../tasks/task-runtim
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { createTestPreparedRunAdmission } from "../admitted-run-context.test-support.js";
+import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agent-run-terminal-outcome.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../auth-profiles/runtime-snapshots.js";
 import { saveAuthProfileStore } from "../auth-profiles/store.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
@@ -2398,6 +2399,7 @@ describe("CLI attempt execution", () => {
         await persistAcpTurnTranscript({
           body: "internal prompt",
           finalText: "internal reply",
+          terminalOutcome: { reason: "completed", status: "ok" },
           sessionId,
           sessionKey,
           sessionFile: internalSessionFile,
@@ -2660,9 +2662,16 @@ describe("CLI attempt execution", () => {
     });
   });
 
-  it.each([false, true])(
-    "persists ACP assistant media ownership only when the dispatcher supplies it: %s",
-    async (managed) => {
+  it.each([
+    [false, "end", "completed", "stop"],
+    [true, "end", "completed", "stop"],
+    [false, "error", "failed", "error"],
+    [true, "error", "failed", "error"],
+    [false, "end", "cancelled", "aborted"],
+    [true, "end", "cancelled", "aborted"],
+  ] as const)(
+    "persists ACP assistant media ownership %s and %s/%s as %s",
+    async (managed, phase, status, stopReason) => {
       const sessionKey = "agent:main:direct:acp-media-ownership";
       const sessionEntry = makeSessionEntry("session-acp-media-ownership");
       await writeSessionStoreSeed({ [sessionKey]: sessionEntry });
@@ -2675,9 +2684,14 @@ describe("CLI attempt execution", () => {
         expectedSessionId: sessionEntry.sessionId,
         promptText: "Prepare the report",
         finalText,
+        terminalOutcome: buildAgentRunTerminalOutcomeFromLifecycleEvent({
+          phase,
+          data: { status, stopReason: phase === "error" ? "error" : "stop" },
+        }),
         prepareAssistantTranscriptMessage: managed
           ? (message, sourceText) => {
               expect(sourceText).toBe(finalText);
+              expect(message.stopReason).toBe(stopReason);
               return applyAssistantDeliveryDirectives(message, {
                 managedMediaUrls: ["./report.png"],
               });
@@ -2695,6 +2709,7 @@ describe("CLI attempt execution", () => {
       expect(messages[1]).toMatchObject({
         role: "assistant",
         content: [{ type: "text", text: finalText }],
+        stopReason,
       });
       if (managed) {
         expect(messages[1]).toHaveProperty("openclawDelivery.mediaUrls", ["./report.png"]);
@@ -2713,6 +2728,7 @@ describe("CLI attempt execution", () => {
 
     await persistAcpTurnTranscript({
       body: "[media attached: media://inbound/image-1]",
+      terminalOutcome: { reason: "completed", status: "ok" },
       transcriptBody: "",
       userInput: {
         text: "",

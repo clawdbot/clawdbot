@@ -630,23 +630,15 @@ extension RealtimeTalkRelaySession {
 
     private func handleOutputClear(_ payload: [String: AnyCodable]) {
         let clearIdentity = OutputIdentity(payload)
-        var clearsSuppressed = false
-        if self.awaitingOutputClear,
-           let suppressed = self.suppressedOutputIdentity
-        {
-            clearsSuppressed =
-                clearIdentity.isEmpty()
-                ? suppressed.isEmpty()
-                : suppressed.isEmpty() || suppressed.relation(to: clearIdentity) == .same
-            if clearsSuppressed {
-                self.awaitingOutputClear = false
-                if self.outputCancellationTask == nil { self.retireOutputCancellation() }
-            }
+        // Provider clears retire playback; only turn.cancelled acknowledges turn cancellation.
+        let clearsSuppressed = self.awaitingOutputClear &&
+            payload["talkEvent"]?.dictionaryValue?["type"]?.stringValue == "turn.cancelled" &&
+            self.suppressedOutputIdentity?.relation(to: clearIdentity) == .same
+        if clearsSuppressed {
+            self.awaitingOutputClear = false
+            if self.outputCancellationTask == nil { self.retireOutputCancellation() }
         }
-        let currentMatches =
-            clearIdentity.isEmpty()
-            ? self.outputIdentity == nil
-            : self.outputIdentity?.relation(to: clearIdentity) == .same
+        let currentMatches = clearIdentity.isEmpty() || self.outputIdentity?.relation(to: clearIdentity) == .same
         guard clearsSuppressed || currentMatches else { return }
         let marks = self.takePendingPlaybackMarks()
         // Cancellation already published the stopped state. A later clear with no

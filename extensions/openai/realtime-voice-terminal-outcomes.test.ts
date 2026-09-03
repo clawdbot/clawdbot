@@ -84,7 +84,10 @@ async function capture(
         throw new Error("consumer callback failed");
       }
     },
-    onToolCall: (tool) => captured.tools.push(tool),
+    onToolCall: (tool) => {
+      captured.tools.push(tool);
+      captured.events.push(`tool:${tool.callId}`);
+    },
     onEvent: (event) => {
       captured.events.push(`${event.direction}:${event.type}`);
       if (event.direction === "server" && event.type === "response.created") {
@@ -226,7 +229,7 @@ describe("OpenAI realtime terminal response ownership", () => {
     },
   );
 
-  it("executes terminal tool calls only for completed responses", async () => {
+  it("delivers completed tools before their response owner is retired", async () => {
     const captured = await capture({
       type: "response.done",
       response: { id: "response_1", status: "completed", output: [completedTool] },
@@ -240,6 +243,9 @@ describe("OpenAI realtime terminal response ownership", () => {
         args: { city: "Paris" },
       },
     ]);
+    expect(captured.events.indexOf("tool:call_tool")).toBeLessThan(
+      captured.events.indexOf("outcome:completed"),
+    );
   });
 
   it("drains a queued follow-up when the terminal consumer throws", async () => {

@@ -578,6 +578,86 @@ class ChatControllerReconnectRestoreTest {
     }
 
   @Test
+  fun transcriptInvalidationCanFinishPendingRecoveryWithoutReplayingItsOlderSnapshot() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      val controller = loadController(gateway, history(emptyList()))
+      val olderHistory = CompletableDeferred<String>()
+      gateway.respond("chat.history") { olderHistory.await() }
+      reconnect(controller)
+      assertFalse(controller.healthOk.value)
+
+      gateway.respondWith("chat.history", history(listOf(userTurn), inFlightRun = "run-active" to "working"))
+      controller.handleGatewayEvent("sessions.changed", """{"sessionKey":"main","agentId":"main","phase":"message"}""")
+      runCurrent()
+
+      assertTrue(controller.healthOk.value)
+      assertEquals(1, controller.pendingRunCount.value)
+      assertEquals("working", controller.streamingAssistantText.value)
+      olderHistory.complete(history(emptyList()))
+      runCurrent()
+      assertEquals(listOf("keep working"), controller.messageTexts)
+      assertEquals(1, controller.pendingRunCount.value)
+    }
+
+  @Test
+  fun delayedTranscriptCannotRestoreAnEndedRecoveredRun() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      val controller = loadController(gateway, history(emptyList()))
+      val recoveryHistory = CompletableDeferred<String>()
+      gateway.respond("chat.history") { recoveryHistory.await() }
+      reconnect(controller)
+
+      val transcriptHistory = CompletableDeferred<String>()
+      gateway.respond("chat.history") { transcriptHistory.await() }
+      controller.handleGatewayEvent("sessions.changed", """{"sessionKey":"main","agentId":"main","phase":"message"}""")
+      runCurrent()
+      val recoveryHealth = CompletableDeferred<String>()
+      gateway.respond("health") { recoveryHealth.await() }
+      recoveryHistory.complete(history(listOf(userTurn), inFlightRun = "run-active" to "working"))
+      runCurrent()
+      assertFalse(controller.healthOk.value)
+      assertEquals(1, controller.pendingRunCount.value)
+
+      controller.handleGatewayEvent(
+        "agent",
+        """{"sessionKey":"main","runId":"run-active","seq":2,"stream":"lifecycle","data":{"phase":"end"}}""",
+      )
+      val messages = listOf(userTurn, ReplayHistoryMessage("assistant", "transcript update", 2_000))
+      transcriptHistory.complete(history(messages, inFlightRun = "run-active" to "stale working"))
+      runCurrent()
+
+      assertEquals(listOf("keep working", "transcript update"), controller.messageTexts)
+      assertEquals(0, controller.pendingRunCount.value)
+      assertNull(controller.streamingAssistantText.value)
+      recoveryHealth.complete("{}")
+      runCurrent()
+      assertTrue(controller.healthOk.value)
+    }
+
+  @Test
+  fun transcriptRefreshCannotConfirmWatchdogRunState() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      val controller = loadController(gateway, history(listOf(userTurn), inFlightRun = "run-active" to "working"))
+      val watchdogHistory = CompletableDeferred<String>()
+      gateway.respond("chat.history") { watchdogHistory.await() }
+      advanceTimeBy(120_000)
+      runCurrent()
+
+      gateway.respondWith("chat.history", history(listOf(userTurn)))
+      controller.handleGatewayEvent("sessions.changed", """{"sessionKey":"main","agentId":"main","phase":"message"}""")
+      runCurrent()
+      watchdogHistory.complete(history(listOf(userTurn), inFlightRun = "run-active" to "working"))
+      runCurrent()
+
+      assertEquals(1, controller.pendingRunCount.value)
+      assertEquals("working", controller.streamingAssistantText.value)
+      assertNull(controller.errorText.value)
+    }
+
+  @Test
   fun lateHealthSuccessCannotOverrideNewerSelectionFailure() = runTest { verifyLateHealthAfterSelection(cancelOlder = false) }
 
   @Test

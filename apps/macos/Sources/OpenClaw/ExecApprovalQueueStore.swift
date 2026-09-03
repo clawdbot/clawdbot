@@ -223,12 +223,10 @@ final class ExecApprovalQueueStore {
             self.removeRequest(id: request.id)
             return
         }
+        // Task startup may be delayed; keep the Gateway's expiry deadline.
+        let deadline = ContinuousClock.now + .milliseconds(remainingMs)
         self.expiryTasks[request.id] = Task { [weak self] in
-            do {
-                try await Task.sleep(for: .milliseconds(remainingMs))
-            } catch {
-                return
-            }
+            try? await Task.sleep(until: deadline, clock: .continuous)
             guard !Task.isCancelled else { return }
             self?.removeRequest(id: request.id)
         }

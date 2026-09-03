@@ -19,6 +19,7 @@ import { resetClientVoiceConfirmationStateForTest } from "../../talk/client-voic
 import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../talk/describe-view-tool.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveSessionMutationAuthorization } from "../session-sharing.js";
+import { prepareTalkAgentConsultTranscript } from "../talk-agent-consult-transcript.js";
 import { buildTalkRealtimeConfig } from "./talk-shared.js";
 import { talkHandlers } from "./talk.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
@@ -2845,6 +2846,7 @@ describe("talk.client.toolCall handler", () => {
     expect(mockCallArg(mocks.chatSend, 0, 2)).toEqual({
       toolsAllow: ["read", "web_search", "web_fetch", "x_search", "memory_search", "memory_get"],
       transcript: { display: false, excludeFromContext: true },
+      prepareAssistantTranscriptMessage: prepareTalkAgentConsultTranscript,
     });
     const response = expectRespondOk(respond, { runId: "run-voice-1" }) as Record<string, unknown>;
     expect(response.idempotencyKey).toMatch(/^talk-call-1-/);
@@ -2973,6 +2975,7 @@ describe("talk.client.toolCall handler", () => {
     expect(mockCallArg(mocks.chatSend, 0, 2)).toEqual({
       toolsAllow: undefined,
       transcript: { display: false, excludeFromContext: true },
+      prepareAssistantTranscriptMessage: prepareTalkAgentConsultTranscript,
     });
     expectRespondOk(respond, { runId: "run-voice-1" });
   });
