@@ -159,6 +159,36 @@ struct AppStateRemoteConfigTests {
     }
 
     @Test
+    func `partial direct URL remains editable after config sync`() async {
+        let configPath = TestIsolation.tempConfigPath()
+        await TestIsolation.withIsolatedState(
+            env: ["OPENCLAW_CONFIG_PATH": configPath],
+            defaults: [connectionModeKey: AppState.ConnectionMode.remote.rawValue])
+        {
+            #expect(OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "transport": "direct",
+                    ],
+                ],
+            ]))
+            let state = AppState(preview: true)
+            state._testEnableGatewayConfigSync()
+
+            state.remoteUrl = "w"
+            await state._testAwaitGatewayConfigSync()
+
+            #expect(state.remoteUrl == "w")
+            #expect(state._testDirtyGatewayConfigFields == ["gateway.remote.url"])
+            #expect(!state._testGatewayConfigIsCurrentForRouting)
+            let remote = (OpenClawConfigFile.loadDict()["gateway"] as? [String: Any])?["remote"]
+                as? [String: Any]
+            #expect(remote?["url"] == nil)
+        }
+    }
+
+    @Test
     func `invalid remote edit retires the prior canonical gateway route`() async {
         let configPath = TestIsolation.tempConfigPath()
         await TestIsolation.withIsolatedState(
