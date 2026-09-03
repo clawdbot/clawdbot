@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -121,21 +122,10 @@ func splitFrontMatter(content string) (string, string) {
 // Match the source docs front matter contract, including YAML's document-end marker.
 // Reject lookalikes so a marker-like value in front matter cannot truncate the metadata.
 func isFrontMatterTerminator(line string) bool {
-	trimmed := strings.TrimSpace(line)
-	for _, marker := range []string{"---", "..."} {
-		if trimmed == marker {
-			return true
-		}
-		suffix := strings.TrimPrefix(trimmed, marker)
-		if suffix == trimmed || (!strings.HasPrefix(suffix, " ") && !strings.HasPrefix(suffix, "\t")) {
-			continue
-		}
-		if strings.HasPrefix(strings.TrimSpace(suffix), "#") {
-			return true
-		}
-	}
-	return false
+	return frontMatterTerminatorPattern.MatchString(line)
 }
+
+var frontMatterTerminatorPattern = regexp.MustCompile(`^(?:---|\.\.\.)(?:[ \t]+(?:#[^\r\n]*)?)?[ \t]*\r?$`)
 
 func encodeFrontMatter(frontData map[string]any, relPath string, source []byte) (string, error) {
 	if frontData == nil {

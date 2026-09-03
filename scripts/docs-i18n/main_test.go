@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 type fakeDocsTranslator struct{}
@@ -228,6 +230,9 @@ func TestProcessFileAcceptsYamlDocumentEndFrontMatter(t *testing.T) {
 	writeFile(t, sourcePath, stringsJoin(
 		"---",
 		"title: Gateway",
+		"description: |",
+		"  ...",
+		"  retained scalar content",
 		"...",
 		"",
 		"# Gateway",
@@ -254,6 +259,18 @@ func TestProcessFileAcceptsYamlDocumentEndFrontMatter(t *testing.T) {
 	metadataIndex := strings.Index(got, "x-i18n:")
 	if titleIndex < 0 || metadataIndex < 0 || titleIndex > metadataIndex {
 		t.Fatalf("expected YAML document-end front matter to be preserved as metadata:\n%s", got)
+	}
+	front, body := splitFrontMatter(got)
+	var metadata map[string]any
+	if err := yaml.Unmarshal([]byte(front), &metadata); err != nil {
+		t.Fatalf("generated front matter was not valid YAML: %v\n%s", err, got)
+	}
+	description, ok := metadata["description"].(string)
+	if !ok || !strings.Contains(description, "...\nretained scalar content") {
+		t.Fatalf("indented YAML block-scalar marker was not preserved: %#v\n%s", metadata["description"], got)
+	}
+	if strings.Contains(body, "\n...\n") {
+		t.Fatalf("indented block-scalar marker leaked into translated body:\n%s", body)
 	}
 	if strings.Contains(got, "\n...\n") {
 		t.Fatalf("front matter document-end marker leaked into translated body:\n%s", got)
