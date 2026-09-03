@@ -7,7 +7,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { type RuntimeEnv, writeRuntimeJson, writeRuntimeStdout } from "../../runtime.js";
 import { loadModelsConfig } from "./load-config.js";
 import {
-  createModelEntryKeyResolver,
   ensureFlagCompatibility,
   mergePrimaryFallbackConfig,
   modelKey,
@@ -124,11 +123,11 @@ export async function removeFallbackCommand(
   const updated = await updateConfig((cfg) => {
     const resolved = resolveModelTarget({ raw: modelRaw, cfg });
     const targetKey = modelKey(resolved.provider, resolved.model);
-    const resolveKey = createModelEntryKeyResolver(cfg);
     const existing = getFallbacks(cfg, params.key);
+    const existingKeys = resolveModelKeysFromEntries({ cfg, entries: existing });
     // Fallback entries may be aliases or provider/model refs. Resolve each entry
     // before comparison so removing an alias removes the canonical target.
-    const filtered = existing.filter((entry) => resolveKey(entry ?? "") !== targetKey);
+    const filtered = existing.filter((_, index) => existingKeys[index] !== targetKey);
 
     if (filtered.length === existing.length) {
       throw new Error(

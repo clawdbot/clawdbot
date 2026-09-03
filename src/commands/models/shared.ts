@@ -118,40 +118,25 @@ function resolveAuthoredModelAliasTarget(params: {
   return resolved?.alias ? resolved.ref : undefined;
 }
 
-/**
- * Builds a resolver from configured model reference strings to canonical
- * provider/model keys. Manifest provider aliases are folded in so a stored
- * `moonshotai/kimi-k2` entry compares equal to the `moonshot/kimi-k2` key
- * `resolveModelTarget` produces. Returns undefined for unresolvable entries.
- */
-export function createModelEntryKeyResolver(
-  cfg: OpenClawConfig,
-): (entry: string) => string | undefined {
-  const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: DEFAULT_PROVIDER });
-  const canonicalizer = createModelCatalogProviderAliasCanonicalizer({ cfg });
-  return (entry) => {
+/** Resolves model reference strings to index-aligned canonical provider/model keys. */
+export function resolveModelKeysFromEntries(params: {
+  cfg: OpenClawConfig;
+  entries: readonly string[];
+}): Array<string | undefined> {
+  const aliasIndex = buildModelAliasIndex({
+    cfg: params.cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+  });
+  const canonicalizer = createModelCatalogProviderAliasCanonicalizer({ cfg: params.cfg });
+  return params.entries.map((entry) => {
     const resolved = resolveModelRefFromString({
       raw: entry,
       defaultProvider: DEFAULT_PROVIDER,
       aliasIndex,
     });
-    if (!resolved) {
-      return undefined;
-    }
-    const ref = canonicalizer.ref(resolved.ref);
-    return modelKey(ref.provider, ref.model);
-  };
-}
-
-/** Resolves model reference strings to canonical provider/model keys. */
-export function resolveModelKeysFromEntries(params: {
-  cfg: OpenClawConfig;
-  entries: readonly string[];
-}): string[] {
-  const resolveKey = createModelEntryKeyResolver(params.cfg);
-  return params.entries
-    .map((entry) => resolveKey(entry))
-    .filter((key): key is string => key !== undefined);
+    const ref = resolved ? canonicalizer.ref(resolved.ref) : undefined;
+    return ref ? modelKey(ref.provider, ref.model) : undefined;
+  });
 }
 
 function resolveKnownAgentId(cfg: OpenClawConfig, rawAgentId: string): string {
