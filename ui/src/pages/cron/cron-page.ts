@@ -286,6 +286,10 @@ class CronPage extends OpenClawLightDomElement {
     const activeCronJobId = cronState.cronRunsScope === "job" ? cronState.cronRunsJobId : null;
     void this.loadRuns(activeCronJobId, options.coalesce);
     void this.context.channels.refresh(false);
+    // Externally edited boards change outside cron mutations, so the operator's
+    // explicit Refresh must also re-read the lane snapshot (no-op when the
+    // gateway reports the capability unconfigured).
+    this.scheduleTaskLanesReload();
     await Promise.all([
       this.runCronTask((current) => loadCronStatus(current, options)),
       this.runCronTask((current) =>

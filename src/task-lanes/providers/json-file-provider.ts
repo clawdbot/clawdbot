@@ -106,6 +106,13 @@ function sanitizeArtifactUrl(value: unknown): string | undefined {
   }
 }
 
+// The taskLanes.list contract declares millisecond fields as non-negative
+// integers; provider JSON is untrusted, so anything else is dropped here.
+function asNonNegativeIntegerMs(value: unknown): number | undefined {
+  const parsed = asFiniteNumber(value);
+  return parsed !== undefined && Number.isInteger(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
 function normalizeLaneItem(value: unknown): TaskLaneItem | null {
   if (!value || typeof value !== "object") {
     return null;
@@ -119,8 +126,8 @@ function normalizeLaneItem(value: unknown): TaskLaneItem | null {
     return null;
   }
   const state: TaskLaneItemState = normalizeTaskLaneItemState(record.state);
-  const startedAtMs = asFiniteNumber(record.startedAtMs);
-  const heartbeatAtMs = asFiniteNumber(record.heartbeatAtMs);
+  const startedAtMs = asNonNegativeIntegerMs(record.startedAtMs);
+  const heartbeatAtMs = asNonNegativeIntegerMs(record.heartbeatAtMs);
   const outcome =
     typeof record.outcome === "string" && record.outcome.length > 0
       ? truncateTaskLaneText(record.outcome, TASK_LANE_MAX_OUTCOME_CHARS)

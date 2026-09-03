@@ -327,6 +327,63 @@ describe("json-file task-lane provider", () => {
     expect(lanes[0]?.items.map((item) => item.id)).toEqual(["good"]);
   });
 
+  it("drops timestamp fields that violate the non-negative-integer RPC contract", async () => {
+    const { lanes } = await loadJsonFileProviderLanes({
+      rootDir: "/data/lanes",
+      filePath: "board.json",
+      reader: readerReturning({
+        schemaVersion: 1,
+        lanes: [
+          {
+            id: "bad-times",
+            label: "Bad timestamps",
+            items: [
+              {
+                id: "negative",
+                title: "Negative startedAtMs",
+                state: "running",
+                startedAtMs: -1,
+                heartbeatAtMs: 1_700_000_000_000,
+              },
+              {
+                id: "fractional",
+                title: "Fractional heartbeat",
+                state: "running",
+                startedAtMs: 1_700_000_000_000,
+                heartbeatAtMs: 1.5,
+              },
+              {
+                id: "valid",
+                title: "Valid timestamps",
+                state: "running",
+                startedAtMs: 1_700_000_000_000,
+                heartbeatAtMs: 1_700_000_000_500,
+              },
+            ],
+          },
+        ],
+      }),
+      resolveRealpath: async (p) => p,
+    });
+    const items = lanes[0]?.items ?? [];
+    expect(items.find((item) => item.id === "negative")).toEqual({
+      id: "negative",
+      title: "Negative startedAtMs",
+      state: "running",
+      heartbeatAtMs: 1_700_000_000_000,
+    });
+    expect(items.find((item) => item.id === "fractional")).toEqual({
+      id: "fractional",
+      title: "Fractional heartbeat",
+      state: "running",
+      startedAtMs: 1_700_000_000_000,
+    });
+    expect(items.find((item) => item.id === "valid")).toMatchObject({
+      startedAtMs: 1_700_000_000_000,
+      heartbeatAtMs: 1_700_000_000_500,
+    });
+  });
+
   it("exposes a provider wrapper with a stable id", () => {
     const provider = createJsonFileProvider("json-file", {
       rootDir: "/data/lanes",
