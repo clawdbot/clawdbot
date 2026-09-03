@@ -39,7 +39,7 @@ const VISIBILITY_LABEL_KEYS: Record<SessionVisibility, string> = {
 
 function sharingIcon(visibility: SessionVisibility): TemplateResult {
   if (visibility === "draft") {
-    return html`<span aria-hidden="true">👻</span>`;
+    return icons.pencil;
   }
   return visibility === "shared" ? icons.users : icons.lock;
 }
@@ -104,7 +104,7 @@ export function renderChatSessionSharing(props: ChatSessionSharingProps, inline 
   if (!canManage) {
     return visibility === "draft"
       ? html`<span class="chat-pane__draft-indicator" title=${t("chat.sessionSharing.draft")}
-          >👻</span
+          >${sharingIcon("draft")}</span
         >`
       : nothing;
   }

@@ -830,6 +830,11 @@ openclaw-chat-pane {
   font-size: 13px;
 }
 
+.chat-pane__draft-indicator svg {
+  width: 15px;
+  height: 15px;
+}
+
 .chat-pane__header-center .chat-pane__draft-indicator {
   width: 28px;
   height: 28px;
