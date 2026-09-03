@@ -14,8 +14,14 @@ import { onAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.
 import {
   onTrustedToolExecutionEvent,
   resetDiagnosticEventsForTest,
+  setDiagnosticsEnabledForProcess,
   type TrustedToolExecutionEvent,
 } from "../../infra/diagnostic-events.js";
+import {
+  getDiagnosticSessionActivitySnapshot,
+  resetDiagnosticRunActivityForTest,
+  startDiagnosticRunActivityTracking,
+} from "../../logging/diagnostic-run-activity.js";
 import type { CliBackendParseJsonlEvent } from "../../plugins/cli-backend.types.js";
 import { getPluginModuleLoaderStats } from "../../plugins/plugin-module-loader-cache.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -228,6 +234,40 @@ describe("executePreparedCliRun supervisor output capture", () => {
     }
     const prompt = spawnInput.input;
     expect(prompt).toContain(hashCliImageTurnEntryId(entryId));
+  });
+
+  it("publishes streamed stdout as run progress so a live turn is not reclaimed", async () => {
+    setDiagnosticsEnabledForProcess(true);
+    startDiagnosticRunActivityTracking();
+    try {
+      supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const input = args[0] as SupervisorSpawnInput;
+        input.onStdout?.("streamed");
+        return createManagedRun({
+          reason: "exit",
+          exitCode: 0,
+          exitSignal: null,
+          durationMs: 50,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+          noOutputTimedOut: false,
+        });
+      });
+      const context = buildPreparedCliRunContext({ output: "text", provider: "claude-cli" });
+
+      await executePreparedCliRun(context);
+
+      expect(
+        getDiagnosticSessionActivitySnapshot({
+          sessionId: context.params.sessionId,
+          sessionKey: context.params.sessionKey,
+        }),
+      ).toMatchObject({ lastProgressReason: "model_call:stream_progress" });
+    } finally {
+      resetDiagnosticRunActivityForTest();
+      setDiagnosticsEnabledForProcess(false);
+    }
   });
 
   it("passes native compaction as an argument and requires backend acknowledgement", async () => {

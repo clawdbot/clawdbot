@@ -170,6 +170,16 @@ export function getAttachedBackend(operation: ReplyOperation): ReplyBackendHandl
   return attachedBackendByOperation.get(operation);
 }
 
+/**
+ * True once a turn commits its terminal outcome and only delivery/finalization
+ * remains. A stale watchdog must not treat that as a stall: the reply already
+ * exists, so aborting here discards output the backend produced. The
+ * finalization lease and terminal-settle timer still bound this owner.
+ */
+export function hasCommittedReplyOperationOutcome(operation: ReplyOperation): boolean {
+  return !operation.result && abortFrozenOperations.has(operation);
+}
+
 export function isReplyOperationAbortable(operation: ReplyOperation): boolean {
   if (operation.result || abortFrozenOperations.has(operation)) {
     return false;

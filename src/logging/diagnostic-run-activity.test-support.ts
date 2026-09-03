@@ -3,7 +3,13 @@ import "./diagnostic-run-activity.js";
 
 type DiagnosticModelStartedActivityEvent = Pick<
   Extract<DiagnosticEventPayload, { type: "model.call.started" }>,
-  "runId" | "sessionId" | "sessionKey" | "provider" | "model" | "observationUnit"
+  | "runId"
+  | "sessionId"
+  | "sessionKey"
+  | "provider"
+  | "model"
+  | "observationUnit"
+  | "requestTimeoutMs"
 > & { seq?: number };
 
 type DiagnosticRunActivityTestApi = {

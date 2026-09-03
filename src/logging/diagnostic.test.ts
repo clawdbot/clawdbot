@@ -1487,6 +1487,35 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
+  it("defers stale model call recovery to a longer backend-declared deadline", () => {
+    const recoverStuckSession = vi.fn();
+    const backendDeadlineMs = 180_000;
+
+    startEnabledDiagnosticHeartbeat({ recoverStuckSession });
+    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+    markDiagnosticModelStartedForTest({
+      sessionId: "s1",
+      sessionKey: "main",
+      runId: "run-1",
+      provider: "anthropic",
+      model: "claude-sonnet-5",
+      observationUnit: "turn",
+      requestTimeoutMs: backendDeadlineMs,
+    });
+
+    // The generic abort threshold (60s here) must not preempt a backend that
+    // still allows this silence under its own watchdog.
+    vi.advanceTimersByTime(120_000);
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(60_000);
+    expectRecoveryCall(
+      recoverStuckSession,
+      { sessionId: "s1", sessionKey: "main", queueDepth: 0, allowActiveAbort: true },
+      ["ageMs", "stateGeneration"],
+    );
+  });
+
   it("does not recover a recent native tool call just because the session is old", async () => {
     const recoverStuckSession = vi.fn();
     const stuckSessionAbortMs = 90_000;

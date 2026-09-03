@@ -30,7 +30,7 @@ type SnapshotTool = {
 type SnapshotActivity = DiagnosticArgumentChurnActivity &
   DiagnosticRepeatedRequestActivity & {
     activeEmbeddedRuns: ReadonlyMap<string, { runId: string; sequence: number }>;
-    activeModelCalls: ReadonlyMap<string, unknown>;
+    activeModelCalls: ReadonlyMap<string, { requestTimeoutMs?: number }>;
     activeCoreModelCalls: ReadonlyMap<object, ReadonlyMap<string, { requestTimeoutMs?: number }>>;
     activeTools: ReadonlyMap<string, SnapshotTool>;
     lastProgressAt: number;
@@ -43,17 +43,25 @@ export function buildDiagnosticSessionActivitySnapshot(
 ): DiagnosticSessionActivitySnapshot {
   let activeCoreModelCallCount = 0;
   let activeModelCallRequestTimeoutMs: number | undefined;
+  // Every backend that declares its own liveness deadline owns recovery timing
+  // for its calls, so the widest declared deadline bounds the generic floor.
+  const observeRequestTimeout = (call: { requestTimeoutMs?: number }): void => {
+    if (
+      call.requestTimeoutMs !== undefined &&
+      (activeModelCallRequestTimeoutMs === undefined ||
+        call.requestTimeoutMs > activeModelCallRequestTimeoutMs)
+    ) {
+      activeModelCallRequestTimeoutMs = call.requestTimeoutMs;
+    }
+  };
   for (const calls of activity.activeCoreModelCalls.values()) {
     activeCoreModelCallCount += calls.size;
     for (const call of calls.values()) {
-      if (
-        call.requestTimeoutMs !== undefined &&
-        (activeModelCallRequestTimeoutMs === undefined ||
-          call.requestTimeoutMs > activeModelCallRequestTimeoutMs)
-      ) {
-        activeModelCallRequestTimeoutMs = call.requestTimeoutMs;
-      }
+      observeRequestTimeout(call);
     }
+  }
+  for (const call of activity.activeModelCalls.values()) {
+    observeRequestTimeout(call);
   }
   const activeWorkKind: DiagnosticSessionActiveWorkKind | undefined =
     activity.activeTools.size > 0

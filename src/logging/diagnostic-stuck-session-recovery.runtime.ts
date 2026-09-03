@@ -215,6 +215,21 @@ export async function recoverStuckDiagnosticSession(
       activeReplyAgeMs !== undefined &&
       activeReplyAgeMs < staleActiveLaneTaskReleaseMs;
 
+    if (activeReplyActivity?.terminalOutcomeCommitted === true) {
+      // The turn already produced its reply and only delivery/finalization is
+      // left, so the no-progress premise is false. Aborting here discards a
+      // completed answer; the finalization lease still bounds this owner.
+      return reportRecoveryOutcome({
+        status: "skipped",
+        action: "keep_lane",
+        reason: "terminal_outcome_committed",
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        activeSessionId: activeWorkSessionId,
+        activeWorkKind: "embedded_run",
+      });
+    }
+
     if (activeReplyPhase === "waiting_for_global_lane" || activeMaintenanceProtected) {
       // Queued replies and configured maintenance own their lane until their
       // producer finishes or the existing compaction safety window expires.

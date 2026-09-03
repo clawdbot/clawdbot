@@ -5,6 +5,7 @@ import {
   resolveEventSessionRoutingPolicy,
   scopedHeartbeatWakeOptionsForPolicy,
 } from "../../infra/event-session-routing.js";
+import { createModelCallStreamProgressReporter } from "../../logging/diagnostic-model-stream-progress.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import type { RunExit } from "../../process/supervisor/types.js";
 import type { CliOutput, CliTerminalInterruption } from "../cli-output-contracts.js";
@@ -144,9 +145,19 @@ export async function executeCliProcess(params: {
   let stderrBytes = 0;
   const stderrHash = crypto.createHash("sha256");
   let stderrParseExceeded = false;
+  // Stdout bytes are this backend's liveness proof: the same signal its own
+  // no-output watchdog trusts. Publishing them as run progress keeps the
+  // stuck-session watchdog from reclaiming a turn that is still streaming.
+  const reportStreamProgress = createModelCallStreamProgressReporter();
+  const streamProgressTarget = {
+    runId: runParams.runId,
+    ...(runParams.sessionKey ? { sessionKey: runParams.sessionKey } : {}),
+    ...(runParams.sessionId ? { sessionId: runParams.sessionId } : {}),
+  };
   const consumeStdout = (chunk: string) => {
     const chunkBytes = Buffer.byteLength(chunk);
     params.diagnostics?.observeCliOutput(chunk, "stdout", chunkBytes);
+    reportStreamProgress(streamProgressTarget);
     stdoutBytes += chunkBytes;
     stdoutHash.update(chunk);
     stdoutTail = appendCliOutputTail(stdoutTail, chunk);

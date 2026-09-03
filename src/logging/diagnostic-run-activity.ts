@@ -79,7 +79,14 @@ type DiagnosticToolStartedActivityEvent = Pick<
 
 type ModelStartedActivityEvent = Pick<
   Extract<DiagnosticEventPayload, { type: "model.call.started" }>,
-  "runId" | "sessionId" | "sessionKey" | "provider" | "model" | "callId" | "observationUnit"
+  | "runId"
+  | "sessionId"
+  | "sessionKey"
+  | "provider"
+  | "model"
+  | "callId"
+  | "observationUnit"
+  | "requestTimeoutMs"
 > & { seq?: number };
 
 type RunProgressEvent = Pick<
@@ -359,6 +366,7 @@ function recordModelStarted(
     sessionId: event.sessionId,
     sessionKey: event.sessionKey,
     sequence: event.seq,
+    requestTimeoutMs: event.requestTimeoutMs,
   });
   touchSessionActivity(activity, "model_call:started");
 }

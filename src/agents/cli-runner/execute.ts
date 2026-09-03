@@ -300,6 +300,20 @@ export async function executePreparedCliRun(
   // still needs the per-turn capture key used by other non-live executions.
   const useManagedClaudeLiveSession =
     usePluginOwnedExecution && acceptsCliLiveSession(context) && !params.onSuccessfulAuthBinding;
+  const runTimeoutOverrideMs = resolveCliRunTimeoutOverrideMs({
+    config: params.config,
+    lane: params.lane,
+    timeoutMs: params.timeoutMs,
+    runTimeoutOverrideMs: params.runTimeoutOverrideMs,
+  });
+  const noOutputTimeoutMs = resolveCliNoOutputTimeoutMs({
+    backend,
+    timeoutMs: params.timeoutMs,
+    expectedQuiet: params.controlOperation === "compact",
+    runTimeoutOverrideMs,
+    useResume,
+    trigger: params.trigger,
+  });
   // Fresh-session retries invoke this function again. Keep one helper per
   // observable CLI attempt so every started call retains its own terminal event.
   const diagnostics = createClaudeCliModelCallDiagnostics({
@@ -311,6 +325,9 @@ export async function executePreparedCliRun(
       : useManagedClaudeLiveSession
         ? "stdio-live"
         : "stdio",
+    // This backend's own no-output watchdog owns liveness for the turn; publish
+    // it so stuck-session recovery cannot abort inside that allowance.
+    requestTimeoutMs: noOutputTimeoutMs,
   });
   let completedOutput: CliOutput | undefined;
   let executionError: unknown;
@@ -542,20 +559,6 @@ export async function executePreparedCliRun(
           log: (message) => cliBackendLog.info(message),
         });
       }
-      const runTimeoutOverrideMs = resolveCliRunTimeoutOverrideMs({
-        config: params.config,
-        lane: params.lane,
-        timeoutMs: params.timeoutMs,
-        runTimeoutOverrideMs: params.runTimeoutOverrideMs,
-      });
-      const noOutputTimeoutMs = resolveCliNoOutputTimeoutMs({
-        backend,
-        timeoutMs: params.timeoutMs,
-        expectedQuiet: params.controlOperation === "compact",
-        runTimeoutOverrideMs,
-        useResume,
-        trigger: params.trigger,
-      });
       if (!useManagedClaudeLiveSession) {
         toolTracking.beginGatewayCapture(initialGatewayCaptureKey);
       }
