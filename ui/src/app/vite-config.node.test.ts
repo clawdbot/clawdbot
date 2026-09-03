@@ -7,10 +7,12 @@ import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import { describe, expect, it, vi } from "vitest";
 import {
   hashControlUiTranslationText,
-  loadControlUiSourceCatalog,
   materializeControlUiLocaleCatalog,
-  readControlUiSourceCatalog,
 } from "../../../scripts/lib/control-ui-i18n-catalog.ts";
+import {
+  loadControlUiSourceCatalog,
+  readControlUiSourceCatalog,
+} from "../../../scripts/lib/control-ui-i18n-source-catalog.ts";
 import { flattenTranslations } from "../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import { controlUiLocaleModulesPlugin } from "../../config/control-ui-locales.ts";
 import {
@@ -546,7 +548,7 @@ describe("Control UI Vite config", () => {
       ]),
     );
 
-    expect(flattenTranslations(translated).get(oldKey)).toBe("Eski ağ geçidi belirteci");
+    expect(flattenTranslations(translated).get(oldKey)).toBeUndefined();
     expect(flattenTranslations(translated).get(currentKey)).toBeUndefined();
   });
 
@@ -587,6 +589,7 @@ describe("Control UI Vite config", () => {
     expect(catalog.common.health).toBe("Santé");
     expect(catalog.activity.title).toBeTypeOf("string");
     expect(addWatchFile).toHaveBeenCalledWith(path.join(repoRoot, "ui/src/i18n/.i18n/fr.tm.jsonl"));
+    expect(addWatchFile).toHaveBeenCalledWith(path.join(repoRoot, "src/config/schema.hints.ts"));
   });
 
   it("bootstraps only an absent locale memory from the English catalog", async () => {
@@ -609,14 +612,16 @@ describe("Control UI Vite config", () => {
         expect([...flattenTranslations(catalog)]).toEqual([
           ...flattenTranslations(loadControlUiSourceCatalog()),
         ]);
-        expect(addWatchFile).not.toHaveBeenCalled();
+        expect(addWatchFile).toHaveBeenCalledWith(
+          path.join(repoRoot, "src/config/schema.hints.ts"),
+        );
       },
     );
 
     await fsMocks.readFileSync.withImplementation(
       () => "",
       async () => {
-        expect(() => load.call({ addWatchFile } as never, id, {} as never)).toThrow(
+        await expect(load.call({ addWatchFile } as never, id, {} as never)).rejects.toThrow(
           "Control UI fr translation memory is missing or empty",
         );
       },
@@ -624,17 +629,23 @@ describe("Control UI Vite config", () => {
     await fsMocks.readFileSync.withImplementation(
       () => "{",
       async () => {
-        expect(() => load.call({ addWatchFile } as never, id, {} as never)).toThrow(SyntaxError);
+        await expect(load.call({ addWatchFile } as never, id, {} as never)).rejects.toThrow(
+          SyntaxError,
+        );
       },
     );
   });
 
-  it("omits stale and missing Settings translations so runtime English can resolve them", async () => {
+  it("omits stale config and Settings translations so runtime English can resolve them", async () => {
     const loadHook = controlUiLocaleModulesPlugin().load;
     const load = typeof loadHook === "function" ? loadHook : loadHook?.handler;
     if (!load) {
       throw new Error("Expected locale module loader");
     }
+    const currentHintText = "Gateway Token";
+    const currentHintKey = configHintTranslationKey("gateway.auth.token", "label", currentHintText);
+    const staleHintText = "Old Gateway Token";
+    const staleHintKey = configHintTranslationKey("gateway.auth.token", "label", staleHintText);
     const memory = [
       {
         cache_key: "current",
@@ -647,6 +658,20 @@ describe("Control UI Vite config", () => {
         segment_id: "updates.page.intro",
         text_hash: hashControlUiTranslationText("Retired update introduction"),
         translated: "Obsolete",
+      },
+      {
+        cache_key: "current-hint",
+        segment_id: currentHintKey,
+        text: currentHintText,
+        text_hash: hashControlUiTranslationText(currentHintText),
+        translated: "Ağ geçidi belirteci",
+      },
+      {
+        cache_key: "stale-hint",
+        segment_id: staleHintKey,
+        text: staleHintText,
+        text_hash: hashControlUiTranslationText(staleHintText),
+        translated: "Eski ağ geçidi belirteci",
       },
     ]
       .map((entry) => JSON.stringify(entry))
@@ -666,9 +691,12 @@ describe("Control UI Vite config", () => {
             if (typeof result !== "string") {
               throw new Error("Expected locale module loader to return generated source");
             }
-            expect(JSON.parse(result.replace(/^export default /, "").replace(/;$/, ""))).toEqual({
-              configView: { chatPrefs: { title: "Discussion" } },
-            });
+            const catalog = JSON.parse(result.replace(/^export default /, "").replace(/;$/, ""));
+            const flat = flattenTranslations(catalog);
+            expect(flat.get("configView.chatPrefs.title")).toBe("Discussion");
+            expect(flat.get(currentHintKey)).toBe("Ağ geçidi belirteci");
+            expect(flat.has("updates.page.intro")).toBe(false);
+            expect(flat.has(staleHintKey)).toBe(false);
           },
         );
       },
