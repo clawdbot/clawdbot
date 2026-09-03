@@ -1,4 +1,4 @@
-import type { RespondFn } from "../server-methods/types.js";
+import type { RespondFn } from "../server-methods/response-types.js";
 
 export type GatewayPolicyClient = {
   invalidated?: boolean;

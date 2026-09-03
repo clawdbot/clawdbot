@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
+import { readConfigFileSnapshot } from "../config/config.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
@@ -21,6 +22,22 @@ import {
 } from "../utils/message-channel.js";
 import type { GatewayClient } from "./client.js";
 import type { HealthSummary } from "./health/types.js";
+import type { ManagedGatewayConfigReloaderParams } from "./server-reload-contracts.js";
+
+const reloadFixture = vi.hoisted<{
+  reconcileRuntimePolicy?: ManagedGatewayConfigReloaderParams["reconcileRuntimePolicy"];
+}>(() => ({}));
+
+vi.mock("./server-reload-handlers.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./server-reload-handlers.js")>();
+  return {
+    ...actual,
+    startManagedGatewayConfigReloader: (params: ManagedGatewayConfigReloaderParams) => {
+      reloadFixture.reconcileRuntimePolicy = params.reconcileRuntimePolicy;
+      return actual.startManagedGatewayConfigReloader(params);
+    },
+  };
+});
 
 vi.mock("../infra/update-runner.js", () => ({
   resolveUpdateInstallSurface: vi.fn(async () => ({
@@ -702,7 +719,11 @@ describe("gateway node command allowlist", () => {
   test("rechecks current allowlist before exposing approved live commands", async () => {
     const displayName = "node-approve-live-commands-current-allowlist";
     let nodeClient: GatewayClient | undefined;
-    let configPath: string | undefined;
+    let originalConfig: Awaited<ReturnType<typeof readConfigFileSnapshot>> | undefined;
+    const reconcileRuntimePolicy = reloadFixture.reconcileRuntimePolicy;
+    if (!reconcileRuntimePolicy) {
+      throw new Error("gateway runtime policy reconciliation is required");
+    }
 
     try {
       const deviceIdentity = createDeviceIdentityForTest("openclaw-node-current-allowlist");
@@ -720,16 +741,17 @@ describe("gateway node command allowlist", () => {
 
       const nodeId = await findConnectedNodeIdByDisplayName(displayName);
 
-      configPath = getGatewayTestConfigPath();
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      originalConfig = await readConfigFileSnapshot();
       await fs.writeFile(
-        configPath,
+        originalConfig.path,
         JSON.stringify(
           { gateway: { nodes: { commands: { deny: ["canvas.snapshot"] } } } },
           null,
           2,
         ),
       );
+      // The shared minimal Gateway skips file watching; drive its real commit hook.
+      await reconcileRuntimePolicy((await readConfigFileSnapshot()).config, "committed");
 
       await approvePendingNodePairing(nodeId, ["canvas.snapshot"]);
 
@@ -737,10 +759,11 @@ describe("gateway node command allowlist", () => {
 
       await expectCanvasSnapshotDenied(nodeId, "stale-allowlist-canvas-snapshot");
     } finally {
-      if (configPath) {
-        await fs.writeFile(configPath, "{}\n");
-      }
       await nodeClient?.stopAndWait();
+      if (originalConfig) {
+        await fs.writeFile(originalConfig.path, originalConfig.raw ?? "{}\n");
+        await reconcileRuntimePolicy(originalConfig.config, "committed");
+      }
     }
   });
 

@@ -36,9 +36,10 @@ function createFixture(
   };
   const registry = new NodeRegistry(options);
   registries.push(registry);
+  const socket = { readyState: 1, bufferedAmount: 0, send: vi.fn(), close: vi.fn() };
   const client = {
     connId: "policy-conn",
-    socket: { readyState: 1, bufferedAmount: 0, send: vi.fn(), close: vi.fn() },
+    socket,
     usesSharedGatewayAuth: false,
     connect: {
       minProtocol: 1,
@@ -65,10 +66,11 @@ function createFixture(
     registry,
     node,
     client,
-    publishConfig(next: OpenClawConfig) {
+    socket,
+    publishConfig: (next: OpenClawConfig) => {
       config = next;
     },
-    reload(next: OpenClawConfig) {
+    reload: (next: OpenClawConfig) => {
       config = next;
       registry.refreshRuntimePolicy(next);
     },
@@ -85,7 +87,7 @@ describe("connected node runtime policy", () => {
       gateway: { nodes: { commands: { deny: TALK_PTT_COMMANDS } } },
     };
     const approvedCommands = ["talk.ptt.start", "talk.ptt.stop"];
-    const { registry, client, reload } = createFixture(initiallyDenied ? denied : {});
+    const { registry, client, socket, reload } = createFixture(initiallyDenied ? denied : {});
     Object.assign(client.connect, {
       caps: initiallyDenied ? [] : caps,
       commands: initiallyDenied ? [] : approvedCommands,
@@ -110,7 +112,7 @@ describe("connected node runtime policy", () => {
     expect(node.commands).toEqual(approvedCommands);
     expect(node.caps).toEqual(caps);
     expect(node.pairingGeneration).toBe("policy-generation");
-    expect(client.socket.close).not.toHaveBeenCalled();
+    expect(socket.close).not.toHaveBeenCalled();
   });
 
   it("keeps publications and pending frames on committed policy until reconciliation", async () => {
@@ -182,7 +184,7 @@ describe("connected node runtime policy", () => {
   it.each([false, true])(
     "cancels a revoked active command and rejects retained input (streamed=%s)",
     async (streamed) => {
-      const { registry, node, reload, client } = createFixture();
+      const { registry, node, reload, socket } = createFixture();
       let invokeId = "";
       const onProgress = vi.fn();
       const result = registry.invoke({
@@ -203,7 +205,7 @@ describe("connected node runtime policy", () => {
         /not pending|not authorized|unavailable/,
       );
       expect(await result).toMatchObject({ ok: false, error: { code: "POLICY_CHANGED" } });
-      expect(client.socket.send).toHaveBeenCalledWith(
+      expect(socket.send).toHaveBeenCalledWith(
         expect.stringContaining('"event":"node.invoke.cancel"'),
       );
       expect(
@@ -228,7 +230,7 @@ describe("connected node runtime policy", () => {
       expect(() => registry.sendInvokeInput(invokeId, { input: "after-restoration" })).toThrow(
         /not pending/,
       );
-      expect(client.socket.close).not.toHaveBeenCalled();
+      expect(socket.close).not.toHaveBeenCalled();
     },
   );
 
@@ -300,7 +302,7 @@ describe("connected node runtime policy", () => {
   });
 
   it("withdraws and restores approved commands without granting an unapproved declaration", () => {
-    const { node, client, reload } = createFixture();
+    const { node, client, socket, reload } = createFixture();
     reload({ gateway: { nodes: { commands: { deny: ["computer.act"] } } } });
 
     expect(node.commands).toEqual(["system.run"]);
@@ -315,7 +317,7 @@ describe("connected node runtime policy", () => {
     expect(readNodeSessionWithheldCommands(node)).not.toContain("computer.act");
     expect(node.connId).toBe("policy-conn");
     expect(node.pairingGeneration).toBe("policy-generation");
-    expect(client.socket.close).not.toHaveBeenCalled();
+    expect(socket.close).not.toHaveBeenCalled();
   });
 
   it("retains tool publication while disabled and restores only currently approved commands", () => {

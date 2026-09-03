@@ -7,12 +7,7 @@ import {
 } from "../../utils/message-channel.js";
 import { checkBrowserOrigin, normalizeChromeExtensionOrigin } from "../origin-check.js";
 import { invalidateGatewayPolicyClient } from "./ws-policy-close.js";
-import type { GatewayWsClient } from "./ws-types.js";
-
-export type GatewayWsBrowserOrigin = Pick<
-  Parameters<typeof checkBrowserOrigin>[0],
-  "requestHost" | "origin" | "isLocalClient"
->;
+import type { GatewayWsBrowserOrigin, GatewayWsClient } from "./ws-types.js";
 
 /** Retain attested transport facts only for connections governed by browser-origin policy. */
 export function resolveGatewayWsBrowserOrigin(
