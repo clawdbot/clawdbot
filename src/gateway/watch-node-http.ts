@@ -80,6 +80,7 @@ import type {
   NodeEventTransport,
   NodeRegistry,
   NodeSession,
+  NodeSessionConnectParams,
   SerializedEventPayload,
 } from "./node-registry.js";
 import { withSerializedRateLimitAttempt } from "./rate-limit-attempt-serialization.js";
@@ -898,13 +899,11 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
         return;
       }
 
-      const registeredConnect = connect as ConnectParams & {
-        declaredCaps?: string[];
-        declaredCommands?: string[];
-        withheldCommands?: string[];
-        declaredComputerUse?: unknown;
-        declaredPermissions?: Record<string, boolean>;
-      };
+      const registeredConnect = connect as NodeSessionConnectParams;
+      // Retain the bounded declaration before policy narrows the active surface;
+      // reallow must restore only commands this connection actually declared.
+      registeredConnect.sessionCapsCeiling = connect.caps ?? [];
+      registeredConnect.sessionCommandsCeiling = connect.commands ?? [];
       registeredConnect.declaredCaps = reconciliation.declaredCaps;
       registeredConnect.declaredCommands = reconciliation.declaredCommands;
       registeredConnect.withheldCommands = reconciliation.withheldCommands;
@@ -945,6 +944,7 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
             remoteIp: clientIp,
             pairingIdentity: nodePairingState.identity.key,
             pairingGeneration: nodePairingGeneration.key,
+            approvedSurface: nodePairingState.approvedSurface,
           },
           createTransport(session),
         );

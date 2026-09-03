@@ -27,6 +27,7 @@ import { proveHotReloadNodePolicies } from "./gateway-config-hot-reload-nodes.js
 import { prepareGatewayPairingFixture } from "./gateway-config-hot-reload-pairing.js";
 import { proveHotReloadRequests } from "./gateway-config-hot-reload-requests.js";
 import { proveHotReloadSecurity } from "./gateway-config-hot-reload-security.js";
+import { proveHotReloadWatchPolicy } from "./gateway-config-hot-reload-watch.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
 const SCENARIO_ID = "gateway-config-hot-reload";
@@ -478,6 +479,15 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
       });
 
       await proveHotReloadNodePolicies({
+        gateway: activeGateway,
+        temporaryRoot,
+        rpc,
+        patch,
+        verifyContinuity,
+        proveGroup,
+      });
+
+      await proveHotReloadWatchPolicy({
         gateway: activeGateway,
         temporaryRoot,
         rpc,
