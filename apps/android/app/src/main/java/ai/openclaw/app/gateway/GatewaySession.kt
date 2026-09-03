@@ -2222,9 +2222,9 @@ internal const val GATEWAY_RECONNECT_MIN_STEADY_DELAY_MS = 8_000L
 /**
  * Ceiling for steady probing. A gateway can come back without Android ever reporting a network
  * change (the process restarts, or the LAN becomes routable again), so the loop must keep probing;
- * this bounds how long that recovery can take while keeping the radio idle nearly all of the time.
+ * this keeps endpoint-only recovery within one minute while still reducing radio activity.
  */
-internal const val GATEWAY_RECONNECT_MAX_DELAY_MS = 300_000L
+internal const val GATEWAY_RECONNECT_MAX_DELAY_MS = 60_000L
 
 /**
  * Delay before retry number [attempt] (1-based) against a gateway that keeps failing to connect.

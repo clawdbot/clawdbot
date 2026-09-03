@@ -2024,10 +2024,12 @@ class GatewaySessionReconnectTest {
   }
 
   @Test
-  fun steadyReconnectDelayStaysInsideItsJitterBand() {
-    assertEquals(GATEWAY_RECONNECT_MAX_DELAY_MS / 2, gatewayReconnectDelayMs(20, jitter = 0.0))
-    assertEquals(GATEWAY_RECONNECT_MAX_DELAY_MS, gatewayReconnectDelayMs(20, jitter = 1.0))
-    assertEquals(225_000L, gatewayReconnectDelayMs(20, jitter = 0.5))
+  fun steadyReconnectDelayKeepsEndpointOnlyRecoveryWithinOneMinute() {
+    // Android emits no network callback when only the Gateway process restarts. Pin the absolute
+    // user wait, not just a value derived from the production ceiling, so it cannot drift upward.
+    assertEquals(30_000L, gatewayReconnectDelayMs(20, jitter = 0.0))
+    assertEquals(60_000L, gatewayReconnectDelayMs(20, jitter = 1.0))
+    assertEquals(45_000L, gatewayReconnectDelayMs(20, jitter = 0.5))
   }
 
   @Test

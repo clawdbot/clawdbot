@@ -40,8 +40,7 @@ internal class NetworkMonitor(
   // resolves within milliseconds of registration; the window only needs to be short enough to
   // cover that, not long enough to risk absorbing a genuine restore that happens to land in the
   // same instant. A missed genuine restore in this narrow window is not unbounded: the affected
-  // session still falls back to its own independent backoff retry, the same bound this PR already
-  // asks for acceptance of elsewhere in this body.
+  // session still falls back to the bounded retry ceiling owned by GatewaySession.
   private val registeredAtNanos = System.nanoTime()
 
   private val callback =
