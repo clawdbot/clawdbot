@@ -128,13 +128,15 @@ export function renderIdentitySection(props: IdentitySectionProps) {
             </form>
           `,
         })}
-        ${isOwnerProfile
-          ? nothing
-          : renderSettingsRow({
-              title: t("profilePage.identity.linkedEmails"),
-              description: t("profilePage.identity.linkedEmailsDescription"),
-              control: emails ? renderSettingsValue(emails) : nothing,
-            })}
+        ${
+          isOwnerProfile
+            ? nothing
+            : renderSettingsRow({
+                title: t("profilePage.identity.linkedEmails"),
+                description: t("profilePage.identity.linkedEmailsDescription"),
+                control: emails ? renderSettingsValue(emails) : nothing,
+              })
+        }
         ${renderSettingsRow({
           title: t("profilePage.identity.githubAccount"),
           description: isOwnerProfile
