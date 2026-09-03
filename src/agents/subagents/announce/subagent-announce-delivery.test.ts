@@ -2936,8 +2936,15 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         debounceMs: 500,
         deliveryTimeoutMs: 120_000,
         steeringMode: "all",
+        waitForTranscriptCommit: true,
         userTurnTranscriptRecorder: expect.any(Object),
       }),
+    );
+    expect(queueEmbeddedAgentMessageWithOutcome.mock.invocationCallOrder[0]).toBeLessThan(
+      callGateway.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(callGateway.mock.invocationCallOrder[0]).toBeLessThan(
+      queueEmbeddedAgentMessageWithOutcome.mock.invocationCallOrder[1] ?? Number.POSITIVE_INFINITY,
     );
     expect(sendMessage).not.toHaveBeenCalled();
   });

@@ -122,7 +122,7 @@ export async function resolveActiveWakeWithRetries(
       outcome.reason === "source_reply_delivery_mode_mismatch" &&
       currentOptions.sourceReplyDeliveryMode !== undefined
     ) {
-      // Active requester runs own their final delivery mode. Direct-completion
+      // Active requester runs own the final delivery mode. Direct-completion
       // policy must not make an already-running automatic parent unreachable.
       const activeRunOptions = { ...currentOptions };
       delete activeRunOptions.sourceReplyDeliveryMode;
