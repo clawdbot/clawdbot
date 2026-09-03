@@ -21,6 +21,8 @@ import {
 import {
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
+} from "./active-run-projections.js";
+import {
   setActiveEmbeddedRunLifecycleGeneration,
   type EmbeddedAgentQueueHandle,
 } from "./run-state.js";

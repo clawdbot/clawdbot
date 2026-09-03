@@ -8,13 +8,17 @@ const coerceSecretRefMock = vi.hoisted(() => vi.fn());
 const resolveConfiguredSecretInputWithFallbackMock = vi.hoisted(() => vi.fn());
 const resolveRequiredConfiguredSecretRefInputStringMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/provider-auth", async () => {
+vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => {
+  const { findNormalizedProviderValue, resolveAuthProfileOrder } =
+    await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>();
   const { normalizeOptionalString } = await import("openclaw/plugin-sdk/string-coerce-runtime");
   return {
     coerceSecretRef: coerceSecretRefMock,
     ensureAuthProfileStore: ensureAuthProfileStoreMock,
+    findNormalizedProviderValue,
     listProfilesForProvider: listProfilesForProviderMock,
     normalizeOptionalSecretInput: normalizeOptionalString,
+    resolveAuthProfileOrder,
   };
 });
 

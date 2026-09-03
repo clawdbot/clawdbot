@@ -22,6 +22,14 @@ const UNDICI_REQUIRE_BOOTSTRAP = [
 ] as const;
 const WORKER_UNDICI_IMPORT = 'import * as bundledUndici from "undici";';
 
+export function resolveWorkerDeployGeneratorInputs(rootDir = process.cwd()) {
+  const playwrightRoot = fs.realpathSync(path.resolve(rootDir, "node_modules/playwright-core"));
+  return [
+    path.join(playwrightRoot, "package.json"),
+    path.join(playwrightRoot, "browsers.json"),
+  ] as const;
+}
+
 /** Composes bundled-plugin runtime and removes dependency package reads from the worker build. */
 export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
   const playwrightRoot = fs.realpathSync(path.resolve(rootDir, "node_modules/playwright-core"));
@@ -35,12 +43,12 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
   const undiciDispatcherOptionsPath = fs.realpathSync(
     path.resolve("src/infra/net/undici-dispatcher-options.ts"),
   );
-  const packageJson = JSON.parse(
-    fs.readFileSync(path.join(playwrightRoot, "package.json"), "utf8"),
-  ) as { name: string; version: string };
-  const browsersJson = JSON.parse(
-    fs.readFileSync(path.join(playwrightRoot, "browsers.json"), "utf8"),
-  ) as unknown;
+  const [packageJsonPath, browsersJsonPath] = resolveWorkerDeployGeneratorInputs(rootDir);
+  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
+    name: string;
+    version: string;
+  };
+  const browsersJson = JSON.parse(fs.readFileSync(browsersJsonPath, "utf8")) as unknown;
   const replacement = `    packageRoot = __dirname;
     packageJSON = ${JSON.stringify({ name: packageJson.name, version: packageJson.version })};
     binPath = packageRoot;`;

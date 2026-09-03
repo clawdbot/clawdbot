@@ -12,9 +12,9 @@ read_when:
 Mantis publishes visual CI evidence and a PR comment for OpenClaw behavior.
 Live transport scenarios compare a known-bad baseline with a candidate ref;
 focused browser lanes may instead prove one candidate against a deterministic
-mocked transport. Discord shipped first with real bot auth, guild channels,
-reactions, threads, and a browser witness. Slack, Telegram, and focused Control
-UI chat lanes exist too; WhatsApp and Matrix are unimplemented.
+mocked transport. Discord shipped first with real bot auth, guild channels, reactions, threads,
+and a browser witness. Slack and focused Control UI chat lanes exist too;
+WhatsApp and Matrix are unimplemented.
 
 ## Ownership
 
@@ -37,7 +37,6 @@ at build/run time (bundled workflows set `OPENCLAW_BUILD_PRIVATE_QA=1` and
 | `run`                           | Run a before/after scenario against baseline and candidate refs (Discord only).                                                                           |
 | `desktop-browser-smoke`         | Lease/reuse a Crabbox desktop, open a visible browser, capture screenshot + video.                                                                        |
 | `slack-desktop-smoke`           | Lease/reuse a Crabbox desktop, run Slack QA inside it, open Slack Web, capture evidence.                                                                  |
-| `telegram-desktop-builder`      | Lease/reuse a Crabbox desktop, install Telegram Desktop, optionally configure an OpenClaw gateway.                                                        |
 | `visual-task` / `visual-driver` | Generic Crabbox desktop capture with optional image-understanding assertions; `visual-driver` is the driver half launched under `crabbox record --while`. |
 
 Every command accepts `--repo-root <path>` and `--output-dir <path>`; Crabbox
@@ -199,93 +198,6 @@ scenario observed, not the live Slack UI; `slack-desktop-smoke.png` is only
 proof of Slack Web itself when the lease's browser profile was already logged
 in.
 
-### Telegram Desktop recorder
-
-The Telegram Desktop recorder is a standalone operator utility, invoked
-directly through `pnpm qa:telegram-desktop-recorder`. It never drives OpenClaw.
-Its normal recording commands do not send Telegram messages. The optional
-`actions` command drives only the measured Telegram window through bounded
-`click`, `key`, `type`, and `sleep` actions; those actions can send as the
-signed-in Telegram user. Whoever runs it owns the turn and those side effects —
-start the SUT, send through a real Telegram user, then tell the recorder which
-message to show — and supplies
-`--user-driver`, the command the recorder shells out to for the TDLib calls it
-cannot make itself (`confirm-qr`, `terminate-session`). Any driver exposing
-those two verbs works, including this repo's
-`scripts/e2e/telegram-user-driver.py`.
-
-The `Mantis Telegram Desktop Proof` workflow invokes the recorder with its
-local Docker provider. Its OpenClaw SUT remains isolated in the lane-attested
-container boundary while Telegram Desktop runs in the prebaked local image.
-
-Start recording. `--session` names the run-scoped session handle: when it
-already points at a healthy authorized desktop, `start` reuses it and only
-begins a fresh capture in the new output directory; otherwise it provisions
-and QR-authorizes a desktop first.
-
-```bash
-pnpm qa:telegram-desktop-recorder start \
-  --session .artifacts/qa-e2e/desktop-recorder.json \
-  --output-dir .artifacts/qa-e2e/telegram-desktop \
-  --chat -1001234567890 \
-  --user-driver "python3 /path/to/telegram-user-driver.py" \
-  --json
-```
-
-Use `view --session <recorder.json> --message-id <id>` to open a recorded
-group post. Use `screenshot --session <recorder.json>` for a still image. Run
-`stop --session <recorder.json> --crop telegram-window` to copy the recording
-and logs and build motion GIFs; the authorized desktop stays alive for the next
-`start`, so repeated captures skip provisioning and QR login. When the run is
-finished, run `teardown --session <recorder.json>` to terminate the Telegram
-Desktop authorization and release the Crabbox lease; the box stays inspectable
-over WebVNC until then.
-
-The recorder defaults to Crabbox's local Docker desktop path. Build the pinned
-image once, then run `start` without coordinator access:
-
-```bash
-bash scripts/mantis/build-telegram-desktop-image.sh
-```
-
-`--provider aws` targets a Crabbox catalog-only Telegram variant image
-(`--image-sdk telegram-desktop=7.0.9`) so the generic desktop image never
-carries the client. Publishing that variant needs Crabbox coordinator admin
-(`crabbox image create` / `image promote`) and is not part of this repository
-yet; until it is published, use the local Docker image above. Either image must
-provide an
-executable Telegram Desktop at `/opt/Telegram/Telegram`, a readable desktop
-version marker, `wmctrl`, `xdotool`, `scrot`, `ffmpeg`, `zbarimg`, and
-`xdpyinfo`, plus a reachable `DISPLAY=:99`. Crabbox refuses the lease when no
-matching image is promoted, and recorder startup fails when the contract is
-incomplete. It does not install packages or download replacements.
-
-### `telegram-desktop-builder`
-
-```bash
-pnpm openclaw qa mantis telegram-desktop-builder \
-  --credential-source convex \
-  --credential-role maintainer \
-  --keep-lease
-```
-
-Leases or reuses a Crabbox desktop, installs native Linux Telegram Desktop,
-optionally restores a user-session archive, configures OpenClaw with the
-leased Telegram SUT bot token, starts
-`openclaw gateway run --dev --allow-unconfigured --port 38974`, posts a
-driver-bot readiness message to the leased private group, then captures a
-screenshot and MP4. A bot token only configures OpenClaw; it never logs
-Telegram Desktop in. The desktop viewer is a separate Telegram user session
-restored from `--telegram-profile-archive-env <name>` or logged in manually
-through VNC and kept alive with `--keep-lease`.
-
-Flags: `--lease-id <cbx_...>` reruns against a VM already logged in to
-Telegram Desktop; `--telegram-profile-archive-env <name>` restores a base64
-`.tgz` profile archive before launch; `--telegram-profile-dir <remote-path>`
-sets the remote profile directory (default `$HOME/.local/share/TelegramDesktop`);
-`--no-gateway-setup` installs and opens Telegram Desktop only;
-`--credential-source`/`--credential-role` default to `convex`/`maintainer`.
-
 ## Evidence manifest
 
 Every scenario that publishes to a PR writes `mantis-evidence.json` next to
@@ -341,7 +253,7 @@ A run's on-disk artifact layout:
 Screenshots are evidence, not secrets, but still need redaction discipline:
 private channel names, usernames, or message content may appear. Set
 `OPENCLAW_QA_REDACT_PUBLIC_METADATA=1` for public artifact uploads; it is
-enabled by default in the Discord/Slack/Telegram GitHub workflows.
+enabled by default in the Discord and Slack GitHub workflows.
 
 ## GitHub automation
 
@@ -363,41 +275,20 @@ Comments post through the Mantis GitHub App (`MANTIS_GITHUB_APP_ID` /
 `MANTIS_GITHUB_APP_PRIVATE_KEY`), not `github-actions[bot]`, using a hidden
 marker comment as the upsert key.
 
-| Workflow                          | Trigger                                                                                         | What it does                                                                                                                                                                                                                                                                                                                             |
-| --------------------------------- | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Mantis Discord Smoke`            | manual dispatch                                                                                 | Runs `discord-smoke` against a chosen ref.                                                                                                                                                                                                                                                                                               |
-| `Mantis Discord Status Reactions` | manual dispatch                                                                                 | Builds separate baseline/candidate worktrees, runs `discord-status-reactions-tool-only` on each, renders each lane's timeline in a Crabbox desktop browser, generates motion-trimmed GIF/MP4 previews with `crabbox media preview`, uploads artifacts, posts inline PR evidence.                                                         |
-| `Mantis Scenario`                 | manual dispatch                                                                                 | Generic dispatcher: takes `scenario_id` (`discord-status-reactions-tool-only`, `discord-thread-reply-filepath-attachment`, `slack-desktop-smoke`, `telegram-live`, `telegram-desktop-proof`, `web-ui-chat-proof`), `baseline_ref`, `candidate_ref`, `pr_number`, and forwards to the matching scenario workflow.                         |
-| `Mantis Slack Desktop Smoke`      | manual dispatch                                                                                 | Leases a Crabbox Linux desktop (defaults to `aws`, choice of `hetzner`), runs `slack-desktop-smoke --gateway-setup` against the candidate, records the desktop, generates a motion preview, uploads artifacts, posts PR evidence when a PR number is given.                                                                              |
-| `Mantis Telegram Live`            | manual dispatch                                                                                 | Runs the bot-API Telegram live QA lane (`openclaw qa telegram`), writes `mantis-evidence.json` from the QA summary, renders redacted evidence HTML through a Crabbox desktop browser, generates a motion GIF, posts PR evidence. Telegram Web login is not required for this lane.                                                       |
-| `Mantis Telegram Desktop Proof`   | ClawSweeper label (`mantis: telegram-visible-proof`), maintainer PR comment, or manual dispatch | Agentic native Telegram Desktop before/after proof. Hands the PR, baseline/candidate refs, and maintainer instructions to Codex, which runs each container-isolated SUT against a local Docker desktop recorder and posts a 2-column PR evidence table. Candidate is the PR merged onto current main; baseline is that merge's main tip. |
-| `Mantis Web UI Chat Proof`        | manual dispatch                                                                                 | Runs the focused OpenClaw Control UI chat Playwright proof against the candidate, verifies the browser sends through the mocked Gateway, captures screenshot/video artifacts, and posts PR evidence. This lane is web chat proof only, not WinUI/native-app or arbitrary visual proof.                                                   |
+| Workflow                          | Trigger         | What it does                                                                                                                                                                                                                                                                           |
+| --------------------------------- | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Mantis Discord Smoke`            | manual dispatch | Runs `discord-smoke` against a chosen ref.                                                                                                                                                                                                                                             |
+| `Mantis Discord Status Reactions` | manual dispatch | Builds separate baseline/candidate worktrees, runs `discord-status-reactions-tool-only` on each, renders each lane's timeline in a Crabbox desktop browser, generates motion-trimmed GIF/MP4 previews with `crabbox media preview`, uploads artifacts, posts inline PR evidence.       |
+| `Mantis Scenario`                 | manual dispatch | Generic dispatcher: takes `scenario_id` (`discord-status-reactions-tool-only`, `discord-thread-reply-filepath-attachment`, `slack-desktop-smoke`, `web-ui-chat-proof`), `baseline_ref`, `candidate_ref`, `pr_number`, and forwards to the matching scenario workflow.                  |
+| `Mantis Slack Desktop Smoke`      | manual dispatch | Leases a Crabbox Linux desktop (defaults to `aws`, choice of `hetzner`), runs `slack-desktop-smoke --gateway-setup` against the candidate, records the desktop, generates a motion preview, uploads artifacts, posts PR evidence when a PR number is given.                            |
+| `Mantis Web UI Chat Proof`        | manual dispatch | Runs the focused OpenClaw Control UI chat Playwright proof against the candidate, verifies the browser sends through the mocked Gateway, captures screenshot/video artifacts, and posts PR evidence. This lane is web chat proof only, not WinUI/native-app or arbitrary visual proof. |
 
-`Mantis Discord Status Reactions` and `Mantis Telegram Live` both accept
-`baseline_ref`/`candidate_ref` and validate that the resolved SHA is either an
+`Mantis Discord Status Reactions` accepts `baseline_ref`/`candidate_ref` and
+validates that the resolved SHA is either an
 ancestor of `origin/main`, a release tag (`v*`), or the head of an open PR
 before running with secret-bearing credentials.
 
-Comment triggers, from a PR with write/maintain/admin access:
-
-```text
-@openclaw-mantis
-@openclaw-mantis verify the streamed reply stays visible while it arrives
-```
-
-`Mantis Telegram Desktop Proof` only responds to a PR comment when
-the commenter has write, maintain, or admin access. A bare mention starts the
-desktop proof; any remaining text becomes optional proof guidance. Mantis
-reacts with 👀 when it accepts the request, then posts the active run link in
-its evidence comment and replaces that same comment with the result. ClawSweeper's
-`mantis: telegram-visible-proof` label starts the proof automatically for
-branches in `openclaw/openclaw`; fork PRs still require an explicit maintainer
-comment. Proof requests queue serially because they share one Telegram user;
-queued runs do not allocate a runner or start their proof timeout. Manual runs
-first inspect the diff and stop before desktop setup when there is no
-Telegram-visible behavior to test.
-
-The other scenario workflows remain available through manual Actions dispatch.
+The scenario workflows remain available through manual Actions dispatch.
 
 ClawSweeper can also dispatch a scenario directly:
 
@@ -432,15 +323,14 @@ Credential and environment names used across Mantis commands and workflows:
   Discord bot tokens.
 - `OPENCLAW_QA_REDACT_PUBLIC_METADATA=1` for public artifact uploads
 - `OPENCLAW_QA_CONVEX_SITE_URL`, `OPENCLAW_QA_CONVEX_SECRET_CI`
-- `OPENAI_API_KEY` (or the Telegram Desktop proof-specific
-  `OPENCLAW_MANTIS_AGENT_OPENAI_API_KEY`)
+- `OPENAI_API_KEY`
 - `CRABBOX_COORDINATOR` / `CRABBOX_COORDINATOR_TOKEN` (workflows also accept
   `OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR` / `_TOKEN` as a fallback and map
   them onto the plain names before invoking Crabbox)
 - `CRABBOX_ACCESS_CLIENT_ID`, `CRABBOX_ACCESS_CLIENT_SECRET`
 - `MANTIS_GITHUB_APP_ID`, `MANTIS_GITHUB_APP_PRIVATE_KEY`
 
-The Mantis runner must never print Discord/Slack/Telegram bot tokens,
+The Mantis runner must never print Discord or Slack bot tokens,
 provider API keys, browser cookies, auth profile contents, VNC passwords, or
 raw credential payloads. If a token leaks into an issue, PR, chat, or log,
 rotate it after the replacement secret is stored.
@@ -477,10 +367,9 @@ message references, Slack thread `ts`/reaction API state, email message ids
 and headers. Use browser screenshots when UI is the only reliable observable,
 and keep vision checks additive to a platform-API oracle where one exists.
 
-After Discord, Slack, and Telegram, the same runner shape extends to WhatsApp
-(QR login, re-identification, delivery, media, reactions) and Matrix
-(encrypted rooms, thread/reply relations, restart resume); neither is
-implemented yet.
+After Discord and Slack, the same runner shape extends to WhatsApp (QR login,
+re-identification, delivery, media, reactions) and Matrix (encrypted rooms,
+thread/reply relations, restart resume); neither is implemented yet.
 
 ## Open questions
 

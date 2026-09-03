@@ -49,16 +49,19 @@ import {
 import {
   appendExecTimeoutRetryGuidance,
   renderExecExitLabel,
+  renderExecOutputText,
   renderExecUpdateText,
 } from "./bash-tools.exec-output.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { chunkString, clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
+import { buildGitHubExecLaunchArgv } from "./github-exec-launch.js";
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { createSessionSlug } from "./session-slug.js";
 import { maybeWrapCommandWithShellSnapshot } from "./shell-snapshot.js";
 import { createStreamingBinaryOutputSanitizer, getShellConfig } from "./shell-utils.js";
+import { registerTrustedToolNoStartError } from "./tool-result-error.js";
 import { withoutGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 export { applyPathPrepend, normalizePathPrepend } from "../infra/path-prepend.js";
 
@@ -256,17 +259,24 @@ export function resolveExecTarget(params: {
 }) {
   const sandboxRequired = params.sandboxRequired === true;
   if (sandboxRequired && !params.sandboxAvailable) {
-    throw new Error("This session requires a sandbox, but its sandbox runtime is unavailable.");
+    throw registerTrustedToolNoStartError(
+      new Error("This session requires a sandbox, but its sandbox runtime is unavailable."),
+    );
   }
   if (sandboxRequired && params.elevatedRequested) {
-    throw new Error("Elevated execution is unavailable because this session requires a sandbox.");
+    throw registerTrustedToolNoStartError(
+      new Error("Elevated execution is unavailable because this session requires a sandbox."),
+    );
   }
   // Session isolation outranks every agent, session, and request-scoped host preference.
   const configuredTarget = sandboxRequired ? "auto" : (params.configuredTarget ?? "auto");
-  const requestedTarget = params.requestedTarget ?? null;
+  const requestedTarget =
+    params.requestedTarget === "auto" ? null : (params.requestedTarget ?? null);
   if (sandboxRequired && (requestedTarget === "gateway" || requestedTarget === "node")) {
-    throw new Error(
-      `exec host not allowed (requested ${renderExecTargetLabel(requestedTarget)}; this session requires a sandbox).`,
+    throw registerTrustedToolNoStartError(
+      new Error(
+        `exec host not allowed (requested ${renderExecTargetLabel(requestedTarget)}; this session requires a sandbox).`,
+      ),
     );
   }
   if (
@@ -288,10 +298,12 @@ export function resolveExecTarget(params: {
             : [renderExecTargetLabel(requestedTarget), "auto"],
       ),
     ).join(" or ");
-    throw new Error(
-      `exec host not allowed (requested ${renderExecTargetLabel(requestedTarget)}; ` +
-        `configured host is ${renderExecTargetLabel(configuredTarget)}; ` +
-        `set tools.exec.host=${allowedConfig} to allow this override).`,
+    throw registerTrustedToolNoStartError(
+      new Error(
+        `exec host not allowed (requested ${renderExecTargetLabel(requestedTarget)}; ` +
+          `configured host is ${renderExecTargetLabel(configuredTarget)}; ` +
+          `set tools.exec.host=${allowedConfig} to allow this override).`,
+      ),
     );
   }
   const selectedTarget = requestedTarget ?? configuredTarget;
@@ -558,7 +570,7 @@ function buildExecExitOutcome(params: {
       exitSignal: params.exit.exitSignal,
       exitReason: params.exit.reason,
       durationMs: params.durationMs,
-      aggregated: params.aggregated + exitMsg,
+      aggregated: (exitMsg ? renderExecOutputText(params.aggregated) : params.aggregated) + exitMsg,
       timedOut: false,
       noOutputTimedOut: params.exit.noOutputTimedOut,
     };
@@ -645,6 +657,7 @@ function wrapPosixCommandWithPathPrepend(
 
 /** Starts a host or sandbox exec process and registers it for polling/backgrounding. */
 export async function runExecProcess({
+  startupSignal: initialStartupSignal,
   onUpdate: initialOnUpdate,
   beforeSpawn: initialBeforeSpawn,
   onSettledBeforeNotify: initialOnSettledBeforeNotify,
@@ -656,6 +669,8 @@ export async function runExecProcess({
   execCommand?: string;
   workdir: string;
   env: Record<string, string>;
+  /** Host-selected managed profile; never inferred from the requested environment. */
+  githubProfileDir?: string;
   pathPrepend?: string[];
   sandbox?: BashSandboxConfig;
   containerWorkdir?: string | null;
@@ -683,6 +698,8 @@ export async function runExecProcess({
   timeoutSec: number | null;
   /** Whether exec may return a supervised session for later continuation. */
   processContinuationAvailable?: boolean;
+  /** Cancels startup only; background process lifetime belongs to the supervisor. */
+  startupSignal?: AbortSignal;
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
   /** Runs after process finalization and before the exit wake is queued. */
   onSettledBeforeNotify?: (outcome: ExecProcessOutcome) => void;
@@ -737,6 +754,7 @@ export async function runExecProcess({
   // Foreground delivery keeps its caller context only until yield, abort, or exit.
   // Clearing the callback also releases the completed turn's captured authority.
   let onUpdate = initialOnUpdate && AsyncLocalStorage.bind(initialOnUpdate);
+  let startupSignal = initialStartupSignal;
   let beforeSpawn = initialBeforeSpawn;
   let onSettledBeforeNotify = initialOnSettledBeforeNotify;
 
@@ -912,21 +930,15 @@ export async function runExecProcess({
       env: shellRuntimeEnv,
     });
 
-    const childArgv = [shell, ...shellArgs, commandWithShellSnapshot];
-    if (opts.usePty) {
-      return {
-        mode: "pty" as const,
-        ptyCommand: commandWithShellSnapshot,
-        childFallbackArgv: childArgv,
-        env: shellRuntimeEnv,
-        stdinMode: "pipe-open" as const,
-      };
-    }
+    const shellArgv = [shell, ...shellArgs, commandWithShellSnapshot];
+    const argv = opts.githubProfileDir
+      ? buildGitHubExecLaunchArgv(shellArgv, opts.githubProfileDir)
+      : shellArgv;
     return {
-      mode: "child" as const,
-      argv: childArgv,
+      mode: opts.usePty ? ("pty" as const) : ("child" as const),
+      argv,
       env: shellRuntimeEnv,
-      stdinMode: "pipe-closed" as const,
+      stdinMode: opts.usePty ? ("pipe-open" as const) : ("pipe-closed" as const),
     };
   };
 
@@ -949,15 +961,21 @@ export async function runExecProcess({
   };
 
   const assertPreSpawnAuthorized = async () => {
+    startupSignal?.throwIfAborted();
     const denied = await beforeSpawn?.();
+    startupSignal?.throwIfAborted();
     if (denied) {
       throw new ExecProcessPreflightError(denied);
     }
   };
-  const spawn = (input: SpawnInput) =>
-    withoutGatewayToolCallerIdentity(() => supervisor.spawn(input));
+  const spawn = (input: SpawnInput) => {
+    // No await between the final cancellation check and supervisor admission.
+    startupSignal?.throwIfAborted();
+    return withoutGatewayToolCallerIdentity(() => supervisor.spawn(input));
+  };
 
   try {
+    startupSignal?.throwIfAborted();
     const spawnSpec = await prepareSpawnSpec();
     usingPty = spawnSpec.mode === "pty";
     const spawnBase = {
@@ -978,9 +996,10 @@ export async function runExecProcess({
         managedRun = await spawn({
           ...spawnBase,
           mode: "pty",
-          ptyCommand: spawnSpec.ptyCommand,
+          argv: spawnSpec.argv,
         });
       } catch (err) {
+        startupSignal?.throwIfAborted();
         const warning = `Warning: PTY spawn failed (${String(err)}); retrying without PTY for \`${opts.command}\`.`;
         logWarn(
           `exec: PTY spawn failed (${String(err)}); retrying without PTY for "${opts.command}".`,
@@ -988,15 +1007,9 @@ export async function runExecProcess({
         opts.warnings.push(warning);
         usingPty = false;
         await assertPreSpawnAuthorized();
-        managedRun = await spawn({
-          ...spawnBase,
-          mode: "child",
-          argv: spawnSpec.childFallbackArgv,
-          stdinMode: "pipe-open",
-          onStdout: handleStdout,
-        });
       }
-    } else {
+    }
+    if (!managedRun) {
       managedRun = await spawn({
         ...spawnBase,
         mode: "child",
@@ -1024,6 +1037,7 @@ export async function runExecProcess({
     });
     throw error;
   } finally {
+    startupSignal = undefined;
     beforeSpawn = undefined;
   }
   session.stdin = managedRun.stdin;

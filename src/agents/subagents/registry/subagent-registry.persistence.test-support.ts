@@ -3,8 +3,10 @@
  * SQLite-backed session entries and runtime dependency mocks without loading
  * the production embedded-agent stack.
  */
+import fs from "node:fs/promises";
 import path from "node:path";
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionEntry } from "../../../config/sessions.js";
 import {
   applySessionEntryLifecycleMutation,
@@ -12,9 +14,86 @@ import {
   loadSessionEntry,
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
+import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
+import { withEnvAsync } from "../../../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
+import type { SubagentRegistryDeps } from "./subagent-registry-deps.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type SessionStore = Record<string, Record<string, unknown>>;
+
+export function expectDeferredSubagentAnnouncement(
+  entry: SubagentRunRecord | undefined,
+  runId: string,
+) {
+  expect(entry, "deferred announcement committed").toMatchObject({
+    cleanupHandled: false,
+    delivery: { status: "pending", attemptCount: 1, payload: { childRunId: runId } },
+  });
+  expect(entry?.cleanupCompletedAt, "deferred cleanup remains unfinished").toBeUndefined();
+  expect(Number.isFinite(entry?.delivery?.nextAttemptAt), "durable retry deadline").toBe(true);
+}
+
+/** Hold the real lazy settlement dependency without replacing its completion policy. */
+export function gateSubagentRequesterSettlement(
+  settle: SubagentRegistryDeps["maybeWakeRequesterAfterAllChildrenSettled"],
+) {
+  const released = createDeferred();
+  let pending: Promise<boolean> | undefined;
+  const run = vi.fn<SubagentRegistryDeps["maybeWakeRequesterAfterAllChildrenSettled"]>((params) => {
+    pending = (async () => {
+      await released.promise;
+      return await settle(params);
+    })();
+    return pending;
+  });
+  return {
+    run,
+    async release() {
+      released.resolve();
+      await pending;
+    },
+  };
+}
+
+/** Gates owned by a test must be released before waiting for imports and detached tails. */
+export async function settleSubagentRegistryPersistenceWork() {
+  await vi.dynamicImportSettled();
+  await vi.waitFor(() =>
+    expect(getActiveGatewayRootWorkCount(), "residual registry roots").toBe(0),
+  );
+}
+
+type PersistenceCleanup = {
+  stateDir: string;
+  resetRegistry: () => void;
+  resetDeps: () => void;
+  closeDatabases?: () => void | Promise<void>;
+};
+
+export async function cleanupSubagentRegistryPersistenceTest(params: PersistenceCleanup) {
+  await settleSubagentRegistryPersistenceWork();
+  params.resetRegistry();
+  await cleanupSessionStateForTest({ stateDir: params.stateDir });
+  await params.closeDatabases?.();
+  params.resetDeps();
+  await fs.rm(params.stateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+}
+
+/** Finish fixture-owned writes before withEnvAsync restores their database location. */
+export async function withSubagentRegistryPersistenceState<T>(
+  params: PersistenceCleanup,
+  run: () => Promise<T>,
+): Promise<T> {
+  return await withEnvAsync({ OPENCLAW_STATE_DIR: params.stateDir }, async () => {
+    try {
+      return await run();
+    } finally {
+      await cleanupSubagentRegistryPersistenceTest(params);
+    }
+  });
+}
+
 export type SubagentRunFixture = Omit<SubagentRunRecord, "execution"> & {
   execution?: SubagentRunRecord["execution"];
   startedAt?: number;

@@ -93,9 +93,11 @@ advisory: they do not by themselves make a hook unloadable.
 openclaw hooks info <name> [--agent <id>] [--json]
 ```
 
-Accepts a hook name or its metadata `hookKey`. Shows source, descriptor and
-handler paths, homepage, events, unknown-event warnings, blocked reason, and
-per-requirement status. A missing hook exits with code 1.
+Accepts a hook name or its metadata `hookKey`. Exact hook names take precedence
+over matching keys; a key must identify a single hook. Shows source, descriptor
+and handler paths, homepage, events, unknown-event warnings, blocked reason, and
+per-requirement status. A missing or ambiguous hook exits with code 1; an
+ambiguous selector lists candidates so you can choose a unique name or key.
 
 JSON includes the list fields plus `filePath`, `baseDir`, `handlerPath`,
 `hookKey`, `always`, `requirements`, `configChecks`, and normalized `install`
@@ -190,9 +192,11 @@ non-latest tag such as `@beta` or `@rc`. Use `npm:` to select npm explicitly; th
 unified installer supports other plugin sources described in
 [`openclaw plugins`](/cli/plugins).
 
-Supported local archives are `.zip`, `.tgz`, `.tar.gz`, and `.tar`. npm pack and
-project-local dependency installation use `--ignore-scripts`; this does not
-sandbox the installed handler.
+Supported local archives are `.zip`, `.tgz`, `.tar.gz`, and `.tar`. Copied hook
+packs resolve runtime packages from `dependencies` and `optionalDependencies`,
+including packs with only optional dependencies. Packages listed only in
+`devDependencies` are omitted. npm pack and dependency installation use
+`--ignore-scripts`; this does not sandbox the installed handler.
 
 ### Install options and trust
 
@@ -204,9 +208,10 @@ sandbox the installed handler.
 | `--acknowledge-install-policy-warning` | Acknowledge an operator `security.installPolicy` warning without its prompt. Blocks and policy failures still stop the install.             |
 
 Interactive non-ClawHub installs ask you to confirm trust. Noninteractive
-installs require `--force`; global `--yes` is not a substitute for that gate.
-`--force` is also not a substitute for acknowledging an install-policy warning.
-Review the source before supplying either acknowledgement.
+installs require `--force`; neither `plugins install` nor the `hooks install`
+alias accepts a `--yes` flag. `--force` is also not a substitute for
+acknowledging an install-policy warning. Review the source before supplying
+either acknowledgement.
 
 <Warning>
 A linked hook runs directly from the supplied path; linking does not copy it
@@ -233,9 +238,10 @@ archive records are not refreshed by the npm hook updater.
 when reached through the deprecated alias; it is not a hooks-only bulk command.
 
 When an applicable stored integrity hash differs from the downloaded artifact,
-the updater warns and asks for confirmation. Global `--yes` can accept that
-yes/no prompt, so use it only when you intend to accept the drift. It does not
-bypass operator policy blocks or replace the dedicated policy-warning flag.
+the updater warns and asks for confirmation in the terminal. No CLI flag answers
+that prompt: neither `plugins update` nor the `hooks update` alias accepts
+`--yes`, and `--acknowledge-install-policy-warning` covers only install-policy
+warnings. `--dry-run` reports the drift without prompting.
 
 ### Deprecated aliases
 

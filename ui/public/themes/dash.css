@@ -74,7 +74,7 @@
   --overlay-shadow: var(--shadow-md);
 
   --grid-line: rgba(255, 240, 225, 0.03);
-  /* Typography — DM Sans chrome, Fraunces chat prose (fonts/dash.css): the
+  /* Typography — DM Sans chrome, Fraunces chat prose (fonts/dm-sans.css + fonts/fraunces.css): the
      Absolutely recipe tuned warm. Fallbacks keep text painting on failure. */
   --font-body: "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-chat: "Fraunces", Georgia, "Times New Roman", serif;
@@ -145,7 +145,7 @@
   --overlay-shadow: var(--shadow-md);
 
   --grid-line: rgba(80, 50, 20, 0.04);
-  /* Typography — DM Sans chrome, Fraunces chat prose (fonts/dash.css); see the
+  /* Typography — DM Sans chrome, Fraunces chat prose (fonts/dm-sans.css + fonts/fraunces.css); see the
      dark block. */
   --font-body: "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-chat: "Fraunces", Georgia, "Times New Roman", serif;

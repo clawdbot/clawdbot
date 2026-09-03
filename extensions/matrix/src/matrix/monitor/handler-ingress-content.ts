@@ -152,7 +152,6 @@ export async function resolveMatrixIngressContent(config: {
     isDirectMessage,
     dmSessionScope,
     threadId: thread.threadId,
-    eventTs: eventTs ?? undefined,
     resolveAgentRoute: core.channel.routing.resolveAgentRoute,
   });
   const hasExplicitSessionBinding = _configuredBinding !== null || _runtimeBindingId !== null;
@@ -452,7 +451,10 @@ export async function resolveMatrixIngressContent(config: {
   }
   if (_runtimeBindingId) {
     const { getSessionBindingService } = await loadSessionBindingRuntime();
-    getSessionBindingService().touch(_runtimeBindingId, eventTs ?? undefined);
+    getSessionBindingService().touch(_runtimeBindingId, eventTs ?? undefined, {
+      channel: "matrix",
+      accountId,
+    });
   }
   const preparedTrigger =
     isRoom && historyLimit > 0

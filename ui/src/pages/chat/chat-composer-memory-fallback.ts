@@ -1,17 +1,14 @@
-import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment, ChatGoalDraftMode, HumanMention } from "../../lib/chat/chat-types.ts";
+import { parseStoredChatOutboxScope } from "../../lib/chat/outbox-store.ts";
 import {
-  DEFAULT_MAIN_KEY,
-  buildAgentMainSessionKey,
-  resolveUiConfiguredMainKey,
-  resolveUiDefaultAgentId,
-  resolveUiKnownSelectedGlobalAgentId,
+  resolveUiConversationIdentity,
+  hasUiSessionDefaults,
 } from "../../lib/sessions/session-key.ts";
 import { releaseDisplacedChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import type { ChatComposerMemoryFallback, ChatPageHost } from "./chat-state-host.ts";
 import {
   loadChatComposerCommittedDraftRevision,
   loadChatComposerDraftRevision,
-  resolveStoredChatOutboxScope,
   storedChatOutboxScopeKey,
   type ChatComposerDraftRetry,
   type StoredChatOutboxScope,
@@ -28,39 +25,20 @@ function resolveChatComposerMemoryFallback(
   sessionKey: string,
   scopeOverride?: StoredChatOutboxScope,
 ): { fallback?: ChatComposerMemoryFallback; scopeKey: string } {
-  const scope = scopeOverride ?? resolveStoredChatOutboxScope(state, sessionKey);
+  const scope = scopeOverride ?? resolveUiConversationIdentity(state, sessionKey);
   const scopeKey = storedChatOutboxScopeKey(scope);
-  const fallback = state.chatComposerFallbackByScope[scopeKey];
-  const selectedGlobalAgentId = resolveUiKnownSelectedGlobalAgentId(state);
-  if (scope.sessionKey !== "global" || !scope.agentId) {
-    return { fallback, scopeKey };
-  }
-  const configuredMainKey = resolveUiConfiguredMainKey(state);
-  const isSelectedTarget = scope.agentId === selectedGlobalAgentId;
-  const isDefaultTarget = scope.agentId === resolveUiDefaultAgentId(state);
-  const qualifiedMainScopeKey =
-    configuredMainKey === DEFAULT_MAIN_KEY
-      ? undefined
-      : storedChatOutboxScopeKey({
-          sessionKey: buildAgentMainSessionKey({
-            agentId: scope.agentId,
-            mainKey: configuredMainKey,
-          }),
-          agentId: scope.agentId,
-        });
-  if (!isSelectedTarget && !isDefaultTarget && !qualifiedMainScopeKey) {
-    return { fallback, scopeKey };
-  }
   const fallbackSourceKeys = new Set([scopeKey]);
-  if (isSelectedTarget) {
-    fallbackSourceKeys.add(storedChatOutboxScopeKey({ sessionKey: "global" }));
-  }
-  if (isDefaultTarget) {
-    fallbackSourceKeys.add(storedChatOutboxScopeKey({ sessionKey: DEFAULT_MAIN_KEY }));
-    fallbackSourceKeys.add(storedChatOutboxScopeKey({ sessionKey: configuredMainKey }));
-  }
-  if (qualifiedMainScopeKey) {
-    fallbackSourceKeys.add(qualifiedMainScopeKey);
+  for (const key of Object.keys(state.chatComposerFallbackByScope)) {
+    const source = parseStoredChatOutboxScope(key);
+    if (
+      source &&
+      state.chatComposerFallbackByScope[key]?.awaitingDefaults &&
+      storedChatOutboxScopeKey(
+        resolveUiConversationIdentity(state, source.sessionKey, source.agentId),
+      ) === scopeKey
+    ) {
+      fallbackSourceKeys.add(key);
+    }
   }
   const candidates = [...fallbackSourceKeys]
     .map((candidateScopeKey) => ({
@@ -79,6 +57,9 @@ function resolveChatComposerMemoryFallback(
   }
   const sourceKey = newest.scopeKey;
   const sourceFallback = newest.fallback;
+  if (hasUiSessionDefaults(state)) {
+    delete sourceFallback.awaitingDefaults;
+  }
   if (candidates.length === 1 && sourceKey === scopeKey) {
     return { fallback: sourceFallback, scopeKey };
   }
@@ -123,6 +104,8 @@ export function storeChatComposerMemoryFallback(
   scope: StoredChatOutboxScope,
   composer: {
     message: string;
+    mentions?: readonly HumanMention[];
+    goalMode?: ChatGoalDraftMode | null;
     attachments: ChatAttachment[];
     draftRetry?: ChatComposerDraftRetry;
   },
@@ -131,7 +114,12 @@ export function storeChatComposerMemoryFallback(
   state.chatComposerFallbackByScope = {
     ...state.chatComposerFallbackByScope,
     [storedChatOutboxScopeKey(scope)]: {
+      ...(!hasUiSessionDefaults(state) ? { awaitingDefaults: true as const } : {}),
       message: composer.message,
+      ...(composer.mentions?.length
+        ? { mentions: composer.mentions.map((mention) => ({ ...mention })) }
+        : {}),
+      ...(composer.goalMode ? { goalMode: composer.goalMode } : {}),
       attachments: [...composer.attachments],
       storageFailed: composer.draftRetry !== undefined,
       sequence,
@@ -154,7 +142,7 @@ function chatAttachmentsMatch(
 export function retainChatComposerMemoryFallback(
   state: ChatPageHost,
   scope: StoredChatOutboxScope,
-  composer: { message: string; attachments: ChatAttachment[] },
+  composer: { message: string; mentions?: readonly HumanMention[]; attachments: ChatAttachment[] },
 ): ChatComposerMemoryFallbackOwnership | undefined {
   const { fallback: existing, scopeKey } = resolveChatComposerMemoryFallback(
     state,
@@ -163,6 +151,7 @@ export function retainChatComposerMemoryFallback(
   );
   const existingMatches =
     existing?.message === composer.message &&
+    JSON.stringify(existing.mentions ?? []) === JSON.stringify(composer.mentions ?? []) &&
     chatAttachmentsMatch(existing.attachments, composer.attachments);
   if (existing && existingMatches) {
     return { sequence: existing.sequence };
@@ -173,6 +162,7 @@ export function retainChatComposerMemoryFallback(
       [scopeKey]: {
         ...existing,
         message: composer.message,
+        mentions: composer.mentions,
         attachments: [...composer.attachments],
       },
     };
@@ -190,11 +180,12 @@ export function retainChatComposerMemoryFallback(
 export function captureChatComposerMemoryFallbackOwnership(
   state: ChatPageHost,
   scope: StoredChatOutboxScope,
-  composer: { message: string; attachments: ChatAttachment[] },
+  composer: { message: string; mentions?: readonly HumanMention[]; attachments: ChatAttachment[] },
 ): ChatComposerMemoryFallbackOwnership | undefined {
   const { fallback: existing } = resolveChatComposerMemoryFallback(state, scope.sessionKey, scope);
   if (
     existing?.message !== composer.message ||
+    JSON.stringify(existing?.mentions ?? []) !== JSON.stringify(composer.mentions ?? []) ||
     !chatAttachmentsMatch(existing.attachments, composer.attachments)
   ) {
     return undefined;

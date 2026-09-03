@@ -17,8 +17,7 @@ import {
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve as pathResolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { expandPackageDistImportClosure } from "./lib/package-dist-imports.mjs";
-
+import { PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH } from "./lib/package-lifecycle-marker.mjs";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PACKAGE_ROOT = join(scriptDir, "..");
 const DISABLE_POSTINSTALL_ENV = "OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL";
@@ -506,23 +505,6 @@ export function pruneInstalledPackageDist(params = {}) {
     }
   }
   const installedFiles = listInstalledDistFiles(distScanParams);
-  const readFile = params.readFileSync ?? readFileSync;
-  expectedFiles = new Set(
-    expandPackageDistImportClosure({
-      files: installedFiles,
-      seedFiles: [...expectedFiles],
-      readText(relativePath) {
-        try {
-          return readFile(join(packageRoot, relativePath), "utf8");
-        } catch (error) {
-          if (error?.code === "ENOENT") {
-            return "";
-          }
-          throw error;
-        }
-      },
-    }),
-  );
   const removed = [];
 
   for (const relativePath of installedFiles) {
@@ -552,62 +534,6 @@ export function pruneInstalledPackageDist(params = {}) {
   return removed;
 }
 
-function resolveDistModuleUrl(packageRoot, distPath) {
-  return pathToFileURL(join(packageRoot, distPath)).href;
-}
-
-async function importInstalledDistModule(params, distPath) {
-  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
-  const pathExists = params.existsSync ?? existsSync;
-  const modulePath = join(packageRoot, distPath);
-  if (!pathExists(modulePath)) {
-    return null;
-  }
-  const importModule = params.importModule ?? ((specifier) => import(specifier));
-  return await importModule(resolveDistModuleUrl(packageRoot, distPath));
-}
-
-export async function runPluginRegistryPostinstallMigration(params = {}) {
-  const log = params.log ?? console;
-  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
-  const env = params.env ?? process.env;
-  const pathExists = params.existsSync ?? existsSync;
-
-  // Registry migration belongs to installed-package upgrades. Source checkouts
-  // can contain stale dist from a different build and must not touch operator state.
-  if (isSourceCheckoutRoot({ packageRoot, existsSync: pathExists })) {
-    return { status: "skipped", reason: "source-checkout" };
-  }
-
-  try {
-    const migrationModule = await importInstalledDistModule(
-      { ...params, existsSync: pathExists },
-      "dist/commands/doctor/shared/plugin-registry-migration.js",
-    );
-    if (!migrationModule) {
-      return { status: "skipped", reason: "missing-dist-entry" };
-    }
-    if (typeof migrationModule.migratePluginRegistryForInstall !== "function") {
-      return { status: "skipped", reason: "missing-dist-contract" };
-    }
-
-    const result = await migrationModule.migratePluginRegistryForInstall({
-      env,
-      packageRoot,
-    });
-    if (result.migrated) {
-      log.log(
-        `[postinstall] migrated plugin registry: ${result.current.plugins.length} plugin(s) indexed`,
-      );
-    }
-    return result;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    log.warn(`[postinstall] could not migrate plugin registry: ${message}`);
-    return { status: "failed", error: message };
-  }
-}
-
 export function isSourceCheckoutRoot(params) {
   const pathExists = params.existsSync ?? existsSync;
   const hasPostinstallInventory = pathExists(join(params.packageRoot, DIST_INVENTORY_PATH));
@@ -619,30 +545,6 @@ export function isSourceCheckoutRoot(params) {
   );
 }
 
-export function pruneBundledPluginSourceNodeModules(params = {}) {
-  const extensionsDir = params.extensionsDir ?? join(DEFAULT_PACKAGE_ROOT, "extensions");
-  const pathExists = params.existsSync ?? existsSync;
-  const readDir = params.readdirSync ?? readdirSync;
-  const removePath = params.rmSync ?? rmSync;
-
-  if (!pathExists(extensionsDir)) {
-    return;
-  }
-
-  for (const entry of readDir(extensionsDir, { withFileTypes: true })) {
-    if (!entry.isDirectory() || entry.isSymbolicLink()) {
-      continue;
-    }
-
-    const pluginDir = join(extensionsDir, entry.name);
-    if (!pathExists(join(pluginDir, "package.json"))) {
-      continue;
-    }
-
-    removePath(join(pluginDir, "node_modules"), { recursive: true, force: true });
-  }
-}
-
 export function runBundledPluginPostinstall(params = {}) {
   const env = params.env ?? process.env;
   const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
@@ -652,16 +554,8 @@ export function runBundledPluginPostinstall(params = {}) {
     return;
   }
   if (isSourceCheckoutRoot({ packageRoot, existsSync: pathExists })) {
-    try {
-      pruneBundledPluginSourceNodeModules({
-        extensionsDir: join(packageRoot, "extensions"),
-        existsSync: pathExists,
-        readdirSync: params.readdirSync,
-        rmSync: params.rmSync,
-      });
-    } catch (e) {
-      log.warn(`[postinstall] could not prune bundled plugin source node_modules: ${String(e)}`);
-    }
+    // pnpm owns source dependency versions and workspace links. Packaged cleanup
+    // must not alter that install or the operator state from a development checkout.
     return;
   }
   pruneLegacyPluginRuntimeDepsState({
@@ -699,7 +593,22 @@ export function isDirectPostinstallInvocation(params = {}) {
   }
 }
 
+export function completePackageLifecycle(params = {}, reportError = console.error) {
+  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
+  const removePath = params.rmSync ?? rmSync;
+  const markerPath = join(packageRoot, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH);
+  try {
+    removePath(markerPath, { force: true });
+    return true;
+  } catch (error) {
+    reportError(`[postinstall] could not complete package lifecycle: ${String(error)}`);
+    return false;
+  }
+}
+
 if (isDirectPostinstallInvocation()) {
   runBundledPluginPostinstall();
-  await runPluginRegistryPostinstallMigration();
+  if (!completePackageLifecycle()) {
+    process.exitCode = 1;
+  }
 }

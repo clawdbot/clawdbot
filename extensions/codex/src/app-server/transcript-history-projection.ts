@@ -55,7 +55,7 @@ function normalizeImportedHistoryText(value: unknown): string | undefined {
   return `${truncateUtf8Prefix(text, contentLimitBytes)}${CODEX_HISTORY_TRUNCATION_SUFFIX}`;
 }
 
-function projectCodexUserItemText(item: Record<string, unknown>): string | undefined {
+export function projectCodexUserItemText(item: Record<string, unknown>): string | undefined {
   if (!Array.isArray(item.content)) {
     return undefined;
   }

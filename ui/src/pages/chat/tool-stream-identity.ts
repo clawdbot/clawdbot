@@ -1,3 +1,4 @@
+import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asToolRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -66,7 +67,8 @@ export function extractToolMessageRefs(message: unknown): ToolMessageRef[] {
       )
     : [];
   const topLevelToolId = resolveToolUseId({ ...record, id: undefined });
-  const topLevelRunId = normalizeOptionalString(record.runId);
+  const topLevelRunId =
+    readSessionMessageIdentity(record)?.runId ?? normalizeOptionalString(record.runId);
   const role = record.role;
   const messageHasToolShape =
     (typeof role === "string" && normalizeRoleForGrouping(role).toLowerCase() === "tool") ||
@@ -124,47 +126,6 @@ export function resolveMatchingLiveToolIdentity(
       liveRef.id === ref.id && (!ref.runId || !liveRef.runId || liveRef.runId === ref.runId),
   );
   return matches.length === 1 ? matches[0]?.identity : undefined;
-}
-
-export function buildLiveRenderedToolRefs(toolMessages: unknown[]): LiveToolStreamRef[] {
-  const refs: LiveToolStreamRef[] = [];
-  const seen = new Set<string>();
-  for (const [index, message] of toolMessages.entries()) {
-    for (const ref of extractToolMessageRefs(message)) {
-      const key = JSON.stringify([ref.runId ?? null, ref.id]);
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      refs.push({ ...ref, identity: `live:${index}:${key}` });
-    }
-  }
-  return refs;
-}
-
-export function removeLiveToolBlocksFromHistory(
-  message: unknown,
-  liveToolRefs: LiveToolStreamRef[],
-): unknown {
-  const record = asToolRecord(message);
-  if (!record || !Array.isArray(record.content) || liveToolRefs.length === 0) {
-    return message;
-  }
-  const topLevelToolId = resolveToolUseId({ ...record, id: undefined });
-  const topLevelRunId = normalizeOptionalString(record.runId);
-  const content = record.content.filter((block) => {
-    const entry = asToolRecord(block);
-    if (!entry || !isToolMessageContentBlock(entry)) {
-      return true;
-    }
-    const id = resolveToolUseId(entry) ?? topLevelToolId;
-    if (!id) {
-      return true;
-    }
-    const runId = normalizeOptionalString(entry.runId) ?? topLevelRunId;
-    return !resolveMatchingLiveToolIdentity({ id, ...(runId ? { runId } : {}) }, liveToolRefs);
-  });
-  return content.length === record.content.length ? message : { ...record, content };
 }
 
 export function persistedCurrentToolStreamIds(

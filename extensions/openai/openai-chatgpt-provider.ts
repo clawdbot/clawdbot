@@ -41,8 +41,6 @@ import {
   OPENAI_GPT_55_PRO_MODEL_ID as OPENAI_CODEX_GPT_55_PRO_MODEL_ID,
   OPENAI_GPT_56_VARIANT_MODEL_IDS as OPENAI_CODEX_GPT_56_MODEL_IDS,
 } from "./model-route-contract.js";
-import { loginOpenAICodexDeviceCode } from "./openai-chatgpt-device-code.js";
-import { loginOpenAICodexOAuth } from "./openai-chatgpt-oauth.runtime.js";
 import {
   buildOpenAIResponsesProviderHooks,
   buildOpenAISyntheticCatalogEntry,
@@ -488,6 +486,7 @@ type OpenAICodexOAuthContext = ProviderAuthContext & {
 };
 
 async function runOpenAICodexOAuth(ctx: OpenAICodexOAuthContext) {
+  const { loginOpenAICodexOAuth } = await import("./openai-chatgpt-oauth.runtime.js");
   const creds = await loginOpenAICodexOAuth({
     prompter: ctx.prompter,
     runtime: ctx.runtime,
@@ -523,6 +522,7 @@ async function runOpenAICodexOAuth(ctx: OpenAICodexOAuthContext) {
 async function runOpenAICodexDeviceCode(ctx: ProviderAuthContext) {
   const spin = ctx.prompter.progress("Starting device code flow…");
   try {
+    const { loginOpenAICodexDeviceCode } = await import("./openai-chatgpt-device-code.js");
     const creds = await loginOpenAICodexDeviceCode({
       ...(ctx.signal ? { signal: ctx.signal } : {}),
       onProgress: (message) => spin.update(message),

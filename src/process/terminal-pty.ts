@@ -49,9 +49,8 @@ function resolveTerminalPtyInvocation(params: {
   file: string;
   args: string[];
   platform?: NodeJS.Platform;
-  comSpec?: string;
   env: NodeJS.ProcessEnv;
-}): { file: string; args: string[] } {
+}): { file: string; args: string[] | string } {
   const platform = params.platform ?? process.platform;
   if (!isWindowsBatchCommand(params.file, platform)) {
     return { file: params.file, args: params.args };
@@ -73,8 +72,11 @@ function resolveTerminalPtyInvocation(params: {
     return { file: invocation.command, args: invocation.argv };
   }
   return {
-    file: params.comSpec?.trim() || resolveTrustedWindowsCmdExe(platform),
-    args: ["/d", "/s", "/c", buildWindowsCmdExeCommandLine(params.file, params.args)],
+    file:
+      resolveEnvironmentValue(params.env, "COMSPEC")?.trim() ||
+      resolveTrustedWindowsCmdExe(platform),
+    // node-pty preserves string tails verbatim; arrays would escape the prepared cmd quotes again.
+    args: `/d /s /c ${buildWindowsCmdExeCommandLine(params.file, params.args)}`,
   };
 }
 
@@ -92,12 +94,10 @@ export async function spawnTerminalPty(params: {
   // Passing it through makes interactive CLIs refuse to start in the web terminal.
   const terminalName = resolvePtyTerminalName(readPtyTerminalName(env, process.platform));
   setPtyTerminalName({ env, name: terminalName, platform: process.platform });
-  const comSpec = resolveEnvironmentValue(env, "COMSPEC");
   const invocation = resolveTerminalPtyInvocation({
     file: params.file,
     args: params.args,
     env,
-    ...(comSpec ? { comSpec } : {}),
   });
   const pty = spawn(invocation.file, invocation.args, {
     name: terminalName,

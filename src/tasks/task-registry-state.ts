@@ -22,6 +22,24 @@ export const taskRegistryLog = createSubsystemLogger("tasks/registry");
 export const TASK_FLOW_SYNC_RETRY_DELAYS_MS = [1_000, 5_000, 25_000, 120_000, 600_000] as const;
 
 const taskRegistryProcessState = getTaskRegistryProcessState();
+const TASK_REGISTRY_REVISION_KEY = Symbol.for("openclaw.taskRegistry.revision");
+type TaskRegistryRevisionGlobal = typeof globalThis & {
+  [TASK_REGISTRY_REVISION_KEY]?: { value: number };
+};
+// SAFETY: This symbol owns the process-global revision cell assigned below.
+const taskRegistryRevisionGlobal = globalThis as TaskRegistryRevisionGlobal;
+const taskRegistryRevisionState = (taskRegistryRevisionGlobal[TASK_REGISTRY_REVISION_KEY] ??= {
+  value: 0,
+});
+
+export function readTaskRegistryRevision(): number {
+  return taskRegistryRevisionState.value;
+}
+
+export function bumpTaskRegistryRevision(): void {
+  taskRegistryRevisionState.value += 1;
+}
+
 export const tasks = taskRegistryProcessState.tasks;
 export const taskDeliveryStates = taskRegistryProcessState.taskDeliveryStates;
 const taskIdsByRunId = taskRegistryProcessState.taskIdsByRunId;
@@ -259,6 +277,7 @@ export function clearTaskRegistryMemory(): void {
   }
   taskActivityByTaskId.clear();
   tasks.clear();
+  bumpTaskRegistryRevision();
   taskDeliveryStates.clear();
   taskIdsByRunId.clear();
   taskIdsByOwnerKey.clear();

@@ -200,6 +200,48 @@ describe("runExecProcess cursor tracking", () => {
 });
 
 describe("sandbox exec preparation failures", () => {
+  it.each([
+    { mode: "child", usePty: false, cancelCheck: 1, expectedSpawns: 0 },
+    { mode: "PTY", usePty: true, cancelCheck: 1, expectedSpawns: 0 },
+    { mode: "PTY fallback", usePty: true, cancelCheck: 2, expectedSpawns: 1 },
+  ])(
+    "does not start $mode after cancellation during final admission",
+    async ({ usePty, cancelCheck, expectedSpawns }) => {
+      const controller = new AbortController();
+      let checks = 0;
+      supervisorMock.spawn.mockImplementation(async (input: SpawnInput) => {
+        if (input.mode === "pty") {
+          throw new Error("PTY unavailable");
+        }
+        return runtimeManagedRun(input);
+      });
+
+      await expect(
+        runExecProcess({
+          command: "echo should-not-run",
+          workdir: process.cwd(),
+          env: {},
+          usePty,
+          warnings: [],
+          maxOutput: 1000,
+          pendingMaxOutput: 1000,
+          notifyOnExit: false,
+          timeoutSec: null,
+          startupSignal: controller.signal,
+          beforeSpawn: async () => {
+            if (++checks === cancelCheck) {
+              controller.abort(new Error("cancelled during admission"));
+            }
+            return undefined;
+          },
+        }),
+      ).rejects.toThrow("cancelled during admission");
+
+      expect(supervisorMock.spawn.mock.calls.length).toBe(expectedSpawns);
+      expect(checks).toBe(cancelCheck);
+    },
+  );
+
   it("keeps turn authority out of process lifetime while preserving foreground updates", async () => {
     const exit = createDeferred<RunExit>();
     const identity = {

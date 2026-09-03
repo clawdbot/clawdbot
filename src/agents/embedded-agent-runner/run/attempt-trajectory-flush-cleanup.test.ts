@@ -1,6 +1,6 @@
 // Coverage for bounded trajectory flush during attempt cleanup.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { flushEmbeddedAttemptTrajectoryRecorder } from "./attempt-finalize.js";
+import { flushEmbeddedAttemptTrajectoryRecorder } from "./attempt-trajectory-flush.js";
 
 describe("embedded attempt trajectory flush cleanup", () => {
   const log = {

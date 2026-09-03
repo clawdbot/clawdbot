@@ -343,9 +343,10 @@ async function buildHostApprovalDecisionParams(
     runId: params.runId,
     toolCallId: params.toolCallId,
     requireDeliveryRoute: params.requireDeliveryRoute,
-    // Gateway-host cron cards go only to connected approval clients (Control
-    // UI/TUI); allow-always there mints a standing grant that ends the
-    // recurrence. With no client connected, the request still registers and
+    // Gateway-host cron cards go only to connected exec approval clients
+    // (Control UI, macOS/iOS/Android apps, `approvals`/`exec-approvals` cap
+    // holders — not the TUI); allow-always there mints a standing grant that
+    // ends the recurrence. With no client connected, the request still registers and
     // expires no-route into the headless denial (#128031). Node-host cron has
     // no grant mint/consume path yet, so it keeps the fully suppressed
     // headless policy instead of raising cards whose allow-always could not

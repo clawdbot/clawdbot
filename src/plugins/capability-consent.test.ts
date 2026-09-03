@@ -5,16 +5,16 @@ import type {
   PluginAcceptedDeclaredSurface,
   PluginInstallRecord,
 } from "../config/types.plugins.js";
+import { resolvePluginArtifactDeclaredSurface } from "./capability-artifact.js";
+import { createManagedPluginArtifactConsentHandler } from "./capability-consent.js";
 import {
-  buildPluginCapabilityConsentReview,
+  buildPluginCapabilitySummary,
   computeDeclaredSurfaceHash,
-  createManagedPluginArtifactConsentHandler,
   diffDeclaredSurfaceWidening,
+  mergePluginDeclaredSurfaces,
   resolveAcceptedSurfaceCurrent,
-  resolvePluginArtifactDeclaredSurface,
   resolvePluginInstallRecordIntegrity,
-} from "./capability-consent.js";
-import { buildPluginCapabilitySummary, mergePluginDeclaredSurfaces } from "./capability-summary.js";
+} from "./capability-summary.js";
 import { resolveInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
 import { loadInstalledPluginIndexWithDiscovery } from "./installed-plugin-index.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -391,23 +391,33 @@ describe("plugin capability consent", () => {
     expect(resolveAcceptedSurfaceCurrent(installRecord, surface)).toBe(current);
   });
 
-  it("redacts source credentials before a capability review reaches a prompt or pending inspection", () => {
+  it("redacts source credentials before a capability review reaches a prompt or pending inspection", async () => {
     const url = new URL("https://example.invalid/plugins/demo.git");
     url.username = "fixture-user";
     url.password = "fixture-password";
     url.searchParams.set("token", "fixture-token");
     const record: PluginInstallRecord = { source: "git", spec: `git:${url.href}` };
 
-    const review = buildPluginCapabilityConsentReview({
-      pluginId: "plugin",
-      manifest: {},
+    let reviewSpec: string | undefined;
+    const consent = createManagedPluginArtifactConsentHandler({
       config: {},
-      record,
+      source: record.source,
+      spec: record.spec,
+      onCapabilityConsent: async (review) => {
+        reviewSpec = review.source?.spec;
+        return { reviewToken: review.reviewToken };
+      },
+    });
+    await consent.onBeforePluginArtifactCommit({
+      pluginId: "plugin",
+      mode: "install",
+      stagedArtifactDir: createArtifactFixture({
+        "index.js": "export {};",
+        "openclaw.plugin.json": { id: "plugin", configSchema: { type: "object" } },
+      }),
     });
 
-    expect(review.source?.spec).toBe(
-      "git:https://***:***@example.invalid/plugins/demo.git?token=***",
-    );
+    expect(reviewSpec).toBe("git:https://***:***@example.invalid/plugins/demo.git?token=***");
     expect(record.spec).toBe(`git:${url.href}`);
   });
 
@@ -495,7 +505,7 @@ describe("plugin capability consent", () => {
     },
   );
 
-  it("requires consent when reinstalling a previously disabled plugin will enable it", async () => {
+  it("rejects reinstall without capability consent even when the plugin is disabled", async () => {
     const rootDir = createArtifactFixture({
       "package.json": { openclaw: { extensions: ["./index.js"] } },
       "index.js": "export {};",

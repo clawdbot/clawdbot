@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import type { PluginCandidate, PluginDiscoveryResult } from "../plugins/discovery.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
@@ -1106,23 +1106,10 @@ describe("applyPluginAutoEnable core", () => {
     expect(setupRegistryMock.resolvePluginSetupAutoEnableReasons).toHaveBeenCalledTimes(2);
   });
 
-  it("fingerprints identical snapshots once per plugin metadata lifecycle", () => {
-    const traversals = { candidates: 0, config: 0, env: 0, plugins: 0 };
-    const config = new Proxy<OpenClawConfig>(
-      {},
-      {
-        ownKeys: (target) => {
-          traversals.config += 1;
-          return Reflect.ownKeys(target);
-        },
-      },
-    );
-    const envSnapshot = new Proxy(makeIsolatedEnv(), {
-      ownKeys: (target) => {
-        traversals.env += 1;
-        return Reflect.ownKeys(target);
-      },
-    });
+  it("fingerprints identical metadata snapshots once per plugin metadata lifecycle", () => {
+    const traversals = { candidates: 0, plugins: 0 };
+    const config: OpenClawConfig = {};
+    const envSnapshot = makeIsolatedEnv();
     const discovery: PluginDiscoveryResult = {
       candidates: new Proxy([], {
         get: (target, property, receiver) => {
@@ -1162,8 +1149,6 @@ describe("applyPluginAutoEnable core", () => {
     clearPluginMetadataLifecycleCaches();
     applyPluginAutoEnable({ config, discovery, env: envSnapshot, manifestRegistry });
 
-    expect(traversals.config).toBeGreaterThan(firstTraversalCounts.config);
-    expect(traversals.env).toBeGreaterThan(firstTraversalCounts.env);
     expect(traversals.candidates).toBeGreaterThan(firstTraversalCounts.candidates);
     expect(traversals.plugins).toBeGreaterThan(firstTraversalCounts.plugins);
   });

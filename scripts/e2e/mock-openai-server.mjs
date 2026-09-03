@@ -298,6 +298,7 @@ function responseEvents(text, deltas = [text]) {
   return [
     {
       type: "response.output_item.added",
+      output_index: 0,
       item: {
         type: "message",
         id: itemId,
@@ -322,6 +323,7 @@ function responseEvents(text, deltas = [text]) {
     },
     {
       type: "response.output_item.done",
+      output_index: 0,
       item: {
         type: "message",
         id: itemId,
@@ -418,6 +420,7 @@ function preambleThenToolCallEvents(preamble, name, args) {
   return [
     {
       type: "response.output_item.added",
+      output_index: 0,
       item: {
         type: "message",
         id: messageItemId,
@@ -442,6 +445,7 @@ function preambleThenToolCallEvents(preamble, name, args) {
     },
     {
       type: "response.output_item.done",
+      output_index: 0,
       item: {
         type: "message",
         id: messageItemId,
@@ -501,7 +505,7 @@ function progressDraftEvents(body, bodyText) {
       return null;
     }
     return preambleThenToolCallEvents("Checking the workspace before answering.", "exec", {
-      command: ["bash", "-lc", "sleep 3 && echo openclaw-draft-proof"],
+      command: "sleep 3 && echo openclaw-draft-proof",
     });
   }
   return responseEvents("OPENCLAW_E2E_DRAFTPROOF");
@@ -913,7 +917,7 @@ const server = http.createServer((req, res) => {
             body.stream !== false,
             "Checking the workspace before answering.",
             "exec",
-            { command: ["bash", "-lc", "sleep 3 && echo openclaw-draft-proof"] },
+            { command: "sleep 3 && echo openclaw-draft-proof" },
           );
           return;
         }

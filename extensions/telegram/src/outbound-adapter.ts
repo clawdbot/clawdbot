@@ -88,6 +88,7 @@ async function resolveTelegramSendContext(params: {
     NonNullable<ChannelOutboundAdapter["sendText"]>
   >[0]["onDeliveryResult"];
   onPlatformSendDispatch?: () => Promise<void>;
+  assertDirectAdapterHandoff?: () => void;
   resolveSend: ResolveTelegramSendFn;
 }): Promise<{
   send: TelegramSendFn;
@@ -105,6 +106,7 @@ async function resolveTelegramSendContext(params: {
     gatewayClientScopes?: readonly string[];
     onDeliveryResult?: TelegramSendOpts["onDeliveryResult"];
     onPlatformSendDispatch?: TelegramSendOpts["onPlatformSendDispatch"];
+    assertPlatformSendAuthorized?: TelegramSendOpts["assertPlatformSendAuthorized"];
   };
 }> {
   const send = await params.resolveSend(params.deps);
@@ -128,6 +130,7 @@ async function resolveTelegramSendContext(params: {
           }
         : undefined,
       onPlatformSendDispatch: params.onPlatformSendDispatch,
+      assertPlatformSendAuthorized: params.assertDirectAdapterHandoff,
       ...(params.formatting?.parseMode === "HTML" ? { textMode: "html" as const } : {}),
       tableMode: params.formatting?.tableMode,
     },
@@ -401,6 +404,7 @@ export async function sendTelegramPayloadMessages(params: {
       throw new Error("Telegram reaction requires a reply target");
     }
     await params.baseOpts.onPlatformSendDispatch?.();
+    params.baseOpts.assertPlatformSendAuthorized?.();
     const reactionResult = await params.react(params.to, replyToMessageId, reactionEmoji, {
       cfg: params.baseOpts.cfg,
       accountId: params.baseOpts.accountId,
@@ -644,6 +648,7 @@ export function createTelegramOutboundAdapter(
       isAnonymous,
       gatewayClientScopes,
       onPlatformSendDispatch,
+      assertDirectAdapterHandoff,
     }) => {
       const outboundTo = normalizeTelegramOutboundTarget(to);
       const { sendPollTelegram } = await loadSendModule();
@@ -655,6 +660,7 @@ export function createTelegramOutboundAdapter(
         isAnonymous: isAnonymous ?? undefined,
         gatewayClientScopes,
         onPlatformSendDispatch,
+        assertPlatformSendAuthorized: assertDirectAdapterHandoff,
       });
     },
   };

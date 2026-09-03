@@ -21,17 +21,17 @@ import {
   renderSettingsNavRow,
   renderSettingsSection,
 } from "../../components/settings-ui.ts";
+import type { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
 import { t } from "../../i18n/index.ts";
 import {
   agentBadgeText,
   buildAgentContext,
   normalizeAgentLabel,
 } from "../../lib/agents/display.ts";
-import type { AgentsPanel } from "../../lib/agents/index.ts";
 import "../../styles/agents.css";
 import "../../styles/sidebar-markdown.css";
 import "./memory/memory-panel.ts";
-import type { GitHubIdentityController } from "./github-identity-controller.ts";
+import type { AgentsPanel } from "../../lib/agents/index.ts";
 import type { AgentIdentityDraft } from "./panels-overview.ts";
 import { renderAgentOverview } from "./panels-overview.ts";
 import { renderAgentFiles, renderAgentChannels, renderAgentCron } from "./panels-status-files.ts";
@@ -124,6 +124,7 @@ type AgentsProps = {
   toolsCatalog: ToolsCatalogState;
   toolsEffective: ToolsEffectiveState;
   githubIdentity: GitHubIdentityController;
+  onOpenGitHubConnections: () => void;
   runtimeSessionKey: string;
   runtimeSessionMatchesSelectedAgent: boolean;
   modelCatalog: ModelCatalogEntry[];
@@ -412,6 +413,7 @@ export function renderAgents(props: AgentsProps) {
                       runtimeSessionMatchesSelectedAgent: props.runtimeSessionMatchesSelectedAgent,
                       canUpdateConfig: props.access.canUpdateConfig,
                       githubIdentity: props.githubIdentity,
+                      onOpenGitHubConnections: props.onOpenGitHubConnections,
                       onProfileChange: props.onToolsProfileChange,
                       onOverridesChange: props.onToolsOverridesChange,
                       onConfigReload: props.onConfigReload,

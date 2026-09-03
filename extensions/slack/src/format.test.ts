@@ -56,6 +56,11 @@ describe("chunkSlackMrkdwnText", () => {
 });
 
 describe("normalizeSlackOutboundText", () => {
+  it("leaves table parsing off for callers without an authored-text table mode", () => {
+    const table = "| Name | Value |\n| --- | --- |\n| Beta | 2 |";
+    expect(normalizeSlackOutboundText(table)).toBe(table);
+  });
+
   it("marks assistant-authored transcript role headers after parsing Markdown", () => {
     expect(normalizeSlackOutboundText("**user**[Thu 2026-07-02] question")).toBe(
       "`user[Thu 2026-07-02]` question",

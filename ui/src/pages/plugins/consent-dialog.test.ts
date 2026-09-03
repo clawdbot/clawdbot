@@ -242,11 +242,26 @@ describe("renderPluginConsentDialog", () => {
     expect(dialog?.querySelector<HTMLButtonElement>(".btn.primary")?.disabled).toBe(true);
   });
 
-  it("prevents consent confirmation when the operator cannot mutate plugins", () => {
-    const container = mount({ canMutate: false, mutationBlockedReason: "Admin access required." });
+  it("keeps blocked consent confirmation reachable without dispatching it", async () => {
+    const onConfirm = vi.fn();
+    const container = mount({
+      canMutate: false,
+      mutationBlockedReason: "Admin access required.",
+      onConfirm,
+    });
     const confirm = container.querySelector<HTMLButtonElement>(".btn.primary");
 
-    expect(confirm?.disabled).toBe(true);
-    expect(confirm?.title).toBe("Admin access required.");
+    expect(confirm?.disabled).toBe(false);
+    expect(confirm?.getAttribute("aria-disabled")).toBe("true");
+    const tooltip = confirm?.closest("openclaw-tooltip") as
+      | (HTMLElement & { content?: string; updateComplete: Promise<unknown> })
+      | null;
+    await tooltip?.updateComplete;
+    expect(tooltip?.content).toBe("Admin access required.");
+    expect(confirm?.getAttribute("aria-describedby")).toBeTruthy();
+    confirm?.focus();
+    expect(document.activeElement).toBe(confirm);
+    confirm?.click();
+    expect(onConfirm).not.toHaveBeenCalled();
   });
 });

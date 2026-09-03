@@ -36,6 +36,15 @@ type RuntimeParityStatus = "pass" | "fail" | "skip";
 
 const CANONICAL_RUNTIME_IDS = ["openclaw", "codex"] as const satisfies readonly RuntimeId[];
 
+export function normalizeRuntimePair(
+  pair: [RuntimeId, RuntimeId] | null | undefined,
+): [RuntimeId, RuntimeId] {
+  if (pair?.[0] && pair?.[1]) {
+    return pair;
+  }
+  return ["openclaw", "codex"];
+}
+
 export type RuntimeParityToolCall = {
   tool: string;
   argsHash: string;

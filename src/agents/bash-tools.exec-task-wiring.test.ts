@@ -25,6 +25,7 @@ describe("exec background task wiring", () => {
 
   it("does not spawn when the turn closes during asynchronous process preparation", async () => {
     const abortController = new AbortController();
+    const finalizeExec = vi.fn<NonNullable<BashSandboxConfig["finalizeExec"]>>();
     const preparationStarted = createDeferred();
     const preparation =
       createDeferred<Awaited<ReturnType<NonNullable<BashSandboxConfig["buildExecSpec"]>>>>();
@@ -41,6 +42,7 @@ describe("exec background task wiring", () => {
           preparationStarted.resolve();
           return await preparation.promise;
         },
+        finalizeExec,
       },
     });
     try {
@@ -56,10 +58,17 @@ describe("exec background task wiring", () => {
         argv: [process.execPath, "-e", ""],
         env: process.env,
         stdinMode: "pipe-closed",
+        finalizeToken: "cancelled-startup",
       });
       await settled;
       expect(spawn.mock.calls.length).toBe(0);
       await expect(execution).rejects.toThrow("turn closed during preparation");
+      expect(finalizeExec).toHaveBeenCalledExactlyOnceWith({
+        token: "cancelled-startup",
+        status: "failed",
+        exitCode: null,
+        timedOut: false,
+      });
       expect(taskTracking.createBackgroundExecTask).not.toHaveBeenCalled();
     } finally {
       spawn.mockRestore();

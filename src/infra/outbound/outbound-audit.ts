@@ -69,7 +69,7 @@ type OutboundAuditTerminal =
       sentBeforeError?: boolean;
     };
 
-type IndexedOutboundAuditTerminal = {
+export type IndexedOutboundAuditTerminal = {
   payloadIndex: number;
   terminal: OutboundAuditTerminal;
 };
@@ -130,7 +130,11 @@ function projectRecordedOutboundAuditTerminal(
     if (latest.reason === "adapter_returned_no_identity") {
       return { outcome: "unknown", failureStage: "platform_send" };
     }
-    return { outcome: "suppressed", reasonCode: latest.reason };
+    return {
+      outcome: "suppressed",
+      reasonCode:
+        latest.reason === "adapter_returned_no_send" ? "no_visible_payload" : latest.reason,
+    };
   }
   return undefined;
 }

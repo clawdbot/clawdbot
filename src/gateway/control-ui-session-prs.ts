@@ -2,7 +2,12 @@
 // UI chat view can pin PR status chips above the composer.
 import fs from "node:fs/promises";
 import nodePath from "node:path";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeOptionalString,
+  readNonBlankString,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { runGit } from "../agents/worktrees/git.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
@@ -16,9 +21,6 @@ import {
   ControlUiGitHubError,
   fetchGitHubJson,
   GITHUB_API_ORIGIN,
-  isRecord,
-  optionalNumber,
-  readOptionalGitHubString,
   resolveGitHubApiCredentialScope,
 } from "./control-ui-github-api.js";
 import {
@@ -56,6 +58,7 @@ type PullListItem = {
   owner: string;
   repo: string;
   state: ControlUiSessionPullRequest["state"];
+  author?: ControlUiSessionPullRequest["author"];
   headSha?: string;
   baseRef?: string;
   mergeCommitSha?: string;
@@ -326,7 +329,7 @@ async function resolveSessionBranch(
 }
 
 function derivePullState(value: Record<string, unknown>): ControlUiSessionPullRequest["state"] {
-  if (readOptionalGitHubString(value, "merged_at")) {
+  if (readNonBlankString(value.merged_at)) {
     return "merged";
   }
   if (value.state !== "open") {
@@ -339,18 +342,20 @@ function parsePullListItem(value: unknown): PullListItem | null {
   if (!isRecord(value)) {
     return null;
   }
-  const number = optionalNumber(value, "number");
-  const title = readOptionalGitHubString(value, "title");
-  const url = readOptionalGitHubString(value, "html_url");
+  const number = asFiniteNumber(value.number);
+  const title = readNonBlankString(value.title);
+  const url = readNonBlankString(value.html_url);
   const base = isRecord(value.base) ? value.base : {};
   const baseRepo = isRecord(base.repo) ? base.repo : {};
   const baseOwner = isRecord(baseRepo.owner) ? baseRepo.owner : {};
-  const owner = readOptionalGitHubString(baseOwner, "login");
-  const repo = readOptionalGitHubString(baseRepo, "name");
+  const owner = readNonBlankString(baseOwner.login);
+  const repo = readNonBlankString(baseRepo.name);
   const head = isRecord(value.head) ? value.head : {};
   if (!number || !Number.isSafeInteger(number) || number < 1 || !title || !url || !owner || !repo) {
     return null;
   }
+  const user = isRecord(value.user) ? value.user : {};
+  const authorLogin = readNonBlankString(user.login);
   return {
     number,
     title,
@@ -358,9 +363,10 @@ function parsePullListItem(value: unknown): PullListItem | null {
     owner,
     repo,
     state: derivePullState(value),
-    headSha: readOptionalGitHubString(head, "sha"),
-    baseRef: readOptionalGitHubString(base, "ref"),
-    mergeCommitSha: readOptionalGitHubString(value, "merge_commit_sha"),
+    ...(authorLogin ? { author: { login: authorLogin } } : {}),
+    headSha: readNonBlankString(head.sha),
+    baseRef: readNonBlankString(base.ref),
+    mergeCommitSha: readNonBlankString(value.merge_commit_sha),
   };
 }
 
@@ -410,9 +416,9 @@ async function fetchDiffCounts(
       return {};
     }
     return {
-      additions: optionalNumber(value, "additions"),
-      deletions: optionalNumber(value, "deletions"),
-      changedFiles: optionalNumber(value, "changed_files"),
+      additions: asFiniteNumber(value.additions),
+      deletions: asFiniteNumber(value.deletions),
+      changedFiles: asFiniteNumber(value.changed_files),
     };
   } catch (error) {
     rethrowRateLimit(error);
@@ -438,7 +444,7 @@ function rollupCheckRuns(value: unknown): ControlUiSessionPullRequest["checks"] 
   let running = 0;
   for (const runValue of value.check_runs) {
     const run = isRecord(runValue) ? runValue : {};
-    const conclusion = readOptionalGitHubString(run, "conclusion");
+    const conclusion = readNonBlankString(run.conclusion);
     if (conclusion && FAILING_CHECK_CONCLUSIONS.has(conclusion)) {
       failed += 1;
       continue;
@@ -476,13 +482,12 @@ async function fetchChecks(
   }
 }
 
-async function finishPullRequest(
-  item: PullListItem,
-  branch: string,
-  fetchImpl: typeof fetch,
-  token: string | undefined,
-): Promise<ControlUiSessionPullRequest> {
-  const chip: ControlUiSessionPullRequest = {
+/**
+ * The facts a chip carries without spending quota on per-PR detail calls. The
+ * rate-limited path renders exactly this, so both callers share one shape.
+ */
+function stateOnlyPullRequestChip(item: PullListItem, branch: string): ControlUiSessionPullRequest {
+  return {
     number: item.number,
     owner: item.owner,
     repo: item.repo,
@@ -490,7 +495,17 @@ async function finishPullRequest(
     title: item.title,
     url: item.url,
     state: item.state,
+    ...(item.author ? { author: item.author } : {}),
   };
+}
+
+async function finishPullRequest(
+  item: PullListItem,
+  branch: string,
+  fetchImpl: typeof fetch,
+  token: string | undefined,
+): Promise<ControlUiSessionPullRequest> {
+  const chip = stateOnlyPullRequestChip(item, branch);
   // Merged/closed chips render state only; diff counts and CI rollup are
   // live-work signals, so spend GitHub quota on open PRs alone.
   if (item.state !== "open" && item.state !== "draft") {
@@ -556,15 +571,9 @@ async function fetchBranchPullRequests(
     // keep the proven PR list as state-only chips instead of dropping it, or
     // a cold cache would show a Create PR row despite a known open PR.
     return {
-      pullRequests: capped.map((item) => ({
-        number: item.number,
-        owner: item.owner,
-        repo: item.repo,
-        branch: context.branch,
-        title: item.title,
-        url: item.url,
-        state: item.state,
-      })),
+      // Author and title came from the list fetch that already succeeded, so
+      // they survive here; only the per-PR detail facts are missing.
+      pullRequests: capped.map((item) => stateOnlyPullRequestChip(item, context.branch)),
       rateLimited: true,
       mergedHeads,
     };

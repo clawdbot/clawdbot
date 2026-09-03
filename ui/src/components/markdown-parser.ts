@@ -16,6 +16,7 @@ import {
   parseMarkdownFileLinkTarget,
   splitMarkdownFileLineSuffix,
 } from "./markdown-file-links.ts";
+import { hasMarkdownLinkBoundaries } from "./markdown-link-boundary.ts";
 import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
 import { installMarkdownSessionLinks, SESSION_LINK_SCAN_RE } from "./markdown-session-links.ts";
 import { installMarkdownTables } from "./markdown-tables.ts";
@@ -126,16 +127,6 @@ function formatGitHubLinkLabel(url: URL): string {
   const fallbackSegments = segments.length > 2 ? segments.slice(2) : segments;
   const path = fallbackSegments.map((segment) => decodeGitHubPathSegment(segment) ?? segment);
   return ["github.com", ...path].join("/");
-}
-
-function isFileLinkBoundaryBefore(value: string, index: number): boolean {
-  const char = value[index - 1];
-  return char === undefined || /\s/.test(char) || "([{<\"'`".includes(char);
-}
-
-function isFileLinkBoundaryAfter(value: string, index: number): boolean {
-  const char = value[index];
-  return char === undefined || /\s/.test(char) || ".,;:!?)]}>\"'".includes(char);
 }
 
 export function createMarkdownParser(): MarkdownItParser {
@@ -445,10 +436,7 @@ export function createMarkdownParser(): MarkdownItParser {
           const matchIndex = match.index;
           const matched = match[0];
           const matchEnd = matchIndex + matched.length;
-          if (
-            !isFileLinkBoundaryBefore(token.content, matchIndex) ||
-            !isFileLinkBoundaryAfter(token.content, matchEnd)
-          ) {
+          if (!hasMarkdownLinkBoundaries(token.content, matchIndex, matchEnd)) {
             continue;
           }
           const target = parseMarkdownFileLinkTarget(matched);
@@ -666,12 +654,18 @@ export function createMarkdownParser(): MarkdownItParser {
     const language = token.info.trim().split(/\s+/)[0] || "";
     // An unfinished fence consumes the remaining input; only container closers can
     // follow it. Invalid fence-looking prose must not de-highlight an earlier block.
-    const streamingOpenFence = env?.streamingOpenFence === true;
-    return renderMarkdownCodeBlock(token.content, language, env, {
+    const openFence =
+      env?.streamingOpenFence === true &&
+      tokens.findLastIndex(({ nesting }) => nesting !== -1) === index;
+    const code = renderMarkdownCodeBlock(token.content, language, env, {
       copyText: markdownCodeBlockCopyText(token.content),
-      highlight:
-        !streamingOpenFence || tokens.findLastIndex(({ nesting }) => nesting !== -1) !== index,
+      highlight: !openFence,
     });
+    // Keep source readable until the host mounts the lazy renderer. Incomplete
+    // streamed fences stay code so partial syntax never starts diagram layout.
+    return language.toLowerCase() === "mermaid" && !openFence
+      ? `<div class="markdown-mermaid">${code}</div>`
+      : code;
   };
   // Override indented code blocks (code_block) with the same treatment as fence
   markdownParser.renderer.rules.code_block = (tokens, index, _options, env) => {

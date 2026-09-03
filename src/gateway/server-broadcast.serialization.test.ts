@@ -5,7 +5,7 @@ import { once } from "node:events";
 import { existsSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { resolveSessionStorePathCore } from "../config/sessions.js";
 import {
@@ -78,6 +78,20 @@ afterEach(() => {
 });
 
 describe("broadcast serialization failures", () => {
+  it("delivers public suspension state to connected operators without read scope", () => {
+    const peer = makeClient("suspension-viewer");
+    peer.client.connect.scopes = [];
+    const { broadcast } = createGatewayBroadcaster({ clients: new Set([peer.client]) });
+    broadcast("gateway.suspension", { phase: "prepared" });
+    expect(peer.socket.send).toHaveBeenCalledOnce();
+    expect(JSON.parse(peer.socket.send.mock.calls[0]![0])).toMatchObject({
+      type: "event",
+      event: "gateway.suspension",
+      seq: 1,
+      payload: { phase: "prepared" },
+    });
+  });
+
   it("never sends raw presence when its owner projection is missing", () => {
     const peer = makeClient("unprepared");
     const { broadcast } = createGatewayBroadcaster({ clients: new Set([peer.client]) });
@@ -240,6 +254,62 @@ describe("broadcast serialization failures", () => {
 });
 
 describe("presence recipient projection", () => {
+  it.each(["chat.metadata.changed", "node.presence", "node.hostStats"])(
+    "delivers %s only to readable operators",
+    (event) => {
+      const readers = [makeClient("reader"), makeClient("writer"), makeClient("admin")];
+      readers[1]!.client.connect.scopes = ["operator.write"];
+      readers[2]!.client.connect.scopes = ["operator.admin"];
+      const denied = [makeClient("no-scope"), makeClient("node"), makeClient("pairing")];
+      denied[0]!.client.connect.scopes = [];
+      denied[1]!.client.connect.role = "node";
+      denied[2]!.client.connect.scopes = ["operator.pairing"];
+      const { broadcast } = createGatewayBroadcaster({
+        clients: new Set([...readers, ...denied].map(({ client }) => client)),
+      });
+      broadcast(event, {});
+      for (const peer of readers) {
+        expect(JSON.parse(peer.socket.send.mock.lastCall![0])).toMatchObject({
+          event,
+          payload: {},
+        });
+      }
+      for (const peer of denied) {
+        expect(peer.socket.send).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("delivers mention invalidations only to targeted readable operators", () => {
+    const readers = [makeClient("reader"), makeClient("writer"), makeClient("admin")];
+    readers[1]!.client.connect.scopes = ["operator.write"];
+    readers[2]!.client.connect.scopes = ["operator.admin"];
+    const denied = [makeClient("no-scope"), makeClient("node"), makeClient("unrelated")];
+    denied[0]!.client.connect.scopes = [];
+    denied[1]!.client.connect.role = "node";
+    const { broadcastToConnIds } = createGatewayBroadcaster({
+      clients: new Set([...readers, ...denied].map(({ client }) => client)),
+    });
+    const payload = { gatewayInstanceId: "mention-gateway", revision: 1 };
+
+    broadcastToConnIds(
+      "mentions.changed",
+      payload,
+      new Set(["reader", "writer", "admin", "no-scope", "node"]),
+    );
+
+    for (const peer of readers) {
+      expect(JSON.parse(peer.socket.send.mock.lastCall![0])).toMatchObject({
+        event: "mentions.changed",
+        payload,
+        seq: 1,
+      });
+    }
+    for (const peer of denied) {
+      expect(peer.socket.send).not.toHaveBeenCalled();
+    }
+  });
+
   it("preserves scoped sentinels, recipient ordering, and current visibility without changing the source", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       let cfg: OpenClawConfig = { agents: { entries: { main: {}, work: {} } } };
@@ -265,7 +335,8 @@ describe("presence recipient projection", () => {
             sessionId: `${agentId}-${sessionKey}`,
             updatedAt: 1,
             visibility,
-            createdActor: { type: "human", id: "creator" },
+            createdVia: "operator",
+            createdActor: { type: "human", source: "profile", id: "creator" },
           },
         );
       }
@@ -279,15 +350,23 @@ describe("presence recipient projection", () => {
       };
       const admin = makeClient("admin");
       admin.client.connect.scopes = ["operator.admin"];
-      const connection = createGatewayConnectionState({ cfg, getRuntimeConfig: () => cfg });
+      const connection = createGatewayConnectionState({
+        bootId: "presence-projection",
+        cfg,
+        getRuntimeConfig: () => cfg,
+      });
+      onTestFinished(() => connection.mentionInbox.dispose());
       const person = {
         text: "watcher",
         ts: 42,
+        onlineSince: 30,
+        lastActivityAt: 40,
+        timeZone: "Europe/Vienna",
         instanceId: "watcher",
         user: { id: "creator", name: "Creator" },
       };
       const watcher = { ...person, watchedSessions: [...keys, "agent:main:deleted"] };
-      const presence = [watcher, { text: "idle", ts: 41 }];
+      const presence = [watcher, { ...person, text: "idle", instanceId: "idle", ts: 41 }];
       Object.freeze(watcher.watchedSessions);
       presence.forEach(Object.freeze);
       Object.freeze(presence);
@@ -370,11 +449,20 @@ describe("presence recipient projection", () => {
           sessionId: "private",
           updatedAt: 1,
           visibility: "draft",
-          createdActor: { type: "human", id: "creator" },
+          createdVia: "operator",
+          createdActor: { type: "human", source: "profile", id: "creator" },
         },
       );
-      const person = { text: "watcher", ts: 1 };
-      const presence = [{ ...person, watchedSessions: [key] }];
+      const person = {
+        text: "watcher",
+        ts: 3,
+        onlineSince: 1,
+        lastActivityAt: 2,
+        timeZone: "Europe/Vienna",
+        user: { id: "creator" },
+      };
+      const idle = { ...person, text: "idle" };
+      const presence = [{ ...person, watchedSessions: [key] }, idle];
       const solo = makeClient("solo").client;
       solo.connect.scopes = ["operator.write"];
       const pending = makeClient("pending").client;
@@ -387,16 +475,25 @@ describe("presence recipient projection", () => {
       node.connect.scopes = ["operator.admin"];
       const noRead = makeClient("no-read").client;
       noRead.connect.scopes = [];
+      const worker = makeClient("worker").client;
+      worker.connect.role = "worker";
+      worker.connect.scopes = [];
+      worker.connectionKind = "worker";
       const project = createPresenceRecipientProjection({ cfg: {}, presence });
       expect(project(solo)).toEqual(presence);
-      for (const client of [pending, node, noRead, null]) {
-        expect(project(client)).toEqual([person]);
+      solo.connect.scopes = [];
+      expect(project(solo)).toEqual([]);
+      solo.connect.scopes = ["operator.write"];
+      expect(project(solo)).toEqual(presence);
+      expect(project(pending)).toEqual([person, idle]);
+      for (const client of [node, worker, noRead, null]) {
+        expect(project(client)).toEqual([]);
       }
       pending.connect.scopes = ["operator.admin"];
       expect(project(pending)).toEqual(presence);
       const cfg: OpenClawConfig = { gateway: { roles: { definitions: {} } } };
       const restrictedProject = createPresenceRecipientProjection({ cfg, presence });
-      expect(restrictedProject(solo)).toEqual([person]);
+      expect(restrictedProject(solo)).toEqual([person, idle]);
       solo.internal = { operatorRoleActor: { kind: "system" } };
       expect(restrictedProject(solo)).toEqual(presence);
       pending.authenticatedUserProfile = {

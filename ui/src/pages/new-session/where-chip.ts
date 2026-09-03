@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { icons } from "../../components/icons.ts";
+import { workerCapacityPresentation } from "../../components/worker-capacity.ts";
 import { t } from "../../i18n/index.ts";
 import {
   renderCloudProfileMenuItems,
@@ -82,7 +83,7 @@ export function resolveWhereChip(params: {
   if (params.autoDevice) {
     return {
       kind: "auto-device",
-      label: t("newSession.anyAvailableNode"),
+      label: t("newSession.autoDevice"),
       cloudMachines: [],
       selectedMachineId: "",
       devices,
@@ -102,6 +103,7 @@ export function resolveWhereChip(params: {
 }
 
 export function renderWhereChip(params: {
+  autoPlacementMode?: "least-busy" | "eligible-order";
   state: WhereChipState;
   gatewayName: string;
   cloudProfileId: string;
@@ -192,7 +194,12 @@ export function renderWhereChip(params: {
               ${renderSessionMenuItem(
                 {
                   value: "auto-device",
-                  label: t("newSession.anyAvailableNode"),
+                  label: t("newSession.autoDevice"),
+                  sub: t(
+                    params.autoPlacementMode === "eligible-order"
+                      ? "newSession.autoDeviceSubEligible"
+                      : "newSession.autoDeviceSub",
+                  ),
                   icon: icons.monitor,
                   checked: params.autoDevice === true,
                   disabled: Boolean(params.state.autoDeviceDisabledReason),
@@ -205,6 +212,12 @@ export function renderWhereChip(params: {
                 params.submitting,
               )}
               ${params.state.devices.map((device) => {
+                const capacity = workerCapacityPresentation({
+                  workerSlots: device.workerSlots,
+                  capabilities: device.capabilities,
+                  commands: device.invocableCommands,
+                  unavailable: !device.selectable,
+                });
                 return renderSessionMenuItem(
                   {
                     value: `device:${device.deviceId}`,
@@ -212,9 +225,12 @@ export function renderWhereChip(params: {
                     sub: device.subtitle,
                     icon: icons.monitor,
                     facts: device.facts,
+                    meter: capacity?.meter,
                     checked: params.deviceId === device.deviceId,
                     disabled: !device.selectable,
-                    title: device.disabledReason,
+                    title:
+                      [device.disabledReason, capacity?.title].filter(Boolean).join(" · ") ||
+                      undefined,
                     onSelect: () => params.onSelectDevice(device.deviceId),
                   },
                   params.submitting,

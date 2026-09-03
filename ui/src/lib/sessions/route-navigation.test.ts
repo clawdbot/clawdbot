@@ -5,6 +5,7 @@ import { buildCatalogSessionKey } from "./catalog-key.ts";
 import {
   resolveSessionPreferredFace,
   resolveSessionPreferredFaceForKey,
+  SESSION_DASHBOARD_EXPANDED_PARAM,
   SESSION_FACE_PREFERENCE_PARAM,
   SESSION_NAVIGATION_KEY_PARAM,
   sessionNavigationTarget,
@@ -52,8 +53,8 @@ describe("sessionNavigationTarget", () => {
     };
     const target = sessionNavigationTarget({
       face: "dashboard",
-      sessionKey: buildCatalogSessionKey(catalogKey),
-      fallbackAgentId: "research",
+      sessionKey: buildCatalogSessionKey(catalogKey, "research"),
+      fallbackAgentId: "main",
       basePath: "/admin/openclaw/",
       mainKey: "workspace",
     });
@@ -88,6 +89,35 @@ describe("sessionNavigationTarget", () => {
       href: "/chat/research/telegram/12345",
       options: { pathname: "/chat/research/telegram/12345" },
     });
+  });
+
+  it("builds a shareable expanded-dashboard destination", () => {
+    const sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
+    const target = sessionNavigationTarget({
+      face: "dashboard",
+      sessionKey,
+      fallbackAgentId: "main",
+      dashboardExpanded: true,
+    });
+
+    expect(target.href).toBe(
+      `/dashboard/main/12345678?${SESSION_DASHBOARD_EXPANDED_PARAM}=expanded`,
+    );
+    expect(target.options).toEqual({
+      pathname: "/dashboard/main/12345678",
+      search: `?${SESSION_DASHBOARD_EXPANDED_PARAM}=expanded`,
+    });
+  });
+
+  it("opens a gallery dashboard through its owning chat session", () => {
+    const target = sessionNavigationTarget({
+      face: "chat",
+      sessionKey: "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef",
+      fallbackAgentId: "main",
+      dashboardExpanded: true,
+    });
+
+    expect(target.href).toBe(`/chat/main/12345678?${SESSION_DASHBOARD_EXPANDED_PARAM}=expanded`);
   });
 
   it("marks an uncached preference-derived face for in-app navigation but keeps href shareable", () => {

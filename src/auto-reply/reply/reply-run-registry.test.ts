@@ -71,6 +71,8 @@ function toolAuthorityOverlay(
   run: ReturnType<typeof createQueueTestRun>,
 ): ReplyToolAuthorityOverlay {
   return {
+    permissionMode: run.run.permissionMode,
+    toolOverrides: run.run.toolOverrides,
     originatingChannel: run.originatingChannel,
     messageProvider: run.run.messageProvider,
     chatType: run.run.chatType,
@@ -130,14 +132,37 @@ async function withFakeReplyTimers<T>(run: () => Promise<T>): Promise<T> {
 }
 
 describe("reply run registry", () => {
-  it("distinguishes hidden allowlist intersections in steering authority", () => {
-    const first = createQueueTestRun({ prompt: "first" });
-    const second = createQueueTestRun({ prompt: "second" });
-    first.toolsAllow = attachToolAllowlistIntersection(["exec"], [["exec"]]);
-    second.toolsAllow = attachToolAllowlistIntersection(["exec"], [["exec"], ["message"]]);
+  it.each(["agent:agent:main", "global"])(
+    "distinguishes hidden allowlist intersections in steering authority for %s",
+    (sessionKey) => {
+      const first = createQueueTestRun({ prompt: "first" });
+      const second = createQueueTestRun({ prompt: "second" });
+      for (const run of [first, second]) {
+        run.run.sessionKey = sessionKey;
+        run.run.config = { agents: { ownership: "explicit", entries: { agent: {}, other: {} } } };
+      }
+      first.toolsAllow = attachToolAllowlistIntersection(["exec"], [["exec"]]);
+      second.toolsAllow = attachToolAllowlistIntersection(["exec"], [["exec"], ["message"]]);
 
-    expect(resolveFollowupRunToolAuthorityFingerprint(first)).not.toBe(
-      resolveFollowupRunToolAuthorityFingerprint(second),
+      expect(resolveFollowupRunToolAuthorityFingerprint(first)).not.toBe(
+        resolveFollowupRunToolAuthorityFingerprint(second),
+      );
+    },
+  );
+
+  it("distinguishes session permission and tool settings in steering authority", () => {
+    const full = createQueueTestRun({ prompt: "full authority" });
+    const guarded = createQueueTestRun({ prompt: "guarded authority" });
+    full.run.permissionMode = "full";
+    guarded.run.permissionMode = "guarded";
+    expect(resolveFollowupRunToolAuthorityFingerprint(full)).not.toBe(
+      resolveFollowupRunToolAuthorityFingerprint(guarded),
+    );
+
+    guarded.run.permissionMode = "full";
+    guarded.run.toolOverrides = { webSearch: false };
+    expect(resolveFollowupRunToolAuthorityFingerprint(full)).not.toBe(
+      resolveFollowupRunToolAuthorityFingerprint(guarded),
     );
   });
 
@@ -1858,7 +1883,11 @@ describe("reply run registry", () => {
     );
   });
 
-  it("queues images only through backends that preserve them", async () => {
+  it.each([
+    { images: [{ type: "image" as const, data: "png", mimeType: "image/png" }] },
+    { media: [{ path: "/tmp/stored.png", contentType: "image/png" }] },
+    { imageOrder: ["offloaded" as const] },
+  ])("queues image inputs only through backends that preserve them: %j", async (input) => {
     const queueMessage = vi.fn(async () => {});
     const operation = createTestReplyOperation({
       sessionId: "session-images",
@@ -1870,10 +1899,9 @@ describe("reply run registry", () => {
       queueMessage,
     });
     operation.setPhase("running");
-    const images = [{ type: "image" as const, data: "png", mimeType: "image/png" }];
 
     await expect(
-      queueCurrentReplyRunMessage("session-images", "inspect", { images }),
+      queueCurrentReplyRunMessage("session-images", "inspect", input),
     ).resolves.toMatchObject({ status: "rejected", reason: "image_input_unsupported" });
     expect(queueMessage).not.toHaveBeenCalled();
 
@@ -1885,12 +1913,12 @@ describe("reply run registry", () => {
       supportsQueueMessageImages: true,
     });
 
-    await expect(
-      queueCurrentReplyRunMessage("session-images", "inspect", { images }),
-    ).resolves.toEqual({ status: "accepted" });
+    await expect(queueCurrentReplyRunMessage("session-images", "inspect", input)).resolves.toEqual({
+      status: "accepted",
+    });
     expect(queueMessage).toHaveBeenCalledWith(
       "inspect",
-      expect.objectContaining({ images, onQueueAccepted: expect.any(Function) }),
+      expect.objectContaining({ ...input, onQueueAccepted: expect.any(Function) }),
     );
   });
 
@@ -1982,6 +2010,14 @@ describe("reply run registry", () => {
       queueCurrentReplyRunMessage("session-projected-authority", "changed authority", {
         isInboundUserMessage: true,
         toolAuthorityOverlay: { ...overlay, clientCaps: ["changed-capability"] },
+      }),
+    ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
+    expect(queueMessage).toHaveBeenCalledOnce();
+
+    await expect(
+      queueCurrentReplyRunMessage("session-projected-authority", "restricted authority", {
+        isInboundUserMessage: true,
+        toolAuthorityOverlay: { ...overlay, permissionMode: "guarded" },
       }),
     ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
     expect(queueMessage).toHaveBeenCalledOnce();

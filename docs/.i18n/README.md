@@ -65,6 +65,7 @@ Fields:
 ## Translation mechanics
 
 - `scripts/docs-i18n` still owns translation generation.
+- Translation rules and glossary guidance are passed as Codex developer instructions; document text is user input, and repository `AGENTS.md` instructions are excluded from translation calls. Placeholder spelling and occurrence counts must match the input, even when the target language restructures comparisons or references.
 - Doc mode writes `x-i18n.source_hash` into each translated page.
 - The publish workflow precomputes a pending file list by comparing the current English source hash to the stored locale `x-i18n.source_hash`.
 - If the pending count is `0`, the expensive translation step is skipped entirely.
@@ -79,3 +80,9 @@ Fields:
 - Source repo secret: `OPENCLAW_DOCS_SYNC_TOKEN`
 - Publish repo secret: `OPENCLAW_DOCS_I18N_OPENAI_API_KEY`
 - If locale output looks stale, check the `Translate All` workflow in `openclaw/docs` first.
+
+### Rejected translation diagnostics
+
+For an operator-approved, bounded diagnostic, set `OPENCLAW_DOCS_I18N_LOG_REJECTED_BODY=1` (the publish repo's reusable locale workflow exposes `log_rejected_body`). This opt-in logs rejected raw chunks at the placeholder-validation boundary, including the chunk ID, normalized masked input, returned translation, and error. It also logs failed leaf-fallback errors and rejected bodies at final-document validation. Validation and retry behavior stay unchanged.
+
+The chunk input/output are the Go translator boundary values, after its whitespace and input-wrapper handling, not raw provider transport bytes. Diagnostics can contain complete document text; limit the selected paths and attempts, retain the logs, and inspect them before sharing. Enabling the flag cannot recover responses from an earlier run.

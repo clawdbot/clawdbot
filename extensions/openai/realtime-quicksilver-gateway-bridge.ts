@@ -128,6 +128,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
         getSocket: () => this.sideband?.socket,
         isCanceledError: isAbortLikeError,
         logger: config.logger,
+        onError: config.onError,
         onFatalError: (error) => this.fail(error),
         onSessionStarted: (expiresAt) => {
           if (expiresAt !== undefined) {

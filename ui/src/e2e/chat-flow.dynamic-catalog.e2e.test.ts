@@ -1,19 +1,23 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
-import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import {
+  createChatFlowE2eSuite,
+  controlUiSessionUrl,
+  installMockGateway,
+} from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
-const dynamicCatalogProofDir =
-  process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
-    ? path.join(process.cwd(), ".artifacts", "control-ui-e2e", "dynamic-catalog-convergence")
-    : null;
+let dynamicCatalogProofDir: string | null;
+beforeEach(() => {
+  dynamicCatalogProofDir =
+    process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+      ? createControlUiE2eArtifactDir("dynamic-catalog-convergence")
+      : null;
+});
 
 suite.define(() => {
   it("converges Chat reasoning and context metadata after dynamic catalog discovery", async () => {
-    if (dynamicCatalogProofDir) {
-      await mkdir(dynamicCatalogProofDir, { recursive: true });
-    }
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -67,6 +71,7 @@ suite.define(() => {
         {
           contextTokens,
           key: sessionKey,
+          sessionId: "control-ui-dynamic-catalog-convergence",
           kind: "direct",
           label: "Dynamic catalog",
           model: "deepseekv4flash-equivalent",
@@ -94,7 +99,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       const main = page.getByRole("main");
       const modelSelect = main.locator('[data-chat-model-select="true"]');
       const effortSelect = main.locator('[data-chat-thinking-select="true"]');

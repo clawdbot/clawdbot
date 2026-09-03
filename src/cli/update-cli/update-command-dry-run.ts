@@ -4,9 +4,8 @@ import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-gl
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawDatabaseSchemaPreflight } from "../../state/openclaw-database-preflight.js";
-import { resolveGlobalManager } from "./shared.js";
-import { formatSchemaRefusalLines, hasSchemaRefusal } from "./update-command-git.js";
-import type { ManagedServiceRootRedirect } from "./update-command-service.js";
+import { formatSchemaRefusalLines, hasSchemaRefusal } from "./schema-preflight.js";
+import type { ManagedServiceRootRedirect } from "./update-command-service-plan.js";
 
 type UpdateDryRunPreview = {
   dryRun: true;
@@ -67,10 +66,11 @@ function printDryRunPreview(preview: UpdateDryRunPreview, jsonMode: boolean): vo
   }
 }
 
-export async function printUpdateDryRun(params: {
+export function printUpdateDryRun(params: {
   root: string;
   installKind: "git" | "package" | "unknown";
   updateInstallKind: "git" | "package" | "unknown";
+  mode: UpdateRunResult["mode"];
   switchToGit: boolean;
   switchToPackage: boolean;
   shouldRestart: boolean;
@@ -87,20 +87,8 @@ export async function printUpdateDryRun(params: {
   managedServiceRootRedirect: ManagedServiceRootRedirect | null;
   explicitTag: string | null;
   packageSchemaPreflight: OpenClawDatabaseSchemaPreflight;
-  timeoutMs: number;
   opts: { tag?: string; json?: boolean };
-}): Promise<void> {
-  let mode: UpdateRunResult["mode"] = "unknown";
-  if (params.updateInstallKind === "git") {
-    mode = "git";
-  } else if (params.updateInstallKind === "package") {
-    mode = await resolveGlobalManager({
-      root: params.root,
-      installKind: params.installKind,
-      timeoutMs: params.timeoutMs,
-    });
-  }
-
+}): void {
   const actions: string[] = [];
   if (params.requestedChannel && params.requestedChannel !== params.storedChannel) {
     actions.push(`Persist update.channel=${params.requestedChannel} in config`);
@@ -108,7 +96,7 @@ export async function printUpdateDryRun(params: {
   if (params.switchToGit) {
     actions.push("Switch install mode from package to git checkout (dev channel)");
   } else if (params.switchToPackage) {
-    actions.push(`Switch install mode from git to package manager (${mode})`);
+    actions.push(`Switch install mode from git to package manager (${params.mode})`);
   } else if (params.updateInstallKind === "git") {
     actions.push(`Run git update flow on channel ${params.channel} (fetch/rebase/build/doctor)`);
   } else if (params.packageAlreadyCurrent) {
@@ -159,7 +147,7 @@ export async function printUpdateDryRun(params: {
       dryRun: true,
       root: params.root,
       installKind: params.installKind,
-      mode,
+      mode: params.mode,
       updateInstallKind: params.updateInstallKind,
       switchToGit: params.switchToGit,
       switchToPackage: params.switchToPackage,

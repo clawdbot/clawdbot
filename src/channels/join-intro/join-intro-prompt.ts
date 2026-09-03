@@ -38,38 +38,32 @@ function formatChannelJoinRoomSnapshot(params: {
     roomFacts.push("Earlier room messages cannot be read on this platform.");
   }
 
-  let snapshot = roomFacts.join("\n").slice(0, CHANNEL_JOIN_INTRO_MAX_SNAPSHOT_CHARS);
-  const recentMessages: string[] = [];
-  for (const message of (context.recentMessages ?? []).toReversed()) {
+  const metadata = roomFacts.join("\n").slice(0, CHANNEL_JOIN_INTRO_MAX_SNAPSHOT_CHARS);
+  const messageHeader = "\nRecent room messages:\n";
+  let remaining = CHANNEL_JOIN_INTRO_MAX_SNAPSHOT_CHARS - metadata.length - messageHeader.length;
+  const recentMessages = (context.recentMessages ?? []).flatMap((message) => {
     const text = message.text.trim();
-    if (!text) {
-      continue;
-    }
-    const line = `${message.sender?.trim() || "Participant"}: ${text}`;
-    const messageHeader = recentMessages.length === 0 ? "\nRecent room messages:\n" : "\n";
-    const remaining =
-      CHANNEL_JOIN_INTRO_MAX_SNAPSHOT_CHARS - snapshot.length - messageHeader.length;
+    return text ? [`${message.sender?.trim() || "Participant"}: ${text}`] : [];
+  });
+  let retained = 0;
+  for (const line of recentMessages.toReversed()) {
     if (remaining <= 0) {
       break;
     }
     if (line.length > remaining) {
-      if (recentMessages.length === 0) {
-        recentMessages.unshift(line.slice(0, remaining));
+      if (retained === 0) {
+        return `${metadata}${messageHeader}${line.slice(0, remaining)}`;
       }
       break;
     }
-    recentMessages.unshift(line);
-    snapshot += messageHeader + line;
+    retained++;
+    remaining -= line.length + 1;
   }
 
-  if (recentMessages.length > 0) {
-    const metadata = roomFacts.join("\n").slice(0, CHANNEL_JOIN_INTRO_MAX_SNAPSHOT_CHARS);
-    return `${metadata}\nRecent room messages:\n${recentMessages.join("\n")}`.slice(
-      0,
-      CHANNEL_JOIN_INTRO_MAX_SNAPSHOT_CHARS,
-    );
+  if (retained > 0) {
+    return `${metadata}${messageHeader}${recentMessages.slice(-retained).join("\n")}`;
   }
-  return snapshot || "No room details or readable message history were provided.";
+  return metadata || "No room details or readable message history were provided.";
 }
 
 export function buildChannelJoinIntroPrompt(params: {

@@ -18,8 +18,11 @@ import {
 } from "../channels/plugins/config-write-policy-shared.js";
 import { buildAccountScopedDmSecurityPolicy } from "../channels/plugins/helpers.js";
 import type { ChannelConfigAdapter } from "../channels/plugins/types.adapters.js";
+import type { ChannelSecurityDmPolicy } from "../channels/plugins/types.core.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
+
+export { clearAccountFieldsFromConfigSection } from "../channels/plugins/config-helpers.js";
 
 export {
   ensureOpenDmPolicyAllowFromWildcard,
@@ -572,6 +575,7 @@ export function createScopedDmSecurityResolver<
   approveChannelId?: string;
   approveHint?: string;
   normalizeEntry?: (raw: string) => string;
+  classifyEntryAuthentication?: ChannelSecurityDmPolicy["classifyEntryAuthentication"];
   inheritSharedDefaultsFromDefaultAccount?: boolean;
 }) {
   return ({
@@ -597,6 +601,7 @@ export function createScopedDmSecurityResolver<
       approveChannelId: params.approveChannelId,
       approveHint: params.approveHint,
       normalizeEntry: params.normalizeEntry,
+      classifyEntryAuthentication: params.classifyEntryAuthentication,
       inheritSharedDefaultsFromDefaultAccount: params.inheritSharedDefaultsFromDefaultAccount,
     });
   };

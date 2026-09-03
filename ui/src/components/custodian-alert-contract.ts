@@ -4,8 +4,13 @@ export type CustodianAlertAction =
   | { kind: "update" }
   | { kind: "navigate"; routeId: NavigationRouteId };
 
+export type CustodianTurnAdmission = {
+  isCurrent: () => boolean;
+  admit: () => boolean;
+};
+
 export type CustodianAlert = {
-  /** Stable per incident; the store asks the agent at most once per id. */
+  /** Stable per incident; automatic callers also supply an admission owner. */
   id: string;
   title: string;
   /** Raw facts, rendered before any model output. Never empty. */

@@ -1,5 +1,6 @@
 // Covers heartbeat handling of queued reminder system events.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import { clearCronJobActive, markCronJobActive, resetCronActiveJobs } from "../cron/active-jobs.js";
@@ -20,6 +21,11 @@ import {
   peekSystemEvents,
   resetSystemEventsForTest,
 } from "./system-events.js";
+
+type HeartbeatReplyContext = Pick<
+  MsgContext,
+  "InternalTurnSource" | "SessionKey" | "MessageThreadId" | "Body"
+>;
 
 beforeEach(() => {
   setupTelegramHeartbeatPluginRuntimeForTests();
@@ -109,14 +115,8 @@ describe("Ghost reminder bug (issue #13317)", () => {
     });
   };
 
-  const expectCronEventPrompt = (
-    calledCtx: {
-      Provider?: string;
-      Body?: string;
-    } | null,
-    reminderText: string,
-  ) => {
-    expect(calledCtx?.Provider).toBe("cron-event");
+  const expectCronEventPrompt = (calledCtx: HeartbeatReplyContext | null, reminderText: string) => {
+    expect(calledCtx?.InternalTurnSource).toBe("cron");
     if (calledCtx === null || typeof calledCtx.Body !== "string") {
       throw new Error("Expected cron event prompt body");
     }
@@ -138,24 +138,12 @@ describe("Ghost reminder bug (issue #13317)", () => {
     return call;
   };
 
-  const getFirstReplyContext = (
-    replySpy: ReturnType<typeof vi.fn>,
-  ): {
-    Provider?: string;
-    SessionKey?: string;
-    MessageThreadId?: number;
-    Body?: string;
-  } => {
+  const getFirstReplyContext = (replySpy: ReturnType<typeof vi.fn>): HeartbeatReplyContext => {
     const [ctx] = mockCallAt(replySpy, 0, "heartbeat reply");
     if (!ctx || typeof ctx !== "object") {
       throw new Error("expected heartbeat reply context");
     }
-    return ctx as {
-      Provider?: string;
-      SessionKey?: string;
-      MessageThreadId?: number;
-      Body?: string;
-    };
+    return ctx as HeartbeatReplyContext;
   };
 
   const expectTelegramSend = (
@@ -181,7 +169,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
   ): Promise<{
     result: Awaited<ReturnType<typeof runHeartbeatOnce>>;
     sendTelegram: ReturnType<typeof vi.fn>;
-    calledCtx: { Provider?: string; Body?: string } | null;
+    calledCtx: HeartbeatReplyContext | null;
   }> => {
     return runHeartbeatCase({
       tmpPrefix,
@@ -211,11 +199,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
   }): Promise<{
     result: Awaited<ReturnType<typeof runHeartbeatOnce>>;
     sendTelegram: ReturnType<typeof vi.fn>;
-    calledCtx: {
-      Provider?: string;
-      Body?: string;
-      SessionKey?: string;
-    } | null;
+    calledCtx: HeartbeatReplyContext | null;
     sessionKey: string;
     replyCallCount: number;
   }> => {
@@ -306,7 +290,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
     });
     expect(result.status).toBe("ran");
     expect(replyCallCount).toBe(1);
-    expect(calledCtx?.Provider).toBe("heartbeat");
+    expect(calledCtx?.InternalTurnSource).toBe("heartbeat");
     expect(calledCtx?.Body).not.toContain("scheduled reminder has been triggered");
     expect(calledCtx?.Body).not.toContain("relay this reminder");
     expect(sendTelegram).toHaveBeenCalled();
@@ -375,7 +359,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
     });
     expect(result.status).toBe("ran");
     expect(replyCallCount).toBe(1);
-    expect(calledCtx?.Provider).toBe("cron-event");
+    expect(calledCtx?.InternalTurnSource).toBe("cron");
     expect(calledCtx?.Body).toContain("scheduled reminder has been triggered");
     expect(calledCtx?.Body).toContain("Cron: memory maintenance completed");
     expect(calledCtx?.Body).not.toContain("Read HEARTBEAT.md");
@@ -622,17 +606,19 @@ describe("Ghost reminder bug (issue #13317)", () => {
       expect(second.status).toBe("ran");
       expect(getReplySpy).toHaveBeenCalledTimes(2);
 
-      const firstCtx = mockCallAt(getReplySpy, 0, "first heartbeat reply")[0] as {
-        Provider?: string;
-        Body?: string;
-      };
-      const secondCtx = mockCallAt(getReplySpy, 1, "second heartbeat reply")[0] as {
-        Provider?: string;
-        Body?: string;
-      };
-      expect(firstCtx.Provider).toBe("cron-event");
+      const firstCtx = mockCallAt(
+        getReplySpy,
+        0,
+        "first heartbeat reply",
+      )[0] as HeartbeatReplyContext;
+      const secondCtx = mockCallAt(
+        getReplySpy,
+        1,
+        "second heartbeat reply",
+      )[0] as HeartbeatReplyContext;
+      expect(firstCtx.InternalTurnSource).toBe("cron");
       expect(firstCtx.Body).toContain("Cron: memory maintenance completed");
-      expect(secondCtx.Provider).toBe("heartbeat");
+      expect(secondCtx.InternalTurnSource).toBe("heartbeat");
       expect(secondCtx.Body).toContain("Heartbeat monitor scratch:");
       expect(secondCtx.Body).not.toContain("Cron: memory maintenance completed");
     });
@@ -675,7 +661,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
       expect(sendTelegram).toHaveBeenCalledTimes(1);
       expect(peekSystemEvents(sessionKey)).toEqual([]);
       for (const [context] of getReplySpy.mock.calls) {
-        expect(context).toMatchObject({ Provider: "cron-event" });
+        expect(context).toMatchObject({ InternalTurnSource: "cron" });
         expect(context.Body).toContain(reminder);
       }
     });
@@ -698,7 +684,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
     });
 
     expect(result.status).toBe("ran");
-    expect(calledCtx?.Provider).toBe("cron-event");
+    expect(calledCtx?.InternalTurnSource).toBe("cron");
     expect(calledCtx?.Body).toContain("Handle this reminder internally");
     expect(sendTelegram).not.toHaveBeenCalled();
     expect(peekSystemEvents(processedSessionKey)).toEqual([]);
@@ -721,7 +707,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
     });
 
     expect(result.status).toBe("ran");
-    expect(calledCtx?.Provider).toBe("exec-event");
+    expect(calledCtx?.InternalTurnSource).toBe("exec");
     expect(calledCtx?.Body).toContain("Handle the result internally");
     expect(sendTelegram).not.toHaveBeenCalled();
     expect(peekSystemEvents(processedSessionKey)).toEqual([]);
@@ -738,7 +724,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
     });
 
     expect(result.status).toBe("ran");
-    expect(calledCtx?.Provider).toBe("exec-event");
+    expect(calledCtx?.InternalTurnSource).toBe("exec");
     expect(calledCtx?.Body).toContain("exec finished: deploy succeeded");
     expect(sendTelegram).toHaveBeenCalled();
   });
@@ -757,7 +743,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
     });
 
     expect(result.status).toBe("ran");
-    expect(calledCtx?.Provider).toBe("exec-event");
+    expect(calledCtx?.InternalTurnSource).toBe("exec");
     expect(calledCtx?.Body).toContain("deploy succeeded");
     expect(calledCtx?.Body).not.toContain("Node connected");
     expect(peekSystemEvents(sessionKey)).toEqual(["Node connected"]);
@@ -800,7 +786,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
     });
 
     expect(result.status).toBe("ran");
-    expect(calledCtx?.Provider).toBe("exec-event");
+    expect(calledCtx?.InternalTurnSource).toBe("exec");
     expect(calledCtx?.Body).toContain("Handle the result internally");
     expect(sendTelegram).not.toHaveBeenCalled();
   });
@@ -818,7 +804,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
     });
 
     expect(result.status).toBe("ran");
-    expect(calledCtx?.Provider).toBe("heartbeat");
+    expect(calledCtx?.InternalTurnSource).toBe("heartbeat");
     expect(calledCtx?.SessionKey).toContain(":heartbeat");
     expect(sendTelegram).not.toHaveBeenCalled();
   });

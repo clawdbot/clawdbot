@@ -17,6 +17,11 @@ const DOCS_MAP_EXCLUDED_DIRS = new Set([
   "snippets",
 ]);
 const DOCS_MAP_EXCLUDED_FILES = new Set(["AGENTS.md", "CLAUDE.md", "docs_map.md"]);
+const FRONTMATTER_TERMINATOR = /^(?:---|\.\.\.)(?:[ \t]+(?:#[^\r\n]*)?)?[ \t]*$/u;
+const FRONTMATTER_END = new RegExp(
+  `\\r?\\n${FRONTMATTER_TERMINATOR.source.slice(1, -1)}(?:\\r?\\n|$)`,
+  "u",
+);
 
 function assertDocsDir(docsDir) {
   if (!existsSync(docsDir)) {
@@ -96,7 +101,7 @@ function extractMetadata(fullPath) {
     return { summary: null, readWhen: [], error: "missing front matter" };
   }
 
-  const endIndex = content.indexOf("\n---", 3);
+  const endIndex = content.search(FRONTMATTER_END);
   if (endIndex === -1) {
     return { summary: null, readWhen: [], error: "unterminated front matter" };
   }
@@ -175,7 +180,7 @@ function stripFrontmatter(raw) {
   }
   const lines = raw.split(/\r?\n/u);
   for (let index = 1; index < lines.length; index += 1) {
-    if (lines[index] === "---" || lines[index] === "...") {
+    if (FRONTMATTER_TERMINATOR.test(lines[index])) {
       return lines.slice(index + 1).join("\n");
     }
   }
@@ -216,8 +221,12 @@ function extractHeadings(raw) {
     const trimmed = rawLine.trim();
     const fenceMatch = /^(?<marker>`{3,}|~{3,})/u.exec(trimmed);
     if (fenceMatch) {
-      const marker = fenceMatch.groups.marker[0];
-      fenceMarker = fenceMarker === marker ? null : (fenceMarker ?? marker);
+      const marker = fenceMatch.groups.marker;
+      if (!fenceMarker) {
+        fenceMarker = marker;
+      } else if (marker[0] === fenceMarker[0] && marker.length >= fenceMarker.length) {
+        fenceMarker = null;
+      }
       continue;
     }
     if (fenceMarker) {

@@ -217,7 +217,6 @@ describe("config form scalar integrity", () => {
     expect(textInput.value).toBe("");
     expect(textInput.placeholder).toBe("Default: balanced");
     expect(container.textContent).toContain("Using default: balanced");
-    expect(container.querySelector("button[aria-label='Reset to default']")).toBeNull();
     expect(onPatch).not.toHaveBeenCalled();
     expect(onRemove).not.toHaveBeenCalled();
 
@@ -252,7 +251,27 @@ describe("config form scalar integrity", () => {
     expect(onPatch).toHaveBeenLastCalledWith(["retries"], 4);
   });
 
-  it("restores scalar and select defaults by removing optional overrides", () => {
+  it("shows the default description without a reset button on an overridden row", () => {
+    const container = document.createElement("div");
+    render(
+      renderTextInput({
+        schema: { type: "string", default: "balanced" },
+        value: "custom",
+        path: ["mode"],
+        hints: {},
+        unsupported: new Set(),
+        disabled: false,
+        inputType: "text",
+        onPatch: vi.fn(),
+      }),
+      container,
+    );
+
+    expect(container.textContent).toContain("Default: balanced");
+    expect(container.querySelector("button[aria-label='Reset to default']")).toBeNull();
+  });
+
+  it("restores scalar and select defaults through clearing and default selection", () => {
     const container = document.createElement("div");
     const onPatch = vi.fn();
     const onRemove = vi.fn();
@@ -271,14 +290,16 @@ describe("config form scalar integrity", () => {
       container,
     );
     expect(container.textContent).toContain("Default: 3");
-    expectElement(
-      container.querySelector<HTMLButtonElement>("button[aria-label='Reset to default']"),
-      "number reset",
-    ).click();
-    expect(onRemove).toHaveBeenCalledWith(["retries"]);
-    expect(onPatch).not.toHaveBeenCalled();
+    const numberInput = expectElement(
+      container.querySelector<HTMLInputElement>("input[type='number']"),
+      "number input",
+    );
+    numberInput.value = "";
+    numberInput.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenCalledWith(["retries"], undefined);
+    expect(onRemove).not.toHaveBeenCalled();
 
-    onRemove.mockClear();
+    onPatch.mockClear();
     render(
       renderSelect({
         schema: { type: "string", default: "balanced" },
@@ -712,7 +733,7 @@ describe("config form scalar integrity", () => {
     },
   );
 
-  it("keeps restore disabled while a sensitive value is concealed", () => {
+  it("conceals the default description while a sensitive value is concealed", () => {
     const container = document.createElement("div");
 
     render(
@@ -731,11 +752,6 @@ describe("config form scalar integrity", () => {
       container,
     );
 
-    const reset = expectElement(
-      container.querySelector<HTMLButtonElement>("button[aria-label='Reset to default']"),
-      "concealed sensitive reset",
-    );
-    expect(reset.disabled).toBe(true);
     expect(container.textContent).not.toContain("inherited");
   });
 

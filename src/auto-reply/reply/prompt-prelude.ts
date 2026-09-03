@@ -13,6 +13,8 @@ import type { MsgContext, TemplateContext } from "../templating.js";
 import { appendChannelPromptContext } from "./channel-prompt-context.js";
 
 const ROOM_EVENT_PROMPT = "[OpenClaw room event]";
+const ROOM_EVENT_PARTICIPATION_RULE =
+  "Treat this message as observed room activity, not a request. You were not explicitly tagged or mentioned in this room event. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking.";
 const RESUMABLE_ROOM_CONTEXT_OMITTED_PREFIXES = [
   "Conversation context (chronological, selected for current message):",
   "Chat history since last reply:",
@@ -154,8 +156,8 @@ function resolvePerTurnDeliveryDirective(params: {
 }): string | undefined {
   if (params.inboundEventKind === "room_event") {
     return params.sourceReplyDeliveryMode === "message_tool_only"
-      ? "Treat the current message as observed room activity. Default: no reply; most room events need no response from you. Send a visible reply via message(action=send) only when you are directly addressed or have concrete value to add; your final text here stays private either way."
-      : "Treat the current message as observed room activity. Default: no reply; most room events need no response from you. Reply only when you are directly addressed or have concrete value to add.";
+      ? `${ROOM_EVENT_PARTICIPATION_RULE} To respond visibly, use message(action=send); your final text here stays private either way.`
+      : ROOM_EVENT_PARTICIPATION_RULE;
   }
   if (
     params.inboundEventKind === "user_request" &&

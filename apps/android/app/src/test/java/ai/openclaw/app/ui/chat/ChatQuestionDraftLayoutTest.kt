@@ -10,16 +10,26 @@ import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatQuestionStatus
+import ai.openclaw.app.closeNodeRuntimeTestFixture
 import ai.openclaw.app.gateway.QuestionListResult
 import ai.openclaw.app.gateway.QuestionRecord
+import ai.openclaw.app.gateway.QuestionSecretStore
+import ai.openclaw.app.gateway.QuestionSecretStoreExisting
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import android.content.Context
 import android.os.Looper
 import android.provider.Settings
+import android.text.InputType
+import android.view.inputmethod.EditorInfo
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.platform.InterceptPlatformTextInput
+import androidx.compose.ui.platform.PlatformTextInputInterceptor
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
@@ -42,6 +52,7 @@ import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -58,6 +69,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicReference
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], qualifiers = "w360dp-h800dp-420dpi")
@@ -100,13 +112,77 @@ class ChatQuestionDraftLayoutTest {
 
   @After
   fun tearDown() {
-    runtime.disconnect()
-    composeRule.waitForIdle()
-    viewModelStore.clear()
-    setApplicationRuntime(originalRuntime)
-    AndroidScreenshotFixture.configure(AndroidScreenshotScene.Home)
-    Settings.Global.putString(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, originalAnimatorScale)
-    shadowOf(Looper.getMainLooper()).idle()
+    try {
+      viewModelStore.clear()
+    } finally {
+      try {
+        closeNodeRuntimeTestFixture(runtime)
+      } finally {
+        setApplicationRuntime(originalRuntime)
+        AndroidScreenshotFixture.configure(AndroidScreenshotScene.Home)
+        Settings.Global.putString(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, originalAnimatorScale)
+        shadowOf(Looper.getMainLooper()).idle()
+      }
+    }
+  }
+
+  @Test
+  fun credentialCardShowsConsentAndKeepsEditedInput() {
+    val secret =
+      question.questions.first().copy(
+        options = emptyList(),
+        isSecret = true,
+        secretStore = QuestionSecretStore("TASK_TOKEN", "secret", listOf("api.example.test"), "Deploy the approved change"),
+        secretStoreExisting = QuestionSecretStoreExisting(1_000, "operator"),
+      )
+    var prompt by mutableStateOf(ChatQuestionPrompt(question.copy(questions = listOf(secret), agentId = "requester", sessionKey = "agent:requester:main")))
+    var submitted: Map<String, List<String>>? = null
+    val editorInfo = AtomicReference<EditorInfo>()
+    val interceptor =
+      PlatformTextInputInterceptor { request, _ ->
+        val info = EditorInfo()
+        val connection = request.createInputConnection(info)
+        editorInfo.set(info)
+        try {
+          awaitCancellation()
+        } finally {
+          connection.closeConnection()
+        }
+      }
+    composeRule.setContent {
+      ClawDesignTheme {
+        InterceptPlatformTextInput(interceptor) {
+          ChatQuestionCard(
+            prompt = prompt,
+            onDraftChanged = { _, update -> prompt = prompt.copy(draft = update(prompt.draft)) },
+            onSubmit = { _, answers -> submitted = answers },
+            onSkip = {},
+          )
+        }
+      }
+    }
+    composeRule.onNodeWithText("Requested by requester", substring = true).assertIsDisplayed()
+    composeRule.onNodeWithText("agent:requester:main", substring = true).assertIsDisplayed()
+    composeRule.onNodeWithText("Stores TASK_TOKEN as Protected secret").assertIsDisplayed()
+    composeRule.onNodeWithText("Deploy the approved change").assertIsDisplayed()
+    composeRule.onNodeWithText("Replaces TASK_TOKEN", substring = true).assertIsDisplayed()
+    composeRule.onNodeWithText("Updated by operator").assertIsDisplayed()
+    val hosts = composeRule.onNode(hasSetTextAction() and hasText("Allowed HTTPS hosts"))
+    hosts.assertTextContains("api.example.test").performTextReplacement("uploads.example.test, api.example.test")
+    hosts.assertTextContains("uploads.example.test, api.example.test")
+    val secretInput = composeRule.onNode(hasSetTextAction() and hasText("Secret value"))
+    secretInput.performClick()
+    composeRule.waitUntil {
+      editorInfo.get()?.inputType?.and(InputType.TYPE_MASK_VARIATION) == InputType.TYPE_TEXT_VARIATION_PASSWORD
+    }
+    assertEquals(
+      "Secret replies must not request autocorrection",
+      0,
+      editorInfo.get().inputType and InputType.TYPE_TEXT_FLAG_AUTO_CORRECT,
+    )
+    secretInput.performTextReplacement("  synthetic-value  ")
+    composeRule.onNodeWithText("Submit").performClick()
+    assertEquals(mapOf(secret.questionId to listOf("  synthetic-value  ")), submitted)
   }
 
   @Test
@@ -208,7 +284,6 @@ class ChatQuestionDraftLayoutTest {
             showSidebarButton = true,
             onOpenSidebar = {},
             onToggleTalk = {},
-            onOpenSessions = {},
             onOpenDashboard = {},
             onOpenGatewaySettings = {},
           )

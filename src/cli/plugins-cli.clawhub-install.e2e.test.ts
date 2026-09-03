@@ -8,6 +8,7 @@ import path from "node:path";
 import JSZip from "jszip";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { ClawHubPackageSecurityResponse } from "../infra/clawhub-packages.js";
 import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
 
 const PACKAGE_NAME = "@openclaw/telemetry-demo";
@@ -151,6 +152,8 @@ async function startClawHubServer(options: TestServerOptions = {}) {
             family: "code-plugin",
           },
           release: { version: PACKAGE_VERSION },
+          overview: "Synthetic plugin fixture with no registered tools or services.",
+          securityAuditUrl: `${registry}/plugins/${PACKAGE_NAME}/security-audit?version=${PACKAGE_VERSION}`,
           trust: {
             scanStatus: "clean",
             moderationState: null,
@@ -159,7 +162,7 @@ async function startClawHubServer(options: TestServerOptions = {}) {
             pending: false,
             stale: false,
           },
-        }),
+        } satisfies ClawHubPackageSecurityResponse),
       );
       return;
     }
@@ -191,9 +194,10 @@ async function startClawHubServer(options: TestServerOptions = {}) {
   await new Promise<void>((resolve) => {
     server.listen(0, "127.0.0.1", resolve);
   });
+  const registry = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 
   return {
-    registry: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+    registry,
     requestLog,
     telemetryBodies,
     close: async () => {
@@ -333,7 +337,7 @@ describe("openclaw plugins install ClawHub E2E", () => {
     30_000,
   );
 
-  it("does not report success when plugin installation fails", async () => {
+  it("rejects a corrupt archive without persisting or reporting a successful install", async () => {
     const testServer = await startClawHubServer({ artifactSha256: "0".repeat(64) });
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-telemetry-fail-"));
     try {
@@ -343,6 +347,8 @@ describe("openclaw plugins install ClawHub E2E", () => {
       );
 
       expect(result.status).not.toBe(0);
+      expect(`${result.stdout}\n${result.stderr}`).toContain("ClawHub archive integrity mismatch");
+      expect(testServer.requestLog).toContain(`GET ${PACKAGE_API_PATH}/download`);
       expect(testServer.telemetryBodies).toEqual([]);
       await expect(readPersistedInstallRecord(stateDir)).resolves.toBeUndefined();
     } finally {

@@ -12,8 +12,8 @@ const EXTENSION_PACKAGE_BOUNDARY_PATHS_CONFIG =
 const EXTENSION_PACKAGE_BOUNDARY_BASE_CONFIG =
   "extensions/tsconfig.package-boundary.base.json" as const;
 const XAI_OMITTED_BOUNDARY_PATHS = {
-  "openclaw/plugin-sdk/channel-secret-basic-runtime": [
-    "../dist/plugin-sdk/channel-secret-basic-runtime.d.ts",
+  "openclaw/plugin-sdk/browser-maintenance": [
+    "../packages/plugin-sdk/dist/extensions/browser/browser-maintenance.d.ts",
   ],
   "openclaw/plugin-sdk/channel-secret-owner-runtime": [
     "../packages/plugin-sdk/dist/src/plugin-sdk/channel-secret-owner-runtime.d.ts",
@@ -21,11 +21,17 @@ const XAI_OMITTED_BOUNDARY_PATHS = {
   "openclaw/plugin-sdk/channel-secret-tts-runtime": [
     "../packages/plugin-sdk/dist/src/plugin-sdk/channel-secret-tts-runtime.d.ts",
   ],
-  "@openclaw/matrix/test-api.js": ["../dist/plugin-sdk/extensions/matrix/test-api.d.ts"],
-  "@openclaw/discord/api.js": ["../dist/plugin-sdk/extensions/discord/api.d.ts"],
-  "@openclaw/slack/api.js": ["../dist/plugin-sdk/extensions/slack/api.d.ts"],
-  "@openclaw/telegram/api.js": ["../dist/plugin-sdk/extensions/telegram/api.d.ts"],
-  "@openclaw/whatsapp/api.js": ["../dist/plugin-sdk/extensions/whatsapp/api.d.ts"],
+  "@openclaw/matrix/test-api.js": [
+    "../.artifacts/extension-package-boundary/plugins/matrix/test-api.d.ts",
+  ],
+  "@openclaw/discord/api.js": ["../.artifacts/extension-package-boundary/plugins/discord/api.d.ts"],
+  "@openclaw/slack/api.js": ["../.artifacts/extension-package-boundary/plugins/slack/api.d.ts"],
+  "@openclaw/telegram/api.js": [
+    "../.artifacts/extension-package-boundary/plugins/telegram/api.d.ts",
+  ],
+  "@openclaw/whatsapp/api.js": [
+    "../.artifacts/extension-package-boundary/plugins/whatsapp/api.d.ts",
+  ],
 } as const;
 const trackedCodeFilesByRoot = new Map<string, readonly string[] | null>();
 
@@ -66,18 +72,15 @@ const MEMORY_HOST_SDK_ALLOWED_CORE_BRIDGE_FILES = [
   // Type-only alias to the canonical embedding provider contract.
   "packages/memory-host-sdk/src/host/embeddings.types.ts",
   "packages/memory-host-sdk/src/host/error-utils.ts",
-  "packages/memory-host-sdk/src/host/openclaw-runtime-auth.ts",
-  "packages/memory-host-sdk/src/host/openclaw-runtime-kysely.ts",
-  "packages/memory-host-sdk/src/host/openclaw-runtime-network.ts",
-  "packages/memory-host-sdk/src/host/openclaw-runtime-sqlite.ts",
-  "packages/memory-host-sdk/src/host/openclaw-runtime.ts",
-] as const;
-const MEMORY_HOST_SDK_RUNTIME_ADAPTER_FILES = [
   "packages/memory-host-sdk/src/host/openclaw-runtime-agent.ts",
+  "packages/memory-host-sdk/src/host/openclaw-runtime-auth.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-config.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-io.ts",
+  "packages/memory-host-sdk/src/host/openclaw-runtime-kysely.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-memory.ts",
+  "packages/memory-host-sdk/src/host/openclaw-runtime-network.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-session.ts",
+  "packages/memory-host-sdk/src/host/openclaw-runtime-sqlite.ts",
 ] as const;
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe JSON file shape.
@@ -90,7 +93,9 @@ function readExtensionTsconfig(extensionName: string): TsConfigJson {
 }
 
 function isContainedPackageBoundaryTarget(target: string): boolean {
-  const root = /^\.\.\/(dist|packages|extensions)\//u.exec(target)?.[1];
+  const root = /^\.\.\/(dist|packages|extensions|\.artifacts\/extension-package-boundary)\//u.exec(
+    target,
+  )?.[1];
   return root !== undefined && posix.normalize(target).startsWith(`../${root}/`);
 }
 
@@ -154,10 +159,10 @@ function collectCoreReferenceFiles(relativeDir: string): string[] {
     });
 }
 
-function collectOpenClawRuntimeDirectImportFiles(relativeDir: string): string[] {
+function collectCombinedRuntimeImportFiles(relativeDir: string): string[] {
   return collectCodeFiles(relativeDir).filter((file) => {
     const source = fs.readFileSync(resolve(REPO_ROOT, file), "utf8");
-    return source.includes('"./openclaw-runtime.js"');
+    return /["'][^"']*\/openclaw-runtime\.[cm]?[jt]s["']/u.test(source);
   });
 }
 
@@ -180,7 +185,9 @@ describe("opt-in extension package boundaries", () => {
     if (!paths) {
       throw new Error("Missing shared extension package boundary aliases");
     }
-    expect(paths["openclaw/plugin-sdk/*"]).toEqual(["../dist/plugin-sdk/*.d.ts"]);
+    expect(paths["openclaw/plugin-sdk/*"]).toEqual([
+      "../packages/plugin-sdk/dist/src/plugin-sdk/*.d.ts",
+    ]);
     for (const [specifier, targets] of Object.entries(XAI_OMITTED_BOUNDARY_PATHS)) {
       expect(paths[specifier], specifier).toEqual(targets);
     }
@@ -200,7 +207,7 @@ describe("opt-in extension package boundaries", () => {
       const subpath = exportKey === "." ? "" : exportKey.slice(2);
       const specifier = subpath ? `@openclaw/acp-core/${subpath}` : "@openclaw/acp-core";
       expect(paths[specifier], specifier).toEqual([
-        `../dist/plugin-sdk/packages/acp-core/src/${subpath || "index"}.d.ts`,
+        `../packages/plugin-sdk/dist/packages/acp-core/src/${subpath || "index"}.d.ts`,
       ]);
     }
     for (const [specifier, targets] of Object.entries(paths)) {
@@ -276,16 +283,12 @@ describe("opt-in extension package boundaries", () => {
         ]),
     );
     Object.assign(expectedPaths, {
-      "openclaw/plugin-sdk/channel-entry-contract": [
-        "../../dist/plugin-sdk/channel-entry-contract.d.ts",
+      "@openclaw/qa-channel/api.js": [
+        "../../.artifacts/extension-package-boundary/plugins/qa-channel/api.d.ts",
       ],
-      "openclaw/plugin-sdk/browser-maintenance": [
-        "../../dist/plugin-sdk/src/plugin-sdk/browser-maintenance.d.ts",
-      ],
-      "@openclaw/qa-channel/api.js": ["../../dist/plugin-sdk/extensions/qa-channel/api.d.ts"],
       "@openclaw/*.js": ["../../packages/plugin-sdk/dist/extensions/*.d.ts", "../*"],
       "@openclaw/*": ["../*"],
-      "@openclaw/plugin-sdk/*": ["../../dist/plugin-sdk/*.d.ts"],
+      "@openclaw/plugin-sdk/*": ["../../packages/plugin-sdk/dist/src/plugin-sdk/*.d.ts"],
       "@openclaw/anthropic-vertex/api.js": ["./.boundary-stubs/anthropic-vertex-api.d.ts"],
       "@openclaw/ollama/api.js": ["./.boundary-stubs/ollama-api.d.ts"],
       "@openclaw/ollama/runtime-api.js": ["./.boundary-stubs/ollama-runtime-api.d.ts"],
@@ -302,10 +305,12 @@ describe("opt-in extension package boundaries", () => {
     expect(tsconfig.compilerOptions?.rootDir).toBe("../..");
     expect(tsconfig.include).toEqual([
       "../../packages/ai/src/**/*.ts",
+      "../../packages/llm-core/src/**/*.ts",
       "../../packages/markdown-core/src/**/*.ts",
       "../../packages/media-core/src/**/*.ts",
       "../../packages/media-generation-core/src/**/*.ts",
       "../../packages/model-catalog-core/src/**/*.ts",
+      "../../packages/memory-host-sdk/src/**/*.ts",
       "../../packages/normalization-core/src/**/*.ts",
       "../../packages/retry/src/**/*.ts",
       "../../packages/acp-core/src/**/*.ts",
@@ -413,9 +418,34 @@ describe("opt-in extension package boundaries", () => {
     expect(collectCoreReferenceFiles("packages/memory-host-sdk/src")).toEqual([
       ...MEMORY_HOST_SDK_ALLOWED_CORE_BRIDGE_FILES,
     ]);
-    expect(collectOpenClawRuntimeDirectImportFiles("packages/memory-host-sdk/src")).toEqual([
-      ...MEMORY_HOST_SDK_RUNTIME_ADAPTER_FILES,
+    expect(collectCombinedRuntimeImportFiles("packages/memory-host-sdk/src")).toEqual([]);
+    expect(
+      fs.existsSync(resolve(REPO_ROOT, "packages/memory-host-sdk/src/host/openclaw-runtime.ts")),
+    ).toBe(false);
+  });
+
+  it("keeps memory config values independent from config IO and runtime facades", () => {
+    const source = fs.readFileSync(
+      resolve(REPO_ROOT, "packages/memory-host-sdk/src/host/openclaw-runtime-config.ts"),
+      "utf8",
+    );
+    const sources = [...source.matchAll(/\bfrom\s+["']([^"']+)["']/gu)].map(
+      (match) => match[1] ?? "",
+    );
+
+    // This facade is used by embedding metadata. Every dependency must remain a
+    // config value/shape owner; config loading belongs to the session runtime.
+    expect([...new Set(sources)].toSorted()).toEqual([
+      "../../../../src/cli/parse-duration.js",
+      "../../../../src/config/byte-size.js",
+      "../../../../src/config/paths.js",
+      "../../../../src/config/sessions/paths.js",
+      "../../../../src/config/types.memory.js",
+      "../../../../src/config/types.openclaw.js",
+      "../../../../src/config/types.secrets.js",
+      "../../../../src/config/types.tools.js",
     ]);
+    expect(source).not.toMatch(/^\s*import\b/mu);
   });
 
   it("keeps plugin-package-contract independent from core internals", () => {

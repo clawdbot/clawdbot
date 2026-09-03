@@ -14,7 +14,6 @@ export async function reconcileUnchangedUpdate(params: {
   pluginId: string;
   record: UpdatablePluginInstallRecord;
   currentVersion: string;
-  effectiveSpec?: string;
   recordSpec?: string;
   resolution: NpmSpecResolution;
   updateChannel?: UpdateChannel;
@@ -28,7 +27,7 @@ export async function reconcileUnchangedUpdate(params: {
     !params.hasSpecOverride && !params.hasOfficialNpmSpec
       ? await resolveNewerExactPinnedNpmDefaultLine({
           currentVersion: params.currentVersion,
-          effectiveSpec: params.effectiveSpec,
+          recordedSpec: params.record.spec,
           probeNpmVersion: params.resolution.version,
           updateChannel: params.updateChannel,
           timeoutMs: params.timeoutMs,
@@ -77,10 +76,10 @@ export async function reconcileUnchangedUpdate(params: {
       currentVersion: params.currentVersion,
       nextVersion: newerExactPinnedDefaultLine?.version ?? params.resolution.version,
       message:
-        newerExactPinnedDefaultLine && params.effectiveSpec
+        newerExactPinnedDefaultLine && params.record.spec
           ? formatNewerExactPinnedNpmDefaultLineMessage({
               pluginId: params.pluginId,
-              effectiveSpec: params.effectiveSpec,
+              recordedSpec: params.record.spec,
               currentVersion: params.currentVersion,
               newer: newerExactPinnedDefaultLine,
             })

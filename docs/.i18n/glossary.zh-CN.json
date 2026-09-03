@@ -488,6 +488,10 @@
     "target": "添加能力（重定向）"
   },
   {
+    "source": "Adding capabilities",
+    "target": "添加能力"
+  },
+  {
     "source": "Adding capabilities (contributor guide)",
     "target": "添加能力（贡献者指南）"
   },
@@ -1400,6 +1404,10 @@
     "target": "后台进程"
   },
   {
+    "source": "Channel inbound API",
+    "target": "渠道入站 API"
+  },
+  {
     "source": "Channel outbound API",
     "target": "渠道出站 API"
   },
@@ -1656,6 +1664,18 @@
     "target": "Gateway 配置参考"
   },
   {
+    "source": "v2026.8.1 (AKA OpenClaw 2.0)",
+    "target": "v2026.8.1 (AKA OpenClaw 2.0)"
+  },
+  {
+    "source": "v2026.8.2",
+    "target": "v2026.8.2"
+  },
+  {
+    "source": "v2026.8.1",
+    "target": "v2026.8.1"
+  },
+  {
     "source": "v2026.7.1",
     "target": "v2026.7.1"
   },
@@ -1850,5 +1870,13 @@
   {
     "source": "Built-in memory",
     "target": "内置记忆"
+  },
+  {
+    "source": "macOS SSH tunnel",
+    "target": "macOS SSH 隧道"
+  },
+  {
+    "source": "Node and tsx startup errors",
+    "target": "Node 和 tsx 启动错误"
   }
 ]

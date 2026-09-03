@@ -198,6 +198,25 @@ describe("llama.cpp provider plugin", () => {
     expect(mocks.discoverServer).not.toHaveBeenCalled();
   });
 
+  it("keeps an embedding-only managed model inventory empty", async () => {
+    const provider = registerTextProvider();
+    const catalog = expectDefined(provider.catalog, "managed model catalog");
+    const options = configuredOptions();
+    options.config.models.providers[LLAMA_CPP_PROVIDER_ID].models = [];
+
+    const result = await catalog.run({
+      config: options.config,
+      env: {},
+      resolveProviderApiKey: () => ({ apiKey: undefined }),
+      resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+    });
+
+    if (!result || !("provider" in result)) {
+      throw new Error("managed catalog returned no provider");
+    }
+    expect(result.provider.models).toEqual([]);
+  });
+
   it("registers local embeddings through the generic provider contract", () => {
     const { config, registry } = createPluginRegistryFixture();
     registerVirtualTestPlugin({
@@ -284,11 +303,9 @@ describe("llama.cpp provider plugin", () => {
     );
     expect(mocks.prepareServer).toHaveBeenCalledWith(
       expect.objectContaining({
+        chatModel: { mode: "preserve" },
         embeddingModelPath: "/models/model.gguf",
       }),
-    );
-    expect(mocks.prepareServer).not.toHaveBeenCalledWith(
-      expect.objectContaining({ chatModelPath: expect.anything() }),
     );
     expect(result.runtime?.cacheKeyData).toEqual({
       provider: "local",
@@ -377,8 +394,11 @@ describe("llama.cpp provider plugin", () => {
       expect(result.defaultModel).toBe(`${LLAMA_CPP_PROVIDER_ID}/${DEFAULT_LLAMA_CPP_MODEL_ID}`);
       expect(mocks.prepareServer).toHaveBeenCalledWith(
         expect.objectContaining({
-          chatModelId: DEFAULT_LLAMA_CPP_MODEL_ID,
-          chatModelPath: "/models/chat.gguf",
+          chatModel: expect.objectContaining({
+            mode: "configure",
+            id: DEFAULT_LLAMA_CPP_MODEL_ID,
+            path: "/models/chat.gguf",
+          }),
           embeddingModelPath: "/models/embedding.gguf",
         }),
       );

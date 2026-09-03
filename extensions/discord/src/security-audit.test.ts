@@ -207,7 +207,7 @@ describe("Discord security audit findings", () => {
       config: {
         enabled: true,
         token: "t",
-        allowFrom: ["Alice#1234", "<@123456789012345678>"],
+        allowFrom: ["Alice#1234", " Alice#1234 ", "second.operator", "<@123456789012345678>"],
         guilds: {
           "123": {
             users: ["trusted.operator"],
@@ -222,12 +222,21 @@ describe("Discord security audit findings", () => {
       storeAllowFrom: ["team.owner"],
       expectNameBasedSeverity: "warn",
       detailIncludes: [
-        "channels.discord.allowFrom:Alice#1234",
-        "channels.discord.guilds.123.users:trusted.operator",
-        "channels.discord.guilds.123.channels.general.users:security-team",
-        "~/.openclaw/credentials/discord-allowFrom.json:team.owner",
+        "Found 5 name/tag entries",
+        "channels.discord.allowFrom (2)",
+        "channels.discord.guilds.123.users (1)",
+        "channels.discord.guilds.123.channels.general.users (1)",
+        "Discord pairing store (1)",
       ],
-      detailExcludes: ["<@123456789012345678>"],
+      detailExcludes: [
+        "Alice#1234",
+        "second.operator",
+        "trusted.operator",
+        "security-team",
+        "team.owner",
+        "<@123456789012345678>",
+        "987654321098765432",
+      ],
     },
     {
       name: "marks Discord name-based allowlists as break-glass when dangerous matching is enabled",
@@ -239,6 +248,7 @@ describe("Discord security audit findings", () => {
       } satisfies DiscordAccountConfig,
       expectNameBasedSeverity: "info",
       detailIncludes: ["out-of-scope"],
+      detailExcludes: ["Alice#1234"],
     },
     {
       name: "audits name-based allowlists on non-default Discord accounts",
@@ -251,7 +261,8 @@ describe("Discord security audit findings", () => {
         allowFrom: ["Alice#1234"],
       } satisfies DiscordAccountConfig,
       expectNameBasedSeverity: "warn",
-      detailIncludes: ["channels.discord.accounts.beta.allowFrom:Alice#1234"],
+      detailIncludes: ["channels.discord.accounts.beta.allowFrom (1)"],
+      detailExcludes: ["Alice#1234"],
     },
     {
       name: "does not warn when Discord allowlists use ID-style entries only",
@@ -302,7 +313,7 @@ describe("Discord security audit findings", () => {
         expect(nameBasedFinding.detail).toContain(snippet);
       }
       for (const snippet of testCase.detailExcludes ?? []) {
-        expect(nameBasedFinding.detail).not.toContain(snippet);
+        expect(JSON.stringify(findings)).not.toContain(snippet);
       }
     }
   });

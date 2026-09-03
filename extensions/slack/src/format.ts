@@ -393,10 +393,11 @@ function protectSlackAssistantTranscriptRoleHeaders(text: string): string {
     return text;
   }
   const tokenProjection = projectSlackMrkdwnVisibleText(text, "token");
-  const fallbackProjection = projectSlackMrkdwnVisibleText(text, "fallback");
+  // Only native date tokens have different modern-client and fallback text.
   if (
     !slackProjectionHasRoleHeader(tokenProjection) &&
-    !slackProjectionHasRoleHeader(fallbackProjection)
+    (!text.includes("<!date^") ||
+      !slackProjectionHasRoleHeader(projectSlackMrkdwnVisibleText(text, "fallback")))
   ) {
     return text;
   }
@@ -425,7 +426,10 @@ function buildSlackRenderOptions() {
   };
 }
 
-function markdownToSlackMrkdwn(markdown: string, options: SlackMarkdownOptions = {}): string {
+export function normalizeSlackOutboundText(
+  markdown: string,
+  options: SlackMarkdownOptions = {},
+): string {
   const ir = makeSlackEmphasisStylesSafe(
     markdownToIR(markdown ?? "", {
       assistantTranscriptRoleHeaders: true,
@@ -436,11 +440,9 @@ function markdownToSlackMrkdwn(markdown: string, options: SlackMarkdownOptions =
       tableMode: options.tableMode,
     }),
   );
-  return renderMarkdownWithMarkers(ir, buildSlackRenderOptions(), SLACK_FORMAT_PROFILE);
-}
-
-export function normalizeSlackOutboundText(markdown: string): string {
-  return protectSlackAssistantTranscriptRoleHeaders(markdownToSlackMrkdwn(markdown ?? ""));
+  return protectSlackAssistantTranscriptRoleHeaders(
+    renderMarkdownWithMarkers(ir, buildSlackRenderOptions(), SLACK_FORMAT_PROFILE),
+  );
 }
 
 /** Chunk already-rendered Slack mrkdwn without splitting entities or code markers. */

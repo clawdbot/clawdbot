@@ -1,4 +1,5 @@
 // Voice Call plugin module implements manager harness behavior.
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +8,7 @@ import {
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { onTestFinished } from "vitest";
 import { VoiceCallConfigSchema } from "./config.js";
 import { CallManager } from "./manager.js";
 import type { CallManagerContext } from "./manager/context.js";
@@ -105,12 +107,43 @@ function installVoiceCallStateRuntimeForTests(): void {
   setVoiceCallStateRuntime({ state: createVoiceCallStateRuntimeForTests() });
 }
 
+export function finalizeTestManagerCalls(manager: CallManager): void {
+  const errors: unknown[] = [];
+  for (const call of manager.getActiveCalls()) {
+    try {
+      // Synthetic carrier completion retires fixture timers/waiters even when
+      // its fake hangup deliberately fails. Provider work must be joined first.
+      manager.processEvent({
+        id: randomUUID(),
+        type: "call.ended",
+        callId: call.callId,
+        providerCallId: call.providerCallId,
+        timestamp: Date.now(),
+        reason: "hangup-user",
+      });
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length > 0) {
+    throw new AggregateError(errors, "Failed to finalize fixture calls");
+  }
+}
+
+export function registerTestManagerCleanup(manager: CallManager): CallManager {
+  // Register before initialize can fail. Store/runtime owners must outlive this
+  // LIFO finish hook; this fixture does not reset shared stores or runtimes.
+  onTestFinished(() => finalizeTestManagerCalls(manager));
+  return manager;
+}
+
 export async function createManagerHarness(
   configOverrides: Record<string, unknown> = {},
   provider = new FakeProvider(),
 ): Promise<{
   manager: CallManager;
   provider: FakeProvider;
+  storePath: string;
 }> {
   const config = VoiceCallConfigSchema.parse({
     enabled: true,
@@ -119,9 +152,10 @@ export async function createManagerHarness(
     ...configOverrides,
   });
   installVoiceCallStateRuntimeForTests();
-  const manager = new CallManager(config, createTestStorePath());
+  const storePath = createTestStorePath();
+  const manager = registerTestManagerCleanup(new CallManager(config, storePath));
   await manager.initialize(provider, "https://example.com/voice/webhook");
-  return { manager, provider };
+  return { manager, provider, storePath };
 }
 
 export function markCallAnswered(manager: CallManager, callId: string, eventId: string): void {

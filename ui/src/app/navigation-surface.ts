@@ -16,13 +16,14 @@ type AppSidebarElement = HTMLElement & { dismissTransientMenus(): boolean };
 type SidebarAttentionElement = HTMLElement & { dismissPanel(): boolean };
 
 export function dismissNavigationTransientSurfaces(host: HTMLElement): boolean {
+  // Unupgraded elements cannot own transient UI; navigation must not wait for their imports.
   const dismissedPanel = [
-    ...host.querySelectorAll<SidebarAttentionElement>("openclaw-sidebar-attention"),
+    ...host.querySelectorAll<SidebarAttentionElement>("openclaw-sidebar-attention:defined"),
   ]
     .map((attention) => attention.dismissPanel())
     .some((dismissed) => dismissed);
   const dismissedMenu = host
-    .querySelector<AppSidebarElement>("openclaw-app-sidebar")
+    .querySelector<AppSidebarElement>("openclaw-app-sidebar:defined")
     ?.dismissTransientMenus();
   return dismissedMenu === true || dismissedPanel;
 }
@@ -121,14 +122,10 @@ export function floatingSidebarAttentionVisible(params: {
   navigationSurfaceHidden: boolean;
   mobileNavLayout: boolean;
   onboarding: boolean;
-  settingsTakeover?: boolean;
   compact?: boolean;
 }): boolean {
-  // Mobile keeps attention in its drawer except during onboarding. Settings
-  // replaces that drawer/sidebar entirely, so both need the floating copy.
   const attentionNeedsFloating =
-    params.settingsTakeover ||
-    (params.navigationSurfaceHidden && (!params.mobileNavLayout || params.onboarding));
+    params.navigationSurfaceHidden && !params.mobileNavLayout && !params.onboarding;
   return attentionNeedsFloating && !params.compact;
 }
 
@@ -136,7 +133,6 @@ export function renderFloatingUpdateCard(params: {
   navigationSurfaceHidden: boolean;
   mobileNavLayout: boolean;
   onboarding: boolean;
-  settingsTakeover?: boolean;
   compact?: boolean;
   updateAvailable: ApplicationContext["overlays"]["snapshot"]["updateAvailable"];
   updateSchedule?: ApplicationContext["overlays"]["snapshot"]["updateSchedule"];

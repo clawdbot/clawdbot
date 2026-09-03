@@ -224,9 +224,13 @@ class WearReplyReceiver : BroadcastReceiver() {
         Log.w(LOG_TAG, "Wear notification reply failed", err)
         val notifier = WearReplyNotifier(context.applicationContext)
         when (notificationReplyFailureAction(err)) {
-          NotificationReplyFailureAction.RetrySamePhone ->
+          NotificationReplyFailureAction.RetrySamePhone -> {
             notifier.showReplyFailure(sessionKey, notificationTag, phoneNodeId)
-          NotificationReplyFailureAction.OpenApp -> notifier.showPreferredPhoneChanged(notificationTag)
+          }
+
+          NotificationReplyFailureAction.OpenApp -> {
+            notifier.showPreferredPhoneChanged(notificationTag)
+          }
         }
       } finally {
         pendingResult.finish()

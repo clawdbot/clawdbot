@@ -95,17 +95,54 @@ describe("TranscriptsStore", () => {
     ]);
   });
 
-  it("requires date-qualified selectors for repeated ids", async () => {
-    const { store } = createStore();
-    await store.writeSession(session("standup", "2026-07-01T10:00:00.000Z"));
-    await store.writeSession(session("standup", "2026-07-02T10:00:00.000Z"));
+  it.each(["standup", "2026-07-03/raw-id"])(
+    "requires dated selectors for repeated %s",
+    async (id) => {
+      const { store } = createStore();
+      await store.writeSession(session(id, "2026-07-01T10:00:00.000Z"));
+      await store.writeSession(session(id, "2026-07-02T10:00:00.000Z"));
 
-    await expect(store.readSession("standup")).rejects.toThrow(
-      "multiple transcripts sessions match standup",
-    );
-    await expect(store.readSession("2026-07-01/standup")).resolves.toMatchObject({
-      startedAt: "2026-07-01T10:00:00.000Z",
-    });
+      await expect(store.readSession(id)).rejects.toThrow("multiple transcripts sessions match");
+      await expect(store.readSession(`2026-07-01/${id}`)).resolves.toMatchObject({
+        startedAt: "2026-07-01T10:00:00.000Z",
+      });
+    },
+  );
+
+  it.each([false, true])(
+    "prioritizes qualified targets regardless of insertion order %s",
+    async (reverse) => {
+      const { store } = createStore();
+      const raw = session("2026-07-03/raw-id", "2026-07-04T10:00:00.000Z");
+      const qualified = session("raw-id", "2026-07-03T10:00:00.000Z");
+      for (const target of reverse ? [qualified, raw] : [raw, qualified]) {
+        await store.writeSession(target);
+      }
+      closeOpenClawStateDatabaseForTest();
+      await expect(store.readSession(raw.sessionId)).resolves.toEqual(qualified);
+      await expect(store.readSession("2026-07-04/2026-07-03-raw-id")).resolves.toEqual(raw);
+      await expect(store.readSession(`2026-07-04/${raw.sessionId}`)).resolves.toEqual(raw);
+    },
+  );
+
+  it("reads literal date-prefixed raw IDs and shipped date/raw suffixes", async () => {
+    const { store } = createStore();
+    const raw = session("2026-07-03/raw-id");
+    const punctuated = session("notes: room/one");
+    for (const target of [raw, punctuated]) {
+      await store.writeSession(target);
+      await expect(store.readSession(target.sessionId)).resolves.toEqual(target);
+      await expect(store.readSession(`2026-07-01/${target.sessionId}`)).resolves.toEqual(target);
+      await expect(store.readSession(`2026-07-02/${target.sessionId}`)).resolves.toBeUndefined();
+    }
+    await expect(store.readSession("2026-07-01/notes: Room/one")).resolves.toBeUndefined();
+  });
+
+  it("does not reinterpret legacy export ownership as a raw ID lookup", async () => {
+    const { store } = createStore();
+    await store.writeSession(session(".", "2026-07-01T10:00:00.000Z"));
+    await store.writeSession(session(".", "2026-07-02T10:00:00.000Z"));
+    await expect(store.writeSession(session(".."))).resolves.toBeUndefined();
   });
 
   it("matches bare selector slugs literally and case-sensitively", async () => {
@@ -263,9 +300,9 @@ describe("TranscriptsStore", () => {
     const artifacts = await store.materializeSessionArtifacts(target, "transcript");
     fs.appendFileSync(artifacts.transcriptPath, '{"text":"external edit"}\n');
 
-    await expect(store.updateStopped(target.sessionId, "2026-07-01T11:00:00.000Z")).resolves.toBe(
-      undefined,
-    );
+    await expect(
+      store.writeSession({ ...target, stoppedAt: "2026-07-01T11:00:00.000Z" }),
+    ).resolves.toBeUndefined();
     await expect(store.readSession(target.sessionId)).resolves.toMatchObject({
       stoppedAt: "2026-07-01T11:00:00.000Z",
     });

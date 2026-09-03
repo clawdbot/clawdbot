@@ -1,21 +1,6 @@
 // Gateway startup-migration readiness refusals shared by doctor config preflight.
 import { ExitError } from "../runtime.js";
 
-export function formatStartupMigrationFailure(params: {
-  warnings: string[];
-  blockers: string[];
-}): string {
-  const details = [
-    ...params.warnings.map((warning) => `- ${warning}`),
-    ...params.blockers.map((blocker) => `- ${blocker}`),
-  ];
-  return [
-    "OpenClaw startup migrations did not complete cleanly; refusing to report the gateway ready.",
-    ...details,
-    'Run "openclaw doctor --fix" against the same state/config, then restart the gateway.',
-  ].join("\n");
-}
-
 export function throwStartupMigrationRefusal(message: string): never {
   // ExitError bypasses entry.ts's generic failure formatter, so report the owned reason here.
   console.error(message);

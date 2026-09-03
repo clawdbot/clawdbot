@@ -58,7 +58,6 @@ export type IrcAccountConfig = {
   groupAllowFrom?: Array<string | number>;
   groups?: Record<string, IrcChannelConfig>;
   channels?: string[];
-  mentionPatterns?: string[];
   markdown?: MarkdownConfig;
   historyLimit?: number;
   dmHistoryLimit?: number;

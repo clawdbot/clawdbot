@@ -4,7 +4,7 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 // Discord plugin module implements transcripts source behavior.
 import type {
   TranscriptSourceProvider,
-  TranscriptStartRequest,
+  TranscriptOccupancyWatchRequest,
 } from "openclaw/plugin-sdk/transcripts";
 import { listEnabledDiscordAccounts, resolveDiscordAccount } from "../accounts.js";
 import { authorizeDiscordVoiceIngress } from "./access.js";
@@ -114,11 +114,14 @@ const resolveDiscordTranscriptsAccountId: NonNullable<
 };
 
 async function waitForManager(
-  request: TranscriptStartRequest,
+  request: Pick<
+    TranscriptOccupancyWatchRequest,
+    "cfg" | "source" | "abortSignal" | "startupWaitMs"
+  >,
 ): Promise<{ ok: true; value: DiscordVoiceManager | undefined } | { ok: false; error: string }> {
   const accountResolution = resolveDiscordTranscriptsAccountId({
     cfg: request.cfg,
-    source: request.session.source,
+    source: request.source,
   });
   if (!accountResolution.ok) {
     return accountResolution;
@@ -213,8 +216,42 @@ export const discordVoiceTranscriptsSourceProvider: TranscriptSourceProvider = {
   },
   name: "Discord Voice",
   sourceKinds: ["live-audio"],
-  async start(request) {
+  async watchOccupancy(request) {
     const managerResolution = await waitForManager(request);
+    if (!managerResolution.ok) {
+      return managerResolution;
+    }
+    const manager = managerResolution.value;
+    if (!manager) {
+      return { ok: false, error: "Discord voice manager is not available." };
+    }
+    if (request.abortSignal?.aborted) {
+      return { ok: false, error: "Discord transcripts occupancy watch aborted." };
+    }
+    const guildId = request.source.guildId?.trim();
+    const channelId = request.source.channelId?.trim();
+    if (!guildId || !channelId) {
+      return { ok: false, error: "Discord transcripts require guildId and channelId." };
+    }
+    const unsubscribe = manager.watchChannelOccupancy({ guildId, channelId }, ({ occupied }) => {
+      if (occupied) {
+        request.onOccupied();
+      } else {
+        request.onEmpty();
+      }
+    });
+    const stop = () => {
+      unsubscribe();
+      request.abortSignal?.removeEventListener("abort", stop);
+    };
+    request.abortSignal?.addEventListener("abort", stop, { once: true });
+    if (request.abortSignal?.aborted) {
+      stop();
+    }
+    return { ok: true, value: { stop } };
+  },
+  async start(request) {
+    const managerResolution = await waitForManager({ ...request, source: request.session.source });
     if (!managerResolution.ok) {
       return managerResolution;
     }
@@ -236,13 +273,22 @@ export const discordVoiceTranscriptsSourceProvider: TranscriptSourceProvider = {
         transcripts: {
           sessionId: request.session.sessionId,
           onUtterance: request.onUtterance,
+          onStop: () =>
+            request.onStatus?.({
+              sessionId: request.session.sessionId,
+              active: false,
+              source: request.session.source,
+            }),
         },
       },
     );
     if (!joined.ok) {
       return { ok: false, error: joined.message };
     }
-    return { ok: true, session: request.session };
+    const title = joined.channelName?.trim();
+    const session =
+      !request.session.title && title ? { ...request.session, title } : request.session;
+    return { ok: true, session };
   },
   async stop(request) {
     const accountId = request.source.accountId?.trim();

@@ -330,13 +330,12 @@ describe("security audit gateway exposure findings", () => {
     ).toBe(true);
   });
 
-  it("evaluates trusted-proxy auth guardrails", () => {
+  it.each(["loopback", "lan"] as const)("evaluates trusted-proxy auth guardrails on %s", (bind) => {
     const cases: Array<{
       name: string;
       cfg: OpenClawConfig;
       expectedCheckId: string;
       expectedSeverity: "warn" | "critical";
-      suppressesGenericSharedSecretFindings?: boolean;
     }> = [
       {
         name: "trusted-proxy base mode",
@@ -352,7 +351,6 @@ describe("security audit gateway exposure findings", () => {
         },
         expectedCheckId: "gateway.trusted_proxy_auth",
         expectedSeverity: "critical",
-        suppressesGenericSharedSecretFindings: true,
       },
       {
         name: "missing trusted proxies",
@@ -462,17 +460,52 @@ describe("security audit gateway exposure findings", () => {
     ];
 
     for (const testCase of cases) {
-      const findings = collectGatewayConfigFindings(testCase.cfg, testCase.cfg, {});
+      const cfg = { ...testCase.cfg, gateway: { ...testCase.cfg.gateway, bind } };
+      const findings = collectGatewayConfigFindings(cfg, cfg, {});
       expect(
         hasFinding(testCase.expectedCheckId, testCase.expectedSeverity, findings),
         testCase.name,
       ).toBe(true);
-      if (testCase.suppressesGenericSharedSecretFindings) {
-        const checkIds = findings.map((finding) => finding.checkId);
-        expect(checkIds).not.toContain("gateway.bind_no_auth");
-        expect(checkIds).not.toContain("gateway.auth_no_rate_limit");
-      }
+      const checkIds = findings.map((finding) => finding.checkId);
+      expect(checkIds, testCase.name).toContain("gateway.trusted_proxy_auth");
+      expect(checkIds, testCase.name).not.toContain("gateway.bind_no_auth");
+      expect(checkIds, testCase.name).not.toContain("gateway.loopback_no_auth");
+      expect(checkIds, testCase.name).not.toContain("gateway.auth_no_rate_limit");
     }
+  });
+
+  it.each([
+    { name: "missing consent", trustedProxies: ["127.0.0.1"], allowLoopback: undefined },
+    { name: "missing loopback source", trustedProxies: ["10.0.0.1"], allowLoopback: true },
+    { name: "allowed exact source", trustedProxies: ["127.0.0.1"], allowLoopback: true },
+    { name: "allowed loopback CIDR", trustedProxies: ["127.0.0.0/8"], allowLoopback: true },
+    { name: "allowed IPv6 source", trustedProxies: ["::1"], allowLoopback: true },
+  ])("explains same-host proxy requirements with $name", ({ trustedProxies, allowLoopback }) => {
+    const cfg = {
+      gateway: {
+        bind: "loopback",
+        trustedProxies,
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+            allowUsers: ["nick@example.com"],
+            allowLoopback,
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const findings = collectGatewayConfigFindings(cfg, cfg, {});
+    const finding = requireFinding(findings, "gateway.trusted_proxy_auth", "same-host proxy");
+    expect(finding.severity).toBe("critical");
+    expect(finding.remediation).toContain(
+      "Same-host proxy requests are rejected unless gateway.auth.trustedProxy.allowLoopback=true",
+    );
+    expect(finding.remediation).toContain("gateway.trustedProxies includes their loopback source");
+    expect(findings.map((entry) => entry.checkId)).not.toContain("gateway.loopback_no_auth");
+    expect(hasFinding("gateway.trusted_proxy_allow_loopback", "warn", findings)).toBe(
+      allowLoopback === true,
+    );
   });
 
   it("explains the trusted-proxy admin auto-approval impact and alternatives", () => {

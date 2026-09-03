@@ -129,8 +129,7 @@ export function resolveMatrixSharedDmContextNotice(params: {
 
     return [
       "This Matrix DM is sharing a session with another Matrix DM room.",
-      "Use /focus here for a one-off isolated thread session when thread bindings are enabled, or set",
-      "channels.matrix.dm.sessionScope to per-room to isolate each Matrix DM room.",
+      "Set channels.matrix.dm.sessionScope to per-room to isolate each Matrix DM room.",
     ].join(" ");
   } catch (err) {
     params.logVerboseMessage(

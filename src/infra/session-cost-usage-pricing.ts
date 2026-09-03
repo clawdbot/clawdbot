@@ -1,10 +1,11 @@
+import { calculateUsageCost } from "@openclaw/llm-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { NormalizedUsage, UsageLike } from "../agents/usage.js";
 import { normalizeUsage } from "../agents/usage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { countToolResults, extractToolCallNames } from "../utils/transcript-tools.js";
-import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
+import { resolveModelCostConfig } from "../utils/usage-format.js";
 import type {
   CostBreakdown,
   CostUsageTotals,
@@ -14,7 +15,7 @@ import type {
 const normalizeUsageCostTotalOrigin = (value: unknown): CostBreakdown["totalOrigin"] =>
   value === "provider-billed" ? value : undefined;
 
-export const extractCostBreakdown = (usageRaw?: UsageLike | null): CostBreakdown | undefined => {
+const extractCostBreakdown = (usageRaw?: UsageLike | null): CostBreakdown | undefined => {
   if (!usageRaw || typeof usageRaw !== "object") {
     return undefined;
   }
@@ -39,7 +40,7 @@ export const extractCostBreakdown = (usageRaw?: UsageLike | null): CostBreakdown
   };
 };
 
-export const parseTimestamp = (entry: Record<string, unknown>): Date | undefined => {
+const parseTimestamp = (entry: Record<string, unknown>): Date | undefined => {
   const message = entry.message as Record<string, unknown> | undefined;
   const messageTimestamp = asFiniteNumber(message?.timestamp);
   if (messageTimestamp !== undefined) {
@@ -189,17 +190,6 @@ const shouldPreserveRecordedZeroCost = (costBreakdown: CostBreakdown | undefined
       costBreakdown.cacheWrite,
     ].some((value) => value !== undefined && value !== 0));
 
-export const shouldRecomputeRecordedZeroCost = (params: {
-  cost: ReturnType<typeof resolveModelCostConfig>;
-  costBreakdown: CostBreakdown | undefined;
-  costTotal: number | undefined;
-  usage: NormalizedUsage;
-}): boolean =>
-  params.costTotal === 0 &&
-  !shouldPreserveRecordedZeroCost(params.costBreakdown) &&
-  isModelPricingKnown(params.cost) &&
-  computeUsageTokenTotals(params.usage).totalTokens > 0;
-
 export type UsageCostResolver = (params: {
   provider?: string;
   model?: string;
@@ -237,29 +227,30 @@ export function parseUsageCostTranscriptEntry(
   const cost = resolveCost({ provider: entry.provider, model: entry.model });
   const usageTotals = computeUsageTokenTotals(entry.usage);
   const pricingKnown = isModelPricingKnown(cost);
-  const preserveRecordedZeroCost = shouldPreserveRecordedZeroCost(entry.costBreakdown);
-  if (cost?.tieredPricing && cost.tieredPricing.length > 0 && !preserveRecordedZeroCost) {
-    entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
-    entry.costBreakdown = undefined;
-  } else if (
+  // Provider billing is authoritative even when catalog tiers would estimate a different total.
+  const preserveRecordedCost =
+    entry.costBreakdown?.totalOrigin === "provider-billed" ||
+    shouldPreserveRecordedZeroCost(entry.costBreakdown);
+  if (preserveRecordedCost) {
+    return entry;
+  }
+  if (
     !pricingKnown &&
-    !preserveRecordedZeroCost &&
     (entry.costTotal === undefined || entry.costTotal === 0) &&
     usageTotals.totalTokens > 0
   ) {
     entry.costTotal = undefined;
     entry.costBreakdown = undefined;
   } else if (
+    cost?.tieredPricing?.length ||
     entry.costTotal === undefined ||
-    shouldRecomputeRecordedZeroCost({
-      usage: entry.usage,
-      cost,
-      costBreakdown: entry.costBreakdown,
-      costTotal: entry.costTotal,
-    })
+    (entry.costTotal === 0 && pricingKnown && usageTotals.totalTokens > 0)
   ) {
-    entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
-    entry.costBreakdown = undefined;
+    const estimated = cost ? calculateUsageCost(entry.usage, cost) : undefined;
+    // Repricing replaces the total and its allocation together, or summaries lose
+    // the input/output/cache breakdown while still displaying the correct total.
+    entry.costBreakdown = estimated && Number.isFinite(estimated.total) ? estimated : undefined;
+    entry.costTotal = entry.costBreakdown?.total;
   }
   return entry;
 }

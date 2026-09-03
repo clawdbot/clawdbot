@@ -369,6 +369,36 @@ describe("handleBuzzInbound", () => {
     expect(params.historyMap.size).toBe(0);
   });
 
+  it.each([undefined, "all", "off"] as const)(
+    "uses replyToMode %s for automatic delivery and typing without changing thread context",
+    async (replyToMode) => {
+      const runtime = createPluginRuntimeMock();
+      setBuzzRuntime(runtime);
+      const bus = createBus();
+      const account = createAccount();
+      const config = { ...account.config, replyToMode };
+      await handleBuzzInbound({
+        account: { ...account, config },
+        cfg: {},
+        bus,
+        message: createMessage({ threadId: "existing-thread", mentionedPubkeys: [BOT_PUBLIC_KEY] }),
+        ...createLifecycle(),
+      });
+      const dispatch = firstDispatch(runtime);
+      expect(dispatch.ctxPayload.MessageThreadId).toBe("existing-thread");
+      expect(dispatch.ctxPayload.ReplyToId).toBe("event-1");
+      await dispatch.delivery.deliver({ text: "response" }, { kind: "final" });
+      await dispatch.replyPipeline?.typing?.start();
+      const replyTarget = {
+        channelId: ROOM_ID,
+        threadId: replyToMode === "off" ? undefined : "existing-thread",
+        replyToId: replyToMode === "off" ? undefined : "existing-thread",
+      };
+      expect(bus.sendText).toHaveBeenCalledWith({ ...replyTarget, text: "response" });
+      expect(bus.sendTyping).toHaveBeenCalledWith(replyTarget);
+    },
+  );
+
   it("accepts a native Nostr public-key mention", async () => {
     const runtime = createPluginRuntimeMock();
     setBuzzRuntime(runtime);

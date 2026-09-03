@@ -18,11 +18,13 @@ const CODEX_ON_DEMAND_ASSERTIONS_SCRIPT = "scripts/e2e/lib/codex-on-demand/asser
 const CODEX_NPM_PLUGIN_LIVE_ASSERTIONS_SCRIPT =
   "scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs";
 const DISABLE_EXPERIMENTAL_WARNING = "--disable-warning=ExperimentalWarning";
-const CODEX_VERSION = "0.150.1";
+const CODEX_VERSION = "0.153.0";
 const tempDirs: string[] = [];
 const tmpFixtureFiles = [
   "/tmp/openclaw-codex-agent.err",
   "/tmp/openclaw-codex-agent.json",
+  "/tmp/openclaw-codex-agent-after-uninstall.err",
+  "/tmp/openclaw-codex-agent-after-uninstall.json",
   "/tmp/openclaw-codex-followthrough.err",
   "/tmp/openclaw-codex-followthrough.json",
   "/tmp/openclaw-codex-inspect.json",
@@ -640,6 +642,48 @@ function createCodexInstallFixture(root: string) {
 }
 
 describe("Codex install helpers", () => {
+  const missingRegistration =
+    'Agent harness runtime "codex" is unavailable because its plugin registration is missing from this prepared run. Enable or reinstall the plugin that provides this runtime, restart the Gateway, then retry.';
+  const inactiveOwner =
+    'Agent harness runtime "codex" is unavailable. (reason=owner-plugin-not-activatable, ownerPluginId=codex). Run "openclaw doctor --fix". Owner plugin "codex" is not activatable (disabled in config). Repair the plugin or select a model that does not require this runtime, restart the Gateway, then retry.';
+  it.each([
+    ["missing registration", 1, missingRegistration, true],
+    ["inactive owner", 1, inactiveOwner, true],
+    ["successful command", 0, inactiveOwner, false],
+    ["unrelated provider failure", 1, "Provider request failed", false],
+    [
+      "degraded owner",
+      1,
+      inactiveOwner.replace("owner-plugin-not-activatable", "owner-plugin-degraded"),
+      false,
+    ],
+    [
+      "unverified owner",
+      1,
+      inactiveOwner.replace("owner-plugin-not-activatable", "owner-plugin-unverified"),
+      false,
+    ],
+    ["wrong owner", 1, inactiveOwner.replace("ownerPluginId=codex", "ownerPluginId=other"), false],
+    ["wrong runtime", 1, inactiveOwner.replace('runtime "codex"', 'runtime "other"'), false],
+  ] as const)(
+    "validates the post-uninstall agent failure: %s",
+    (_label, status, message, accepted) => {
+      writeJson("/tmp/openclaw-codex-agent-after-uninstall.json", {
+        ok: false,
+        error: { type: "cli_error", message },
+      });
+      writeFileSync("/tmp/openclaw-codex-agent-after-uninstall.err", message);
+
+      const result = spawnSync(
+        process.execPath,
+        [CODEX_NPM_PLUGIN_LIVE_ASSERTIONS_SCRIPT, "assert-agent-error", String(status)],
+        { encoding: "utf8" },
+      );
+
+      expect(result.status === 0, result.stderr).toBe(accepted);
+    },
+  );
+
   it("configures the canonical OpenAI model for the Codex runtime by default", () => {
     const root = makeTempDir(tempDirs, "openclaw-codex-npm-configure-");
 
@@ -767,7 +811,7 @@ describe("Codex install helpers", () => {
 
     const result = runCodexOnDemandAssertions(root);
 
-    expect(result.status).toBe(0);
+    expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain(`[codex-release] packageVersion=${CODEX_VERSION}`);
     expect(result.stdout).toContain(`[codex-release] cliVersion=${CODEX_VERSION}`);

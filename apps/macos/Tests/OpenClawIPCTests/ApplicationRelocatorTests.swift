@@ -98,6 +98,31 @@ struct ApplicationRelocatorTests {
     }
 
     @Test
+    func `relaunch marker stops a repeated transient handoff`() {
+        let destination = URL(fileURLWithPath: "/Applications/OpenClaw.app")
+        let markedArguments = [
+            "/private/var/folders/x/AppTranslocation/y/d/OpenClaw.app/Contents/MacOS/OpenClaw",
+            ApplicationRelocator.relocationRelaunchArgument,
+        ]
+
+        let repeatedRecommendations: [ApplicationRelocator.Recommendation] = [
+            .handOff(destination),
+            .offerInstall(destination: destination, replacing: true),
+        ]
+        for recommendation in repeatedRecommendations {
+            #expect(ApplicationRelocator.shouldStopRelocationRelaunch(
+                recommendation: recommendation,
+                arguments: markedArguments))
+        }
+        #expect(!ApplicationRelocator.shouldStopRelocationRelaunch(
+            recommendation: .continueLaunch,
+            arguments: markedArguments))
+        #expect(!ApplicationRelocator.shouldStopRelocationRelaunch(
+            recommendation: .handOff(destination),
+            arguments: []))
+    }
+
+    @Test
     func `older installed build can be replaced`() {
         let destination = URL(fileURLWithPath: "/Applications/OpenClaw.app")
         let installed = ApplicationRelocator.ApplicationIdentity(

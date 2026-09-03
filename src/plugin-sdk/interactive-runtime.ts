@@ -67,3 +67,4 @@ export {
   reduceLegacyInteractiveReply,
   resolveLegacyInteractiveTextFallback,
 } from "../interactive/payload.js";
+export { renderPresentationForDelivery } from "../channels/plugins/outbound/presentation-delivery.js";

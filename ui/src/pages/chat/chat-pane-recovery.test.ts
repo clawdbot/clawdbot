@@ -4,7 +4,11 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import { createTestChatPane, type TestChatPane } from "./chat-pane.test-support.ts";
+import {
+  createSessionCapabilityFixture,
+  createTestChatPane,
+  type TestChatPane,
+} from "./chat-pane.test-support.ts";
 
 function advertiseSessionRecovery(pane: TestChatPane) {
   pane.context.gateway.snapshot.hello = {
@@ -17,7 +21,7 @@ describe("chat pane session recovery", () => {
   it("unlocks the composer when shared session state settles the exact local run", () => {
     const { pane, state } = createTestChatPane({
       client: {} as GatewayBrowserClient,
-      sessions: {} as SessionCapability,
+      sessions: createSessionCapabilityFixture(),
     });
     state.chatRunId = "run-missed-terminal";
     state.chatStream = "answer already rendered";

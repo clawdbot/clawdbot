@@ -15,14 +15,12 @@ import {
   requestActiveCronJobCancellation,
 } from "../active-jobs.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
-import { cloneCronRuntimeAuthority, type CronRuntimeAuthority } from "../runtime-authority.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { removeCronJobBaseSession } from "../session-reaper.js";
 import { removeStaleCronJobFamilyRows } from "../store.js";
 import { createCronStreamSourceIdentity, cronStreamScheduleKey } from "../stream-schedule.js";
 import { systemOwnedDeclarationKeyNamespace } from "../system-owned-declaration.js";
 import { normalizeCronTaskRunJobId } from "../task-run-history.js";
-import { cronJobUsesToolRuntime } from "../tools-allow.js";
 import {
   isSystemOwnedCronPayloadKind,
   type CronJob,
@@ -38,6 +36,7 @@ import {
   nextWakeAtMs,
   recomputeNextRunsForMaintenance,
 } from "./jobs-scheduling.js";
+import { reconcileRuntimeAuthority } from "./jobs-tool-policy.js";
 import { cronPatchTouchesDeliveryResolution } from "./jobs-validation.js";
 import { applyJobPatch, applyDeclarativeJobSpec, createJob } from "./jobs.js";
 import {
@@ -269,52 +268,13 @@ function declarativeFields(job: CronStoredJob, includeEnabled: boolean) {
     payload: job.payload,
     scheduledToolPolicy: job.scheduledToolPolicy,
     toolsAllowProvenance: job.toolsAllowProvenance,
+    toolsAllowExecTarget: job.toolsAllowExecTarget,
     runtimeAuthority: job.runtimeAuthority,
     runtimeAuthorityRecoveryRequired: job.runtimeAuthorityRecoveryRequired,
     delivery: job.delivery,
     displayName: job.displayName,
     ...(includeEnabled ? { enabled: job.enabled } : {}),
   };
-}
-
-function reconcileRuntimeAuthority(params: {
-  job: CronStoredJob;
-  captured: boolean;
-  runtimeAuthority?: CronRuntimeAuthority;
-  explicitlyMutatesToolsAllow: boolean;
-}): void {
-  if (!cronJobUsesToolRuntime(params.job)) {
-    // Runtime authority cannot survive a payload transition into a path that
-    // does not execute the captured tool surface and later reappear on reuse.
-    delete params.job.runtimeAuthority;
-    delete params.job.runtimeAuthorityRecoveryRequired;
-    return;
-  }
-  if (params.captured) {
-    delete params.job.runtimeAuthorityRecoveryRequired;
-    const runtimeAuthority = params.runtimeAuthority
-      ? cloneCronRuntimeAuthority(params.runtimeAuthority)
-      : undefined;
-    if (params.runtimeAuthority && !runtimeAuthority) {
-      throw new TypeError("captured cron runtime authority is invalid");
-    }
-    if (runtimeAuthority) {
-      params.job.runtimeAuthority = runtimeAuthority;
-    } else {
-      // A fresh exact-surface capture with no runtime authority intentionally
-      // replaces any older runtime-specific grant instead of retaining it.
-      delete params.job.runtimeAuthority;
-    }
-    return;
-  }
-  if (params.explicitlyMutatesToolsAllow) {
-    // Explicit tool caps are a complete replacement. Runtime-owned authority
-    // may be restored only by another authenticated exact-surface capture.
-    if (params.job.runtimeAuthority) {
-      params.job.runtimeAuthorityRecoveryRequired = true;
-      delete params.job.runtimeAuthority;
-    }
-  }
 }
 
 function consumeRuntimeAuthorityMutationOptions(
@@ -395,6 +355,7 @@ export async function add(
         cronConfig: state.deps.cronConfig,
         scheduledToolPolicy: opts?.scheduledToolPolicy,
         toolsAllowProvenance: opts?.toolsAllowProvenance,
+        toolsAllowExecTarget: opts?.toolsAllowExecTarget,
         configuredChannels,
       });
       const runtimeAuthorityMutation = consumeRuntimeAuthorityMutationOptions(opts);
@@ -440,10 +401,14 @@ export async function add(
     const job = createJob(state, creationInput, {
       scheduledToolPolicy: opts?.scheduledToolPolicy,
       toolsAllowProvenance: opts?.toolsAllowProvenance,
+      toolsAllowExecTarget: opts?.toolsAllowExecTarget,
       configuredChannels,
     });
     if (opts?.createdActor) {
       job.createdActor = structuredClone(opts.createdActor);
+    }
+    if (opts?.skillLibrarySelections) {
+      job.skillLibrarySelections = structuredClone(opts.skillLibrarySelections);
     }
     const runtimeAuthorityMutation = consumeRuntimeAuthorityMutationOptions(opts);
     reconcileRuntimeAuthority({
@@ -539,6 +504,7 @@ async function updateLoadedJob(params: {
     cronConfig: state.deps.cronConfig,
     scheduledToolPolicy: opts?.scheduledToolPolicy,
     toolsAllowProvenance: opts?.toolsAllowProvenance,
+    toolsAllowExecTarget: opts?.toolsAllowExecTarget,
     configuredChannels,
   });
   if (patch.agentId !== undefined) {

@@ -4,6 +4,7 @@ import { normalizeSessionIdentities } from "./session-lifecycle-identity.js";
 
 export type SessionWorkAdmissionLease = {
   createHandoff: () => string;
+  isActive: () => boolean;
   release: () => void;
   released: Promise<void>;
   run: <T>(run: () => Promise<T>) => Promise<T>;
@@ -12,8 +13,8 @@ export type SessionWorkAdmissionLease = {
 export type HandoffSessionWorkAdmission = {
   handoffIds: Set<string>;
   identities: ReadonlySet<string>;
-  interrupt?: () => void;
-  interrupted: boolean;
+  interrupt?: (reason?: Error) => void;
+  interrupted: Error | undefined;
 };
 
 type SessionWorkAdmissionHandoff = {
@@ -53,7 +54,7 @@ export function consumeSessionWorkAdmissionHandoff(params: {
   handoffId: string;
   scope: string;
   identities: Iterable<string | undefined>;
-  onInterrupt?: () => void;
+  onInterrupt?: (reason?: Error) => void;
 }): SessionWorkAdmissionLease | undefined {
   const handoffId = params.handoffId.trim();
   if (!handoffId) {
@@ -74,7 +75,7 @@ export function consumeSessionWorkAdmissionHandoff(params: {
   handoff.admission.handoffIds.delete(handoffId);
   handoff.admission.interrupt = params.onInterrupt;
   if (handoff.admission.interrupted) {
-    params.onInterrupt?.();
+    params.onInterrupt?.(handoff.admission.interrupted);
   }
   return handoff.lease;
 }

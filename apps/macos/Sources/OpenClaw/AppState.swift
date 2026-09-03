@@ -446,10 +446,10 @@ final class AppState {
         guard !fields.isEmpty else { return nil }
         let fieldNames = fields.map(\.displayName)
         let fieldList = ListFormatter.localizedString(byJoining: fieldNames)
-        let message = String(localized: """
-        These settings changed outside the app while you were editing: \(fieldList). \
+        let message = String(format: String(localized: """
+        These settings changed outside the app while you were editing: %@. \
         Choose which version to keep.
-        """)
+        """), fieldList)
         return GatewayConfigConflict(
             fields: fields,
             fieldNames: fieldNames,
@@ -740,12 +740,10 @@ extension AppState {
             }
 
             if draft.dirtyFields.contains(.remoteUrl) {
-                let trimmedUrl = draft.remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines)
-                if trimmedUrl.isEmpty {
-                    changed = Self.updateGatewayString(&remote, key: "url", value: nil) || changed
-                } else if let normalizedUrl = GatewayRemoteConfig.normalizeGatewayUrlString(trimmedUrl) {
-                    changed = Self.updateGatewayString(&remote, key: "url", value: normalizedUrl) || changed
-                }
+                // Reconciliation needs the incomplete draft too, or it mistakes the
+                // unchanged disk URL for a saved edit. gatewayDraftCanPersist gates writes.
+                let url = GatewayRemoteConfig.normalizeGatewayUrlString(draft.remoteUrl) ?? draft.remoteUrl
+                changed = Self.updateGatewayString(&remote, key: "url", value: url) || changed
             }
 
         case .ssh:
@@ -1105,16 +1103,10 @@ extension AppState {
     }
 
     func setTalkEnabled(_ enabled: Bool) async {
-        guard voiceWakeSupported else {
-            self.talkEnabled = false
-            await GatewayConnection.shared.talkMode(enabled: false, phase: "disabled")
-            return
-        }
-
-        self.talkEnabled = enabled
+        self.talkEnabled = enabled && voiceWakeSupported
         guard !self.isPreview else { return }
 
-        if !enabled {
+        if !self.talkEnabled {
             await GatewayConnection.shared.talkMode(enabled: false, phase: "disabled")
             return
         }
@@ -1559,7 +1551,7 @@ extension AppState {
 
 @MainActor
 enum AppStateStore {
-    static let shared = AppState()
+    static let shared = AppState(preview: ProcessInfo.processInfo.isPreview)
 
     static func updateLaunchAtLogin(enabled: Bool) {
         Task.detached(priority: .utility) {

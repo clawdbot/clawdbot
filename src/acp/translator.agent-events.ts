@@ -209,7 +209,9 @@ export class AcpTranslatorAgentEvents {
     approvalEvent: GatewayExecApprovalEvent;
   }): void {
     const approvalEvent = params.approvalEvent;
-    if (this.approvalRelays.has(approvalEvent.approvalId)) {
+    const existing = this.approvalRelays.get(approvalEvent.approvalId);
+    if (existing) {
+      void this.retryApprovalRelayDecision(existing);
       return;
     }
 
@@ -270,6 +272,7 @@ export class AcpTranslatorAgentEvents {
     approvalEvent: GatewayExecApprovalEvent,
   ): Promise<void> {
     let resolved = false;
+    let decision: GatewayExecApprovalDecision | undefined;
     try {
       const details = await this.getGatewayApprovalDetails(relay.approvalId);
       if (!this.isApprovalRelayActive(relay)) {
@@ -282,7 +285,6 @@ export class AcpTranslatorAgentEvents {
         event: approvalEvent,
         details,
       });
-      let decision: GatewayExecApprovalDecision | undefined;
       try {
         const response = await this.connection.requestPermission(request);
         decision = resolveGatewayDecisionFromPermissionOutcome(response, request.options);
@@ -298,10 +300,35 @@ export class AcpTranslatorAgentEvents {
         if (resolved) {
           // Keep completed relays until prompt cleanup as replay/dedup sentinels.
           current.state = "completed";
+        } else if (decision) {
+          // Approval broadcasts have no catch-up replay. Retain the user's
+          // decision until reconnect or a duplicate event can deliver it.
+          current.pendingDecision = decision;
         } else {
           this.approvalRelays.delete(relay.approvalId);
         }
       }
+    }
+  }
+
+  private async retryApprovalRelayDecision(relay: AcpPendingApprovalRelay): Promise<void> {
+    const decision = relay.pendingDecision;
+    // Prompt cleanup revokes relay ownership. A detached stored decision must
+    // never race its cleanup denial at the Gateway authorization boundary.
+    if (!decision || !this.isApprovalRelayActive(relay)) {
+      return;
+    }
+    const resolved = await this.resolveGatewayApproval(relay.approvalId, decision);
+    if (!resolved || !this.isApprovalRelayActive(relay)) {
+      return;
+    }
+    relay.pendingDecision = undefined;
+    relay.state = "completed";
+  }
+
+  async replayApprovalDecisionsOnReconnect(): Promise<void> {
+    for (const relay of this.approvalRelays.values()) {
+      await this.retryApprovalRelayDecision(relay);
     }
   }
 

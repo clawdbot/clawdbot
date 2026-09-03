@@ -238,33 +238,33 @@ describe("normalizeCompatibilityConfigValues", () => {
     );
   });
 
-  it("removes null workspace values from agents.list entries", () => {
+  it("removes null workspace values from agents.entries", () => {
     const res = normalizeCompatibilityConfigValues({
       agents: {
-        list: [
-          { id: "main", workspace: null as unknown as string },
-          { id: "beta", workspace: "/beta" },
-          { id: "gamma" },
-        ],
+        entries: {
+          main: { workspace: null as unknown as string },
+          beta: { workspace: "/beta" },
+          gamma: {},
+        },
       },
     });
 
-    expect(res.config.agents?.list).toEqual([
-      { id: "main" },
-      { id: "beta", workspace: "/beta" },
-      { id: "gamma" },
-    ]);
-    expect(res.changes).toContain("Removed null workspace value from agents.list entry.");
+    expect(res.config.agents?.entries).toEqual({
+      main: {},
+      beta: { workspace: "/beta" },
+      gamma: {},
+    });
+    expect(res.changes).toContain("Removed null workspace value from agents.entries entry.");
   });
 
-  it("does not alter agents.list when no workspace is null", () => {
+  it("does not alter agents.entries when no workspace is null", () => {
     const res = normalizeCompatibilityConfigValues({
       agents: {
-        list: [{ id: "main", workspace: "/main" }, { id: "beta" }],
+        entries: { main: { workspace: "/main" }, beta: {} },
       },
     });
 
-    expect(res.config.agents?.list).toEqual([{ id: "main", workspace: "/main" }, { id: "beta" }]);
+    expect(res.config.agents?.entries).toEqual({ main: { workspace: "/main" }, beta: {} });
     expect(res.changes.some((change) => change.includes("workspace"))).toBe(false);
   });
 
@@ -278,26 +278,25 @@ describe("normalizeCompatibilityConfigValues", () => {
               activeHours: { start: "99:99", end: "17:00" },
             },
           },
-          list: [
-            {
-              id: "ops",
+          entries: {
+            ops: {
               heartbeat: {
                 prompt: "Check alerts",
                 activeHours: { start: "09:00", end: "not-a-time" },
               },
             },
-          ],
+          },
         },
       }),
     );
 
     expect(res.config.agents?.defaults?.heartbeat).toEqual({ every: "30m" });
-    expect(res.config.agents?.list?.[0]?.heartbeat).toEqual({ prompt: "Check alerts" });
+    expect(res.config.agents?.entries?.ops?.heartbeat).toEqual({ prompt: "Check alerts" });
     expect(res.changes).toContain(
       "Removed invalid agents.defaults.heartbeat.activeHours; heartbeats will use unrestricted hours until it is reconfigured.",
     );
     expect(res.changes).toContain(
-      "Removed invalid agents.list[0].heartbeat.activeHours; heartbeats will use unrestricted hours until it is reconfigured.",
+      "Removed invalid agents.entries.ops.heartbeat.activeHours; heartbeats will use unrestricted hours until it is reconfigured.",
     );
     expect(validateConfigObject(res.config).ok).toBe(true);
   });
@@ -309,6 +308,9 @@ describe("normalizeCompatibilityConfigValues", () => {
           heartbeat: {
             activeHours: { start: "09:00", end: "24:00", timezone: "user" },
           },
+        },
+        entries: {
+          ops: { heartbeat: { activeHours: { start: "22:00", end: "06:00" } } },
         },
       },
     });

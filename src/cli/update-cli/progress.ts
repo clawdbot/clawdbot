@@ -2,19 +2,23 @@
 import { spinner } from "@clack/prompts";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import { formatDurationPrecise } from "../../infra/format-time/format-duration.ts";
+import {
+  formatDurationCompact,
+  formatDurationPrecise,
+} from "../../infra/format-time/format-duration.ts";
 import type {
   UpdateRunResult,
   UpdateStepAdvisory,
   UpdateStepInfo,
   UpdateStepProgress,
+  UpdateStepResult,
 } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { UpdateCommandOptions } from "./shared.js";
 
 const STEP_LABELS: Record<string, string> = {
-  "clean check": "Working directory is clean",
-  "upstream check": "Upstream branch exists",
+  "clean check": "Checking for local changes",
+  "upstream check": "Checking the upstream branch",
   "git fetch": "Fetching latest changes",
   "git rebase": "Rebasing onto target commit",
   "git rev-parse @{upstream}": "Resolving upstream commit",
@@ -36,10 +40,21 @@ const STEP_LABELS: Record<string, string> = {
   "global install verify": "Verifying global package",
   "global install swap": "Activating global package",
   "global install": "Installing global package",
+  "global update pack": "Downloading the update",
+  "global update pack verify": "Verifying the downloaded package",
+  checkout: "Checking out candidate",
+  lint: "Checking code quality",
+  "config validate": "Validating configuration",
 };
 
 function getStepLabel(step: Pick<UpdateStepInfo, "name">): string {
-  return STEP_LABELS[step.name] ?? step.name;
+  return (
+    STEP_LABELS[step.name] ??
+    step.name.replace(
+      /^preflight (.+) \(([a-f0-9]+)\)$/,
+      (_match, name: string, sha: string) => `Preflight: ${STEP_LABELS[name] ?? name} (${sha})`,
+    )
+  );
 }
 
 function isAdvisoryStep(step: { advisory?: UpdateStepAdvisory }): boolean {
@@ -50,6 +65,12 @@ function isAdvisoryStep(step: { advisory?: UpdateStepAdvisory }): boolean {
 function inferUpdateFailureHints(result: UpdateRunResult): string[] {
   if (result.status !== "error") {
     return [];
+  }
+  if (result.reason === "preflight-insufficient-space") {
+    return [
+      "Free space on the preflight staging and package-manager store filesystems, then rerun the update.",
+      "Preflight stopped because storage was exhausted; trying another commit would not repair it.",
+    ];
   }
   if (result.reason === "pnpm-corepack-missing") {
     return [
@@ -130,51 +151,64 @@ export function createUpdateProgress(enabled: boolean): ProgressController {
   }
 
   let currentSpinner: ReturnType<typeof spinner> | null = null;
+  const stop = () => {
+    currentSpinner?.clear();
+    currentSpinner = null;
+  };
 
   const progress: UpdateStepProgress = {
     onStepStart: (step) => {
-      currentSpinner = spinner();
-      currentSpinner.start(theme.accent(getStepLabel(step)));
+      stop();
+      if (process.stdout.isTTY) {
+        currentSpinner = spinner({ indicator: "timer" });
+        currentSpinner.start(theme.accent(getStepLabel(step)));
+      } else {
+        defaultRuntime.log(`${getStepLabel(step)}...`);
+      }
     },
     onStepComplete: (step) => {
-      if (!currentSpinner) {
-        return;
-      }
-
-      const label = getStepLabel(step);
-      const duration = theme.muted(`(${formatDurationPrecise(step.durationMs)})`);
-      const icon = formatStepStatus(step);
-
-      currentSpinner.stop(`${icon} ${label} ${duration}`);
-      currentSpinner = null;
-
-      if (isAdvisoryStep(step) && step.stderrTail) {
-        const lines = step.stderrTail.split("\n").slice(-10);
-        for (const line of lines) {
-          if (line.trim()) {
-            defaultRuntime.log(`    ${theme.warn(line)}`);
-          }
-        }
-      } else if (step.exitCode !== 0 && step.stderrTail) {
-        const lines = step.stderrTail.split("\n").slice(-10);
-        for (const line of lines) {
-          if (line.trim()) {
-            defaultRuntime.log(`    ${theme.error(line)}`);
-          }
-        }
-      }
+      stop();
+      printStep(step);
     },
   };
 
-  return {
-    progress,
-    stop: () => {
-      if (currentSpinner) {
-        currentSpinner.stop();
-        currentSpinner = null;
+  return { progress, stop };
+}
+
+type DisplayStep = Pick<
+  UpdateStepResult,
+  | "name"
+  | "durationMs"
+  | "exitCode"
+  | "advisory"
+  | "stdoutTail"
+  | "stderrTail"
+  | "termination"
+  | "signal"
+>;
+
+function printStep(step: DisplayStep): void {
+  const duration = theme.muted(`(${formatDurationPrecise(step.durationMs)})`);
+  const termination =
+    step.termination === "timeout" || step.termination === "no-output-timeout"
+      ? " — timed out"
+      : step.signal
+        ? ` — interrupted (${step.signal})`
+        : "";
+  defaultRuntime.log(`  ${formatStepStatus(step)} ${getStepLabel(step)}${termination} ${duration}`);
+  if (!isAdvisoryStep(step) && step.exitCode === 0) {
+    return;
+  }
+  // Build tools often report failures on stdout. Keep the final diagnostic from
+  // each stream, so npm's stderr footer cannot hide the actual build error.
+  const color = isAdvisoryStep(step) ? theme.warn : theme.error;
+  for (const output of [step.stdoutTail, step.stderrTail]) {
+    for (const line of (output ?? "").trimEnd().split("\n").slice(-10)) {
+      if (line.trim()) {
+        defaultRuntime.log(`    ${color(line)}`);
       }
-    },
-  };
+    }
+  }
 }
 
 function formatStepStatus(step: {
@@ -227,29 +261,16 @@ export function printResult(result: UpdateRunResult, opts: PrintResultOptions): 
     defaultRuntime.log(`  After: ${theme.muted(after)}`);
   }
 
-  if (!opts.hideSteps && result.steps.length > 0) {
+  // Some preflight failures are synthesized without a progress callback. Keep
+  // their diagnostics visible even when successful streamed steps are hidden.
+  const steps = opts.hideSteps
+    ? result.steps.filter((step) => step.exitCode !== 0 || isAdvisoryStep(step))
+    : result.steps;
+  if (steps.length > 0) {
     defaultRuntime.log("");
     defaultRuntime.log(theme.heading("Steps:"));
-    for (const step of result.steps) {
-      const status = formatStepStatus(step);
-      const duration = theme.muted(`(${formatDurationPrecise(step.durationMs)})`);
-      defaultRuntime.log(`  ${status} ${step.name} ${duration}`);
-
-      if (isAdvisoryStep(step) && step.stderrTail) {
-        const lines = step.stderrTail.split("\n").slice(0, 5);
-        for (const line of lines) {
-          if (line.trim()) {
-            defaultRuntime.log(`      ${theme.warn(line)}`);
-          }
-        }
-      } else if (step.exitCode !== 0 && step.stderrTail) {
-        const lines = step.stderrTail.split("\n").slice(0, 5);
-        for (const line of lines) {
-          if (line.trim()) {
-            defaultRuntime.log(`      ${theme.error(line)}`);
-          }
-        }
-      }
+    for (const step of steps) {
+      printStep(step);
     }
   }
 
@@ -263,5 +284,9 @@ export function printResult(result: UpdateRunResult, opts: PrintResultOptions): 
   }
 
   defaultRuntime.log("");
-  defaultRuntime.log(`Total time: ${theme.muted(formatDurationPrecise(result.durationMs))}`);
+  const totalTime =
+    result.durationMs < 60_000
+      ? formatDurationPrecise(result.durationMs)
+      : (formatDurationCompact(result.durationMs, { spaced: true }) ?? "0ms");
+  defaultRuntime.log(`Total time: ${theme.muted(totalTime)}`);
 }

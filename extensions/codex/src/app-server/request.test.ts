@@ -1,4 +1,5 @@
 // Codex tests cover request plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sharedClientMocks = vi.hoisted(() => ({
@@ -22,6 +23,7 @@ vi.mock("./shared-client.js", () => ({
 
 const { readCodexAppServerUsage, requestCodexAppServerJson, withCodexAppServerJsonClient } =
   await import("./request.js");
+const { listAllCodexAppServerModels } = await import("./models.js");
 
 const expectDeadlineOptions = () =>
   expect.objectContaining({ timeoutMs: expect.any(Number), signal: expect.anything() });
@@ -487,7 +489,27 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     await expect(
       retained.send({ method: "thread/resume", requestParams: { threadId: "thread-1" } }),
     ).rejects.toThrow();
+    await expect(listAllCodexAppServerModels({ request: retained.send })).rejects.toThrow(
+      "codex app-server request timed out",
+    );
     expect(request).toHaveBeenCalledOnce();
+  });
+
+  it("does not request another model page after the shared deadline", async () => {
+    vi.useFakeTimers();
+    const page = createDeferred<{ data: never[]; nextCursor: string }>();
+    const request = vi.fn(() => page.promise);
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
+    const result = withCodexAppServerJsonClient({ timeoutMs: 50 }, async (scopedRequest) =>
+      listAllCodexAppServerModels({ request: scopedRequest }),
+    );
+    const rejection = expect(result).rejects.toThrow("codex app-server request timed out");
+    await vi.advanceTimersByTimeAsync(50);
+    await rejection;
+    page.resolve({ data: [], nextCursor: "next-page" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(request).toHaveBeenCalledOnce();
+    expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledOnce();
   });
 
   it("blocks thread starts with sandbox environments when exec host=node is active", async () => {

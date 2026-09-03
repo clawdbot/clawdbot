@@ -156,7 +156,19 @@ export type OpenClawConfig = {
      */
     prefs?: {
       /** Control UI theme. */
-      theme?: "claw" | "knot" | "dash" | "absolutely" | "tide" | "beacon" | "phosphor" | "custom";
+      theme?:
+        | "claw"
+        | "knot"
+        | "dash"
+        | "absolutely"
+        | "tide"
+        | "beacon"
+        | "phosphor"
+        | "crt"
+        | "manuscript"
+        | "rose"
+        | "miami"
+        | "custom";
       /** Light/dark preference. */
       themeMode?: "light" | "dark" | "system";
       /** User-selected Control UI accent color (#RRGGBB). */
@@ -191,6 +203,8 @@ export type OpenClawConfig = {
   nodeHost?: NodeHostConfig;
   /** Agent definitions, defaults, bindings, and runtime policy. */
   agents?: AgentsConfig;
+  /** Global root for new managed worktrees. Defaults to <state-dir>/worktrees; accepts ~. */
+  worktreeRoot?: string;
   /** Tool exposure, policy, web/media tools, exec, and code-mode settings. */
   tools?: ToolsConfig;
   /** Legacy/direct agent bindings used by runtime resolution. */

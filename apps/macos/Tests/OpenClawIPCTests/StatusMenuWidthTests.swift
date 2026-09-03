@@ -15,6 +15,8 @@ struct StatusMenuWidthTests {
     ].joined(separator: "\n")
 
     @Test func `long native and hosted content cannot expand the status menu`() throws {
+        // Cancel queued previews before this synchronous MainActor render releases its executor.
+        defer { StatusMenuSessions.shared.cancelPreviewTasks() }
         let state = AppState(preview: true)
         state.connectionMode = .local
 

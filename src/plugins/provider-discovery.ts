@@ -49,7 +49,7 @@ export type PreparedProviderStaticCatalog = Readonly<{
 }>;
 
 /** Options for resolving plugin providers that can contribute model catalog entries. */
-type ResolveRuntimePluginDiscoveryProvidersParams = {
+export type ResolveRuntimePluginDiscoveryProvidersParams = {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -61,6 +61,16 @@ type ResolveRuntimePluginDiscoveryProvidersParams = {
   includeSyntheticAuthProviders?: boolean;
   pluginMetadataSnapshot?: PluginMetadataRegistryView;
 };
+
+export type ProviderDiscoveryPlan =
+  | { kind: "entries"; providers: ProviderPlugin[] }
+  | { kind: "runtime"; providers: ProviderPlugin[]; pluginIds: string[] | undefined };
+
+export async function planRuntimePluginDiscovery(
+  params: ResolveRuntimePluginDiscoveryProvidersParams,
+): Promise<ProviderDiscoveryPlan> {
+  return (await loadProviderRuntime()).planPluginDiscoveryRuntime(params);
+}
 
 /** Loads provider runtime discovery and filters to providers that can produce catalog order entries. */
 export async function resolveRuntimePluginDiscoveryProviders(

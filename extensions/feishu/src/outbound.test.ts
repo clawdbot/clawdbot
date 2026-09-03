@@ -26,7 +26,6 @@ import type { FeishuClientCredentials } from "./client.js";
 const sendMediaFeishuMock = vi.hoisted(() => vi.fn());
 const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
 const sendCardFeishuMock = vi.hoisted(() => vi.fn());
-const sendMarkdownCardFeishuMock = vi.hoisted(() => vi.fn());
 const sendStructuredCardFeishuMock = vi.hoisted(() => vi.fn());
 const createFeishuClientMock = vi.hoisted(() =>
   vi.fn((_account: FeishuClientCredentials) => ({ request: vi.fn() })),
@@ -71,12 +70,12 @@ vi.mock("./media.js", () => ({
   shouldSuppressFeishuTextForVoiceMedia: shouldSuppressFeishuTextForVoiceMediaMock,
 }));
 
-vi.mock("./send.js", () => ({
+vi.mock("./send.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./send.js")>()),
   editMessageFeishu: vi.fn(),
   getMessageFeishu: vi.fn(),
   sendCardFeishu: sendCardFeishuMock,
   sendMessageFeishu: sendMessageFeishuMock,
-  sendMarkdownCardFeishu: sendMarkdownCardFeishuMock,
   sendStructuredCardFeishu: sendStructuredCardFeishuMock,
   resolveFeishuCardTemplate: (template?: string) =>
     new Set([
@@ -236,7 +235,6 @@ function resetOutboundMocks() {
   vi.clearAllMocks();
   sendMessageFeishuMock.mockResolvedValue({ messageId: "text_msg" });
   sendCardFeishuMock.mockResolvedValue({ messageId: "native_card_msg" });
-  sendMarkdownCardFeishuMock.mockResolvedValue({ messageId: "card_msg" });
   sendStructuredCardFeishuMock.mockResolvedValue({ messageId: "card_msg" });
   sendMediaFeishuMock.mockResolvedValue({ messageId: "media_msg" });
   deliverCommentThreadTextMock.mockResolvedValue({
@@ -263,11 +261,6 @@ function sendCardCall(index = 0): Record<string, any> | undefined {
 
 function sendStructuredCardCall(index = 0): Record<string, any> | undefined {
   const calls = sendStructuredCardFeishuMock.mock.calls as unknown as Array<[Record<string, any>]>;
-  return calls[index]?.[0];
-}
-
-function sendMarkdownCardCall(index = 0): Record<string, any> | undefined {
-  const calls = sendMarkdownCardFeishuMock.mock.calls as unknown as Array<[Record<string, any>]>;
   return calls[index]?.[0];
 }
 
@@ -2545,7 +2538,6 @@ describe("feishuOutbound comment-thread routing", () => {
     expect(commentThreadParams()?.comment_id).toBe("7623358762119646411");
     expect(commentThreadParams()?.content).toBe("```ts\nconst x = 1\n```");
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
-    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
     expectFeishuResult(result, "reply_msg");
   });
 
@@ -2562,7 +2554,6 @@ describe("feishuOutbound comment-thread routing", () => {
     expect(commentThreadParams()?.comment_id).toBe("7623358762119646411");
     expect(commentThreadParams()?.content).toBe("handled in thread");
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
-    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
     expectFeishuResult(result, "reply_msg");
   });
 
@@ -3244,7 +3235,7 @@ describe("feishuOutbound.sendMedia replyToId forwarding", () => {
     }));
     const onDeliveryResult = vi.fn();
 
-    await feishuOutbound.sendMedia?.({
+    const result = await feishuOutbound.sendMedia?.({
       cfg: emptyConfig,
       to: "chat_1",
       text: Array.from({ length: 2_200 }, () => "a").join("\n"),
@@ -3254,10 +3245,15 @@ describe("feishuOutbound.sendMedia replyToId forwarding", () => {
     });
 
     expect(sendMessageFeishuMock.mock.calls.length).toBeGreaterThan(1);
-    expect(onDeliveryResult.mock.calls.map(([result]) => result.messageId)).toEqual([
+    expect(onDeliveryResult.mock.calls.map(([delivery]) => delivery.messageId)).toEqual([
       ...sendMessageFeishuMock.mock.calls.map((_call, index) => `caption_${index + 1}`),
       "media_msg",
     ]);
+    expect(result?.receipt?.parts.map((part) => part.platformMessageId)).toEqual(
+      onDeliveryResult.mock.calls.map(([delivery]) => delivery.messageId),
+    );
+    expect(result?.messageId).toBe("media_msg");
+    expect(result?.receipt?.primaryPlatformMessageId).toBe("media_msg");
   });
 
   it("preserves accepted caption chunks when a later chunk fails before media", async () => {
@@ -3444,35 +3440,42 @@ describe("feishuOutbound.sendMedia replyToId forwarding", () => {
   // duplicates the already-visible caption. Pre-fix the catch block threw a plain
   // Error with no receipt; post-fix it throws a ChannelPartialDeliveryError
   // carrying the caption's messageId.
-  it("preserves a delivered caption as partial delivery when media upload fails", async () => {
-    sendMessageFeishuMock.mockResolvedValueOnce({
-      messageId: "caption_msg",
-      chatId: "chat_1",
-    });
-    sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
+  it.each(["see attachment", "x".repeat(8_500), `\`\`\`text\n${"x".repeat(8_500)}\n\`\`\``])(
+    "preserves all delivered caption chunks when media upload fails (%#)",
+    async (text) => {
+      const sender = text.startsWith("```") ? sendStructuredCardFeishuMock : sendMessageFeishuMock;
+      sender.mockImplementation(async () => ({
+        messageId: `caption_${sender.mock.calls.length}`,
+        chatId: "chat_1",
+      }));
+      sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
 
-    let caught: unknown;
-    try {
-      await feishuOutbound.sendMedia?.({
-        cfg: emptyConfig,
-        to: "chat_1",
-        text: "see attachment",
-        mediaUrl: "https://example.com/file.png",
-        accountId: "main",
-        propagateMediaUploadFailure: true,
-      } as never);
-    } catch (err) {
-      caught = err;
-    }
+      let caught: unknown;
+      try {
+        await feishuOutbound.sendMedia?.({
+          cfg: emptyConfig,
+          to: "chat_1",
+          text,
+          mediaUrl: "https://example.com/file.png",
+          accountId: "main",
+          propagateMediaUploadFailure: true,
+        } as never);
+      } catch (err) {
+        caught = err;
+      }
 
-    expect(isChannelPartialDeliveryError(caught)).toBe(true);
-    const partial = caught as ReturnType<typeof createChannelPartialDeliveryError>;
-    expect(partial.deliveryResult.visibleReplySent).toBe(true);
-    expect(partial.deliveryResult.messageIds).toEqual(["caption_msg"]);
-    // The caption was delivered exactly once; no retry/duplicate send occurred.
-    expect(sendMessageFeishuMock).toHaveBeenCalledOnce();
-    expect(sendMediaFeishuMock).toHaveBeenCalledOnce();
-  });
+      expect(isChannelPartialDeliveryError(caught)).toBe(true);
+      const partial = caught as ReturnType<typeof createChannelPartialDeliveryError>;
+      expect(partial.deliveryResult.visibleReplySent).toBe(true);
+      const ids = sender.mock.calls.map((_call, index) => `caption_${index + 1}`);
+      expect(ids.length).toBe(text.length > 4_000 ? 3 : 1);
+      expect(new Set(partial.deliveryResult.messageIds)).toEqual(new Set(ids));
+      expect(partial.deliveryResult.receipt?.parts.map((part) => part.platformMessageId)).toEqual(
+        ids,
+      );
+      expect(sendMediaFeishuMock).toHaveBeenCalledOnce();
+    },
+  );
 
   // Regression for #112244 (seventeenth-review P1, scope guard): a media-upload
   // failure with NO delivered caption is a wholly failed send, so the propagated
@@ -3649,9 +3652,9 @@ describe("feishuOutbound.sendMedia renderMode", () => {
       accountId: "main",
     });
 
-    expect(sendMarkdownCardCall()?.to).toBe("chat_1");
-    expect(sendMarkdownCardCall()?.text).toBe("| a | b |\n| - | - |");
-    expect(sendMarkdownCardCall()?.accountId).toBe("main");
+    expect(sendStructuredCardCall()?.to).toBe("chat_1");
+    expect(sendStructuredCardCall()?.text).toBe("| a | b |\n| - | - |");
+    expect(sendStructuredCardCall()?.accountId).toBe("main");
     expect(sendMediaCall()?.to).toBe("chat_1");
     expect(sendMediaCall()?.mediaUrl).toBe("https://example.com/image.png");
     expect(sendMediaCall()?.accountId).toBe("main");

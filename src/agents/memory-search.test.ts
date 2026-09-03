@@ -4,12 +4,15 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveRememberAcrossConversations } from "../memory-host-sdk/host/config-utils.js";
 import {
   clearEmbeddingProviders,
-  listRegisteredEmbeddingProviders,
   registerEmbeddingProvider,
-  restoreRegisteredEmbeddingProviders,
-  type RegisteredEmbeddingProvider,
 } from "../plugins/embedding-providers.js";
 import type { MemoryEmbeddingProviderAdapter } from "../plugins/memory-embedding-providers.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  rollbackStagedPluginRegistry,
+  stageActivePluginRegistry,
+} from "../plugins/runtime.js";
 import {
   SecretSurfaceUnavailableError,
   setActiveDegradedSecretOwners,
@@ -24,7 +27,6 @@ const asConfig = (cfg: OpenClawConfig): OpenClawConfig => ({
   // to its integration tests and would turn these pure config cases into cold scans.
   plugins: cfg.plugins ?? { enabled: false },
 });
-let registeredEmbeddingProvidersSnapshot: RegisteredEmbeddingProvider[];
 
 function registerTestMemoryAdapter(adapter: MemoryEmbeddingProviderAdapter): void {
   registerEmbeddingProvider(adapter);
@@ -85,15 +87,28 @@ function registerBaseMemoryEmbeddingProviders(options?: { includeGemini?: boolea
 }
 
 describe("memory search config", () => {
-  beforeEach(() => {
-    registeredEmbeddingProvidersSnapshot = listRegisteredEmbeddingProviders();
-    clearEmbeddingProviders();
+  beforeEach(({ onTestFinished }) => {
+    const previous = captureActivePluginRegistrySnapshot();
+    onTestFinished(() => rollbackStagedPluginRegistry(previous));
+    stageActivePluginRegistry(createEmptyPluginRegistry(), null, "default");
     registerBaseMemoryEmbeddingProviders();
   });
 
   afterEach(() => {
     setActiveDegradedSecretOwners([]);
-    restoreRegisteredEmbeddingProviders(registeredEmbeddingProvidersSnapshot);
+  });
+
+  it("bounds the embedding cache with a built-in default", () => {
+    // #111382 purged `memory.search.cache.maxEntries` from the config contract and replaced it
+    // with an unset built-in default, so pruneEmbeddingCacheIfNeeded early-returned on
+    // `!max` and memory_embedding_cache grew without limit (openclaw/openclaw#114612).
+    const resolved = resolveMemorySearchConfig(
+      asConfig({ memory: { search: {} }, agents: { defaults: {} } }),
+      "main",
+    );
+
+    expect(resolved?.cache.enabled).toBe(true);
+    expect(resolved?.cache.maxEntries).toBeGreaterThan(0);
   });
 
   function configWithDefaultProvider(provider: string): OpenClawConfig {
@@ -521,7 +536,7 @@ describe("memory search config", () => {
     const cfg = configWithDefaultProvider("openai");
     const resolved = resolveMemorySearchConfig(cfg, "main")!;
     const expected = structuredClone(resolved);
-    expect(resolved.cache).toStrictEqual({ enabled: true, maxEntries: undefined });
+    expect(resolved.cache).toStrictEqual({ enabled: true, maxEntries: 50_000 });
 
     resolved.chunking.tokens = 1;
     resolved.chunking.overlap = 0;

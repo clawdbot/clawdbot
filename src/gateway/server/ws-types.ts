@@ -7,6 +7,12 @@ import type { GatewayOperatorRoleActor } from "../operator-role-actor.js";
 import type { PluginNodeCapabilityClient } from "../plugin-node-capability.js";
 import type { WorkerConnectionIdentity } from "../worker-environments/connection-identity.js";
 
+export type GatewayWsBrowserOrigin = {
+  requestHost?: string;
+  origin?: string;
+  isLocalClient?: boolean;
+};
+
 export const GATEWAY_WS_CONNECTION_KIND_PROPERTY = "__openclawConnectionKind";
 export const GATEWAY_WS_PREAUTH_BUDGET_PROPERTY = "__openclawPreauthBudget";
 type GatewayWsConnectionKind = "gateway" | "worker";
@@ -34,6 +40,8 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   usesSharedGatewayAuth: boolean;
   sharedGatewaySessionGeneration?: string;
   presenceKey?: string;
+  /** Connection-owned timing facts, reconciled across live peers independently of the TTL cache. */
+  personPresence?: { onlineSince: number; lastActivityAt?: number };
   authenticatedUserId?: string;
   /** Verified Tailscale provider identity; generic proxy identities must not infer this. */
   authenticatedUserIsTailscaleProvider?: boolean;
@@ -46,6 +54,8 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
     updatedAt: number;
   };
   clientIp?: string;
+  /** Server-attested inputs for rechecking browser-origin policy after config publication. */
+  browserOrigin?: GatewayWsBrowserOrigin;
   internal?: {
     /** Handshake-attested direct-local transport; never accepted from wire params. */
     isLocalClient?: true;

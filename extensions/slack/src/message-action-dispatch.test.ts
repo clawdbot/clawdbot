@@ -1,5 +1,11 @@
 // Slack tests cover message action dispatch plugin behavior.
-import { describe, expect, it, vi } from "vitest";
+import {
+  createTestRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/channel-test-helpers";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { slackSetupPlugin } from "./channel.setup.js";
 import { handleSlackMessageAction } from "./message-action-dispatch.js";
 import { extractSlackToolSend } from "./message-actions.js";
 import { renderSlackMessagePresentationFallbackText } from "./presentation-fallback.js";
@@ -83,7 +89,20 @@ function largeTablePresentation() {
   };
 }
 
+const paddedMarkdownTable = [
+  `| ${"H".repeat(200)} | Value |`,
+  "| --- | --- |",
+  ...Array.from({ length: 20 }, () => "| x | 2 |"),
+].join("\n");
+
 describe("handleSlackMessageAction", () => {
+  beforeEach(() => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "slack", source: "test", plugin: slackSetupPlugin }]),
+    );
+  });
+  afterEach(() => resetPluginRuntimeStateForTest());
+
   it("defaults reactions to the current inbound Slack message", async () => {
     const invoke = createInvokeSpy();
     const toolContext = { currentMessageId: "171234.567" };
@@ -267,6 +286,10 @@ describe("handleSlackMessageAction", () => {
     { name: "ASCII", message: `${"x".repeat(4_000)}TAIL` },
     { name: "multibyte", message: `${"😀".repeat(1_000)}TAIL` },
     { name: "expanded Slack markdown", message: `${"&".repeat(801)}TAIL` },
+    {
+      name: "padded Markdown table",
+      message: paddedMarkdownTable,
+    },
   ])("rejects oversized $name text-only edits before sending", async ({ message }) => {
     const invoke = createInvokeSpy();
 
@@ -284,6 +307,34 @@ describe("handleSlackMessageAction", () => {
 
     expect(invoke).not.toHaveBeenCalled();
   });
+
+  it.each(["off", "bullets"] as const)(
+    "measures the account's %s table rendering before rejecting an edit",
+    async (tables) => {
+      const invoke = createInvokeSpy();
+      await handleSlackMessageAction({
+        providerId: "slack",
+        ctx: {
+          action: "edit",
+          cfg: {
+            channels: {
+              slack: {
+                defaultAccount: "work",
+                markdown: { tables: "code" },
+                accounts: { work: { markdown: { tables } } },
+              },
+            },
+          },
+          params: { channelId: "C1", messageId: "171234.567", message: paddedMarkdownTable },
+        } as never,
+        invoke: invoke as never,
+      });
+      expect(firstAction(invoke)).toMatchObject({
+        action: "editMessage",
+        content: paddedMarkdownTable,
+      });
+    },
+  );
 
   it("accepts a text-only edit at Slack's exact byte limit", async () => {
     const invoke = createInvokeSpy();

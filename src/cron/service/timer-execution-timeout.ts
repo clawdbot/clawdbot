@@ -1,5 +1,6 @@
-import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply.js";
+import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply-skip-reason.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import type { HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
 import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
@@ -108,7 +109,10 @@ export type StartupCatchupCandidate = {
 export type StartupDeferredJob = {
   jobId: string;
   delayMs?: number;
-  configRevision: string;
+  scheduleIdentity: string | undefined;
+  createdAtMs: number;
+  payloadKind: CronJob["payload"]["kind"];
+  scheduleActivatedAtMs: number | undefined;
   nextRunAtMs: number | undefined;
   lastRunAtMs: number | undefined;
   lastRunStatus: CronRunStatus | undefined;
@@ -129,6 +133,7 @@ export type ExecuteJobCoreOptions = {
   onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
   onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
   onLaneWait?: (info?: { waiting?: boolean }) => void;
+  onHeartbeatExecutionStarted?: (opts: HeartbeatWakeRequest & { agentId: string }) => void;
   executionIdentity?: import("./state.js").CronExecutionIdentityAdmission;
   /** Revalidates the durable run fence after awaited planning and before effects. */
   assertRunCurrent?: () => void;

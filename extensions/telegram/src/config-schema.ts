@@ -3,7 +3,7 @@ import {
   buildChannelConfigSchema,
   buildChannelExecApprovalsSchema,
   buildChannelReactionShape,
-  buildCommonChannelAccountShape,
+  buildChannelAccountSchemaParts,
   buildGroupEntrySchema,
   ChannelPreviewStreamingConfigSchema,
   ChannelStreamingPreviewSchema,
@@ -165,14 +165,15 @@ const validateTelegramCustomCommands = (
   }
 };
 
+const { accountShape, rootPolicyShape } = buildChannelAccountSchemaParts({
+  capabilities: TelegramCapabilitiesSchema.optional(),
+  defaultTo: z.union([z.string(), z.number()]).optional(),
+  streaming: TelegramPreviewStreamingConfigSchema.optional(),
+});
+
 const TelegramAccountSchemaBase = z
   .object({
-    ...buildCommonChannelAccountShape({
-      useDefaults: true,
-      capabilities: TelegramCapabilitiesSchema.optional(),
-      defaultTo: z.union([z.string(), z.number()]).optional(),
-      streaming: TelegramPreviewStreamingConfigSchema.optional(),
-    }),
+    ...accountShape,
     joinIntro: z.boolean().optional(),
     execApprovals: buildChannelExecApprovalsSchema(z.union([z.string(), z.number()])),
     commands: ProviderCommandsSchema,
@@ -284,6 +285,7 @@ const TelegramAccountSchema = TelegramAccountSchemaBase.superRefine((value, ctx)
 });
 
 export const TelegramConfigSchema = TelegramAccountSchemaBase.extend({
+  ...rootPolicyShape,
   accounts: z.record(z.string(), TelegramAccountSchema.optional()).optional(),
   defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
@@ -331,38 +333,6 @@ export const TelegramConfigSchema = TelegramAccountSchemaBase.extend({
     }
   }
 
-  if (!value.accounts) {
-    validateTelegramWebhookSecretRequirements(value, ctx);
-    return;
-  }
-  for (const [accountId, account] of Object.entries(value.accounts)) {
-    if (!account) {
-      continue;
-    }
-    if (account.enabled === false) {
-      continue;
-    }
-    const effectiveDmPolicy = account.dmPolicy ?? value.dmPolicy;
-    const effectiveAllowFrom = Array.isArray(account.allowFrom)
-      ? account.allowFrom
-      : value.allowFrom;
-    requireOpenAllowFrom({
-      policy: effectiveDmPolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: ["accounts", accountId, "allowFrom"],
-      message:
-        'channels.telegram.accounts.*.dmPolicy="open" requires channels.telegram.allowFrom or channels.telegram.accounts.*.allowFrom to include "*"',
-    });
-    requireAllowlistAllowFrom({
-      policy: effectiveDmPolicy,
-      allowFrom: effectiveAllowFrom,
-      ctx,
-      path: ["accounts", accountId, "allowFrom"],
-      message:
-        'channels.telegram.accounts.*.dmPolicy="allowlist" requires channels.telegram.allowFrom or channels.telegram.accounts.*.allowFrom to contain at least one sender ID',
-    });
-  }
   validateTelegramWebhookSecretRequirements(value, ctx);
 });
 

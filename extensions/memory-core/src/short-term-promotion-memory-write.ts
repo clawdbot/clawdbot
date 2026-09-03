@@ -7,6 +7,13 @@ export function buildPromotionMarker(candidateKey: string): string {
   return `<!-- openclaw-memory-promotion:${candidateKey} -->`;
 }
 
+export function extractPromotionKeys(content: string): string[] {
+  // Source paths can contain spaces; the comment boundary terminates a key.
+  return [...content.matchAll(/<!--\s*openclaw-memory-promotion:([^\n]*?)\s*-->/giu)]
+    .map((match) => match[1]?.trim())
+    .filter((key): key is string => Boolean(key));
+}
+
 export class MemoryWriteConflictError extends Error {
   constructor() {
     super("MEMORY.md changed before the dreaming write could commit");
@@ -125,19 +132,6 @@ export async function writeMemoryContent(params: {
   content: string;
 }): Promise<void> {
   const memoryDirMode = (await fs.stat(path.dirname(params.memoryWritePath))).mode & 0o7777;
-  let renameCommitted = false;
-  const trackedRename: typeof fs.rename = async (source, destination) => {
-    if (
-      params.expectedHash &&
-      hashMemoryContent(await readMemoryContent(params.memoryWritePath)) !== params.expectedHash
-    ) {
-      throw new MemoryWriteConflictError();
-    }
-    // External editors can still write between this check and rename. OpenClaw writers
-    // are serialized; policy accepts this millisecond-wide race because the preimage is recoverable.
-    await fs.rename(source, destination);
-    renameCommitted = true;
-  };
   try {
     await replaceFileAtomic({
       filePath: params.memoryWritePath,
@@ -149,12 +143,22 @@ export async function writeMemoryContent(params: {
       syncTempFile: true,
       syncParentDir: true,
       throwOnCleanupError: true,
+      beforeRename: async () => {
+        if (
+          params.expectedHash &&
+          hashMemoryContent(await readMemoryContent(params.memoryWritePath)) !== params.expectedHash
+        ) {
+          throw new MemoryWriteConflictError();
+        }
+        // OpenClaw writers are serialized. The recoverable preimage covers the
+        // accepted race with external editors between this check and rename.
+      },
       fileSystem: {
         promises: {
           mkdir: fs.mkdir,
           chmod: fs.chmod,
           writeFile: fs.writeFile,
-          rename: trackedRename,
+          rename: fs.rename,
           copyFile: fs.copyFile,
           unlink: fs.unlink,
           rm: fs.rm,
@@ -167,11 +171,6 @@ export async function writeMemoryContent(params: {
   } catch (error) {
     // Append-only promotion retains the shipped writable-file fallback when
     // directory ACLs block temp-file replacement; consolidation never uses it.
-    if (renameCommitted) {
-      throw new Error("MEMORY.md rename committed before a later write step failed", {
-        cause: error,
-      });
-    }
     if (
       !params.allowInPlaceFallback ||
       params.expectedContent === undefined ||
