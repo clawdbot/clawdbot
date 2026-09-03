@@ -769,12 +769,9 @@ const DISABLED_FAILURE_BACKOFF_POLICIES = {
   },
 } as const satisfies Record<DisabledFailureReason, DisabledFailureBackoffPolicy>;
 
-// Billing (402) and auth_permanent are both operator-fixable states: the key is
-// valid, the operator recharges or replaces it. While a disabled window is
-// active the profile is never selected, so an observed success cannot clear it
-// early — the base backoff IS the post-recharge recovery time (#135835), so it
-// stays in minutes, not hours. maxMs stays generous so provider incident noise
-// misclassified as billing cannot spin hot.
+// While a disabled window is active the profile is never selected, so the base
+// backoff is the whole post-recharge recovery time; billing stays minutes like
+// auth_permanent, and maxMs keeps misclassified incident noise from spinning hot.
 const DEFAULT_BILLING_BACKOFF_MINUTES = 10;
 const DEFAULT_BILLING_MAX_HOURS = 24;
 const DEFAULT_AUTH_PERMANENT_BACKOFF_MINUTES = 10;
