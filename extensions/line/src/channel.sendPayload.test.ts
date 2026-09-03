@@ -270,6 +270,35 @@ describe("line outbound sendPayload", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it("sends a captioned media send as its own pushes, caption first", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+
+    const result = await lineOutboundAdapter.sendMedia!({
+      to: "line:user:U123",
+      text: "caption",
+      mediaUrl: "https://example.com/image.png",
+      accountId: "default",
+      cfg,
+    });
+
+    // Media rides the payload owner so its push is recorded like any other; that
+    // makes it a push of its own rather than one message beside the caption, and
+    // the caption goes first because the payload path sends text before media.
+    expect(mocks.pushMessageLine).toHaveBeenCalledOnce();
+    expect(mocks.sendMessageLine).toHaveBeenCalledOnce();
+    expect(mocks.pushMessageLine.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.sendMessageLine.mock.invocationCallOrder[0]!,
+    );
+    expect(mocks.sendMessageLine).toHaveBeenCalledWith(
+      "line:user:U123",
+      "",
+      expect.objectContaining({ mediaUrl: "https://example.com/image.png" }),
+    );
+    expect(result.messageId).toBe("m-media");
+  });
+
   it("publishes completed Flex receipts before a later legacy text send fails", async () => {
     const { runtime, mocks } = createRuntime();
     setLineRuntime(runtime);
