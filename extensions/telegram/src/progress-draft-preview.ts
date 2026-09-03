@@ -154,11 +154,31 @@ function isStatusHeadlineWorkLine(
   return !line.id?.startsWith("reasoning:") && !line.id?.startsWith("commentary:");
 }
 
+function insertWorkLinesAfterActivePlanStep<T>(
+  statusLines: readonly string[],
+  renderedStatusLines: readonly T[],
+  renderedWorkLines: readonly T[],
+  planLayout?: Readonly<{ lineCount: number; activeLineIndex?: number }>,
+): T[] {
+  const planStartIndex = Math.max(0, statusLines.length - (planLayout?.lineCount ?? 0));
+  const activePlanIndex =
+    planLayout?.activeLineIndex === undefined ? -1 : planStartIndex + planLayout.activeLineIndex;
+  if (activePlanIndex < 0 || renderedWorkLines.length === 0) {
+    return [...renderedStatusLines, ...renderedWorkLines];
+  }
+  return [
+    ...renderedStatusLines.slice(0, activePlanIndex + 1),
+    ...renderedWorkLines,
+    ...renderedStatusLines.slice(activePlanIndex + 1),
+  ];
+}
+
 export function renderTelegramProgressDraftPreview(
   text: string,
   lines: readonly ChannelProgressDraftCompositorLine[],
   richMessages: boolean,
   statusHeadlineActive = false,
+  planLayout?: Readonly<{ lineCount: number; activeLineIndex?: number }>,
 ): TelegramDraftPreview {
   const trimmed = text.trimEnd();
   if (statusHeadlineActive) {
@@ -167,7 +187,11 @@ export function renderTelegramProgressDraftPreview(
       .map((line) => line.trim())
       .filter(Boolean);
     const workLines = lines.filter(isStatusHeadlineWorkLine);
-    const renderedLines = workLines.map(renderTelegramProgressLine).filter(Boolean);
+    const hasActivePlanStep = planLayout?.activeLineIndex !== undefined;
+    const renderedLines = workLines
+      .map(renderTelegramProgressLine)
+      .filter(Boolean)
+      .map((line) => (hasActivePlanStep ? `↳ ${line}` : line));
     if (!richMessages) {
       const renderedStatusLines =
         statusLines.length > 1
@@ -176,7 +200,15 @@ export function renderTelegramProgressDraftPreview(
               ...statusLines.slice(1).map(renderTelegramProgressStringLine),
             ]
           : statusLines.map(renderTelegramProgressStringLine);
-      return { text: [...renderedStatusLines, ...renderedLines].join("<br>"), parseMode: "HTML" };
+      return {
+        text: insertWorkLinesAfterActivePlanStep(
+          statusLines,
+          renderedStatusLines,
+          renderedLines,
+          planLayout,
+        ).join("<br>"),
+        parseMode: "HTML",
+      };
     }
     const richStatusParts: RichText[] =
       statusLines.length > 1
@@ -184,21 +216,31 @@ export function renderTelegramProgressDraftPreview(
         : statusLines.map(markdownLineToRichText);
     const richLineParts = workLines
       .map(progressLineToRichText)
-      .filter((part): part is RichText => part !== undefined);
+      .filter((part): part is RichText => part !== undefined)
+      .map((part) => (hasActivePlanStep ? joinRichText(["↳ ", part], "") : part));
     const plainLineTexts = workLines
       .map((line) => line.text)
       .map((line) => line.trim())
-      .filter(Boolean);
-    const plainText = [...statusLines, ...plainLineTexts].join("\n");
+      .filter(Boolean)
+      .map((line) => (hasActivePlanStep ? `↳ ${line}` : line));
+    const richParts = insertWorkLinesAfterActivePlanStep(
+      statusLines,
+      richStatusParts,
+      richLineParts,
+      planLayout,
+    );
+    const plainText = insertWorkLinesAfterActivePlanStep(
+      statusLines,
+      statusLines,
+      plainLineTexts,
+      planLayout,
+    ).join("\n");
     return {
       text: plainText,
-      richMessage: buildTelegramRichBlocksPlan(
-        buildProgressRichBlocks([...richStatusParts, ...richLineParts]),
-        {
-          skipEntityDetection: true,
-          plainText,
-        },
-      ).richMessage,
+      richMessage: buildTelegramRichBlocksPlan(buildProgressRichBlocks(richParts), {
+        skipEntityDetection: true,
+        plainText,
+      }).richMessage,
     };
   }
   const renderedLines = lines.map(renderTelegramProgressLine).filter(Boolean);

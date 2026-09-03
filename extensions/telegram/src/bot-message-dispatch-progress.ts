@@ -93,12 +93,18 @@ export function createProgressState(
     commentaryLinePrefix: "💬 ",
     commentaryItalics: false,
     updateOnLineChange: true,
+    resetRollingLinesOnPlanStepChange: true,
+    derivePlanStatusHeadline: true,
     shouldStartNow: (line) => typeof line !== "string" && line?.kind === "tool",
     // renderTelegramProgressDraftPreview draws the work lines from `lines` in
     // headline/checklist mode, so they must not also arrive inside the text.
     rendersRollingLinesNatively: true,
     update: async (streamText, options) => {
       await prepareAnswerLaneForToolProgress();
+      if (options?.isCurrentPlanGeneration?.() === false) {
+        return false;
+      }
+      getTurn().draftEverRendered = true;
       draftState.answerLane.lastPartialText = streamText;
       draftState.answerLane.hasStreamedMessage = true;
       draftState.answerLane.finalized = false;
@@ -108,11 +114,13 @@ export function createProgressState(
           options?.lines ?? [],
           config.telegramCfg.richMessages === true,
           progressCompositor.hasStatusHeadline || progressCompositor.hasPlanProgress,
+          options?.planLayout,
         ),
       );
       if (options?.flush) {
         await draftState.answerLane.stream?.flush();
       }
+      return true;
     },
   });
   return Object.assign(progressState, {

@@ -55,11 +55,11 @@ migration, see [Streaming and chunking](/concepts/streaming).
 
 ## What users see
 
-| Part            | Purpose                                                                           |
-| --------------- | --------------------------------------------------------------------------------- |
-| Status headline | On Discord and Telegram, the model preamble; Discord adds a utility filler.       |
-| Label           | Optional starter/status line such as `Working`.                                   |
-| Progress lines  | Compact run updates using the same tool icons and detail formatter as `/verbose`. |
+| Part            | Purpose                                                                                                                                                       |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Status headline | On Discord and Telegram, the model preamble; Telegram falls back to the active plan step when authored status is absent, while Discord adds a utility filler. |
+| Label           | Optional starter/status line such as `Working`.                                                                                                               |
+| Progress lines  | Compact run updates using the same tool icons and detail formatter as `/verbose`.                                                                             |
 
 The status headline sits above the rolling progress lines and both stay visible,
 so one message answers what the agent is doing and how far it has got.
@@ -281,13 +281,15 @@ On Discord, when a utility model resolves for the agent — an explicit
 [`utilityModel`](/gateway/config-agents#agents-defaults-model), or the primary
 provider's declared small-model default (OpenAI → `gpt-5.6-luna`,
 Anthropic → `claude-haiku-4-5`) — it supplies a short plain-language filler
-when the model emits no preamble or has been quiet for about 20 seconds
-(Telegram's headline is preamble-only today):
+when the model emits no preamble or has been quiet for about 20 seconds:
 
 ```text
 Updating the default model in your config, then restarting the gateway to pick
 it up. One agent listing call failed and is being retried.
 ```
+
+Telegram does not use this utility narration. When authored status text is
+absent, it derives a headline from the active or next pending plan step.
 
 Utility narration is on by default (`streaming.progress.narration`, default
 `true`) and never falls back to the primary model: it runs only with an explicit
