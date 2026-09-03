@@ -105,6 +105,10 @@ supplied the displayed job. After changing Primary, reopen the job from the new
 list before acting on it. A socket reconnect to the same Gateway keeps an open
 editor usable and reloads the selected job before refreshing its history.
 
+While jobs load, the pane shows a loading indicator and disables **Refresh**.
+A failed load shows the Gateway error and enables **Refresh** to try again.
+“No cron jobs yet” appears only after the Gateway returns an empty list.
+
 You can draft a **New Job** while offline. Saving can reconnect or start that
 Gateway, but changing Primary while the editor is open does not move the draft
 to the new Gateway. The app reports the change so you can reopen the editor for

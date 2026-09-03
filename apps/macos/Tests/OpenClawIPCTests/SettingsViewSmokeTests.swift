@@ -147,6 +147,80 @@ struct SettingsViewSmokeTests {
         }
     }
 
+    @Test(arguments: [false, true])
+    func `Cron distinguishes a pending or failed replacement from a successful empty list`(
+        emptySuccess: Bool) async throws
+    {
+        try await TestIsolation.withIsolatedState {
+            AppStateStore.shared.connectionMode = .unconfigured
+            let replacement = LockIsolated(false)
+            let waiting = LockIsolated(false)
+            let gate = GatewayConnectionSuspensionGate()
+            let fixture = CronSourceFixture(beforeEndpointLookup: {
+                guard replacement.value else { return }
+                waiting.setValue(true)
+                await gate.suspend()
+                if !emptySuccess {
+                    throw URLError(.cannotConnectToHost, userInfo: [
+                        NSLocalizedDescriptionKey: "Gateway B unavailable",
+                    ])
+                }
+            })
+            let store = CronJobsStore(gateway: fixture.gateway, endpointRevision: { fixture.endpoint.value.revision! })
+            @MainActor func cleanup() async {
+                await gate.open()
+                store.stop(.settings)
+                await fixture.gateway.shutdown()
+            }
+            do {
+                try await withHostedCronSettings(store: store, isActive: true) { hosting, _ in
+                    let initial = try await waitForCronSettingsStrings(hosting) {
+                        $0.contains { $0.contains("Gateway A") } && !store.isLoadingJobs
+                    }
+                    try #require(initial.contains { $0.contains("Gateway A") })
+                    replacement.setValue(true)
+                    fixture.emptyJobLists.setValue(true)
+                    fixture.adoptB()
+                    try await fixture.gateway.adoptSelectedEndpoint()
+                    _ = try await waitForCronSettingsStrings(hosting) { _ in
+                        store.snapshot == nil && !store.isLoadingJobs
+                    }
+                    let refresh = try await cronSettingsRefreshButton(hosting)
+                    try #require(refresh.isAccessibilityEnabled?() == true)
+                    try #require(refresh.accessibilityPerformPress?() == true)
+                    let pending = try await waitForCronSettingsStrings(hosting) { visible in
+                        waiting.value && store.isLoadingJobs && visible.contains("Loading cron jobs…")
+                    }
+                    try #require(waiting.value && store.isLoadingJobs)
+                    #expect(pending.contains("Loading cron jobs…"))
+                    #expect(!pending.contains("No cron jobs yet."))
+                    #expect(!pending.contains { $0.contains("Gateway A") })
+                    let pendingRefresh = try await cronSettingsRefreshButton(hosting)
+                    #expect(pendingRefresh.isAccessibilityEnabled?() == false)
+
+                    await gate.open()
+                    let completed = try await waitForCronSettingsStrings(hosting) { visible in
+                        !store.isLoadingJobs && (emptySuccess
+                            ? (store.statusMessage == "No cron jobs yet." && visible.contains("No cron jobs yet."))
+                            : visible.contains { $0.contains("Gateway B unavailable") })
+                    }
+                    try #require(!store.isLoadingJobs)
+                    let completedRefresh = try await cronSettingsRefreshButton(hosting)
+                    #expect(completedRefresh.isAccessibilityEnabled?() == true)
+                    #expect(!completed.contains("Loading cron jobs…"))
+                    #expect(completed.contains("No cron jobs yet.") == emptySuccess)
+                    #expect(completed.contains { $0.contains("Gateway B unavailable") } == !emptySuccess)
+                    #expect((store.snapshot != nil) == emptySuccess)
+                    #expect(store.jobs.isEmpty)
+                }
+            } catch {
+                await cleanup()
+                throw error
+            }
+            await cleanup()
+        }
+    }
+
     @Test func `Gateway settings is visible`() {
         let tabs = SettingsTabGroup.defaultGroups(showDebug: false, showSystemAgent: false)
             .flatMap(\.tabs)
@@ -253,6 +327,30 @@ private func withHostedCronSettings(
     window.orderFront(nil)
     hosting.layoutSubtreeIfNeeded()
     try await body(hosting, window)
+}
+
+@MainActor
+private func cronSettingsRefreshButton(_ hosting: NSView) async throws -> AnyObject {
+    let elements = try await cronEditorAccessibilityElements(hosting)
+    return try #require(elements.first { element in
+        element.accessibilityRole?() == .button &&
+            [element.accessibilityLabel?(), element.accessibilityTitle?()].contains("Refresh")
+    })
+}
+
+@MainActor
+private func waitForCronSettingsStrings(
+    _ hosting: NSView,
+    until condition: ([String]) -> Bool) async throws -> [String]
+{
+    let deadline = ContinuousClock.now + .seconds(3)
+    var visible: [String] = []
+    repeat {
+        visible = try await cronSettingsVisibleStrings(hosting)
+        if condition(visible) { return visible }
+        try await Task.sleep(for: .milliseconds(20))
+    } while ContinuousClock.now < deadline
+    return visible
 }
 
 @MainActor

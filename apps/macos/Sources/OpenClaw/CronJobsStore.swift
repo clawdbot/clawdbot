@@ -211,7 +211,7 @@ final class CronJobsStore {
                 }
             }
             if jobs.isEmpty {
-                self.statusMessage = "No cron jobs yet."
+                self.statusMessage = String(localized: "No cron jobs yet.")
             }
         } catch {
             guard self.jobsGeneration == generation, !Task.isCancelled,

@@ -438,7 +438,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         // Endpoint swaps must queue commands for the replacement document.
         self.hasLiveContent = false
         self.isShowingFailurePage = false
-        dashboardWindowLogger.debug("dashboard load \(dashboardLogString(for: url), privacy: .public)")
+        dashboardWindowLogger
+            .debug("dashboard load \(GatewayEndpointStore.diagnosticURLString(for: url), privacy: .public)")
         self.webView.load(URLRequest(url: url))
     }
 
@@ -998,9 +999,10 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             self.pendingNativeCommands = []
             self.pendingNativeNavigation = nil
         }
+        let urlDescription = GatewayEndpointStore.diagnosticURLString(for: self.currentURL)
         dashboardWindowLogger.error(
             """
-            dashboard load failed url=\(dashboardLogString(for: self.currentURL), privacy: .public) \
+            dashboard load failed url=\(urlDescription, privacy: .public) \
             error=\(error.localizedDescription, privacy: .public)
             """)
         let html = DashboardFailurePage.html(

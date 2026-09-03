@@ -15,6 +15,7 @@ final class CronSourceFixture: @unchecked Sendable {
 
     let endpoint = LockIsolated(CronSourceFixture.endpoint(revision: 1))
     let requests = LockIsolated<[Request]>([])
+    let emptyJobLists = LockIsolated(false)
     let gateway: GatewayConnection
 
     init(
@@ -26,6 +27,7 @@ final class CronSourceFixture: @unchecked Sendable {
         if !preparedOwner { self.endpoint.setValue(Self.endpoint(revision: 1, preparedOwner: false)) }
         let endpoint = self.endpoint
         let requests = self.requests
+        let emptyJobLists = self.emptyJobLists
         let session = GatewayTestWebSocketSession(taskFactory: {
             let owner = endpoint.value.revision == 1 ? "A" : "B"
             return GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
@@ -43,7 +45,7 @@ final class CronSourceFixture: @unchecked Sendable {
                     jobID: params?["id"] as? String,
                     socket: socket)
                 requests.withValue { $0.append(request) }
-                if requestMethod != method { Self.respond(request) }
+                if requestMethod != method { Self.respond(request, emptyJobList: emptyJobLists.value) }
             })
         })
         self.gateway = GatewayConnection(
@@ -87,12 +89,12 @@ final class CronSourceFixture: @unchecked Sendable {
         request.socket.emitReceiveSuccess(.data(Data(response.utf8)))
     }
 
-    static func respond(_ request: Request) {
+    static func respond(_ request: Request, emptyJobList: Bool = false) {
         let payload = switch request.method {
         case "cron.status":
             #"{"enabled":true,"storePath":"/gateway-\#(request.gateway)","jobs":1}"#
         case "cron.list":
-            #"""
+            emptyJobList ? #"{"jobs":[]}"# : #"""
             {"jobs":[{"id":"shared-job","name":"Gateway \#(request.gateway)","enabled":true,
             "createdAtMs":0,"updatedAtMs":0,"schedule":{"kind":"every","everyMs":1000},
             "sessionTarget":"isolated","wakeMode":"now","payload":{"kind":"systemEvent","text":"fixture"},"state":{}}]}

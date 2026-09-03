@@ -128,10 +128,17 @@ extension CronSettings {
     var content: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 8) {
-                if let err = self.store.lastError {
+                if self.store.isLoadingJobs {
+                    ProgressView("Loading cron jobs…")
+                        .controlSize(.small)
+                } else if let err = self.store.lastError {
                     Text(String(format: String(localized: "Error: %@"), err))
                         .font(.footnote)
                         .foregroundStyle(.red)
+                } else if self.store.snapshot == nil {
+                    Text("Refresh to load cron jobs.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 } else if let msg = self.store.statusMessage {
                     Text(msg)
                         .font(.footnote)
@@ -154,14 +161,6 @@ extension CronSettings {
                             }
                             .buttonStyle(.plain)
                             .contextMenu { self.jobContextMenu(context) }
-                        }
-
-                        if self.store.jobs.isEmpty {
-                            Text("No cron jobs yet.")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 6)
                         }
                     }
                     .padding(.vertical, 4)
