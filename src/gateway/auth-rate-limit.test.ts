@@ -242,6 +242,67 @@ describe("auth rate limiter", () => {
     expect(limiter.size()).toBe(expectedSize);
   });
 
+  it.each([
+    { value: 0, effectiveMaxAttempts: 1 },
+    { value: -2, effectiveMaxAttempts: 1 },
+    { value: 1.9, effectiveMaxAttempts: 1 },
+    { value: 2.9, effectiveMaxAttempts: 2 },
+    { value: Number.NaN, effectiveMaxAttempts: 10 },
+    { value: Number.POSITIVE_INFINITY, effectiveMaxAttempts: 10 },
+  ])(
+    "normalizes maxAttempts value $value instead of locking out before any failure",
+    ({ value, effectiveMaxAttempts }) => {
+      limiter = createAuthRateLimiter({
+        maxAttempts: value,
+        windowMs: 60_000,
+        lockoutMs: 60_000,
+        pruneIntervalMs: 0,
+      });
+
+      const ip = "10.0.5.1";
+      for (let i = 0; i < effectiveMaxAttempts - 1; i++) {
+        limiter.recordFailure(ip);
+      }
+      expect(limiter.check(ip).allowed).toBe(true);
+
+      limiter.recordFailure(ip);
+      expect(limiter.check(ip).allowed).toBe(false);
+    },
+  );
+
+  it("does not disable the sliding window when windowMs is 0", () => {
+    // windowMs: 0 made slideWindow's cutoff equal `now`, wiping every recorded
+    // attempt on the very next check before maxAttempts could ever be reached.
+    limiter = createAuthRateLimiter({ maxAttempts: 2, windowMs: 0, lockoutMs: 60_000 });
+    limiter.recordFailure("10.0.6.1");
+    limiter.recordFailure("10.0.6.1");
+    expect(limiter.check("10.0.6.1").allowed).toBe(false);
+  });
+
+  it("does not disable the lockout duration when lockoutMs is 0", () => {
+    limiter = createAuthRateLimiter({ maxAttempts: 1, windowMs: 60_000, lockoutMs: 0 });
+    limiter.recordFailure("10.0.6.2");
+    const result = limiter.check("10.0.6.2");
+    expect(result.allowed).toBe(false);
+    expect(result.retryAfterMs).toBeGreaterThan(0);
+  });
+
+  it("clamps a non-positive windowMs to a 1s floor, not the generic 1ms minimum", () => {
+    // A 1ms floor is real-clock-flaky: two sequential recordFailure() calls
+    // can legitimately land more than 1ms apart. Assert the actual clamp
+    // deterministically with fake timers instead of relying on real timing.
+    vi.useFakeTimers();
+    try {
+      limiter = createAuthRateLimiter({ maxAttempts: 2, windowMs: 0, lockoutMs: 60_000 });
+      limiter.recordFailure("10.0.6.3");
+      vi.advanceTimersByTime(999);
+      limiter.recordFailure("10.0.6.3");
+      expect(limiter.check("10.0.6.3").allowed).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("treats ipv4 and ipv4-mapped ipv6 forms as the same client", () => {
     limiter = createAuthRateLimiter({ maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000 });
     limiter.recordFailure("1.2.3.4");
