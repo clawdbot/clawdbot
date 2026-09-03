@@ -18,11 +18,7 @@ import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-st
 import type { InstallSafetyOverrides } from "./install-security-scan.types.js";
 import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
 import { PLUGIN_INSTALL_ERROR_CODE, resolvePluginInstallDir } from "./install.js";
-import {
-  buildNpmResolutionInstallFields,
-  recordPluginInstall,
-  resolveNpmInstallRecordSpec,
-} from "./installs.js";
+import { buildNpmResolutionInstallFields, recordPluginInstall } from "./installs.js";
 import { ManagedPluginLifecycleError } from "./management-lifecycle-error.js";
 import type { PackageManifest } from "./manifest.js";
 import {
@@ -441,11 +437,9 @@ export async function updateNpmInstalledPlugins(params: {
             updateChannel,
             timeoutMs: params.timeoutMs,
             hasSpecOverride: Boolean(npmSpecOverride),
-            hasOfficialNpmSpec: Boolean(officialNpmSpec),
             syncOfficialInstall: Boolean(
               params.syncOfficialPluginInstalls && trustedSourceLinkedOfficialInstall,
             ),
-            preserveRecordIntent: true,
           });
           next = unchanged.config;
           changed ||= unchanged.changed;
@@ -609,7 +603,6 @@ export async function updateNpmInstalledPlugins(params: {
           fallbackSpec: npmSpecs?.fallbackSpec,
           usedNpmFallback,
           hasSpecOverride: Boolean(npmSpecOverride),
-          hasOfficialNpmSpec: Boolean(officialNpmSpec),
           updateChannel,
           timeoutMs: params.timeoutMs,
           channelFallbackSuffix,
@@ -634,11 +627,7 @@ export async function updateNpmInstalledPlugins(params: {
         capabilityConsent.acceptInstallRecord({
           pluginId: resolvedPluginId,
           source: "npm",
-          spec: resolveNpmInstallRecordSpec({
-            requestedSpec: recordSpec,
-            resolution: npmResult.npmResolution,
-            pinResolvedRegistrySpec: false,
-          }),
+          spec: recordSpec,
           installPath: result.targetDir,
           version: nextVersion,
           ...buildNpmResolutionInstallFields(npmResult.npmResolution),

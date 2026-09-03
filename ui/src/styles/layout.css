@@ -3832,17 +3832,8 @@ openclaw-tooltip.sidebar-hover-tooltip {
   transition: color 120ms ease;
 }
 
-wa-dropdown-item.sidebar-agent-menu__agent-switch::part(base) {
-  justify-content: center;
-  width: 100%;
-  padding: 0;
-  border-radius: var(--menu-item-radius);
-}
-
 wa-dropdown-item.sidebar-agent-menu__agent-switch:hover,
-wa-dropdown-item.sidebar-agent-menu__agent-switch:focus-visible,
-wa-dropdown-item.sidebar-agent-menu__agent-switch:hover::part(base),
-wa-dropdown-item.sidebar-agent-menu__agent-switch:focus-visible::part(base) {
+wa-dropdown-item.sidebar-agent-menu__agent-switch:focus-visible {
   background: transparent !important;
 }
 
@@ -3853,10 +3844,6 @@ wa-dropdown-item.sidebar-agent-menu__agent-switch:focus-visible {
 .sidebar-agent-menu__agent-switch--active {
   background: transparent;
   color: var(--text-strong) !important;
-}
-
-wa-dropdown-item.sidebar-agent-menu__agent-switch--active::part(base) {
-  background: transparent;
 }
 
 .sidebar-agent-menu__agent-tile {

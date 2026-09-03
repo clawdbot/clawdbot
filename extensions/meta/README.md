@@ -5,7 +5,7 @@ Official OpenClaw provider plugin for the **Meta API** — an OpenAI-compatible
 
 - **Base URL:** `https://api.meta.ai/v1`
 - **Auth:** `Authorization: Bearer $MODEL_API_KEY`
-- **Models:** `muse-spark-1.1`, `muse-spark-1.2`, `muse-spark-1.2-contributor` (reasoning models)
+- **Models:** `muse-spark-1.3`, `muse-spark-1.3-contributor`, `muse-spark-1.2`, `muse-spark-1.2-contributor`, `muse-spark-1.1` (reasoning models)
   - Context window: 1,048,576 tokens (input + output share the budget)
   - Reasoning effort: `minimal | low | medium | high | xhigh` (OpenClaw default: `high`)
   - Vision: image input in `user` messages
@@ -55,7 +55,7 @@ export MODEL_API_KEY=<key>
 {
   agents: {
     defaults: {
-      model: { primary: "meta/muse-spark-1.1" },
+      model: { primary: "meta/muse-spark-1.3" },
     },
   },
 }
