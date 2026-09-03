@@ -173,7 +173,6 @@
     "native.android.1b95ee4b75f6033b": "저장된 인증이 올바르지 않습니다",
     "native.android.1bbbdb0fb0e3a5a3": "비활성화",
     "native.android.1c35de4d06275916": "OpenClaw에 오신 것을 환영합니다",
-    "native.android.1c3686e1c087e2c8": "제공자 카탈로그를 불러올 수 없습니다.",
     "native.android.1c4acd27277544e0": "읽기 전용 접근이며, 네이티브 도구 승인 규칙이 계속 적용됩니다.",
     "native.android.1c4be71b5c3aa079": "연결 필요",
     "native.android.1c62b20321fbbd26": "잊어버리기",
@@ -1455,7 +1454,6 @@
     "native.android.e5021b83ff593f1e": "현재",
     "native.android.e502c87002ff73f0": "${seconds}초",
     "native.android.e50e16c71fc204f1": "일부 채널 상태 확인이 완료되지 않았습니다.",
-    "native.android.e5387d6aaf34ede8": "검색 중…",
     "native.android.e53f4d638a7fa07e": "앱에서 승인 요청을 불러오려면 Gateway를 연결하세요.",
     "native.android.e541942ff77b53eb": "듣는 중(PTT)",
     "native.android.e54941cceace936d": "여기로 되감기",
@@ -2243,6 +2241,7 @@
     "native.apple.36797a0a0d370b1c": "지금 상태 확인 실행",
     "native.apple.367d222547a7dfa4": "컨텍스트",
     "native.apple.3704f5846ba19f61": "테스트 중…",
+    "native.apple.3707ddd116730423": "\\(minimum)–\\(maximum)",
     "native.apple.3763e29c884dd87a": "gateway 토큰 업데이트",
     "native.apple.37715ac8050292a6": "%@이(가) 업데이트함",
     "native.apple.377a95b3a57b9e32": "자격 증명은 이 프로필과 함께 Mac 키체인에 저장됩니다.",
@@ -2450,6 +2449,7 @@
     "native.apple.4a85eb1605f1ba49": "+%1$lld개 더 작업 중",
     "native.apple.4a999d79dfd4a4e2": "Gateway가 예기치 않은 채널 상태 응답을 반환했습니다.",
     "native.apple.4aa0a356f580cb09": "unknown gateway error",
+    "native.apple.4adc28ed0e25f735": "백그라운드 세션을 열 수 없음",
     "native.apple.4b1707775e3d4ded": "Watch 노드 온라인",
     "native.apple.4b1c264d08779b81": "성능 저하",
     "native.apple.4b34153a64ea0fbe": "%@, 정상",
@@ -3657,6 +3657,7 @@
     "native.apple.bb24048d5940285c": "이 Gateway에서 텍스트 추론 공급자 플러그인을 활성화하거나 설치한 후 다시 확인하세요.",
     "native.apple.bb25a6eb7fab6d0e": "수면 위로 떠오르는 중",
     "native.apple.bb3054116d83e716": "OpenClaw를 다시 열어 내장된 CUA 데몬을 재시도하세요.",
+    "native.apple.bb3b23bb105850ba": "\\(maximum)",
     "native.apple.bb5f5e891aeadb25": "이 페어링된 gateway는 더 이상 사용할 수 없습니다.",
     "native.apple.bb69920e6930860f": "Automation issues",
     "native.apple.bb7347e3399c42ee": "%@의 컨텍스트 — %@",
@@ -4298,6 +4299,7 @@
     "native.apple.f4155b853aa86198": "Skills 섹션",
     "native.apple.f420de18a586c900": "브라우저 로그인 사용",
     "native.apple.f43c1f8049a80f31": "스레드 삭제",
+    "native.apple.f4483cba92be9484": "텍스트 선택",
     "native.apple.f454890b0dc22cfd": "로컬(이 Mac)",
     "native.apple.f47dbe72f59ee9cb": "마이크 및 음성 인식 권한이 필요합니다.",
     "native.apple.f496b5c54219ca5f": "빠른 작업 준비됨",
@@ -4428,6 +4430,7 @@
     "native.apple.ff9163dd493d583b": "깨우기",
     "native.apple.ffba42bcdc2cc866": "토큰 1개",
     "native.apple.ffcccb2c944378ff": "스피커폰",
-    "native.apple.ffd5f2e059651aa1": "Gateway 설정 열기"
+    "native.apple.ffd5f2e059651aa1": "Gateway 설정 열기",
+    "native.apple.ffefad3c8b30c36d": "코드 복사"
   }
 }

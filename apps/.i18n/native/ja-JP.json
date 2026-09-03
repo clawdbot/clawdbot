@@ -173,7 +173,6 @@
     "native.android.1b95ee4b75f6033b": "保存済みの認証情報が無効です",
     "native.android.1bbbdb0fb0e3a5a3": "無効化",
     "native.android.1c35de4d06275916": "OpenClaw へようこそ",
-    "native.android.1c3686e1c087e2c8": "プロバイダーカタログを読み込めませんでした。",
     "native.android.1c4acd27277544e0": "読み取り専用アクセス。ネイティブツールの承認ルールは引き続き適用されます。",
     "native.android.1c4be71b5c3aa079": "接続が必要です",
     "native.android.1c62b20321fbbd26": "削除",
@@ -1455,7 +1454,6 @@
     "native.android.e5021b83ff593f1e": "現在",
     "native.android.e502c87002ff73f0": "${seconds}秒",
     "native.android.e50e16c71fc204f1": "一部のチャンネルのステータス確認が完了しませんでした。",
-    "native.android.e5387d6aaf34ede8": "検索中…",
     "native.android.e53f4d638a7fa07e": "Gateway に接続して、アプリで承認リクエストを読み込みます。",
     "native.android.e541942ff77b53eb": "聞き取り中（PTT）",
     "native.android.e54941cceace936d": "ここまで巻き戻す",
@@ -2243,6 +2241,7 @@
     "native.apple.36797a0a0d370b1c": "今すぐヘルスチェックを実行",
     "native.apple.367d222547a7dfa4": "コンテキスト",
     "native.apple.3704f5846ba19f61": "テスト中…",
+    "native.apple.3707ddd116730423": "\\(minimum)–\\(maximum)",
     "native.apple.3763e29c884dd87a": "Gateway トークンを更新",
     "native.apple.37715ac8050292a6": "%@ によって更新されました",
     "native.apple.377a95b3a57b9e32": "認証情報は、このプロファイルとともにMacのキーチェーンに保存されます。",
@@ -2450,6 +2449,7 @@
     "native.apple.4a85eb1605f1ba49": "+他%1$lld件が作業中",
     "native.apple.4a999d79dfd4a4e2": "Gateway が予期しないチャンネルステータス応答を返しました。",
     "native.apple.4aa0a356f580cb09": "unknown gateway error",
+    "native.apple.4adc28ed0e25f735": "バックグラウンドセッションを開けませんでした",
     "native.apple.4b1707775e3d4ded": "Watch ノードがオンライン",
     "native.apple.4b1c264d08779b81": "低下",
     "native.apple.4b34153a64ea0fbe": "%@、正常",
@@ -3657,6 +3657,7 @@
     "native.apple.bb24048d5940285c": "この Gateway でテキスト推論プロバイダーのプラグインを有効化またはインストールしてから、再度確認してください。",
     "native.apple.bb25a6eb7fab6d0e": "浮上中",
     "native.apple.bb3054116d83e716": "OpenClawを再度開いて、組み込みのCUAデーモンを再試行してください。",
+    "native.apple.bb3b23bb105850ba": "\\(maximum)",
     "native.apple.bb5f5e891aeadb25": "このペアリング済み Gateway は利用できなくなりました。",
     "native.apple.bb69920e6930860f": "Automation issues",
     "native.apple.bb7347e3399c42ee": "%@ からのコンテキスト — %@",
@@ -4298,6 +4299,7 @@
     "native.apple.f4155b853aa86198": "Skillsセクション",
     "native.apple.f420de18a586c900": "ブラウザのログインを使用",
     "native.apple.f43c1f8049a80f31": "スレッドを削除",
+    "native.apple.f4483cba92be9484": "テキストを選択",
     "native.apple.f454890b0dc22cfd": "ローカル（この Mac）",
     "native.apple.f47dbe72f59ee9cb": "マイクと音声認識の権限が必要です。",
     "native.apple.f496b5c54219ca5f": "クイックアクションの準備ができました",
@@ -4428,6 +4430,7 @@
     "native.apple.ff9163dd493d583b": "ウェイク",
     "native.apple.ffba42bcdc2cc866": "1トークン",
     "native.apple.ffcccb2c944378ff": "スピーカーフォン",
-    "native.apple.ffd5f2e059651aa1": "Gateway 設定を開く"
+    "native.apple.ffd5f2e059651aa1": "Gateway 設定を開く",
+    "native.apple.ffefad3c8b30c36d": "コードをコピー"
   }
 }
