@@ -1,6 +1,6 @@
-export const DEFAULT_MEMORY_SEARCH_TIMEOUT_MS = 15_000;
-export const MIN_MEMORY_SEARCH_TIMEOUT_MS = 1_000;
-export const MAX_MEMORY_SEARCH_TIMEOUT_MS = 120_000;
+const DEFAULT_MEMORY_SEARCH_TIMEOUT_MS = 15_000;
+const MIN_MEMORY_SEARCH_TIMEOUT_MS = 1_000;
+const MAX_MEMORY_SEARCH_TIMEOUT_MS = 120_000;
 
 export function normalizeMemorySearchTimeoutMs(value: number | undefined): number {
   if (value === undefined || !Number.isFinite(value)) {
