@@ -506,26 +506,4 @@ describe("venice provider plugin", () => {
     )[0];
     expect(toolCall).not.toHaveProperty("thought_signature");
   });
-
-  it("applies the Gemini tool-schema profile to Gemini-backed Venice models", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-
-    expect(
-      provider.normalizeResolvedModel?.({
-        modelId: "venice/gemini-3-8-flash",
-        model: {
-          id: "gemini-3-8-flash",
-          compat: {
-            supportsUsageInStreaming: true,
-          },
-        },
-      } as never),
-    ).toEqual({
-      id: "gemini-3-8-flash",
-      compat: {
-        supportsUsageInStreaming: true,
-        toolSchemaProfile: "gemini",
-      },
-    });
-  });
 });

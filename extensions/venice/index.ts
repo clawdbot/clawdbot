@@ -22,18 +22,17 @@ const XAI_UNSUPPORTED_SCHEMA_KEYWORDS = [
   "maxContains",
 ] as const;
 
-// Venice fronts several upstream vendors; each needs its own tool-schema dialect.
-const VENICE_UPSTREAM_COMPAT: ReadonlyArray<readonly [string, ModelCompatConfig]> = [
-  [
-    "grok",
-    {
-      toolSchemaProfile: "xai",
-      unsupportedToolSchemaKeywords: [...XAI_UNSUPPORTED_SCHEMA_KEYWORDS],
-      toolCallArgumentsEncoding: "html-entities",
-    },
-  ],
-  ["gemini", { toolSchemaProfile: "gemini" }],
-];
+function applyXaiModelCompat<T extends { compat?: unknown }>(model: T): T {
+  return applyModelCompatPatch(model as T & { compat?: ModelCompatConfig }, {
+    toolSchemaProfile: "xai",
+    unsupportedToolSchemaKeywords: [...XAI_UNSUPPORTED_SCHEMA_KEYWORDS],
+    toolCallArgumentsEncoding: "html-entities",
+  }) as T;
+}
+
+function isXaiBackedVeniceModel(modelId: string): boolean {
+  return normalizeLowercaseStringOrEmpty(modelId).includes("grok");
+}
 
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
@@ -56,13 +55,8 @@ export default defineSingleProviderPluginEntry({
       buildProvider: buildStaticVeniceProvider,
       liveModelDiscovery: VENICE_MODEL_DISCOVERY_OPTIONS,
     },
-    normalizeResolvedModel: ({ modelId, model }) => {
-      const id = normalizeLowercaseStringOrEmpty(modelId);
-      const compat = VENICE_UPSTREAM_COMPAT.find(([marker]) => id.includes(marker))?.[1];
-      return compat
-        ? applyModelCompatPatch(model as typeof model & { compat?: ModelCompatConfig }, compat)
-        : undefined;
-    },
+    normalizeResolvedModel: ({ modelId, model }) =>
+      isXaiBackedVeniceModel(modelId) ? applyXaiModelCompat(model) : undefined,
     wrapStreamFn: (ctx) => createVeniceStreamWrapper(ctx.streamFn, ctx.thinkingLevel),
     resolveUsageAuth: async (ctx) => {
       const apiKey = ctx.resolveApiKeyFromConfigAndStore({
