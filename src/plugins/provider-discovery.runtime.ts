@@ -15,6 +15,10 @@ import {
   resolvePluginRuntimeArtifactPreference,
 } from "./plugin-runtime-artifact-selection.js";
 import { buildEffectiveManifestProviderConfig } from "./provider-catalog.js";
+import type {
+  ProviderDiscoveryPlan,
+  ResolveRuntimePluginDiscoveryProvidersParams,
+} from "./provider-discovery.js";
 import { resolveDiscoveredProviderPluginIds } from "./providers.js";
 import { resolvePluginProvidersCore } from "./providers.runtime.js";
 import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-scope.js";
@@ -281,18 +285,9 @@ function resolveRuntimeEntryProviders(entryResult: ProviderDiscoveryEntryResult)
   });
 }
 
-export function resolvePluginDiscoveryProvidersRuntime(params: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  onlyPluginIds?: string[];
-  includeUntrustedWorkspacePlugins?: boolean;
-  requireCompleteDiscoveryEntryCoverage?: boolean;
-  discoveryEntriesOnly?: boolean;
-  includeManifestModelCatalogProviders?: boolean;
-  includeSyntheticAuthProviders?: boolean;
-  pluginMetadataSnapshot?: PluginMetadataRegistryView;
-}): ProviderPlugin[] {
+export function planPluginDiscoveryRuntime(
+  params: ResolveRuntimePluginDiscoveryProvidersParams,
+): ProviderDiscoveryPlan {
   const env = params.env ?? process.env;
   const entryResult = resolveProviderDiscoveryEntryPlugins({ ...params, env });
   const entryProviders = entryResult.providers.filter(
@@ -303,7 +298,7 @@ export function resolvePluginDiscoveryProvidersRuntime(params: {
   );
   const runtimeEntryProviders = resolveRuntimeEntryProviders(entryResult);
   if (params.discoveryEntriesOnly === true) {
-    return entryProviders;
+    return { kind: "entries", providers: entryProviders };
   }
   if (
     entryResult.providers.length > 0 &&
@@ -311,7 +306,7 @@ export function resolvePluginDiscoveryProvidersRuntime(params: {
     runtimeEntryProviders.length === entryResult.providers.length &&
     entryResult.runtimeManifestCatalogPluginIds.size === 0
   ) {
-    return runtimeEntryProviders;
+    return { kind: "entries", providers: runtimeEntryProviders };
   }
   let fullPluginIds = params.onlyPluginIds;
   let retainedProviders: ProviderPlugin[] | undefined;
@@ -329,7 +324,7 @@ export function resolvePluginDiscoveryProvidersRuntime(params: {
       ...entryResult.runtimeManifestCatalogPluginIds,
     ]);
     if (fullPluginIds.length === 0) {
-      return [...runtimeEntryProviders];
+      return { kind: "entries", providers: runtimeEntryProviders };
     }
     const fullPluginIdSet = new Set(fullPluginIds);
     retainedProviders = runtimeEntryProviders.filter(
@@ -345,10 +340,20 @@ export function resolvePluginDiscoveryProvidersRuntime(params: {
       fullPluginIds = entryPluginIds;
     }
   }
+  return { kind: "runtime", providers: retainedProviders ?? [], pluginIds: fullPluginIds };
+}
+
+export function resolvePluginDiscoveryProvidersRuntime(
+  params: ResolveRuntimePluginDiscoveryProvidersParams,
+): ProviderPlugin[] {
+  const plan = planPluginDiscoveryRuntime(params);
+  if (plan.kind === "entries") {
+    return plan.providers;
+  }
   const fullProviders = resolvePluginProvidersCore({
     ...params,
-    env,
-    ...(fullPluginIds ? { onlyPluginIds: fullPluginIds } : {}),
+    env: params.env ?? process.env,
+    ...(plan.pluginIds ? { onlyPluginIds: plan.pluginIds } : {}),
   });
-  return retainedProviders ? [...retainedProviders, ...fullProviders] : fullProviders;
+  return [...plan.providers, ...fullProviders];
 }
