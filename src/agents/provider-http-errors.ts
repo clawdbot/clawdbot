@@ -12,6 +12,7 @@ import {
   readResponseWithLimit,
   type ReadResponseTextPrefixOptions,
 } from "../infra/http-body.js";
+import { parseRetryAfterHeaderSeconds } from "../infra/retry-after.js";
 import { redactSensitiveText, redactToolPayloadText } from "../logging/redact.js";
 import type { ModelProviderRequestTransportOverrides } from "./provider-request-config.js";
 import { redactProviderResponseErrorText } from "./provider-request-header-redaction.js";
@@ -243,6 +244,7 @@ type ProviderHttpErrorInfo = {
   type?: string;
   body?: string;
   requestId?: string;
+  retryAfterMs?: number;
 };
 
 /** Extracts normalized provider error metadata while keeping the raw body bounded and redacted. */
@@ -282,8 +284,14 @@ async function extractProviderErrorInfo(
       ? redactProviderResponseErrorText(rawRequestId, options.requestHeaders)
       : rawRequestId;
   const rawBody = trimToUndefined(prefix?.text);
+  const retryAfterSeconds = parseRetryAfterHeaderSeconds(response.headers.get("Retry-After"));
+  const headerRetryAfterMs =
+    retryAfterSeconds === undefined ? undefined : Math.ceil(retryAfterSeconds * 1000);
   if (!rawBody) {
-    return requestId ? { requestId } : {};
+    return {
+      ...(requestId ? { requestId } : {}),
+      ...(headerRetryAfterMs !== undefined ? { retryAfterMs: headerRetryAfterMs } : {}),
+    };
   }
   // Redact before metadata extraction or preview truncation can split a credential.
   const safeBody = options?.requestHeaders
@@ -298,6 +306,7 @@ async function extractProviderErrorInfo(
       ...(metadata.detail ? { detail: metadata.detail } : { detail: body }),
       ...(metadata.code ? { code: metadata.code } : {}),
       ...(metadata.type ? { type: metadata.type } : {}),
+      ...(headerRetryAfterMs !== undefined ? { retryAfterMs: headerRetryAfterMs } : {}),
       body,
       ...(requestId ? { requestId } : {}),
     };
@@ -306,6 +315,7 @@ async function extractProviderErrorInfo(
       detail: body,
       body,
       ...(requestId ? { requestId } : {}),
+      ...(headerRetryAfterMs !== undefined ? { retryAfterMs: headerRetryAfterMs } : {}),
     };
   }
 }
@@ -327,6 +337,7 @@ export function extractProviderRequestId(response: Response): string | undefined
 export class ProviderHttpError extends Error {
   readonly status: number;
   readonly statusCode: number;
+  readonly retryAfterMs?: number;
   readonly code?: string;
   readonly errorCode?: string;
   readonly errorType?: string;
@@ -341,6 +352,7 @@ export class ProviderHttpError extends Error {
       type?: string;
       body?: string;
       requestId?: string;
+      retryAfterMs?: number;
     },
   ) {
     super(message);
@@ -352,6 +364,7 @@ export class ProviderHttpError extends Error {
     this.errorType = params.type;
     this.errorBody = params.body;
     this.requestId = params.requestId;
+    this.retryAfterMs = params.retryAfterMs;
   }
 }
 
@@ -392,6 +405,7 @@ export async function createProviderHttpError(
       type: info.type,
       body: info.body,
       requestId: info.requestId,
+      retryAfterMs: info.retryAfterMs,
     },
   );
 }

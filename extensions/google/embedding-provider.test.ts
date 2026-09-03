@@ -342,6 +342,198 @@ describe("Gemini embedding provider", () => {
     );
   });
 
+  it("preserves structured Gemini cooldowns on failed embedding responses", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            error: {
+              code: 429,
+              status: "RESOURCE_EXHAUSTED",
+              details: [
+                {
+                  "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                  retryDelay: "1.500000001s",
+                },
+              ],
+            },
+          }),
+          { status: 429, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { provider } = await createGeminiEmbeddingProvider({
+      config: {} as never,
+      provider: "gemini",
+      remote: { apiKey: "test-key" },
+      model: "gemini-embedding-001",
+      fallback: "none",
+    });
+
+    await expect(provider.embed("test query", { inputType: "query" })).rejects.toMatchObject({
+      status: 429,
+      retryAfterMs: 1501,
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the larger RetryInfo or Retry-After cooldown on failed embedding responses", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            error: {
+              code: 429,
+              status: "RESOURCE_EXHAUSTED",
+              details: [
+                {
+                  "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                  retryDelay: "21.549315790s",
+                },
+              ],
+            },
+          }),
+          {
+            status: 429,
+            headers: {
+              "Content-Type": "application/json",
+              "Retry-After": "30",
+            },
+          },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { provider } = await createGeminiEmbeddingProvider({
+      config: {} as never,
+      provider: "gemini",
+      remote: { apiKey: "test-key" },
+      model: "gemini-embedding-001",
+      fallback: "none",
+    });
+
+    await expect(provider.embed("test query", { inputType: "query" })).rejects.toMatchObject({
+      status: 429,
+      retryAfterMs: 30_000,
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("decodes RetryInfo past core's 500-char errorBody truncation", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            error: {
+              code: 429,
+              status: "RESOURCE_EXHAUSTED",
+              // Padding pushes the RetryInfo detail well past core's 500-char
+              // ProviderHttpError.errorBody preview, matching real ~1KB+ Gemini bodies.
+              message: "quota exceeded ".repeat(40),
+              details: [
+                {
+                  "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                  retryDelay: "5s",
+                },
+              ],
+            },
+          }),
+          { status: 429, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { provider } = await createGeminiEmbeddingProvider({
+      config: {} as never,
+      provider: "gemini",
+      remote: { apiKey: "test-key" },
+      model: "gemini-embedding-001",
+      fallback: "none",
+    });
+
+    await expect(provider.embed("test query", { inputType: "query" })).rejects.toMatchObject({
+      status: 429,
+      retryAfterMs: 5000,
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("falls back to the errorBody-based parse when the clone read fails", async () => {
+    const fetchMock = vi.fn(async () => {
+      const response = new Response(
+        JSON.stringify({
+          error: {
+            code: 429,
+            status: "RESOURCE_EXHAUSTED",
+            details: [
+              {
+                "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                retryDelay: "1.500000001s",
+              },
+            ],
+          },
+        }),
+        { status: 429, headers: { "Content-Type": "application/json" } },
+      );
+      response.clone = () => {
+        throw new Error("clone unsupported");
+      };
+      return response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { provider } = await createGeminiEmbeddingProvider({
+      config: {} as never,
+      provider: "gemini",
+      remote: { apiKey: "test-key" },
+      model: "gemini-embedding-001",
+      fallback: "none",
+    });
+
+    await expect(provider.embed("test query", { inputType: "query" })).rejects.toMatchObject({
+      status: 429,
+      retryAfterMs: 1501,
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["negative RetryInfo", "-1s"],
+    ["malformed RetryInfo", "NaNs"],
+    ["over-precise RetryInfo", "1.0000000001s"],
+    ["unsafe RetryInfo", "9007199254741s"],
+  ])("ignores %s cooldown hints", async (_label, retryDelay) => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            error: {
+              code: 429,
+              status: "RESOURCE_EXHAUSTED",
+              details: [
+                {
+                  "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                  retryDelay,
+                },
+              ],
+            },
+          }),
+          { status: 429, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { provider } = await createGeminiEmbeddingProvider({
+      config: {} as never,
+      provider: "gemini",
+      remote: { apiKey: "test-key" },
+      model: "gemini-embedding-001",
+      fallback: "none",
+    });
+
+    await expect(provider.embed("test query", { inputType: "query" })).rejects.toMatchObject({
+      status: 429,
+      retryAfterMs: undefined,
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it("rejects wrong single embedding vector shapes", async () => {
     installFetchMock(() => ({ embedding: { values: [1, "bad"] } }));
 

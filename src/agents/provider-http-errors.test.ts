@@ -304,6 +304,41 @@ describe("provider error utils", () => {
     expect(providerError.errorBody).not.toContain("sk-secret1234567890abcd");
   });
 
+  it.each([
+    ["delta seconds", "12", 12_000],
+    ["HTTP date", "Fri, 01 May 2026 12:00:05 GMT", 5_000],
+    ["past HTTP date", "Fri, 01 May 2026 11:59:55 GMT", 0],
+  ])("preserves Retry-After $name as structured milliseconds", async (_name, value, expected) => {
+    const now = Date.UTC(2026, 4, 1, 12, 0, 0);
+    // Shared-worker runs (--isolate=false): restore Date.now even on assertion failure.
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      const error = await createProviderHttpError(
+        new Response(null, { status: 429, headers: { "Retry-After": value } }),
+        "Provider API error",
+      );
+
+      expect(error).toMatchObject({ retryAfterMs: expected });
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    ["negative header", { header: "-1" }],
+    ["unsafe header", { header: "9007199254741" }],
+  ])("ignores $name cooldown hints", async (_name, value) => {
+    const error = await createProviderHttpError(
+      new Response(null, {
+        status: 429,
+        headers: { "Retry-After": value.header },
+      }),
+      "Provider API error",
+    );
+
+    expect((error as ProviderHttpError).retryAfterMs).toBeUndefined();
+  });
+
   it("keeps legacy HTTP status formatting while sharing provider parsing", async () => {
     const response = new Response(
       JSON.stringify({

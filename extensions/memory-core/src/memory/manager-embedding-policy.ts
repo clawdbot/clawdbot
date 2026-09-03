@@ -6,6 +6,10 @@ import {
   type EmbeddingInput,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type MemoryEmbeddingChunk = {
   text: string;
@@ -48,8 +52,10 @@ export function buildMemoryEmbeddingBatches<T extends MemoryEmbeddingChunk>(
   return batches;
 }
 
-const RETRYABLE_MEMORY_EMBEDDING_SERVICE_ERROR_RE =
-  /(rate[_ ]limit|too many requests|\b(?:429|5\d\d)\b|resource has been exhausted|cloudflare|tokens per day)/i;
+const RATE_LIMITED_MEMORY_EMBEDDING_ERROR_RE =
+  /(rate[_ ]limit|too many requests|\b429\b|resource has been exhausted|tokens per day)/i;
+
+const RETRYABLE_MEMORY_EMBEDDING_SERVICE_ERROR_RE = /\b5\d\d\b|cloudflare/i;
 
 const RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE =
   /(fetch failed|other side closed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|UND_ERR_|socket hang up|socket terminated|network error|read ECONN|timed out|connection (?:reset|refused|aborted|timed out)|EHOSTUNREACH|ENETUNREACH|ECONNABORTED|EAI_AGAIN)/i;
@@ -57,63 +63,117 @@ const RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE =
 const SPLITTABLE_MEMORY_EMBEDDING_BATCH_ERROR_RE =
   /(request_headers_too_large|request header fields too large|other side closed|ECONNRESET|EPIPE|UND_ERR_SOCKET|socket hang up|socket terminated|read ECONN|connection (?:reset|aborted)|\bembeddings (?:api input limit exceeded:\s*max\s+\d+\s*,\s*got\s+\d+|max input length is\s+\d+)\b)/i;
 
+const SHORT_MEMORY_EMBEDDING_RETRY_BUDGET = {
+  attempts: 3,
+  baseDelayMs: 500,
+  maxDelayMs: 8000,
+} as const;
+const MEMORY_EMBEDDING_RETRY_PROFILES = {
+  index: {
+    transient: SHORT_MEMORY_EMBEDDING_RETRY_BUDGET,
+    rateLimit: { attempts: 5, baseDelayMs: 5000, maxDelayMs: 60_000 },
+    maxTotalWaitMs: Number.POSITIVE_INFINITY,
+  },
+  query: {
+    transient: SHORT_MEMORY_EMBEDDING_RETRY_BUDGET,
+    rateLimit: SHORT_MEMORY_EMBEDDING_RETRY_BUDGET,
+    maxTotalWaitMs: 8000,
+  },
+} as const;
+export type MemoryEmbeddingRetryProfileName = keyof typeof MEMORY_EMBEDDING_RETRY_PROFILES;
+
 export function isSplittableMemoryEmbeddingBatchError(message: string): boolean {
   return SPLITTABLE_MEMORY_EMBEDDING_BATCH_ERROR_RE.test(message);
 }
 
-export function isRetryableMemoryEmbeddingError(message: string): boolean {
-  return (
-    RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE.test(message) ||
-    (!isSplittableMemoryEmbeddingBatchError(message) &&
-      RETRYABLE_MEMORY_EMBEDDING_SERVICE_ERROR_RE.test(message))
-  );
+function readMemoryEmbeddingRetryAfterMs(error: unknown): number | undefined {
+  const value = asOptionalRecord(error)?.retryAfterMs;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
-export function resolveMemoryEmbeddingRetryDelay(
-  delayMs: number,
-  randomValue: number,
-  maxDelayMs: number,
-): number {
-  return Math.min(maxDelayMs, Math.round(delayMs * (1 + randomValue * 0.2)));
+function resolveMemoryEmbeddingRetryBudget(
+  profile: (typeof MEMORY_EMBEDDING_RETRY_PROFILES)[MemoryEmbeddingRetryProfileName],
+  error: unknown,
+) {
+  const fields = asOptionalRecord(error);
+  const message = formatErrorMessage(error);
+  const retryAfterMs = readMemoryEmbeddingRetryAfterMs(error);
+  const status = [fields?.status, fields?.statusCode].find(
+    (value): value is number => typeof value === "number" && Number.isInteger(value),
+  );
+  const code = normalizeOptionalString(fields?.errorCode) ?? normalizeOptionalString(fields?.code);
+  if (code?.toLowerCase() === "quota_exceeded" && retryAfterMs === undefined) {
+    return undefined;
+  }
+  if (status === 429 || RATE_LIMITED_MEMORY_EMBEDDING_ERROR_RE.test(message)) {
+    return profile.rateLimit;
+  }
+  return RETRYABLE_MEMORY_EMBEDDING_TRANSPORT_ERROR_RE.test(message) ||
+    (!isSplittableMemoryEmbeddingBatchError(message) &&
+      ((status !== undefined && status >= 500 && status <= 599) ||
+        RETRYABLE_MEMORY_EMBEDDING_SERVICE_ERROR_RE.test(message)))
+    ? profile.transient
+    : undefined;
 }
 
 export async function runMemoryEmbeddingRetryLoop<T>(params: {
+  profile: MemoryEmbeddingRetryProfileName;
   run: () => Promise<T>;
-  isRetryable: (message: string) => boolean;
   waitForRetry: (delayMs: number) => Promise<void>;
-  maxAttempts: number;
-  baseDelayMs: number;
   /** Caller-owned cancellation; an aborted caller stops the retry loop. */
   signal?: AbortSignal;
 }): Promise<T> {
+  const profile = MEMORY_EMBEDDING_RETRY_PROFILES[params.profile];
+  let remainingWaitMs = profile.maxTotalWaitMs;
   return await retryAsync(params.run, {
-    attempts: params.maxAttempts,
-    minDelayMs: params.baseDelayMs,
-    maxDelayMs: Number.MAX_SAFE_INTEGER,
+    attempts: profile.rateLimit.attempts,
+    minDelayMs: profile.transient.baseDelayMs,
+    maxDelayMs: profile.rateLimit.maxDelayMs,
+    retryAfterMaxDelayMs: profile.rateLimit.maxDelayMs,
+    jitter: 0.2,
     // Caller cancellation wins even when its timeout resembles a retryable
     // provider error; otherwise abandoned searches start another request.
-    shouldRetry: (err) => !params.signal?.aborted && params.isRetryable(formatErrorMessage(err)),
-    sleep: params.waitForRetry,
+    shouldRetry: (err, attempt) => {
+      if (params.signal?.aborted) {
+        return false;
+      }
+      const retryBudget = resolveMemoryEmbeddingRetryBudget(profile, err);
+      return retryBudget !== undefined && attempt < retryBudget.attempts;
+    },
+    delayMs: ({ attempt, err }) => {
+      const retryBudget = resolveMemoryEmbeddingRetryBudget(profile, err);
+      return retryBudget
+        ? Math.min(retryBudget.maxDelayMs, retryBudget.baseDelayMs * 2 ** (attempt - 1))
+        : 0;
+    },
+    // The query profile shares one short budget for both classes, so this gate
+    // also admits hints on transient errors there — accepted: every honored
+    // hint stays under the profile's per-wait cap and cumulative wait ceiling.
+    retryAfterMs: (err) =>
+      resolveMemoryEmbeddingRetryBudget(profile, err) === profile.rateLimit
+        ? readMemoryEmbeddingRetryAfterMs(err)
+        : undefined,
+    sleep: async (delayMs) => {
+      const boundedDelayMs = Math.min(delayMs, remainingWaitMs);
+      remainingWaitMs -= boundedDelayMs;
+      await params.waitForRetry(boundedDelayMs);
+    },
   });
 }
 
 export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(params: {
+  profile: MemoryEmbeddingRetryProfileName;
   items: TInput[];
   run: (items: TInput[]) => Promise<TOutput[]>;
-  isRetryable: (message: string) => boolean;
   isSplittable: (message: string) => boolean;
   waitForRetry: (delayMs: number) => Promise<void>;
-  maxAttempts: number;
-  baseDelayMs: number;
   onSplit?: (info: { itemCount: number; splitAt: number; message: string }) => void;
 }): Promise<TOutput[]> {
   try {
     return await runMemoryEmbeddingRetryLoop({
+      profile: params.profile,
       run: async () => await params.run(params.items),
-      isRetryable: params.isRetryable,
       waitForRetry: params.waitForRetry,
-      maxAttempts: params.maxAttempts,
-      baseDelayMs: params.baseDelayMs,
     });
   } catch (err) {
     const message = formatErrorMessage(err);

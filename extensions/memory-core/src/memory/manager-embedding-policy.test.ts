@@ -4,12 +4,39 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildMemoryEmbeddingBatches,
   filterNonEmptyMemoryChunks,
-  isRetryableMemoryEmbeddingError,
   isSplittableMemoryEmbeddingBatchError,
-  resolveMemoryEmbeddingRetryDelay,
   runMemoryEmbeddingBatchRetryWithSplit,
   runMemoryEmbeddingRetryLoop,
 } from "./manager-embedding-policy.js";
+
+function expectDelayBetween(delayMs: number | undefined, min: number, max: number): void {
+  expect(delayMs).toBeGreaterThanOrEqual(min);
+  expect(delayMs).toBeLessThanOrEqual(max);
+}
+
+/**
+ * Probes the frozen retry-class boundary through the public retry loop:
+ * a permanent error stops after one call, a retryable one runs to its
+ * class's exhaustion count (3 for transient, 5 for rate-limit).
+ */
+async function probeRetryAttempts(
+  message: string,
+  profile: "index" | "query" = "index",
+): Promise<number> {
+  const run = vi.fn(async () => {
+    throw new Error(message);
+  });
+  try {
+    await runMemoryEmbeddingRetryLoop({
+      profile,
+      run,
+      waitForRetry: async () => {},
+    });
+  } catch {
+    // Expected: the loop always rejects since `run` never succeeds.
+  }
+  return run.mock.calls.length;
+}
 
 function chunk(text: string) {
   return {
@@ -90,18 +117,134 @@ describe("memory embedding policy", () => {
     const waits: number[] = [];
 
     const result = await runMemoryEmbeddingRetryLoop({
+      profile: "index",
       run,
-      isRetryable: isRetryableMemoryEmbeddingError,
       waitForRetry: async (delayMs) => {
         waits.push(delayMs);
       },
-      maxAttempts: 3,
-      baseDelayMs: 500,
     });
 
     expect(result).toBe("ok");
     expect(run).toHaveBeenCalledTimes(3);
-    expect(waits).toEqual([500, 1000]);
+    expectDelayBetween(waits[0], 4000, 6000);
+    expectDelayBetween(waits[1], 800, 1200);
+  });
+
+  it("uses the bounded long retry budget for a bare 429", async () => {
+    const run = vi.fn(async () => {
+      throw Object.assign(new Error("gemini embeddings failed (429)"), { status: 429 });
+    });
+    const waits: number[] = [];
+
+    await expect(
+      runMemoryEmbeddingRetryLoop({
+        profile: "index",
+        run,
+        waitForRetry: async (delayMs) => void waits.push(delayMs),
+      }),
+    ).rejects.toThrow("429");
+
+    expect(run).toHaveBeenCalledTimes(5);
+    expect(waits).toHaveLength(4);
+    for (const [index, range] of [
+      [4000, 6000],
+      [8000, 12_000],
+      [16_000, 24_000],
+      [32_000, 48_000],
+    ].entries()) {
+      expectDelayBetween(waits[index], range[0] ?? 0, range[1] ?? 0);
+    }
+  });
+
+  it.each([
+    ["index", "valid", 30_000, 30_000, 36_000],
+    ["index", "hostile", Number.MAX_SAFE_INTEGER, 48_000, 60_000],
+    ["query", "hostile", 60_000, 6400, 8000],
+  ] as const)(
+    "honors and caps a $profile $name structured cooldown",
+    async (profile, _name, retryAfterMs, min, max) => {
+      const run = vi
+        .fn<() => Promise<string>>()
+        .mockRejectedValueOnce(
+          Object.assign(new Error("gemini embeddings failed (429)"), {
+            status: 429,
+            retryAfterMs,
+          }),
+        )
+        .mockResolvedValueOnce("ok");
+      const waits: number[] = [];
+
+      await expect(
+        runMemoryEmbeddingRetryLoop({
+          profile,
+          run,
+          waitForRetry: async (delayMs) => void waits.push(delayMs),
+        }),
+      ).resolves.toBe("ok");
+      expectDelayBetween(waits[0], min, max);
+    },
+  );
+
+  it("keeps query-path hostile cooldown waits within the interactive retry budget", async () => {
+    const waits: number[] = [];
+    const run = vi.fn(async () => {
+      throw Object.assign(new Error("gemini embeddings failed (429)"), {
+        status: 429,
+        retryAfterMs: 60_000,
+      });
+    });
+
+    await expect(
+      runMemoryEmbeddingRetryLoop({
+        profile: "query",
+        run,
+        waitForRetry: async (delayMs) => void waits.push(delayMs),
+      }),
+    ).rejects.toThrow("429");
+
+    expect(run).toHaveBeenCalledTimes(3);
+    expect(waits).toHaveLength(2);
+    expect(waits.every((delayMs) => delayMs <= 8000)).toBe(true);
+    expect(waits.reduce((total, delayMs) => total + delayMs, 0)).toBe(8000);
+  });
+
+  it("fails fast for typed daily quota exhaustion without a cooldown", async () => {
+    const quotaError = Object.assign(new Error("Too many tokens per day"), {
+      status: 429,
+      errorCode: "quota_exceeded",
+    });
+    const run = vi.fn(async () => {
+      throw quotaError;
+    });
+    const waitForRetry = vi.fn(async () => {});
+
+    await expect(
+      runMemoryEmbeddingRetryLoop({
+        profile: "index",
+        run,
+        waitForRetry,
+      }),
+    ).rejects.toBe(quotaError);
+    expect(run).toHaveBeenCalledOnce();
+    expect(waitForRetry).not.toHaveBeenCalled();
+  });
+
+  it("keeps 5xx failures on the short retry budget", async () => {
+    const run = vi.fn(async () => {
+      throw Object.assign(new Error("gemini embeddings failed"), { status: 503 });
+    });
+    const waits: number[] = [];
+
+    await expect(
+      runMemoryEmbeddingRetryLoop({
+        profile: "index",
+        run,
+        waitForRetry: async (delayMs) => void waits.push(delayMs),
+      }),
+    ).rejects.toThrow("gemini embeddings failed");
+    expect(run).toHaveBeenCalledTimes(3);
+    expectDelayBetween(waits[0], 400, 600);
+    expectDelayBetween(waits[1], 800, 1200);
   });
 
   it("stops retrying after the caller signal aborts, even for retryable-looking errors", async () => {
@@ -115,11 +258,9 @@ describe("memory embedding policy", () => {
 
     await expect(
       runMemoryEmbeddingRetryLoop({
+        profile: "index",
         run,
-        isRetryable: isRetryableMemoryEmbeddingError,
         waitForRetry,
-        maxAttempts: 3,
-        baseDelayMs: 500,
         signal: controller.signal,
       }),
     ).rejects.toThrow("memory embeddings query timed out after 60s");
@@ -141,17 +282,15 @@ describe("memory embedding policy", () => {
       });
 
       const pending = runMemoryEmbeddingRetryLoop({
+        profile: "index",
         run,
-        isRetryable: isRetryableMemoryEmbeddingError,
         waitForRetry,
-        maxAttempts: 3,
-        baseDelayMs: 500,
         signal: controller.signal,
       });
       await vi.advanceTimersByTimeAsync(0);
 
       expect(run).toHaveBeenCalledOnce();
-      expect(waitForRetry).toHaveBeenCalledWith(500);
+      expectDelayBetween(waitForRetry.mock.calls[0]?.[0], 400, 600);
       expect(vi.getTimerCount()).toBe(1);
 
       controller.abort(abortReason);
@@ -176,11 +315,9 @@ describe("memory embedding policy", () => {
 
     await expect(
       runMemoryEmbeddingRetryLoop({
+        profile: "index",
         run,
-        isRetryable: isRetryableMemoryEmbeddingError,
         waitForRetry,
-        maxAttempts: 3,
-        baseDelayMs: 500,
       }),
     ).rejects.toBe(permanentError);
 
@@ -188,7 +325,95 @@ describe("memory embedding policy", () => {
     expect(waitForRetry).not.toHaveBeenCalled();
   });
 
-  it("retries transient socket/network embedding errors", () => {
+  const RETRY_BOUNDARY_FIXTURES: Array<{
+    label: string;
+    profile?: "index" | "query";
+    message: string;
+    expectedCalls: number;
+  }> = [
+    // Transient transport/service errors retry up to the short 3-attempt budget.
+    {
+      label: "fetch failed transport error",
+      message: "TypeError: fetch failed | other side closed",
+      expectedCalls: 3,
+    },
+    { label: "undici socket error", message: "undici error: UND_ERR_SOCKET", expectedCalls: 3 },
+    { label: "ECONNRESET read error", message: "read ECONNRESET", expectedCalls: 3 },
+    { label: "socket hang up", message: "socket hang up", expectedCalls: 3 },
+    { label: "ECONNREFUSED", message: "ECONNREFUSED", expectedCalls: 3 },
+    { label: "EHOSTUNREACH", message: "EHOSTUNREACH", expectedCalls: 3 },
+    {
+      label: "embedding batch timeout",
+      message: "memory embeddings batch timed out",
+      expectedCalls: 3,
+    },
+    { label: "5xx service error", message: "HTTP 503: service unavailable", expectedCalls: 3 },
+    // Permanent errors never retry.
+    {
+      label: "worker terminated by user",
+      message: "worker terminated by user",
+      expectedCalls: 1,
+    },
+    {
+      label: "embedding validation failure",
+      message: "embedding validation failed",
+      expectedCalls: 1,
+    },
+    {
+      label: "splittable item-limit error (max/got)",
+      message: "Embeddings API input limit exceeded: max 10, got 33. Request id: fixture-000597000",
+      expectedCalls: 1,
+    },
+    {
+      label: "splittable item-limit error (max input length)",
+      message: "embeddings max input length is 16",
+      expectedCalls: 1,
+    },
+    {
+      label: "HTTP 400 client error",
+      message: "HTTP 400: request id fixture-000597000",
+      expectedCalls: 1,
+    },
+    {
+      label: "431 request headers too large",
+      message: "431 request_headers_too_large",
+      expectedCalls: 1,
+    },
+    // Rate-limit errors retry up to the long 5-attempt budget.
+    {
+      label: "HTTP 429 rate limit (index)",
+      profile: "index",
+      message: "HTTP 429: rate limit",
+      expectedCalls: 5,
+    },
+    {
+      label: "HTTP 429 rate limit (query)",
+      profile: "query",
+      message: "HTTP 429: rate limit",
+      expectedCalls: 3,
+    },
+    {
+      label: "HTTP 503 transient error (query)",
+      profile: "query",
+      message: "HTTP 503: service unavailable",
+      expectedCalls: 3,
+    },
+    {
+      label: "HTTP 400 permanent error (query)",
+      profile: "query",
+      message: "HTTP 400: invalid input",
+      expectedCalls: 1,
+    },
+  ];
+
+  it.each(RETRY_BOUNDARY_FIXTURES)(
+    "retries $label for $expectedCalls total attempt(s)",
+    async ({ profile, message, expectedCalls }) => {
+      expect(await probeRetryAttempts(message, profile)).toBe(expectedCalls);
+    },
+  );
+
+  it("identifies splittable transport errors", () => {
     const splittableMessages = [
       "TypeError: fetch failed | other side closed",
       "undici error: UND_ERR_SOCKET",
@@ -197,17 +422,11 @@ describe("memory embedding policy", () => {
     ];
 
     for (const message of splittableMessages) {
-      expect(isRetryableMemoryEmbeddingError(message)).toBe(true);
       expect(isSplittableMemoryEmbeddingBatchError(message)).toBe(true);
     }
-    expect(isRetryableMemoryEmbeddingError("ECONNREFUSED")).toBe(true);
     expect(isSplittableMemoryEmbeddingBatchError("ECONNREFUSED")).toBe(false);
-    expect(isRetryableMemoryEmbeddingError("EHOSTUNREACH")).toBe(true);
     expect(isSplittableMemoryEmbeddingBatchError("EHOSTUNREACH")).toBe(false);
-    expect(isRetryableMemoryEmbeddingError("memory embeddings batch timed out")).toBe(true);
     expect(isSplittableMemoryEmbeddingBatchError("memory embeddings batch timed out")).toBe(false);
-    expect(isRetryableMemoryEmbeddingError("worker terminated by user")).toBe(false);
-    expect(isRetryableMemoryEmbeddingError("embedding validation failed")).toBe(false);
   });
 
   it("recognizes only provider errors with an explicit numeric embedding item limit", () => {
@@ -216,7 +435,6 @@ describe("memory embedding policy", () => {
       "embeddings max input length is 16",
     ]) {
       expect(isSplittableMemoryEmbeddingBatchError(message)).toBe(true);
-      expect(isRetryableMemoryEmbeddingError(message)).toBe(false);
     }
 
     for (const message of [
@@ -227,9 +445,6 @@ describe("memory embedding policy", () => {
     ]) {
       expect(isSplittableMemoryEmbeddingBatchError(message)).toBe(false);
     }
-    expect(isRetryableMemoryEmbeddingError("HTTP 400: request id fixture-000597000")).toBe(false);
-    expect(isRetryableMemoryEmbeddingError("HTTP 429: rate limit")).toBe(true);
-    expect(isRetryableMemoryEmbeddingError("HTTP 503: service unavailable")).toBe(true);
   });
 
   it("splits OpenAI 431 oversized embedding batches without retrying the same request", async () => {
@@ -243,18 +458,15 @@ describe("memory embedding policy", () => {
     });
 
     const result = await runMemoryEmbeddingBatchRetryWithSplit({
+      profile: "index",
       items: ["a", "b", "c", "d"],
       run,
-      isRetryable: isRetryableMemoryEmbeddingError,
       isSplittable: isSplittableMemoryEmbeddingBatchError,
       waitForRetry: async () => {},
-      maxAttempts: 3,
-      baseDelayMs: 500,
     });
 
     expect(result).toEqual([[97], [98], [99], [100]]);
     expect(run.mock.calls.map(([items]) => items.length)).toEqual([4, 2, 1, 1, 2, 1, 1]);
-    expect(isRetryableMemoryEmbeddingError("431 request_headers_too_large")).toBe(false);
     expect(isSplittableMemoryEmbeddingBatchError("431 request_headers_too_large")).toBe(true);
     expect(isSplittableMemoryEmbeddingBatchError("embedding validation failed at item 4312")).toBe(
       false,
@@ -266,6 +478,7 @@ describe("memory embedding policy", () => {
     const waits: number[] = [];
 
     const result = await runMemoryEmbeddingRetryLoop({
+      profile: "index",
       run: async () => {
         calls += 1;
         if (calls === 1) {
@@ -273,20 +486,17 @@ describe("memory embedding policy", () => {
         }
         return "ok";
       },
-      isRetryable: isRetryableMemoryEmbeddingError,
       waitForRetry: async (delayMs) => {
         waits.push(delayMs);
       },
-      maxAttempts: 3,
-      baseDelayMs: 500,
     });
 
     expect(result).toBe("ok");
     expect(calls).toBe(2);
-    expect(waits).toEqual([500]);
+    expectDelayBetween(waits[0], 4000, 6000);
   });
 
-  it("stops after the configured maximum attempts", async () => {
+  it("stops after the transient attempt budget", async () => {
     const run = vi.fn(async () => {
       throw new Error("TypeError: fetch failed | other side closed");
     });
@@ -294,18 +504,17 @@ describe("memory embedding policy", () => {
 
     await expect(
       runMemoryEmbeddingRetryLoop({
+        profile: "index",
         run,
-        isRetryable: isRetryableMemoryEmbeddingError,
         waitForRetry: async (delayMs) => {
           waits.push(delayMs);
         },
-        maxAttempts: 3,
-        baseDelayMs: 500,
       }),
     ).rejects.toThrow("fetch failed");
 
     expect(run).toHaveBeenCalledTimes(3);
-    expect(waits).toEqual([500, 1000]);
+    expectDelayBetween(waits[0], 400, 600);
+    expectDelayBetween(waits[1], 800, 1200);
   });
 
   it("splits transport-failed batches after retries are exhausted", async () => {
@@ -319,23 +528,26 @@ describe("memory embedding policy", () => {
     });
 
     const result = await runMemoryEmbeddingBatchRetryWithSplit({
+      profile: "index",
       items: ["a", "b", "c", "d"],
       run,
-      isRetryable: isRetryableMemoryEmbeddingError,
       isSplittable: isSplittableMemoryEmbeddingBatchError,
       waitForRetry: async (delayMs) => {
         waits.push(delayMs);
       },
-      maxAttempts: 2,
-      baseDelayMs: 500,
       onSplit: ({ itemCount, splitAt }) => {
         splits.push(`${itemCount}:${splitAt}`);
       },
     });
 
     expect(result).toEqual([[97], [98], [99], [100]]);
-    expect(run.mock.calls.map(([items]) => items.length)).toEqual([4, 4, 2, 2, 1, 1, 2, 2, 1, 1]);
-    expect(waits).toEqual([500, 500, 500]);
+    expect(run.mock.calls.map(([items]) => items.length)).toEqual([
+      4, 4, 4, 2, 2, 2, 1, 1, 2, 2, 2, 1, 1,
+    ]);
+    expect(waits).toHaveLength(6);
+    for (const [index, wait] of waits.entries()) {
+      expectDelayBetween(wait, index % 2 === 0 ? 400 : 800, index % 2 === 0 ? 600 : 1200);
+    }
     expect(splits).toEqual(["4:2", "2:1", "2:1"]);
   });
 
@@ -346,16 +558,14 @@ describe("memory embedding policy", () => {
 
     await expect(
       runMemoryEmbeddingBatchRetryWithSplit({
+        profile: "index",
         items: ["a", "b"],
         run,
-        isRetryable: isRetryableMemoryEmbeddingError,
         isSplittable: isSplittableMemoryEmbeddingBatchError,
         waitForRetry: async () => {},
-        maxAttempts: 1,
-        baseDelayMs: 500,
       }),
     ).rejects.toThrow("429 rate limit");
-    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledTimes(5);
   });
 
   it("does not split whole-endpoint transport outages", async () => {
@@ -365,21 +575,13 @@ describe("memory embedding policy", () => {
 
     await expect(
       runMemoryEmbeddingBatchRetryWithSplit({
+        profile: "index",
         items: ["a", "b"],
         run,
-        isRetryable: isRetryableMemoryEmbeddingError,
         isSplittable: isSplittableMemoryEmbeddingBatchError,
         waitForRetry: async () => {},
-        maxAttempts: 2,
-        baseDelayMs: 500,
       }),
     ).rejects.toThrow("ECONNREFUSED");
-    expect(run).toHaveBeenCalledTimes(2);
-  });
-
-  it("caps retry jittered delays", () => {
-    expect(resolveMemoryEmbeddingRetryDelay(500, 0, 8000)).toBe(500);
-    expect(resolveMemoryEmbeddingRetryDelay(500, 1, 8000)).toBe(600);
-    expect(resolveMemoryEmbeddingRetryDelay(10_000, 1, 8000)).toBe(8000);
+    expect(run).toHaveBeenCalledTimes(3);
   });
 });
