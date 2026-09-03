@@ -77,6 +77,12 @@ Notes:
 - `FIRECRAWL_BASE_URL` is the shared env fallback for Firecrawl search and scrape base URLs.
 - Firecrawl search requests default to a 30-second timeout; `firecrawl_search`'s `timeoutSeconds` parameter overrides it per call.
 
+Both Firecrawl `web_search` providers and `firecrawl_search` use
+`tools.web.search.cacheTtlMinutes` for OpenClaw's local result cache (default: 15
+minutes). Set it to `0` to bypass cache reads and writes. A shorter TTL limits
+reuse of existing entries; a longer TTL does not extend their original expiry.
+This setting does not change Firecrawl's upstream scrape caching.
+
 ## Configure Firecrawl web_fetch fallback
 
 ```json5

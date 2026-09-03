@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
+import { PACKAGE_LIFECYCLE_MARKER_CONTRACT_RELATIVE_PATH } from "../../scripts/lib/package-lifecycle-marker.mjs";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { runGlobalPackageUpdateSteps } from "./package-update-steps.js";
 import type { CommandRunner, ResolvedGlobalInstallTarget } from "./update-global.js";
@@ -64,7 +65,7 @@ async function expectPathMissing(filePath: string): Promise<void> {
   throw new Error(`Expected missing path: ${filePath}`);
 }
 
-describe("pnpm 11 isolated install preflight", () => {
+describe("pnpm isolated install preflight (v11 layout)", () => {
   it("rejects grouped installs before dropping sibling packages", async () => {
     await withTestDir({ prefix: "openclaw-package-update-pnpm-group-" }, async (base) => {
       const globalRoot = path.join(base, "pnpm-home", "global", "v11");
@@ -233,153 +234,199 @@ describe("pnpm 11 isolated install preflight", () => {
     });
   });
 
-  it("uses the owner-reported custom bin without changing pnpm command resolution", async () => {
-    await withTestDir({ prefix: "openclaw-package-update-pnpm-isolated-" }, async (base) => {
-      const globalDir = path.join(base, "pnpm-home", "global");
-      const globalRoot = path.join(globalDir, "v11");
-      const ownerBinDir = path.join(base, "custom-global-bin");
-      const pathBinDir = path.join(base, "path-pnpm-home", "bin");
-      const callerProjectDir = path.join(base, "caller-project");
-      const oldPackageRoot = path.join(globalRoot, "old", "node_modules", "openclaw");
-      const newPackageRoot = path.join(globalRoot, "new", "node_modules", "openclaw");
-      await fs.mkdir(ownerBinDir, { recursive: true });
-      await writePackageRoot(oldPackageRoot, "1.0.0");
-      await fs.writeFile(
-        path.join(globalRoot, "old", "package.json"),
-        JSON.stringify({ private: true, dependencies: { openclaw: "1.0.0" } }),
-        "utf8",
-      );
-      await fs.symlink(path.join(globalRoot, "old"), path.join(globalRoot, "hash-openclaw"), "dir");
+  it.each(["unset", "conflicting", "empty"] as const)(
+    "uses the owning v11 layout and custom bin with %s pnpm config aliases",
+    async (aliases) => {
+      await withTestDir({ prefix: "openclaw-package-update-pnpm-isolated-" }, async (base) => {
+        const globalDir = path.join(base, "pnpm-home", "global");
+        const globalRoot = path.join(globalDir, "v11");
+        const ownerBinDir = path.join(base, "custom-global-bin");
+        const pathBinDir = path.join(base, "path-pnpm-home", "bin");
+        const callerProjectDir = path.join(base, "caller-project");
+        const oldPackageRoot = path.join(globalRoot, "old", "node_modules", "openclaw");
+        const newPackageRoot = path.join(globalRoot, "new", "node_modules", "openclaw");
+        await fs.mkdir(ownerBinDir, { recursive: true });
+        await writePackageRoot(oldPackageRoot, "1.0.0");
+        await fs.writeFile(
+          path.join(globalRoot, "old", "package.json"),
+          JSON.stringify({ private: true, dependencies: { openclaw: "1.0.0" } }),
+          "utf8",
+        );
+        await fs.symlink(
+          path.join(globalRoot, "old"),
+          path.join(globalRoot, "hash-openclaw"),
+          "dir",
+        );
 
-      const pnpmWarning = "[WARN] Using --global skips the package manager check for this project";
-      const runCommand: CommandRunner = async (argv, options) => {
-        const command = argv.join(" ");
-        expect(options.cwd).toBe(globalRoot);
-        if (command === "pnpm root -g") {
-          return { stdout: `${pnpmWarning}\n${globalRoot}\n`, stderr: "", code: 0 };
-        }
-        if (command === "pnpm bin -g") {
-          expect(options.env?.PATH?.split(path.delimiter)[0]).toBe(pathBinDir);
-          return { stdout: `${pnpmWarning}\n${ownerBinDir}\n`, stderr: "", code: 0 };
-        }
-        if (command === "pnpm --version") {
-          expect(options.env?.PATH?.split(path.delimiter)[0]).toBe(pathBinDir);
-          return { stdout: `${pnpmWarning}\n11.4.0\n`, stderr: "", code: 0 };
-        }
-        throw new Error(`unexpected command: ${command}`);
-      };
-      const runStep = vi.fn(async ({ name, argv, cwd, env }): Promise<PackageUpdateStepResult> => {
-        if (name === "global update") {
-          expect(cwd).toBe(globalRoot);
-          expect(env?.PATH?.split(path.delimiter)[0]).toBe(pathBinDir);
-          expect(argv).toEqual([
-            "pnpm",
-            "add",
-            "-g",
-            "--global-dir",
-            globalDir,
-            "--global-bin-dir",
-            ownerBinDir,
-            "--allow-build=openclaw",
-            "openclaw@2.0.0",
-          ]);
-          await fs.rm(path.join(globalRoot, "hash-openclaw"), { force: true });
-          await fs.rm(path.join(globalRoot, "old"), { recursive: true, force: true });
-          await writePackageRoot(newPackageRoot, "2.0.0");
-          await fs.mkdir(path.join(newPackageRoot, "scripts"), { recursive: true });
-          await Promise.all([
-            fs.writeFile(
-              path.join(newPackageRoot, "dist", "openclaw-install-guard"),
-              "pending\n",
-              "utf8",
-            ),
-            fs.writeFile(
-              path.join(newPackageRoot, "scripts", "preinstall-package-manager-warning.mjs"),
-              "export {};\n",
-              "utf8",
-            ),
-            fs.writeFile(
-              path.join(newPackageRoot, "scripts", "postinstall-bundled-plugins.mjs"),
-              "export {};\n",
-              "utf8",
-            ),
-            fs.writeFile(
-              path.join(globalRoot, "new", "package.json"),
-              JSON.stringify({ private: true, dependencies: { openclaw: "2.0.0" } }),
-              "utf8",
-            ),
-          ]);
-          await fs.symlink(
-            path.join(globalRoot, "new"),
-            path.join(globalRoot, "hash-openclaw"),
-            "dir",
-          );
-        } else if (name === "pnpm package preinstall") {
-          expect(argv).toEqual([
-            process.execPath,
-            path.join(newPackageRoot, "scripts", "preinstall-package-manager-warning.mjs"),
-          ]);
-          await expect(
-            fs.readFile(path.join(newPackageRoot, ".openclaw-lifecycle-pending"), "utf8"),
-          ).resolves.toBe("pending\n");
-          await fs.rm(path.join(newPackageRoot, "dist", "openclaw-install-guard"));
-        } else if (name === "pnpm package postinstall") {
-          expect(argv).toEqual([
-            process.execPath,
-            path.join(newPackageRoot, "scripts", "postinstall-bundled-plugins.mjs"),
-          ]);
-          await expect(
-            fs.readFile(path.join(newPackageRoot, ".openclaw-lifecycle-pending"), "utf8"),
-          ).resolves.toBe("pending\n");
-        } else {
-          throw new Error(`unexpected step: ${name}`);
-        }
-        return {
-          name,
-          command: argv.join(" "),
-          cwd: cwd ?? process.cwd(),
-          durationMs: 1,
-          exitCode: 0,
+        const originalEnv: NodeJS.ProcessEnv = {
+          PATH: `${pathBinDir}${path.delimiter}${ownerBinDir}`,
+          ...(aliases === "unset"
+            ? {}
+            : {
+                pnpm_config_global_dir: aliases === "empty" ? "" : globalDir,
+                pnpm_config_global_bin_dir: aliases === "empty" ? "" : ownerBinDir,
+                PNPM_CONFIG_GLOBAL_DIR: path.join(base, "other-global"),
+                PNPM_CONFIG_GLOBAL_BIN_DIR: pathBinDir,
+                npm_config_global_dir: aliases === "empty" ? "" : path.join(base, "npm-global"),
+                NPM_CONFIG_GLOBAL_DIR: path.join(base, "other-npm-global"),
+                npm_config_global_bin_dir: aliases === "empty" ? "" : pathBinDir,
+                NPM_CONFIG_GLOBAL_BIN_DIR: pathBinDir,
+              }),
         };
-      });
-      const postVerifyStep = vi.fn(async (packageRoot: string) => {
-        expect(packageRoot).toBe(newPackageRoot);
-        return null;
-      });
-
-      const result = await runGlobalPackageUpdateSteps({
-        installTarget: {
-          manager: "pnpm",
-          command: "pnpm",
-          pnpmIsolated: {
-            layoutVersion: 11,
+        const envBefore = { ...originalEnv };
+        const pnpmWarning =
+          "[WARN] Using --global skips the package manager check for this project";
+        const runCommand: CommandRunner = async (argv, options) => {
+          const command = argv.join(" ");
+          expect(options.cwd).toBe(globalRoot);
+          expect(options.env).toBe(originalEnv);
+          expect(options.env).toEqual(envBefore);
+          if (command === "pnpm root -g") {
+            return { stdout: `${pnpmWarning}\n${globalRoot}\n`, stderr: "", code: 0 };
+          }
+          if (command === "pnpm bin -g") {
+            expect(options.env?.PATH?.split(path.delimiter)[0]).toBe(pathBinDir);
+            return { stdout: `${pnpmWarning}\n${ownerBinDir}\n`, stderr: "", code: 0 };
+          }
+          if (command === "pnpm --version") {
+            expect(options.env?.PATH?.split(path.delimiter)[0]).toBe(pathBinDir);
+            return { stdout: `${pnpmWarning}\n12.0.0\n`, stderr: "", code: 0 };
+          }
+          throw new Error(`unexpected command: ${command}`);
+        };
+        const runStep = vi.fn(
+          async ({ name, argv, cwd, env }): Promise<PackageUpdateStepResult> => {
+            if (name === "global update") {
+              expect(cwd).toBe(globalRoot);
+              expect(env?.PATH?.split(path.delimiter)[0]).toBe(pathBinDir);
+              expect(env).toMatchObject({
+                pnpm_config_global_dir: globalDir,
+                PNPM_CONFIG_GLOBAL_DIR: globalDir,
+                npm_config_global_dir: globalDir,
+                NPM_CONFIG_GLOBAL_DIR: globalDir,
+                pnpm_config_global_bin_dir: ownerBinDir,
+                PNPM_CONFIG_GLOBAL_BIN_DIR: ownerBinDir,
+                npm_config_global_bin_dir: ownerBinDir,
+                NPM_CONFIG_GLOBAL_BIN_DIR: ownerBinDir,
+              });
+              expect(argv).toEqual([
+                "pnpm",
+                "add",
+                "-g",
+                "--allow-build=openclaw",
+                "openclaw@2.0.0",
+              ]);
+              await fs.rm(path.join(globalRoot, "hash-openclaw"), { force: true });
+              await fs.rm(path.join(globalRoot, "old"), { recursive: true, force: true });
+              await writePackageRoot(newPackageRoot, "2.0.0");
+              await fs.mkdir(path.join(newPackageRoot, "scripts", "lib"), { recursive: true });
+              await Promise.all([
+                fs.writeFile(
+                  path.join(newPackageRoot, PACKAGE_LIFECYCLE_MARKER_CONTRACT_RELATIVE_PATH),
+                  "export {};\n",
+                ),
+                fs.writeFile(
+                  path.join(newPackageRoot, ".openclaw-lifecycle-pending"),
+                  "pending\n",
+                  "utf8",
+                ),
+                fs.writeFile(
+                  path.join(newPackageRoot, "scripts", "preinstall-package-manager-warning.mjs"),
+                  "export {};\n",
+                  "utf8",
+                ),
+                fs.writeFile(
+                  path.join(newPackageRoot, "scripts", "postinstall-bundled-plugins.mjs"),
+                  "export {};\n",
+                  "utf8",
+                ),
+                fs.writeFile(
+                  path.join(globalRoot, "new", "package.json"),
+                  JSON.stringify({ private: true, dependencies: { openclaw: "2.0.0" } }),
+                  "utf8",
+                ),
+              ]);
+              await fs.symlink(
+                path.join(globalRoot, "new"),
+                path.join(globalRoot, "hash-openclaw"),
+                "dir",
+              );
+            } else if (name === "pnpm package preinstall") {
+              expect(argv).toEqual([
+                process.execPath,
+                path.join(newPackageRoot, "scripts", "preinstall-package-manager-warning.mjs"),
+              ]);
+              await expect(
+                fs.readFile(path.join(newPackageRoot, ".openclaw-lifecycle-pending"), "utf8"),
+              ).resolves.toBe("pending\n");
+            } else if (name === "pnpm package postinstall") {
+              expect(argv).toEqual([
+                process.execPath,
+                path.join(newPackageRoot, "scripts", "postinstall-bundled-plugins.mjs"),
+              ]);
+              await expect(
+                fs.readFile(path.join(newPackageRoot, ".openclaw-lifecycle-pending"), "utf8"),
+              ).resolves.toBe("pending\n");
+              await fs.rm(path.join(newPackageRoot, ".openclaw-lifecycle-pending"));
+            } else {
+              throw new Error(`unexpected step: ${name}`);
+            }
+            return {
+              name,
+              command: argv.join(" "),
+              cwd: cwd ?? process.cwd(),
+              durationMs: 1,
+              exitCode: 0,
+            };
           },
-          globalRoot,
-          packageRoot: oldPackageRoot,
-        },
-        installSpec: "openclaw@2.0.0",
-        packageName: "openclaw",
-        packageRoot: oldPackageRoot,
-        runCommand,
-        runStep,
-        timeoutMs: 1000,
-        env: { PATH: `${pathBinDir}${path.delimiter}${ownerBinDir}` },
-        installCwd: callerProjectDir,
-        postVerifyStep,
-      });
+        );
+        const postVerifyStep = vi.fn(async (packageRoot: string) => {
+          expect(packageRoot).toBe(newPackageRoot);
+          return {
+            name: "candidate doctor",
+            command: "doctor",
+            cwd: packageRoot,
+            durationMs: 0,
+            exitCode: 0,
+          };
+        });
 
-      expect(result.failedStep).toBeNull();
-      expect(result.afterVersion).toBe("2.0.0");
-      expect(result.verifiedPackageRoot).toBe(newPackageRoot);
-      expect(result.steps.map((step) => step.name)).toEqual([
-        "global update",
-        "pnpm package preinstall",
-        "pnpm package postinstall",
-      ]);
-      await expectPathMissing(path.join(newPackageRoot, ".openclaw-lifecycle-pending"));
-      expect(postVerifyStep).toHaveBeenCalledOnce();
-    });
-  });
+        const result = await runGlobalPackageUpdateSteps({
+          installTarget: {
+            manager: "pnpm",
+            command: "pnpm",
+            pnpmIsolated: {
+              layoutVersion: 11,
+            },
+            globalRoot,
+            packageRoot: oldPackageRoot,
+          },
+          installSpec: "openclaw@2.0.0",
+          packageName: "openclaw",
+          packageRoot: oldPackageRoot,
+          runCommand,
+          runStep,
+          timeoutMs: 1000,
+          env: originalEnv,
+          installCwd: callerProjectDir,
+          postVerifyStep,
+        });
+
+        expect(originalEnv).toEqual(envBefore);
+        expect(result.failedStep).toBeNull();
+        expect(result.afterVersion).toBe("2.0.0");
+        expect(result.verifiedPackageRoot).toBe(newPackageRoot);
+        expect(result.steps.map((step) => step.name)).toEqual([
+          "global update",
+          "pnpm package preinstall",
+          "pnpm package postinstall",
+          "candidate doctor",
+        ]);
+        await expectPathMissing(path.join(newPackageRoot, ".openclaw-lifecycle-pending"));
+        expect(postVerifyStep).toHaveBeenCalledOnce();
+      });
+    },
+  );
 
   it("accepts a replacement pnpm project that reuses the same shared-store package", async () => {
     await withTestDir(
@@ -417,7 +464,7 @@ describe("pnpm 11 isolated install preflight", () => {
             return { stdout: `${globalBinDir}\n`, stderr: "", code: 0 };
           }
           if (command === "pnpm --version") {
-            return { stdout: "11.4.0\n", stderr: "", code: 0 };
+            return { stdout: "12.0.0\n", stderr: "", code: 0 };
           }
           throw new Error(`unexpected command: ${command}`);
         };
@@ -483,7 +530,19 @@ describe("pnpm 11 isolated install preflight", () => {
       }> = [
         {
           installSpec: "file:./candidate.tgz",
-          expectedInstallSpec: `file:${candidateTarball}`,
+          expectedInstallSpec: `openclaw@file:${candidateTarball}`,
+        },
+        { installSpec: candidateTarball, expectedInstallSpec: `openclaw@file:${candidateTarball}` },
+        { installSpec: "candidate.tgz", expectedInstallSpec: `openclaw@file:${candidateTarball}` },
+        { installSpec: callerProjectDir, expectedInstallSpec: `openclaw@link:${callerProjectDir}` },
+        { installSpec: ".", expectedInstallSpec: `openclaw@link:${callerProjectDir}` },
+        {
+          installSpec: "../checkout",
+          expectedInstallSpec: `openclaw@link:${path.join(base, "checkout")}`,
+        },
+        {
+          installSpec: "file:./candidate",
+          expectedInstallSpec: `openclaw@file:${path.join(callerProjectDir, "candidate")}`,
         },
         {
           installSpec: "openclaw@link:./candidate",
@@ -494,15 +553,55 @@ describe("pnpm 11 isolated install preflight", () => {
           expectedInstallSpec: "git+file:///C:/caller/candidate#main",
           installCwd: "C:\\caller",
         },
-        { installSpec: "./candidate.tar", expectedInstallSpec: candidateTar },
+        { installSpec: "./candidate.tar", expectedInstallSpec: `openclaw@file:${candidateTar}` },
         {
           installSpec: "openclaw@file:./candidate.tar",
           expectedInstallSpec: `openclaw@file:${candidateTar}`,
         },
         { installSpec: "candidate.tar", expectedInstallSpec: "candidate.tar" },
         { installSpec: "openclaw@candidate.tar", expectedInstallSpec: "openclaw@candidate.tar" },
-        { installSpec: "file:~/candidate.tgz", expectedInstallSpec: "file:~/candidate.tgz" },
-        { installSpec: "~/candidate.tgz", expectedInstallSpec: "~/candidate.tgz" },
+        {
+          installSpec: "file:~/candidate.tgz",
+          expectedInstallSpec: "openclaw@file:~/candidate.tgz",
+        },
+        { installSpec: "~/candidate.tgz", expectedInstallSpec: "openclaw@file:~/candidate.tgz" },
+        { installSpec: "~/checkout", expectedInstallSpec: "openclaw@link:~/checkout" },
+        { installSpec: "openclaw@latest", expectedInstallSpec: "openclaw@latest" },
+        {
+          installSpec: "other-package@candidate.tgz",
+          expectedInstallSpec: "other-package@candidate.tgz",
+        },
+        { installSpec: "@scope/candidate.tgz", expectedInstallSpec: "@scope/candidate.tgz" },
+        {
+          installSpec: "./package@1.0.0.tgz",
+          expectedInstallSpec: `openclaw@file:${path.join(callerProjectDir, "package@1.0.0.tgz")}`,
+        },
+        {
+          installSpec: "openclaw@npm:other@1.0.0",
+          expectedInstallSpec: "openclaw@npm:other@1.0.0",
+        },
+        {
+          installSpec: "https://example.com/source.git",
+          expectedInstallSpec: "https://example.com/source.git",
+        },
+        {
+          installSpec: "https://example.com/candidate.tgz",
+          expectedInstallSpec: "https://example.com/candidate.tgz",
+        },
+        { installSpec: "C:\\checkout", expectedInstallSpec: "openclaw@link:C:\\checkout" },
+        {
+          installSpec: "C:\\candidate.tgz",
+          expectedInstallSpec: "openclaw@file:C:\\candidate.tgz",
+        },
+        {
+          installSpec: "\\\\server\\checkout",
+          expectedInstallSpec: "openclaw@link:\\\\server\\checkout",
+        },
+        {
+          installSpec: ".\\checkout",
+          expectedInstallSpec: "openclaw@link:C:\\caller\\checkout",
+          installCwd: "C:\\caller",
+        },
       ];
       const { packageRoot } = await writePnpmIsolatedPackage({
         globalRoot,
@@ -522,25 +621,19 @@ describe("pnpm 11 isolated install preflight", () => {
           return { stdout: `${globalBinDir}\n`, stderr: "", code: 0 };
         }
         if (command === "pnpm --version") {
-          return { stdout: "11.4.0\n", stderr: "", code: 0 };
+          return { stdout: "12.0.0\n", stderr: "", code: 0 };
         }
         throw new Error(`unexpected command: ${command}`);
       };
       let expectedInstallSpec = "";
-      const runStep = vi.fn(async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
+      const runStep = vi.fn(async ({ name, argv, cwd, env }): Promise<PackageUpdateStepResult> => {
         expect(name).toBe("global update");
         expect(cwd).toBe(globalRoot);
-        expect(argv).toEqual([
-          "pnpm",
-          "add",
-          "-g",
-          "--global-dir",
-          globalDir,
-          "--global-bin-dir",
-          globalBinDir,
-          "--allow-build=openclaw",
-          expectedInstallSpec,
-        ]);
+        expect(env).toMatchObject({
+          pnpm_config_global_dir: globalDir,
+          pnpm_config_global_bin_dir: globalBinDir,
+        });
+        expect(argv).toEqual(["pnpm", "add", "-g", "--allow-build=openclaw", expectedInstallSpec]);
         return {
           name,
           command: argv.join(" "),
@@ -575,59 +668,35 @@ describe("pnpm 11 isolated install preflight", () => {
     });
   });
 
-  it("probes pnpm from its owner root before rejecting a mismatched major", async () => {
-    await withTestDir({ prefix: "openclaw-package-update-pnpm-major-" }, async (base) => {
-      const globalRoot = path.join(base, "pnpm-home", "global", "v11");
-      const globalBinDir = path.join(base, "pnpm-home", "bin");
-      const { packageRoot } = await writePnpmIsolatedPackage({
-        globalRoot,
-        installName: "install",
-        version: "1.0.0",
+  it.each([undefined, "/checkout"])(
+    "qualifies local pnpm specs without a detected global root (cwd %s)",
+    async (installCwd) => {
+      const runStep = vi.fn(async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
+        expect(argv.at(-1)).toBe(
+          `openclaw@file:${path.join(installCwd ?? process.cwd(), "candidate.tgz")}`,
+        );
+        expect(cwd).toBe(installCwd);
+        return {
+          name,
+          command: argv.join(" "),
+          cwd: cwd ?? process.cwd(),
+          durationMs: 0,
+          exitCode: 1,
+        };
       });
-      const runStep = vi.fn();
-      const runCommand: CommandRunner = async (argv, options) => {
-        const command = argv.join(" ");
-        expect(options.cwd).toBe(globalRoot);
-        expect(options.env?.PATH?.split(path.delimiter)[0]).toBe(globalBinDir);
-        if (command === "pnpm root -g") {
-          return { stdout: `${globalRoot}\n`, stderr: "", code: 0 };
-        }
-        if (command === "pnpm bin -g") {
-          return { stdout: `${globalBinDir}\n`, stderr: "", code: 0 };
-        }
-        if (command === "pnpm --version") {
-          return { stdout: "10.32.1\n", stderr: "", code: 0 };
-        }
-        throw new Error(`unexpected command: ${command}`);
-      };
-
       const result = await runGlobalPackageUpdateSteps({
-        installTarget: {
-          manager: "pnpm",
-          command: "pnpm",
-          pnpmIsolated: {
-            layoutVersion: 11,
-          },
-          globalRoot,
-          packageRoot,
-        },
-        installSpec: "openclaw@2.0.0",
+        installTarget: { manager: "pnpm", command: "pnpm", globalRoot: null, packageRoot: null },
+        installSpec: "./candidate.tgz",
         packageName: "openclaw",
-        packageRoot,
-        runCommand,
+        installCwd,
+        runCommand: vi.fn<CommandRunner>(async () => ({ stdout: "", stderr: "", code: 1 })),
         runStep,
         timeoutMs: 1000,
-        env: { PATH: `${globalBinDir}${path.delimiter}${path.join(base, "pnpm-10", "bin")}` },
       });
-
-      expect(result.failedStep?.name).toBe("pnpm isolated install preflight");
-      expect(result.failedStep?.stderrTail).toContain("reports pnpm 10.32.1");
-      expect(runStep).not.toHaveBeenCalled();
-      await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
-        '"version":"1.0.0"',
-      );
-    });
-  });
+      expect(result.failedStep?.name).toBe("global update");
+      expect(runStep).toHaveBeenCalledOnce();
+    },
+  );
 
   it("rejects a pnpm command that owns another global root", async () => {
     await withTestDir({ prefix: "openclaw-package-update-pnpm-root-" }, async (base) => {
@@ -638,7 +707,11 @@ describe("pnpm 11 isolated install preflight", () => {
         installName: "install",
         version: "1.0.0",
       });
-      const runCommand = vi.fn<CommandRunner>(async (argv) => {
+      const originalEnv = { pnpm_config_global_dir: path.dirname(otherGlobalRoot) };
+      const runCommand = vi.fn<CommandRunner>(async (argv, options) => {
+        expect(options.cwd).toBe(globalRoot);
+        expect(options.env).toBe(originalEnv);
+        expect(options.env?.pnpm_config_global_dir).toBe(path.dirname(otherGlobalRoot));
         expect(argv).toEqual(["pnpm", "root", "-g"]);
         return { stdout: `${otherGlobalRoot}\n`, stderr: "", code: 0 };
       });
@@ -658,6 +731,7 @@ describe("pnpm 11 isolated install preflight", () => {
         runCommand,
         runStep,
         timeoutMs: 1000,
+        env: originalEnv,
       });
 
       expect(result.failedStep?.name).toBe("pnpm isolated install preflight");
@@ -686,7 +760,7 @@ describe("pnpm 11 isolated install preflight", () => {
           return { stdout: `${globalBinDir}\n`, stderr: "", code: 0 };
         }
         if (command === "pnpm --version") {
-          return { stdout: "11.4.0\n", stderr: "", code: 0 };
+          return { stdout: "12.0.0\n", stderr: "", code: 0 };
         }
         throw new Error(`unexpected command: ${command}`);
       };
@@ -729,77 +803,90 @@ describe("pnpm 11 isolated install preflight", () => {
     });
   });
 
-  it("retries interrupted pnpm package lifecycle repair", async () => {
-    await withTestDir({ prefix: "openclaw-package-update-pnpm-lifecycle-" }, async (base) => {
-      const globalRoot = path.join(base, "global");
-      const packageRoot = path.join(globalRoot, "openclaw");
-      await writePackageRoot(packageRoot, "1.0.0");
-      let firstAttempt = true;
+  it.each(["pnpm package preinstall", "pnpm package postinstall"])(
+    "retries interrupted pnpm package lifecycle repair after %s fails",
+    async (failedLifecycleStep) => {
+      await withTestDir({ prefix: "openclaw-package-update-pnpm-lifecycle-" }, async (base) => {
+        const globalRoot = path.join(base, "global");
+        const packageRoot = path.join(globalRoot, "openclaw");
+        await writePackageRoot(packageRoot, "1.0.0");
+        let firstAttempt = true;
 
-      const runStep = vi.fn(async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
-        if (name === "global update" && firstAttempt) {
-          await writePackageRoot(packageRoot, "2.0.0");
-          await fs.mkdir(path.join(packageRoot, "scripts"), { recursive: true });
-          await Promise.all([
-            fs.writeFile(
-              path.join(packageRoot, "dist", "openclaw-install-guard"),
-              "pending\n",
-              "utf8",
-            ),
-            fs.writeFile(
-              path.join(packageRoot, "scripts", "preinstall-package-manager-warning.mjs"),
-              "export {};\n",
-              "utf8",
-            ),
-            fs.writeFile(
-              path.join(packageRoot, "scripts", "postinstall-bundled-plugins.mjs"),
-              "export {};\n",
-              "utf8",
-            ),
-          ]);
-        } else if (name === "pnpm package preinstall") {
-          await fs.rm(path.join(packageRoot, "dist", "openclaw-install-guard"));
-        }
-        const exitCode = name === "pnpm package postinstall" && firstAttempt ? 1 : 0;
-        return {
-          name,
-          command: argv.join(" "),
-          cwd: cwd ?? process.cwd(),
-          durationMs: 1,
-          exitCode,
-        };
-      });
-      const updateParams = {
-        installTarget: createPnpmTarget(globalRoot),
-        installSpec: "openclaw@2.0.0",
-        packageName: "openclaw",
-        packageRoot,
-        runCommand: async (argv: string[]) => {
-          if (argv.join(" ") === "pnpm root -g") {
-            return { stdout: `${globalRoot}\n`, stderr: "", code: 0 };
+        const runStep = vi.fn(async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
+          if (name === "global update" && firstAttempt) {
+            await writePackageRoot(packageRoot, "2.0.0");
+            await fs.mkdir(path.join(packageRoot, "scripts", "lib"), { recursive: true });
+            await Promise.all([
+              fs.writeFile(
+                path.join(packageRoot, PACKAGE_LIFECYCLE_MARKER_CONTRACT_RELATIVE_PATH),
+                "export {};\n",
+              ),
+              fs.writeFile(
+                path.join(packageRoot, ".openclaw-lifecycle-pending"),
+                "pending\n",
+                "utf8",
+              ),
+              fs.writeFile(
+                path.join(packageRoot, "scripts", "preinstall-package-manager-warning.mjs"),
+                "export {};\n",
+                "utf8",
+              ),
+              fs.writeFile(
+                path.join(packageRoot, "scripts", "postinstall-bundled-plugins.mjs"),
+                "export {};\n",
+                "utf8",
+              ),
+            ]);
           }
-          throw new Error(`unexpected command: ${argv.join(" ")}`);
-        },
-        runStep,
-        timeoutMs: 1000,
-      };
+          const exitCode = name === failedLifecycleStep && firstAttempt ? 1 : 0;
+          if (name === "pnpm package postinstall" && exitCode === 0) {
+            await fs.rm(path.join(packageRoot, ".openclaw-lifecycle-pending"));
+          }
+          return {
+            name,
+            command: argv.join(" "),
+            cwd: cwd ?? process.cwd(),
+            durationMs: 1,
+            exitCode,
+          };
+        });
+        const updateParams = {
+          installTarget: createPnpmTarget(globalRoot),
+          installSpec: "openclaw@2.0.0",
+          packageName: "openclaw",
+          packageRoot,
+          runCommand: async (argv: string[]) => {
+            if (argv.join(" ") === "pnpm root -g") {
+              return { stdout: `${globalRoot}\n`, stderr: "", code: 0 };
+            }
+            throw new Error(`unexpected command: ${argv.join(" ")}`);
+          },
+          runStep,
+          timeoutMs: 1000,
+        };
 
-      const failed = await runGlobalPackageUpdateSteps(updateParams);
-      expect(failed.failedStep?.name).toBe("pnpm package postinstall");
-      await expect(
-        fs.readFile(path.join(packageRoot, ".openclaw-lifecycle-pending"), "utf8"),
-      ).resolves.toBe("pending\n");
+        const failed = await runGlobalPackageUpdateSteps(updateParams);
+        expect(failed.failedStep?.name).toBe(failedLifecycleStep);
+        expect(failed).toMatchObject({
+          afterVersion: "2.0.0",
+          recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+        });
+        await expect(
+          fs.readFile(path.join(packageRoot, ".openclaw-lifecycle-pending"), "utf8"),
+        ).resolves.toBe("pending\n");
 
-      firstAttempt = false;
-      runStep.mockClear();
-      const recovered = await runGlobalPackageUpdateSteps(updateParams);
-      expect(recovered.failedStep).toBeNull();
-      expect(recovered.afterVersion).toBe("2.0.0");
-      expect(runStep.mock.calls.map(([call]) => call.name)).toEqual([
-        "global update",
-        "pnpm package postinstall",
-      ]);
-      await expectPathMissing(path.join(packageRoot, ".openclaw-lifecycle-pending"));
-    });
-  });
+        firstAttempt = false;
+        runStep.mockClear();
+        const recovered = await runGlobalPackageUpdateSteps(updateParams);
+        expect(recovered.failedStep).toBeNull();
+        expect(recovered.afterVersion).toBe("2.0.0");
+        expect(runStep.mock.calls.map(([call]) => call.name)).toEqual([
+          "global update",
+          "pnpm package preinstall",
+          "pnpm package postinstall",
+        ]);
+        await expectPathMissing(path.join(packageRoot, ".openclaw-lifecycle-pending"));
+      });
+    },
+  );
 });

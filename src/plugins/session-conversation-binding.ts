@@ -1,13 +1,9 @@
 import crypto from "node:crypto";
-import {
-  createConversationBindingRecord,
-  resolveConversationBindingRecord,
-  unbindConversationBindingRecord,
-} from "../bindings/records.js";
+import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
-import { bindConversationNow, buildPluginBindingIdentity } from "./conversation-binding.js";
+import { bindConversationNow } from "./conversation-binding.js";
 import type {
   PluginConversationBinding,
   PluginConversationBindingRequestParams,
@@ -52,10 +48,11 @@ async function bindPluginSessionConversationExclusive(params: {
     accountId: "default",
     conversationId: sessionKey,
   };
-  const previous = resolveConversationBindingRecord(conversation);
+  const bindingService = getSessionBindingService();
+  const previous = bindingService.resolveByConversation(conversation);
   const bindingAttemptId = crypto.randomUUID();
   const binding = await bindConversationNow({
-    identity: buildPluginBindingIdentity(params),
+    identity: params,
     conversation,
     targetSessionKey: sessionKey,
     summary: params.binding.summary,
@@ -67,17 +64,18 @@ async function bindPluginSessionConversationExclusive(params: {
     await params.afterBind?.();
     return binding;
   } catch (error) {
-    const current = resolveConversationBindingRecord(conversation);
+    const current = bindingService.resolveByConversation(conversation);
     if (current?.metadata?.bindingAttemptId !== bindingAttemptId) {
       throw error;
     }
     try {
-      await unbindConversationBindingRecord({
+      await bindingService.unbind({
         bindingId: current.bindingId,
         reason: "plugin-session-bind-rollback",
+        scope: current.conversation,
       });
       if (previous && (previous.expiresAt === undefined || previous.expiresAt > Date.now())) {
-        await createConversationBindingRecord({
+        await bindingService.bind({
           targetSessionKey: previous.targetSessionKey,
           targetKind: previous.targetKind,
           conversation: previous.conversation,

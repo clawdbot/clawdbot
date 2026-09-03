@@ -1,5 +1,6 @@
 // Setup inference verification owns the shared verify/repair loop used by onboarding imports.
 import type { OnboardOptions } from "../commands/onboard-types.js";
+import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withConsoleSubsystemsSuppressed } from "../logging/console.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -46,7 +47,8 @@ export async function offerLiveModelVerification(params: {
     const progress = params.prompter.progress(t("wizard.setup.testAiProgress"));
     const verification = withConsoleSubsystemsSuppressed(() =>
       inference.verifySetupInferenceConfig({
-        config: candidate.config,
+        // SAFETY: Canonical roster migration preserves typed config; this runtime view is never persisted.
+        config: migratePersistedImplicitMainRoster(candidate.config).config as OpenClawConfig,
         runtime: params.runtime,
         authProfiles: candidate.authProfiles,
         ...(params.agentDir ? { agentDir: params.agentDir } : {}),

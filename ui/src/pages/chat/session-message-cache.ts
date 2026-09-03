@@ -6,6 +6,7 @@ import {
 } from "@openclaw/gateway-client/browser";
 import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
+import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-invalidation.ts";
 
@@ -63,6 +64,7 @@ function deleteChatSnapshot(cache: ChatMessageCache, cacheKey: string): void {
 
 export function applyChatCacheSnapshot(
   state: {
+    sessionKey: string;
     chatDisplayedLeafEntryId?: string | null;
     chatHistoryPagination: ChatHistoryPagination;
     chatMessages: unknown[];
@@ -70,7 +72,18 @@ export function applyChatCacheSnapshot(
   },
   snapshot: ChatSessionSnapshot,
 ): void {
-  state.chatMessages = snapshot.messages;
+  reduceChatSessionProjection(
+    state,
+    { type: "snapshotLoaded", messages: snapshot.messages },
+    {
+      scope: readChatSessionProjectionScope(state, {
+        sessionId: snapshot.sessionId,
+        ...(Object.hasOwn(snapshot, "displayedLeafEntryId")
+          ? { activeLeafEntryId: snapshot.displayedLeafEntryId }
+          : {}),
+      }),
+    },
+  );
   state.chatHistoryPagination = snapshot.pagination;
   state.currentSessionId = snapshot.sessionId;
   state.chatDisplayedLeafEntryId = snapshot.displayedLeafEntryId;

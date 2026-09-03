@@ -68,6 +68,7 @@ type AuthStoreSnapshot = {
 };
 
 type ProjectedState = {
+  authStoreEnv: NodeJS.ProcessEnv;
   nextConfig: OpenClawConfig;
   configSnapshot: ConfigFileSnapshot;
   configPath: string;
@@ -293,6 +294,10 @@ async function projectPlanState(params: {
   const options = normalizeSecretsPlanOptions(params.plan.options);
   const nextConfig = structuredClone(snapshot.config);
   const stateDir = resolveStateDir(params.env, os.homedir);
+  const authStoreEnv = {
+    ...params.env,
+    OPENCLAW_STATE_DIR: stateDir,
+  };
   const changedFiles = new Set<string>();
   const warnings: string[] = [];
   const configPath = resolveUserPath(snapshot.path);
@@ -353,6 +358,7 @@ async function projectPlanState(params: {
 
   return {
     nextConfig,
+    authStoreEnv,
     configSnapshot: snapshot,
     configPath,
     configWriteOptions: writeOptions,
@@ -894,7 +900,9 @@ export async function runSecretsApply(params: {
         target,
         persistence: captureAuthProfileStorePersistenceSnapshot(
           target.kind === "agent" ? target.agentDir : undefined,
-          target.kind === "shared" ? { stateDir: target.stateDir } : {},
+          {
+            env: target.kind === "shared" ? target.env : projected.authStoreEnv,
+          },
         ),
       });
     }

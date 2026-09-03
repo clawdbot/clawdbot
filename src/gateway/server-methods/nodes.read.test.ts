@@ -1,11 +1,13 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { PairedDevice } from "../../infra/device-pairing.js";
 import { resolveNodePairingState } from "../../infra/device-pairing.js";
 import {
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
 } from "../../infra/node-runner-inventory.js";
+import type { NodeListNode } from "../../shared/node-list-types.js";
 import { createNodeRegistryRuntime, updateNodeRunnerInventory } from "../node-registry-private.js";
 import { NodeRegistry } from "../node-registry.js";
 import { nodeReadHandlers } from "./nodes.read.js";
@@ -85,6 +87,124 @@ function registerNode(registry: NodeRegistry, pairedNode: PairedDevice) {
 }
 
 describe("node read projections", () => {
+  it.each(["node.list", "node.describe"] as const)(
+    "%s reports host stats only for the live connection",
+    async (method) => {
+      const pairedNode = createPairedNode("stats-node");
+      const { nodeRegistry } = createNodeRegistryRuntime(() => new NodeRegistry());
+      const registered = registerNode(nodeRegistry, pairedNode);
+      const stats = { cpuCount: 4, memoryTotalBytes: 8192, memoryFreeBytes: 4096 };
+      const hostStats = { ...stats, updatedAtMs: 100_000 };
+      nodeRegistry.updateHostStats({
+        nodeId: pairedNode.deviceId,
+        connId: registered.connId,
+        stats,
+        observedAtMs: hostStats.updatedAtMs,
+      });
+      listDevicePairingMock.mockResolvedValue({ pending: [], paired: [pairedNode] });
+      resolveLocalNodeIdMock.mockResolvedValue(undefined);
+      const params = method === "node.list" ? {} : { nodeId: pairedNode.deviceId };
+      const readNode = async (): Promise<NodeListNode> => {
+        const respond = vi.fn();
+        await expectDefined(
+          nodeReadHandlers[method],
+          method,
+        )({
+          req: { type: "req", id: method, method, params },
+          params,
+          client: {
+            connect: { scopes: ["operator.read"] },
+          } as GatewayRequestHandlerOptions["client"],
+          isWebchatConnect: () => false,
+          respond,
+          context: {
+            nodeRegistry,
+            logGateway: { warn: vi.fn() },
+          } as unknown as GatewayRequestHandlerOptions["context"],
+        });
+        expect(respond).toHaveBeenCalledWith(true, expect.anything(), undefined);
+        const payload = respond.mock.calls[0]?.[1];
+        return method === "node.list" ? payload.nodes[0] : payload;
+      };
+
+      try {
+        const connected = await readNode();
+        expect(connected).toMatchObject({ connected: true, hostStats });
+        expect(connected.hostStats).not.toBe(nodeRegistry.get(pairedNode.deviceId)?.hostStats);
+        nodeRegistry.unregister(registered.connId);
+        const offline = await readNode();
+        expect(offline).toMatchObject({ connected: false });
+        expect(offline).not.toHaveProperty("hostStats");
+      } finally {
+        nodeRegistry.unregister(registered.connId);
+      }
+    },
+  );
+
+  it.each(["node.list", "node.describe"] as const)(
+    "%s uses one loaded pairing snapshot without reconciling the live registry",
+    async (method) => {
+      const pairedNode = createPairedNode("snapshot-node");
+      const snapshot =
+        createDeferred<
+          Awaited<ReturnType<(typeof import("../../infra/device-pairing.js"))["listDevicePairing"]>>
+        >();
+      listDevicePairingMock.mockClear().mockReturnValue(snapshot.promise);
+      listNodePairingMock.mockClear();
+      resolveLocalNodeIdMock.mockResolvedValue(undefined);
+      const resolveCurrentPairingState = vi.fn();
+      const { nodeRegistry } = createNodeRegistryRuntime(
+        () => new NodeRegistry({ resolveCurrentPairingState }),
+      );
+      const registered = registerNode(nodeRegistry, pairedNode);
+      const respond = vi.fn();
+      const params = method === "node.list" ? {} : { nodeId: pairedNode.deviceId };
+      const request = expectDefined(
+        nodeReadHandlers[method],
+        method,
+      )({
+        req: { type: "req", id: method, method, params },
+        params,
+        client: {
+          connect: { scopes: ["operator.read"] },
+        } as GatewayRequestHandlerOptions["client"],
+        isWebchatConnect: () => false,
+        respond,
+        context: {
+          nodeRegistry,
+          logGateway: { warn: vi.fn() },
+        } as unknown as GatewayRequestHandlerOptions["context"],
+      });
+
+      try {
+        expect(listDevicePairingMock).toHaveBeenCalledTimes(1);
+        expect(respond).not.toHaveBeenCalled();
+        snapshot.resolve({ paired: [pairedNode], pending: [] });
+        await request;
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          method === "node.list"
+            ? expect.objectContaining({
+                nodes: [expect.objectContaining({ nodeId: pairedNode.deviceId, connected: true })],
+              })
+            : expect.objectContaining({ nodeId: pairedNode.deviceId, connected: true }),
+          undefined,
+        );
+        expect(listDevicePairingMock).toHaveBeenCalledTimes(1);
+        expect(listNodePairingMock).not.toHaveBeenCalled();
+        expect(resolveCurrentPairingState).not.toHaveBeenCalled();
+        expect(registered.invalidated).not.toBe(true);
+      } finally {
+        snapshot.resolve({ paired: [pairedNode], pending: [] });
+        try {
+          await request;
+        } finally {
+          nodeRegistry.unregister(registered.connId);
+        }
+      }
+    },
+  );
+
   it("preserves Gateway-local ownership across list and describe", async () => {
     const localNodeId = "local-node";
     const remoteNodeId = "remote-node";

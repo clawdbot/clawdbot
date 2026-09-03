@@ -1,5 +1,6 @@
 // Covers manifest contract eligibility decisions.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { normalizePluginsConfig } from "./config-state.js";
 
 const mocks = vi.hoisted(() => ({
   loadPluginMetadataSnapshot: vi.fn(),
@@ -7,9 +8,26 @@ const mocks = vi.hoisted(() => ({
   readBundledDiscoveryMode: vi.fn<() => "compat" | "allowlist" | undefined>(() => "allowlist"),
 }));
 
-vi.mock("./bundled-discovery-state.js", () => ({
-  readBundledDiscoveryMode: mocks.readBundledDiscoveryMode,
-}));
+vi.mock("./bundled-discovery-state.js", async () => {
+  const { registerPluginMetadataProcessMemoLifecycleClear } =
+    await import("./plugin-metadata-lifecycle.js");
+  // Mirror the real single-slot memo over the mocked raw reader so the
+  // read-once-per-lifecycle assertions keep exercising the memoized seam.
+  let memo: { value: "compat" | "allowlist" | undefined } | undefined;
+  registerPluginMetadataProcessMemoLifecycleClear(() => {
+    memo = undefined;
+  });
+  return {
+    readBundledDiscoveryMode: mocks.readBundledDiscoveryMode,
+    readBundledDiscoveryModeMemoized: () => {
+      memo ??= { value: mocks.readBundledDiscoveryMode() };
+      return memo.value;
+    },
+    clearBundledDiscoveryModeMemo: () => {
+      memo = undefined;
+    },
+  };
+});
 
 vi.mock("./plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: mocks.loadPluginMetadataSnapshot,
@@ -39,8 +57,9 @@ describe("bundled manifest contract availability", () => {
     origin: "bundled" as const,
     contracts: { imageGenerationProviders: ["google"] },
   };
+  const index = { plugins: [{ pluginId: "google", origin: "bundled", enabled: false }] };
   const snapshot = {
-    index: { plugins: [{ pluginId: "google", origin: "bundled", enabled: false }] },
+    index,
     plugins: [plugin],
   } as never;
 
@@ -64,7 +83,14 @@ describe("bundled manifest contract availability", () => {
       config: { plugins: { allow: ["another-plugin"] } },
     },
   ])("does not expose $name", ({ config }) => {
-    expect(isManifestPluginAvailableForControlPlane({ snapshot, plugin, config })).toBe(false);
+    expect(
+      isManifestPluginAvailableForControlPlane({
+        snapshot,
+        plugin,
+        config,
+        allowBundledProviderCompat: true,
+      }),
+    ).toBe(false);
     expect(
       listAvailableManifestContractValues({
         snapshot,
@@ -176,21 +202,39 @@ describe("bundled manifest contract availability", () => {
     expect(mocks.readBundledDiscoveryMode).toHaveBeenCalledTimes(1);
 
     clearPluginMetadataLifecycleCaches();
-    expect(isManifestPluginAvailableForControlPlane({ snapshot, plugin, config })).toBe(false);
-    expect(mocks.readBundledDiscoveryMode).toHaveBeenCalledTimes(2);
-  });
-
-  it("preserves globally disabled bundled metadata for the named speech compatibility path", () => {
     expect(
       isManifestPluginAvailableForControlPlane({
         snapshot,
         plugin,
-        config: { plugins: { enabled: false } },
+        config,
+        allowBundledProviderCompat: true,
       }),
-    ).toBe(true);
+    ).toBe(false);
+    expect(mocks.readBundledDiscoveryMode).toHaveBeenCalledTimes(2);
   });
 
-  it("preserves the shipped restrictive-allowlist bundled compatibility mode", () => {
+  it("preserves globally disabled bundled metadata for the named speech compatibility path", () => {
+    const config = { plugins: { enabled: false } };
+    const normalizedConfig = normalizePluginsConfig(config.plugins);
+    expect(
+      isManifestPluginAvailableForControlPlane({
+        snapshot,
+        plugin,
+        config,
+        normalizedConfig,
+      }),
+    ).toBe(true);
+    expect(
+      listAvailableManifestContractValues({
+        snapshot,
+        config,
+        contract: "imageGenerationProviders",
+      }),
+    ).toEqual(["google"]);
+    expect(normalizedConfig.enabled).toBe(false);
+  });
+
+  it("preserves the shipped provider-contract compatibility mode", () => {
     mocks.readBundledDiscoveryMode.mockReturnValue("compat");
 
     expect(
@@ -198,6 +242,7 @@ describe("bundled manifest contract availability", () => {
         snapshot,
         plugin,
         config: { plugins: { allow: ["another-plugin"] } },
+        allowBundledProviderCompat: true,
       }),
     ).toBe(true);
   });
@@ -208,10 +253,30 @@ describe("bundled manifest contract availability", () => {
       mocks.readBundledDiscoveryMode.mockReturnValue("compat");
 
       expect(
-        isManifestPluginAvailableForControlPlane({ snapshot, plugin, config: { plugins } }),
+        isManifestPluginAvailableForControlPlane({
+          snapshot,
+          plugin,
+          config: { plugins },
+          allowBundledProviderCompat: true,
+        }),
       ).toBe(false);
     },
   );
+
+  it("keeps non-provider manifest contracts behind the allowlist", () => {
+    mocks.readBundledDiscoveryMode.mockReturnValue("compat");
+    const nonProviderPlugin = {
+      ...plugin,
+      contracts: { documentExtractors: ["document"] },
+    };
+    expect(
+      listAvailableManifestContractValues({
+        snapshot: { index, plugins: [nonProviderPlugin] } as never,
+        contract: "documentExtractors",
+        config: { plugins: { allow: ["another-plugin"] } },
+      }),
+    ).toEqual([]);
+  });
 });
 
 describe("loadManifestContractSnapshot", () => {

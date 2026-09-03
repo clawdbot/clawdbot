@@ -11,6 +11,7 @@ import {
   ownDataValue,
   publicResultScopeKey,
 } from "./admission-evidence-scope-key.js";
+import { readChannelIngressHostOwner, type ChannelIngressHostOwner } from "./ingress-host-owner.js";
 import type {
   ChannelIngressContextBinding,
   ResolvedChannelMessageIngress,
@@ -60,20 +61,12 @@ type ChannelIngressResolutionBinding = Readonly<{
   rawPrincipalRef: string | number | null | undefined;
   participantOutcomeAffecting: boolean;
   identifierAuthentication: "affected" | "evaluated" | "not-evaluated";
-  owner?: ChannelAdmissionEvidenceOwner;
+  owner?: ChannelIngressHostOwner;
   ownerEpoch?: object;
   scope?: ChannelIngressResolutionScope;
   contextBinding?: Readonly<ChannelIngressContextBinding>;
   publicScopeKey?: string;
   handoff: { consumed: boolean };
-}>;
-
-type ChannelAdmissionEvidenceOwner = Readonly<{
-  channelId: string;
-  record: object;
-  epoch: object;
-  isLive: () => boolean;
-  resolveGatewayContext?: GatewayContextResolver;
 }>;
 
 type PreparedChannelAdmissionEvidence = Readonly<{
@@ -88,7 +81,6 @@ const state = resolveGlobalSingleton(CHANNEL_ADMISSION_EVIDENCE_STATE_KEY, () =>
   generation: 0,
   payloadByEvidence: new WeakMap<object, ChannelAdmissionEvidencePayload>(),
   resolutionByIngress: new WeakMap<object, ChannelIngressResolutionBinding>(),
-  ownerByChannelId: new Map<string, ChannelAdmissionEvidenceOwner>(),
   evidenceByPreparation: new WeakMap<object, ChannelAdmissionEvidence | undefined>(),
   gatewayResolverByPreparation: new WeakMap<object, GatewayContextResolver>(),
   evidenceByContext: new WeakMap<object, ChannelAdmissionEvidence>(),
@@ -98,18 +90,6 @@ const state = resolveGlobalSingleton(CHANNEL_ADMISSION_EVIDENCE_STATE_KEY, () =>
   consumedEvidence: new WeakSet<object>(),
   decisionSink: undefined as ((receipt: DecisionReceiptV1) => boolean) | undefined,
 }));
-
-/** Register one exact native channel record as the current in-process producer. */
-export function registerChannelAdmissionEvidenceOwner(
-  owner: ChannelAdmissionEvidenceOwner,
-): () => void {
-  state.ownerByChannelId.set(owner.channelId, owner);
-  return () => {
-    if (state.ownerByChannelId.get(owner.channelId) === owner) {
-      state.ownerByChannelId.delete(owner.channelId);
-    }
-  };
-}
 
 export function configureChannelAdmissionEvidenceCollection(enabled: boolean): () => void {
   const generation = ++state.generation;
@@ -225,7 +205,7 @@ export function recordChannelIngressResolution(params: {
   identifierAuthentication: "affected" | "evaluated" | "not-evaluated";
   scope: ChannelIngressResolutionScope;
 }): ResolvedChannelMessageIngress {
-  const owner = state.ownerByChannelId.get(params.channelId);
+  const owner = readChannelIngressHostOwner(params.channelId);
   const activeOwner = owner?.isLive() === true ? owner : undefined;
   state.resolutionByIngress.set(
     params.result,
@@ -368,7 +348,7 @@ function unknownChannelAdmissionEvidence(): ChannelAdmissionEvidence | undefined
 
 /** Consume and validate the exact resolver-to-context handoff before context construction. */
 export function prepareHostChannelContextAdmissionEvidence(params: {
-  owner?: ChannelAdmissionEvidenceOwner;
+  owner?: ChannelIngressHostOwner;
   channelId: string;
   accountId?: string;
   ingress?:
@@ -410,7 +390,7 @@ export function prepareHostChannelContextAdmissionEvidence(params: {
       params.owner !== undefined &&
       binding?.owner === params.owner &&
       binding.ownerEpoch === params.owner.epoch &&
-      state.ownerByChannelId.get(params.channelId) === params.owner &&
+      readChannelIngressHostOwner(params.channelId) === params.owner &&
       params.owner.isLive();
     const resultIngress = ownDataValue(result, "ingress");
     const resultMatches =

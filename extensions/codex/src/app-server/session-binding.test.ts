@@ -91,7 +91,7 @@ describe("Codex app-server binding store", () => {
     );
     current = false;
     await expect(writing).rejects.toThrow("resume authority changed");
-    expect(await store.read(identity)).toEqual(binding);
+    expect(store.read(identity)).toEqual(binding);
   });
 
   it("deletes only the requested stable owner and restores it on transaction rollback", async () => {
@@ -277,7 +277,7 @@ describe("Codex app-server binding store", () => {
       binding: { threadId: "thread-1", cwd: "/repo", model: "gpt-5.4-codex" },
     });
 
-    const binding = await store.read(identity);
+    const binding = store.read(identity);
     expect(binding).toMatchObject({ threadId: "thread-1", cwd: "/repo" });
     expect(binding).not.toHaveProperty("sessionFile");
     expect(binding).not.toHaveProperty("schemaVersion");
@@ -304,7 +304,7 @@ describe("Codex app-server binding store", () => {
         binding: { threadId: "thread-new", cwd: "/repo" },
       }),
     ).resolves.toBe(false);
-    await expect(store.read(identity)).resolves.toMatchObject({ threadId: "thread-old" });
+    expect(store.read(identity)).toMatchObject({ threadId: "thread-old" });
 
     await expect(
       store.mutate(identity, {
@@ -313,7 +313,7 @@ describe("Codex app-server binding store", () => {
         binding: { threadId: "thread-new", cwd: "/repo" },
       }),
     ).resolves.toBe(true);
-    await expect(store.read(identity)).resolves.toMatchObject({ threadId: "thread-new" });
+    expect(store.read(identity)).toMatchObject({ threadId: "thread-new" });
   });
 
   it("rejects same-thread and supervision ownership through replacement CAS", async () => {
@@ -349,7 +349,7 @@ describe("Codex app-server binding store", () => {
         },
       }),
     ).resolves.toBe(false);
-    await expect(store.read(identity)).resolves.toMatchObject({ threadId: "thread-old" });
+    expect(store.read(identity)).toMatchObject({ threadId: "thread-old" });
   });
 
   it("does not report the exact session or conversation binding owner as another owner", async () => {
@@ -506,7 +506,7 @@ describe("Codex app-server binding store", () => {
       },
     } as never);
 
-    await expect(store.read(identity)).rejects.toThrow("Invalid Codex app-server binding row");
+    expect(() => store.read(identity)).toThrow("Invalid Codex app-server binding row");
   });
 
   it("fails closed on malformed private supervision ownership", () => {
@@ -593,7 +593,7 @@ describe("Codex app-server binding store", () => {
         patch: { model: "native-model", modelProvider: "native-provider" },
       }),
     ).resolves.toBe(true);
-    await expect(store.read(identity)).resolves.toEqual({
+    expect(store.read(identity)).toEqual({
       threadId: "thread-final",
       cwd: "/repo",
       connectionScope: "supervision",
@@ -628,7 +628,7 @@ describe("Codex app-server binding store", () => {
       kind: "set",
       binding: { threadId: "thread-account", cwd: "/repo", pluginAppPolicyContext },
     });
-    await expect(store.read(identity)).resolves.toMatchObject({ pluginAppPolicyContext });
+    expect(store.read(identity)).toMatchObject({ pluginAppPolicyContext });
 
     const imported = createStoredCodexAppServerBinding({
       schemaVersion: 2,
@@ -667,7 +667,7 @@ describe("Codex app-server binding store", () => {
       kind: "set",
       binding: { threadId: "thread-security-review", cwd: "/repo/company", pluginAppPolicyContext },
     });
-    await expect(store.read(identity)).resolves.toMatchObject({ pluginAppPolicyContext });
+    expect(store.read(identity)).toMatchObject({ pluginAppPolicyContext });
 
     const imported = createStoredCodexAppServerBinding({
       schemaVersion: 2,
@@ -785,13 +785,13 @@ describe("Codex app-server binding store", () => {
           patch: { contextEngine: undefined },
         }),
       ).resolves.toBe(true);
-      await expect(store.read(identity)).resolves.toEqual({
+      expect(store.read(identity)).toEqual({
         threadId: "thread-json",
         cwd: "/repo",
       });
       expect(state.lookup(bindingStoreKey(identity))).not.toHaveProperty("lease");
       await expect(store.mutate(identity, { kind: "clear" })).resolves.toBe(true);
-      await expect(store.read(identity)).resolves.toBeUndefined();
+      expect(store.read(identity)).toBeUndefined();
     } finally {
       resetPluginStateStoreForTests();
       fs.rmSync(stateDir, { recursive: true, force: true });
@@ -814,11 +814,11 @@ describe("Codex app-server binding store", () => {
     await expect(store.mutate(identity, { kind: "clear", threadId: "thread-old" })).resolves.toBe(
       false,
     );
-    await expect(store.read(identity)).resolves.toMatchObject({ threadId: "thread-new" });
+    expect(store.read(identity)).toMatchObject({ threadId: "thread-new" });
     await expect(store.mutate(identity, { kind: "clear", threadId: "thread-new" })).resolves.toBe(
       true,
     );
-    await expect(store.read(identity)).resolves.toBeUndefined();
+    expect(store.read(identity)).toBeUndefined();
   });
 
   it("retains cleared legacy conversation provenance after normal tombstones expire", async () => {
@@ -866,8 +866,8 @@ describe("Codex app-server binding store", () => {
       binding: { threadId: "thread-second", cwd: "/second" },
     });
 
-    await expect(store.read(first)).resolves.toMatchObject({ threadId: "thread-first" });
-    await expect(store.read(second)).resolves.toMatchObject({ threadId: "thread-second" });
+    expect(store.read(first)).toMatchObject({ threadId: "thread-first" });
+    expect(store.read(second)).toMatchObject({ threadId: "thread-second" });
     expect(bindingStoreKey({ kind: "session", agentId: " First ", sessionId: "shared" })).toBe(
       "session:first:shared",
     );
@@ -888,7 +888,7 @@ describe("Codex app-server binding store", () => {
       kind: "set",
       binding: { threadId: "thread-1", cwd: "/repo" },
     });
-    await expect(store.read(second)).resolves.toBeUndefined();
+    expect(store.read(second)).toBeUndefined();
     await store.withLease(second, async () => undefined);
 
     expect(bindingStoreKey(first)).toBe(bindingStoreKey(second));
@@ -908,7 +908,7 @@ describe("Codex app-server binding store", () => {
       }),
     ).resolves.toBe(false);
     await expect(store.mutate(first, { kind: "clear" })).resolves.toBe(false);
-    await expect(store.read(second)).resolves.toMatchObject({ threadId: "thread-1" });
+    expect(store.read(second)).toMatchObject({ threadId: "thread-1" });
     await expect(store.mutate(second, { kind: "clear" })).resolves.toBe(true);
   });
 
@@ -934,8 +934,8 @@ describe("Codex app-server binding store", () => {
     await expect(store.adoptSessionGeneration(second, first.sessionId)).resolves.toBe("conflict");
     await expect(store.retireSessionGeneration(second)).resolves.toBe("conflict");
 
-    await expect(store.read(second)).resolves.toBeUndefined();
-    await expect(store.read(third)).resolves.toMatchObject({ threadId: "thread-1" });
+    expect(store.read(second)).toBeUndefined();
+    expect(store.read(third)).toMatchObject({ threadId: "thread-1" });
   });
 
   it("rejects reclaim when another session generation wins after verification", async () => {
@@ -966,7 +966,7 @@ describe("Codex app-server binding store", () => {
         expectedPreviousSessionId: plan.expectedPreviousSessionId,
       }),
     ).resolves.toBe(false);
-    await expect(store.read(third)).resolves.toMatchObject({ threadId: "thread-1" });
+    expect(store.read(third)).toMatchObject({ threadId: "thread-1" });
   });
 
   it("falls back to physical session identity when no stable session key exists", () => {
@@ -1086,8 +1086,8 @@ describe("Codex app-server binding store", () => {
       }),
     ).resolves.toBe(true);
 
-    await expect(store.read(previous)).resolves.toBeUndefined();
-    await expect(store.read(current)).resolves.toMatchObject({
+    expect(store.read(previous)).toBeUndefined();
+    expect(store.read(current)).toMatchObject({
       threadId: "thread-new",
       cwd: "/new",
     });
@@ -1164,7 +1164,7 @@ describe("Codex app-server binding store", () => {
         binding: { threadId: "thread-delayed", cwd: "/stale" },
       }),
     ).resolves.toBe(false);
-    await expect(store.read(current)).resolves.toMatchObject({ threadId: "thread-new" });
+    expect(store.read(current)).toMatchObject({ threadId: "thread-new" });
   });
 
   it("preserves a stale private supervision binding instead of reclaiming it as empty", async () => {
@@ -1211,11 +1211,11 @@ describe("Codex app-server binding store", () => {
       sessionId: previous.sessionId,
       binding: { threadId: "thread-supervised", connectionScope: "supervision" },
     });
-    await expect(store.read(previous)).resolves.toMatchObject({
+    expect(store.read(previous)).toMatchObject({
       threadId: "thread-supervised",
       connectionScope: "supervision",
     });
-    await expect(store.read(current)).resolves.toBeUndefined();
+    expect(store.read(current)).toBeUndefined();
   });
 
   it("fences a retired physical generation until its successor claims the stable key", async () => {
@@ -1277,7 +1277,7 @@ describe("Codex app-server binding store", () => {
         binding: { threadId: "thread-new", cwd: "/new" },
       }),
     ).resolves.toBe(true);
-    await expect(store.read(current)).resolves.toMatchObject({ threadId: "thread-new" });
+    expect(store.read(current)).toMatchObject({ threadId: "thread-new" });
   });
 
   it("keeps a retired in-place generation fenced until it is verified", async () => {
@@ -1443,8 +1443,8 @@ describe("Codex app-server binding store", () => {
     ).rejects.toThrow("native archive is in progress");
     releaseArchive();
     await expect(archive).resolves.toBeUndefined();
-    await expect(store.read(firstIdentity)).resolves.toMatchObject({ cwd: "/updated" });
-    await expect(store.read(lateIdentity)).resolves.toBeUndefined();
+    expect(store.read(firstIdentity)).toMatchObject({ cwd: "/updated" });
+    expect(store.read(lateIdentity)).toBeUndefined();
   });
 
   it("hashes stable session keys and keeps agent ownership distinct", () => {
@@ -1489,7 +1489,7 @@ describe("Codex app-server binding store", () => {
         patch: { serviceTier: "fast" },
       }),
     ).resolves.toBe(true);
-    await expect(store.read(identity)).resolves.toMatchObject({
+    expect(store.read(identity)).toMatchObject({
       threadId: "thread-1",
       model: "gpt-5.4-codex",
       serviceTier: "priority",
@@ -1520,7 +1520,7 @@ describe("Codex app-server binding store", () => {
         if: { kind: "absent" },
       }),
     ).resolves.toBe(false);
-    await expect(store.read(identity)).resolves.toMatchObject({ threadId: "thread-new" });
+    expect(store.read(identity)).toMatchObject({ threadId: "thread-new" });
   });
 
   it("maps the legacy sidecar update timestamp to the history watermark", () => {
@@ -1672,7 +1672,7 @@ describe("Codex app-server binding store", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     await peerWrite;
 
-    await expect(peer.read(identity)).resolves.toMatchObject({ threadId: "thread-2" });
+    expect(peer.read(identity)).toMatchObject({ threadId: "thread-2" });
   });
 
   it("leases an absent binding before creating its first thread", async () => {
@@ -1710,7 +1710,7 @@ describe("Codex app-server binding store", () => {
     await vi.advanceTimersByTimeAsync(1_000);
 
     await expect(peerWrite).resolves.toBe(false);
-    await expect(owner.read(identity)).resolves.toMatchObject({ threadId: "thread-owner" });
+    expect(owner.read(identity)).toMatchObject({ threadId: "thread-owner" });
   });
 
   it("releases a lease when its owner callback rejects", async () => {
@@ -1782,7 +1782,7 @@ describe("Codex app-server binding store", () => {
     await expect(ownerRun).resolves.toBe(true);
     await vi.advanceTimersByTimeAsync(1_000);
     await expect(peerWrite).resolves.toBe(true);
-    await expect(peer.read(identity)).resolves.toMatchObject({ threadId: "thread-peer" });
+    expect(peer.read(identity)).toMatchObject({ threadId: "thread-peer" });
   });
 
   it("fences an expired lease owner after a peer takes over", async () => {
@@ -1814,7 +1814,7 @@ describe("Codex app-server binding store", () => {
       }),
     ).rejects.toThrow("Lost Codex binding lease");
 
-    await expect(owner.read(identity)).resolves.toMatchObject({ threadId: "thread-peer" });
+    expect(owner.read(identity)).toMatchObject({ threadId: "thread-peer" });
   });
 
   it("surfaces heartbeat lease loss without deleting the replacement owner", async () => {

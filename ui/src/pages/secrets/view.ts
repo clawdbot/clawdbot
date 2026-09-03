@@ -6,6 +6,7 @@ import "../../components/modal-dialog.ts";
 import {
   renderDocsLink,
   renderSettingsEmpty,
+  renderSettingsLoadingSkeleton,
   renderSettingsPage,
   renderSettingsSection,
 } from "../../components/settings-ui.ts";
@@ -105,7 +106,7 @@ function renderTable(props: SecretsStoreViewProps): TemplateResult {
     return renderSettingsEmpty(t("secretsStore.unavail"));
   }
   if (props.loading && !props.entries.length) {
-    return renderSettingsEmpty(t("common.loading"));
+    return renderSettingsLoadingSkeleton();
   }
   if (!props.entries.length) {
     return html`

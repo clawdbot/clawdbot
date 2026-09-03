@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { AssistantDeliveryTtsFacts } from "../../llm/types.js";
+import type { AssistantDeliveryTtsFacts, AssistantMessage } from "../../llm/types.js";
 import { extractTtsDirectiveFacts } from "../../tts/directive-facts.js";
 import {
   parseInlineDirectives,
@@ -19,6 +19,29 @@ type AssistantDeliveryFacts = {
   tts?: AssistantDeliveryTtsFacts;
 };
 
+/** Turn-owned display preparation; source text precedes transcript-only hook rewrites. */
+export type PrepareAssistantTranscriptMessage = (
+  message: AssistantMessage,
+  sourceText: string | undefined,
+) => AssistantMessage;
+
+/** Record display ownership without rewriting bytes used by runtime transcript identity. */
+export function recordAssistantManagedMediaUrls<T extends AssistantDirectiveMessage>(
+  message: T,
+  urls: readonly string[] | undefined,
+): T {
+  const mediaUrls = Array.from(new Set(urls?.map((url) => url.trim()).filter(Boolean) ?? []));
+  if (message.role === "assistant" && mediaUrls.length > 0) {
+    Object.assign(message, {
+      openclawDelivery: {
+        ...(isRecord(message.openclawDelivery) ? message.openclawDelivery : {}),
+        mediaUrls,
+      },
+    });
+  }
+  return message;
+}
+
 function mergeTtsFacts(
   current: AssistantDeliveryTtsFacts | undefined,
   next: AssistantDeliveryTtsFacts,
@@ -36,9 +59,10 @@ function mergeTtsFacts(
 // TRANSITIONAL(marker-retirement): once the visibleReplies default flips and the
 // model stops emitting inline markers, this projection parses nothing and the
 // whole applier (plus its parser imports) can be deleted; openclawDelivery facts
-// then come exclusively from structured message-tool sends.
+// then come exclusively from structured message-tool sends and managed-media rewrites.
 export function applyAssistantDeliveryDirectives<T extends AssistantDirectiveMessage>(
   message: T,
+  options?: { managedMediaUrls?: readonly string[] },
 ): T {
   if (message.role !== "assistant" || !Array.isArray(message.content)) {
     return message;
@@ -68,7 +92,14 @@ export function applyAssistantDeliveryDirectives<T extends AssistantDirectiveMes
     });
   }
   if (facts) {
-    Object.assign(message, { openclawDelivery: facts });
+    const currentFacts = isRecord(message.openclawDelivery) ? message.openclawDelivery : undefined;
+    const mergedFacts = { ...currentFacts, ...facts };
+    if (facts.replyToId) {
+      delete mergedFacts.replyToCurrent;
+    } else if (facts.replyToCurrent) {
+      delete mergedFacts.replyToId;
+    }
+    Object.assign(message, { openclawDelivery: mergedFacts });
   }
-  return message;
+  return recordAssistantManagedMediaUrls(message, options?.managedMediaUrls);
 }

@@ -152,7 +152,7 @@ describe("sessions_history redaction", () => {
       Value.Check(tool.outputSchema!, { status: "forbidden", error: "hidden", extra: true }),
     ).toBe(false);
     expect(compactToolOutputHint(tool.outputSchema)).toBe(
-      '{ bytes: number; contentRedacted: boolean; contentTruncated: boolean; droppedMessages: boolean; messages: Array<unknown>; sessionKey: string; truncated: boolean; hasMore?: boolean; nextOffset?: number; offset?: number; sessionLinkRule?: string; totalMessages?: number } | { error: string; status: "error" | "forbidden" }',
+      '{ bytes: number; contentRedacted: boolean; contentTruncated: boolean; droppedMessages: boolean; messages: Array<unknown>; sessionKey: string; truncated: boolean; hasMore?: boolean; nextOffset?: number; offset?: number; pendingInputs?: { items: Array<{ acceptedAt: number; id: string; message: unknown; state: "queued" | "cancelled" | "interrupted" }>; total: number; nextBefore?: number }; sessionLinkRule?: string; totalMessages?: number } | { error: string; status: "error" | "forbidden" }',
     );
   });
 
@@ -234,6 +234,50 @@ describe("sessions_history redaction", () => {
     expect(serialized).not.toContain("sk-or-v1-abcdef0123456789");
     expect(serialized).toContain("OPENROUTER_API_KEY=");
     expect((result.details as { contentRedacted?: unknown }).contentRedacted).toBe(true);
+  });
+
+  it("keeps accepted inputs separate, redacted, bounded, and addressable by their own cursor", async () => {
+    useLoggingConfig("pending-redaction-off.json", { redactSensitive: "off" });
+    const requests: CallGatewayRequest[] = [];
+    const items = Array.from({ length: 20 }, (_, index) => ({
+      id: `00000000-0000-0000-0000-${String(index).padStart(12, "0")}`,
+      runId: "do-not-expose-correlation",
+      state: "interrupted",
+      acceptedAt: 1_700_000_000_000,
+      message: {
+        role: "user",
+        content: `OPENROUTER_API_KEY=sk-or-v1-abcdef0123456789 ${"queued input ".repeat(1000)}`,
+      },
+    }));
+    const tool = createSessionsHistoryTool({
+      config: {},
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        return {
+          messages: [{ role: "assistant", content: "Canonical reply" }],
+          pendingInputs: { items, total: 23, nextBefore: 4 },
+        } as T;
+      },
+    });
+    const result = await tool.execute("pending-cursor", { sessionKey: "main", pendingBefore: 24 });
+    const details = result.details as {
+      messages: unknown[];
+      pendingInputs: { items: unknown[]; total: number; nextBefore: number };
+      contentRedacted: boolean;
+      bytes: number;
+    };
+    expect(requireGatewayRequest(requests, "chat.history").params).toMatchObject({
+      pendingBefore: 24,
+    });
+    expect(details.messages).toEqual([{ role: "assistant", content: "Canonical reply" }]);
+    expect(details.pendingInputs).toMatchObject({ total: 23, nextBefore: 4 });
+    expect(details.pendingInputs.items).toHaveLength(20);
+    expect(Buffer.byteLength(JSON.stringify(details.pendingInputs))).toBeLessThanOrEqual(4096);
+    expect(JSON.stringify(details.pendingInputs)).not.toContain("sk-or-v1-abcdef0123456789");
+    expect(JSON.stringify(details.pendingInputs)).not.toContain("do-not-expose-correlation");
+    expect(details.contentRedacted).toBe(true);
+    expect(details.bytes).toBeLessThanOrEqual(80 * 1024);
+    expect(Value.Check(tool.outputSchema!, details)).toBe(true);
   });
 
   it("applies custom redaction patterns to recalled session text", async () => {
@@ -528,6 +572,103 @@ describe("sessions_history redaction", () => {
       hasMore: true,
       totalMessages: 10,
     });
+  });
+
+  it("reads an old child from its exact durable lineage row", async () => {
+    const requesterSessionKey = "agent:main:subagent:parent";
+    const targetSessionKey = "agent:main:subagent:old-child";
+    const expectedSessionId = "old-child-session";
+    const storePath = await writeSessionStore("old-child.json", {
+      [targetSessionKey]: { sessionId: expectedSessionId, updatedAt: 1 },
+    });
+    const requests: CallGatewayRequest[] = [];
+    const tool = createSessionsHistoryTool({
+      agentSessionKey: requesterSessionKey,
+      config: {
+        session: { store: storePath },
+        tools: { sessions: { visibility: "tree" } },
+      } as OpenClawConfig,
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        if (request.method === "sessions.resolve") {
+          const params = request.params as { spawnedBy?: unknown };
+          return ("spawnedBy" in params ? {} : { key: targetSessionKey, agentId: "main" }) as T;
+        }
+        if (request.method === "sessions.describe") {
+          return {
+            session: {
+              key: targetSessionKey,
+              sessionId: expectedSessionId,
+              parentSessionKey: requesterSessionKey,
+            },
+          } as T;
+        }
+        if (request.method === "chat.history") {
+          return {
+            messages: [{ role: "assistant", content: "durable child history" }],
+          } as T;
+        }
+        throw new Error(`unexpected method: ${request.method}`);
+      },
+    });
+
+    const result = await tool.execute("old-child-history", {
+      sessionKey: targetSessionKey,
+      limit: 1,
+    });
+
+    expect(result.details).toMatchObject({
+      sessionKey: targetSessionKey,
+      messages: [{ role: "assistant", content: "durable child history" }],
+    });
+    expect(requests.map((request) => request.method)).toEqual([
+      "sessions.resolve",
+      "sessions.describe",
+      "chat.history",
+    ]);
+  });
+
+  it("rejects a durable history grant when the target incarnation changes", async () => {
+    const requesterSessionKey = "agent:main:subagent:parent";
+    const targetSessionKey = "agent:main:subagent:old-child-race";
+    const expectedSessionId = "old-child-session";
+    const storePath = await writeSessionStore("old-child-race.json", {
+      [targetSessionKey]: { sessionId: expectedSessionId, updatedAt: 1 },
+    });
+    const requests: CallGatewayRequest[] = [];
+    const tool = createSessionsHistoryTool({
+      agentSessionKey: requesterSessionKey,
+      config: {
+        session: { store: storePath },
+        tools: { sessions: { visibility: "tree" } },
+      } as OpenClawConfig,
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        if (request.method === "sessions.resolve") {
+          const params = request.params as { spawnedBy?: unknown };
+          return ("spawnedBy" in params ? {} : { key: targetSessionKey, agentId: "main" }) as T;
+        }
+        if (request.method === "sessions.describe") {
+          replaceSessionEntrySync(
+            { storePath, sessionKey: targetSessionKey },
+            { sessionId: "replacement-session", updatedAt: 2 },
+          );
+          return {
+            session: {
+              key: targetSessionKey,
+              sessionId: expectedSessionId,
+              parentSessionKey: requesterSessionKey,
+            },
+          } as T;
+        }
+        throw new Error(`unexpected method: ${request.method}`);
+      },
+    });
+
+    await expect(
+      tool.execute("old-child-history-race", { sessionKey: targetSessionKey }),
+    ).rejects.toThrow(`Session "${targetSessionKey}" changed after access was granted.`);
+    expect(requests.some((request) => request.method === "chat.history")).toBe(false);
   });
 
   it("honors a scoped incarnation grant through the sandbox visibility clamp", async () => {

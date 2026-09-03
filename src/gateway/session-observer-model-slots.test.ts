@@ -24,42 +24,52 @@ function modelState(index: number, terminalHealth?: "done" | "failed"): SessionO
 }
 
 describe("session observer model slots", () => {
-  it("demotes the oldest nonterminal model state", () => {
-    const states = new Map<string, SessionObserverState>();
-    const terminal = modelState(0, "done");
-    states.set(terminal.sessionKey, terminal);
-    for (let index = 1; index < 6; index += 1) {
-      const state = modelState(index);
-      states.set(state.sessionKey, state);
-    }
-    const demote = vi.fn();
-    const slots = createSessionObserverModelSlots({
-      states,
-      maxSessions: 6,
-      resolve: () => "openai/gpt-test",
-      demote,
-    });
+  it.each(["activity", "session-key"] as const)(
+    "demotes the oldest nonterminal model state by %s",
+    (order) => {
+      const states = new Map<string, SessionObserverState>();
+      const terminal = modelState(0, "done");
+      states.set(terminal.sessionKey, terminal);
+      for (const index of [5, 4, 3, 2, 1]) {
+        const state = modelState(index);
+        if (order === "session-key") {
+          state.lastActivityAt = 1;
+        }
+        states.set(state.sessionKey, state);
+      }
+      const demote = vi.fn();
+      const slots = createSessionObserverModelSlots({
+        states,
+        maxSessions: 6,
+        resolve: () => "openai/gpt-test",
+        demote,
+      });
 
-    expect(slots.claim("main")).toBe("openai/gpt-test");
-    expect(demote).toHaveBeenCalledWith(states.get("agent:main:session-1"));
-    expect(demote).not.toHaveBeenCalledWith(terminal);
-  });
+      expect(slots.claim("main")).toBe("openai/gpt-test");
+      expect(demote).toHaveBeenCalledWith(states.get("agent:main:session-1"));
+      expect(demote).not.toHaveBeenCalledWith(terminal);
+    },
+  );
 
-  it("does not evict terminal finalizations when every slot is protected", () => {
-    const states = new Map<string, SessionObserverState>();
-    for (let index = 0; index < 6; index += 1) {
-      const state = modelState(index, "done");
-      states.set(state.sessionKey, state);
-    }
-    const demote = vi.fn();
-    const slots = createSessionObserverModelSlots({
-      states,
-      maxSessions: 6,
-      resolve: () => "openai/gpt-test",
-      demote,
-    });
+  it.each(["terminal", "final-pending"] as const)(
+    "does not evict %s states when every slot is protected",
+    (kind) => {
+      const states = new Map<string, SessionObserverState>();
+      for (let index = 0; index < 6; index += 1) {
+        const state = modelState(index, kind === "terminal" ? "done" : undefined);
+        state.finalPending = kind === "final-pending";
+        states.set(state.sessionKey, state);
+      }
+      const demote = vi.fn();
+      const slots = createSessionObserverModelSlots({
+        states,
+        maxSessions: 6,
+        resolve: () => "openai/gpt-test",
+        demote,
+      });
 
-    expect(slots.claim("main")).toBeUndefined();
-    expect(demote).not.toHaveBeenCalled();
-  });
+      expect(slots.claim("main")).toBeUndefined();
+      expect(demote).not.toHaveBeenCalled();
+    },
+  );
 });

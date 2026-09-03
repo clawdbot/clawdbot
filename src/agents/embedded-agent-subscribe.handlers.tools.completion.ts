@@ -234,6 +234,7 @@ export async function handleToolExecutionEnd(
     arguments: startArgs,
     ...(meta ? { meta } : {}),
     executionStarted,
+    replaySafe: callSummary.replaySafe,
     outcome: isToolError ? "failure" : "success",
     ...(callSummary.ownerKey
       ? {
@@ -715,5 +716,6 @@ export async function handleToolExecutionEnd(
         ctx.log.warn(`after_tool_call hook failed: tool=${toolName} error=${String(err)}`);
       });
   }
-  return { executionStarted: terminal.executionStarted };
+  terminal.executedArguments ??= startArgs;
+  return Object.assign(terminal, { isError: observerIsError });
 }

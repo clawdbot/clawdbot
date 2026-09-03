@@ -99,6 +99,18 @@ export const ExternalPostApprovalScopeSchema = closedObject({
 });
 
 /**
+ * What allow-always mints for an automation approval: a standing grant bound
+ * to this exact command and automation. Absent expiresInDays means the grant
+ * lives until revoked or the automation changes.
+ */
+export const StandingGrantApprovalScopeSchema = closedObject({
+  kind: Type.Literal("standing-grant"),
+  automation: Type.String({ minLength: 1, maxLength: 128 }),
+  command: Type.String({ minLength: 1, maxLength: 256 }),
+  expiresInDays: Type.Optional(Type.Integer({ minimum: 1, maximum: 3650 })),
+});
+
+/**
  * Owner-declared blast-radius facts for a pending approval. Variants are
  * named schemas so native protocol generators emit the discriminated union.
  */
@@ -106,7 +118,18 @@ export const ApprovalScopeSchema = Type.Union([
   MessageSendApprovalScopeSchema,
   PaymentApprovalScopeSchema,
   ExternalPostApprovalScopeSchema,
+  StandingGrantApprovalScopeSchema,
 ]);
+
+/** Reviewer-safe projection of a plugin-owned external verification choice. */
+export const PluginApprovalExternalResolutionSchema = closedObject({
+  label: Type.String({ minLength: 1, maxLength: 80 }),
+  decisions: Type.Array(ApprovalAllowDecisionSchema, {
+    minItems: 1,
+    maxItems: 2,
+    uniqueItems: true,
+  }),
+});
 
 const ApprovalAllowedDecisionsSchema = Type.Array(ApprovalDecisionSchema, {
   minItems: 1,
@@ -154,6 +177,7 @@ export const PluginApprovalPresentationSchema = closedObject({
   agentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   scope: Type.Optional(ApprovalScopeSchema),
   allowedDecisions: ApprovalAllowedDecisionsSchema,
+  externalResolution: Type.Optional(PluginApprovalExternalResolutionSchema),
 });
 
 /** Reviewer-safe OpenClaw system change. Exact operation stays host-local. */
@@ -208,6 +232,8 @@ const ApprovalResolutionFields = {
 export const PendingApprovalSnapshotSchema = closedObject({
   ...ApprovalRecordCommonFields,
   status: Type.Literal("pending"),
+  /** Canonical raising session when projected into a session-scoped reviewer surface. */
+  sourceSessionKey: Type.Optional(NonEmptyString),
 });
 
 /** Approval whose first recorded reviewer decision allows the operation. */
@@ -292,6 +318,10 @@ export const ApprovalResolveParamsSchema = closedObject({
   kind: ApprovalKindSchema,
   decision: ApprovalDecisionSchema,
   reviewer: Type.Optional(ApprovalChannelReviewerSchema),
+  // Per-grant expiry override for allow-always on automation (exec) approvals:
+  // days from resolution. Absent defers to tools.exec.grantExpiryDays; unset
+  // config keeps the grant valid until revoked. Ignored for other kinds.
+  grantExpiresInDays: Type.Optional(Type.Integer({ minimum: 1, maximum: 3650 })),
 });
 
 /** First-answer outcome plus the canonical recorded state returned to all contenders. */
@@ -351,6 +381,9 @@ export type ApprovalAllowDecision = Static<typeof ApprovalAllowDecisionSchema>;
 export type ApprovalTerminalReason = Static<typeof ApprovalTerminalReasonSchema>;
 export type PluginApprovalSeverity = Static<typeof PluginApprovalSeveritySchema>;
 export type ApprovalScope = Static<typeof ApprovalScopeSchema>;
+export type PluginApprovalExternalResolution = Static<
+  typeof PluginApprovalExternalResolutionSchema
+>;
 export type ExecApprovalPresentation = Static<typeof ExecApprovalPresentationSchema>;
 export type PluginApprovalPresentation = Static<typeof PluginApprovalPresentationSchema>;
 export type SystemAgentApprovalPresentation = Static<typeof SystemAgentApprovalPresentationSchema>;

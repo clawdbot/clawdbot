@@ -1,10 +1,13 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import nativeFs from "node:fs";
 import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { MEMORY_INDEX_CHUNKS_TABLE } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   configureMemoryCoreDreamingStateForTests,
   resetMemoryCoreDreamingStateForTests,
@@ -21,6 +24,30 @@ describe("memory watchers on the real filesystem", () => {
     async (operation) => {
       const state = await createOpenClawTestState({ label: "memory-watch-filesystem" });
       const initialWatchers = activeFilesystemWatchers();
+      const turnContext = new AsyncLocalStorage<string>();
+      const pendingInputContext = new AsyncLocalStorage<string>();
+      const watcherContexts: Array<{ turn?: string; pendingInput?: string }> = [];
+      const timerContexts: typeof watcherContexts = [];
+      const originalWatch = nativeFs.watch;
+      const watchObserver = vi.spyOn(nativeFs, "watch").mockImplementation((...args) => {
+        watcherContexts.push({
+          turn: turnContext.getStore(),
+          pendingInput: pendingInputContext.getStore(),
+        });
+        return originalWatch(...args);
+      });
+      syncBuiltinESMExports();
+      const originalSetTimeout = globalThis.setTimeout;
+      const timerObserver = vi.spyOn(globalThis, "setTimeout").mockImplementation((...args) => {
+        // Observe the real startup pressure check and filesystem debounce timers.
+        if (args[1] === 10_000 || args[1] === 1500) {
+          timerContexts.push({
+            turn: turnContext.getStore(),
+            pendingInput: pendingInputContext.getStore(),
+          });
+        }
+        return originalSetTimeout(...args);
+      });
       let manager: MemoryIndexManager | null = null;
       let index: DatabaseSync | undefined;
       try {
@@ -42,7 +69,14 @@ describe("memory watchers on the real filesystem", () => {
             },
           },
         };
-        manager = await MemoryIndexManager.get({ cfg, agentId: "main" });
+        manager = await turnContext.run("opening turn", () =>
+          pendingInputContext.run("accepted input", async () => {
+            const opened = await MemoryIndexManager.get({ cfg, agentId: "main" });
+            expect(turnContext.getStore()).toBe("opening turn");
+            expect(pendingInputContext.getStore()).toBe("accepted input");
+            return opened;
+          }),
+        );
         if (!manager) {
           throw new Error("memory manager unavailable");
         }
@@ -93,6 +127,11 @@ describe("memory watchers on the real filesystem", () => {
         ]);
         expect(await activeManager.search("Amethyst")).toEqual([]);
         expect(await activeManager.search("Cobalt")).toEqual([]);
+        expect(watcherContexts.length).toBeGreaterThan(0);
+        expect(timerContexts.length).toBeGreaterThan(0);
+        for (const context of [...watcherContexts, ...timerContexts]) {
+          expect(context).toEqual({ turn: undefined, pendingInput: undefined });
+        }
 
         index.close();
         index = undefined;
@@ -101,6 +140,9 @@ describe("memory watchers on the real filesystem", () => {
       } finally {
         index?.close();
         await manager?.close();
+        timerObserver.mockRestore();
+        watchObserver.mockRestore();
+        syncBuiltinESMExports();
         resetMemoryCoreDreamingStateForTests();
         await state.cleanup();
       }

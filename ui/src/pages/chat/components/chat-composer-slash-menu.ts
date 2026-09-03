@@ -51,6 +51,7 @@ export type SlashMenuHost = {
   runInlineCommand?: (command: string) => void;
   refreshCommands?: () => void | Promise<void>;
   commandFilter?: (command: SlashCommandDef) => boolean;
+  activateComposerMode?: (command: SlashCommandDef) => boolean;
 };
 
 export function createSlashMenuState(): SlashMenuState {
@@ -254,6 +255,9 @@ function selectSlashCommand(
   host: SlashMenuHost,
   requestUpdate: () => void,
 ): void {
+  if (host.activateComposerMode?.(cmd)) {
+    return;
+  }
   if (cmd.source !== "skill" && !host.canRunInlineCommand() && state.slashMenuCompletion?.inline) {
     return;
   }

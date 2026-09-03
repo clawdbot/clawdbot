@@ -20,9 +20,12 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerMemoryImportEnglish } from "../../i18n/locales/en-memory-import.ts";
 import { normalizeAgentLabel } from "../../lib/agents/display.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import "../../styles/memory-import.css";
+
+registerMemoryImportEnglish();
 
 type MemoryCollection = {
   id: string;

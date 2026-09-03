@@ -19,6 +19,7 @@ import {
   getOfficialExternalPluginCatalogEntry,
   getOfficialExternalPluginCatalogEntryForPackage,
   getOfficialExternalPluginCatalogManifest,
+  isExternallyDistributedPlugin,
   isOfficialExternalPluginId,
   isOfficialExternalPluginCatalogFeed,
   listOfficialExternalChannelEnvVars,
@@ -31,6 +32,7 @@ import {
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
   resolveOfficialExternalPluginLegacyIds,
+  resolveOfficialExternalPluginLegacyNpmPackageNames,
 } from "./official-external-plugin-catalog.js";
 
 type ExtensionPackageMetadata = {
@@ -330,6 +332,23 @@ describe("official external plugin catalog", () => {
     expect(source).not.toMatch(/from ["']\.\.\/infra\/net\/fetch-guard\.js["']/);
     expect(source).toContain('await import("../infra/net/fetch-guard.js")');
   });
+
+  it.each([
+    { pluginId: "google-meet", packageName: "@openclaw/google-meet", external: true },
+    { pluginId: "google-meet", packageName: "@example/google-meet", external: false },
+    { pluginId: "other-plugin", packageName: "@openclaw/google-meet", external: false },
+    {
+      pluginId: "source-external",
+      packageName: "@example/source-external",
+      packageBuild: { bundledDist: false },
+      external: true,
+    },
+  ])(
+    "classifies distribution ownership for $pluginId from $packageName",
+    ({ external, ...plugin }) => {
+      expect(isExternallyDistributedPlugin(plugin)).toBe(external);
+    },
+  );
 
   it("ships the official plugin catalog as a feed-shaped bundled fallback", () => {
     expect(isOfficialExternalPluginCatalogFeed(officialExternalPluginCatalog)).toBe(true);
@@ -2059,14 +2078,17 @@ describe("official external plugin catalog", () => {
     );
     expect(resolveOfficialExternalPluginId(qqbotByChannel)).toBe("openclaw-qqbot");
     expect(qqbotByPlugin).toBe(qqbotByChannel);
+    expect(resolveOfficialExternalPluginLegacyNpmPackageNames(qqbotByChannel)).toEqual([
+      "@openclaw/qqbot",
+    ]);
     expect(
       getOfficialExternalPluginCatalogManifest(qqbotByChannel)?.channel?.doctorCapabilities,
     ).toEqual({ openDmRequiresAllowFromWildcard: false });
     expect(resolveOfficialExternalPluginInstall(qqbotByChannel)).toEqual({
-      npmSpec: "@tencent-connect/openclaw-qqbot@2.0.1",
+      npmSpec: "@tencent-connect/openclaw-qqbot@2.0.3",
       defaultChoice: "npm",
       expectedIntegrity:
-        "sha512-2010PaCummeQaxerLtaGfQ/5HChiXaW/KpTERid7V/1zyTs46S2ACi0hgZQ1SB7tH0t1InWr8tzVBJV/pLss3Q==",
+        "sha512-yngu/2cPeZjJfIfHWCXWB2/6KlDHrb9vpOUjKLdQxePLSp6wCn3CFOALcBIVq/9o6jlYz9WTU9idW6nfX1xpFA==",
     });
     expect(getOfficialExternalChannelSecretContract("qqbot")).toEqual({
       channelId: "qqbot",
@@ -2144,7 +2166,7 @@ describe("official external plugin catalog", () => {
     expect(manifest?.providerEndpoints).toEqual([
       {
         endpointClass: "opencode-native",
-        hostSuffixes: ["opencode.ai"],
+        baseUrls: ["https://opencode.ai/zen", "https://opencode.ai/zen/v1"],
       },
     ]);
   });
@@ -2164,8 +2186,8 @@ describe("official external plugin catalog", () => {
     expect(manifest?.contracts?.mediaUnderstandingProviders).toEqual(["opencode-go"]);
     expect(manifest?.providerEndpoints).toEqual([
       {
-        endpointClass: "opencode-native",
-        hostSuffixes: ["opencode.ai"],
+        endpointClass: "opencode-go-native",
+        baseUrls: ["https://opencode.ai/zen/go", "https://opencode.ai/zen/go/v1"],
       },
     ]);
   });
@@ -2656,7 +2678,7 @@ describe("official external plugin catalog", () => {
     });
   });
 
-  it("lists Matrix as an official external ClawHub channel after cutover", () => {
+  it("lists Matrix as an official external npm-first channel after cutover", () => {
     const ids = new Set<string>();
     for (const entry of listOfficialExternalPluginCatalogEntries()) {
       const pluginId = resolveOfficialExternalPluginId(entry);
@@ -2670,7 +2692,7 @@ describe("official external plugin catalog", () => {
     expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("matrix"))).toEqual({
       clawhubSpec: "clawhub:@openclaw/matrix",
       npmSpec: "@openclaw/matrix",
-      defaultChoice: "clawhub",
+      defaultChoice: "npm",
       minHostVersion: ">=2026.4.10",
       allowInvalidConfigRecovery: true,
     });

@@ -224,6 +224,45 @@ async function runRecallSubagent(params: {
   let harnessHasUnavailableMemorySearchResult = false;
   let transcriptArtifactPersisted = false;
   let runtimeSessionCreated = false;
+  let resultStatus: RecallSubagentResult["resultStatus"];
+  const cleanupRecallResources = async () => {
+    try {
+      try {
+        if (runtimeSessionCreated) {
+          if (params.config.persistTranscripts && !transcriptArtifactPersisted) {
+            await persistActiveMemoryTranscriptArtifact({
+              sources: transcriptSources,
+              sessionFile: artifactSessionFile,
+            }).catch((error: unknown) => {
+              const message = toSingleLineErrorMessage(error);
+              params.api.logger.debug?.(
+                `active-memory: failed to persist recall transcript ${artifactSessionFile}: ${message}`,
+              );
+            });
+          }
+          await cleanupActiveMemoryRecallSession({
+            agentId: params.agentId,
+            sessionId: subagentSessionId,
+            sessionKey: subagentSessionKey,
+            storePath,
+          }).catch((error: unknown) => {
+            const message = toSingleLineErrorMessage(error);
+            params.api.logger.warn?.(
+              `active-memory: failed to clean up recall session ${subagentSessionKey}: ${message}`,
+            );
+            throw error;
+          });
+        }
+      } finally {
+        await transientWorkspace?.cleanup();
+      }
+    } catch (error) {
+      // Cleanup failure invalidates recall, independently of the completed agent outcome.
+      attachPartialTimeoutData(error, { cleanupFailed: true });
+      throw error;
+    }
+  };
+
   try {
     const runtimeEntry = {
       pluginOwnerId: params.api.id,
@@ -315,6 +354,7 @@ async function runRecallSubagent(params: {
         },
       })
       .finally(params.onEmbeddedRunSettled);
+    resultStatus = result.meta.error ? "failed" : undefined;
     const activeSessionFile =
       readActiveMemorySessionFileFromRunResult(result) ?? runtimeSessionFile;
     transcriptSources = collectActiveMemoryTranscriptSources({
@@ -337,6 +377,7 @@ async function runRecallSubagent(params: {
       throw abortErr;
     }
     const rawReply = (result.payloads ?? [])
+      .filter((payload) => payload.isError !== true)
       .map((payload) => payload.text?.trim() ?? "")
       .filter(Boolean)
       .join("\n")
@@ -356,6 +397,7 @@ async function runRecallSubagent(params: {
       transcriptState.searchDebug ?? readActiveMemorySearchDebugFromRunResult(result);
     return {
       rawReply: rawReply || "NONE",
+      resultStatus,
       transcriptPath: params.config.persistTranscripts ? artifactSessionFile : undefined,
       searchDebug,
       hasUsableMemoryResult: transcriptState.hasUsableMemoryResult || harnessHasUsableMemoryResult,
@@ -369,12 +411,16 @@ async function runRecallSubagent(params: {
         sources: transcriptSources,
         toolsAllow: params.config.toolsAllow,
       });
-      attachPartialTimeoutData(
-        error,
-        partialReply,
-        transcriptState.searchDebug,
-        transcriptState.hasUnavailableMemorySearchResult || harnessHasUnavailableMemorySearchResult,
-      );
+      attachPartialTimeoutData(error, {
+        rawReply: partialReply ?? undefined,
+        resultStatus,
+        searchDebug: transcriptState.searchDebug,
+        hasUnavailableMemorySearchResult:
+          transcriptState.hasUnavailableMemorySearchResult ||
+          harnessHasUnavailableMemorySearchResult,
+        hasUsableMemoryResult:
+          transcriptState.hasUsableMemoryResult || harnessHasUsableMemoryResult,
+      });
     }
     if (
       !params.abortSignal?.aborted &&
@@ -394,35 +440,7 @@ async function runRecallSubagent(params: {
     }
     throw error;
   } finally {
-    try {
-      if (runtimeSessionCreated) {
-        if (params.config.persistTranscripts && !transcriptArtifactPersisted) {
-          await persistActiveMemoryTranscriptArtifact({
-            sources: transcriptSources,
-            sessionFile: artifactSessionFile,
-          }).catch((error: unknown) => {
-            const message = toSingleLineErrorMessage(error);
-            params.api.logger.debug?.(
-              `active-memory: failed to persist recall transcript ${artifactSessionFile}: ${message}`,
-            );
-          });
-        }
-        await cleanupActiveMemoryRecallSession({
-          agentId: params.agentId,
-          sessionId: subagentSessionId,
-          sessionKey: subagentSessionKey,
-          storePath,
-        }).catch((error: unknown) => {
-          const message = toSingleLineErrorMessage(error);
-          params.api.logger.warn?.(
-            `active-memory: failed to clean up recall session ${subagentSessionKey}: ${message}`,
-          );
-          throw error;
-        });
-      }
-    } finally {
-      await transientWorkspace?.cleanup();
-    }
+    await cleanupRecallResources();
   }
 }
 

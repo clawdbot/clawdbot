@@ -35,7 +35,10 @@ import {
   resolveDiscordChannelInfo,
   resolveDiscordMessageChannelId,
 } from "./message-channel-info.js";
-import { resolveDiscordMessageStickers } from "./message-forwarded.js";
+import {
+  resolveDiscordMessageStickers,
+  resolveDiscordReferencedReplyMessage,
+} from "./message-forwarded.js";
 import { resolveDiscordDmPreflightAccess } from "./message-handler.dm-preflight.js";
 import type { DiscordHistoryEntry } from "./message-handler.history.js";
 import { hydrateDiscordMessageIfNeeded } from "./message-handler.hydration.js";
@@ -58,7 +61,6 @@ import {
 } from "./message-handler.preflight-logging.js";
 import { resolveDiscordPreflightPluralKitInfo } from "./message-handler.preflight-pluralkit.js";
 import {
-  isPreflightAborted,
   loadPreflightAudioRuntime,
   loadSystemEventsRuntime,
 } from "./message-handler.preflight-runtime.js";
@@ -198,7 +200,7 @@ async function recordDiscordPendingHistoryEntry(params: {
     limit: params.preflight.historyLimit,
     mediaLimit: DISCORD_HISTORY_MEDIA_MAX_ATTACHMENTS,
     messageId: params.message.id,
-    shouldRecord: () => !isPreflightAborted(params.preflight.abortSignal),
+    shouldRecord: () => !params.preflight.abortSignal?.aborted,
     media: async () =>
       toHistoryMediaEntries(
         await resolveDiscordHistoryMediaForPendingRecord({
@@ -213,7 +215,7 @@ async function recordDiscordPendingHistoryEntry(params: {
 export async function preflightDiscordMessage(
   params: DiscordMessagePreflightParams,
 ): Promise<DiscordMessagePreflightContext | null> {
-  if (isPreflightAborted(params.abortSignal)) {
+  if (params.abortSignal?.aborted) {
     return null;
   }
   const logger = getChildLogger({ module: "discord-auto-reply" });
@@ -245,7 +247,7 @@ export async function preflightDiscordMessage(
     messageChannelId,
   });
   message = hydration.message;
-  if (isPreflightAborted(params.abortSignal)) {
+  if (params.abortSignal?.aborted) {
     return null;
   }
 
@@ -267,7 +269,7 @@ export async function preflightDiscordMessage(
   }
   const isGuildMessage = Boolean(params.data.guild_id);
   const channelInfo = await resolveDiscordChannelInfo(params.client, messageChannelId);
-  if (isPreflightAborted(params.abortSignal)) {
+  if (params.abortSignal?.aborted) {
     return null;
   }
   const { isDirectMessage, isGroupDm } = resolveDiscordPreflightConversationKind({
@@ -318,7 +320,7 @@ export async function preflightDiscordMessage(
     config: pluralkitConfig,
     abortSignal: params.abortSignal,
   });
-  if (isPreflightAborted(params.abortSignal)) {
+  if (params.abortSignal?.aborted) {
     return null;
   }
   const sender = resolveDiscordSenderIdentity({
@@ -363,7 +365,7 @@ export async function preflightDiscordMessage(
       allowNameMatching,
       conversationId: messageChannelId,
     });
-    if (isPreflightAborted(params.abortSignal)) {
+    if (params.abortSignal?.aborted) {
       return null;
     }
     if (!access) {
@@ -601,7 +603,7 @@ export async function preflightDiscordMessage(
       cfg: params.cfg,
       abortSignal: params.abortSignal,
     });
-  if (isPreflightAborted(params.abortSignal)) {
+  if (params.abortSignal?.aborted) {
     return null;
   }
 
@@ -650,6 +652,7 @@ export async function preflightDiscordMessage(
           name: sender.name,
           tag: sender.tag,
           isPluralKit: sender.isPluralKit,
+          authorKind: author.bot ? "bot" : "user",
         },
         memberAccessConfigured: hasAccessRestrictions,
         memberAllowed,
@@ -738,16 +741,24 @@ export async function preflightDiscordMessage(
   }
   const ignoreOtherMentions =
     channelConfig?.ignoreOtherMentions ?? guildInfo?.ignoreOtherMentions ?? false;
+  const referencedReply = resolveDiscordReferencedReplyMessage(message);
+  const referencedWebhookId = referencedReply ? resolveDiscordWebhookId(referencedReply) : null;
+  const referencedAuthor = referencedReply?.author;
+  const replyTargetsOtherBot =
+    Boolean(botId) &&
+    Boolean(referencedAuthor?.bot) &&
+    referencedAuthor?.id !== botId &&
+    !referencedWebhookId;
   if (
     isGuildMessage &&
     ignoreOtherMentions &&
-    hasUserOrRoleMention &&
+    (hasUserOrRoleMention || replyTargetsOtherBot) &&
     !wasMentioned &&
     !mentionDecision.implicitMention
   ) {
-    logDebug(`[discord-preflight] drop: other-mention`);
+    logDebug(`[discord-preflight] drop: addressed-to-other`);
     logVerbose(
-      `discord: drop guild message (another user/role mentioned, ignoreOtherMentions=true, botId=${botId})`,
+      `discord: drop guild message (addressed to another identity, ignoreOtherMentions=true, botId=${botId})`,
     );
     await recordDiscordPendingHistoryEntry({
       preflight: params,
@@ -844,7 +855,7 @@ export async function preflightDiscordMessage(
     abortSignal: params.abortSignal,
   };
   const preparedMedia = await resolveMediaList(message, params.mediaMaxBytes, mediaResolveOptions);
-  if (isPreflightAborted(params.abortSignal)) {
+  if (params.abortSignal?.aborted) {
     return null;
   }
   const forwardedMedia = await resolveForwardedMediaList(
@@ -852,7 +863,7 @@ export async function preflightDiscordMessage(
     params.mediaMaxBytes,
     mediaResolveOptions,
   );
-  if (isPreflightAborted(params.abortSignal)) {
+  if (params.abortSignal?.aborted) {
     return null;
   }
   preparedMedia.push(...forwardedMedia);

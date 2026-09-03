@@ -102,7 +102,10 @@ describe("renderChannelWizard busy controls", () => {
       );
 
       expect(busyButton?.disabled).toBe(true);
+      expect(busyButton?.getAttribute("aria-label")).toBe("Continue");
+      expect(busyButton?.querySelector(".btn__label")?.textContent).toBe("Continue");
       expect(busyButton?.querySelector(".btn__spinner")).not.toBeNull();
+      expect(busyButton?.querySelector(".btn__label + .btn__spinner")).not.toBeNull();
       expect(busyButton?.querySelector(".sr-only")?.textContent).toBe("Working…");
       expect(rendered.container.querySelectorAll(".btn__spinner")).toHaveLength(1);
       expect(
@@ -140,7 +143,10 @@ describe("renderChannelWizard busy controls", () => {
     );
 
     expect(busyButton?.disabled).toBe(true);
+    expect(busyButton?.getAttribute("aria-label")).toBe("Continue");
+    expect(busyButton?.querySelector(".btn__label")?.textContent).toBe("Continue");
     expect(busyButton?.querySelector(".btn__spinner")).not.toBeNull();
+    expect(busyButton?.querySelector(".btn__label + .btn__spinner")).not.toBeNull();
     expect(busyButton?.querySelector(".sr-only")?.textContent).toBe(status);
     expect(rendered.container.querySelectorAll(".btn__spinner")).toHaveLength(1);
   });

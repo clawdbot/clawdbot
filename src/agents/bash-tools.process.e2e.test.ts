@@ -155,6 +155,51 @@ test("rejects malformed direct actions before requiring a session id", async () 
   expect(result.details).toMatchObject({ status: "failed" });
 });
 
+test.each([
+  {
+    name: "empty nonzero exit",
+    source: "process.exit(1)",
+    expectedText: "(no output)\n\n(Command exited with code 1)",
+    expectedAggregated: "(no output)\n\n(Command exited with code 1)",
+    exitCode: 1,
+  },
+  {
+    name: "nonzero exit with output",
+    source: 'process.stdout.write("VISIBLE"); process.exit(1)',
+    expectedText: "VISIBLE\n\n(Command exited with code 1)",
+    expectedAggregated: "VISIBLE\n\n(Command exited with code 1)",
+    exitCode: 1,
+  },
+  {
+    name: "empty successful exit",
+    source: "process.exit(0)",
+    expectedText: "(no output)",
+    expectedAggregated: "",
+    exitCode: 0,
+  },
+])(
+  "renders a real foreground $name with the expected structured output",
+  async ({ source, expectedText, expectedAggregated, exitCode }) => {
+    const execTool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      allowBackground: false,
+      timeoutSec: 10,
+    });
+    const result = await execTool.execute(`foreground-exit-${exitCode}`, {
+      command: currentNodeEvalCommand(source),
+    });
+
+    expect(textContent(result)).toBe(expectedText);
+    expect(result.details).toMatchObject({
+      status: "completed",
+      exitCode,
+      aggregated: expectedAggregated,
+    });
+  },
+);
+
 test.skipIf(process.platform === "win32").each([
   { name: "quiet successful exit", exitCode: 0, output: "", expectsNotification: false },
   { name: "quiet nonzero exit", exitCode: 7, output: "", expectsNotification: true },

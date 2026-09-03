@@ -93,6 +93,7 @@ import { resolveFeishuGroupToolPolicy } from "./policy.js";
 import {
   assertFeishuCardWithinEnvelope,
   buildFeishuPresentationCard,
+  FEISHU_PRESENTATION_CAPABILITIES,
   isFeishuCardWithinEnvelope,
   resolveFeishuRichReply,
 } from "./presentation-card.js";
@@ -2019,6 +2020,17 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       },
     },
     threading: {
+      matchesToolContextTarget: ({ target, toolContext }) => {
+        const normalizedTarget = normalizeFeishuTarget(target);
+        if (!normalizedTarget) {
+          return false;
+        }
+        return [toolContext.currentChannelId, toolContext.currentMessagingTarget].some(
+          (currentTarget) =>
+            currentTarget !== undefined &&
+            normalizeFeishuTarget(currentTarget) === normalizedTarget,
+        );
+      },
       buildToolContext: ({ context, hasRepliedRef }) => ({
         currentChannelId:
           normalizeOptionalString(context.NativeChannelId) ?? normalizeOptionalString(context.To),
@@ -2040,26 +2052,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       chunkerMode: "markdown",
       textChunkLimit: 4000,
       sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
-      presentationCapabilities: {
-        supported: true,
-        buttons: true,
-        selects: false,
-        context: true,
-        divider: true,
-        limits: {
-          actions: {
-            maxActions: 20,
-            maxActionsPerRow: 5,
-            maxLabelLength: 40,
-            maxValueBytes: 1024,
-          },
-          text: {
-            maxLength: 4000,
-            encoding: "characters",
-            markdownDialect: "markdown",
-          },
-        },
-      },
+      presentationCapabilities: FEISHU_PRESENTATION_CAPABILITIES,
       ...createRuntimeOutboundDelegates({
         getRuntime: loadFeishuChannelRuntime,
         renderPresentation: { resolve: (runtime) => runtime.feishuOutbound.renderPresentation },

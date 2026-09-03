@@ -18,7 +18,8 @@ describe("Git checkout discovery", () => {
     const root = tempDirs.make("openclaw-git-error-");
     const result = await runGit(path.join(root, "missing"), ["status"]);
 
-    expectTypeOf(result).toEqualTypeOf<SpawnResult>();
+    expectTypeOf(result).toMatchTypeOf<SpawnResult>();
+    expect(result.timeoutMs).toBe(120_000);
     expect(result.code).toBe(128);
     expect(result).toMatchObject({ termination: "exit", signal: null });
     const message = commandError("git status", result).message;

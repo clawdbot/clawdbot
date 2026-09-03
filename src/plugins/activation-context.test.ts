@@ -5,7 +5,7 @@ import {
   makeRegistry,
 } from "../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import type { PluginDiscoveryResult } from "./discovery.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 
@@ -29,7 +29,6 @@ vi.mock("./bundled-compat.js", () => ({
 
 import {
   resolveBundledCompatActivationInputs,
-  resolvePluginActivationInputs,
   withActivatedPluginIds,
 } from "./activation-context.js";
 
@@ -82,10 +81,11 @@ describe("plugin activation inputs", () => {
       },
     );
 
-    resolvePluginActivationInputs({
+    resolveBundledCompatActivationInputs({
       rawConfig: { plugins: { allow: ["openai"] } },
       workspaceDir,
       applyAutoEnable: true,
+      resolveBundledPluginIds: () => [],
     });
 
     expect(applyPluginAutoEnableMock).toHaveBeenCalledWith({
@@ -109,11 +109,12 @@ describe("plugin activation inputs", () => {
       [firstManifestRegistry, firstDiscovery],
       [secondManifestRegistry, secondDiscovery],
     ] as const) {
-      resolvePluginActivationInputs({
+      resolveBundledCompatActivationInputs({
         rawConfig: { plugins: { allow: [manifestRegistry.plugins[0]!.id] } },
         manifestRegistry,
         discovery,
         applyAutoEnable: true,
+        resolveBundledPluginIds: () => [],
       });
     }
 
@@ -169,6 +170,7 @@ describe("plugin activation inputs", () => {
     expect(withBundledPluginEnablementCompatMock).toHaveBeenCalledWith({
       config: autoEnabledConfig,
       pluginIds: ["anthropic"],
+      env: process.env,
     });
     expect(activation.config).toBe(compatConfig);
     expect(activation.normalized.entries.anthropic?.enabled).toBe(true);

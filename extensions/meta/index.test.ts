@@ -237,7 +237,6 @@ describe("meta provider", () => {
     };
     const stream = await streamFn(model, context, {
       apiKey: "unit-test-token",
-      maxRetries: 0,
       onPayload: (payload) => {
         capturedPayload = payload as Record<string, unknown>;
       },

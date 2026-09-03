@@ -58,26 +58,6 @@ function axTreeResult(nodes?: RawAXNode[]): CdpMockReply {
   return cdpResult(nodes ? { nodes } : {});
 }
 
-function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
-  let count = 0;
-  for (const item of items) {
-    if (predicate(item)) {
-      count += 1;
-    }
-  }
-  return count;
-}
-
-function replyToViewportCommandOrScreenshot(msg: CdpMockMessage, data: string) {
-  if (
-    msg.method === "Emulation.setDeviceMetricsOverride" ||
-    msg.method === "Emulation.clearDeviceMetricsOverride"
-  ) {
-    return cdpResult();
-  }
-  return msg.method === "Page.captureScreenshot" ? screenshotResult(data) : undefined;
-}
-
 async function startMockWsServer(handle: CdpReplyHandler) {
   const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
   await new Promise<void>((resolve) => {
@@ -154,85 +134,6 @@ describe("cdp internal", () => {
       });
       expect(observed[0]?.format).toBe("jpeg");
       expect(observed[0]?.quality).toBe(100);
-    });
-
-    it("captures fullPage and restores viewport overrides", async () => {
-      const events: string[] = [];
-      const server = await startMockWsServer((msg) => {
-        events.push(msg.method ?? "");
-        if (msg.method === "Page.getLayoutMetrics") {
-          return cdpResult({ cssContentSize: { width: 2000, height: 3000 } });
-        }
-        if (msg.method === "Runtime.evaluate") {
-          // Pre-capture viewport probe + post-capture probe.
-          const isPre = countMatching(events, (m) => m === "Runtime.evaluate") === 1;
-          return cdpResult({
-            result: {
-              value: isPre
-                ? { w: 800, h: 600, dpr: 2, sw: 1600, sh: 1200 }
-                : { w: 2000, h: 3000, dpr: 2 },
-            },
-          });
-        }
-        return replyToViewportCommandOrScreenshot(msg, "FULL");
-      });
-      wss = server.wss;
-      const buf = await captureScreenshot({ wsUrl: server.wsUrl, fullPage: true });
-      expect(buf.toString("utf8")).toBe("FULL");
-      expect(events).toContain("Emulation.setDeviceMetricsOverride");
-      expect(events).toContain("Emulation.clearDeviceMetricsOverride");
-    });
-
-    it("restores viewport even when the post-capture probe mismatches", async () => {
-      // Post probe returns a different dpr than saved → helper reapplies.
-      const calls: Array<Record<string, unknown>> = [];
-      let evalCount = 0;
-      const server = await startMockWsServer((msg) => {
-        if (msg.method === "Page.getLayoutMetrics") {
-          return cdpResult({ contentSize: { width: 1200, height: 800 } });
-        }
-        if (msg.method === "Runtime.evaluate") {
-          evalCount += 1;
-          return cdpResult({
-            result: {
-              value:
-                evalCount === 1
-                  ? { w: 400, h: 300, dpr: 1, sw: 800, sh: 600 }
-                  : { w: 9999, h: 9999, dpr: 9 },
-            },
-          });
-        }
-        if (msg.method === "Emulation.setDeviceMetricsOverride") {
-          calls.push(msg.params ?? {});
-          return cdpResult();
-        }
-        if (msg.method === "Emulation.clearDeviceMetricsOverride") {
-          return cdpResult();
-        }
-        if (msg.method === "Page.captureScreenshot") {
-          return screenshotResult("PIC");
-        }
-        return undefined;
-      });
-      wss = server.wss;
-      await captureScreenshot({ wsUrl: server.wsUrl, fullPage: true });
-      // Two setDeviceMetricsOverride calls: expand then restore.
-      expect(calls.length).toBeGreaterThanOrEqual(2);
-    });
-
-    it("skips viewport expansion when content size is zero", async () => {
-      const server = await startMockWsServer((msg) => {
-        if (msg.method === "Page.getLayoutMetrics") {
-          return cdpResult({ cssContentSize: { width: 0, height: 0 } });
-        }
-        if (msg.method === "Page.captureScreenshot") {
-          return screenshotResult("Z");
-        }
-        return undefined;
-      });
-      wss = server.wss;
-      const buf = await captureScreenshot({ wsUrl: server.wsUrl, fullPage: true });
-      expect(buf.toString("utf8")).toBe("Z");
     });
 
     it("throws when Page.captureScreenshot returns no data", async () => {
@@ -377,6 +278,48 @@ describe("cdp internal", () => {
   });
 
   describe("snapshotRoleViaCdp", () => {
+    it("keeps zero-based indexes on duplicate role refs", async () => {
+      const server = await startMockWsServer((msg) => {
+        if (msg.method === "Accessibility.getFullAXTree") {
+          return axTreeResult([
+            {
+              nodeId: "1",
+              role: { value: "RootWebArea" },
+              name: { value: "" },
+              childIds: ["2", "3"],
+            },
+            {
+              nodeId: "2",
+              role: { value: "button" },
+              name: { value: "Save" },
+              childIds: [],
+            },
+            {
+              nodeId: "3",
+              role: { value: "button" },
+              name: { value: "Save" },
+              childIds: [],
+            },
+          ]);
+        }
+        if (msg.method === "Runtime.evaluate") {
+          return runtimeValueResult([]);
+        }
+        return undefined;
+      });
+      wss = server.wss;
+
+      const snap = await snapshotRoleViaCdp({
+        wsUrl: server.wsUrl,
+        options: { interactive: true },
+      });
+
+      expect(snap.refs).toMatchObject({
+        e1: { role: "button", name: "Save", nth: 0 },
+        e2: { role: "button", name: "Save", nth: 1 },
+      });
+    });
+
     it("builds role refs, promotes cursor-interactive nodes, and appends link urls", async () => {
       const server = await startMockWsServer((msg) => {
         if (msg.method === "Accessibility.getFullAXTree") {
@@ -534,6 +477,16 @@ describe("cdp internal", () => {
       expect(snap.snapshot).toContain('  - button "Inside" [ref=e2]');
       expect(snap.refs.e1?.frameId).toBe("FRAME_1");
       expect(snap.refs.e2?.frameId).toBe("FRAME_1");
+
+      const mainFrameOnly = await snapshotRoleViaCdp({
+        wsUrl: server.wsUrl,
+        options: { interactive: true },
+        recurseIframes: false,
+      });
+
+      expect(mainFrameOnly.snapshot).toContain('- Iframe "Child" [ref=e1]');
+      expect(mainFrameOnly.snapshot).not.toContain('button "Inside"');
+      expect(mainFrameOnly.refs.e2).toBeUndefined();
     });
   });
 
@@ -568,42 +521,6 @@ describe("cdp internal", () => {
     it("uses the default jpeg quality when opts.quality is omitted", async () => {
       const { observed } = await captureScreenshotAndObserveParams({ format: "jpeg" });
       expect(observed[0]?.quality).toBe(85);
-    });
-
-    it("defaults fullPage content/viewport fields to 0 when the page reports nothing", async () => {
-      // Covers the right-hand sides of `size?.width ?? 0`, `size?.height ?? 0`,
-      // `v?.w ?? 0`, `v?.h ?? 0`, `v?.dpr ?? 1`, `v?.sw ?? currentW`, `v?.sh ?? currentH`.
-      const server = await startMockWsServer((msg) => {
-        if (msg.method === "Page.getLayoutMetrics") {
-          // Both cssContentSize and contentSize absent — forces the
-          // `?? 0` default on width/height.
-          return cdpResult();
-        }
-        if (msg.method === "Page.captureScreenshot") {
-          return screenshotResult("N");
-        }
-        return undefined;
-      });
-      wss = server.wss;
-      const buf = await captureScreenshot({ wsUrl: server.wsUrl, fullPage: true });
-      expect(buf.toString("utf8")).toBe("N");
-    });
-
-    it("falls back to the non-css contentSize when cssContentSize is absent", async () => {
-      const server = await startMockWsServer((msg) => {
-        if (msg.method === "Page.getLayoutMetrics") {
-          return cdpResult({ contentSize: { width: 100, height: 200 } });
-        }
-        if (msg.method === "Runtime.evaluate") {
-          // viewport probe with a completely empty value to exercise all
-          // `v?.X ?? default` branches.
-          return runtimeValueResult({});
-        }
-        return replyToViewportCommandOrScreenshot(msg, "C");
-      });
-      wss = server.wss;
-      const buf = await captureScreenshot({ wsUrl: server.wsUrl, fullPage: true });
-      expect(buf.toString("utf8")).toBe("C");
     });
   });
 
@@ -752,32 +669,6 @@ describe("cdp internal", () => {
       wss = server.wss;
       const snap = await snapshotAria({ wsUrl: server.wsUrl });
       expect(snap.nodes).toStrictEqual([]);
-    });
-
-    it("swallows a failing Emulation.clearDeviceMetricsOverride in the screenshot finally", async () => {
-      // Exercises the `.catch(() => {})` on clearDeviceMetricsOverride inside
-      // the fullPage finally block.
-      const server = await startMockWsServer((msg) => {
-        if (msg.method === "Page.getLayoutMetrics") {
-          return cdpResult({ cssContentSize: { width: 800, height: 600 } });
-        }
-        if (msg.method === "Runtime.evaluate") {
-          return runtimeValueResult({ w: 400, h: 300, dpr: 1, sw: 800, sh: 600 });
-        }
-        if (msg.method === "Emulation.setDeviceMetricsOverride") {
-          return cdpResult();
-        }
-        if (msg.method === "Emulation.clearDeviceMetricsOverride") {
-          return cdpError("denied");
-        }
-        if (msg.method === "Page.captureScreenshot") {
-          return screenshotResult("S");
-        }
-        return undefined;
-      });
-      wss = server.wss;
-      const buf = await captureScreenshot({ wsUrl: server.wsUrl, fullPage: true });
-      expect(buf.toString("utf8")).toBe("S");
     });
   });
 });

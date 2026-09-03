@@ -6,7 +6,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { tokTypes } from "acorn";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
-import type { PluginToolMcpMeta } from "../plugins/tools.js";
+import type { PluginToolMcpMeta } from "../plugins/tool-metadata.js";
 import { sanitizeNodeIdFragment } from "./agent-bundle-mcp-names.js";
 import { toCodeModeJsonSafe } from "./code-mode-json.js";
 import {
@@ -18,6 +18,7 @@ import {
   type CodeModeApiVirtualFile,
   type McpApiServerDoc,
 } from "./code-mode-mcp-api.js";
+import { registerToolEffectReceipt } from "./tool-effect-receipt.js";
 
 export type { CodeModeApiVirtualFile } from "./code-mode-mcp-api.js";
 
@@ -464,7 +465,7 @@ interface AgentsApi {
   run<T>(prompt: string, options: AgentRunOptions & { schema: AgentJsonSchema }): Promise<T>;
 }
 
-/** Spawn collector agents concurrently. */
+/** Spawn collector agents concurrently; requests queue when bridge slots are full. */
 declare const agents: Readonly<AgentsApi>;
 /** Publish a phase heading for this swarm. */
 declare function phase(title: string): void;
@@ -643,9 +644,17 @@ export function createCodeModeNamespaceRuntime(
       if (!isCodeModeNamespaceToolCall(target)) {
         throw new Error(`Code mode namespace path is not callable: ${path.join(".")}`);
       }
-      const input = target.input ? await target.input(args) : (args[0] ?? {});
+      let input: unknown;
+      try {
+        input = target.input ? await target.input(args) : (args[0] ?? {});
+      } catch (error) {
+        if (target.local) {
+          throw registerToolEffectReceipt(error, { state: "failed_no_effect" });
+        }
+        throw error;
+      }
       if (target.local) {
-        return toCodeModeJsonSafe(input);
+        return registerToolEffectReceipt(toCodeModeJsonSafe(input), { state: "read_completed" });
       }
       if (!target.catalogId) {
         throw new Error(`Code mode namespace path has no catalog tool: ${path.join(".")}`);

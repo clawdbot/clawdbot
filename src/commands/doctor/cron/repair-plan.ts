@@ -80,6 +80,18 @@ export function formatScheduledToolPolicyAdvisory(params: {
   return lines.join("\n");
 }
 
+/** Advisory for alias-only jobs whose original exec authority cannot be proven from storage. */
+export function formatLegacyGatewayExecAdvisory(names: string[]): string | null {
+  if (names.length === 0) {
+    return null;
+  }
+  return [
+    `${pluralize(names.length, "automation")} ${names.length === 1 ? "grants" : "grant"} the retired \`gateway_exec\` alias${formatJobNameList(names)}.`,
+    "- Doctor will not convert this alias to `exec` because the stored name does not prove its original producer or approval restrictions.",
+    "- Recreate the automation from a fresh authenticated creator turn, or explicitly reauthorize its complete tool cap from a trusted operator shell.",
+  ].join("\n");
+}
+
 /** Advisory for legacy default caps that were captured before configured MCP was final. */
 export function formatIncompleteInheritedAuthorityAdvisory(names: string[]): string | null {
   if (names.length === 0) {
@@ -111,6 +123,11 @@ export function formatLegacyIssuePreview(issues: CronLegacyIssueCounts): string[
   }
   if (issues.legacyScheduleCron) {
     lines.push(`- ${pluralize(issues.legacyScheduleCron, "job")} still uses \`schedule.cron\``);
+  }
+  if (issues.legacyScheduleKind) {
+    lines.push(
+      `- ${pluralize(issues.legacyScheduleKind, "job")} stores a non-canonical schedule \`kind\` or stream \`mode\` that will be normalized`,
+    );
   }
   if (issues.legacyPayloadKind) {
     lines.push(`- ${pluralize(issues.legacyPayloadKind, "job")} needs payload kind normalization`);

@@ -1,6 +1,7 @@
 // Browser tests cover register.files downloads plugin behavior.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as browserPathsModule from "../../browser/paths.js";
 import * as browserCliSharedModule from "../browser-cli-shared.js";
 import {
   createBrowserProgram,
@@ -31,7 +32,7 @@ vi.spyOn(cliCoreApiModule.defaultRuntime, "writeJson").mockImplementation(
 );
 vi.spyOn(cliCoreApiModule.defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
 vi.spyOn(cliCoreApiModule.defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
-vi.spyOn(cliCoreApiModule, "resolveExistingUploadPaths").mockResolvedValue({
+vi.spyOn(browserPathsModule, "resolveExistingUploadPaths").mockResolvedValue({
   ok: true,
   paths: ["/tmp/openclaw/uploads/a.pdf", "/tmp/openclaw/uploads/b.pdf"],
 });
@@ -51,7 +52,7 @@ function getLastRequestOptions(): { timeoutMs?: number } | undefined {
 describe("browser action input file/download commands", () => {
   beforeEach(() => {
     mocks.callBrowserRequest.mockClear();
-    vi.mocked(cliCoreApiModule.resolveExistingUploadPaths).mockClear();
+    vi.mocked(browserPathsModule.resolveExistingUploadPaths).mockClear();
     getBrowserCliRuntimeCapture().resetRuntimeCapture();
     getBrowserCliRuntime().exit.mockImplementation(() => {});
   });
@@ -77,7 +78,7 @@ describe("browser action input file/download commands", () => {
       { from: "user" },
     );
 
-    expect(cliCoreApiModule.resolveExistingUploadPaths).toHaveBeenCalledWith({
+    expect(browserPathsModule.resolveExistingUploadPaths).toHaveBeenCalledWith({
       requestedPaths: ["/tmp/openclaw/uploads/a.pdf", "media://inbound/b"],
     });
     const request = mocks.callBrowserRequest.mock.calls.at(-1)?.[1] as

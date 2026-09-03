@@ -302,7 +302,7 @@ describe("sessions.dispatch device targets", () => {
           deviceEnvironments(nodes),
         );
         let firstChecks = 0;
-        const workerEnvironmentService = {};
+        const workerEnvironmentService = { get: () => undefined };
         bindDeviceWorkerAvailability(workerEnvironmentService, async (deviceId) => {
           if (deviceId === "first" && ++firstChecks >= 2) {
             return unavailableReason === "disconnected"

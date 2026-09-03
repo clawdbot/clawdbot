@@ -6,6 +6,7 @@ import {
   resetDiagnosticEventsForTest,
 } from "../../infra/diagnostic-events.js";
 import { markTrustedOtelDiagnosticListener } from "../../infra/diagnostic-otel-listener-provenance.js";
+import type { Model } from "../../llm/types.js";
 import { withPluginRuntimePluginIdScope } from "./gateway-request-scope.js";
 import { createRuntimeLlm } from "./runtime-llm.runtime.js";
 
@@ -167,6 +168,103 @@ describe("runtime.llm.complete isolated agent runtime", () => {
       },
     ]);
     expect(hoisted.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "isolated unknown tiered total",
+      isolated: true,
+      tiered: true,
+      total: undefined,
+      expected: undefined,
+    },
+    {
+      name: "isolated flat estimate",
+      isolated: true,
+      tiered: false,
+      total: undefined,
+      expected: 0.3,
+    },
+    {
+      name: "isolated recorded total",
+      isolated: true,
+      tiered: true,
+      total: 0.125,
+      expected: 0.125,
+    },
+    { name: "isolated recorded zero", isolated: true, tiered: true, total: 0, expected: 0 },
+    {
+      name: "direct single-call tier",
+      isolated: false,
+      tiered: true,
+      total: undefined,
+      expected: 0.6,
+    },
+  ])("prices $name at its execution boundary", async ({ isolated, tiered, total, expected }) => {
+    const selection = { provider: "fixture", modelId: "priced", agentDir: "/tmp/main" };
+    const model = {
+      id: "priced",
+      name: "Priced",
+      provider: "fixture",
+      api: "openai-completions",
+      baseUrl: "https://fixture.invalid",
+      reasoning: false,
+      input: ["text" as const],
+      contextWindow: 1_000_000,
+      maxTokens: 1_000,
+      cost: {
+        input: 1,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        ...(tiered
+          ? {
+              tieredPricing: [
+                { input: 2, output: 0, cacheRead: 0, cacheWrite: 0, range: [200_000] as [number] },
+              ],
+            }
+          : {}),
+      },
+    } satisfies Model<"openai-completions">;
+    const usage = {
+      input: 300_000,
+      output: 200,
+      ...(total !== undefined ? { cost: { total } } : {}),
+    };
+    hoisted.resolveSimpleCompletionSelectionForAgent.mockReturnValueOnce(selection);
+    hoisted.runIsolatedCompletion.mockResolvedValueOnce({
+      text: "isolated",
+      provider: "fixture",
+      model: "priced",
+      owner: { kind: "cli", id: "fixture-cli" },
+      usage,
+    });
+    hoisted.prepareSimpleCompletionModelForAgent.mockResolvedValueOnce({
+      selection,
+      model,
+      auth: {},
+    });
+    hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValueOnce({
+      content: [{ type: "text", text: "direct" }],
+      stopReason: "stop",
+      usage,
+    });
+    const llm = createRuntimeLlm({
+      getConfig: () => ({
+        models: { providers: { fixture: { baseUrl: "https://fixture.invalid", models: [model] } } },
+      }),
+      authority: { allowComplete: true },
+    });
+
+    const messages: [{ role: "user"; content: string }] = [
+      { role: "user", content: "Return JSON" },
+    ];
+    const request: Parameters<typeof llm.complete>[0] = isolated
+      ? { messages, execution: { mode: "isolated-agent-runtime" } }
+      : { messages };
+    const result = await llm.complete(request);
+
+    expect(result.usage.costUsd).toBe(expected);
   });
 
   it("keeps usage-free isolated completions silent", async () => {

@@ -1,0 +1,143 @@
+name: Full Release Artifacts
+run-name: Full Release Artifacts ${{ inputs.dispatch_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        type: choice
+        required: true
+        options: [npm, candidate, docker]
+      dispatch_id:
+        description: Exact calling Full Release Validation run and attempt
+        type: string
+        required: true
+      source_sha:
+        type: string
+        required: true
+      release_tag:
+        type: string
+        required: true
+      npm_dist_tag:
+        type: string
+        default: latest
+      preflight_phase:
+        type: choice
+        default: all
+        options: [all, prepare]
+      release_candidate_branch:
+        type: string
+        default: ""
+      request_json:
+        type: string
+        default: ""
+      prepared_npm_bundle_json:
+        type: string
+        default: ""
+
+# Separate runs own immutable publication bytes. Retrying the FRV collectors
+# cannot hide their producer artifacts or require a rebuild of successful work.
+permissions:
+  actions: read
+  contents: read
+  packages: read
+  pull-requests: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  ARTIFACT_STAGE: ${{ inputs.stage }}
+  ARTIFACT_DISPATCH_ID: ${{ inputs.dispatch_id }}
+  TARGET_SHA: ${{ inputs.source_sha }}
+  RELEASE_TAG: ${{ inputs.release_tag }}
+  PREFLIGHT_PHASE: ${{ inputs.preflight_phase }}
+  PARENT_WORKFLOW_SHA: ${{ github.sha }}
+  CHILD_WORKFLOW_REF: ${{ github.ref_name }}
+  CANDIDATE_REQUEST_JSON: ${{ inputs.request_json }}
+
+jobs:
+  admit:
+    name: Validate artifact producer request
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      request_sha256: ${{ steps.request.outputs.request_sha256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: scripts
+          persist-credentials: false
+      - id: request
+        name: Bind exact active validation parent
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/full-release-artifacts.mjs admit
+      - name: Preserve immutable artifact dispatch
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ steps.request.outputs.dispatch_name }}
+          path: ${{ steps.request.outputs.directory }}/dispatch.json
+          if-no-files-found: error
+          retention-days: 7
+
+  npm:
+    name: Prepare npm artifacts
+    needs: admit
+    if: inputs.stage == 'npm'
+    uses: ./.github/workflows/openclaw-npm-preflight.yml
+    with:
+      tag: ${{ inputs.source_sha }}
+      release_tag: ${{ inputs.release_tag }}
+      preflight_only: true
+      preflight_phase: ${{ inputs.preflight_phase }}
+      npm_dist_tag: ${{ inputs.npm_dist_tag }}
+      release_candidate_branch: ${{ inputs.release_candidate_branch }}
+
+  candidate:
+    name: Prepare validation candidate
+    needs: admit
+    if: inputs.stage == 'candidate'
+    uses: ./.github/workflows/full-release-candidate.yml
+    with:
+      ref: ${{ inputs.source_sha }}
+      request_json: ${{ inputs.request_json }}
+      request_sha256: ${{ needs.admit.outputs.request_sha256 }}
+      prepared_npm_bundle_json: ${{ inputs.prepared_npm_bundle_json }}
+
+  docker:
+    name: Prepare Docker artifacts
+    needs: admit
+    if: inputs.stage == 'docker'
+    uses: ./.github/workflows/docker-release-prepare.yml
+    with:
+      tag: ${{ inputs.release_tag }}
+      release_sha: ${{ inputs.source_sha }}
+
+  receipt:
+    name: Seal artifact producer receipt
+    needs: [admit, npm, candidate, docker]
+    if: ${{ !cancelled() && needs.admit.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require successful artifact stage
+        env:
+          STAGE_RESULT: ${{ inputs.stage == 'npm' && needs.npm.result || inputs.stage == 'candidate' && needs.candidate.result || needs.docker.result }}
+        run: test "$STAGE_RESULT" = success
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: scripts
+          persist-credentials: false
+      - id: receipt
+        name: Record immutable artifact outputs
+        env:
+          ARTIFACT_OUTPUTS_JSON: ${{ inputs.stage == 'npm' && toJSON(needs.npm.outputs) || inputs.stage == 'candidate' && toJSON(needs.candidate.outputs) || toJSON(needs.docker.outputs) }}
+        run: node scripts/full-release-artifacts.mjs receipt
+      - name: Upload immutable artifact receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: full-release-artifact-receipt-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.receipt.outputs.directory }}/artifact-receipt.json
+          if-no-files-found: error
+          retention-days: 7

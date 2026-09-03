@@ -24,7 +24,7 @@ vi.mock("./doctor-session-sqlite.js", () => ({
   runDoctorSessionSqlite,
 }));
 
-vi.mock("../infra/state-migrations.doctor.js", () => ({
+vi.mock("../infra/state-migrations.plugin-doctor.js", () => ({
   runPostSessionPluginDoctorStateRepairs,
 }));
 
@@ -35,6 +35,10 @@ vi.mock("./doctor-session-incognito-key-repair.js", () => ({
 vi.mock("./doctor-session-delivery-state.js", () => ({
   repairCanonicalSessionDeliveryStates,
   repairCanonicalSessionResolvedSkills,
+}));
+
+vi.mock("./doctor-session-exec-policy.js", () => ({
+  repairLegacySessionExecPolicy: vi.fn(),
 }));
 
 vi.mock("./doctor-session-canonical-keys.js", () => ({
@@ -60,42 +64,11 @@ import {
   sessionTranscriptIssueToHealthFinding,
   sessionTranscriptIssueToRepairEffect,
 } from "./doctor-session-transcripts.js";
+import { repairTranscriptFixture } from "./doctor-session-transcripts.test-support.js";
 import { DoctorSqliteMaintenanceLockUnavailableError } from "./doctor-sqlite-maintenance-lock.js";
 
-async function repairBrokenSessionTranscriptFile(params: {
-  filePath: string;
-  shouldRepair: boolean;
-}) {
-  const [issue] = await detectSessionTranscriptHealthIssues({
-    sessionDirs: [path.dirname(params.filePath)],
-  });
-  if (!issue) {
-    return {
-      filePath: params.filePath,
-      broken: false,
-      repaired: false,
-      originalEntries: 0,
-      activeEntries: 0,
-      legacyOpenAICodexEntries: 0,
-    };
-  }
-  if (!params.shouldRepair) {
-    return issue;
-  }
-
-  await noteSessionTranscriptHealth({
-    sessionDirs: [path.dirname(params.filePath)],
-    shouldRepair: true,
-  });
-  const backupPrefix = `${path.basename(params.filePath)}.pre-doctor-`;
-  const backupName = (await fs.readdir(path.dirname(params.filePath))).find(
-    (entry) => entry.startsWith(backupPrefix) && entry.endsWith(".bak"),
-  );
-  return {
-    ...issue,
-    repaired: true,
-    ...(backupName ? { backupPath: path.join(path.dirname(params.filePath), backupName) } : {}),
-  };
+function repairBrokenSessionTranscriptFile(params: Parameters<typeof repairTranscriptFixture>[0]) {
+  return repairTranscriptFixture(params, () => note.mock.calls);
 }
 
 function countNonEmptyLines(value: string): number {
@@ -156,7 +129,9 @@ describe("doctor session transcript repair", () => {
         async (params: { run: (authority: { assertCurrent(): void }) => unknown }) =>
           await params.run({ assertCurrent() {} }),
       );
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-transcripts-"));
+    root = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-transcripts-")),
+    );
   });
 
   afterEach(async () => {
@@ -215,6 +190,14 @@ describe("doctor session transcript repair", () => {
       },
     ]);
 
+    if (process.platform !== "win32") {
+      await fs.chmod(filePath, 0o640);
+      await fs.chmod(path.dirname(filePath), 0o750);
+    }
+    const originalBytes = await fs.readFile(filePath);
+    const originalMode = (await fs.stat(filePath)).mode;
+    const directoryMode = (await fs.stat(path.dirname(filePath))).mode;
+
     const result = await repairBrokenSessionTranscriptFile({ filePath, shouldRepair: true });
 
     expect(result.broken).toBe(true);
@@ -225,6 +208,9 @@ describe("doctor session transcript repair", () => {
       throw new Error("expected transcript backup path");
     }
     await expect(fs.access(result.backupPath)).resolves.toBeUndefined();
+    expect(await fs.readFile(result.backupPath)).toEqual(originalBytes);
+    expect((await fs.stat(filePath)).mode).toBe(originalMode);
+    expect((await fs.stat(path.dirname(filePath))).mode).toBe(directoryMode);
     const lines = (await fs.readFile(filePath, "utf-8")).trim().split(/\r?\n/);
     expect(lines).toHaveLength(4);
     expect(
@@ -234,6 +220,110 @@ describe("doctor session transcript repair", () => {
         .map((entry) => entry.id),
     ).toEqual(["parent", "plain-user", "plain-assistant"]);
   });
+
+  it.each(
+    ["branch", "metadata"].flatMap((variant) =>
+      ["write", "backup", "rename"].map((fault) => ({ variant, fault })),
+    ),
+  )(
+    "preserves $variant transcript bytes and reports a $fault failure",
+    async ({ variant, fault }) => {
+      const filePath = await writeTranscript([
+        { type: "session", version: 3, id: "session", timestamp: "2026-08-27T00:00:00Z" },
+        ...(variant === "branch"
+          ? [
+              {
+                type: "message",
+                id: "runtime-user",
+                parentId: null,
+                message: {
+                  role: "user",
+                  content:
+                    "visible ask\n\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\ncontext\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+                },
+              },
+              {
+                type: "message",
+                id: "plain-user",
+                parentId: null,
+                message: { role: "user", content: "visible ask" },
+              },
+            ]
+          : [
+              {
+                type: "message",
+                message: { role: "assistant", provider: "openai-codex", content: "legacy" },
+              },
+            ]),
+      ]);
+      const originalBytes = await fs.readFile(filePath);
+      const writeFile = fs.writeFile;
+      const error = Object.assign(new Error(`simulated ${fault} failure`), {
+        code: fault === "rename" ? "EPERM" : "ENOSPC",
+      });
+      const writeSpy = vi.spyOn(fs, "writeFile");
+      const copySpy = vi.spyOn(fs, "copyFile");
+      const renameSpy = vi.spyOn(fs, "rename");
+      if (fault === "write") {
+        writeSpy.mockImplementationOnce(async (file) => {
+          await writeFile(file, "partial");
+          throw error;
+        });
+      } else if (fault === "backup") {
+        copySpy.mockRejectedValueOnce(error);
+      } else {
+        renameSpy.mockRejectedValueOnce(error);
+      }
+      try {
+        await noteSessionTranscriptHealth({
+          shouldRepair: true,
+          sessionDirs: [path.dirname(filePath)],
+        });
+      } finally {
+        writeSpy.mockRestore();
+        copySpy.mockRestore();
+        renameSpy.mockRestore();
+      }
+
+      expect(await fs.readFile(filePath)).toEqual(originalBytes);
+      const message = note.mock.calls.map(([text]) => String(text)).join("\n");
+      expect(message).toContain("repair failed");
+      expect(message).toContain(error.message);
+      expect(message).not.toContain("Repaired 1 transcript file");
+      const files = await fs.readdir(path.dirname(filePath));
+      expect(files.filter((file) => file.endsWith(".tmp"))).toEqual([]);
+      const backups = files.filter((file) => file.endsWith(".bak"));
+      expect(backups).toHaveLength(fault === "backup" ? 0 : 1);
+      if (fault !== "backup") {
+        const backup = expectDefined(backups[0], "repair backup");
+        expect(await fs.readFile(path.join(path.dirname(filePath), backup))).toEqual(originalBytes);
+        expect(message).toContain(backup);
+      } else {
+        expect(message).not.toContain("backup=");
+      }
+    },
+  );
+
+  it.each(["ENOENT", "EACCES"])(
+    "does not label an unreadable file as broken after %s",
+    async (code) => {
+      const filePath = await writeTranscript([{ type: "session", id: "uninspected" }]);
+      const readSpy = vi
+        .spyOn(fs, "readFile")
+        .mockRejectedValueOnce(Object.assign(new Error("unavailable transcript"), { code }));
+      try {
+        await noteSessionTranscriptHealth({
+          shouldRepair: true,
+          sessionDirs: [path.dirname(filePath)],
+        });
+      } finally {
+        readSpy.mockRestore();
+      }
+      const message = note.mock.calls.map(([text]) => String(text)).join("\n");
+      expect(message).not.toContain("legacy state");
+      expect(message).not.toContain("repair failed");
+    },
+  );
 
   it("reports affected transcripts without rewriting outside repair mode", async () => {
     const filePath = await writeTranscript([
@@ -416,6 +506,54 @@ describe("doctor session transcript repair", () => {
     );
   });
 
+  it("hands a large untouched original to public Doctor SQLite import without a raw repair copy", async () => {
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const transcriptPath = path.join(sessionsDir, "large.jsonl");
+    await fs.writeFile(transcriptPath, '{"type":"session","id":"large","version":3}\n');
+    const payload = "x".repeat(64 * 1024);
+    for (let index = 0; index < 128; index += 1) {
+      await fs.appendFile(
+        transcriptPath,
+        `${JSON.stringify({
+          type: "message",
+          id: `event-${index}`,
+          parentId: index ? `event-${index - 1}` : null,
+          message: { role: "assistant", provider: "openai-codex", content: payload },
+        })}\n`,
+      );
+    }
+    const originalSize = (await fs.stat(transcriptPath)).size;
+    let filesAtImport: string[] = [];
+    let sizeAtImport = 0;
+    runDoctorSessionSqlite.mockImplementationOnce(async () => {
+      filesAtImport = await fs.readdir(sessionsDir);
+      sizeAtImport = (await fs.stat(transcriptPath)).size;
+      return { totals: { legacyEntries: 0, unreferencedJsonlFiles: 0, issues: 0 } };
+    });
+    const readFile = vi.spyOn(fs, "readFile");
+    try {
+      await noteSessionTranscriptHealth({
+        cfg: {},
+        env: { ...process.env, OPENCLAW_STATE_DIR: root },
+        sessionDirs: [sessionsDir],
+        sessionSqlite: true,
+        shouldRepair: true,
+      });
+      expect({
+        filesAtImport,
+        sizeAtImport,
+        fullRawRead: readFile.mock.calls.some(([file]) => file === transcriptPath),
+      }).toEqual({
+        filesAtImport: ["large.jsonl"],
+        sizeAtImport: originalSize,
+        fullRawRead: false,
+      });
+    } finally {
+      readFile.mockRestore();
+    }
+  });
+
   it("explains how to shrink SQLite files after removing persisted runtime skills", async () => {
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
@@ -465,8 +603,8 @@ describe("doctor session transcript repair", () => {
         archivedTranscriptFiles: 0,
         archivedUnreferencedJsonlFiles: 0,
         importedTranscriptEvents: 0,
-        issues: 0,
-        legacyEntries: 0,
+        issues: 1,
+        legacyEntries: 1,
         sqliteEntries: 0,
         unreferencedJsonlFiles: 0,
         validatedTranscriptEvents: 0,
@@ -496,6 +634,12 @@ describe("doctor session transcript repair", () => {
       env,
       maintenanceAuthority: undefined,
     });
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Inspect with "openclaw doctor --session-sqlite dry-run --session-sqlite-all-agents".',
+      ),
+      "Session SQLite",
+    );
   });
 
   it("reports post-session plugin changes and actionable ownership warnings", async () => {

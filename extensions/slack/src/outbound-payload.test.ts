@@ -857,6 +857,7 @@ describe("slackOutbound sendPayload", () => {
     const controlsSent = sentSlackMessage(sendMock, 1);
     expect(controlsSent.to).toBe(to);
     expect(controlsSent.text).toBe("Approval required\n\nAllow");
+    expect(controlsSent.options).not.toHaveProperty("mediaUrl");
     expect(controlsSent.options.blocks?.map((block) => block.type)).toEqual(["section", "actions"]);
     expect(result.channel).toBe("slack");
     expect(result.messageId).toBe("sl-controls");

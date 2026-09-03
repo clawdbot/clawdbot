@@ -309,6 +309,13 @@ describe("program routes", () => {
     await expectRunFalse(["sessions"], routeArgv("sessions --store"));
   });
 
+  it.each([
+    ["separate empty value", ["node", "openclaw", "sessions", "--store", ""]],
+    ["empty assigned value", routeArgv("sessions --store=")],
+  ])("falls back to Commander for a sessions --store $0", async (_name, argv) => {
+    await expectRunFalse(["sessions"], argv);
+  });
+
   it("returns false for sessions route when --active value is missing", async () => {
     await expectRunFalse(["sessions"], routeArgv("sessions --active"));
   });

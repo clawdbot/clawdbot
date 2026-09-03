@@ -48,6 +48,13 @@ async function mountDiscover(handler: Parameters<typeof createClient>[0]) {
   return { page, request, available };
 }
 
+async function confirmPendingPluginInstall() {
+  await waitForFast(() =>
+    expect(document.body.querySelector(".exec-approval-actions .btn.primary")).not.toBeNull(),
+  );
+  document.body.querySelector<HTMLButtonElement>(".exec-approval-actions .btn.primary")?.click();
+}
+
 describe("PluginsPage consent", () => {
   beforeEach(async () => {
     await i18n.setLocale("en");
@@ -122,6 +129,7 @@ describe("PluginsPage consent", () => {
       }
 
       await clickRowAction(page, row, "Install");
+      await confirmPendingPluginInstall();
 
       await waitForFast(() =>
         expect(request).toHaveBeenCalledWith("plugins.install", installRequest),
@@ -204,6 +212,7 @@ describe("PluginsPage consent", () => {
     });
 
     await clickRowAction(page, '[data-plugin-id="calendar-runtime"]', "Install");
+    await confirmPendingPluginInstall();
     await waitForFast(() =>
       expect(page.querySelector(".plugins-policy-review")?.textContent).toContain(
         "Review this plugin.",

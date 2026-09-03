@@ -4,6 +4,26 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct TalkModeControllerPublishingTests {
+    @Test func `preview phase and pause updates retain local presentation state`() throws {
+        try #require(AppStateStore.shared.isPreview)
+        let controller = TalkModeController()
+        defer {
+            controller.setPaused(false)
+            controller.updatePhase(.idle)
+        }
+
+        controller.updatePhase(.listening)
+        controller.setPaused(true)
+        #expect(controller.phase == .listening)
+        #expect(controller.isPaused)
+
+        controller.updatePhase(.speaking)
+        #expect(controller.phase == .speaking)
+        #expect(controller.isPaused)
+        controller.setPaused(false)
+        #expect(!controller.isPaused)
+    }
+
     @Test func `controller publishes smoothed clamped level`() {
         let controller = TalkModeController()
 

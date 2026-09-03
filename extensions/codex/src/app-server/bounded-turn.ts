@@ -21,6 +21,7 @@ import type { CodexAppServerClient } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { createCodexElicitationResponse } from "./elicitation-response.js";
 import { normalizeCodexResponseTokenUsage } from "./event-projector-usage.js";
+import { readCodexAppServerConfigOptions } from "./launch-args.js";
 import { readModelListResult } from "./models.js";
 import { readCodexNotificationTurnId } from "./notification-correlation.js";
 import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
@@ -82,6 +83,7 @@ type CodexBoundedTurnResult = {
   text: string;
   items: CodexThreadItem[];
   model: string;
+  nativeSelection: { model: string; modelProvider?: string | null };
   usage?: ReturnType<typeof normalizeCodexResponseTokenUsage>;
 };
 
@@ -105,6 +107,7 @@ type CodexBoundedTurnParams = {
   authRequirement?: CodexAppServerAuthRequirement;
   timeoutMs: number;
   signal?: AbortSignal;
+  assertCurrent?: () => void;
   agentDir?: string;
   authProfileStore?: AuthProfileStore;
   options: CodexBoundedTurnOptions;
@@ -185,12 +188,14 @@ async function runBoundedCodexAppServerTurnInWorkspace(
         agentDir,
         config: params.config,
         timeoutMs,
+        assertCurrent: params.assertCurrent,
         ...(params.signal ? { abandonSignal: params.signal } : {}),
       })
     : await import("./shared-client.js").then(({ createIsolatedCodexAppServerClient }) =>
         createIsolatedCodexAppServerClient({
           startOptions,
           timeoutMs,
+          assertCurrent: params.assertCurrent,
           ...authSelection,
           authRequirement: params.authRequirement,
           agentDir,
@@ -233,6 +238,11 @@ async function runBoundedCodexAppServerTurnInWorkspace(
   timeout.unref?.();
 
   let retrySelection = false;
+  const requestOptions = {
+    timeoutMs,
+    signal: abortController.signal,
+    assertCurrent: params.assertCurrent,
+  };
   try {
     const modelSelection = await resolveCodexBoundedTurnModel({
       client,
@@ -240,6 +250,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
       requiredModalities: params.requiredModalities,
       timeoutMs,
       signal: abortController.signal,
+      assertCurrent: params.assertCurrent,
     });
     const inheritedMcpServerNames = params.requireNoExternalCapabilities
       ? await readCodexInheritedMcpServerNames(client, workspace.cwd, abortController.signal)
@@ -273,7 +284,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
           experimentalRawEvents: true,
           ephemeral: true,
         } satisfies CodexThreadStartParams,
-        { timeoutMs, signal: abortController.signal },
+        requestOptions,
       ),
     );
     activeThreadId = thread.thread.id;
@@ -294,7 +305,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
       await client.request(
         "thread/inject_items",
         { threadId: thread.thread.id, items: params.historyItems },
-        { timeoutMs, signal: abortController.signal },
+        requestOptions,
       );
     }
     const collector = createCodexBoundedTurnCollector(
@@ -308,17 +319,17 @@ async function runBoundedCodexAppServerTurnInWorkspace(
     );
     try {
       const turn = assertCodexTurnStartResponse(
-        // Inherit the empty thread environment; a cwd override recreates native tools.
+        // Inherit the admitted model and empty environment; another model/cwd
+        // override would replace the native selection or recreate native tools.
         await client.request<unknown>(
           "turn/start",
           {
             threadId: thread.thread.id,
             input: params.input,
             approvalPolicy: "on-request",
-            model: modelSelection.runtimeModelId,
             effort: "low",
           } satisfies CodexTurnStartParams,
-          { timeoutMs, signal: abortController.signal },
+          requestOptions,
         ),
       );
       activeTurnId = turn.turn.id;
@@ -331,6 +342,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
           timeoutError,
         })),
         model: modelSelection.catalogId,
+        nativeSelection: { model: thread.model, modelProvider: thread.modelProvider },
       };
     } finally {
       await interruptPromise;
@@ -403,17 +415,13 @@ function buildPrivateCodexAppServerStartOptions(
 ): ReturnType<typeof resolveCodexAppServerRuntimeOptions>["start"] {
   // Provider identity and model catalogs must survive isolation; hooks, MCP,
   // sandbox policy, and other process overrides must not cross that boundary.
-  const providerArgs = start.args.flatMap((arg, index) => {
-    const override =
-      arg === "-c" || arg === "--config"
-        ? start.args[index + 1]
-        : arg.startsWith("--config=")
-          ? arg.slice("--config=".length)
-          : undefined;
-    return override && /^\s*(?:openai_base_url|model_catalog_json)\s*=/u.test(override)
-      ? ["-c", override]
-      : [];
-  });
+  const providerArgs = readCodexAppServerConfigOptions(start.args).flatMap(({ name, value }) =>
+    (name === "-c" || name === "--config") &&
+    value &&
+    /^\s*(?:openai_base_url|model_catalog_json)\s*=/u.test(value)
+      ? ["-c", value]
+      : [],
+  );
   const privateEnv = Object.fromEntries(
     Object.entries(start.env ?? {}).filter(
       ([name]) => name.trim().toUpperCase() !== CODEX_APP_SERVER_ARGS_ENV_KEY,
@@ -472,11 +480,16 @@ async function resolveCodexBoundedTurnModel(params: {
   requiredModalities: string[];
   timeoutMs: number;
   signal: AbortSignal;
+  assertCurrent?: () => void;
 }): Promise<{ catalogId: string; runtimeModelId: string }> {
   const result = await params.client.request<unknown>(
     "model/list",
-    { limit: null, cursor: null, includeHidden: false },
-    { timeoutMs: Math.min(params.timeoutMs, 5_000), signal: params.signal },
+    { limit: null, cursor: null, includeHidden: params.selection.mode === "required" },
+    {
+      timeoutMs: Math.min(params.timeoutMs, 5_000),
+      signal: params.signal,
+      assertCurrent: params.assertCurrent,
+    },
   );
   const listed = readModelListResult(result).models;
   if (params.selection.mode === "live-default") {
@@ -587,7 +600,7 @@ function createCodexBoundedTurnCollector(
     async collect(
       startedTurn: CodexTurn,
       options: { signal: AbortSignal; timeoutError: CodexBoundedTurnTimeoutError },
-    ): Promise<Omit<CodexBoundedTurnResult, "model">> {
+    ): Promise<Omit<CodexBoundedTurnResult, "model" | "nativeSelection">> {
       turnId = startedTurn.id;
       if (isTerminalTurnStatus(startedTurn.status)) {
         completedTurn = startedTurn;

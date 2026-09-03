@@ -1,4 +1,5 @@
 import { WORKER_BUNDLE_PREWARM_VERSION } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { NODE_WORKER_BUNDLE_INSTALL_COMMAND } from "../../infra/node-commands.js";
 import { parseNodeWorkerBundleInstallResult } from "../../worker/node-bundle-install-protocol.js";
 import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
@@ -12,22 +13,27 @@ type WorkerBundleArtifact = Extract<WorkerInstallationArtifact, { install: "bund
 export function createGatewayNodeWorkerBundleInstaller(options: {
   gatewayNamespace: string;
   getTransport: () => NodeWorkerSupervisorTransport | undefined;
-  prepareBundle: () => Promise<WorkerBundleArtifact>;
   transfer: NodeWorkerBundleTransferService;
 }) {
-  return async (params: { deviceId: string; signal?: AbortSignal }) => {
+  return async (params: {
+    deviceId: string;
+    artifact: WorkerBundleArtifact;
+    signal?: AbortSignal;
+  }) => {
+    params.signal?.throwIfAborted();
     const transport = options.getTransport();
     if (!transport) {
       throw new Error("Device worker node transport is unavailable");
     }
-    const node = (await transport.listCurrentNodes()).find(
-      (candidate) => candidate.nodeId === params.deviceId,
-    );
+    const node = (
+      await racePromiseWithAbortSignal(transport.listCurrentNodes(), params.signal)
+    ).find((candidate) => candidate.nodeId === params.deviceId);
+    params.signal?.throwIfAborted();
     if (!node) {
       throw new Error("Device worker node is not connected with the installer dialect");
     }
-    const artifact = await options.prepareBundle();
-    const isAuthorized = () => transport.isCurrent(node);
+    const { artifact } = params;
+    const isAuthorized = () => !params.signal?.aborted && transport.isCurrent(node);
     const bundlePrewarm =
       (node.workerHost.bundlePrewarm ?? 0) >= WORKER_BUNDLE_PREWARM_VERSION
         ? WORKER_BUNDLE_PREWARM_VERSION

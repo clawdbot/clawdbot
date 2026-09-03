@@ -9,6 +9,8 @@ import {
 import { LOBSTER_PALETTE_LORE, lobsterPaletteName } from "../../components/lobster-pet-lore.ts";
 import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
 import { i18n, t } from "../../i18n/index.ts";
+// Page stars must override the shared mini-star rules loaded by lobster-pet-look.
+import "../../styles/lobsterdex.css";
 
 type LobsterdexViewEntry = {
   firstSeenAt: number | null;

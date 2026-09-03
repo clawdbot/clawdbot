@@ -10,6 +10,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult, SessionsListResult } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import type { RouteId } from "../app-route-paths.ts";
+import { createApplicationConfigCapability } from "../app/config.ts";
 import type {
   ApplicationContext,
   ApplicationGateway,
@@ -98,6 +99,8 @@ export type SidebarLifecycleState = HTMLElement & {
   refreshRequired: boolean;
   onRefresh: () => void;
   onRetryConnect?: () => void;
+  onOpenPalette?: () => void;
+  onToggleSidebar?: () => void;
   onOpenNewSession?: (agentId: string, target?: { catalogId: string }) => void;
   variant: "panel" | "drawer";
 };
@@ -127,6 +130,9 @@ export function createGatewayHarness(client: GatewayBrowserClient) {
     const [method] = args;
     if (method === "cron.list") {
       return Promise.resolve({ jobs: [], total: 0 } as T);
+    }
+    if (method === "cron.status") {
+      return Promise.resolve({ enabled: true, triggersEnabled: true, jobs: 0 } as T);
     }
     if (method === "models.authStatus") {
       return Promise.resolve({ ts: 0, providers: [] } as T);
@@ -363,9 +369,11 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     create,
     patch,
     archiveVisibility: (key: string) => archiveVisibilityByKey.get(key),
-    setArchiveVisibility(key: string, visibility: "pending" | "archived" | undefined) {
-      if (visibility) {
-        archiveVisibilityByKey.set(key, visibility);
+    setArchivePending(key: string, pending: boolean) {
+      if (pending) {
+        archiveVisibilityByKey.set(key, "pending");
+      } else if (state.result?.sessions.find((row) => row.key === key)?.archived) {
+        archiveVisibilityByKey.set(key, "archived");
       } else {
         archiveVisibilityByKey.delete(key);
       }
@@ -375,6 +383,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     },
     assignOwner,
     patchMany,
+    deletionState: () => undefined,
     delete: deleteSession,
     deleteMany,
     list,
@@ -529,8 +538,10 @@ export function createContext(
   sidebarSessionGatewayBindings.get(sessions)?.(gateway);
   const selectedAgentId = sessions.state.agentId ?? "main";
   return {
+    config: createApplicationConfigCapability({ resourceBasePath: "" }),
     gateway,
     sessions,
+    placementStartup: { pause: vi.fn<ApplicationContext["placementStartup"]["pause"]>() },
     agents: {
       state: {
         client: gateway.snapshot.client,
@@ -602,7 +613,7 @@ export const manyAgents = (count: number) =>
   }) as AgentsListResult;
 
 export const catalogPage = (
-  sessions: Array<{ threadId: string; name: string; sessionKey?: string }>,
+  sessions: Array<{ threadId: string; name: string; sessionKey?: string; color?: string }>,
   nextCursor?: string,
   catalogId = "codex",
 ): SessionsCatalogListResult => ({
@@ -668,9 +679,15 @@ export function setupSidebarTest() {
     localStorage.setItem("openclaw:sidebar:sessions:collapsed-sections", JSON.stringify([]));
   });
 
-  afterEach(() => {
-    document.body.replaceChildren();
+  afterEach(async () => {
     vi.useRealTimers();
+    await vi.dynamicImportSettled();
+    // Removing a prompt's DOM does not settle its promise or release its reentrancy guard.
+    for (const modal of document.body.querySelectorAll("openclaw-modal-dialog")) {
+      modal.dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
+    }
+    await vi.dynamicImportSettled();
+    document.body.replaceChildren();
     if (originalLocalStorage) {
       Object.defineProperty(globalThis, "localStorage", originalLocalStorage);
     } else {

@@ -1,6 +1,7 @@
 // Feishu helper module supports config schema behavior.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
+  ContextVisibilityModeSchema,
   DmPolicySchema,
   GroupPolicySchema,
   ReplyToModeSchema,
@@ -236,6 +237,7 @@ const FeishuSharedConfigShape = {
   capabilities: z.array(z.string()).optional(),
   markdown: MarkdownConfigSchema,
   configWrites: z.boolean().optional(),
+  contextVisibility: ContextVisibilityModeSchema.optional(),
   replyToMode: ReplyToModeSchema.optional(),
   responsePrefix: z.string().optional(),
   dmPolicy: DmPolicySchema.optional(),

@@ -30,12 +30,16 @@ function createRawEvent(params?: { messageId?: string; roomToken?: string; text?
   return JSON.stringify(payload);
 }
 
-function startSpool(queue: NextcloudTalkIngressQueue, deliver: NextcloudTalkIngressDeliver) {
+function startSpool(
+  queue: NextcloudTalkIngressQueue,
+  deliver: NextcloudTalkIngressDeliver,
+  log = vi.fn(),
+) {
   return createNextcloudTalkWebhookSpool({
     accountId: "default",
     queue,
     deliver,
-    runtime: { error: vi.fn(), log: vi.fn() },
+    runtime: { error: vi.fn(), log },
     pollIntervalMs: 60_000,
     adoptionStallTimeoutMs: 5_000,
     legacyReplayStore: null,
@@ -368,13 +372,28 @@ describe("Nextcloud Talk durable ingress", () => {
     });
   });
 
-  it("ignores non-message events before they consume the message id", async () => {
+  it("logs non-message events before they consume the message id", async () => {
     await withQueue(async (queue) => {
       const deliver = vi.fn();
-      const spool = startSpool(queue, deliver);
+      const log = vi.fn();
+      const spool = startSpool(queue, deliver, log);
       try {
-        const ignored = JSON.stringify({ type: "Update", object: { id: "msg-edit" } });
-        await expect(spool.receive(ignored)).resolves.toBe("ignored");
+        const fileShare = JSON.stringify({
+          type: "Create",
+          actor: { type: "Person", id: "alice", name: "Alice" },
+          object: {
+            type: "Document",
+            id: "file-1",
+            name: "report.pdf",
+            content: "",
+            mediaType: "application/pdf",
+          },
+          target: { type: "Collection", id: "room-1", name: "Room 1" },
+        });
+        await expect(spool.receive(fileShare)).resolves.toBe("ignored");
+        expect(log).toHaveBeenCalledWith(
+          "nextcloud-talk: ignored non-message webhook event (type=Create objectType=Document)",
+        );
         expect(await queue.listPending({ limit: "all" })).toEqual([]);
         expect(deliver).not.toHaveBeenCalled();
       } finally {

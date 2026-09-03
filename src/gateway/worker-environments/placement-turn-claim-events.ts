@@ -1,14 +1,17 @@
 import type { OperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
+import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import {
   getActiveAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import type { AssistantMessage } from "../../llm/types.js";
 import {
   captureGatewayRootWorkAdmissionContinuationScope,
   type GatewayRootWorkAdmissionContinuationScope,
 } from "../../process/gateway-work-admission.js";
+import { extractAssistantPhaseText } from "../../shared/chat-message-content.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
@@ -40,7 +43,7 @@ const workerTurnClaimClosedHandlers = resolveGlobalMap<
 export type WorkerTurnExecutionIdentity = Readonly<{
   agentId: string;
   delegatedAuthority: AgentRunDelegatedAuthority;
-  executionIdentityToken: ExecutionIdentityAdmissionToken;
+  executionIdentityToken?: ExecutionIdentityAdmissionToken;
   operationalRunInstance: OperationalRunInstanceRef;
   receiptAuthority: () => void;
   sessionKey: string;
@@ -52,12 +55,13 @@ export type WorkerTurnExecutionIdentityCapability = Readonly<{
 }>;
 
 type BoundWorkerTurnOwner = {
-  capability?: WorkerTurnExecutionIdentityCapability;
+  capability: WorkerTurnExecutionIdentityCapability;
   claim: WorkerSessionTurnClaim;
   claimKey: string;
-  continuation?: {
+  runtime: {
     delegatedAuthority: AgentRunDelegatedAuthority;
-    scope: GatewayRootWorkAdmissionContinuationScope;
+    prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
+    scope?: GatewayRootWorkAdmissionContinuationScope;
     store: WorkerTurnExecutionIdentityStore;
   };
 };
@@ -67,7 +71,7 @@ const workerTurnOwners = resolveGlobalMap<string, Map<string, BoundWorkerTurnOwn
   (ownersByPath) => {
     for (const owners of ownersByPath.values()) {
       for (const owner of owners.values()) {
-        owner.continuation?.scope.release();
+        owner.runtime?.scope?.release();
       }
     }
     ownersByPath.clear();
@@ -91,21 +95,28 @@ function claimKey(claim: WorkerSessionTurnClaim): string {
   ]);
 }
 
-/** Bind diagnostic provenance to the exact live run and worker owners. */
-export function bindWorkerTurnExecutionIdentity(
+/** Bind every worker to its live run; diagnostic provenance remains optional. */
+export function bindWorkerTurnOwner(
   store: WorkerTurnExecutionIdentityStore,
   claim: WorkerSessionTurnClaim,
-  token: ExecutionIdentityAdmissionToken,
+  token: ExecutionIdentityAdmissionToken | undefined,
   operationalRunInstance: OperationalRunInstanceRef,
   source: { agentId: string; sessionKey: string },
+  assertRunActive: () => void,
+  prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage,
 ): void {
+  const scope = captureGatewayRootWorkAdmissionContinuationScope();
   const path = store[WORKER_TURN_EXECUTION_IDENTITY_PATH];
   const delegatedAuthority = getActiveAgentRunDelegatedAuthority(operationalRunInstance);
   if (!path || !store.validateTurnClaim(claim) || !delegatedAuthority) {
+    scope?.release();
     throw new Error(`Session ${claim.sessionId} worker turn authority changed`);
   }
+  const owners = workerTurnOwners.get(path) ?? new Map();
   const assertActive = () => {
+    assertRunActive();
     if (
+      owners.get(claim.sessionId) !== owner ||
       !store.validateTurnClaim(claim) ||
       !validateAgentRunDelegatedAuthority(delegatedAuthority)
     ) {
@@ -115,7 +126,7 @@ export function bindWorkerTurnExecutionIdentity(
   const identity = Object.freeze({
     agentId: source.agentId,
     delegatedAuthority,
-    executionIdentityToken: token,
+    ...(token ? { executionIdentityToken: token } : {}),
     operationalRunInstance,
     receiptAuthority: assertActive,
     sessionKey: source.sessionKey,
@@ -130,18 +141,21 @@ export function bindWorkerTurnExecutionIdentity(
       return result;
     },
   });
-  const owners = workerTurnOwners.get(path) ?? new Map();
   const existing = owners.get(claim.sessionId);
   const currentClaimKey = claimKey(claim);
-  if (existing && existing.claimKey !== currentClaimKey) {
-    existing.continuation?.scope.release();
-  }
-  owners.set(claim.sessionId, {
-    ...(existing?.claimKey === currentClaimKey ? existing : {}),
+  existing?.runtime.scope?.release();
+  const owner: BoundWorkerTurnOwner = {
     capability,
     claim,
     claimKey: currentClaimKey,
-  });
+    runtime: {
+      delegatedAuthority,
+      prepareAssistantTranscriptMessage,
+      scope: scope ?? undefined,
+      store,
+    },
+  };
+  owners.set(claim.sessionId, owner);
   workerTurnOwners.set(path, owners);
 }
 
@@ -156,39 +170,9 @@ export function getWorkerTurnExecutionIdentityCapability(
     : undefined;
 }
 
-/** Completion authority follows the exact admitted run, not optional audit provenance. */
-export function bindWorkerTurnAdmissionContinuation(
-  store: WorkerTurnExecutionIdentityStore,
-  claim: WorkerSessionTurnClaim,
-  operationalRunInstance: OperationalRunInstanceRef,
-): void {
-  const scope = captureGatewayRootWorkAdmissionContinuationScope();
-  if (!scope) {
-    return;
-  }
-  const path = store[WORKER_TURN_EXECUTION_IDENTITY_PATH];
-  const delegatedAuthority = getActiveAgentRunDelegatedAuthority(operationalRunInstance);
-  if (!path || !store.validateTurnClaim(claim) || !delegatedAuthority) {
-    scope.release();
-    throw new Error(`Session ${claim.sessionId} worker turn authority changed`);
-  }
-  const owners = workerTurnOwners.get(path) ?? new Map();
-  const existing = owners.get(claim.sessionId);
-  existing?.continuation?.scope.release();
-  const currentClaimKey = claimKey(claim);
-  owners.set(claim.sessionId, {
-    ...(existing?.claimKey === currentClaimKey ? existing : {}),
-    claim,
-    claimKey: currentClaimKey,
-    continuation: { delegatedAuthority, scope, store },
-  });
-  workerTurnOwners.set(path, owners);
-}
-
-export function runWorkerTurnAdmissionContinuation<T>(
+function resolveWorkerTurnRuntime(
   identity: WorkerConnectionIdentity,
-  run: () => Promise<T>,
-): Promise<T> | null {
+): BoundWorkerTurnOwner["runtime"] | undefined {
   const claim = identity.turnClaim;
   if (
     !claim ||
@@ -198,7 +182,7 @@ export function runWorkerTurnAdmissionContinuation<T>(
     identity.environmentId !== claim.owner.environmentId ||
     identity.ownerEpoch !== claim.owner.ownerEpoch
   ) {
-    return null;
+    return undefined;
   }
   const currentClaimKey = claimKey(claim);
   let owner: BoundWorkerTurnOwner | undefined;
@@ -208,20 +192,40 @@ export function runWorkerTurnAdmissionContinuation<T>(
       continue;
     }
     if (owner) {
-      return null;
+      return undefined;
     }
     owner = candidate;
   }
-  const continuation = owner?.continuation;
+  const runtime = owner?.runtime;
   if (
     !owner ||
-    !continuation ||
-    !continuation.store.validateTurnClaim(owner.claim) ||
-    !validateAgentRunDelegatedAuthority(continuation.delegatedAuthority)
+    !runtime ||
+    !runtime.store.validateTurnClaim(owner.claim) ||
+    !validateAgentRunDelegatedAuthority(runtime.delegatedAuthority)
   ) {
-    return null;
+    return undefined;
   }
-  return continuation.scope.run(run);
+  return runtime;
+}
+
+export function runWorkerTurnAdmissionContinuation<T>(
+  identity: WorkerConnectionIdentity,
+  run: () => Promise<T>,
+): Promise<T> | null {
+  return resolveWorkerTurnRuntime(identity)?.scope?.run(run) ?? null;
+}
+
+/** Host-owned preparation runs at append time, after any awaited transcript admission. */
+export function prepareWorkerTurnTranscriptMessage(
+  identity: WorkerConnectionIdentity,
+  message: AssistantMessage,
+): AssistantMessage {
+  return (
+    resolveWorkerTurnRuntime(identity)?.prepareAssistantTranscriptMessage?.(
+      message,
+      extractAssistantPhaseText(message),
+    ) ?? message
+  );
 }
 
 export function attachWorkerTurnExecutionIdentityStore(store: object, path: string): void {
@@ -296,7 +300,7 @@ export function signalWorkerTurnClaimClosed(path: string, claim: WorkerSessionTu
   const owners = workerTurnOwners.get(path);
   const owner = owners?.get(claim.sessionId);
   if (owner?.claimKey === claimKey(claim)) {
-    owner.continuation?.scope.release();
+    owner.runtime?.scope?.release();
     owners?.delete(claim.sessionId);
     if (owners?.size === 0) {
       workerTurnOwners.delete(path);

@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Observation
+import OpenClawChatUI
 import SwiftUI
 
 @MainActor
@@ -17,6 +18,7 @@ final class StatusMenuSessions: NSObject {
     @ObservationIgnored private let refreshInterval: TimeInterval = 12
 
     func refresh(force: Bool = false) async {
+        guard !Task.isCancelled else { return }
         if !force,
            let updatedAt,
            Date().timeIntervalSince(updatedAt) < self.refreshInterval
@@ -34,12 +36,14 @@ final class StatusMenuSessions: NSObject {
 
         do {
             let snapshot = try await SessionLoader.loadSnapshot(limit: 32)
+            guard !Task.isCancelled else { return }
             self.cachedSnapshot = snapshot
             self.rows = snapshot.rows
             self.errorText = nil
             self.updatedAt = Date()
             self.prewarmPreviews(for: snapshot.rows)
         } catch {
+            guard !Task.isCancelled else { return }
             self.cachedSnapshot = nil
             self.rows = []
             self.errorText = self.compactError(error)
@@ -136,6 +140,11 @@ extension StatusMenuSessions {
             action: #selector(self.patchVerbose(_:)))
         menu.addItem(verbose)
 
+        let color = NSMenuItem(title: String(localized: "Color"), action: nil, keyEquivalent: "")
+        color.identifier = NSUserInterfaceItemIdentifier("session.color")
+        color.submenu = self.buildColorMenu(for: row)
+        menu.addItem(color)
+
         self.updateDebugLogItem(in: menu, row: row)
 
         menu.addItem(NSMenuItem.separator())
@@ -170,7 +179,36 @@ extension StatusMenuSessions {
         self.updatePreferenceMenu(
             menu.items.first { $0.identifier?.rawValue == "session.verbose" }?.submenu,
             current: row.verboseLevel)
+        menu.items.first { $0.identifier?.rawValue == "session.color" }?.submenu = self.buildColorMenu(for: row)
         self.updateDebugLogItem(in: menu, row: row)
+    }
+
+    private func buildColorMenu(for row: SessionRow) -> NSMenu {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        menu.showsStateColumn = true
+        menu.delegate = StatusMenuHighlightDelegate.shared
+        StatusMenuAppearance.pin(menu)
+        let selected = OpenClawSessionColor(name: row.color)
+        let scheme: ColorScheme = menu.appearance?.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            ? .dark : .light
+        for color in [OpenClawSessionColor?.none] + OpenClawSessionColor.allCases.map(Optional.some) {
+            let item = self.makeActionItem(
+                title: color?.label ?? String(localized: "Default"),
+                action: #selector(patchColor(_:)),
+                payload: ["key": row.key, "value": color?.rawValue ?? ""])
+            item.state = selected == color ? .on : .off
+            if let color {
+                let tint = NSColor(color.tint(in: scheme))
+                item.image = NSImage(size: NSSize(width: 14, height: 14), flipped: false) { rect in
+                    tint.setFill()
+                    NSBezierPath(ovalIn: rect.insetBy(dx: 2, dy: 2)).fill()
+                    return true
+                }
+            }
+            menu.addItem(item)
+        }
+        return menu
     }
 
     private func updateDebugLogItem(in menu: NSMenu, row: SessionRow) {
@@ -322,6 +360,30 @@ extension StatusMenuSessions {
 }
 
 extension StatusMenuSessions {
+    @objc private func patchColor(_ sender: NSMenuItem) {
+        guard let payload = sender.representedObject as? [String: String],
+              let key = payload["key"],
+              let value = payload["value"]
+        else { return }
+        Task {
+            do {
+                let request = OpenClawChatGatewayRequests.patchSession(
+                    sessionKey: key,
+                    agentID: nil,
+                    label: nil,
+                    category: nil,
+                    color: .some(value.isEmpty ? nil : value),
+                    pinned: nil,
+                    archived: nil,
+                    unreadPatch: nil)
+                _ = try await ControlChannel.shared.request(request)
+                await self.refresh(force: true)
+            } catch {
+                SessionActions.presentError(title: String(localized: "Update color failed"), error: error)
+            }
+        }
+    }
+
     @objc private func patchThinking(_ sender: NSMenuItem) {
         guard let payload = sender.representedObject as? [String: String],
               let key = payload["key"],
@@ -366,7 +428,7 @@ extension StatusMenuSessions {
         Task {
             guard SessionActions.confirmDestructiveAction(
                 title: String(localized: "Reset session?"),
-                message: String(localized: "Starts a new session ID for “\(key)”."),
+                message: String(format: String(localized: "Starts a new session ID for “%@”."), key),
                 action: String(localized: "Reset"))
             else { return }
 
@@ -406,7 +468,7 @@ extension StatusMenuSessions {
         Task {
             guard SessionActions.confirmDestructiveAction(
                 title: String(localized: "Delete session?"),
-                message: String(localized: "Deletes the “\(key)” entry and archives its transcript."),
+                message: String(format: String(localized: "Deletes the “%@” entry and archives its transcript."), key),
                 action: String(localized: "Delete"))
             else { return }
 

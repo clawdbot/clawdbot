@@ -13,10 +13,9 @@ import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
 import { scrollbarShadowStyles } from "../../lit/scrollbar-styles.ts";
 import { DockLayoutController, dockPanelStyles } from "../dock-layout-controller.ts";
-import { createDockPanelLayout, type DockPanelPlacement } from "../dock-panel-layout.ts";
+import { terminalPanelLayout, type DockPanelPlacement } from "../dock-panel-layout.ts";
 import { panelTabStripStyles } from "../panel-tab-strip.ts";
 import {
-  isTerminalPanelShortcut,
   TERMINAL_PANEL_DOCK_BOTTOM_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
   type TerminalPanelToggleDetail,
@@ -44,15 +43,6 @@ import { renderTerminalSessionPicker } from "./terminal-session-picker.ts";
 
 type TerminalDock = Exclude<DockPanelPlacement, "left">;
 
-const panelLayout = createDockPanelLayout({
-  storageKey: "openclaw.terminal.panel.v1",
-  minHeight: 140,
-  minWidth: 320,
-  defaultDock: "bottom",
-  supportedDocks: ["bottom", "right", "main"],
-  defaultHeight: 320,
-  defaultWidth: 520,
-});
 const CATALOG_TERMINAL_READY_TIMEOUT_MS = 30_000;
 
 /** `<openclaw-terminal-panel>` — the dockable Control UI shell surface. */
@@ -113,14 +103,13 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   catalogReadyTimeoutMs = CATALOG_TERMINAL_READY_TIMEOUT_MS;
   private readonly terminalSessions = new TerminalPanelSessionController(this);
   private readonly dockLayout = new DockLayoutController(this, {
-    layout: panelLayout,
+    layout: terminalPanelLayout,
     reservationPrefix: "terminal",
     isAvailable: () => this.isDockLayoutAvailable(),
     isFullscreen: () => this.fullscreen,
     onResize: () =>
       fitActiveTerminalSession(this.terminalSessions.tabs, this.terminalSessions.activeId),
   });
-  private readonly onGlobalKeyDown = (event: KeyboardEvent) => this.handleGlobalKey(event);
   private readonly onToggleRequest = (event: Event) => this.handleToggleRequest(event);
   private readonly onDockBottomRequest = (event: Event) => this.handleToggleRequest(event);
   private readonly onDocumentPointerDown = (event: PointerEvent) =>
@@ -138,7 +127,6 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     // Suppress before the restored open state boots a session nobody can see.
     this.dockLayout.setSuppressed(this.suppressed);
     if (!this.fullscreen && !this.embedded && !this.sessionBottomOnly) {
-      window.addEventListener("keydown", this.onGlobalKeyDown);
       window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.onToggleRequest);
     }
     if (!this.fullscreen && !this.embedded) {
@@ -161,7 +149,6 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
-    window.removeEventListener("keydown", this.onGlobalKeyDown);
     window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.onToggleRequest);
     window.removeEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, this.onDockBottomRequest);
     document.removeEventListener("pointerdown", this.onDocumentPointerDown, true);
@@ -173,10 +160,8 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   override updated(changed: Map<string, unknown>): void {
     if ((changed.has("embedded") || changed.has("sessionKey")) && !this.fullscreen) {
       if (this.embedded || this.sessionBottomOnly) {
-        window.removeEventListener("keydown", this.onGlobalKeyDown);
         window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.onToggleRequest);
       } else {
-        window.addEventListener("keydown", this.onGlobalKeyDown);
         window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.onToggleRequest);
       }
       if (this.embedded) {
@@ -263,7 +248,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   }
 
   get terminalPanelOpen(): boolean {
-    return this.dockLayout.open;
+    return this.embedded ? this.available : this.dockLayout.open && this.isDockLayoutAvailable();
   }
 
   hideTerminalPanelForUnavailableSurface(): void {
@@ -276,14 +261,6 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
 
   restoreTerminalPanelOpenState(): boolean {
     return this.dockLayout.restoreOpenState();
-  }
-
-  private handleGlobalKey(event: KeyboardEvent): void {
-    // Ctrl+` toggles the terminal, matching common IDE shells.
-    if (isTerminalPanelShortcut(event)) {
-      event.preventDefault();
-      this.toggle();
-    }
   }
 
   private isDockLayoutAvailable(): boolean {
@@ -399,11 +376,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   }
 
   override render() {
-    if (
-      !this.available ||
-      (!this.embedded && !this.dockLayout.open) ||
-      (this.sessionBottomOnly && this.dockLayout.dock !== "bottom")
-    ) {
+    if (!this.terminalPanelOpen) {
       return nothing;
     }
     const mode = this.embedded ? "embedded" : this.fullscreen ? "fullscreen" : this.dockLayout.dock;

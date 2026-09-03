@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { migratePersistedImplicitMainRoster } from "../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -34,6 +35,41 @@ function createRuntime(config: OpenClawConfig) {
 }
 
 describe("createAgentHarnessToolSurfaceRuntime", () => {
+  it("executes a model opt-in while the global default is off", async () => {
+    const markerTool = createStubTool("read_marker");
+    markerTool.execute = async () => ({
+      content: [{ type: "text", text: "MODEL_OVERRIDE" }],
+      details: { marker: "MODEL_OVERRIDE" },
+    });
+    const runtime = createAgentHarnessToolSurfaceRuntime({
+      config: {
+        tools: { codeMode: false },
+        agents: { defaults: { models: { "test/model-a": { codeMode: true } } } },
+      },
+      modelProvider: "test",
+      modelId: "model-a",
+      modelToolsEnabled: true,
+      executeTool: async ({ toolCallId, input }) => markerTool.execute(toolCallId, input),
+    });
+    try {
+      const surface = runtime.compactTools([markerTool]);
+      expect(surface.tools.map((tool) => tool.name)).toEqual(["exec", "wait"]);
+      const exec = expectDefined(
+        surface.tools.find((tool) => tool.name === "exec"),
+        "model-enabled exec control",
+      );
+      const result = await exec.execute("model-override", {
+        code: "return await read_marker({});",
+      });
+      expect(result.details).toMatchObject({
+        status: "completed",
+        value: { marker: "MODEL_OVERRIDE" },
+      });
+    } finally {
+      runtime.cleanup();
+    }
+  });
+
   it("suppresses catalog controls for a host-scoped ring-zero run", () => {
     const openclaw = {
       ...createStubTool("openclaw"),

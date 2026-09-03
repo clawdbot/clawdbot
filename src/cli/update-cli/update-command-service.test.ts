@@ -32,8 +32,7 @@ vi.mock("./restart-helper.js", async (importOriginal) => ({
   runRestartScript: mocks.runRestartScript,
 }));
 
-vi.mock("./update-command-config.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./update-command-config.js")>()),
+vi.mock("./update-command-config-snapshot.js", () => ({
   createUpdateConfigSnapshot: mocks.createUpdateConfigSnapshot,
 }));
 
@@ -91,6 +90,44 @@ describe("maybeRestartService", () => {
     expect(mocks.waitForGatewayHealthyRestart).toHaveBeenCalledWith(
       expect.objectContaining({ expectedBuildId: "new-build" }),
     );
+  });
+
+  it("rejects a Git restart when the expected build is never observed", async () => {
+    mocks.waitForGatewayHealthyRestart.mockResolvedValue({
+      runtime: { status: "stopped" },
+      portUsage: {
+        port: 18789,
+        status: "free",
+        listeners: [],
+        hints: [],
+      },
+      healthy: false,
+      staleGatewayPids: [],
+      expectedBuildId: "new-build",
+      waitOutcome: "timeout",
+    });
+
+    await expect(
+      maybeRestartService({
+        shouldRestart: true,
+        result: {
+          status: "ok",
+          mode: "git",
+          root: "/tmp/openclaw-configured-ui-update",
+          after: { buildId: "new-build" },
+          steps: [],
+          durationMs: 0,
+        },
+        channel: "dev",
+        opts: { json: true },
+        refreshServiceEnv: false,
+        serviceEnv: { HOME: "/home/operator" },
+        serviceInstallEnv: {},
+        gatewayPort: 18789,
+        restartScriptPath: "/tmp/openclaw-configured-ui-restart.sh",
+        timeoutMs: 1_000,
+      }),
+    ).resolves.toBe(false);
   });
 
   it.each(["stable", "beta"] as const)(

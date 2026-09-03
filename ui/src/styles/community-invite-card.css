@@ -1,0 +1,23 @@
+.sidebar-shell__invite {
+  --community-invite-surface-current: var(--sidebar-bg, var(--bg));
+  --community-invite-fade-height-current: 36px;
+  --community-invite-fade-opacity-20-current: 6%;
+  --community-invite-fade-opacity-45-current: 22%;
+  --community-invite-fade-opacity-70-current: 60%;
+  --community-invite-fade-opacity-88-current: 80%;
+  --community-invite-photo-base-shade-current: rgb(0 0 0 / 30%);
+}
+
+:root[data-theme-mode="light"] .sidebar-shell__invite {
+  --community-invite-surface-current: color-mix(
+    in srgb,
+    var(--sidebar-bg, var(--bg)) 70%,
+    var(--bg-hover) 30%
+  );
+  --community-invite-fade-height-current: 0px;
+  --community-invite-fade-gradient-current: linear-gradient(
+    to bottom,
+    transparent,
+    var(--community-invite-surface-current)
+  );
+}

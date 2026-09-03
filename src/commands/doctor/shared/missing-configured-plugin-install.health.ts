@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import type { HealthFinding, HealthRepairEffect } from "../../../flows/health-checks.js";
+import { isPayloadMissing } from "../../../plugins/payload-verification.js";
 import { resolveCompatibilityHostVersion } from "../../../version.js";
 import {
   collectDownloadableInstallCandidates,
@@ -16,10 +17,7 @@ import {
   resolveCandidateInstallSpec,
   resolveRecordInstallPath,
 } from "./missing-configured-plugin-install.install.js";
-import {
-  isInstalledRecordMissingOnDisk,
-  isTrustedOfficialInstallRecordForCandidate,
-} from "./missing-configured-plugin-install.records.js";
+import { isTrustedOfficialInstallRecordForCandidate } from "./missing-configured-plugin-install.records.js";
 import { shouldDeferConfiguredPluginInstallRepair } from "./update-phase.js";
 
 const CONFIGURED_PLUGIN_INSTALLS_CHECK_ID = "core/doctor/configured-plugin-installs";
@@ -125,7 +123,7 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
     })) {
       deferredPluginIds.add(pluginId);
       const record = records[pluginId];
-      if (!record || !isInstalledRecordMissingOnDisk(record, env)) {
+      if (!record || !isPayloadMissing(env, record.installPath)) {
         continue;
       }
       issues.push({
@@ -145,7 +143,7 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
       !officialReplacementPluginIds.has(pluginId) &&
       !bundledPluginsById.has(pluginId) &&
       ((pluginIds.has(pluginId) &&
-        (!knownIds.has(pluginId) || isInstalledRecordMissingOnDisk(records[pluginId], env))) ||
+        (!knownIds.has(pluginId) || isPayloadMissing(env, records[pluginId]?.installPath))) ||
         staleDescriptorPluginIds.has(pluginId) ||
         repairableInstalledPluginIds.has(pluginId)),
   );
@@ -187,7 +185,7 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
         (!knownIds.has(pluginId) && !hasRecord && !bundledPluginsById.has(pluginId)) ||
         (hasRecord &&
           !bundledPluginsById.has(pluginId) &&
-          isInstalledRecordMissingOnDisk(records[pluginId], env))
+          isPayloadMissing(env, records[pluginId]?.installPath))
       );
     }),
   );
@@ -223,7 +221,7 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
     }
     const hasRecord = Object.hasOwn(records, candidate.pluginId);
     const hasUsableRecord =
-      hasRecord && !isInstalledRecordMissingOnDisk(records[candidate.pluginId], env);
+      hasRecord && !isPayloadMissing(env, records[candidate.pluginId]?.installPath);
     if (
       !shouldReplaceBrokenOfficialInstall &&
       (hasUsableRecord || (knownIds.has(candidate.pluginId) && !hasRecord))

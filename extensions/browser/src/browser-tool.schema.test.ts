@@ -2,6 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { projectRuntimeToolInputSchema } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { normalizeOpenAIToolSchemas } from "openclaw/plugin-sdk/provider-tools";
+import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { createBrowserToolSchema, resolveBrowserToolCapabilities } from "./browser-tool.schema.js";
 import { ACT_MAX_VIEWPORT_DIMENSION } from "./browser/act-policy.js";
@@ -111,6 +112,58 @@ describe("browser tool schema", () => {
       expect.arrayContaining(["download", "waitfordownload"]),
     );
     expect(properties.path).toBeDefined();
+  });
+
+  it.each([false, true])("accepts the new action parameters (bound=%s)", (tabBound) => {
+    const schema = createBrowserToolSchema(resolveBrowserToolCapabilities({ tabBound }));
+    for (const args of [
+      { action: "requests", targetId: "t1", filter: "fetch", clear: true, limit: 10 },
+      { action: "errors", targetId: "t1", clear: true, limit: 10 },
+      { action: "text", targetId: "t1", selector: "article", maxChars: 1000 },
+      {
+        action: "emulate",
+        targetId: "t1",
+        device: "iPhone 15",
+        colorScheme: "none",
+        timezoneId: "America/New_York",
+        locale: "en-US",
+      },
+      { action: "snapshot", query: "sign in" },
+    ]) {
+      expect(Value.Check(schema, args), JSON.stringify(args)).toBe(true);
+    }
+    expect(Value.Check(schema, { action: "emulate", colorScheme: "invalid" })).toBe(false);
+    expect(Value.Check(schema, { action: "requests", clear: "true" })).toBe(false);
+    expect(Value.Check(schema, { action: "errors", clear: "true" })).toBe(false);
+    expect(Value.Check(schema, { action: "errors", limit: 0 })).toBe(false);
+  });
+
+  it("hides Playwright-only actions for an existing-session binding", () => {
+    const capabilities = resolveBrowserToolCapabilities({
+      tabBound: true,
+      profileCapabilities: {
+        supportsBatchActions: false,
+        supportsDownloads: false,
+        supportsPdf: false,
+        supportsRequests: false,
+        supportsErrors: false,
+        supportsPageText: false,
+        supportsEmulation: false,
+      },
+    });
+    for (const action of [
+      "requests",
+      "errors",
+      "text",
+      "emulate",
+      "pdf",
+      "download",
+      "waitfordownload",
+    ]) {
+      expect(capabilities.actions).not.toContain(action);
+    }
+    expect(capabilities.actions).toContain("snapshot");
+    expect(capabilities.actions).toContain("console");
   });
 
   it("exposes scrollIntoView on nested and flattened act params", () => {

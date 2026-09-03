@@ -36,7 +36,7 @@ describe("GPT-Live session shaping", () => {
       buildOpenAIQuicksilverSession({
         model: "gpt-live-1",
         instructions: " Speak briefly. ",
-        voice: "CEDAR",
+        voice: "SPRUCE",
         initialItems: [
           { role: "user", text: "Question" },
           { role: "assistant", text: "Answer" },
@@ -45,7 +45,7 @@ describe("GPT-Live session shaping", () => {
     ).toEqual({
       model: "gpt-live-1",
       instructions: "Speak briefly.",
-      audio: { output: { voice: "cedar" } },
+      audio: { output: { voice: "spruce" } },
       delegation: { type: "client" },
       initial_items: [
         {
@@ -69,10 +69,19 @@ describe("GPT-Live session shaping", () => {
     ).toEqual({
       model: "gpt-live-1-mini",
       instructions: "",
-      audio: { output: { voice: "marin" } },
+      audio: { output: { voice: "cove" } },
       delegation: { type: "client" },
     });
   });
+
+  it.each(["arbor", "breeze", "cove", "ember", "juniper", "maple", "sol", "spruce", "vale"])(
+    "accepts the Codex V3 %s voice",
+    (voice) => {
+      expect(buildOpenAIQuicksilverSession({ model: "gpt-live-1-codex", voice }).audio).toEqual({
+        output: { voice },
+      });
+    },
+  );
 
   it.each([
     "alloy",
@@ -85,20 +94,11 @@ describe("GPT-Live session shaping", () => {
     "sage",
     "shimmer",
     "verse",
-  ])("accepts the live-proven %s voice", (voice) => {
+  ])("defaults the GA-only %s voice to Cove for GPT-Live", (voice) => {
     expect(buildOpenAIQuicksilverSession({ model: "gpt-live-1-codex", voice }).audio).toEqual({
-      output: { voice },
+      output: { voice: "cove" },
     });
   });
-
-  it.each(["arbor", "breeze", "cove", "ember", "juniper", "maple", "sol", "spruce", "vale"])(
-    "falls back from the rejected %s voice",
-    (voice) => {
-      expect(buildOpenAIQuicksilverSession({ model: "gpt-live-1-codex", voice }).audio).toEqual({
-        output: { voice: "marin" },
-      });
-    },
-  );
 
   it("bounds initial items to the newest context", () => {
     const session = buildOpenAIQuicksilverSession({
@@ -373,12 +373,17 @@ describe("GPT-Live offer broker", () => {
       auth: { type: "oauth" as const, token: "oauth-token", accountId: "account-123" },
       authorization: "Bearer oauth-token",
       accountId: "account-123",
+      callUrl:
+        "https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
+      contentType: "application/json",
     },
     {
       name: "API key",
       auth: { type: "api-key" as const, token: "platform-key" },
       authorization: "Bearer platform-key",
       accountId: undefined,
+      callUrl: "https://api.openai.com/v1/live",
+      contentType: expect.stringMatching(/^multipart\/form-data; boundary=/),
     },
   ])("uses matching $name headers on signaling and the API sideband", async (authCase) => {
     vi.stubEnv("OPENCLAW_VERSION", "2026.7.2-test");
@@ -408,8 +413,7 @@ describe("GPT-Live offer broker", () => {
       );
 
       const sideband = socketRequests[0];
-      expect(signalingUrl).toBe("https://api.openai.com/v1/live");
-      expect(signalingUrl).not.toContain("?");
+      expect(signalingUrl).toBe(authCase.callUrl);
       expect(sideband?.url).toBe("wss://api.openai.com/v1/live/rtc_header-parity");
       expect(signalingHeaders).toMatchObject({
         Authorization: authCase.authorization,
@@ -420,7 +424,7 @@ describe("GPT-Live offer broker", () => {
         "session-id": expect.any(String),
         "thread-id": expect.any(String),
         "x-session-id": expect.any(String),
-        "Content-Type": expect.stringMatching(/^multipart\/form-data; boundary=/),
+        "Content-Type": authCase.contentType,
       });
       expect(sideband?.headers).toMatchObject({
         Authorization: authCase.authorization,
@@ -562,6 +566,8 @@ describe("GPT-Live offer broker", () => {
   it.each(["error", "close"] as const)(
     "fails safely when the sideband emits %s immediately after opening",
     async (terminalEvent) => {
+      const onError = vi.fn();
+      const onClose = vi.fn();
       const { realtime, sockets, logger } = createBroker({
         socketFactory: () => {
           const socket = new FakeSocket("manual");
@@ -584,6 +590,7 @@ describe("GPT-Live offer broker", () => {
             providerConfig: {},
             model: "gpt-live-1-codex",
             runAgentConsult: vi.fn(async () => ({ text: "Done" })),
+            gatewayControl: { bindBridge: vi.fn(), onError, onClose },
           },
           { type: "api-key", token: "platform-key" },
         );
@@ -596,6 +603,8 @@ describe("GPT-Live offer broker", () => {
         expect(response.res.statusCode).toBe(502);
         expect(response.readBody()).toContain("sideband failed during startup");
         expect(sockets).toHaveLength(1);
+        expect(onError).toHaveBeenCalledOnce();
+        expect(onClose).toHaveBeenCalledExactlyOnceWith("error");
         if (terminalEvent === "error") {
           expect(logger.warn).toHaveBeenCalledWith(
             "OpenAI GPT-Live sideband socket failed: post-open failure",
@@ -746,7 +755,7 @@ describe("GPT-Live offer broker", () => {
       expect(reservation).toMatchObject({
         offerUrl: OPENAI_QUICKSILVER_OFFER_PATH,
         model: "gpt-live-1",
-        voice: "marin",
+        voice: "cove",
         expiresAt: expect.any(Number),
       });
       if (reservation.transport !== "webrtc") {

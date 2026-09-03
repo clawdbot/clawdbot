@@ -20,7 +20,7 @@ describe("shared/entry-status", () => {
       entry: {
         metadata: {
           emoji: "🦀",
-          homepage: "https://openclaw.ai",
+          homepage: " https://openclaw.ai ",
           requires: {
             bins: ["bun"],
             anyBins: ["ffmpeg", "sox"],
@@ -64,7 +64,7 @@ describe("shared/entry-status", () => {
     });
   });
 
-  it("uses process.platform in the current-platform wrapper", () => {
+  it("evaluates OS requirements against process.platform", () => {
     setPlatform("darwin");
 
     const result = evaluateEntryRequirementsForCurrentPlatform({
@@ -83,7 +83,7 @@ describe("shared/entry-status", () => {
     expect(result.missing.os).toStrictEqual([]);
   });
 
-  it("pulls metadata and frontmatter from entry objects in the entry wrapper", () => {
+  it("combines frontmatter presentation with always-on requirements", () => {
     setPlatform("linux");
 
     const result = evaluateEntryRequirementsForCurrentPlatform({
@@ -155,5 +155,48 @@ describe("shared/entry-status", () => {
       requirementsSatisfied: true,
       configChecks: [],
     });
+  });
+
+  it.each([
+    {
+      name: "blank metadata suppresses frontmatter",
+      entry: {
+        metadata: { emoji: "", homepage: "   " },
+        frontmatter: { emoji: "🙂", homepage: "https://example.com" },
+      },
+      emoji: undefined,
+      homepage: undefined,
+    },
+    {
+      name: "URL alias is trimmed when higher-priority fields are absent",
+      entry: { frontmatter: { emoji: " ", url: " https://openclaw.ai/install " } },
+      emoji: " ",
+      homepage: "https://openclaw.ai/install",
+    },
+    {
+      name: "blank homepage suppresses lower-priority aliases",
+      entry: {
+        frontmatter: {
+          homepage: " ",
+          website: "https://docs.openclaw.ai",
+          url: "https://openclaw.ai/install",
+        },
+      },
+      emoji: undefined,
+      homepage: undefined,
+    },
+  ])("preserves presentation precedence: $name", ({ entry, emoji, homepage }) => {
+    const result = evaluateEntryRequirementsForCurrentPlatform({
+      always: false,
+      entry,
+      hasLocalBin: () => false,
+      isEnvSatisfied: () => false,
+      isConfigSatisfied: () => false,
+    });
+
+    expect(result.emoji).toBe(emoji);
+    expect(result.homepage).toBe(homepage);
+    expect(Object.hasOwn(result, "emoji")).toBe(emoji !== undefined);
+    expect(Object.hasOwn(result, "homepage")).toBe(homepage !== undefined);
   });
 });

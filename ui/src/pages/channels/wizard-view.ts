@@ -2,7 +2,6 @@
 // confirm/multiselect) plus the WhatsApp QR linking phase after config write.
 import { html, nothing, type TemplateResult } from "lit";
 import { renderChannelIcon } from "../../components/channel-icon.ts";
-import { handleCopyButton } from "../../components/copy-button.ts";
 import {
   renderWizardBusyButton,
   renderWizardStepControls,
@@ -15,6 +14,8 @@ import type { ChannelWizardState, ChannelWizardStep } from "./wizard-controller.
 type ChannelWizardViewProps = {
   wizard: ChannelWizardState;
   channelLabel: (channelId: string) => string;
+  channelIconUrl?: (channelId: string) => string | undefined;
+  channelHasPluginIcon?: (channelId: string) => boolean;
   // Pending multiselect toggles live in page state so re-renders keep them.
   multiselectValues: readonly unknown[];
   onToggleMultiselect: (value: unknown) => void;
@@ -52,26 +53,10 @@ function renderNoteStep(step: ChannelWizardStep, props: ChannelWizardViewProps) 
     `;
   }
   const looksLikeCode = message.includes("{") || message.includes("  ");
-  const copyLabel = t("channels.setup.copyText");
-  const onCopy = (event: Event) => void handleCopyButton(event, message, copyLabel);
+  const outputClass = `channels-wizard__output${looksLikeCode ? " channels-wizard__output--code" : ""}`;
   return html`
     ${step.title ? html`<div class="channels-wizard__message">${step.title}</div>` : nothing}
-    ${message
-      ? html`<div
-          class="channels-wizard__note ${looksLikeCode ? "channels-wizard__note--code" : ""}"
-        >
-          ${message}
-        </div>`
-      : nothing}
-    ${message
-      ? html`
-          <div class="channels-wizard__links">
-            <button type="button" class="btn btn--sm" @click=${onCopy}>
-              <span data-copy-label>${copyLabel}</span>
-            </button>
-          </div>
-        `
-      : nothing}
+    ${message ? html`<div class=${outputClass}>${message}</div>` : nothing}
     <div class="channels-wizard__footer">
       ${stepIsBusy(props)
         ? renderWizardBusyButton(t("channels.setup.working"))
@@ -253,7 +238,12 @@ export function renderChannelWizard(
     >
       <div class="channels-wizard">
         <div class="channels-wizard__header">
-          ${channel ? renderChannelIcon(channel, label, "tile") : nothing}
+          ${channel
+            ? renderChannelIcon(channel, label, "tile", {
+                pluginIconUrl: props.channelIconUrl?.(channel),
+                preferPluginIcon: props.channelHasPluginIcon?.(channel),
+              })
+            : nothing}
           <div class="channels-wizard__heading">
             <h2>${t("channels.setup.title", { channel: label })}</h2>
             <div class="muted channels-wizard__subtitle">

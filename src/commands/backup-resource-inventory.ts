@@ -2,6 +2,7 @@
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isVolatileBackupPath } from "../infra/backup-volatile-filter.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import type { ResolvedPluginBackupResource } from "../plugins/manifest-backup-resources.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -32,6 +33,7 @@ export type BackupResourceInventory = Readonly<{
   isIncluded: (sourcePath: string) => boolean;
   isTraversable: (sourcePath: string) => boolean;
   isPackageContent: (sourcePath: string) => boolean;
+  isVolatile: (sourcePath: string) => boolean;
 }>;
 
 const MANAGED_STATE_ROOTS = ["dev", "git", "npm", "npm-runtime", "tmp", "tools"] as const;
@@ -101,12 +103,14 @@ export async function createBackupResourceInventory(params: {
   configPath: string;
   oauthDir: string;
   workspaceDirs: readonly string[];
+  excludedWorkspaceDirs: readonly string[];
   agentRoots: readonly BackupAgentRoot[];
   pluginResources: readonly ResolvedPluginBackupResource[];
   pluginRoots: readonly string[];
   onlyConfig?: boolean;
 }): Promise<BackupResourceInventory> {
   const stateDir = path.resolve(params.stateDir);
+  const configPath = path.resolve(params.configPath);
   const agentRoots = Object.freeze(
     params.agentRoots.map((root) =>
       Object.freeze({
@@ -117,7 +121,7 @@ export async function createBackupResourceInventory(params: {
     ),
   );
   const protectedPathSet = new Set<string>([
-    path.resolve(params.configPath),
+    configPath,
     resolveOpenClawStateSqlitePath({ ...process.env, OPENCLAW_STATE_DIR: stateDir }),
   ]);
   const regenerableRoots: BackupRegenerableRoot[] = [];
@@ -180,10 +184,13 @@ export async function createBackupResourceInventory(params: {
       }),
   );
   const protectedPaths = Object.freeze([...protectedPathSet].toSorted());
+  // Workspace exclusions stop traversal but are not regenerable resources;
+  // protected nested owners remain reachable through isIncluded below.
   const excludedPaths = Object.freeze(
-    uniqueRegenerableRoots
-      .map((resource) => resource.sourcePath)
-      .toSorted((left, right) => right.length - left.length || left.localeCompare(right)),
+    [
+      ...uniqueRegenerableRoots.map((resource) => resource.sourcePath),
+      ...new Set(params.excludedWorkspaceDirs.map((dir) => path.resolve(dir))),
+    ].toSorted((left, right) => right.length - left.length || left.localeCompare(right)),
   );
 
   const isIncluded = (sourcePath: string): boolean => {
@@ -237,6 +244,11 @@ export async function createBackupResourceInventory(params: {
     }
     return segments.includes("node_modules");
   };
+  const volatilePlan = { stateDirs: [stateDir] };
+  // Keep the explicit config file; the planner selects it separately when a
+  // volatile parent would otherwise prune it along with its neighbors.
+  const isVolatile = (sourcePath: string): boolean =>
+    path.resolve(sourcePath) !== configPath && isVolatileBackupPath(sourcePath, volatilePlan);
 
   return Object.freeze({
     stateDir,
@@ -245,5 +257,6 @@ export async function createBackupResourceInventory(params: {
     isIncluded,
     isTraversable,
     isPackageContent,
+    isVolatile,
   });
 }

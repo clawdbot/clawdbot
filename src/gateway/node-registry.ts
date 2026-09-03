@@ -5,11 +5,11 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
-import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 // NodeSession is plugin-SDK-reachable; importing these types from the
 // gateway-protocol index would retain the whole ProtocolSchemas registry in
 // the public plugin-sdk dts (check-plugin-sdk-exports guards this).
 import type {
+  NodeHostStatsPayload,
   NodePluginToolDescriptor,
   NodeSkillDescriptor,
 } from "../../packages/gateway-protocol/src/schema/nodes.js";
@@ -22,7 +22,9 @@ import {
   parseComputerUseCapabilityDescriptor,
   type ComputerUseCapabilityDescriptor,
 } from "../plugins/computer-use-contract.js";
+import type { NodeHostStats } from "../shared/node-host-stats.js";
 import { resolveEffectiveComputerUseDescriptor } from "./node-computer-use-descriptor.js";
+import { serializeNodeEvent } from "./node-invoke-request.js";
 import {
   createRegisteredNodePluginToolDescriptorMap,
   normalizeNodePluginToolDescriptors,
@@ -33,6 +35,7 @@ import {
 } from "./node-plugin-tool-snapshot.js";
 import {
   forgetNodeRunnerInventory,
+  invokeLifecycleNodeRegistry,
   invokePublicNodeRegistry,
   isNodeRegistryPendingInvokeConnectionActive,
   reconcileNodeRunnerAvailability,
@@ -46,6 +49,7 @@ import {
   type PendingInvoke,
   type PendingSystemRunEvent,
 } from "./node-registry.invoke-stream.js";
+import { isNodeWorkerHostClientId } from "./node-runner-inventory-runtime.js";
 import { normalizeNodeSkillDescriptors } from "./node-skill-descriptors.js";
 import { MAX_BUFFERED_BYTES, WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -86,9 +90,16 @@ export type NodeSession = {
   connectedAtMs: number;
   lastActiveAtMs?: number;
   presenceUpdatedAtMs?: number;
+  hostStats?: NodeHostStats;
 };
 
 type PairingBoundNodeSession = NodeSession & { pairingIdentity: string };
+const NODE_SESSION_WITHHELD_COMMANDS = new WeakMap<object, readonly string[]>();
+
+/** Reads the private pre-pairing policy result retained for the current live session. */
+export function readNodeSessionWithheldCommands(node: object): readonly string[] {
+  return NODE_SESSION_WITHHELD_COMMANDS.get(node) ?? [];
+}
 
 type PairingBoundNodeSessionLease = {
   session: PairingBoundNodeSession;
@@ -232,7 +243,8 @@ export class NodeRegistry {
       if (
         !node ||
         node.connId !== pending.connId ||
-        (!pending.onProgress && node.clientId !== GATEWAY_CLIENT_IDS.NODE_HOST)
+        (!pending.onProgress &&
+          (!isNodeWorkerHostClientId(node.clientId) || node.clientMode !== "node"))
       ) {
         return;
       }
@@ -466,6 +478,9 @@ export class NodeRegistry {
     )
       ? ((connect as { declaredCommands?: string[] }).declaredCommands ?? [])
       : commands;
+    // SAFETY: reconciliation attaches this fact before admission, preserving policy-denial provenance.
+    const withheldCommandsValue = (connect as { withheldCommands?: string[] }).withheldCommands;
+    const withheldCommands = Array.isArray(withheldCommandsValue) ? withheldCommandsValue : [];
     const computerUse =
       connect.computerUse === undefined
         ? undefined
@@ -537,6 +552,7 @@ export class NodeRegistry {
       pathEnv,
       connectedAtMs: Date.now(),
     };
+    NODE_SESSION_WITHHELD_COMMANDS.set(session, withheldCommands);
     const replacesPresence = previousSession?.lastActiveAtMs !== undefined;
     forgetNodeRunnerInventory(this, client.connId);
     this.nodesById.set(nodeId, session);
@@ -756,6 +772,22 @@ export class NodeRegistry {
       this.publishActiveNodeContext();
     }
     return resolution.status === "current";
+  }
+
+  /** Stores the latest resource snapshot for the exact authenticated node connection. */
+  updateHostStats(params: {
+    nodeId: string;
+    connId?: string;
+    stats: NodeHostStatsPayload;
+    observedAtMs?: number;
+  }): NodeHostStats | null {
+    const node = this.getRegisteredSession(params.nodeId);
+    if (!node || node.connId !== params.connId) {
+      return null;
+    }
+    // Resource snapshots are operator-facing; publishing active-node context would churn prompts.
+    node.hostStats = { ...params.stats, updatedAtMs: params.observedAtMs ?? Date.now() };
+    return node.hostStats;
   }
 
   /** Updates recent input activity for the exact authenticated node connection. */
@@ -1113,12 +1145,19 @@ export class NodeRegistry {
     signal?: AbortSignal;
     idempotencyKey?: string;
     sessionKey?: string;
-    /** Receives the id after pairing validation and a successful dispatch. */
-    onDispatchReady?: (invokeId: string) => void;
+    /** Receives the id and armed hard deadline after a successful dispatch. */
+    onDispatchReady?: (invokeId: string, deadlineAtMs?: number) => void;
     /** Revalidates caller authority at the registry-owned transport handoff. */
     isDispatchAuthorized?: () => boolean;
   }): Promise<NodeInvokeResult> {
     return await invokePublicNodeRegistry(this, params);
+  }
+
+  /** Internal cleanup retains its owner through replies without admitting new root work. */
+  invokeLifecycle(
+    params: Parameters<NodeRegistry["invoke"]>[0] & { isDispatchAuthorized: () => boolean },
+  ): Promise<NodeInvokeResult> {
+    return invokeLifecycleNodeRegistry(this, params);
   }
 
   /** Send one ordered input frame to a pending streaming invoke. */
@@ -1126,31 +1165,23 @@ export class NodeRegistry {
     this.invokeStreams.sendInput(invokeId, payload);
   }
 
+  /** Synchronous effect fence for callbacks retained across awaited host work. */
+  isInvokeCurrent(invokeId: string, nodeId: string, connId: string): boolean {
+    return this.invokeStreams.isPending(invokeId, nodeId, connId);
+  }
+
   handleInvokeProgress(params: NodeInvokeProgressParams): boolean {
     return this.invokeStreams.handleProgress(params);
   }
 
-  /** Re-enters only the root that owns this exact live node invocation. */
+  /** Continues only the exact live owner of a pending node invocation. */
   runPendingInvokeContinuation<T>(params: {
     invokeId: string;
     nodeId: string;
     connId: string | undefined;
     run: () => Promise<T>;
   }): Promise<T> | null {
-    const pending = this.pendingInvokes.get(params.invokeId);
-    if (
-      !pending?.admissionContinuation ||
-      pending.nodeId !== params.nodeId ||
-      pending.connId !== params.connId ||
-      !isNodeRegistryPendingInvokeConnectionActive({
-        registry: this,
-        pending,
-        currentNode: this.nodesById.get(params.nodeId),
-      })
-    ) {
-      return null;
-    }
-    return pending.admissionContinuation.run(params.run);
+    return this.invokeStreams.runPendingContinuation(params);
   }
 
   /** Authorize an inbound system.run event against a recently issued node invoke. */
@@ -1421,13 +1452,7 @@ export class NodeRegistry {
       return false;
     }
     try {
-      node.client.socket.send(
-        JSON.stringify({
-          type: "event",
-          event,
-          payload,
-        }),
-      );
+      node.client.socket.send(serializeNodeEvent(event, payload));
       return true;
     } catch {
       return false;

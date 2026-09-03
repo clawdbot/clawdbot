@@ -3,9 +3,12 @@ import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
 import {
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
@@ -16,6 +19,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateDirForDatabasePath } from "../../state/openclaw-state-db.paths.js";
 import { advanceCronActiveJobGeneration, isCronJobActive } from "../active-jobs.js";
+import { cronOwnerHardeningEntrypoints } from "../owner-hardening-runtime.test-support.js";
 import { CronService } from "../service.js";
 import { createCronStoreHarness } from "../service.test-harness.js";
 import { loadCronStore, saveCronStore } from "../store.js";
@@ -23,6 +27,7 @@ import { cronStoreKey } from "../store/key.js";
 import { upsertCronJobRow } from "../store/row-codec.js";
 import {
   claimCronRunReceiptInDatabase,
+  finishCronRunReceipt,
   inspectActiveCronRunReceipt,
   isCronRunReceiptOwnerStale,
   prepareCronRunReceiptClaim,
@@ -33,12 +38,18 @@ import { listForeignReceipts } from "./foreign-receipt-monitor.js";
 import type { CronServiceState } from "./state.js";
 import { findCronTaskRunRecoveryInDatabase } from "./task-runs.js";
 
+const serviceUrl = resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.service);
+const stateDatabaseUrl = resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.stateDatabase);
+
 const children = new Set<ChildProcess>();
 let scriptRoot = "";
 let runnerScript = "";
 
-// Register this before the temp and store hooks because children can retain
-// both filesystem and SQLite ownership until their exit event is observed.
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const { makeStorePath } = createCronStoreHarness({ prefix: "cron-owner-hardening-" });
+
+// Vitest runs afterEach hooks in reverse registration order, so register last
+// to observe child exits before the temp and store hooks release their state.
 afterEach(async () => {
   const activeChildren = [...children].filter(
     (child) => child.exitCode === null && child.signalCode === null,
@@ -50,20 +61,15 @@ afterEach(async () => {
   children.clear();
 });
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const { makeStorePath } = createCronStoreHarness({ prefix: "cron-owner-hardening-" });
-
 beforeEach(async () => {
   scriptRoot = tempDirs.make("cron-owner-hardening-script-", os.tmpdir());
-  runnerScript = path.join(scriptRoot, "runner.mts");
-  const serviceUrl = pathToFileURL(path.resolve("src/cron/service.ts")).href;
-  const stateDatabaseUrl = pathToFileURL(path.resolve("src/state/openclaw-state-db.ts")).href;
+  runnerScript = path.join(scriptRoot, "runner.mjs");
   await fsPromises.writeFile(
     runnerScript,
     `
       import fs from "node:fs";
-      import { CronService } from ${JSON.stringify(serviceUrl)};
-      import { openOpenClawStateDatabase } from ${JSON.stringify(stateDatabaseUrl)};
+      import { CronService } from ${JSON.stringify(serviceUrl.href)};
+      import { openOpenClawStateDatabase } from ${JSON.stringify(stateDatabaseUrl.href)};
       const [storePath, jobId, mode, releasePath, outputPath] = process.argv.slice(2);
       const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       const logger = { debug() {}, info() {}, warn() {}, error() {} };
@@ -166,8 +172,7 @@ function spawnRunner(params: {
   const child = spawn(
     process.execPath,
     [
-      "--import",
-      "tsx",
+      ...resolveRuntimeWorkerArgv(serviceUrl).slice(0, -1),
       runnerScript,
       params.storePath,
       params.jobId,
@@ -378,7 +383,7 @@ describe("cron durable run ownership", () => {
     }
   });
 
-  it("retries transient receipt finalization before releasing ownership", async () => {
+  it("retains a failed manual finalization receipt until its exact outcome is recovered", async () => {
     vi.useRealTimers();
     const { storePath } = await makeStorePath();
     const now = Date.now();
@@ -403,27 +408,84 @@ describe("cron durable run ownership", () => {
     );
     try {
       await expect(cron.run(job.id, "force")).rejects.toThrow("receipt finalization unavailable");
+      const retained = inspectActiveCronRunReceipt({ storePath, jobId: job.id });
+      expect(retained).toBeDefined();
+      expect(isCronRunReceiptOwnerStale(retained!)).toBe(true);
       expect(receipts(storePath, job.id)[0]).toMatchObject({ status: "running" });
-      database.exec("DROP TRIGGER reject_cron_run_receipt_finish");
-      await vi.waitFor(
-        () => expect(receipts(storePath, job.id)[0]).toMatchObject({ status: "superseded" }),
-        { timeout: 3_000, interval: 50 },
+      expect((await loadCronStore(storePath)).jobs[0]?.state.runningAtMs).toBe(
+        retained?.startedAtMs,
       );
+      const recovery = findCronTaskRunRecoveryInDatabase({
+        database,
+        jobId: job.id,
+        startedAt: retained!.startedAtMs,
+        storeKey: cronStoreKey(storePath),
+        receiptId: retained!.receiptId,
+      });
+      expect(recovery.finalized?.entry.status).toBe("ok");
+      // The failed transaction rolled back both row and receipt. A receipt-only
+      // supersede would sever this exact terminal fact from subsequent recovery.
+      database.exec("DROP TRIGGER reject_cron_run_receipt_finish");
     } finally {
       cron.stop();
       database.exec("DROP TRIGGER IF EXISTS reject_cron_run_receipt_finish");
     }
     expect(isCronJobActive(job.id)).toBe(false);
 
-    const replacement = makeParentService(
-      storePath,
-      vi.fn(async () => ({ status: "ok" as const })),
-    );
+    const replacementRunner = vi.fn(async () => ({ status: "ok" as const }));
+    const replacement = makeParentService(storePath, replacementRunner);
     try {
       await replacement.start();
+      expect(replacementRunner).not.toHaveBeenCalled();
+      expect(receipts(storePath, job.id)).toMatchObject([{ status: "ok" }]);
+      const recovered = (await loadCronStore(storePath)).jobs[0];
+      expect(recovered?.state.lastRunStatus).toBe("ok");
+      expect(recovered?.state.runningAtMs).toBeUndefined();
       await expect(replacement.run(job.id, "force")).resolves.toEqual({ ok: true, ran: true });
     } finally {
       replacement.stop();
+    }
+  });
+
+  it("retries receipt-only finalization before releasing ownership", async () => {
+    vi.useRealTimers();
+    const { storePath } = await makeStorePath();
+    const now = Date.now();
+    const job = makeCommandJob("receipt-only-retry", now + 60_000);
+    await saveCronStore(storePath, { version: 1, jobs: [job] });
+    const receipt = claimMarkerlessReceipt(storePath, job, now);
+    const database = openOpenClawStateDatabase().db;
+    database.exec(`
+      CREATE TEMP TRIGGER reject_receipt_only_finish
+      BEFORE UPDATE OF status ON cron_run_receipts
+      BEGIN
+        SELECT RAISE(ABORT, 'receipt finalization unavailable');
+      END;
+    `);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      expect(() =>
+        finishCronRunReceipt({ handle: receipt, status: "superseded", finishedAtMs: now }),
+      ).toThrow("receipt finalization unavailable");
+      releaseLocalCronRunReceiptOwnership(receipt);
+      expect(isCronRunReceiptOwnerStale(receipt)).toBe(false);
+      expect(receipts(storePath, job.id)[0]?.status).toBe("running");
+      database.exec("DROP TRIGGER reject_receipt_only_finish");
+      await vi.advanceTimersByTimeAsync(999);
+      expect(isCronRunReceiptOwnerStale(receipt)).toBe(false);
+      expect(receipts(storePath, job.id)[0]?.status).toBe("running");
+      await vi.advanceTimersByTimeAsync(1);
+      expect(receipts(storePath, job.id)[0]?.status).toBe("superseded");
+      expect(isCronRunReceiptOwnerStale(receipt)).toBe(true);
+    } finally {
+      try {
+        database.exec("DROP TRIGGER IF EXISTS reject_receipt_only_finish");
+        // Drain even after a failed assertion so the retry clears its pending
+        // receipt and local ownership before the store fixture is removed.
+        await vi.runOnlyPendingTimersAsync();
+      } finally {
+        vi.useRealTimers();
+      }
     }
   });
 
@@ -640,6 +702,8 @@ describe("cron durable run ownership", () => {
     const first = spawnRunner({ storePath, jobId: job.id, mode: "due", releasePath, outputPath });
     const second = spawnRunner({ storePath, jobId: job.id, mode: "due", releasePath, outputPath });
     await Promise.all([waitForExit(first), waitForExit(second)]);
+    expect(first.exitCode).toBe(0);
+    expect(second.exitCode).toBe(0);
 
     const invocations = fs.existsSync(outputPath)
       ? fs.readFileSync(outputPath, "utf8").trim().split("\n").filter(Boolean)

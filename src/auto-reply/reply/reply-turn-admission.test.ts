@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
 import { SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE } from "../../config/sessions/lifecycle.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
@@ -18,6 +19,7 @@ import {
 } from "../../logging/diagnostic-run-activity.js";
 import { markDiagnosticToolStartedForTest } from "../../logging/diagnostic-run-activity.test-support.js";
 import {
+  beginSessionWorkAdmission,
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
@@ -126,6 +128,56 @@ describe("reply turn admission", () => {
     }
   });
 
+  it("waits for the named recovery owner before admitting a queued followup", async () => {
+    const sessionKey = "agent:main:queued-recovery-owner";
+    const sessionId = "queued-recovery-owner";
+    const storePath = createSessionStoreFor(sessionKey, sessionId);
+    const owner = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: [sessionKey, sessionId],
+      owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER,
+      assertAllowed: () => {},
+    });
+    const loadSpy = vi.spyOn(sessionAccessor, "loadSessionEntry");
+    const controller = new AbortController();
+    const admission = admitTestReplyTurn({
+      sessionKey,
+      sessionId,
+      expectedSessionId: sessionId,
+      storePath,
+      kind: "queued_followup",
+      upstreamAbortSignal: controller.signal,
+    });
+    let settled = false;
+    void admission.then(() => {
+      settled = true;
+    });
+    let result: Awaited<typeof admission> | undefined;
+    let completed = false;
+    try {
+      await vi.waitFor(() => expect(loadSpy.mock.calls.length).toBeGreaterThanOrEqual(2));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(settled).toBe(false);
+      owner.release();
+      result = await admission;
+      expect(result.status).toBe("owned");
+      if (result.status === "owned") {
+        result.operation.complete();
+        completed = true;
+      }
+    } finally {
+      controller.abort();
+      owner.release();
+      result ??= await admission;
+      if (!completed && result.status === "owned") {
+        result.operation.complete();
+      }
+      loadSpy.mockRestore();
+    }
+  });
+
   it("rejects a reply when an archive commits before admission", async () => {
     const sessionKey = "agent:main:telegram:topic:archived";
     const sessionId = "session-before-archive";
@@ -190,7 +242,7 @@ describe("reply turn admission", () => {
     releaseMutation.resolve();
     await mutation;
 
-    await expect(admission).rejects.toThrow(/deleted while starting work/i);
+    await expect(admission).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
   });
 
   it("uses the persisted session id when reset commits before admission", async () => {
@@ -260,7 +312,7 @@ describe("reply turn admission", () => {
     releaseMutation.resolve();
     await mutation;
 
-    await expect(admission).rejects.toThrow(/changed while starting work/i);
+    await expect(admission).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
   });
 
   it("drops queued work when reset cleanup cancels admission", async () => {

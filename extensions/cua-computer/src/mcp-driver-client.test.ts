@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import net from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { ClickButton, EscalationReason } from "./driver-client.js";
@@ -17,14 +16,17 @@ type FakeEndpoint = {
   socketPath: string;
   requests: RpcRequest[];
   respond: (request: RpcRequest, result: unknown) => void;
-  writeRaw: (request: RpcRequest, value: string) => void;
+  writeRaw: (request: RpcRequest, value: string | Buffer) => void;
   close: () => Promise<void>;
 };
 
 async function createFakeEndpoint(
   handle: (request: RpcRequest, endpoint: FakeEndpoint) => void,
 ): Promise<FakeEndpoint> {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cua-mcp-test-"));
+  // macOS sockaddr_un cannot hold the test runner's nested temporary path.
+  const directory = await fs.mkdtemp(path.join(await fs.realpath("/tmp"), "oc-cua-mcp-"));
+  // Registered before the bind so a failed listen still removes the root.
+  onTestFinished(async () => await fs.rm(directory, { recursive: true, force: true }));
   const socketPath = path.join(directory, "daemon.sock");
   const binaryPath = path.join(directory, "cua-driver");
   await fs.writeFile(
@@ -87,7 +89,7 @@ socket.on("close", () => process.exit(0));
       const writer = request.id === undefined ? undefined : writers.get(request.id);
       writer?.write(`${JSON.stringify({ jsonrpc: "2.0", id: request.id, result })}\n`);
     },
-    writeRaw: (request: RpcRequest, value: string) => {
+    writeRaw: (request: RpcRequest, value: string | Buffer) => {
       const writer = request.id === undefined ? undefined : writers.get(request.id);
       writer?.write(value);
     },
@@ -100,7 +102,6 @@ socket.on("close", () => process.exit(0));
           resolve();
         });
       });
-      await fs.rm(directory, { recursive: true, force: true });
     },
   });
   // Register first so later driver hooks dispose before socket cleanup, even when a test fails.
@@ -278,6 +279,57 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
       count: 1,
       target: { kind: "desktop", display_id: "primary" },
     });
+  });
+
+  it("preserves UTF-8 and routes multiple out-of-order responses", async () => {
+    const held: RpcRequest[] = [];
+    const endpoint = await createFakeEndpoint((request, fake) => {
+      if (request.method === "initialize") {
+        fake.respond(request, {
+          protocolVersion: "2025-06-18",
+          capabilities: { tools: {} },
+          serverInfo: { name: "fake-cua-driver", version: "0.20.0" },
+        });
+      } else if (request.method === "tools/call" && request.params?.name === "start_session") {
+        fake.respond(request, sessionState("window"));
+      } else if (request.method === "tools/call" && request.params?.name === "list_windows") {
+        held.push(request);
+        if (held.length !== 2) {
+          return;
+        }
+        const firstRequest = held.find((call) => call.params?.arguments?.marker === "first");
+        const secondRequest = held.find((call) => call.params?.arguments?.marker === "second");
+        if (!firstRequest || !secondRequest) {
+          throw new Error("fixture did not receive both tagged requests");
+        }
+        const framed = Buffer.from(
+          `${JSON.stringify({ jsonrpc: "2.0", id: secondRequest.id, result: toolResult({ marker: "second", text: "β雪" }) })}\n\n${JSON.stringify({ jsonrpc: "2.0", id: firstRequest.id, result: toolResult({ marker: "first" }) })}\n`,
+        );
+        const split = framed.indexOf(Buffer.from("雪")) + 1;
+        expect(split).toBeGreaterThan(0);
+        // Receiving both requests owns the response; cold proxy startup is not a polling deadline.
+        fake.writeRaw(secondRequest, framed.subarray(0, split));
+        setImmediate(() => fake.writeRaw(secondRequest, framed.subarray(split)));
+      } else if (request.method === "tools/call" && request.params?.name === "end_session") {
+        fake.respond(request, toolResult({ session: "openclaw-test", active: false }));
+      }
+    });
+    const driver = createCuaMcpDriver(endpoint);
+    onTestFinished(() => driver.dispose());
+    const settlement: string[] = [];
+    const firstCall = driver.callTool("list_windows", { marker: "first" }).then((result) => {
+      settlement.push("first");
+      return result;
+    });
+    const secondCall = driver.callTool("list_windows", { marker: "second" }).then((result) => {
+      settlement.push("second");
+      return result;
+    });
+    const [first, second] = await Promise.all([firstCall, secondCall]);
+    expect(JSON.parse(first.structuredJson!)).toEqual({ marker: "first" });
+    expect(JSON.parse(second.structuredJson!)).toEqual({ marker: "second", text: "β雪" });
+    expect(settlement).toEqual(["second", "first"]);
+    await driver.dispose();
   });
 
   it("fails closed on invalid proxy JSON", async () => {

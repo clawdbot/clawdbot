@@ -1,6 +1,7 @@
 import { normalizeOptionalString as readLiveModelCatalogString } from "../../packages/normalization-core/src/string-coerce.js";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
-import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
+import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
+import { cancelUnreadResponseBody } from "../infra/http-body.js";
 import { retainSafeHeadersForCrossOriginRedirect } from "../infra/net/redirect-headers.js";
 import type {
   ProviderCatalogContext,
@@ -20,7 +21,6 @@ import {
 } from "./provider-catalog-live-normalize.internal.js";
 import {
   buildSingleProviderApiKeyCatalog,
-  clearLiveCatalogCacheForTests,
   getCachedLiveCatalogValue,
 } from "./provider-catalog-shared.js";
 import type { ManifestProviderCatalogEntry } from "./provider-catalog-shared.js";
@@ -43,7 +43,7 @@ export type LiveModelCatalogHeaderContext = {
   discoveryApiKey?: string;
 };
 
-export { clearLiveCatalogCacheForTests };
+export { clearLiveCatalogCacheForTests } from "./provider-catalog-shared.js";
 export {
   readLiveModelCatalogBooleanField,
   readLiveModelCatalogPositiveSafeIntegerField,
@@ -203,7 +203,8 @@ function selectLiveModelCatalogRequestApiKey(
   ctx: LiveModelCatalogHeaderContext,
 ): string | undefined {
   return (
-    normalizeLiveModelCatalogRequestApiKey(ctx.discoveryApiKey) ??
+    // Explicit discovery credentials are resolved bytes; only apiKey can be a placeholder.
+    readLiveModelCatalogString(ctx.discoveryApiKey) ??
     normalizeLiveModelCatalogRequestApiKey(ctx.apiKey)
   );
 }
@@ -236,17 +237,17 @@ function buildHeaders(
 
 async function readLiveModelCatalogJson(
   response: Response,
-  timeoutMs: number,
-  bodyMaxBytes = LIVE_MODEL_CATALOG_BODY_MAX_BYTES,
+  params: { label: string; timeoutMs: number; maxBytes?: number; requestHeaders?: HeadersInit },
 ): Promise<unknown> {
-  const buffer = await readResponseWithLimit(response, bodyMaxBytes, {
-    chunkTimeoutMs: timeoutMs,
+  return await readProviderJsonResponse(response, params.label, {
+    chunkTimeoutMs: params.timeoutMs,
+    maxBytes: params.maxBytes ?? LIVE_MODEL_CATALOG_BODY_MAX_BYTES,
+    requestHeaders: params.requestHeaders,
     onOverflow: ({ size, maxBytes }) =>
       new Error(`Live model catalog response exceeded ${maxBytes} bytes (${size} bytes received)`),
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(`Live model catalog response stalled: no data received for ${chunkTimeoutMs}ms`),
   });
-  return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(buffer));
 }
 
 /** Loads one provider from a shared public metadata feed only when explicitly requested. */
@@ -275,11 +276,11 @@ export async function getCachedUpstreamProviderCatalog(
           throw new LiveModelCatalogHttpError("upstream-provider-catalog", response.status);
         }
         const catalog = readLiveModelCatalogRecord(
-          await readLiveModelCatalogJson(
-            response,
+          await readLiveModelCatalogJson(response, {
+            label: "upstream-provider-catalog",
             timeoutMs,
-            UPSTREAM_PROVIDER_CATALOG_BODY_MAX_BYTES,
-          ),
+            maxBytes: UPSTREAM_PROVIDER_CATALOG_BODY_MAX_BYTES,
+          }),
         );
         if (!catalog) {
           throw new Error("Upstream provider catalog response must be an object");
@@ -441,7 +442,11 @@ async function fetchLiveProviderModelCatalogPage(
       await cancelUnreadResponseBody(response);
       throw new LiveModelCatalogHttpError(params.providerId, response.status);
     }
-    const body = await readLiveModelCatalogJson(response, params.timeoutMs);
+    const body = await readLiveModelCatalogJson(response, {
+      label: `${params.providerId} model discovery`,
+      timeoutMs: params.timeoutMs,
+      requestHeaders,
+    });
     return {
       body,
       finalUrl,

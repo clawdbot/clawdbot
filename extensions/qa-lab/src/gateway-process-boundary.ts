@@ -778,6 +778,13 @@ export async function createQaGatewayProcessBoundaryController(params: {
     signal,
     markReady,
     markExited,
+    cleanupTempRoot: () =>
+      runBoundaryLauncherCommand({
+        args: ["--cleanup-temp-root", tempRoot],
+        label: "temp-root cleanup",
+        launcherPath: params.launcherPath,
+        timeoutMs: PROCESS_BOUNDARY_CONTROL_TIMEOUT_MS,
+      }),
     evidencePath,
     retainCredentialLeasePath,
     retainCredentialLease,

@@ -6,10 +6,13 @@ import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../../shared/transcript-only-o
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
-  OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
   OPENCLAW_RUNTIME_CONTEXT_NOTICE,
 } from "../internal-runtime-context.js";
 import { normalizeAssistantReplayContent } from "./replay-history.js";
+
+// Preface of carriers persisted before the stable system prompt explained the markers.
+const LEGACY_NEXT_TURN_RUNTIME_CONTEXT_HEADER =
+  "OpenClaw runtime context for the active user request in this turn. Do not reply to or describe this context. Use it to continue answering the active user request now. Do not wait for another message.";
 
 const FALLBACK_TEXT = "[assistant turn failed before producing content]";
 const COPIED_INBOUND_METADATA_ONLY_TEXT = [
@@ -71,6 +74,30 @@ function openclawTranscriptAssistant(model: "delivery-mirror" | "gateway-injecte
 }
 
 describe("normalizeAssistantReplayContent", () => {
+  it("removes persisted attachment display blocks before model replay", () => {
+    const damaged = bedrockAssistant(
+      [
+        { type: "text", text: "Slides ready" },
+        { type: "attachment", attachment: { label: "slides.pptx" } },
+        { type: "attachment_error", attachment: { label: "missing.txt" } },
+      ],
+      "stop",
+      { output: 1, totalTokens: 1 },
+    );
+
+    expect(normalizeAssistantReplayContent([damaged, userMessage("continue")])).toEqual([
+      { ...damaged, content: [{ type: "text", text: "Slides ready" }] },
+      userMessage("continue"),
+    ]);
+  });
+
+  it("preserves unknown assistant blocks outside the managed display contract", () => {
+    const unknown = { customType: "legacy_data", data: "preserve me" };
+    const message = bedrockAssistant([unknown], "stop", { output: 1, totalTokens: 1 });
+
+    expect(normalizeAssistantReplayContent([message])).toEqual([message]);
+  });
+
   it("keeps bare marked late-media turns alive while rejecting whitespace-only media fields", () => {
     const blankString = {
       role: "user",
@@ -369,10 +396,8 @@ describe("normalizeAssistantReplayContent", () => {
     ]);
   });
 
-  it.each([
-    ["tool calls", { type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
-    ["unknown blocks", { customType: "legacy_data", data: "preserve me" }],
-  ])("preserves silent-reply turns with %s", (_label, companion) => {
+  it("preserves silent-reply turns with tool calls", () => {
+    const companion = { type: "toolCall", id: "call_1", name: "exec", arguments: {} };
     const messages = [
       userMessage("hi"),
       bedrockAssistant(
@@ -404,7 +429,7 @@ describe("normalizeAssistantReplayContent", () => {
             INTERNAL_RUNTIME_CONTEXT_BEGIN,
             "keep this internal",
             INTERNAL_RUNTIME_CONTEXT_END,
-            OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
+            LEGACY_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
             OPENCLAW_RUNTIME_CONTEXT_NOTICE,
             "",
             "Visible after",

@@ -60,6 +60,82 @@ function claimForeground(entry: SessionEntry) {
 }
 
 describe("main session recovery execution identity state", () => {
+  it.each([false, true])(
+    "refreshes the budget only after a runtime turn starts (audit=%s)",
+    (audit) => {
+      const entry = interruptedEntry();
+      for (let attempt = 1; attempt <= 7; attempt++) {
+        const view = observe(entry, "generation-1");
+        if (view.status !== "recoverable") {
+          throw new Error("expected a recoverable session");
+        }
+        expect(view.nextAttempt).toBe(attempt);
+        expect(
+          transitionMainSessionRecovery(entry, {
+            kind: "prepare_attempt",
+            attempt,
+            lifecycleGeneration: "generation-1",
+            now: 200 + attempt,
+            observation: view.observation,
+            runId: "recovery-1",
+            executionIdentity: { state: audit ? "enabled" : "disabled" },
+          }).kind,
+        ).toBe("reserved");
+        expect(
+          transitionMainSessionRecovery(entry, {
+            kind: "admit_recovery",
+            lifecycleGeneration: "generation-1",
+            now: 300 + attempt,
+            runId: "recovery-1",
+            sessionId: "session-1",
+          }).kind,
+        ).toBe("admitted_recovery");
+        if (attempt <= 4) {
+          const registration = {
+            kind: "register_recovery_turn" as const,
+            attempt,
+            cycleId: "cycle-1",
+            lifecycleGeneration: "generation-1",
+            runId: "recovery-1",
+            sessionId: "session-1",
+          };
+          if (audit) {
+            transitionMainSessionRecovery(entry, {
+              ...registration,
+              kind: "bind_admitted_execution_identity",
+              token: executionIdentity("recovery-1"),
+            });
+          }
+          expect(transitionMainSessionRecovery(entry, registration).kind).toBe("applied");
+          expect(transitionMainSessionRecovery(entry, registration).kind).toBe("no_change");
+        }
+        transitionMainSessionRecovery(entry, {
+          kind: "mark_admitted_recovery_interrupted",
+          lifecycleGeneration: "generation-1",
+          now: 400 + attempt,
+          runId: "recovery-1",
+          sessionId: "session-1",
+        });
+      }
+      expect(observe(entry, "generation-1")).toMatchObject({ status: "exhausted" });
+      expect(entry.mainRestartRecovery).toMatchObject({ chargedAttempts: 7, startedAttempt: 4 });
+      expect(entry.mainRestartRecovery?.executionIdentity).toEqual(
+        audit ? executionIdentity("recovery-1") : undefined,
+      );
+      expect(
+        transitionMainSessionRecovery(entry, {
+          kind: "register_recovery_turn",
+          attempt: 4,
+          cycleId: "cycle-1",
+          lifecycleGeneration: "generation-1",
+          runId: "recovery-1",
+          sessionId: "session-1",
+        }),
+      ).toEqual({ kind: "rejected", reason: "stale_reservation" });
+      expect(observe(entry, "generation-1")).toMatchObject({ status: "exhausted" });
+    },
+  );
+
   it("keeps reservation identity-free and cancellation leaves no identity state", () => {
     const entry = interruptedEntry();
     const prepared = transitionMainSessionRecovery(entry, {

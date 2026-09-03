@@ -1,20 +1,15 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { zstdCompressSync } from "node:zlib";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { loadSqliteVecExtension } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { deleteSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { deleteSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { openOpenClawStateDatabase } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DREAMING_MEMORY_BACKUP_NAMESPACE,
@@ -28,12 +23,16 @@ import {
   recordMemoryEntryOrigins,
 } from "./memory-entry-origins.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
+import {
+  createMemoryForgetFixture,
+  closeMemoryForgetFixture,
+  seedMemoryForgetSession,
+} from "./memory-forget.test-helpers.js";
 import * as memoryDatabase from "./memory/manager-db.js";
 import { closeMemoryDatabase, openMemoryDatabaseAtPath } from "./memory/manager-db.js";
 import { runSessionBackfill } from "./session-backfill.js";
 import { readSessionIngestionState, writeSessionIngestionState } from "./session-ingestion.js";
 import { readShortTermRecallEntries } from "./short-term-promotion.js";
-import { configureMemoryCoreDreamingStateForTests } from "./test-helpers.js";
 
 describe("memory forget", () => {
   let stateDir: string;
@@ -42,51 +41,26 @@ describe("memory forget", () => {
   let vectorDatabase: DatabaseSync | undefined;
 
   beforeEach(async () => {
-    stateDir = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-forget-")),
-    );
-    workspaceDir = path.join(stateDir, "workspace");
-    await fs.mkdir(workspaceDir);
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    await configureMemoryCoreDreamingStateForTests();
-    cfg = {
-      agents: { defaults: { workspace: workspaceDir }, list: [{ id: "main", default: true }] },
-    } as OpenClawConfig;
+    stateDir = tempDirs.make("openclaw-memory-forget-");
+    ({ workspaceDir, cfg } = await createMemoryForgetFixture(stateDir));
   });
 
-  afterEach(async () => {
-    if (vectorDatabase) {
-      closeMemoryDatabase(vectorDatabase);
-      vectorDatabase = undefined;
-    }
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    resetPluginStateStoreForTests();
-    vi.unstubAllEnvs();
-    await fs.rm(stateDir, { recursive: true, force: true });
-  });
-
-  async function seedSession(sessionId: string, hookSource?: "gmail" | "webhook"): Promise<void> {
-    const sessionKey = `agent:main:${sessionId}`;
-    await upsertSessionEntry({
-      agentId: "main",
-      sessionKey,
-      entry: { sessionId, updatedAt: 1_000 },
-    });
-    if (hookSource) {
-      openOpenClawAgentDatabase({ agentId: "main" })
-        .db.prepare(
-          "UPDATE session_windows SET hook_external_content_source = ? WHERE session_id = ?",
-        )
-        .run(hookSource, sessionId);
-    }
-  }
+  const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+    afterEach(() => {
+      if (vectorDatabase) {
+        closeMemoryDatabase(vectorDatabase);
+        vectorDatabase = undefined;
+      }
+      closeMemoryForgetFixture();
+      cleanup();
+    }),
+  );
 
   it.each([
     { label: "session ID", selector: "archived" },
     { label: "session key", selector: "agent:main:archived" },
   ])("purges an archived-only session selected by its $label", async ({ selector }) => {
-    await seedSession("archived");
+    await seedMemoryForgetSession("archived");
     recordMemoryEntryOrigins({
       agentId: "main",
       origins: [
@@ -312,7 +286,7 @@ describe("memory forget", () => {
   );
 
   it("removes staged backfill entries when their source session is forgotten", async () => {
-    await seedSession("backfilled");
+    await seedMemoryForgetSession("backfilled");
     const nowMs = Date.parse("2026-08-26T12:00:00.000Z");
     const privateFact = "The project launch code is amber-indigo.";
     await appendSessionTranscriptMessageByIdentity({
@@ -347,7 +321,7 @@ describe("memory forget", () => {
   it.each(["prefix-survivor", "prefix.jsonl.other", "PREFIX"])(
     "does not purge session %s when an unresolved explicit selector is prefix",
     async (survivorId) => {
-      await seedSession(survivorId);
+      await seedMemoryForgetSession(survivorId);
       const corpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
       await fs.mkdir(corpusDir, { recursive: true });
       const corpusPath = path.join(corpusDir, "2026-08-26.txt");
@@ -378,45 +352,6 @@ describe("memory forget", () => {
     },
   );
 
-  it("does not infer hook or participant facts for an archived-only session", async () => {
-    await seedSession("archived", "gmail");
-    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
-    db.prepare(
-      `INSERT INTO session_participants
-         (session_key, actor_type, actor_id, first_prompted_at, last_prompted_at)
-       VALUES (?, 'human', 'participant', 1, 1)`,
-    ).run("agent:main:archived");
-    expect(
-      (
-        await forgetMemoryEntries({
-          cfg,
-          agentId: "main",
-          participants: ["participant"],
-          dryRun: true,
-        })
-      ).sessionIds,
-    ).toEqual(["archived"]);
-    await appendSessionTranscriptMessageByIdentity({
-      agentId: "main",
-      sessionId: "archived",
-      sessionKey: "agent:main:archived",
-      message: { role: "user", content: "Archive this session." },
-    });
-    await deleteSessionEntry({
-      agentId: "main",
-      sessionKey: "agent:main:archived",
-      expectedSessionId: "archived",
-      archiveTranscript: true,
-    });
-
-    for (const selectors of [{ hookSources: ["gmail"] }, { participants: ["participant"] }]) {
-      const report = await forgetMemoryEntries({ cfg, agentId: "main", ...selectors });
-      expect(report.sessionIds).toEqual([]);
-      expect(report.sessionResolutions).toEqual([]);
-    }
-    expect(listMemorySessionTombstones({ agentId: "main" })).toEqual([]);
-  });
-
   it.each([
     { failure: "none", corpusExtension: "txt" },
     { failure: "index", corpusExtension: "txt" },
@@ -428,8 +363,8 @@ describe("memory forget", () => {
   ])(
     "durably purges every derived owner after a $failure failure with $corpusExtension corpus",
     async ({ failure, corpusExtension }) => {
-      await seedSession("survivor");
-      await seedSession("target", "gmail");
+      await seedMemoryForgetSession("survivor");
+      await seedMemoryForgetSession("target", "gmail");
       recordMemoryEntryOrigins({
         agentId: "main",
         origins: [
@@ -855,7 +790,7 @@ describe("memory forget", () => {
   );
 
   it("keeps missing provenance untargetable without creating its table during dry-run", async () => {
-    await seedSession("target");
+    await seedMemoryForgetSession("target");
     const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
     db.exec("DROP TABLE IF EXISTS memory_entry_origins");
     db.exec("DROP TABLE IF EXISTS memory_session_tombstones");

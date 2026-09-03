@@ -15,7 +15,6 @@ import {
   parseRealtimeVoiceAgentConsultArgs,
 } from "../../talk/agent-consult-tool.js";
 import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
-import { resolveTalkSessionAgentId } from "../../talk/agent-target.js";
 import {
   authorizeClientVoiceConfirmation,
   bindAuthorizedClientVoiceConfirmation,
@@ -31,16 +30,18 @@ import {
   resolveClientVoiceSessionOrigin,
   resolveOpenClientVoiceSessionId,
 } from "../../talk/client-voice-session.js";
-import {
-  authorizeGatewaySessionCreation,
-  resolveSandboxedSessionCreation,
-} from "../operator-role-policy.js";
+import { resolveSandboxedSessionCreation } from "../operator-role-policy.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { startTalkRealtimeAgentConsult } from "../talk-agent-consult.js";
 import { closeTalkClientGatewayControlSession } from "../talk-client-gateway-control.js";
 import {
   ensureTalkRealtimeRelayVoiceSession,
   flushTalkRealtimeRelayVoiceWrites,
 } from "../talk-realtime-relay.js";
+import {
+  prepareTalkSessionTarget,
+  requirePreparedTalkSessionTarget,
+} from "../talk-session-target.js";
 import { formatForLog } from "../ws-log.js";
 import { createTalkClient } from "./talk-client-create.js";
 import {
@@ -48,7 +49,7 @@ import {
   readLegacyVoiceBinding,
   rememberLegacyVoiceBinding,
 } from "./talk-client-legacy-voice-bindings.js";
-import { hasOwnedActiveTalkClientRun } from "./talk-client-run-ownership.js";
+import { resolveOwnedActiveTalkRunTarget } from "./talk-client-run-ownership.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -77,16 +78,11 @@ export const talkClientHandlers: GatewayRequestHandlers = {
     }
 
     const config = request.context.getRuntimeConfig();
-    const agentId = resolveTalkSessionAgentId(config, params.sessionKey);
-    const creationError = authorizeGatewaySessionCreation({
-      cfg: config,
-      client: request.client,
-      agentId,
-    });
-    if (creationError) {
-      respond(false, undefined, creationError);
-      return;
-    }
+    const target = requirePreparedTalkSessionTarget(
+      request.sessionMutationAuthorization?.talkSessionTarget,
+    );
+    const { agentId } = target;
+    request.sessionMutationAuthorization?.assertCurrent();
     const relaySessionId = normalizeOptionalString(params.relaySessionId);
     const connId = normalizeOptionalString(request.client?.connId);
     const explicitVoiceSessionId = normalizeOptionalString(params.voiceSessionId);
@@ -120,8 +116,6 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         rememberLegacyVoiceBinding({ connId, sessionKey: params.sessionKey, voiceSessionId });
       }
       if (relaySessionId && connId) {
-        // Initialize the canonical session row BEFORE binding: the bind drains the
-        // relay's buffered finals into transcript appends, which fail without it.
         await ensureClientVoiceAgentSessionEntry({
           agentId,
           sessionKey: params.sessionKey,
@@ -157,12 +151,8 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const result = await startTalkRealtimeAgentConsult({
-      context: request.context,
-      client: request.client,
-      isWebchatConnect: request.isWebchatConnect,
-      requestId: request.req.id,
-      sessionKey: params.sessionKey,
+    const result = await startTalkRealtimeAgentConsult(request, {
+      sessionTarget: target,
       callId: params.callId,
       args: params.args ?? {},
       relaySessionId: normalizeOptionalString(params.relaySessionId),
@@ -189,11 +179,13 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       {
         runId: result.runId,
         idempotencyKey: result.idempotencyKey,
+        agentId,
+        agentSessionKey: target.canonicalKey,
       },
       undefined,
     );
   },
-  "talk.client.transcript": async ({ params, respond, context }) => {
+  "talk.client.transcript": async ({ params, respond, context, sessionMutationAuthorization }) => {
     if (
       !assertValidParams(
         params,
@@ -206,9 +198,14 @@ export const talkClientHandlers: GatewayRequestHandlers = {
     }
     try {
       const config = context.getRuntimeConfig();
+      const target =
+        sessionMutationAuthorization?.talkSessionTarget ??
+        prepareTalkSessionTarget(config, params.sessionKey);
+      sessionMutationAuthorization?.assertCurrent();
       await appendClientVoiceTranscript({
-        agentId: resolveTalkSessionAgentId(config, params.sessionKey),
-        sessionKey: params.sessionKey,
+        agentId: target.agentId,
+        sessionKey: target.sessionKey,
+        sessionTarget: { sessionKey: target.canonicalKey, storePath: target.storePath },
         voiceSessionId: params.voiceSessionId,
         entryId: params.entryId,
         role: params.role,
@@ -221,7 +218,13 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
     }
   },
-  "talk.client.close": async ({ params, respond, context, client }) => {
+  "talk.client.close": async ({
+    params,
+    respond,
+    context,
+    client,
+    sessionMutationAuthorization,
+  }) => {
     if (!assertValidParams(params, validateTalkClientCloseParams, "talk.client.close", respond)) {
       return;
     }
@@ -237,7 +240,10 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         return;
       }
       const config = context.getRuntimeConfig();
-      const agentId = resolveTalkSessionAgentId(config, params.sessionKey);
+      const { agentId } =
+        sessionMutationAuthorization?.talkSessionTarget ??
+        prepareTalkSessionTarget(config, params.sessionKey);
+      sessionMutationAuthorization?.assertCurrent();
       const origin = resolveClientVoiceSessionOrigin({
         agentId,
         sessionKey: params.sessionKey,
@@ -261,35 +267,49 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
     }
   },
-  "talk.client.steer": async ({ params, respond, client, context }) => {
+  "talk.client.steer": async ({
+    params,
+    respond,
+    client,
+    context,
+    sessionMutationAuthorization,
+  }) => {
     if (!assertValidParams(params, validateTalkClientSteerParams, "talk.client.steer", respond)) {
       return;
     }
-    if (
-      !hasOwnedActiveTalkClientRun({
+    try {
+      const target =
+        sessionMutationAuthorization?.talkSessionTarget ??
+        prepareTalkSessionTarget(context.getRuntimeConfig(), params.sessionKey);
+      const runTarget = resolveOwnedActiveTalkRunTarget({
         context,
         clientConnId: client?.connId,
-        sessionKey: params.sessionKey,
-      })
-    ) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "talk.client.steer requires an active browser-owned Talk run",
-        ),
-      );
-      return;
-    }
-    try {
+        sessionTarget: target,
+        assertCurrent: sessionMutationAuthorization?.assertCurrent,
+      });
+      if (runTarget === null) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "talk.client.steer requires an active browser-owned Talk run",
+          ),
+        );
+        return;
+      }
       const result = await controlRealtimeVoiceAgentRun({
-        sessionKey: params.sessionKey,
+        sessionKey: target.canonicalKey,
+        runTarget,
         text: params.text,
         mode: params.mode,
       });
       respond(true, result, undefined);
     } catch (err) {
+      if (err instanceof SessionMutationAuthorizationChangedError) {
+        respond(false, undefined, err.error);
+        return;
+      }
       respond(
         false,
         undefined,

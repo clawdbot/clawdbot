@@ -1,9 +1,10 @@
 import Foundation
 
 struct ChatLiveRunState: Equatable, Sendable {
-    let sequence: Int
-    let outputTokens: Int?
-    let terminal: Bool
+    var sequence = 0
+    var outputTokens: Int?
+    var terminal = false
+    var hasAgentAssistantText = false
 }
 
 extension OpenClawChatViewModel {
@@ -33,7 +34,7 @@ extension OpenClawChatViewModel {
 
     /// Session lists publish canonical agent keys even when the UI presents `main`.
     /// Keep visible model metadata on the same exact-then-alias read path.
-    func currentSessionEntry() -> OpenClawChatSessionEntry? {
+    public func currentSessionEntry() -> OpenClawChatSessionEntry? {
         self.sessions.first(where: { $0.key == self.sessionKey }) ??
             self.sessions.first(where: {
                 self.matchesCurrentSessionKey(incoming: $0.key, current: self.sessionKey)
@@ -113,24 +114,22 @@ extension OpenClawChatViewModel {
     @discardableResult
     func applyLiveRunUsage(runID: String, sequence: Int, outputTokens: Int) -> Bool {
         guard sequence > 0, outputTokens > 0, self.ownsLiveTelemetryRun(runID) else { return false }
-        let previous = self.liveRunStateByRunID[runID]
-        guard sequence > (previous?.sequence ?? 0), previous?.terminal != true else { return false }
-        self.liveRunStateByRunID[runID] = ChatLiveRunState(
-            sequence: sequence,
-            outputTokens: max(outputTokens, previous?.outputTokens ?? 0),
-            terminal: false)
+        var state = self.liveRunStateByRunID[runID] ?? ChatLiveRunState()
+        guard sequence > state.sequence, !state.terminal else { return false }
+        state.sequence = sequence
+        state.outputTokens = max(outputTokens, state.outputTokens ?? 0)
+        self.liveRunStateByRunID[runID] = state
         return true
     }
 
     @discardableResult
     func applyLiveRunLifecycle(runID: String, sequence: Int, terminal: Bool) -> Bool {
         guard sequence > 0, self.ownsLiveTelemetryRun(runID) else { return false }
-        let previous = self.liveRunStateByRunID[runID]
-        guard sequence > (previous?.sequence ?? 0), previous?.terminal != true else { return false }
-        self.liveRunStateByRunID[runID] = ChatLiveRunState(
-            sequence: sequence,
-            outputTokens: previous?.outputTokens,
-            terminal: terminal)
+        var state = self.liveRunStateByRunID[runID] ?? ChatLiveRunState()
+        guard sequence > state.sequence, !state.terminal else { return false }
+        state.sequence = sequence
+        state.terminal = terminal
+        self.liveRunStateByRunID[runID] = state
         return true
     }
 
@@ -149,10 +148,7 @@ extension OpenClawChatViewModel {
 
     func invalidateIncompleteLiveRunUsage() {
         for (runID, state) in self.liveRunStateByRunID where !state.terminal && state.outputTokens != nil {
-            self.liveRunStateByRunID[runID] = ChatLiveRunState(
-                sequence: state.sequence,
-                outputTokens: nil,
-                terminal: false)
+            self.liveRunStateByRunID[runID]?.outputTokens = nil
         }
     }
 

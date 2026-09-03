@@ -36,6 +36,15 @@ async function makePlan(
   return await makeProvenancePlan(root, manifestValue, options);
 }
 
+const extensionFixture = Object.freeze({
+  id: "coding-tools",
+  format: "openclaw" as const,
+  detectedFormat: "claude" as const,
+  mapped: ["commands", "skills"],
+  unavailable: ["agents"],
+  adapterIdentity: "openclaw/test",
+});
+
 describe("Claw root install provenance", () => {
   it("replays an exact package ref without losing its relationship or origin", async () => {
     const { root, plan } = await makePlan();
@@ -77,30 +86,35 @@ describe("Claw root install provenance", () => {
 
   it("round-trips canonical extension inventory on the shared plugin dependency edge", async () => {
     const { root, plan } = await makePlan();
-    const extension = {
-      id: "coding-tools",
-      format: "claude" as const,
-      detectedFormat: "claude" as const,
-      mapped: ["commands", "skills"],
-      unavailable: ["agents"],
-      adapterIdentity: "openclaw/test",
+    const pkg = {
+      kind: "plugin" as const,
+      source: "clawhub" as const,
+      ref: "@acme/coding-tools",
+      version: "1.2.3",
+      integrity: `sha256:${"b".repeat(64)}`,
+      extension: extensionFixture,
     };
 
-    const persisted = persistClawPackageRef(
-      plan,
-      {
-        kind: "plugin",
-        source: "clawhub",
-        ref: "@acme/coding-tools",
-        version: "1.2.3",
-        integrity: `sha256:${"b".repeat(64)}`,
-        extension,
-      },
-      { env: stateEnv(root), nowMs: 42, relationship: "referenced" },
-    );
+    persistClawPackageRef(plan, pkg, {
+      env: stateEnv(root),
+      nowMs: 42,
+      status: "pending",
+      relationship: "referenced",
+    });
+    const replayed = persistClawPackageRef(plan, pkg, {
+      env: stateEnv(root),
+      nowMs: 84,
+      status: "complete",
+      relationship: "referenced",
+    });
 
-    expect(persisted.extension).toEqual(extension);
-    expect(readClawPackageRefs({ env: stateEnv(root) })).toEqual([persisted]);
+    expect(replayed).toMatchObject({
+      extension: extensionFixture,
+      status: "complete",
+      installedAtMs: 42,
+      updatedAtMs: 84,
+    });
+    expect(readClawPackageRefs({ env: stateEnv(root) })).toEqual([replayed]);
   });
 
   it("persists package identity, agent ownership, workspace, and config digest", async () => {
@@ -300,6 +314,7 @@ describe("Claw root install provenance", () => {
         ref: "@acme/audit",
         version: "2.3.4",
         integrity: "sha256:audit-2.3.4",
+        extension: extensionFixture,
       },
       { ...options, nowMs: 43 },
     );
@@ -321,6 +336,7 @@ describe("Claw root install provenance", () => {
         ref: "@acme/audit",
         version: "2.3.4",
         integrity: "sha256:audit-2.3.4",
+        extension: extensionFixture,
       },
       { ...options, nowMs: 45 },
     );

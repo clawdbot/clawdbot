@@ -118,6 +118,9 @@ export function buildGoogleGeminiCliBackend(): CliBackendPlugin {
     },
     bundleMcp: true,
     bundleMcpMode: "gemini-system-settings",
+    // Gemini compresses and persists its native history before requests; a second
+    // compactor would require API auth outside the CLI and discard its resume binding.
+    ownsNativeCompaction: true,
     nativeToolMode: "selectable",
     toolAvailabilityEnforcement: "prepare-execution",
     authEpochMode: "profile-only",

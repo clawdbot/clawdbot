@@ -141,32 +141,48 @@ export function renderMicrophoneActivity(props: MicrophoneActivityProps): Templa
   `;
 }
 
-type ChatVoiceErrorProps = {
+type ChatVoiceStatusProps = {
   status?: RealtimeTalkStatus;
   detail?: string | null;
   onDismissError?: () => void;
 };
 
-export function renderChatVoiceError(props: ChatVoiceErrorProps): TemplateResult | typeof nothing {
+export function renderChatVoiceStatus(
+  props: ChatVoiceStatusProps,
+): TemplateResult | typeof nothing {
+  if (props.status === "connecting") {
+    return html`<div
+      class="callout agent-chat__talk-status"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+    >
+      ${voiceStatusLabel(props.status, props.detail)}
+    </div>`;
+  }
   if (props.status !== "error" || !props.detail) {
     return nothing;
   }
   return html`
-    <div class="agent-chat__composer-error agent-chat__talk-status" role="alert">
-      <span class="agent-chat__composer-error-icon" aria-hidden="true">${icons.alertTriangle}</span>
-      <span class="agent-chat__talk-status-text">${props.detail}</span>
-      ${props.onDismissError
-        ? html`
-            <button
-              class="callout__dismiss"
-              type="button"
-              @click=${props.onDismissError}
-              aria-label=${t("chat.composer.dismissVoiceInputError")}
-            >
-              ${icons.x}
-            </button>
-          `
-        : nothing}
+    <div class="agent-chat__composer-errors agent-chat__composer-errors--standalone">
+      <div class="agent-chat__composer-error agent-chat__talk-status" role="alert">
+        <span class="agent-chat__composer-error-icon" aria-hidden="true"
+          >${icons.alertTriangle}</span
+        >
+        <span class="agent-chat__talk-status-text">${props.detail}</span>
+        ${props.onDismissError
+          ? html`
+              <button
+                class="callout__dismiss"
+                type="button"
+                @click=${props.onDismissError}
+                aria-label=${t("chat.composer.dismissVoiceInputError")}
+              >
+                ${icons.x}
+              </button>
+            `
+          : nothing}
+      </div>
     </div>
   `;
 }

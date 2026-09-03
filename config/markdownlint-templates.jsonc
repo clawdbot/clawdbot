@@ -1,0 +1,14 @@
+{
+  "globs": ["docs/reference/templates/**/*.md", "src/agents/templates/**/*.md"],
+  "ignores": ["**/node_modules/**", "**/.local/**"],
+  "config": {
+    "default": false,
+    "MD001": true,
+    "MD009": true,
+    "MD010": true,
+    "MD012": true,
+    "MD027": true,
+    "MD031": true,
+    "MD032": true,
+  },
+}
