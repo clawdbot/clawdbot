@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import {
+  applyAnthropicPayloadPolicyToParams,
+  isAnthropicServerToolClearingEnabled,
+  resolveAnthropicPayloadPolicy,
   resolveAnthropicEphemeralCacheControl,
   resolveAnthropicServerCompactionPlan,
 } from "./anthropic-payload-policy.js";
@@ -67,5 +70,44 @@ describe("Anthropic compaction authentication eligibility", () => {
     } finally {
       configureAiTransportHost(host);
     }
+  });
+});
+
+describe("Anthropic tool-clearing policy", () => {
+  const model = { provider: "anthropic", api: "anthropic-messages", contextWindow: 200_000 };
+
+  it.each([undefined, "", "  "])(
+    "requires resolved authentication before disabling client pruning: %j",
+    (apiKey) => {
+      expect(isAnthropicServerToolClearingEnabled(model, apiKey)).toBe(false);
+    },
+  );
+
+  it("expands deny globs over historical tools while the allow complement covers exposed tools", () => {
+    const payload: Record<string, unknown> = {
+      tools: [{ name: "lookup" }, { name: "search" }],
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "tool_use", id: "old_exec", name: "exec_retired", input: {} },
+            { type: "tool_use", id: "old_other", name: "other_retired", input: {} },
+          ],
+        },
+      ],
+    };
+    const policy = resolveAnthropicPayloadPolicy({
+      ...model,
+      cacheTtlPruning: { tools: { allow: ["lookup"], deny: ["exec*"] } },
+    });
+    applyAnthropicPayloadPolicyToParams(payload, policy, new Set());
+    expect(payload.context_management).toEqual({
+      edits: [
+        expect.objectContaining({
+          type: "clear_tool_uses_20250919",
+          exclude_tools: ["exec_retired", "search"],
+        }),
+      ],
+    });
   });
 });

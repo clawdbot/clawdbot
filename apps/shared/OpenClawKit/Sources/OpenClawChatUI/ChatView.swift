@@ -143,6 +143,9 @@ public struct OpenClawChatView: View {
     @State private var isSearchPresented = false
     @State private var composerFocusRequest = 0
     @State private var fullMessageRequest: ChatFullMessageReaderRequest?
+    #if os(iOS)
+    @State private var selectTextMessage: OpenClawChatMessage?
+    #endif
     @State private var turnRecapResolver = ChatTurnRecapResolver()
     @State private var turnRecap: ChatTurnRecap?
     @State private var turnRecapSessionKey: String?
@@ -280,6 +283,11 @@ public struct OpenClawChatView: View {
                         messageID: request.messageID)
                 })
         }
+        #if os(iOS)
+        .sheet(item: self.$selectTextMessage) {
+            ChatSelectableTextSheet(text: ChatMessageVisibleText.copyText(in: $0))
+        }
+        #endif
     }
 
     @ViewBuilder
@@ -703,6 +711,9 @@ public struct OpenClawChatView: View {
     @ViewBuilder
     private func messageMenuActions(for message: OpenClawChatMessage) -> some View {
         self.copyMessageButton(for: message)
+        #if os(iOS)
+        self.selectTextButton(for: message)
+        #endif
         self.replyMessageButton(for: message)
         self.openFullMessageButton(for: message)
         self.rewindMessageButton(for: message)
@@ -1269,7 +1280,7 @@ extension OpenClawChatView {
         let text = ChatMessageVisibleText.copyText(in: message)
         if !text.isEmpty {
             Button {
-                Self.copyToClipboard(text)
+                ChatPasteboard.copy(text)
             } label: {
                 Label {
                     Text("Copy Message")
@@ -1280,6 +1291,23 @@ extension OpenClawChatView {
             }
         }
     }
+
+    #if os(iOS)
+    @ViewBuilder
+    private func selectTextButton(for message: OpenClawChatMessage) -> some View {
+        if !ChatMessageVisibleText.copyText(in: message).isEmpty {
+            Button {
+                self.selectTextMessage = message
+            } label: {
+                Label {
+                    Text("Select Text").font(OpenClawChatTypography.body)
+                } icon: {
+                    Image(systemName: "text.cursor")
+                }
+            }
+        }
+    }
+    #endif
 
     @ViewBuilder
     private func openFullMessageButton(for message: OpenClawChatMessage) -> some View {
@@ -1373,15 +1401,6 @@ extension OpenClawChatView {
         guard role == "assistant" else { return String(localized: "You") }
         let name = self.assistantName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return name.isEmpty ? String(localized: "Assistant") : name
-    }
-
-    fileprivate static func copyToClipboard(_ text: String) {
-        #if os(macOS)
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
-        #else
-        UIPasteboard.general.string = text
-        #endif
     }
 }
 

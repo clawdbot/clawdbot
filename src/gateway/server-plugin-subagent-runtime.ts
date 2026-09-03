@@ -1,15 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
-import {
-  normalizeBuiltInProviderModelId,
-  stripSelfProviderModelPrefix,
-} from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeModelRef } from "../agents/model-ref-shared.js";
 import { parseModelRef } from "../agents/model-selection-normalize.js";
 import type { AgentWaitResult } from "../agents/run-wait.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
+import { compileModelAllowlist, type CompiledModelAllowlist } from "../plugins/model-allowlist.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import {
   bindGatewayContextResolver,
@@ -26,27 +22,6 @@ import {
   prepareInProcessAgentExecution,
 } from "./server-plugin-in-process-dispatch.js";
 import { resolvePluginSubagentToolsAlsoAllow } from "./server-plugin-runtime-client.js";
-
-function normalizePluginSubagentAllowedModelRef(raw: string): string | null {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return null;
-  }
-  if (trimmed === "*") {
-    return "*";
-  }
-  const parsed = parseModelCatalogRef(trimmed);
-  if (!parsed) {
-    return null;
-  }
-  // Operator allowlists already name canonical targets; keep policy setup independent
-  // of plugin metadata and provider-runtime discovery.
-  const modelId = normalizeBuiltInProviderModelId(
-    parsed.provider,
-    stripSelfProviderModelPrefix(parsed.provider, parsed.modelId),
-  );
-  return `${parsed.provider}/${modelId}`;
-}
 
 function resolvePluginSubagentRequestedModelRef(params: {
   provider?: string;
@@ -80,12 +55,8 @@ function normalizePluginSubagentRunRuntime(
   return harness && provider && model ? { harness, provider, model } : undefined;
 }
 
-type PluginSubagentOverridePolicy = {
+type PluginSubagentOverridePolicy = CompiledModelAllowlist & {
   allowModelOverride: boolean;
-
-  allowAnyModel: boolean;
-  hasConfiguredAllowlist: boolean;
-  allowedModels: Set<string>;
 };
 
 export type PluginSubagentOverridePolicies = Record<string, PluginSubagentOverridePolicy>;
@@ -97,34 +68,22 @@ export function resolvePluginSubagentOverridePolicies(
   const policies: PluginSubagentOverridePolicies = {};
   for (const [pluginId, entry] of Object.entries(normalized.entries)) {
     const allowModelOverride = entry.subagent?.allowModelOverride === true;
-    const hasConfiguredAllowlist = entry.subagent?.hasAllowedModelsConfig === true;
-    const configuredAllowedModels = entry.subagent?.allowedModels ?? [];
-    const allowedModels = new Set<string>();
-    let allowAnyModel = false;
-    for (const modelRef of configuredAllowedModels) {
-      const normalizedModelRef = normalizePluginSubagentAllowedModelRef(modelRef);
-      if (!normalizedModelRef) {
-        continue;
-      }
-      if (normalizedModelRef === "*") {
-        allowAnyModel = true;
-        continue;
-      }
-      allowedModels.add(normalizedModelRef);
-    }
+    const allowlist = compileModelAllowlist({
+      configured: entry.subagent?.hasAllowedModelsConfig === true,
+      values: entry.subagent?.allowedModels,
+      formatKey: (provider, model) => `${provider}/${model}`,
+    });
     if (
       !allowModelOverride &&
-      !hasConfiguredAllowlist &&
-      allowedModels.size === 0 &&
-      !allowAnyModel
+      !allowlist.configured &&
+      !allowlist.models.size &&
+      !allowlist.allowAny
     ) {
       continue;
     }
     policies[pluginId] = {
       allowModelOverride,
-      allowAnyModel,
-      hasConfiguredAllowlist,
-      allowedModels,
+      ...allowlist,
     };
   }
   return policies;
@@ -153,16 +112,16 @@ function authorizeFallbackModelOverride(params: {
         "plugins.entries.<id>.subagent.allowModelOverride",
     };
   }
-  if (policy.allowAnyModel) {
+  if (policy.allowAny) {
     return { allowed: true };
   }
-  if (policy.hasConfiguredAllowlist && policy.allowedModels.size === 0) {
+  if (policy.configured && policy.models.size === 0) {
     return {
       allowed: false,
       reason: `plugin "${pluginId}" configured subagent.allowedModels, but none of the entries normalized to a valid provider/model target.`,
     };
   }
-  if (policy.allowedModels.size === 0) {
+  if (policy.models.size === 0) {
     return { allowed: true };
   }
   const requestedModelRef = resolvePluginSubagentRequestedModelRef(params);
@@ -173,7 +132,7 @@ function authorizeFallbackModelOverride(params: {
         "fallback provider/model overrides that use an allowlist must resolve to a canonical provider/model target.",
     };
   }
-  if (policy.allowedModels.has(requestedModelRef)) {
+  if (policy.models.has(requestedModelRef)) {
     return { allowed: true };
   }
   return {
@@ -396,10 +355,7 @@ export function createGatewaySubagentRuntime(
           ...(params.lane && { lane: params.lane }),
           ...(params.cwd && { cwd: params.cwd }),
           ...(params.lightContext === true && { bootstrapContextMode: "lightweight" }),
-          // The gateway `agent` schema requires `idempotencyKey: NonEmptyString`,
-          // so fall back to a generated UUID when the caller omits it. Without
-          // this, plugin subagent runs (for example memory-core dreaming
-          // narrative) silently fail schema validation at the gateway.
+          // The Gateway agent schema requires a nonempty idempotency key.
           idempotencyKey: params.idempotencyKey || randomUUID(),
         },
         {

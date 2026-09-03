@@ -3085,6 +3085,37 @@
   text-transform: uppercase;
 }
 
+.chat-controls__provider-settings {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  cursor: var(--cursor-action);
+}
+
+.chat-controls__provider-settings:hover,
+.chat-controls__provider-settings:focus-visible {
+  background: var(--bg-hover);
+  color: var(--text);
+  outline: none;
+}
+
+.chat-controls__provider-settings:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+
+.chat-controls__provider-settings svg {
+  width: 12px;
+  height: 12px;
+}
+
 /* Mask/brand-color rules live on .provider-brand-icon (components.css). */
 .chat-controls__provider-icon {
   width: 16px;
@@ -3130,6 +3161,12 @@
   gap: 2px;
 }
 
+.chat-controls__provider-model-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2px;
+}
+
 /* Inline variant of the popover title: it sits inside the locked-model row,
    which owns the spacing, so the label carries type only. */
 .chat-controls__inline-select-section-label {
@@ -3148,6 +3185,10 @@
 }
 
 .chat-controls__model-menu[data-chat-model-filtering] .chat-controls__provider-model-group {
+  display: contents;
+}
+
+.chat-controls__model-menu[data-chat-model-filtering] .chat-controls__provider-model-list {
   display: contents;
 }
 
@@ -3234,8 +3275,7 @@
 }
 
 .chat-controls__model-option-title,
-.chat-controls__model-option-meta,
-.chat-controls__model-provenance > span {
+.chat-controls__model-option-meta {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3289,6 +3329,35 @@
 .chat-controls__model-option-meta::before {
   content: "\00b7";
   margin-inline: 6px;
+}
+
+.chat-controls__model-option-auth-warning {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  flex: 0 1 auto;
+  color: var(--warn);
+  font-size: 10px;
+  font-weight: 550;
+}
+
+.chat-controls__model-option-auth-warning::before {
+  content: "\00b7";
+  margin-inline: 6px 3px;
+  color: var(--muted);
+}
+
+.chat-controls__model-option-auth-warning svg {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+}
+
+.chat-controls__model-option-auth-warning > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-controls__model-chat-only-info {
@@ -4121,6 +4190,14 @@
     width: var(--chat-mobile-row-icon-size);
     height: var(--chat-mobile-row-icon-size);
     color: var(--muted);
+  }
+
+  .agent-chat__input--mobile-toolbar
+    .agent-chat__composer-footer
+    .chat-controls__provider-settings
+    svg {
+    width: 12px;
+    height: 12px;
   }
 
   .agent-chat__input--mobile-toolbar

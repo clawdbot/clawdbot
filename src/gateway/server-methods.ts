@@ -54,6 +54,7 @@ import { isRoleAuthorizedForMethod, parseGatewayRole } from "./role-policy.js";
 import { authenticatedProfileUnavailableError } from "./server-methods/gateway-client-identity.js";
 import { createLazyCoreHandlers, lazyHandlerModule } from "./server-methods/lazy-core-handlers.js";
 import { isTargetedNonSafeGatewayRestartRequest } from "./server-methods/restart-request.js";
+import { withSessionMutationCommitGuard } from "./server-methods/session-mutation-guards.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandler,
@@ -704,29 +705,30 @@ export async function handleGatewayRequest(
   }
   const handler = methodRegistry.getHandler(req.method) as GatewayRequestHandler | undefined;
   if (!handler) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, `unknown method: ${req.method}`),
-    );
+    const error = errorShape(ErrorCodes.INVALID_REQUEST, `unknown method: ${req.method}`);
+    respond(false, undefined, error);
     return;
   }
-  const invokeHandler = () =>
-    handler({
+  // Every session mutation owner uses these pre-commit assertions. Compose the
+  // host lifetime here so individual handlers cannot lose it across an await.
+  const sessionMutationAuthorization = withSessionMutationCommitGuard(
+    authorization.sessionMutationAuthorization,
+    opts.sessionMutationCommitGuard,
+  );
+  const invokeHandler = () => {
+    opts.sessionMutationCommitGuard?.();
+    return handler({
       req,
       params: (req.params ?? {}) as Record<string, unknown>,
       client,
       isWebchatConnect,
       respond,
       context,
-      ...(signal ? { signal } : {}),
-      ...(opts.sessionMutationCommitGuard
-        ? { sessionMutationCommitGuard: opts.sessionMutationCommitGuard }
-        : {}),
-      ...(authorization.sessionMutationAuthorization
-        ? { sessionMutationAuthorization: authorization.sessionMutationAuthorization }
-        : {}),
+      signal,
+      sessionMutationCommitGuard: opts.sessionMutationCommitGuard,
+      sessionMutationAuthorization,
     });
+  };
   await runWithGatewayRequestEnvelope(req.method, client, invokeHandler, {
     context,
     isWebchatConnect,

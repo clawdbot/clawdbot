@@ -1694,8 +1694,8 @@ describe("sanitizeSessionHistory", () => {
     expect(sanitized.map((msg) => msg.role)).toEqual(["user", "user"]);
     expect(JSON.stringify(sanitized)).not.toContain("assistant copied inbound metadata omitted");
 
-    // Append-only Anthropic Messages replay keeps the surviving user turns
-    // separate; the Messages API accepts consecutive user messages.
+    // Sonnet 4.6 does not bind thinking to the prefix, so Messages API replay
+    // merges the surviving user turns back into one message.
     const validated = await validateReplayTurns({
       messages: sanitized,
       modelApi: "anthropic-messages",
@@ -1703,10 +1703,12 @@ describe("sanitizeSessionHistory", () => {
       modelId: "claude-sonnet-4-6",
       sessionId: TEST_SESSION_ID,
     });
-    expect(validated.map((msg) => msg.role)).toEqual(["user", "user"]);
-    expect(
-      validated.map((msg) => (msg as Extract<AgentMessage, { role: "user" }>).content),
-    ).toEqual(["First", "Second"]);
+    expect(validated).toHaveLength(1);
+    expect(validated[0]?.role).toBe("user");
+    expect((validated[0] as Extract<AgentMessage, { role: "user" }>).content).toEqual([
+      { type: "text", text: "First" },
+      { type: "text", text: "Second" },
+    ]);
   });
 
   it("strips prior assistant reasoning for Qwen-style OpenAI-compatible replay", async () => {

@@ -251,7 +251,7 @@ describe("local CLI pending process cancellation", () => {
 
     startup.resolve(adapter);
     await expect(run).rejects.toMatchObject({ name: "AbortError" });
-    expect(adapter.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(adapter.kill).toHaveBeenCalledWith("SIGKILL");
     expect(supervisor.getRecord("cli-pending")).toMatchObject({
       state: "exited",
       terminationReason: "manual-cancel",

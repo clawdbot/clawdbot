@@ -4,6 +4,7 @@ import { realpath } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { root as fsSafeRoot, FsSafeError, type Root } from "../infra/fs-safe.js";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -63,8 +64,8 @@ function rowToWorkspaceFile(row: WorkspaceFileRow): PersistedClawWorkspaceFile {
     sourcePath: row.source_path,
     contentDigest: row.content_digest,
     status: row.status,
-    createdAtMs: Number(row.created_at_ms),
-    updatedAtMs: Number(row.updated_at_ms),
+    createdAtMs: sqliteNumber(row.created_at_ms),
+    updatedAtMs: sqliteNumber(row.updated_at_ms),
   };
 }
 
@@ -190,8 +191,8 @@ function readWorkspaceFile(
       sourcePath: row.source_path,
       contentDigest: row.content_digest,
       status: row.status,
-      createdAtMs: Number(row.created_at_ms),
-      updatedAtMs: Number(row.updated_at_ms),
+      createdAtMs: sqliteNumber(row.created_at_ms),
+      updatedAtMs: sqliteNumber(row.updated_at_ms),
     };
   }, options);
 }

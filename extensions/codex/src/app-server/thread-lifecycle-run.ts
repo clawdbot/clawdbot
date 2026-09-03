@@ -669,31 +669,25 @@ export async function startOrResumeThread(
               : "rotating a stale plugin app binding",
           );
         } else {
-          // Native adoption must be checked before releasing any retained owner;
-          // a passive refusal neither acquires nor authorizes dropping a subscription.
-          const configuration = await prepareCodexThreadResume(params, binding, requestContext);
-          try {
-            await releaseRetainedThread(
-              binding.threadId,
-              binding.clientId,
-              configuration.assertCurrent,
-            );
-            configuration.assertCurrent();
-            const resumed = await resumeExistingCodexThread(params, {
-              ...requestContext,
-              binding,
-              clearCurrentBinding,
-              prebuiltFinalConfigPatch: warmReuse.prebuiltFinalConfigPatch,
-              prebuiltPluginThreadConfig,
-              buildLoadedPluginThreadConfig,
-              assertResumeOwnership: configuration.assertCurrent,
-              assertResumeConfiguration: configuration.assertConfigured,
-            });
-            if (resumed) {
-              return resumed;
-            }
-          } finally {
-            configuration.dispose();
+          const resumeBinding = binding;
+          const resumed = await resumeExistingCodexThread(params, {
+            ...requestContext,
+            binding: resumeBinding,
+            clearCurrentBinding,
+            prebuiltFinalConfigPatch: warmReuse.prebuiltFinalConfigPatch,
+            prebuiltPluginThreadConfig,
+            buildLoadedPluginThreadConfig,
+            prepareResume: () => prepareCodexThreadResume(params, resumeBinding, requestContext),
+            releaseRetainedThread: async (assertCurrent) => {
+              await releaseRetainedThread(
+                resumeBinding.threadId,
+                resumeBinding.clientId,
+                assertCurrent,
+              );
+            },
+          });
+          if (resumed) {
+            return resumed;
           }
         }
       }

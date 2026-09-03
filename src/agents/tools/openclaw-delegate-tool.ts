@@ -81,7 +81,7 @@ export function createOpenClawDelegateToolsForRun(
     // Keep human approval in one model tool call; a yielded cell can outlive its turn.
     catalogMode: "direct-only",
     description:
-      "Ask system expert. Gateway restart, config, channels, plugins, agents, models/providers, updates. " +
+      "Ask system expert. Gateway restart, config, channels, plugins, agents, models/providers. " +
       (fullPermission
         ? "Full Access applies permitted changes without asking for approval."
         : "Changes wait for human approval and return the final outcome."),

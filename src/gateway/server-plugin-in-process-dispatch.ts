@@ -2,7 +2,10 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { AgentWaitParams } from "../../packages/gateway-protocol/src/index.js";
 import type { SubagentCompletionToolHandoffRegistration } from "../agents/subagents/announce/subagent-announce-handoff.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
-import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginSubagentRequesterContext } from "../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import { readInProcessAgentRuntimeIdentity } from "./in-process-agent-runtime-identity.js";
@@ -57,6 +60,33 @@ export async function withOperatorToolGatewayAuthority<T>(
   }
 }
 
+/** Transfer bounded cleanup without retaining the finished operator invocation. */
+export function runWithOperatorToolGatewayCleanupContext<T>(run: () => T): T {
+  const authority = operatorToolGatewayAuthority.getStore();
+  if (!authority) {
+    return run();
+  }
+  authority.signal.throwIfAborted();
+  const scope = getPluginRuntimeGatewayRequestScope();
+  // Retain the effective actor and scopes after releasing the invocation;
+  // profile attribution alone does not establish authority.
+  const client = createSyntheticPluginRuntimeClient({
+    authenticatedUserProfile: authority.authenticatedUserProfile,
+    scopes: [...authority.scopes],
+    operatorRoleActor: authority.operatorRoleActor ??
+      scope?.client?.internal?.operatorRoleActor ?? {
+        kind: "operator",
+        profileId: authority.authenticatedUserProfile.profileId,
+      },
+  });
+  return operatorToolGatewayAuthority.exit(() =>
+    withPluginRuntimeGatewayRequestScope(
+      { ...scope, client, isWebchatConnect: scope?.isWebchatConnect ?? (() => false) },
+      run,
+    ),
+  );
+}
+
 type DispatchGatewayMethodInProcessOptions = {
   allowSyntheticModelOverride?: boolean;
   allowSyntheticCronRunContinuation?: boolean;
@@ -105,7 +135,8 @@ function resolveInProcessGatewayDispatch(
   const scope = getPluginRuntimeGatewayRequestScope();
   const scopedOperatorProfile = scope?.client?.authenticatedUserProfile;
   const scopedRoleActor = scope?.client?.internal?.operatorRoleActor;
-  const explicitSystemActor = !scope?.client ? options?.operatorRoleActor : undefined;
+  const explicitSystemActor =
+    !scope?.client && !inheritedOperatorAuthority ? options?.operatorRoleActor : undefined;
   const verifiedOperatorAuthority =
     inheritedOperatorAuthority ??
     (scopedOperatorProfile?.profileId

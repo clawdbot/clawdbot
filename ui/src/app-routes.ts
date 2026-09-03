@@ -63,7 +63,7 @@ import { page as workboardPage } from "./pages/workboard/route.ts";
 import { page as worktreesPage } from "./pages/worktrees/route.ts";
 
 type AppRouteModule = {
-  render: (data: unknown) => unknown;
+  render: (data: unknown, loaderPending: boolean) => unknown;
   renderOwnerKey?: (
     match: Pick<RouteMatch, "data" | "location">,
     settled: Pick<RouteMatch, "data" | "location"> | undefined,
@@ -117,6 +117,20 @@ const APP_ROUTE_TREE = [
 ] as const;
 
 const appRoutes = APP_ROUTE_TREE as readonly AppRoute[];
+
+/** Starts route chunk downloads without running the route's loader. */
+export function warmApplicationRouteModule(
+  router: ApplicationRouter,
+  location: RouteLocation,
+  basePath: string,
+): void {
+  const routeId = routeIdFromPath(location.pathname, basePath);
+  const route = routeId ? router.getRoute(routeId) : null;
+  if (route) {
+    // Navigation owns chunk errors; its import reuses the browser's module cache.
+    void Promise.resolve(route.component()).catch(() => undefined);
+  }
+}
 
 export function createApplicationRouter(): ApplicationRouter {
   const router = createRouter<RouteId, ApplicationContext<RouteId>, AppRouteModule>({

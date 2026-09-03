@@ -53,6 +53,8 @@ Pending pairing requests expire 5 minutes after the device's last retry — a de
   - non-exec node commands: `operator.pairing` + `operator.write`
   - `system.run` / `system.run.prepare` / `system.which`: `operator.pairing` + `operator.admin`
 
+Headless node hosts report the hardware model on macOS and Linux.
+
 Connected CLI node hosts and the macOS app report CPU count, load averages,
 memory, and home-volume disk capacity every 60 seconds, starting on connection.
 The Gateway exposes the latest snapshot as `hostStats` in `node.list` and

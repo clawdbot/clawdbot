@@ -984,6 +984,30 @@ describe("channelsAddCommand", () => {
     expect(lifecycleMocks.onAccountConfigChanged).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { account: "", label: "empty" },
+    { account: "   ", label: "whitespace" },
+  ])(
+    "rejects a $label --account before installing a plugin or writing config",
+    async ({ account }) => {
+      configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+      setActivePluginRegistry(createTestRegistry());
+      catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+        createExternalChatCatalogEntry(),
+      ]);
+      registerExternalChatSetupPlugin();
+
+      await expect(
+        channelsAddCommand({ channel: "external-chat", account, token: "token-1" }, runtime, {
+          hasFlags: true,
+        }),
+      ).rejects.toThrow("--account must not be blank");
+
+      expect(ensureChannelSetupPluginInstalled).not.toHaveBeenCalled();
+      expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+    },
+  );
+
   it("maps legacy Nextcloud Talk add flags to setup input fields", async () => {
     const prepareAccountConfigInput = vi.fn(({ input }: PrepareAccountConfigInputParams) => {
       const setupInput = input as NextcloudTalkSetupInput;
