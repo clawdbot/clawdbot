@@ -26,6 +26,7 @@ import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../../wizard/prompts.js";
 import { normalizeExternalChannelSetupConfig } from "../channel-setup/config-compatibility.js";
 import { resolveChannelSetupOwner } from "../channel-setup/owner.js";
+import { assertAccountSelectorForMutation } from "./account-selector.js";
 import { channelLabel } from "./runtime-label.js";
 import { requireValidConfigFileSnapshot, shouldUseWizard } from "./shared.js";
 
@@ -131,6 +132,7 @@ async function channelsAddCommandImpl(
   runtime: RuntimeEnv,
   params?: { hasFlags?: boolean; beforePersistentEffect?: () => Promise<void> },
 ) {
+  assertAccountSelectorForMutation(opts.account);
   const configSnapshot = await requireValidConfigFileSnapshot(runtime);
   if (!configSnapshot) {
     return;
@@ -173,11 +175,6 @@ async function channelsAddCommandImpl(
     return;
   }
 
-  // Catalog install below runs before account resolution, so a blank selector must
-  // fail here; letting it through would install and then write the default account.
-  if (opts.account !== undefined && !opts.account.trim()) {
-    throw new Error("--account must not be blank");
-  }
   const rawChannel = opts.channel ?? "";
   let channel = normalizeChannelId(rawChannel);
   let preparedWorkspaceDir: string | undefined;

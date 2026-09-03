@@ -9,6 +9,7 @@ import {
   normalizeChannelId,
 } from "../channels/plugins/index.js";
 import { resolveInstallableChannelPlugin } from "../commands/channel-setup/channel-plugin-resolution.js";
+import { assertAccountSelectorForMutation } from "../commands/channels/account-selector.js";
 import { requireValidConfigFileSnapshot } from "../commands/config-validation.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
@@ -103,6 +104,7 @@ async function resolveChannelPluginForMode(
   channelId: string;
   plugin: ChannelPlugin;
 } | null> {
+  assertAccountSelectorForMutation(opts.account);
   const snapshot = await requireValidConfigFileSnapshot(runtime);
   if (!snapshot) {
     return null;
@@ -152,14 +154,6 @@ async function resolveChannelPluginForMode(
     channelId,
     plugin,
   };
-}
-
-function assertAccountSelector(opts: ChannelAuthOptions): void {
-  // Channel resolution can install a plugin and persist config, so a blank
-  // selector must fail before it runs; only an omitted --account selects the default.
-  if (opts.account !== undefined && !opts.account.trim()) {
-    throw new Error("--account must not be blank");
-  }
 }
 
 function resolveAccountContext(
@@ -277,7 +271,6 @@ export async function runChannelLogin(
   opts: ChannelAuthOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  assertAccountSelector(opts);
   const resolvedChannel = await resolveChannelPluginForMode(opts, "login", runtime);
   if (!resolvedChannel) {
     return;
@@ -316,7 +309,6 @@ export async function runChannelLogout(
   opts: ChannelAuthOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  assertAccountSelector(opts);
   const resolvedChannel = await resolveChannelPluginForMode(opts, "logout", runtime);
   if (!resolvedChannel) {
     return;

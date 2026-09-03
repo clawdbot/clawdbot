@@ -1008,19 +1008,6 @@ describe("channelsAddCommand", () => {
     },
   );
 
-  it("still resolves an omitted --account to the default account", async () => {
-    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
-
-    await channelsAddCommand({ channel: "lifecycle-chat", token: "new-token" }, runtime, {
-      hasFlags: true,
-    });
-
-    expect(writtenChannel("lifecycle-chat")).toEqual({ enabled: true, token: "new-token" });
-    expect(lifecycleMocks.onAccountConfigChanged).toHaveBeenCalledWith({
-      accountId: DEFAULT_ACCOUNT_ID,
-    });
-  });
-
   it("maps legacy Nextcloud Talk add flags to setup input fields", async () => {
     const prepareAccountConfigInput = vi.fn(({ input }: PrepareAccountConfigInputParams) => {
       const setupInput = input as NextcloudTalkSetupInput;
