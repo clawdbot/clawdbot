@@ -37,6 +37,7 @@ import {
   createManagedServiceUpdaterFixtureScript,
   createManagedServiceManagerFixtureScript,
   registerManagedSystemdHandoffConvergenceTests,
+  registerManagedHandoffOwnerTests,
   type ManagedServiceCommandTiming,
   type ManagedServiceManagerBoundaryOptions,
   type ManagedServiceManagerBoundaryResult,
@@ -142,7 +143,6 @@ async function runManagedServiceManagerBoundary(
   options?: ManagedServiceManagerBoundaryOptions & {
     controlDisconnect?: "transferred" | "unarmed" | "dead-parent";
     relativeInput?: boolean;
-    requester?: { channel?: string; accountId?: string; senderId?: string };
   },
 ): Promise<ManagedServiceManagerBoundaryResult> {
   const { spawn } =
@@ -533,51 +533,7 @@ async function runManagedServiceManagerBoundary(
 describe("managed service update handoff", () => {
   const itUnix = it.runIf(process.platform !== "win32");
 
-  itUnix.each(["revoked", "unchanged", "internal", "channel-less"] as const)(
-    "rechecks the %s requester after helper readiness and parent exit",
-    async (owner) => {
-      const { state, sentinel, log, sensitiveFilesRemoved } =
-        await runManagedServiceManagerBoundary("systemd", {
-          requester: {
-            channel:
-              owner === "internal" ? "webchat" : owner === "channel-less" ? undefined : "slack",
-            accountId: "primary",
-            senderId: "owner",
-          },
-          revokeOwner: owner === "revoked",
-          helperExitCode: owner === "revoked" ? 1 : 0,
-          updaterExitCode: 0,
-          updaterResult: { status: "ok", mode: "npm" },
-        });
-      expect(state).toMatchObject({ parked: true, stopCompleted: true });
-      expect(state.ownerChecked).toBe(
-        owner === "revoked" || owner === "unchanged" ? true : undefined,
-      );
-      if (owner === "revoked") {
-        expect(state).toMatchObject({
-          ownerRevokedAfterExit: true,
-          restored: true,
-          healthProbed: true,
-        });
-        expect(sentinel).toMatchObject({
-          payload: {
-            status: "error",
-            stats: {
-              reason: "owner_required",
-              steps: expect.arrayContaining([
-                expect.objectContaining({ name: "service-restore", log: { exitCode: 0 } }),
-              ]),
-            },
-          },
-        });
-        expect(log).toContain("owner_required");
-        expect(log).not.toContain("starting managed update command");
-      } else {
-        expect(log).toContain("starting managed update command");
-      }
-      expect(sensitiveFilesRemoved).toBe(true);
-    },
-  );
+  registerManagedHandoffOwnerTests(runManagedServiceManagerBoundary, itUnix, expect);
 
   itUnix.each(
     (["systemd", "launchd"] as const).flatMap((kind) =>
