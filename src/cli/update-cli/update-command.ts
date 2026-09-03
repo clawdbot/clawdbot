@@ -603,6 +603,7 @@ async function updateCommandInternal(
     // service; otherwise the unchanged unit could still restart on the stale Node.
     const canRefreshManagedServiceNode =
       shouldRestart &&
+      !packageAlreadyCurrent &&
       managedServiceNodeRunner !== undefined &&
       (await gatewayServiceCommandUsesRoot({ root })) === true;
     const runtimePreflight = await resolvePackageRuntimePreflight({
@@ -668,6 +669,7 @@ async function updateCommandInternal(
     tag,
     opts,
     shouldRestart,
+    packageAlreadyCurrent,
     devTarget,
     packageInstallSpec,
     packageInstallEnv,
@@ -703,6 +705,7 @@ async function updateCommandInternal(
     channel,
     downgradeRisk,
     shouldRestart,
+    packageAlreadyCurrent,
     opts,
     showProgress,
     preManagedServiceStop,

@@ -5418,6 +5418,7 @@ describe("update-cli", () => {
     await mockPackageInstallAtCaseDir();
     readPackageVersion.mockResolvedValue("2026.4.22");
     primeNpmChannelTag("latest", "2026.4.22");
+    mockRunningManagedGateway();
 
     await updateCommand({ yes: true });
 
@@ -5429,7 +5430,26 @@ describe("update-cli", () => {
     expect(installCalls).toHaveLength(1);
     expect(updateNpmInstalledPlugins).toHaveBeenCalledTimes(1);
     expect(replaceConfigFile).not.toHaveBeenCalled();
-    expect(getLogOutput()).not.toContain("already-current");
+    expectNoSideEffects(serviceStop, serviceRestart, runDaemonRestart, runRestartScript);
+    const logs = getLogOutput();
+    expect(logs).not.toContain("already-current");
+    expect(logs).toContain("leaving the managed gateway running");
+    expect(logs).toContain("Gateway: already at target version; left running.");
+    expect(logs).not.toContain("Stopping managed gateway service before package update");
+    expect(logs).not.toContain("Gateway: restart skipped (--no-restart).");
+  });
+
+  it("previews leaving the managed gateway running when dry-run is already current", async () => {
+    await mockPackageInstallAtCaseDir();
+    readPackageVersion.mockResolvedValue("2026.4.22");
+    primeNpmChannelTag("latest", "2026.4.22");
+
+    await updateCommand({ dryRun: true });
+
+    const logs = getLogOutput();
+    expect(logs).toContain("Leave managed gateway running (already at target version)");
+    expect(logs).not.toContain("Restart gateway service and run doctor checks");
+    expectNoSideEffects(serviceStop, runGatewayUpdate, runDaemonRestart);
   });
 
   it("runs the package update when latest target lookup is unresolved", async () => {

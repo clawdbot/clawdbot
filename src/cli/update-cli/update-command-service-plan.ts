@@ -16,6 +16,18 @@ export type ManagedServiceRootRedirect = {
   previousRoot: string;
 };
 
+export type ManagedGatewayUpdateVerdict =
+  | { kind: "absent" | "foreign" }
+  | {
+      kind: "owned";
+      root: string;
+      fingerprint: string;
+      refreshDefinition: boolean;
+      requiresInstallRootRefresh?: boolean;
+    }
+  | { kind: "unresolved"; root: string; fingerprint: string }
+  | { kind: "unavailable"; message: string };
+
 export class GatewayServiceUpdateOwnershipError extends Error {
   constructor(message: string, cause: unknown) {
     super(message, { cause });

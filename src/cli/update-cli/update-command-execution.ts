@@ -68,6 +68,7 @@ export async function executeMutableUpdate(params: {
   tag: string;
   opts: UpdateCommandOptions;
   shouldRestart: boolean;
+  packageAlreadyCurrent?: boolean;
   devTarget?: DevUpdateTarget;
   packageInstallSpec: string | null;
   packageInstallEnv?: NodeJS.ProcessEnv;
@@ -116,6 +117,7 @@ export async function executeMutableUpdate(params: {
           root: mutationRoot,
           shouldRestart: params.shouldRestart,
           jsonMode: Boolean(params.opts.json),
+          packageAlreadyCurrent: params.packageAlreadyCurrent,
           timeoutMs: params.updateStepTimeoutMs,
           phase,
           handoffFromGateway: (state) =>

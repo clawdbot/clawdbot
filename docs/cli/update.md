@@ -570,11 +570,13 @@ dependency scripts remain blocked. OpenClaw then swaps the clean package tree
 into the real global prefix. If verification fails, post-update doctor, plugin
 sync, and restart work do not run from the suspect tree. Even when the
 installed version already matches the target, the command refreshes the
-global package install, then runs plugin sync, a core-command completion
-refresh, and restart work. This keeps packaged sidecars and channel-owned
-plugin records aligned with the installed OpenClaw build, while leaving full
-plugin-command completion rebuilds to explicit
-`openclaw completion --write-state` runs.
+global package install, then runs plugin sync and a core-command completion
+refresh. It does not stop or restart a running managed gateway on that
+no-op version match. Real upgrades still stop, replace, and restart the
+managed service. `--no-restart` still skips stop and restart on real
+upgrades. This keeps packaged sidecars and channel-owned plugin records
+aligned with the installed OpenClaw build, while leaving full plugin-command
+completion rebuilds to explicit `openclaw completion --write-state` runs.
 
 ## Related
 

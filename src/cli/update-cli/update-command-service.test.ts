@@ -163,6 +163,35 @@ describe("maybeRestartService", () => {
     },
   );
 
+  it("leaves a current gateway running without the --no-restart tip", async () => {
+    const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
+
+    await expect(
+      maybeRestartService({
+        shouldRestart: false,
+        result: {
+          status: "ok",
+          mode: "npm",
+          steps: [],
+          durationMs: 0,
+        },
+        channel: "stable",
+        opts: {},
+        refreshServiceEnv: false,
+        gatewayPort: 18789,
+        timeoutMs: 1_000,
+        packageAlreadyCurrent: true,
+      }),
+    ).resolves.toBe(true);
+
+    const logs = logSpy.mock.calls.map((call) => String(call[0]));
+    expect(logs.some((line) => line.includes("already at target version; left running"))).toBe(
+      true,
+    );
+    expect(logs.some((line) => line.includes("restart skipped (--no-restart)"))).toBe(false);
+    expect(mocks.waitForGatewayHealthyRestart).not.toHaveBeenCalled();
+  });
+
   it("reports service ownership skips to JSON callers", async () => {
     const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
 

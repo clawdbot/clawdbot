@@ -46,6 +46,7 @@ import {
   assertGatewayServiceManagementAllowedForUpdate,
   gatewayServiceCommandUsesRoot,
   GatewayServiceUpdateOwnershipError,
+  type ManagedGatewayUpdateVerdict,
   resolveGatewayServiceManagementBlockMessageForUpdate,
 } from "./update-command-service-plan.js";
 
@@ -86,18 +87,6 @@ export function resolvePreparedGatewayUpdatePolicy(
       shouldRestart && stopState?.stopped === true && verdict?.kind === "owned",
   };
 }
-
-export type ManagedGatewayUpdateVerdict =
-  | { kind: "absent" | "foreign" }
-  | {
-      kind: "owned";
-      root: string;
-      fingerprint: string;
-      refreshDefinition: boolean;
-      requiresInstallRootRefresh?: boolean;
-    }
-  | { kind: "unresolved"; root: string; fingerprint: string }
-  | { kind: "unavailable"; message: string };
 
 async function inspectManagedGatewayServiceBeforeUpdate(params: {
   root: string;
@@ -396,6 +385,7 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
   root: string;
   shouldRestart: boolean;
   jsonMode: boolean;
+  packageAlreadyCurrent?: boolean;
   phase?: "inspect" | "prepare";
   handoffFromGateway?: (state: GatewayServiceState) => Promise<boolean>;
   expectedService?: Pick<PreManagedServiceStop, "serviceEnv" | "serviceUpdateVerdict">;
@@ -476,9 +466,11 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
   }
   // Transfer before either inspection-only Git planning or native shutdown can
   // return control to an updater still owned by this service.
+  // A no-op version match must not hand off or SIGTERM the live gateway.
   if (
     serviceUpdateVerdict.kind === "owned" &&
     params.shouldRestart &&
+    !params.packageAlreadyCurrent &&
     serviceState.running &&
     (await params.handoffFromGateway?.(serviceState))
   ) {
@@ -520,17 +512,23 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
   // need the handoff marker to distinguish that transition from operator-stopped state.
   const supervisorMayRespawn =
     params.shouldRestart &&
+    !params.packageAlreadyCurrent &&
     serviceState.loadState.status === "loaded" &&
     (process.platform === "darwin"
       ? (await service.isEnabled?.({ env: serviceState.env })) === true
       : process.env.OPENCLAW_UPDATE_RUN_HANDOFF === "1");
-  if (!params.shouldRestart || (!serviceState.running && !supervisorMayRespawn)) {
-    if (!params.shouldRestart && !params.jsonMode && serviceState.running) {
-      const warning = `--no-restart is set while the managed gateway service is running; the ${params.updateInstallKind} update will not stop or restart that process.`;
+  const leaveManagedGatewayRunning = !params.shouldRestart || Boolean(params.packageAlreadyCurrent);
+  if (leaveManagedGatewayRunning || (!serviceState.running && !supervisorMayRespawn)) {
+    if (leaveManagedGatewayRunning && !params.jsonMode && serviceState.running) {
+      const warning = params.packageAlreadyCurrent
+        ? "Package already matches the target version; leaving the managed gateway running."
+        : `--no-restart is set while the managed gateway service is running; the ${params.updateInstallKind} update will not stop or restart that process.`;
       defaultRuntime.log(theme.warn(warning));
     }
     const windowsTaskAutoStartRecovery =
-      !params.shouldRestart && isGatewayServiceEnv(process.env) ? undefined : await suspendTask();
+      leaveManagedGatewayRunning && isGatewayServiceEnv(process.env)
+        ? undefined
+        : await suspendTask();
     return {
       ...inspected,
       ...(windowsTaskAutoStartRecovery ? { windowsTaskAutoStartRecovery } : {}),

@@ -83,6 +83,7 @@ export async function finishUpdate(params: {
   channel: UpdateChannel;
   downgradeRisk: boolean;
   shouldRestart: boolean;
+  packageAlreadyCurrent?: boolean;
   opts: UpdateCommandOptions;
   showProgress: boolean;
   preManagedServiceStop?: PreManagedServiceStop;
@@ -482,7 +483,12 @@ export async function finishUpdate(params: {
       processEnv: process.env,
       serviceEnv: params.ownedManagedUpdateEnv,
     });
-    if (params.shouldRestart && serviceMutationAllowed && !skipLegacyServiceRestart) {
+    if (
+      params.shouldRestart &&
+      serviceMutationAllowed &&
+      !skipLegacyServiceRestart &&
+      !params.packageAlreadyCurrent
+    ) {
       try {
         const serviceState = await readGatewayServiceState(resolveGatewayService(), {
           env: serviceStateReadEnv,
@@ -584,7 +590,8 @@ export async function finishUpdate(params: {
     await restoreWindowsAutoStart(resultWithPostUpdate);
     const restartOk = await withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, async () =>
       maybeRestartService({
-        shouldRestart: params.shouldRestart && serviceMutationAllowed,
+        shouldRestart:
+          params.shouldRestart && serviceMutationAllowed && !params.packageAlreadyCurrent,
         result: resultWithPostUpdate,
         channel: params.channel,
         opts: params.opts,
@@ -600,6 +607,7 @@ export async function finishUpdate(params: {
         requireRunningServiceAfterRestart: params.preManagedServiceStop?.stopped === true,
         serviceMutationSkipMessage,
         timeoutMs: params.updateStepTimeoutMs,
+        packageAlreadyCurrent: params.packageAlreadyCurrent,
       }),
     );
     if (!restartOk) {

@@ -105,6 +105,77 @@ const nativeOfflineCases: NativeOfflineCase[] = [
   })),
 ];
 
+it.each([
+  {
+    packageAlreadyCurrent: true,
+    expectStop: false,
+    label: "already current",
+  },
+  {
+    packageAlreadyCurrent: false,
+    expectStop: true,
+    label: "version differs",
+  },
+] as const)(
+  "stops a running owned gateway before package update only when the version differs ($label)",
+  async ({ packageAlreadyCurrent, expectStop }) => {
+    const home = await makeTempWorkspace("openclaw-update-already-current-stop-");
+    try {
+      await withEnvAsync(
+        {
+          HOME: home,
+          USERPROFILE: home,
+          APPDATA: path.join(home, "AppData"),
+          OPENCLAW_GATEWAY_PORT: undefined,
+          OPENCLAW_HOME: undefined,
+          OPENCLAW_STATE_DIR: undefined,
+          OPENCLAW_CONFIG_PATH: undefined,
+          OPENCLAW_PROFILE: undefined,
+          OPENCLAW_SUPERVISOR_MODE: undefined,
+          OPENCLAW_SERVICE_MARKER: undefined,
+          OPENCLAW_SERVICE_KIND: undefined,
+        },
+        async () => {
+          mockProcessPlatform("linux");
+          const service = createMockGatewayService({
+            readCommand: async () => ({
+              programArguments: [
+                process.execPath,
+                path.join(process.cwd(), "openclaw.mjs"),
+                "gateway",
+              ],
+              environment: { HOME: home },
+            }),
+            readRuntime: async () => ({ status: "running", pid: process.pid + 1 }),
+            isLoaded: async () => true,
+            isEnabled: async () => true,
+          });
+          mocks.service.mockReturnValue(service);
+          const inspected = await maybeStopManagedServiceBeforeMutableUpdate({
+            root: process.cwd(),
+            updateInstallKind: "package",
+            shouldRestart: true,
+            jsonMode: true,
+            packageAlreadyCurrent,
+          });
+          expect(inspected.serviceUpdateVerdict?.kind).toBe("owned");
+          expect(inspected.running).toBe(true);
+          expect(inspected.stopped).toBe(expectStop);
+          if (expectStop) {
+            expect(service.stop).toHaveBeenCalledOnce();
+          } else {
+            expect(service.stop).not.toHaveBeenCalled();
+          }
+          expect(service.start).not.toHaveBeenCalled();
+          expect(service.restart).not.toHaveBeenCalled();
+        },
+      );
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  },
+);
+
 it.each(nativeOfflineCases)(
   "requires affirmative native offline proof for owned $platform service ($label)",
   async (scenario) => {
