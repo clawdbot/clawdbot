@@ -5,9 +5,16 @@ import { collectSecurityAuditFindings } from "./audit.test-support.js";
 
 const checkId = "security.trust_model.cross_agent_session_access_default";
 const agents = { entries: { home: {}, work: {} } };
+const sessionTools = [
+  "sessions_list",
+  "sessions_history",
+  "sessions_search",
+  "sessions_send",
+  "session_status",
+];
 
 describe("security audit cross-agent session access", () => {
-  it.each([
+  it.each<{ name: string; cfg: OpenClawConfig }>([
     { name: "one implicit agent", cfg: {} },
     { name: "one explicit agent", cfg: { agents: { entries: { home: {} } } } },
     ...(["agent", "tree", "self"] as const).map((visibility) => ({
@@ -26,7 +33,18 @@ describe("security audit cross-agent session access", () => {
       name: "agents that are all fully sandboxed under the default clamp",
       cfg: { agents: { ...agents, defaults: { sandbox: { mode: "all" } } } },
     },
-  ] satisfies Array<{ name: string; cfg: OpenClawConfig }>)("does not flag $name", ({ cfg }) => {
+    {
+      name: "agents with all session tools removed",
+      cfg: {
+        agents: {
+          entries: {
+            home: { tools: { deny: sessionTools } },
+            work: { tools: { deny: sessionTools } },
+          },
+        },
+      },
+    },
+  ])("does not flag $name", ({ cfg }) => {
     expect(collectCrossAgentSessionAccessFindings(cfg)).toEqual([]);
   });
 
@@ -56,13 +74,15 @@ describe("security audit cross-agent session access", () => {
         title: "Agents share Gateway-wide session access (default)",
       });
       for (const detail of [
-        "home",
-        "work",
+        "Agents: home, work",
         'tools.sessions.visibility resolves to "all"',
         "tools.agentToAgent",
-        "list, read, search, and message",
-        "other users' transcripts",
-        "spawn tree",
+        "Agents that can reach other agents' sessions, including other users' transcripts:",
+        ...["home", "work"].map(
+          (id) =>
+            `- ${id}: unsandboxed sessions; allowed session tools: ${sessionTools.join(", ")}.`,
+        ),
+        "Incognito sessions remain hidden.",
       ]) {
         expect(finding.detail).toContain(detail);
       }
@@ -137,15 +157,14 @@ describe("security audit cross-agent session access", () => {
       name: "a sandboxed agent under the default clamp",
       cfg: { agents: { entries: { home: {}, work: { sandbox: { mode: "all" } } } } },
       detail: [
-        "the agents with unsandboxed sessions (home)",
-        "Sandboxed sessions (work) stay clamped to their spawn tree",
-        "remain readable by the unsandboxed callers",
+        `- home: unsandboxed sessions; allowed session tools: ${sessionTools.join(", ")}.\n` +
+          "- work: sandboxed sessions clamped to their spawn tree; its transcripts remain readable by the agents above.",
       ],
     },
     {
       name: "non-main sandboxing that keeps main sessions unsandboxed",
       cfg: { agents: { ...agents, defaults: { sandbox: { mode: "non-main" } } } },
-      detail: ["every listed agent", "Sandboxed sessions (home, work) stay clamped"],
+      detail: ["- home: unsandboxed main session;", "- work: unsandboxed main session;"],
     },
     {
       name: "fully sandboxed agents with the clamp disabled",
@@ -156,18 +175,54 @@ describe("security audit cross-agent session access", () => {
         },
       },
       detail: [
-        "every listed agent",
-        'Sandboxed sessions (home, work) are not clamped because agents.defaults.sandbox.sessionToolsVisibility is "all"',
+        "- home: sandboxed sessions (clamp disabled); allowed session tools:",
+        "- work: sandboxed sessions (clamp disabled); allowed session tools:",
+      ],
+      absent: "unsandboxed",
+    },
+    {
+      name: "an agent with all session tools removed",
+      cfg: {
+        agents: { entries: { home: {}, work: { tools: { deny: sessionTools } } } },
+      },
+      detail: [
+        `- home: unsandboxed sessions; allowed session tools: ${sessionTools.join(", ")}.\n` +
+          "- work: session tools removed by agent tool policy; its transcripts remain readable by the agents above.",
+      ],
+      absent: "- work: unsandboxed",
+    },
+    {
+      name: "an agent with only session status allowed",
+      cfg: {
+        agents: { entries: { home: {}, work: { tools: { profile: "minimal" } } } },
+      },
+      detail: [
+        `- home: unsandboxed sessions; allowed session tools: ${sessionTools.join(", ")}.\n` +
+          "- work: unsandboxed sessions; allowed session tools: session_status.\n",
       ],
     },
-  ] satisfies Array<{ name: string; cfg: OpenClawConfig; detail: string[] }>)(
-    "renders sandbox reach for $name",
-    ({ cfg, detail }) => {
+    {
+      name: "a non-reaching agent before a reaching agent in the roster",
+      cfg: {
+        agents: { entries: { home: { tools: { deny: sessionTools } }, work: {} } },
+      },
+      detail: [
+        "Agents: home, work",
+        `- work: unsandboxed sessions; allowed session tools: ${sessionTools.join(", ")}.\n` +
+          "- home: session tools removed by agent tool policy; its transcripts remain readable by the agents above.",
+      ],
+    },
+  ] satisfies Array<{ name: string; cfg: OpenClawConfig; detail: string[]; absent?: string }>)(
+    "renders session reach for $name",
+    ({ cfg, detail, absent }) => {
       const findings = collectCrossAgentSessionAccessFindings(cfg);
       expect(findings).toHaveLength(1);
       expect(findings[0]).toMatchObject({ checkId, severity: "warn" });
       for (const fragment of detail) {
         expect(findings[0]!.detail).toContain(fragment);
+      }
+      if (absent) {
+        expect(findings[0]!.detail).not.toContain(absent);
       }
     },
   );

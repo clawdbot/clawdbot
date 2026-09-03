@@ -181,22 +181,41 @@ export function collectCrossAgentSessionAccessFindings(
     return [];
   }
 
-  // Sandboxed sessions clamp to their spawn tree unless the clamp is disabled, so
-  // only agents with an unsandboxed session can reach other agents' sessions.
   const sandboxClamp = resolveSandboxSessionToolsVisibility(cfg);
   const reachers: string[] = [];
-  const sandboxed: string[] = [];
+  const nonReachers: string[] = [];
   const signals: string[] = [];
   for (const agentId of agentIds) {
     const sandboxMode = resolveSandboxConfigForAgent(cfg, agentId).mode;
     if (sandboxMode !== "off") {
-      sandboxed.push(agentId);
       signals.push(`${agentId}: sandbox.mode="${sandboxMode}"`);
     }
-    if (sandboxMode !== "all" || sandboxClamp === "all") {
-      reachers.push(agentId);
-    }
     const tools = resolveAgentConfig(cfg, agentId)?.tools;
+    const policies = resolveToolPolicies({ cfg, agentTools: tools, sandboxMode, agentId });
+    const allowedTools = [
+      "sessions_list",
+      "sessions_history",
+      "sessions_search",
+      "sessions_send",
+      "session_status",
+    ].filter((name) => isToolAllowedByPolicies(name, policies));
+    const unclamped = sandboxMode !== "all" || sandboxClamp === "all";
+    if (unclamped && allowedTools.length > 0) {
+      const context =
+        sandboxMode === "off"
+          ? "unsandboxed sessions"
+          : sandboxMode === "non-main"
+            ? "unsandboxed main session"
+            : "sandboxed sessions (clamp disabled)";
+      reachers.push(`- ${agentId}: ${context}; allowed session tools: ${allowedTools.join(", ")}.`);
+    } else {
+      const reason = unclamped
+        ? "session tools removed by agent tool policy"
+        : "sandboxed sessions clamped to their spawn tree";
+      nonReachers.push(
+        `- ${agentId}: ${reason}; its transcripts remain readable by the agents above.`,
+      );
+    }
     const restrictions = (["profile", "allow", "deny"] as const).filter(
       (key) => tools?.[key] !== undefined,
     );
@@ -210,16 +229,6 @@ export function collectCrossAgentSessionAccessFindings(
     return [];
   }
   signals.push(...listPotentialMultiUserSignals(cfg));
-  const reachLine =
-    reachers.length === agentIds.length
-      ? "every listed agent"
-      : `the agents with unsandboxed sessions (${reachers.join(", ")})`;
-  const clampLine =
-    sandboxed.length === 0
-      ? 'Sandboxed sessions stay clamped to their spawn tree unless agents.defaults.sandbox.sessionToolsVisibility is "all"; incognito sessions remain hidden.'
-      : sandboxClamp === "all"
-        ? `Sandboxed sessions (${sandboxed.join(", ")}) are not clamped because agents.defaults.sandbox.sessionToolsVisibility is "all"; incognito sessions remain hidden.`
-        : `Sandboxed sessions (${sandboxed.join(", ")}) stay clamped to their spawn tree, so they cannot reach other agents, but their transcripts remain readable by the unsandboxed callers; incognito sessions remain hidden.`;
   const trustDetail =
     signals.length > 0
       ? "\nTrust-boundary signals:\n" +
@@ -234,8 +243,9 @@ export function collectCrossAgentSessionAccessFindings(
       title: "Agents share Gateway-wide session access (default)",
       detail:
         `Agents: ${agentIds.join(", ")}\n` +
-        `tools.sessions.visibility resolves to "all" and tools.agentToAgent is enabled with no allow list, so ${reachLine} can list, read, search, and message every other agent's sessions from unsandboxed sessions, including other users' transcripts.\n` +
-        clampLine +
+        'tools.sessions.visibility resolves to "all" and tools.agentToAgent is enabled with no allow list.\n' +
+        "Agents that can reach other agents' sessions, including other users' transcripts:\n" +
+        [...reachers, ...nonReachers, "Incognito sessions remain hidden."].join("\n") +
         trustDetail,
       remediation:
         'Set tools.sessions.visibility to "agent", "tree", or "self"; restrict tools.agentToAgent.allow to the intended requester and target ids; or set tools.agentToAgent.enabled: false. See https://docs.openclaw.ai/gateway/config-tools#tools-agenttoagent and https://docs.openclaw.ai/gateway/security#scope-one-trust-boundary-per-gateway.',

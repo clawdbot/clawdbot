@@ -637,10 +637,20 @@ describe("sessions_send agent targeting", () => {
       name: "explicit cross-agent access",
       tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
     },
-  ] as const)(
-    "starts configured agent main session by agentId before sending with $name",
+    {
+      name: "disabled agent-to-agent access",
+      tools: { agentToAgent: { enabled: false } },
+      error: "Agent-to-agent messaging is disabled",
+    },
+    {
+      name: "restrictive allow list",
+      tools: { agentToAgent: { allow: ["main"] } },
+      error: "denied by tools.agentToAgent.allow",
+    },
+  ] satisfies Array<{ name: string; tools: OpenClawConfig["tools"]; error?: string }>)(
+    "enforces $name when targeting a configured agent main session by agentId",
     { timeout: SESSION_SEND_E2E_TIMEOUT_MS },
-    async ({ tools }) => {
+    async ({ tools, error }) => {
       const configPath = process.env.OPENCLAW_CONFIG_PATH;
       if (!configPath) {
         throw new Error("OPENCLAW_CONFIG_PATH missing in gateway test environment");
@@ -691,6 +701,22 @@ describe("sessions_send agent targeting", () => {
           message: "hello orion",
           timeoutSeconds: 5,
         });
+        if (error) {
+          expect(spy.mock.calls.map(([opts]) => opts)).not.toContainEqual(
+            expect.objectContaining({ sessionKey: "agent:orion:main" }),
+          );
+          expect(
+            loadSessionEntry({
+              sessionKey: "agent:orion:main",
+              storePath: testState.sessionStorePath,
+            }),
+          ).toBeUndefined();
+          expect(result.details).toMatchObject({
+            status: "forbidden",
+            error: expect.stringContaining(error),
+          });
+          return;
+        }
         expectSessionsSendDetails(result, {
           reply: "orion response",
           sessionKey: "agent:orion:main",

@@ -506,7 +506,7 @@ export type ToolsConfig = {
   /** Message tool configuration. */
   message?: MessageToolsConfig;
   agentToAgent?: {
-    /** Enable cross-agent session tool access (send, plus reads under `tools.sessions.visibility: "all"`). Default: true. */
+    /** Default: true. False blocks ordinary cross-agent session tool access; requester-owned native subagent and ACP child sessions remain reachable under tree/all visibility. */
     enabled?: boolean;
     /**
      * Agent ids or `*` glob patterns; the requesting and target agent must both match.

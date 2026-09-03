@@ -110,9 +110,9 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.exec.node":
     "Node binding configuration for exec tooling when command execution is delegated through connected nodes. Use explicit node binding only when multi-node routing is required.",
   "tools.agentToAgent":
-    "Policy for cross-agent session tool calls: sessions_send to another agent, plus cross-agent list, history, search, and status reads under the default tools.sessions.visibility=all. Cross-agent access is on by default; use allow to restrict agent pairs or set enabled=false to keep agents isolated.",
+    "Policy for cross-agent session tool calls: sends, list, history, search, and status reads (default: enabled). Use allow to restrict agent pairs; enabled=false blocks ordinary cross-agent access. Requester-owned native subagent and ACP child sessions stay reachable under tree or all visibility. For strict separation, use tools.sessions.visibility (agent, tree, or self) to narrow reach, or separate gateways.",
   "tools.agentToAgent.enabled":
-    "Enables cross-agent access through the session tools so one agent can message or read another agent's sessions (default: true). Set false to keep agents isolated; omitted or empty allow permits every agent pair.",
+    "Enables cross-agent session tool access (default: true); omitted or empty allow permits every agent pair. Set false to block ordinary cross-agent access; requester-owned native subagent and ACP child sessions stay reachable under tree or all visibility. For strict separation, use tools.sessions.visibility (agent, tree, or self) to narrow reach, or separate gateways.",
   "tools.agentToAgent.allow":
     "Agent ids or * patterns that may take part in cross-agent calls; the requesting and target agent must both match. Cross-agent access is on by default, and omitted or empty allow permits every pair. Set an explicit list to restrict access; blank entries deny.",
   "tools.updatePlan":
