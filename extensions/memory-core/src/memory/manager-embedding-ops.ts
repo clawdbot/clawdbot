@@ -1151,18 +1151,17 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
               EMBEDDING_BATCH_MAX_TOKENS,
             )
           : baseChunks
-      ).map(
-        (chunk): IndexedMemoryChunk =>
-          Object.assign(
+      ).map((chunk): IndexedMemoryChunk =>
+        Object.assign(
+          chunk,
+          resolveChunkRecallMetadata({
+            curatedRoot: pathClassification.curatedRoot,
+            projectScopeEligible:
+              options.source === "memory" && normalizedEntryPath.toUpperCase() !== "USER.MD",
+            content,
             chunk,
-            resolveChunkRecallMetadata({
-              curatedRoot: pathClassification.curatedRoot,
-              projectScopeEligible:
-                options.source === "memory" && normalizedEntryPath.toUpperCase() !== "USER.MD",
-              content,
-              chunk,
-            }),
-          ),
+          }),
+        ),
       );
       if (options.source === "sessions" && "lineMap" in entry) {
         remapChunkLines(chunks, entry.lineMap);

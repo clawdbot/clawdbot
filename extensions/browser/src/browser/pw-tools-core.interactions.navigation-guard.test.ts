@@ -1014,11 +1014,12 @@ describe("pw-tools-core interaction navigation guard", () => {
     });
     await started;
     ctrl.abort(new Error("aborted by test"));
-
+    expect(drain).not.toHaveBeenCalled();
+    expect(dispose).not.toHaveBeenCalled();
+    releaseHover();
     await expect(task).rejects.toThrow("aborted by test");
     expect(drain).toHaveBeenCalledWith(DOWNLOAD_GRACE);
     expect(dispose).toHaveBeenCalledOnce();
-    releaseHover();
   });
 
   it("retains the download grace when an executable wait aborts", async () => {

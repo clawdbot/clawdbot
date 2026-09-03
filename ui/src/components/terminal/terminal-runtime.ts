@@ -17,6 +17,9 @@ export async function createIsolatedGhosttyTerminal(options: CreateGhosttyTermin
   const controller = await createGhosttyTerminal({ ...options, runtime });
   const dispose = controller.dispose.bind(controller);
   const terminal = controller.terminal;
+  // Ghostty ignores defaultPrevented; its custom handler returns true to consume.
+  // App capture listeners own dock shortcuts before they can become PTY input.
+  terminal.attachCustomKeyEventHandler((event) => event.defaultPrevented);
   const mouseUpCandidate = asOptionalRecord(terminal)?.handleMouseUp;
   let handleMouseUp = isEventListener(mouseUpCandidate) ? mouseUpCandidate : undefined;
   let disposed = false;

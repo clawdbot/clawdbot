@@ -153,8 +153,7 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
         config,
         owner,
         dispatch: (pendingRequests = requests) =>
-          createPendingBridgeStates({
-            pendingRequests,
+          createPendingBridgeStates(pendingRequests, {
             config: limits,
             runtime,
             ctx,

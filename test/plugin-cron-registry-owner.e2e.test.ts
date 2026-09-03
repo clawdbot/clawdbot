@@ -246,7 +246,10 @@ async function waitForRequestCount(
   count: number,
 ): Promise<void> {
   await vi.waitFor(() => {
-    expect(requestsContaining(server, marker).length).toBeGreaterThanOrEqual(count);
+    expect(
+      requestsContaining(server, marker).length,
+      `model request marker: ${marker}`,
+    ).toBeGreaterThanOrEqual(count);
   }, WAIT_OPTIONS);
 }
 

@@ -769,3 +769,27 @@ describe("cron view editor", () => {
     expect(inheritText).not.toContain("common.default");
   });
 });
+
+describe("failure alert field inheritance controls", () => {
+  it("offers the stored inheritance choice for alert mode and forwards it unchanged", () => {
+    const onFormChange = vi.fn();
+    const container = renderView({
+      createOpen: true,
+      form: {
+        ...DEFAULT_CRON_FORM,
+        failureAlertMode: "custom",
+        failureAlertDeliveryMode: "webhook",
+      },
+      onFormChange,
+    });
+    const mode = getElement(container, "#cron-failure-alert-delivery-mode", HTMLElement);
+    const inherit = mode.querySelector('wa-option[value=""]');
+
+    expect(inherit?.textContent).toContain("Inherit global setting");
+    Object.defineProperty(mode, "value", { configurable: true, value: "" });
+    mode.dispatchEvent(new Event("change", { bubbles: true }));
+    Reflect.deleteProperty(mode, "value");
+
+    expect(onFormChange).toHaveBeenCalledWith({ failureAlertDeliveryMode: "" });
+  });
+});

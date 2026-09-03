@@ -11,6 +11,7 @@ import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-tr
 import { closeOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db.js";
 import { FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE } from "../../bootstrap-files.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
 
 const hoisted = vi.hoisted(() => ({
   runAgentEndSideEffects: vi.fn(),
@@ -64,6 +65,7 @@ describe("embedded attempt phase lifecycle state", () => {
       sessionId: "session-1",
     };
 
+    const runAbortDeadlineAtMs = Date.now() + 60_000;
     const result = await settleEmbeddedAttemptStream({
       attempt: {
         runId: "run-1",
@@ -75,6 +77,7 @@ describe("embedded attempt phase lifecycle state", () => {
       } as never,
       activeSession: activeSession as never,
       sessionManager: sessionManager as never,
+      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
       withOwnedTranscriptWrite: async (operation) => await operation(),
       subscription: {
         toolMetas: [],
@@ -102,7 +105,7 @@ describe("embedded attempt phase lifecycle state", () => {
       markTimedOutDuringCompaction: () => {
         timedOutDuringCompaction = true;
       },
-      runAbortDeadlineAtMs: Date.now() + 60_000,
+      getRunAbortDeadlineAtMs: () => runAbortDeadlineAtMs,
       runAbortSignal: new AbortController().signal,
       isProbeSession: true,
       abortable: async (promise) => await promise,
@@ -143,6 +146,7 @@ describe("embedded attempt phase lifecycle state", () => {
       sessionId: "session-1",
     };
 
+    const runAbortDeadlineAtMs = Date.now() + 60_000;
     const result = await settleEmbeddedAttemptStream({
       attempt: {
         runId: "run-1",
@@ -155,6 +159,7 @@ describe("embedded attempt phase lifecycle state", () => {
       } as never,
       activeSession: activeSession as never,
       sessionManager: sessionManager as never,
+      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
       withOwnedTranscriptWrite: async (operation) => await operation(),
       subscription: {
         toolMetas: [{ toolName: "exec", asyncStarted: true }],
@@ -177,7 +182,7 @@ describe("embedded attempt phase lifecycle state", () => {
         timedOutDuringCompaction: false,
       }),
       markTimedOutDuringCompaction: () => {},
-      runAbortDeadlineAtMs: Date.now() + 60_000,
+      getRunAbortDeadlineAtMs: () => runAbortDeadlineAtMs,
       runAbortSignal: AbortSignal.abort(),
       isProbeSession: true,
       abortable: async (promise) => await promise,
@@ -228,6 +233,7 @@ describe("embedded attempt phase lifecycle state", () => {
       removeTrailingEntries: vi.fn(() => 0),
     };
 
+    const runAbortDeadlineAtMs = Date.now() + 60_000;
     const result = await settleEmbeddedAttemptStream({
       attempt: {
         runId: "run-1",
@@ -240,6 +246,7 @@ describe("embedded attempt phase lifecycle state", () => {
       } as never,
       activeSession: activeSession as never,
       sessionManager: sessionManager as never,
+      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
       withOwnedTranscriptWrite: async (operation) => await operation(),
       subscription: {
         toolMetas: [
@@ -265,7 +272,7 @@ describe("embedded attempt phase lifecycle state", () => {
         timedOutDuringCompaction: false,
       }),
       markTimedOutDuringCompaction: () => {},
-      runAbortDeadlineAtMs: Date.now() + 60_000,
+      getRunAbortDeadlineAtMs: () => runAbortDeadlineAtMs,
       runAbortSignal: new AbortController().signal,
       isProbeSession: true,
       abortable: async (promise) => await promise,

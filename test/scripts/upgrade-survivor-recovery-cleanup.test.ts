@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -14,10 +15,158 @@ import {
   seedRecoveryFixture,
   writeRecoveryTranscript,
 } from "../../scripts/e2e/lib/upgrade-survivor/recovery-cleanup-fixture.mjs";
+import { runNodeScript } from "../helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const temporary = () => fs.realpathSync(tempDirs.make("upgrade-recovery-assertions-"));
+
+describe.skipIf(process.platform === "win32")("recovery survivor package provenance", () => {
+  type PackageFault =
+    | "metadata-version"
+    | "pack-version"
+    | "integrity-mismatch"
+    | "missing-metadata-integrity"
+    | "missing-pack-integrity";
+
+  async function packageEvidence({
+    requested = "openclaw@2026.7.1-2",
+    installedVersion = "2026.7.1-2",
+    packShape = "array",
+    viewShape = "object",
+    fault,
+  }: {
+    requested?: string;
+    installedVersion?: string;
+    packShape?: "array" | "name-keyed";
+    viewShape?: "object" | "array";
+    fault?: PackageFault;
+  } = {}) {
+    const root = temporary();
+    const artifacts = path.join(root, "artifacts");
+    const state = path.join(root, "state");
+    const runtime = path.join(root, "runtime");
+    const bin = path.join(root, "bin");
+    for (const directory of [artifacts, state, runtime, bin]) {
+      fs.mkdirSync(directory);
+    }
+    const integrity =
+      installedVersion === "2026.7.1-2"
+        ? "sha512-ycF3yPcbjN6bUPeaUx6Mh6vze1hQWoD3CT/wWcmD7a8xaHHHRUaAlaq+lFxMHf1ssEgODVAwjlzYqp2twkYZ7g=="
+        : `sha512-${createHash("sha512").update(installedVersion).digest("base64")}`;
+    const metadata = {
+      version: fault === "metadata-version" ? "2026.1.1" : installedVersion,
+      dist: {
+        tarball: `https://registry.npmjs.org/openclaw/-/openclaw-${installedVersion}.tgz`,
+        ...(fault === "missing-metadata-integrity" ? {} : { integrity }),
+      },
+    };
+    const packed = {
+      name: "openclaw",
+      version: fault === "pack-version" ? "2026.1.1" : installedVersion,
+      ...(fault === "missing-pack-integrity"
+        ? {}
+        : {
+            integrity:
+              fault === "integrity-mismatch"
+                ? `sha512-${createHash("sha512").update("different bytes").digest("base64")}`
+                : integrity,
+          }),
+    };
+    const calls = path.join(root, "npm-calls.jsonl");
+    fs.writeFileSync(
+      path.join(bin, "npm"),
+      `#!${process.execPath}
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args) + "\\n");
+if (args[1] !== ${JSON.stringify(`openclaw@${installedVersion}`)}) {
+  throw new Error("package evidence must use the installed exact baseline");
+}
+if (args[0] === "view") {
+  console.log(JSON.stringify(${JSON.stringify(viewShape === "array" ? [metadata] : metadata)}));
+} else if (args[0] === "pack") {
+  console.log(JSON.stringify(${JSON.stringify(packShape === "array" ? [packed] : { openclaw: packed })}));
+} else {
+  throw new Error("unexpected npm command");
+}
+`,
+      { mode: 0o755 },
+    );
+    const candidate = path.join(root, "candidate.tgz");
+    const candidateBytes = "candidate package fixture";
+    fs.writeFileSync(candidate, candidateBytes);
+    const result = await runNodeScript(
+      [
+        path.resolve("scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs"),
+        "packages",
+        requested,
+        candidate,
+      ],
+      {
+        PATH: [bin, path.dirname(process.execPath), "/usr/bin", "/bin"].join(path.delimiter),
+        HOME: root,
+        TMPDIR: runtime,
+        OPENCLAW_STATE_DIR: state,
+        OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: artifacts,
+        OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: runtime,
+        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION: installedVersion,
+      },
+      10_000,
+    );
+    return {
+      result,
+      metadata,
+      calls: fs
+        .readFileSync(calls, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line)),
+      evidencePath: path.join(artifacts, "recovery-evidence.json"),
+      candidateSha256: createHash("sha256").update(candidateBytes).digest("hex"),
+    };
+  }
+
+  it.each([
+    { requested: "openclaw@2026.7.1-2", installedVersion: "2026.7.1-2", packShape: "array" },
+    {
+      requested: "openclaw@2026.8.2",
+      installedVersion: "2026.8.2",
+      packShape: "name-keyed",
+      viewShape: "array",
+    },
+    { requested: "openclaw@latest", installedVersion: "2026.8.2", packShape: "array" },
+  ] as const)(
+    "verifies $requested against installed $installedVersion ($packShape)",
+    async (entry) => {
+      const fixture = await packageEvidence(entry);
+      expect(fixture.result.error).toBeUndefined();
+      expect(fixture.result.status, fixture.result.stderr).toBe(0);
+      const exactSpec = `openclaw@${entry.installedVersion}`;
+      expect(fixture.calls).toEqual([
+        ["view", exactSpec, "version", "dist", "--json"],
+        ["pack", exactSpec, "--ignore-scripts", "--dry-run", "--json"],
+      ]);
+      expect(JSON.parse(fs.readFileSync(fixture.evidencePath, "utf8"))).toMatchObject({
+        baseline: fixture.metadata,
+        candidate: { sha256: fixture.candidateSha256 },
+      });
+    },
+  );
+
+  it.each<PackageFault>([
+    "metadata-version",
+    "pack-version",
+    "integrity-mismatch",
+    "missing-metadata-integrity",
+    "missing-pack-integrity",
+  ])("rejects %s without recording successful package evidence", async (fault) => {
+    const fixture = await packageEvidence({ fault });
+    expect(fixture.result.error).toBeUndefined();
+    expect(fixture.result.status).toBe(1);
+    expect(fs.existsSync(fixture.evidencePath)).toBe(false);
+  });
+});
 
 describe("recovery survivor evidence", () => {
   it("uses the existing volume controls and rejects unsafe counts", () => {

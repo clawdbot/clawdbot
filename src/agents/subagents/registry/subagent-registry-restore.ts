@@ -176,16 +176,19 @@ export function createSubagentRegistryRestorer(config: {
         if (!firstEntry) {
           continue;
         }
-        settleRequesterTurn({
-          requesterSessionKey: firstEntry.requesterSessionKey,
-          requesterAgentId: resolveRequesterAgentId(firstEntry),
-          requesterTurnRunId,
-          requesterYielded: entries.every((entry) => entry.requesterTurnYielded === true),
-          acceptedSessionSpawns: entries.map((entry) => ({
-            runId: entry.taskRunId ?? entry.runId,
-            childSessionKey: entry.childSessionKey,
-          })),
-        });
+        settleRequesterTurn(
+          {
+            requesterSessionKey: firstEntry.requesterSessionKey,
+            requesterAgentId: resolveRequesterAgentId(firstEntry),
+            requesterTurnRunId,
+            requesterYielded: entries.every((entry) => entry.requesterTurnYielded === true),
+            acceptedSessionSpawns: entries.map((entry) => ({
+              runId: entry.taskRunId ?? entry.runId,
+              childSessionKey: entry.childSessionKey,
+            })),
+          },
+          "restore",
+        );
       }
     }
     if (runs.size === 0) {
@@ -273,7 +276,7 @@ export function createSubagentRegistryRestorer(config: {
                 launchTerminationConfirmed = true;
                 throw error;
               }
-            });
+            }, "subagents:restore-launch");
           },
           onStartFailure: (error) => {
             if (error instanceof GatewayDrainingError) {
@@ -438,7 +441,7 @@ export function createSubagentRegistryRestorer(config: {
           return cleanupSettled && ownsCleanup();
         }
         return await cleanupCollectorLaunchResources(entry, { isCurrent: ownsCleanup });
-      }).catch((cleanupError: unknown) => {
+      }, "subagents:restore-cleanup").catch((cleanupError: unknown) => {
         warn("failed to clean restored collector after launch failure", {
           runId,
           childSessionKey: entry.childSessionKey,

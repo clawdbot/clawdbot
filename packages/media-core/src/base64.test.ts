@@ -1,12 +1,7 @@
-// Media Core tests cover base64 behavior.
 import { describe, expect, it } from "vitest";
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "./base64.js";
 
 describe("base64 helpers", () => {
-  function expectBase64HelperCase<T>(actual: T, expected: T) {
-    expect(actual).toBe(expected);
-  }
-
   it("canonicalizeBase64 validates large payloads without cons-string overflow", () => {
     const encoded = Buffer.alloc(1_900_000).toString("base64");
 
@@ -123,6 +118,6 @@ describe("base64 helpers", () => {
       expected: 0,
     },
   ] as const)("$name", ({ actual, expected }) => {
-    expectBase64HelperCase(actual, expected);
+    expect(actual).toBe(expected);
   });
 });

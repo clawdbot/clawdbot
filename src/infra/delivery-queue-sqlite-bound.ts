@@ -9,6 +9,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "./sqlite-number.js";
 
 type QueueStatus = "pending" | "failed" | "completed";
 export type DeliveryQueueReadMode = "pending" | "unfinished" | "all";
@@ -178,13 +179,13 @@ export function inflateDeliveryQueueRow(
   return {
     ...parsed,
     id: row.id,
-    enqueuedAt: Number(row.enqueued_at),
-    retryCount: Number(row.retry_count),
-    ...(row.last_attempt_at == null ? {} : { lastAttemptAt: Number(row.last_attempt_at) }),
+    enqueuedAt: sqliteNumber(row.enqueued_at),
+    retryCount: sqliteNumber(row.retry_count),
+    ...(row.last_attempt_at == null ? {} : { lastAttemptAt: sqliteNumber(row.last_attempt_at) }),
     ...(row.last_error == null ? {} : { lastError: row.last_error }),
     ...(row.platform_send_started_at == null
       ? {}
-      : { platformSendStartedAt: Number(row.platform_send_started_at) }),
+      : { platformSendStartedAt: sqliteNumber(row.platform_send_started_at) }),
     ...(row.recovery_state == null ? {} : { recoveryState: row.recovery_state }),
   };
 }

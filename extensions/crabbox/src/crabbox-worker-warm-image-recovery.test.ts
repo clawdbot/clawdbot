@@ -105,7 +105,7 @@ describe("Crabbox capture recovery", () => {
     failCreate = true;
     await captureWarmImage(initial.provider, PROFILE, "uncertain");
     const selector = listCrabboxWarmImages()[0]!.capture!.selector;
-    initial.provider.dispose();
+    await initial.provider.dispose();
     resetPluginStateStoreForTests();
     clock.mockReturnValue(now + 2 * DAY_MS);
     const restarted = createWarmProvider(undefined, initial.stateDir);

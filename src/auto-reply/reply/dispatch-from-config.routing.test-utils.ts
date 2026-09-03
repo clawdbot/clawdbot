@@ -5,6 +5,7 @@ import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shar
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
+  acpMocks,
   askUserMocks,
   createDispatcher,
   emptyConfig,
@@ -341,8 +342,20 @@ describe("dispatchReplyFromConfig", () => {
     sessionStoreMocks.currentEntry = {
       sessionId: "background-child",
       spawnedBy: "agent:main:parent",
-      acp: { backend: "codex" },
     };
+    acpMocks.readAcpSessionEntry.mockReturnValue({
+      agentId: "main",
+      sessionKey: "agent:main:background-child",
+      entry: sessionStoreMocks.currentEntry,
+      acp: {
+        backend: "acpx",
+        agent: "fixture",
+        runtimeSessionName: "background-child",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: 1,
+      },
+    });
     const dispatcher = createDispatcher();
     const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       await requireBlockReplyHandler(opts?.onBlockReply)(

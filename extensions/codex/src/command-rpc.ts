@@ -54,7 +54,12 @@ export type CodexControlRequestOptions = {
   isolated?: boolean;
   startOptions?: CodexAppServerStartOptions;
   timeoutMs?: number;
-  beforeRequest?: (request: CodexAppServerScopedRequest) => Promise<void>;
+  assertCurrent?: () => void;
+  beforeRequest?: (
+    request: CodexAppServerScopedRequest,
+    client: CodexAppServerClient,
+    scope: { assertCurrent: () => void },
+  ) => Promise<void>;
   onResponse?: (
     response: unknown,
     client: CodexAppServerClient,
@@ -94,7 +99,8 @@ async function prepareControlAuth(
     readConsistency: "latest",
   });
   const model = resolveSessionModelRef(config, entry, sessionAgentId);
-  const store = resolveCodexAppServerAuthProfileStore({ agentDir, config });
+  const authProfileId = entry?.authProfileOverride ?? options.authProfileId;
+  const store = resolveCodexAppServerAuthProfileStore({ agentDir, config, authProfileId });
   const { plan, attempts } = prepareAgentRuntimeAuth({
     provider: model.provider,
     modelId: model.model,
@@ -102,7 +108,7 @@ async function prepareControlAuth(
     agentDir,
     workspaceDir,
     authProfileStore: store,
-    sessionAuthProfileId: entry?.authProfileOverride ?? options.authProfileId,
+    sessionAuthProfileId: authProfileId,
     sessionAuthProfileSource: entry?.authProfileOverrideSource,
     harnessId: "codex",
     harnessAuthBootstrap: "harness",
@@ -210,6 +216,7 @@ export async function codexControlRequest(
   const auth = await prepareControlAuth(options, startOptions);
   const controlRequestOptions = {
     timeoutMs: options.timeoutMs ?? runtime.requestTimeoutMs,
+    assertCurrent: options.assertCurrent,
     startOptions,
     config: options.config,
     sessionKey: options.sessionKey,
@@ -222,7 +229,7 @@ export async function codexControlRequest(
     return await withCodexAppServerJsonClient(
       controlRequestOptions,
       async (request, client, scope) => {
-        await options.beforeRequest?.(request);
+        await options.beforeRequest?.(request, client, scope);
         scope.assertCurrent();
         let response: unknown;
         if (method === "thread/resume") {

@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { loadSecretFileSync as loadSecretFileSyncFromCore } from "openclaw/plugin-sdk/core";
 import {
+  fileExists,
   readFileWithinRoot,
   removePathWithinRoot,
   writeFileWithinRoot,
@@ -13,10 +14,32 @@ import {
   loadSecretFileSync,
   type SecretFileReadResult,
 } from "openclaw/plugin-sdk/secret-file-runtime";
+import { fileExists as fileExistsFromSecurity } from "openclaw/plugin-sdk/security-runtime";
 import { describe, expect, it } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 
 describe("plugin SDK fs-safe compatibility exports", () => {
+  it.each([
+    { subpath: "file-access-runtime", exists: fileExists },
+    { subpath: "security-runtime", exists: fileExistsFromSecurity },
+  ])("keeps $subpath file checks limited to regular files", async ({ exists }) => {
+    await withTestDir({ prefix: "openclaw-sdk-file-exists-" }, async (root) => {
+      const filePath = path.join(root, "file.txt");
+      const symlinkPath = path.join(root, "linked.txt");
+      fs.writeFileSync(filePath, "content");
+      fs.symlinkSync(filePath, symlinkPath);
+
+      for (const [candidate, expected] of [
+        [filePath, true],
+        [path.join(root, "missing.txt"), false],
+        [root, false],
+        [symlinkPath, false],
+      ] as const) {
+        expect(exists(candidate), candidate).toBe(expected);
+      }
+    });
+  });
+
   it("keeps deprecated secret-file result helpers on public SDK subpaths", async () => {
     await withTestDir({ prefix: "openclaw-sdk-secret-compat-" }, async (root) => {
       const secretPath = path.join(root, "token.txt");

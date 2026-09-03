@@ -244,31 +244,32 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
       },
       buildToolContext: ({ context, hasRepliedRef }) => {
         const currentMessagingTarget = context.To?.trim() || undefined;
+        const chatType =
+          context.ChatType === "direct" ||
+          context.ChatType === "group" ||
+          context.ChatType === "channel"
+            ? context.ChatType
+            : undefined;
         const parsedTarget = currentMessagingTarget
           ? parseQaTarget(currentMessagingTarget, {
-              defaultChatType:
-                context.ChatType === "direct" ||
-                context.ChatType === "group" ||
-                context.ChatType === "channel"
-                  ? context.ChatType
-                  : "channel",
+              defaultChatType: chatType ?? "channel",
             })
           : undefined;
+        const nativeChannelId = context.NativeChannelId?.trim() || undefined;
         const currentThreadTs =
           context.MessageThreadId != null
             ? String(context.MessageThreadId)
             : parsedTarget?.threadId;
         return {
-          currentChannelId:
-            context.NativeChannelId?.trim() ||
-            parsedTarget?.conversationId ||
-            currentMessagingTarget,
-          currentChatType:
-            context.ChatType === "direct" ||
-            context.ChatType === "group" ||
-            context.ChatType === "channel"
-              ? context.ChatType
-              : parsedTarget?.chatType,
+          // Implicit actions need a typed root; embedding To's thread would
+          // bypass topLevel/threadId:null opt-outs.
+          currentChannelId: parsedTarget
+            ? buildQaTarget({
+                chatType: parsedTarget.chatType,
+                conversationId: nativeChannelId || parsedTarget.conversationId,
+              })
+            : nativeChannelId,
+          currentChatType: chatType ?? parsedTarget?.chatType,
           currentMessagingTarget,
           currentThreadTs,
           ...(currentThreadTs ? { replyToMode: "all" as const } : {}),

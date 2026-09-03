@@ -259,22 +259,31 @@ describe("handleRestartCommand", () => {
     expect(mocks.scheduleGatewaySigusr1Restart).not.toHaveBeenCalled();
   });
 
-  it("rejects authorized non-owner restart commands", async () => {
-    const result = await handleRestartCommand(
-      restartCommandParams({
-        command: {
-          ...restartCommandParams().command,
-          senderIsOwner: false,
-          isAuthorizedSender: true,
-        },
-      }),
-      true,
-    );
+  it.each(["text", "native"] as const)(
+    "gives authorized non-owner %s restart commands the owner setup hint",
+    async (source) => {
+      const result = await handleRestartCommand(
+        restartCommandParams({
+          ctx: { CommandSource: source },
+          command: {
+            ...restartCommandParams().command,
+            senderIsOwner: false,
+            isAuthorizedSender: true,
+          },
+        }),
+        true,
+      );
 
-    expect(result).toEqual({ shouldContinue: false });
-    expect(mocks.writeRestartSentinel).not.toHaveBeenCalled();
-    expect(mocks.triggerOpenClawRestart).not.toHaveBeenCalled();
-  });
+      expect(result).toEqual({
+        shouldContinue: false,
+        reply: {
+          text: "You are not authorized to use this owner-only command. Ask the operator to run `openclaw config set commands.ownerAllowFrom '[\"telegram:user-1\"]'` in a terminal to make this sender a command owner.",
+        },
+      });
+      expect(mocks.writeRestartSentinel).not.toHaveBeenCalled();
+      expect(mocks.triggerOpenClawRestart).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not restart when the sentinel cannot be written", async () => {
     mocks.writeRestartSentinel.mockRejectedValueOnce(new Error("disk full"));

@@ -134,6 +134,13 @@ export function createMockFollowupRun(
       },
       provider: "anthropic",
       model: "claude",
+      thinkingCatalog: [
+        {
+          provider: overrides.run?.provider ?? "anthropic",
+          id: overrides.run?.model ?? "claude",
+          input: ["text"],
+        },
+      ],
       verboseLevel: "off",
       elevatedLevel: "off",
       bashElevated: {

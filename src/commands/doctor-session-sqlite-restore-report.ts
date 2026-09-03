@@ -19,7 +19,7 @@ export async function restoreDoctorSessionSqliteTargets(params: {
     ...target,
     sqlitePath: resolveTargetSqlitePath(target),
   }));
-  const restore = restoreSessionSqliteMigrationRuns({
+  const restore = await restoreSessionSqliteMigrationRuns({
     env: params.env,
     trustedTargets,
   });

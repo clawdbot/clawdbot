@@ -1,8 +1,8 @@
 // Creates and applies JSON merge-patch updates to config-like objects.
 import { isDeepStrictEqual } from "node:util";
 import { isPlainObject } from "../infra/plain-object.js";
-import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { isRecord } from "../utils.js";
+import { formatConfigPatchPath, isMergePatchObjectKeyAllowed } from "./patch-replace-paths.js";
 
 type PlainObject = Record<string, unknown>;
 
@@ -59,22 +59,8 @@ function isObjectWithStringId(value: unknown): value is Record<string, unknown> 
   return typeof value.id === "string" && value.id.length > 0;
 }
 
-function formatMergePatchPath(parentPath: string | undefined, key: string): string {
-  return parentPath ? `${parentPath}.${key}` : key;
-}
-
 function formatMergePatchArrayEntryPath(arrayPath: string): string {
   return `${arrayPath}[]`;
-}
-
-/** Whether a merge-patch key is safe at its exact config path. */
-export function isMergePatchObjectKeyAllowed(key: string, parentPath?: string): boolean {
-  if (!isBlockedObjectKey(key)) {
-    return true;
-  }
-  // Browser profile names are schema-validated map ids. Their values still
-  // recurse through this guard, so nested prototype-related keys stay blocked.
-  return parentPath === "browser.profiles" && (key === "constructor" || key === "prototype");
 }
 
 /**
@@ -145,7 +131,7 @@ export function applyMergePatch(
   const result: PlainObject = isPlainObject(base) ? { ...base } : {};
 
   for (const [key, value] of Object.entries(patch)) {
-    const path = formatMergePatchPath(options.path, key);
+    const path = formatConfigPatchPath(options.path, key);
     if (!isMergePatchObjectKeyAllowed(key, options.path)) {
       continue;
     }

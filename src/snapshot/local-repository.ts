@@ -1458,22 +1458,31 @@ function assertTrustedWindowsAcl(
   currentUserSid: string,
   security: z.infer<typeof WINDOWS_PATH_SECURITY_SCHEMA>["paths"][number],
 ): void {
+  const pathRole = requirePrivate ? "repository root" : "ancestor";
   if (security.ownerSid !== currentUserSid && !WINDOWS_TRUSTED_OWNER_SIDS.has(security.ownerSid)) {
-    throw new Error(`Windows staging path is owned by an untrusted principal: ${pathname}`);
+    throw new Error(
+      `Windows SQLite staging ${pathRole} is owned by an untrusted principal: ` +
+        `path=${pathname} principal=${security.ownerSid}. ` +
+        "Choose a local directory owned only by the current user or a trusted OS principal.",
+    );
   }
   const allowedEntries = security.entries.filter((entry) => entry.accessType === "Allow");
   if (allowedEntries.length === 0) {
     throw new Error(`Unable to verify private Windows ACL for SQLite staging: ${pathname}`);
   }
-  const unsafeEntries = allowedEntries
+  const unsafeEntry = allowedEntries
     .filter(
       (entry) =>
         entry.principal !== currentUserSid && !WINDOWS_TRUSTED_ACCESS_SIDS.has(entry.principal),
     )
     .map(windowsSecurityEntryToAclEntry)
-    .filter((entry) => windowsAclEntryPermitsUnsafeStagingAccess(entry, requirePrivate));
-  if (unsafeEntries.length > 0) {
-    throw new Error(`Windows ACL permits untrusted SQLite staging access: ${pathname}`);
+    .find((entry) => windowsAclEntryPermitsUnsafeStagingAccess(entry, requirePrivate));
+  if (unsafeEntry) {
+    throw new Error(
+      `Windows ACL permits untrusted SQLite staging access on ${pathRole}: ` +
+        `path=${pathname} principal=${unsafeEntry.principal} rights=${unsafeEntry.rawRights}. ` +
+        "Remove the untrusted grant or choose a private local directory; do not use a shared or synced root.",
+    );
   }
 }
 
@@ -1555,6 +1564,8 @@ async function runEncodedWindowsPowerShell(command: string, maxBuffer: number): 
   }
   try {
     const { stdout } = await runExec(powershell, buildEncodedPowerShellArgs(command), {
+      // Inherited PowerShell 7 paths can shadow Get-Acl and its nested security module.
+      env: { PSModulePath: path.win32.join(path.win32.dirname(powershell), "Modules") },
       timeoutMs: WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS,
       maxBuffer,
     });

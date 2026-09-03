@@ -92,7 +92,8 @@ async function createReload(canonicalActivator: boolean, commit: () => Promise<v
     resolveSharedGatewaySessionGenerationForConfig: () => undefined,
     sharedGatewaySessionGenerationState: { current: undefined, required: null },
     clients: [],
-    reconcileTerminalSessions: vi.fn(),
+    commitTerminalConfig: vi.fn(),
+    reconcileRuntimePolicy: vi.fn(),
   };
   const { onHotReload } = createManagedReloadSecretHandlers({
     params,

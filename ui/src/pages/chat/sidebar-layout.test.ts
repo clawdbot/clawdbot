@@ -15,7 +15,7 @@ import {
 } from "./sidebar-layout.ts";
 
 function openAll(): SidebarLayout {
-  return openSlot(openSlot(openSlot({ columns: [] }, "discussion"), "chat"), "detail");
+  return openSlot(openSlot(openSlot({ columns: [] }, "discussion"), "dashboard"), "detail");
 }
 
 describe("sidebar layout", () => {
@@ -24,7 +24,7 @@ describe("sidebar layout", () => {
     expect(layout.columns).toHaveLength(1);
     expect(layout.columns[0]?.panels.map((panel) => panel.slot)).toEqual([
       "discussion",
-      "chat",
+      "dashboard",
       "detail",
     ]);
     expect(layout.columns[0]?.activePanelId).toBe("detail");
@@ -35,15 +35,15 @@ describe("sidebar layout", () => {
 
   it("activates an existing tab without changing its persisted order", () => {
     const layout = openAll();
-    const chat = layout.columns[0]!.panels[1]!;
-    const reopened = openSlot(layout, "chat");
+    const dashboard = layout.columns[0]!.panels[1]!;
+    const reopened = openSlot(layout, "dashboard");
     expect(reopened.columns[0]?.panels.map((panel) => panel.slot)).toEqual([
       "discussion",
-      "chat",
+      "dashboard",
       "detail",
     ]);
-    expect(reopened.columns[0]?.activePanelId).toBe(chat.id);
-    expect(activatePanel(layout, chat.id).columns[0]?.activePanelId).toBe(chat.id);
+    expect(reopened.columns[0]?.activePanelId).toBe(dashboard.id);
+    expect(activatePanel(layout, dashboard.id).columns[0]?.activePanelId).toBe(dashboard.id);
   });
 
   it("closes one tab and selects its nearest remaining neighbor", () => {
@@ -51,24 +51,24 @@ describe("sidebar layout", () => {
     const withoutDetail = closeSlot(layout, "detail");
     expect(withoutDetail.columns[0]?.panels.map((panel) => panel.slot)).toEqual([
       "discussion",
-      "chat",
+      "dashboard",
     ]);
-    expect(withoutDetail.columns[0]?.activePanelId).toBe("chat");
+    expect(withoutDetail.columns[0]?.activePanelId).toBe("dashboard");
   });
 
   it("reorders tabs without changing the active surface", () => {
     const layout = openAll();
-    const [discussion, chat, detail] = layout.columns[0]!.panels;
+    const [discussion, dashboard, detail] = layout.columns[0]!.panels;
     const reordered = reorderPanel(layout, discussion!.id, detail!.id, "after");
 
     expect(reordered.columns[0]?.panels.map((panel) => panel.slot)).toEqual([
-      "chat",
+      "dashboard",
       "detail",
       "discussion",
     ]);
     expect(reordered.columns[0]?.activePanelId).toBe(detail!.id);
     expect(layout.columns[0]?.panels[0]?.id).toBe(discussion!.id);
-    expect(chat?.slot).toBe("chat");
+    expect(dashboard?.slot).toBe("dashboard");
   });
 
   it("collapses the panel after its final tab closes", () => {
@@ -92,7 +92,10 @@ describe("sidebar layout", () => {
     const minimized = { ...openAll(), open: false };
     const closed = closeSlot(minimized, "detail");
     expect(closed.open).toBe(false);
-    expect(closed.columns[0]?.panels.map((panel) => panel.slot)).toEqual(["discussion", "chat"]);
+    expect(closed.columns[0]?.panels.map((panel) => panel.slot)).toEqual([
+      "discussion",
+      "dashboard",
+    ]);
   });
 
   it("minimizes and expands without discarding tabs", () => {
@@ -167,6 +170,46 @@ describe("sidebar layout", () => {
       dock: "right",
       open: true,
       expanded: false,
+    });
+  });
+
+  it("migrates the released dashboard slot without losing its panel state", () => {
+    expect(
+      normalizeSidebarLayout({
+        columns: [
+          {
+            id: "side-panel-column",
+            side: "right",
+            panels: [
+              { id: "chat", slot: "chat" },
+              { id: "terminal", slot: "terminal" },
+            ],
+            activePanelId: "chat",
+            height: 520,
+            width: 640,
+          },
+        ],
+        dock: "bottom",
+        open: false,
+        expanded: true,
+      }),
+    ).toEqual({
+      columns: [
+        {
+          id: "side-panel-column",
+          side: "right",
+          panels: [
+            { id: "chat", slot: "dashboard" },
+            { id: "terminal", slot: "terminal" },
+          ],
+          activePanelId: "chat",
+          height: 520,
+          width: 640,
+        },
+      ],
+      dock: "bottom",
+      open: false,
+      expanded: true,
     });
   });
 

@@ -416,12 +416,20 @@ suite.define(() => {
             code: "UNAVAILABLE",
             message: cleanupError,
           });
-          await pollLocatorText(
-            page.locator(".new-session-page__error").filter({ hasText: cleanupError }),
-          ).toContain(cleanupError);
+          await page
+            .getByRole("alert")
+            .filter({ hasText: cleanupError })
+            .waitFor({ state: "visible" });
         } else {
           await gateway.resolveDeferred("sessions.delete", { deleted: true });
         }
+        const pendingPrompt = page.locator(".new-session-page__starting .chat-group.user");
+        await pendingPrompt.waitFor({ state: "visible" });
+        await pollLocatorText(pendingPrompt).toContain(message);
+        await pollLocatorText(
+          page.locator(".new-session-page__starting .chat-working-indicator"),
+        ).toContain("Starting");
+        expect(await composer.count()).toBe(0);
         await expect.poll(readRecovery).toMatchObject({
           sessionKey: nextKey,
           messageId: nextRecovery?.messageId,
@@ -567,7 +575,15 @@ suite.define(() => {
       // Background history loads may arrive before this action's request.
       await expect
         .poll(async () => (await gateway.getRequests("chat.history")).slice(historyCount))
-        .toContainEqual(expect.objectContaining({ params: { sessionKey, limit: 1000 } }));
+        .toContainEqual(
+          expect.objectContaining({
+            params: {
+              sessionKey,
+              limit: 1000,
+              inputRunIds: [(firstSend.params as { idempotencyKey: string }).idempotencyKey],
+            },
+          }),
+        );
       await pollLocatorText(page.getByRole("alert")).toContain("No matching user message");
       await retainedTurn
         .locator(`img[src="data:image/png;base64,${ONE_PIXEL_PNG_B64}"]`)

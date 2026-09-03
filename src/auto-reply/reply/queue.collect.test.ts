@@ -3269,12 +3269,18 @@ describe("followup queue collect routing", () => {
     const secondCorrelation = { begin: vi.fn() };
     const createRecorder = (text: string, mediaPath: string) =>
       createUserTurnTranscriptRecorder({
-        input: { text, media: [{ path: mediaPath, contentType: "image/png" }] },
+        input: {
+          text,
+          media: [{ path: mediaPath, contentType: "image/png" }],
+          mentions: [
+            { profileId: "ada", start: text.indexOf("@Ada"), end: text.indexOf("@Ada") + 4 },
+          ],
+        },
         target: createTestUserTurnTranscriptTarget(),
         updateMode: "none",
       });
-    const firstRecorder = createRecorder("first transcript", "/tmp/first.png");
-    const secondRecorder = createRecorder("second transcript", "/tmp/second.png");
+    const firstRecorder = createRecorder("first transcript @Ada", "/tmp/first.png");
+    const secondRecorder = createRecorder("second transcript 🦞 @Ada", "/tmp/second.png");
     const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
 
     for (const [prompt, recorder, onComplete, deliveryCorrelation] of [
@@ -3316,6 +3322,16 @@ describe("followup queue collect routing", () => {
     const message = await calls[0]?.userTurnTranscriptRecorder?.resolveMessage();
     expect(message?.content).toContain("first transcript");
     expect(message?.content).toContain("second transcript");
+    const mentions = message?.["__openclaw"]?.humanMentions;
+    expect(mentions).toHaveLength(2);
+    expect(
+      mentions?.map((mention) =>
+        typeof message?.content === "string"
+          ? message.content.slice(mention.start, mention.end)
+          : undefined,
+      ),
+    ).toEqual(["@Ada", "@Ada"]);
+    expect(mentions?.[1]?.start).toBeGreaterThan(mentions?.[0]?.end ?? 0);
     expect(
       (message as unknown as { __openclaw?: { media?: Array<{ path?: string }> } } | undefined)?.[
         "__openclaw"

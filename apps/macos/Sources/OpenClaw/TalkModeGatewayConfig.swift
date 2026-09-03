@@ -50,14 +50,7 @@ enum TalkModeGatewayConfigParser {
         let ui = snapshot.config?["ui"]?.dictionaryValue
         let rawSeam = ui?["seamColor"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let voice = activeConfig?["voiceId"]?.stringValue
-        let rawAliases = activeConfig?["voiceAliases"]?.dictionaryValue
-        let resolvedAliases: [String: String] =
-            rawAliases?.reduce(into: [:]) { acc, entry in
-                let key = entry.key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                let value = entry.value.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                guard !key.isEmpty, !value.isEmpty else { return }
-                acc[key] = value
-            } ?? [:]
+        let resolvedAliases = TalkVoiceAliases.normalizedMap(activeConfig?["voiceAliases"])
         let model = activeConfig?["modelId"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedModel: String? = if model?.isEmpty == false {
             model!
@@ -76,20 +69,23 @@ enum TalkModeGatewayConfigParser {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let realtime = talk?["realtime"]?.dictionaryValue
         let realtimeProviders = realtime?["providers"]?.dictionaryValue
-        let realtimeProvider = Self.firstString(realtime, keys: ["provider"])
-            ?? Self.singleRealtimeProviderId(realtimeProviders)
-        let realtimeProviderConfig = Self.realtimeProviderConfig(
+        let realtimeProvider = TalkConfigParsing.firstNonEmptyString(realtime, keys: ["provider"])
+            ?? TalkConfigParsing.singleRealtimeProviderID(realtimeProviders)
+        let realtimeProviderConfig = TalkConfigParsing.realtimeProviderConfig(
             providers: realtimeProviders,
             provider: realtimeProvider)
-        let realtimeModelId = Self.firstString(realtime, keys: ["model"])
-            ?? Self.firstString(realtimeProviderConfig, keys: ["model"])
-        let realtimeSpeakerVoice = Self.firstString(
+        let realtimeModelId = TalkConfigParsing.firstNonEmptyString(realtime, keys: ["model"])
+            ?? TalkConfigParsing.firstNonEmptyString(realtimeProviderConfig, keys: ["model"])
+        let realtimeSpeakerVoice = TalkConfigParsing.firstNonEmptyString(
             realtime,
             keys: ["speakerVoice", "voice"])
-            ?? Self.firstString(realtimeProviderConfig, keys: ["speakerVoice", "voice"])
-        let realtimeMode = Self.firstString(realtime, keys: ["mode"])?.lowercased()
-        let realtimeTransport = Self.firstString(realtime, keys: ["transport"])?.lowercased()
-        let realtimeBrain = Self.firstString(realtime, keys: ["brain"])?.lowercased()
+            ?? TalkConfigParsing.firstNonEmptyString(
+                realtimeProviderConfig,
+                keys: ["speakerVoice", "voice"])
+        let realtimeMode = TalkConfigParsing.firstNonEmptyString(realtime, keys: ["mode"])?.lowercased()
+        let realtimeTransport =
+            TalkConfigParsing.firstNonEmptyString(realtime, keys: ["transport"])?.lowercased()
+        let realtimeBrain = TalkConfigParsing.firstNonEmptyString(realtime, keys: ["brain"])?.lowercased()
         let resolvedVoice: String? = if activeProvider == defaultProvider {
             (voice?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? voice : nil) ??
                 (envVoice?.isEmpty == false ? envVoice : nil) ??
@@ -160,43 +156,5 @@ enum TalkModeGatewayConfigParser {
             realtimeMode: nil,
             realtimeTransport: nil,
             realtimeBrain: nil)
-    }
-
-    private static func firstString(
-        _ config: [String: AnyCodable]?,
-        keys: [String]) -> String?
-    {
-        guard let config else { return nil }
-        for key in keys {
-            let value = config[key]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
-            if value?.isEmpty == false { return value }
-        }
-        return nil
-    }
-
-    private static func singleRealtimeProviderId(_ providers: [String: AnyCodable]?) -> String? {
-        guard let providers, providers.count == 1 else { return nil }
-        let provider = providers.keys.first?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return provider?.isEmpty == false ? provider : nil
-    }
-
-    private static func realtimeProviderConfig(
-        providers: [String: AnyCodable]?,
-        provider: String?) -> [String: AnyCodable]?
-    {
-        guard let providers else { return nil }
-        if let provider {
-            if let exact = providers[provider]?.dictionaryValue {
-                return exact
-            }
-            return providers.first { key, _ in
-                key.trimmingCharacters(in: .whitespacesAndNewlines)
-                    .caseInsensitiveCompare(provider) == .orderedSame
-            }?.value.dictionaryValue
-        }
-        if providers.count == 1 {
-            return providers.values.first?.dictionaryValue
-        }
-        return nil
     }
 }

@@ -3,6 +3,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { TranscriptMessageAppendOptions } from "./session-accessor.sqlite-contract.js";
 import { readTranscriptIdentityByEventId } from "./session-accessor.sqlite-read.js";
@@ -35,7 +36,7 @@ export function resolveTranscriptMessageAppendParent<TMessage>(
       .select((expression) => expression.fn.countAll<number | bigint>().as("count"))
       .where("session_id", "=", sessionId),
   );
-  const maxAncestors = Number(countRow?.count ?? 0);
+  const maxAncestors = sqliteNumber(countRow?.count ?? 0);
   let ancestorId: string | null = tailId;
   for (let depth = 0; depth <= maxAncestors; depth += 1) {
     if (ancestorId === options.parentId) {

@@ -473,6 +473,7 @@ describe("resolvePluginCapabilityProviders", () => {
         setupProviders: new Map(),
         commandAliases: new Map(),
         contracts: new Map(),
+        modelIdNormalizationPolicies: new Map(),
       },
       metrics: {
         registrySnapshotMs: 0,
@@ -822,6 +823,7 @@ describe("resolvePluginCapabilityProviders", () => {
         setupProviders: new Map(),
         commandAliases: new Map(),
         contracts: new Map(),
+        modelIdNormalizationPolicies: new Map(),
       },
       metrics: {
         registrySnapshotMs: 0,

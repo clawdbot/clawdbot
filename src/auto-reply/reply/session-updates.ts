@@ -140,6 +140,7 @@ export async function ensureSkillSnapshot(params: {
       skillOverrides,
       eligibility: { nodeSkills: nodeSkillsEligibility, remote: remoteEligibility },
       existingSnapshot: snapshot,
+      librarySelections: nextEntry?.skillLibrarySelections,
     });
   const initialSnapshotState = resolveSnapshot(existingSnapshot);
   const shouldRefreshSnapshot = initialSnapshotState.shouldRefresh;

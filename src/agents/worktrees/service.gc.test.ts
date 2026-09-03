@@ -409,8 +409,8 @@ describe("ManagedWorktreeService garbage collection", () => {
     expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
   });
 
-  it("enforces thirty live checkouts by default without evicting manual work", async () => {
-    for (let index = 0; index < 29; index += 1) {
+  it("enforces one hundred live checkouts by default without evicting manual work", async () => {
+    for (let index = 0; index < 99; index += 1) {
       await materializeDownstreamFixture(`manual-${index}`);
     }
     const oldest = await materializeRunOwnedFixture("default-oldest", "session");
@@ -419,7 +419,7 @@ describe("ManagedWorktreeService garbage collection", () => {
     expect((await service.gc()).removed).toEqual([oldest.id]);
     expect(
       service.listRegistryRecords().filter((record) => record.removedAt === undefined),
-    ).toHaveLength(30);
+    ).toHaveLength(100);
     expect(getRegistryWorktree(env, newest.id)?.removedAt).toBeUndefined();
   });
 

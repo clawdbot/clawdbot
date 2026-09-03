@@ -371,7 +371,7 @@ class GatewayRestartTransaction {
         if (!emitResult || emitResult.status === "failed") {
           this.scheduleEmissionRetry(retry);
         }
-      }).catch((err: unknown) => {
+      }, "reload:restart").catch((err: unknown) => {
         if (this.isCurrentRequest(retry.requestGeneration)) {
           this.options.params.logReload.warn(
             `gateway restart recovery retry stopped: ${String(err)}`,

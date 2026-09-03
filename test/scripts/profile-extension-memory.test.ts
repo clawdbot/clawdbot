@@ -150,29 +150,32 @@ describe("scripts/profile-extension-memory", () => {
     ] as const;
 
     for (const [flag, value] of cases) {
-      const result = runProfileExtensionMemory([flag, value]);
-
-      expect(result.status).toBe(1);
-      expect(result.stdout).toBe("");
-      expect(result.stderr).toContain(`[extension-memory] ${flag} must be a positive integer`);
-      expect(result.stderr).not.toContain("dist/extensions");
-      expect(result.stderr).not.toContain("at ");
+      expect(() => parseArgs([flag, value])).toThrow(`${flag} must be a positive integer`);
     }
+
+    const result = runProfileExtensionMemory([...cases[0]]);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain(`[extension-memory] ${cases[0][0]} must be a positive integer`);
+    expect(result.stderr).not.toContain("dist/extensions");
+    expect(result.stderr).not.toContain("at ");
   });
 
   it("rejects option-looking string flag values before scanning built plugin artifacts", () => {
-    for (const args of [
+    const cases = [
       ["--extension", "-h"],
       ["--json", "-h"],
-    ]) {
-      const result = runProfileExtensionMemory(args);
-
-      expect(result.status).toBe(1);
-      expect(result.stdout).toBe("");
-      expect(result.stderr).toContain(`[extension-memory] ${args[0]} requires a value`);
-      expect(result.stderr).not.toContain("dist/extensions");
-      expect(result.stderr).not.toContain("at ");
+    ] as const;
+    for (const [flag, value] of cases) {
+      expect(() => parseArgs([flag, value])).toThrow(`${flag} requires a value`);
     }
+
+    const result = runProfileExtensionMemory([...cases[0]]);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain(`[extension-memory] ${cases[0][0]} requires a value`);
+    expect(result.stderr).not.toContain("dist/extensions");
+    expect(result.stderr).not.toContain("at ");
   });
 
   it.each([

@@ -35,12 +35,6 @@ describe("media store", () => {
     vi.restoreAllMocks();
   });
 
-  async function withTempStore<T>(
-    fn: (store: typeof import("./store.js"), home: string) => Promise<T>,
-  ): Promise<T> {
-    return await fn(store, home);
-  }
-
   async function expectPathMissing(targetPath: string): Promise<void> {
     let statError: unknown;
     try {
@@ -50,18 +44,6 @@ describe("media store", () => {
     }
     expect(statError).toBeInstanceOf(Error);
     expect((statError as NodeJS.ErrnoException).code).toBe("ENOENT");
-  }
-
-  async function expectOriginalFilenameCase(params: {
-    filename: string;
-    expected: string;
-    basePath?: string;
-  }) {
-    await withTempStore(async (storeLocal23) => {
-      expect(
-        storeLocal23.extractOriginalFilename(`${params.basePath ?? "/path/to"}/${params.filename}`),
-      ).toBe(params.expected);
-    });
   }
 
   async function expectRetryAfterPrunedWriteCase(params: {
@@ -102,12 +84,10 @@ describe("media store", () => {
         import.meta.url,
         mockKey,
       );
-      await withTempStore(async (_store, homeLocal8) => {
-        const saved = await params.run(storeWithMock, homeLocal8);
-        const savedStat = await fs.stat(saved.path);
-        expect(injectedEnoent).toBe(true);
-        expect(savedStat.isFile()).toBe(true);
-      });
+      const saved = await params.run(storeWithMock, home);
+      const savedStat = await fs.stat(saved.path);
+      expect(injectedEnoent).toBe(true);
+      expect(savedStat.isFile()).toBe(true);
     } finally {
       vi.doUnmock("../infra/file-store.js");
     }
@@ -144,23 +124,21 @@ describe("media store", () => {
         import.meta.url,
         mockKey,
       );
-      await withTempStore(async (_store) => {
-        const mediaDir = await storeWithMock.ensureMediaDir();
-        let saveError: unknown;
-        try {
-          await storeWithMock.saveMediaBuffer(Buffer.from("voice"), "audio/ogg", "failed-buffer");
-        } catch (error) {
-          saveError = error;
-        }
-        expect(saveError).toBeInstanceOf(Error);
-        expect((saveError as NodeJS.ErrnoException).code).toBe("ENOSPC");
+      const mediaDir = await storeWithMock.ensureMediaDir();
+      let saveError: unknown;
+      try {
+        await storeWithMock.saveMediaBuffer(Buffer.from("voice"), "audio/ogg", "failed-buffer");
+      } catch (error) {
+        saveError = error;
+      }
+      expect(saveError).toBeInstanceOf(Error);
+      expect((saveError as NodeJS.ErrnoException).code).toBe("ENOSPC");
 
-        const failedDir = path.join(mediaDir, "failed-buffer");
-        const entries = await fs.readdir(failedDir).catch(() => []);
-        expect(attemptedRelPaths).toHaveLength(1);
-        expect(path.basename(attemptedRelPaths[0] ?? "")).toMatch(/^[^/\\]+\.ogg$/);
-        expect(entries).toStrictEqual([]);
-      });
+      const failedDir = path.join(mediaDir, "failed-buffer");
+      const entries = await fs.readdir(failedDir).catch(() => []);
+      expect(attemptedRelPaths).toHaveLength(1);
+      expect(path.basename(attemptedRelPaths[0] ?? "")).toMatch(/^[^/\\]+\.ogg$/);
+      expect(entries).toStrictEqual([]);
     } finally {
       vi.doUnmock("../infra/file-store.js");
     }
@@ -173,32 +151,28 @@ describe("media store", () => {
     expectUuidOnly?: boolean;
     maxBaseNameLength?: number;
   }) {
-    await withTempStore(async (storeLocal22) => {
-      const saved = await storeLocal22.saveMediaBuffer(
-        Buffer.from("test content"),
-        "text/plain",
-        "inbound",
-        5 * 1024 * 1024,
-        params.originalFilename,
-      );
+    const saved = await store.saveMediaBuffer(
+      Buffer.from("test content"),
+      "text/plain",
+      "inbound",
+      5 * 1024 * 1024,
+      params.originalFilename,
+    );
 
-      expect(saved.id).toMatch(params.expectedIdPattern);
-      if (params.expectedExtractedFilename) {
-        expect(storeLocal22.extractOriginalFilename(saved.path)).toBe(
-          params.expectedExtractedFilename,
-        );
-      }
-      if (params.expectUuidOnly) {
-        expect(saved.id).not.toContain("---");
-      }
-      if (params.maxBaseNameLength !== undefined) {
-        const baseName = expectDefined(
-          path.parse(saved.id).name.split("---")[0],
-          'path.parse(saved.id).name.split("---")[0] test invariant',
-        );
-        expect(baseName.length).toBeLessThanOrEqual(params.maxBaseNameLength);
-      }
-    });
+    expect(saved.id).toMatch(params.expectedIdPattern);
+    if (params.expectedExtractedFilename) {
+      expect(store.extractOriginalFilename(saved.path)).toBe(params.expectedExtractedFilename);
+    }
+    if (params.expectUuidOnly) {
+      expect(saved.id).not.toContain("---");
+    }
+    if (params.maxBaseNameLength !== undefined) {
+      const baseName = expectDefined(
+        path.parse(saved.id).name.split("---")[0],
+        'path.parse(saved.id).name.split("---")[0] test invariant',
+      );
+      expect(baseName.length).toBeLessThanOrEqual(params.maxBaseNameLength);
+    }
   }
 
   async function expectSavedSourceCase(params: {
@@ -209,20 +183,18 @@ describe("media store", () => {
     mutateSource?: (filePath: string) => Promise<void>;
     assertSaved: (saved: Awaited<ReturnType<typeof store.saveMediaSource>>) => Promise<void> | void;
   }) {
-    await withTempStore(async (storeLocal21, homeLocal7) => {
-      const sourcePath = path.join(homeLocal7, params.relativeSourcePath);
-      await fs.mkdir(path.dirname(sourcePath), { recursive: true });
-      await fs.writeFile(sourcePath, params.contents);
-      await params.mutateSource?.(sourcePath);
-      const saved = await storeLocal21.saveMediaSource(sourcePath);
-      if (params.expectedContentType) {
-        expect(saved.contentType).toBe(params.expectedContentType);
-      }
-      if (params.expectedExtension) {
-        expect(path.extname(saved.path)).toBe(params.expectedExtension);
-      }
-      await params.assertSaved(saved);
-    });
+    const sourcePath = path.join(home, params.relativeSourcePath);
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, params.contents);
+    await params.mutateSource?.(sourcePath);
+    const saved = await store.saveMediaSource(sourcePath);
+    if (params.expectedContentType) {
+      expect(saved.contentType).toBe(params.expectedContentType);
+    }
+    if (params.expectedExtension) {
+      expect(path.extname(saved.path)).toBe(params.expectedExtension);
+    }
+    await params.assertSaved(saved);
   }
 
   async function expectCleanedSavedSourceCase(params: {
@@ -258,18 +230,16 @@ describe("media store", () => {
       buffer: Buffer,
     ) => Promise<void> | void;
   }) {
-    await withTempStore(async (storeLocal20) => {
-      const saved = await storeLocal20.saveMediaBuffer(
-        params.buffer,
-        params.contentType,
-        "inbound",
-        5 * 1024 * 1024,
-        params.originalFilename,
-      );
-      expect(saved.contentType).toBe(params.expectedContentType);
-      expect(saved.path.endsWith(params.expectedExtension)).toBe(true);
-      await params.assertSaved?.(saved, params.buffer);
-    });
+    const saved = await store.saveMediaBuffer(
+      params.buffer,
+      params.contentType,
+      "inbound",
+      5 * 1024 * 1024,
+      params.originalFilename,
+    );
+    expect(saved.contentType).toBe(params.expectedContentType);
+    expect(saved.path.endsWith(params.expectedExtension)).toBe(true);
+    await params.assertSaved?.(saved, params.buffer);
   }
 
   async function expectRejectedSourceCase(params: {
@@ -277,27 +247,25 @@ describe("media store", () => {
     setupSource?: (home: string) => Promise<string>;
     expectedError: string | Record<string, unknown>;
   }) {
-    await withTempStore(async (storeLocal19, homeLocal6) => {
-      const sourcePath =
-        params.setupSource !== undefined
-          ? await params.setupSource(homeLocal6)
-          : path.join(homeLocal6, params.relativeSourcePath ?? "");
-      if (typeof params.expectedError === "string") {
-        const rejection = expect(storeLocal19.saveMediaSource(sourcePath)).rejects;
-        await rejection.toThrow(params.expectedError);
-        return;
-      }
-      let sourceError: unknown;
-      try {
-        await storeLocal19.saveMediaSource(sourcePath);
-      } catch (error) {
-        sourceError = error;
-      }
-      expect(sourceError).toBeInstanceOf(Error);
-      for (const [key, value] of Object.entries(params.expectedError)) {
-        expect((sourceError as Record<string, unknown>)[key]).toStrictEqual(value);
-      }
-    });
+    const sourcePath =
+      params.setupSource !== undefined
+        ? await params.setupSource(home)
+        : path.join(home, params.relativeSourcePath ?? "");
+    if (typeof params.expectedError === "string") {
+      const rejection = expect(store.saveMediaSource(sourcePath)).rejects;
+      await rejection.toThrow(params.expectedError);
+      return;
+    }
+    let sourceError: unknown;
+    try {
+      await store.saveMediaSource(sourcePath);
+    } catch (error) {
+      sourceError = error;
+    }
+    expect(sourceError).toBeInstanceOf(Error);
+    for (const [key, value] of Object.entries(params.expectedError)) {
+      expect((sourceError as Record<string, unknown>)[key]).toStrictEqual(value);
+    }
   }
 
   async function createSymlinkSource(homeLocal5: string) {
@@ -321,83 +289,97 @@ describe("media store", () => {
     }>;
     run: (store: typeof import("./store.js")) => Promise<void>;
   }) {
-    await withTempStore(async (storeLocal18) => {
-      const state = await params.setup(storeLocal18);
-      await params.run(storeLocal18);
-      for (const removedFile of state.removedFiles) {
-        await expectPathMissing(removedFile);
-      }
-      for (const preservedFile of state.preservedFiles) {
-        const stat = await fs.stat(preservedFile);
-        expect(stat.isFile()).toBe(true);
-      }
-      for (const removedDir of state.removedDirs ?? []) {
-        await expectPathMissing(removedDir);
-      }
-      for (const preservedDir of state.preservedDirs ?? []) {
-        const stat = await fs.stat(preservedDir);
-        expect(stat.isDirectory()).toBe(true);
-      }
-    });
-  }
-
-  async function expectTempStoreCase(run: () => Promise<void>) {
-    await run();
+    const state = await params.setup(store);
+    await params.run(store);
+    for (const removedFile of state.removedFiles) {
+      await expectPathMissing(removedFile);
+    }
+    for (const preservedFile of state.preservedFiles) {
+      const stat = await fs.stat(preservedFile);
+      expect(stat.isFile()).toBe(true);
+    }
+    for (const removedDir of state.removedDirs ?? []) {
+      await expectPathMissing(removedDir);
+    }
+    for (const preservedDir of state.preservedDirs ?? []) {
+      const stat = await fs.stat(preservedDir);
+      expect(stat.isDirectory()).toBe(true);
+    }
   }
 
   it.each([
     {
       name: "creates and returns media directory",
       run: async () => {
-        await withTempStore(async (storeLocal17, homeLocal4) => {
-          const dir = await storeLocal17.ensureMediaDir();
-          expect(isPathWithinBase(homeLocal4, dir)).toBe(true);
-          expect(path.normalize(dir)).toContain(`${path.sep}.openclaw${path.sep}media`);
-          const stat = await fs.stat(dir);
-          expect(stat.isDirectory()).toBe(true);
-        });
+        const dir = await store.ensureMediaDir();
+        expect(isPathWithinBase(home, dir)).toBe(true);
+        expect(path.normalize(dir)).toContain(`${path.sep}.openclaw${path.sep}media`);
+        const stat = await fs.stat(dir);
+        expect(stat.isDirectory()).toBe(true);
       },
     },
     {
       name: "enforces the media size limit",
       run: async () => {
-        await withTempStore(async (storeLocal16) => {
-          const huge = Buffer.alloc(5 * 1024 * 1024 + 1);
-          await expect(storeLocal16.saveMediaBuffer(huge)).rejects.toThrow(
-            "Media exceeds 5MB limit",
-          );
+        const huge = Buffer.alloc(5 * 1024 * 1024 + 1);
+        await expect(store.saveMediaBuffer(huge)).rejects.toThrow("Media exceeds 5MB limit");
+      },
+    },
+    {
+      name: "reports fractional buffer size limits",
+      run: async () => {
+        const maxBytes = 0.25 * 1024 * 1024;
+        await expect(
+          store.saveMediaBuffer(
+            Buffer.alloc(maxBytes + 1),
+            "application/octet-stream",
+            "fractional-buffer",
+            maxBytes,
+          ),
+        ).rejects.toThrow("Media exceeds 256KB limit");
+      },
+    },
+    {
+      name: "reports fractional source size limits",
+      run: async () => {
+        const maxBytes = 1.5 * 1024 * 1024;
+        const sourcePath = path.join(home, "fractional-source.bin");
+        await fs.writeFile(sourcePath, Buffer.alloc(maxBytes + 1));
+        await expect(
+          store.saveMediaSource(sourcePath, undefined, "outbound", maxBytes),
+        ).rejects.toMatchObject({
+          name: "SaveMediaSourceError",
+          code: "too-large",
+          message: "Media exceeds 1.50MB limit",
+          cause: expect.any(Error),
         });
       },
     },
     {
       name: "allows callers to override the default source size limit",
       run: async () => {
-        await withTempStore(async (storeLocal15, homeLocal3) => {
-          const sourcePath = path.join(homeLocal3, "large-source.bin");
-          await fs.writeFile(sourcePath, Buffer.alloc(6 * 1024 * 1024, 0x41));
+        const sourcePath = path.join(home, "large-source.bin");
+        await fs.writeFile(sourcePath, Buffer.alloc(6 * 1024 * 1024, 0x41));
 
-          const saved = await storeLocal15.saveMediaSource(
-            sourcePath,
-            undefined,
-            "outbound",
-            8 * 1024 * 1024,
-          );
+        const saved = await store.saveMediaSource(
+          sourcePath,
+          undefined,
+          "outbound",
+          8 * 1024 * 1024,
+        );
 
-          expect(saved.size).toBe(6 * 1024 * 1024);
-        });
+        expect(saved.size).toBe(6 * 1024 * 1024);
       },
     },
     {
       name: "reports the effective source size limit in too-large errors",
       run: async () => {
-        await withTempStore(async (storeLocal14, homeLocal2) => {
-          const sourcePath = path.join(homeLocal2, "too-large-source.bin");
-          await fs.writeFile(sourcePath, Buffer.alloc(7 * 1024 * 1024, 0x41));
+        const sourcePath = path.join(home, "too-large-source.bin");
+        await fs.writeFile(sourcePath, Buffer.alloc(7 * 1024 * 1024, 0x41));
 
-          await expect(
-            storeLocal14.saveMediaSource(sourcePath, undefined, "outbound", 6 * 1024 * 1024),
-          ).rejects.toThrow("Media exceeds 6MB limit");
-        });
+        await expect(
+          store.saveMediaSource(sourcePath, undefined, "outbound", 6 * 1024 * 1024),
+        ).rejects.toThrow("Media exceeds 6MB limit");
       },
     },
     {
@@ -424,181 +406,163 @@ describe("media store", () => {
     {
       name: "saves streams with detected extension without buffering first",
       run: async () => {
-        await withTempStore(async (storeLocal12) => {
-          const saved = await storeLocal12.saveMediaStream(
-            Readable.from([Buffer.from([0xff, 0xd8, 0xff, 0x00])]),
-            undefined,
-            "stream-inbound",
-            1024,
-            "photo.bin",
-          );
+        const chunk = Buffer.from([0xff, 0xd8, 0xff, 0x00]);
+        const stream = (async function* () {
+          yield chunk;
+          chunk.fill(0);
+        })();
+        const saved = await store.saveMediaStream(
+          stream,
+          undefined,
+          "stream-inbound",
+          1024,
+          "photo.bin",
+        );
 
-          expect(saved.id).toMatch(/^photo---[a-f0-9-]{36}\.jpg$/);
-          expect(saved.size).toBe(4);
-          expect(saved.contentType).toBe("image/jpeg");
-          await expect(fs.readFile(saved.path)).resolves.toEqual(
-            Buffer.from([0xff, 0xd8, 0xff, 0x00]),
-          );
-        });
+        expect(saved.id).toMatch(/^photo---[a-f0-9-]{36}\.jpg$/);
+        expect(saved.size).toBe(4);
+        expect(saved.contentType).toBe("image/jpeg");
+        await expect(fs.readFile(saved.path)).resolves.toEqual(
+          Buffer.from([0xff, 0xd8, 0xff, 0x00]),
+        );
       },
     },
     {
       name: "uses original filename to detect generic stream content type",
       run: async () => {
-        await withTempStore(async (storeLocal11) => {
-          const saved = await storeLocal11.saveMediaStream(
-            Readable.from([Buffer.from("name,value\none,1\n")]),
-            "application/octet-stream",
-            "stream-inbound",
-            1024,
-            "report.csv",
-          );
+        const saved = await store.saveMediaStream(
+          Readable.from([Buffer.from("name,value\none,1\n")]),
+          "application/octet-stream",
+          "stream-inbound",
+          1024,
+          "report.csv",
+        );
 
-          expect(saved.id).toMatch(/^report---[a-f0-9-]{36}\.csv$/);
-          expect(saved.contentType).toBe("text/csv");
-        });
+        expect(saved.id).toMatch(/^report---[a-f0-9-]{36}\.csv$/);
+        expect(saved.contentType).toBe("text/csv");
       },
     },
     {
       name: "prefers detected stream mime over mixed-case generic zip header extension",
       run: async () => {
-        await withTempStore(async (storeLocal10) => {
-          const saved = await storeLocal10.saveMediaStream(
-            Readable.from([Buffer.from("docx")]),
-            "Application/Zip",
-            "stream-inbound",
-            1024,
-            undefined,
-            "document.docx",
-          );
+        const saved = await store.saveMediaStream(
+          Readable.from([Buffer.from("docx")]),
+          "Application/Zip",
+          "stream-inbound",
+          1024,
+          undefined,
+          "document.docx",
+        );
 
-          expect(saved.id).toMatch(/^[a-f0-9-]{36}\.docx$/);
-          expect(saved.contentType).toBe(
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-          );
-        });
+        expect(saved.id).toMatch(/^[a-f0-9-]{36}\.docx$/);
+        expect(saved.contentType).toBe(
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        );
       },
     },
     {
       name: "rejects oversized streams before writing a final artifact",
       run: async () => {
-        await withTempStore(async (storeLocal9, homeInner) => {
-          await expect(
-            storeLocal9.saveMediaStream(
-              Readable.from([Buffer.alloc(4), Buffer.alloc(4)]),
-              "application/octet-stream",
-              "oversized-stream",
-              7,
-            ),
-          ).rejects.toThrow("Media exceeds 0MB limit");
+        await expect(
+          store.saveMediaStream(
+            Readable.from([Buffer.alloc(4), Buffer.alloc(4)]),
+            "application/octet-stream",
+            "oversized-stream",
+            7,
+          ),
+        ).rejects.toThrow("Media exceeds 7B limit");
 
-          const targetDir = path.join(homeInner, ".openclaw", "media", "oversized-stream");
-          const entries = await fs.readdir(targetDir).catch(() => []);
-          expect(entries).toStrictEqual([]);
-        });
+        const targetDir = path.join(home, ".openclaw", "media", "oversized-stream");
+        const entries = await fs.readdir(targetDir).catch(() => []);
+        expect(entries).toStrictEqual([]);
       },
     },
     {
       name: "saves buffers when the best-effort fsync step reports EPERM",
       run: async () => {
-        await withTempStore(async (storeLocal8) => {
-          const originalOpen = fs.open.bind(fs);
-          vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-            const handle = await originalOpen(...args);
-            const filePath = args[0];
-            if (
-              typeof filePath === "string" &&
-              filePath.includes(`${path.sep}fsync-eperm${path.sep}`)
-            ) {
-              vi.spyOn(handle, "sync").mockRejectedValueOnce(
-                Object.assign(new Error("operation not permitted"), { code: "EPERM" }),
-              );
-            }
-            return handle;
-          });
-
-          const saved = await storeLocal8.saveMediaBuffer(
-            Buffer.from("docx"),
-            "application/zip",
-            "fsync-eperm",
-          );
-
-          await expect(fs.readFile(saved.path, "utf8")).resolves.toBe("docx");
+        const originalOpen = fs.open.bind(fs);
+        vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+          const handle = await originalOpen(...args);
+          const filePath = args[0];
+          if (
+            typeof filePath === "string" &&
+            filePath.includes(`${path.sep}fsync-eperm${path.sep}`)
+          ) {
+            vi.spyOn(handle, "sync").mockRejectedValueOnce(
+              Object.assign(new Error("operation not permitted"), { code: "EPERM" }),
+            );
+          }
+          return handle;
         });
+
+        const saved = await store.saveMediaBuffer(
+          Buffer.from("docx"),
+          "application/zip",
+          "fsync-eperm",
+        );
+
+        await expect(fs.readFile(saved.path, "utf8")).resolves.toBe("docx");
       },
     },
     {
       name: "rejects traversal media subdirs before saving buffers",
       run: async () => {
-        await withTempStore(async (storeLocal7, homeScoped) => {
-          const mediaDir = await storeLocal7.ensureMediaDir();
-          const outsideDir = path.join(homeScoped, "outside-media");
-          const traversalSubdir = path.relative(mediaDir, outsideDir);
+        const mediaDir = await store.ensureMediaDir();
+        const outsideDir = path.join(home, "outside-media");
+        const traversalSubdir = path.relative(mediaDir, outsideDir);
 
-          await expect(
-            storeLocal7.saveMediaBuffer(Buffer.from("escape"), "text/plain", traversalSubdir),
-          ).rejects.toThrow("unsafe media subdir");
-          await expectPathMissing(outsideDir);
-        });
+        await expect(
+          store.saveMediaBuffer(Buffer.from("escape"), "text/plain", traversalSubdir),
+        ).rejects.toThrow("unsafe media subdir");
+        await expectPathMissing(outsideDir);
       },
     },
     {
       name: "rejects traversal media subdirs before resolving IDs",
       run: async () => {
-        await withTempStore(async (storeLocal6, homeItem) => {
-          const mediaDir = await storeLocal6.ensureMediaDir();
-          const outsideDir = path.join(homeItem, "outside-media-resolve");
-          await fs.mkdir(outsideDir, { recursive: true });
-          await fs.writeFile(path.join(outsideDir, "passwd"), "not media");
+        const mediaDir = await store.ensureMediaDir();
+        const outsideDir = path.join(home, "outside-media-resolve");
+        await fs.mkdir(outsideDir, { recursive: true });
+        await fs.writeFile(path.join(outsideDir, "passwd"), "not media");
 
-          await expect(
-            storeLocal6.resolveMediaBufferPath("passwd", path.relative(mediaDir, outsideDir)),
-          ).rejects.toThrow("unsafe media subdir");
-        });
+        await expect(
+          store.resolveMediaBufferPath("passwd", path.relative(mediaDir, outsideDir)),
+        ).rejects.toThrow("unsafe media subdir");
       },
     },
     {
       name: "reads media IDs through the media root boundary",
       run: async () => {
-        await withTempStore(async (storeLocal5) => {
-          const saved = await storeLocal5.saveMediaBuffer(
-            Buffer.from("source bytes"),
-            "text/plain",
-          );
+        const saved = await store.saveMediaBuffer(Buffer.from("source bytes"), "text/plain");
 
-          const read = await storeLocal5.readMediaBuffer(saved.id, "inbound");
+        const read = await store.readMediaBuffer(saved.id, "inbound");
 
-          await expect(fs.realpath(read.path)).resolves.toBe(await fs.realpath(saved.path));
-          expect(read.size).toBe("source bytes".length);
-          expect(read.buffer.toString("utf8")).toBe("source bytes");
-        });
+        await expect(fs.realpath(read.path)).resolves.toBe(await fs.realpath(saved.path));
+        expect(read.size).toBe("source bytes".length);
+        expect(read.buffer.toString("utf8")).toBe("source bytes");
       },
     },
     {
       name: "rejects oversized media ID reads before materializing the file",
       run: async () => {
-        await withTempStore(async (storeLocal4) => {
-          const saved = await storeLocal4.saveMediaBuffer(Buffer.from("too large"), "text/plain");
+        const saved = await store.saveMediaBuffer(Buffer.from("too large"), "text/plain");
 
-          await expect(storeLocal4.readMediaBuffer(saved.id, "inbound", 3)).rejects.toThrow(
-            "maximum is 3 bytes",
-          );
-        });
+        await expect(store.readMediaBuffer(saved.id, "inbound", 3)).rejects.toThrow(
+          "maximum is 3 bytes",
+        );
       },
     },
     {
       name: "rejects traversal media subdirs before reading IDs",
       run: async () => {
-        await withTempStore(async (storeLocal3, homeCandidate) => {
-          const mediaDir = await storeLocal3.ensureMediaDir();
-          const outsideDir = path.join(homeCandidate, "outside-media-read");
-          await fs.mkdir(outsideDir, { recursive: true });
-          await fs.writeFile(path.join(outsideDir, "passwd"), "not media");
+        const mediaDir = await store.ensureMediaDir();
+        const outsideDir = path.join(home, "outside-media-read");
+        await fs.mkdir(outsideDir, { recursive: true });
+        await fs.writeFile(path.join(outsideDir, "passwd"), "not media");
 
-          await expect(
-            storeLocal3.readMediaBuffer("passwd", path.relative(mediaDir, outsideDir)),
-          ).rejects.toThrow("unsafe media subdir");
-        });
+        await expect(
+          store.readMediaBuffer("passwd", path.relative(mediaDir, outsideDir)),
+        ).rejects.toThrow("unsafe media subdir");
       },
     },
     {
@@ -626,26 +590,20 @@ describe("media store", () => {
     {
       name: "cleans old media files in first-level subdirectories",
       run: async () => {
-        await withTempStore(async (storeInner) => {
-          const saved = await storeInner.saveMediaBuffer(
-            Buffer.from("nested"),
-            "text/plain",
-            "inbound",
-          );
-          const inboundDir = path.dirname(saved.path);
-          const past = Date.now() - 10_000;
-          await fs.utimes(saved.path, past / 1000, past / 1000);
+        const saved = await store.saveMediaBuffer(Buffer.from("nested"), "text/plain", "inbound");
+        const inboundDir = path.dirname(saved.path);
+        const past = Date.now() - 10_000;
+        await fs.utimes(saved.path, past / 1000, past / 1000);
 
-          await storeInner.cleanOldMedia(1);
+        await store.cleanOldMedia(1);
 
-          await expectPathMissing(saved.path);
-          const inboundStat = await fs.stat(inboundDir);
-          expect(inboundStat.isDirectory()).toBe(true);
-        });
+        await expectPathMissing(saved.path);
+        const inboundStat = await fs.stat(inboundDir);
+        expect(inboundStat.isDirectory()).toBe(true);
       },
     },
   ] as const)("$name", async ({ run }) => {
-    await expectTempStoreCase(run);
+    await run();
   });
 
   it.each([
@@ -851,24 +809,22 @@ describe("media store", () => {
   it.runIf(process.platform !== "win32")(
     "does not follow symlinked top-level directories during recursive cleanup",
     async () => {
-      await withTempStore(async (storeLocal, homeValue) => {
-        const mediaDir = await storeLocal.ensureMediaDir();
-        const outsideDir = path.join(homeValue, "outside-media");
-        const outsideFile = path.join(outsideDir, "old.txt");
-        const symlinkPath = path.join(mediaDir, "linked-dir");
-        await fs.mkdir(outsideDir, { recursive: true });
-        await fs.writeFile(outsideFile, "outside");
-        const past = Date.now() - 10_000;
-        await fs.utimes(outsideFile, past / 1000, past / 1000);
-        await fs.symlink(outsideDir, symlinkPath);
+      const mediaDir = await store.ensureMediaDir();
+      const outsideDir = path.join(home, "outside-media");
+      const outsideFile = path.join(outsideDir, "old.txt");
+      const symlinkPath = path.join(mediaDir, "linked-dir");
+      await fs.mkdir(outsideDir, { recursive: true });
+      await fs.writeFile(outsideFile, "outside");
+      const past = Date.now() - 10_000;
+      await fs.utimes(outsideFile, past / 1000, past / 1000);
+      await fs.symlink(outsideDir, symlinkPath);
 
-        await storeLocal.cleanOldMedia(1_000, { recursive: true, pruneEmptyDirs: true });
+      await store.cleanOldMedia(1_000, { recursive: true, pruneEmptyDirs: true });
 
-        const outsideStat = await fs.stat(outsideFile);
-        const symlinkStat = await fs.lstat(symlinkPath);
-        expect(outsideStat.isFile()).toBe(true);
-        expect(symlinkStat.isSymbolicLink()).toBe(true);
-      });
+      const outsideStat = await fs.stat(outsideFile);
+      const symlinkStat = await fs.lstat(symlinkPath);
+      expect(outsideStat.isFile()).toBe(true);
+      expect(symlinkStat.isSymbolicLink()).toBe(true);
     },
   );
 
@@ -932,32 +888,30 @@ describe("media store", () => {
   });
 
   it("prefers header mime extension when sniffed mime lacks mapping", async () => {
-    await withTempStore(async (_store, homeLocal) => {
-      vi.doMock("@openclaw/media-core/mime", async () => {
-        const actual = await vi.importActual<typeof import("@openclaw/media-core/mime")>(
-          "@openclaw/media-core/mime",
-        );
-        return {
-          ...actual,
-          detectMime: vi.fn(async () => "audio/opus"),
-        };
-      });
-
-      try {
-        const storeWithMock = await importFreshModule<typeof import("./store.js")>(
-          import.meta.url,
-          "./store.js?scope=sniffed-mime-header-extension",
-        );
-        const saved = await storeWithMock.saveMediaBuffer(
-          Buffer.from("fake-audio"),
-          "audio/ogg; codecs=opus",
-        );
-        expect(path.extname(saved.path)).toBe(".ogg");
-        expect(saved.path.startsWith(homeLocal)).toBe(true);
-      } finally {
-        vi.doUnmock("@openclaw/media-core/mime");
-      }
+    vi.doMock("@openclaw/media-core/mime", async () => {
+      const actual = await vi.importActual<typeof import("@openclaw/media-core/mime")>(
+        "@openclaw/media-core/mime",
+      );
+      return {
+        ...actual,
+        detectMime: vi.fn(async () => "audio/opus"),
+      };
     });
+
+    try {
+      const storeWithMock = await importFreshModule<typeof import("./store.js")>(
+        import.meta.url,
+        "./store.js?scope=sniffed-mime-header-extension",
+      );
+      const saved = await storeWithMock.saveMediaBuffer(
+        Buffer.from("fake-audio"),
+        "audio/ogg; codecs=opus",
+      );
+      expect(path.extname(saved.path)).toBe(".ogg");
+      expect(saved.path.startsWith(home)).toBe(true);
+    } finally {
+      vi.doUnmock("@openclaw/media-core/mime");
+    }
   });
 
   describe("extractOriginalFilename", () => {
@@ -1007,8 +961,8 @@ describe("media store", () => {
         expected: "photo.png",
         basePath: String.raw`C:\media/inbound`,
       },
-    ] as const)("$name", async ({ filename, expected, basePath }) => {
-      await expectOriginalFilenameCase({ filename, expected, basePath });
+    ] as const)("$name", ({ filename, expected, basePath }) => {
+      expect(store.extractOriginalFilename(`${basePath ?? "/path/to"}/${filename}`)).toBe(expected);
     });
   });
 

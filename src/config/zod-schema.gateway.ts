@@ -87,6 +87,7 @@ export const GatewayConfigSchema = z
             color: z.enum(CONTROL_UI_ENVIRONMENT_COLORS),
           })
           .optional(),
+        communityInvite: z.boolean().optional(),
         github: z
           .strictObject({ token: SecretInputSchema.optional().register(sensitive) })
           .optional(),

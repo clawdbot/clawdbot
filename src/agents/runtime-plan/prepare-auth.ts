@@ -46,7 +46,7 @@ type PrepareAgentRuntimeAuthPlanParams = {
   metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
   authProfileStore?: AuthProfileStore;
   sessionAuthProfileId?: string;
-  sessionAuthProfileSource?: "auto" | "user";
+  sessionAuthProfileSource?: "auto" | "user" | "user-link";
   harnessId?: string;
   harnessRuntime?: string;
   harnessAuthBootstrap?: "harness";
@@ -212,7 +212,9 @@ export function prepareAgentRuntimeAuth(
 ): PreparedAgentRuntimeAuth {
   const requestedProfileId = params.sessionAuthProfileId?.trim() || undefined;
   const userPinnedProfileId =
-    params.sessionAuthProfileSource === "user" ? requestedProfileId : undefined;
+    params.sessionAuthProfileSource === "user" || params.sessionAuthProfileSource === "user-link"
+      ? requestedProfileId
+      : undefined;
   const harnessOwnsOpenAIAuth =
     params.harnessId?.trim().toLowerCase() === "codex" ||
     params.harnessRuntime?.trim().toLowerCase() === "codex";
@@ -283,7 +285,7 @@ export function prepareAgentRuntimeAuth(
   const providerBindingSuppressesProfiles =
     (providerBinding.kind === "literal" && explicitConfigApiKeyAuth) ||
     providerHasUsableMarker ||
-    (providerHasApiKeySecretRef && explicitConfigApiKeyAuth);
+    providerHasApiKeySecretRef;
   const providerBindingNeedsNonProfileFallback =
     providerHasDirectMaterial && !providerBindingSuppressesProfiles;
   // Explicit auth owns the physical route; apiKey is only its bearer material.

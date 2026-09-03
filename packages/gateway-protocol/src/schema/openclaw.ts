@@ -93,6 +93,8 @@ export const SystemAgentChatResultSchema = closedObject({
     Type.Literal("open-agent"),
     Type.Literal("exit"),
   ]),
+  /** Optional navigation only; the destination obtains its own human authorization. */
+  handoff: Type.Optional(closedObject({ kind: Type.Literal("model-accounts") })),
   /** Optional localized-draft intent for an `open-agent` handoff. */
   agentDraft: Type.Optional(Type.Literal("hatch")),
   /** Destination agent for a specific `open-agent` handoff. */
@@ -350,6 +352,14 @@ export const SystemAgentSetupActivateParamsSchema = closedObject({
   workspace: Type.Optional(Type.String()),
 });
 
+/** Starts interactive activation without moving artifact consent into the client. */
+export const SystemAgentSetupActivateStartParamsSchema = closedObject({
+  ...SystemAgentSetupActivateParamsSchema.properties,
+  /** Client-generated so the session can be cancelled after a lost start reply. */
+  sessionId: NonEmptyString,
+});
+export const SystemAgentSetupActivateStartResultSchema = WizardStartResultSchema;
+
 export const SystemAgentSetupActivateResultSchema = closedObject({
   ok: Type.Boolean(),
   /** Present on success: the model ref that answered the live test. */
@@ -398,3 +408,10 @@ export type SystemAgentSetupVerifyParams = Static<typeof SystemAgentSetupVerifyP
 export type SystemAgentSetupVerifyResult = Static<typeof SystemAgentSetupVerifyResultSchema>;
 export type SystemAgentSetupAuthStartParams = Static<typeof SystemAgentSetupAuthStartParamsSchema>;
 export type SystemAgentSetupAuthStartResult = Static<typeof SystemAgentSetupAuthStartResultSchema>;
+
+export type SystemAgentSetupActivateStartParams = Static<
+  typeof SystemAgentSetupActivateStartParamsSchema
+>;
+export type SystemAgentSetupActivateStartResult = Static<
+  typeof SystemAgentSetupActivateStartResultSchema
+>;

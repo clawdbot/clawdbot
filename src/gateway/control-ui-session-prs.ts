@@ -2,7 +2,12 @@
 // UI chat view can pin PR status chips above the composer.
 import fs from "node:fs/promises";
 import nodePath from "node:path";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeOptionalString,
+  readNonBlankString,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { runGit } from "../agents/worktrees/git.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
@@ -16,9 +21,6 @@ import {
   ControlUiGitHubError,
   fetchGitHubJson,
   GITHUB_API_ORIGIN,
-  isRecord,
-  optionalNumber,
-  readOptionalGitHubString,
   resolveGitHubApiCredentialScope,
 } from "./control-ui-github-api.js";
 import {
@@ -327,7 +329,7 @@ async function resolveSessionBranch(
 }
 
 function derivePullState(value: Record<string, unknown>): ControlUiSessionPullRequest["state"] {
-  if (readOptionalGitHubString(value, "merged_at")) {
+  if (readNonBlankString(value.merged_at)) {
     return "merged";
   }
   if (value.state !== "open") {
@@ -340,20 +342,20 @@ function parsePullListItem(value: unknown): PullListItem | null {
   if (!isRecord(value)) {
     return null;
   }
-  const number = optionalNumber(value, "number");
-  const title = readOptionalGitHubString(value, "title");
-  const url = readOptionalGitHubString(value, "html_url");
+  const number = asFiniteNumber(value.number);
+  const title = readNonBlankString(value.title);
+  const url = readNonBlankString(value.html_url);
   const base = isRecord(value.base) ? value.base : {};
   const baseRepo = isRecord(base.repo) ? base.repo : {};
   const baseOwner = isRecord(baseRepo.owner) ? baseRepo.owner : {};
-  const owner = readOptionalGitHubString(baseOwner, "login");
-  const repo = readOptionalGitHubString(baseRepo, "name");
+  const owner = readNonBlankString(baseOwner.login);
+  const repo = readNonBlankString(baseRepo.name);
   const head = isRecord(value.head) ? value.head : {};
   if (!number || !Number.isSafeInteger(number) || number < 1 || !title || !url || !owner || !repo) {
     return null;
   }
   const user = isRecord(value.user) ? value.user : {};
-  const authorLogin = readOptionalGitHubString(user, "login");
+  const authorLogin = readNonBlankString(user.login);
   return {
     number,
     title,
@@ -362,9 +364,9 @@ function parsePullListItem(value: unknown): PullListItem | null {
     repo,
     state: derivePullState(value),
     ...(authorLogin ? { author: { login: authorLogin } } : {}),
-    headSha: readOptionalGitHubString(head, "sha"),
-    baseRef: readOptionalGitHubString(base, "ref"),
-    mergeCommitSha: readOptionalGitHubString(value, "merge_commit_sha"),
+    headSha: readNonBlankString(head.sha),
+    baseRef: readNonBlankString(base.ref),
+    mergeCommitSha: readNonBlankString(value.merge_commit_sha),
   };
 }
 
@@ -414,9 +416,9 @@ async function fetchDiffCounts(
       return {};
     }
     return {
-      additions: optionalNumber(value, "additions"),
-      deletions: optionalNumber(value, "deletions"),
-      changedFiles: optionalNumber(value, "changed_files"),
+      additions: asFiniteNumber(value.additions),
+      deletions: asFiniteNumber(value.deletions),
+      changedFiles: asFiniteNumber(value.changed_files),
     };
   } catch (error) {
     rethrowRateLimit(error);
@@ -442,7 +444,7 @@ function rollupCheckRuns(value: unknown): ControlUiSessionPullRequest["checks"] 
   let running = 0;
   for (const runValue of value.check_runs) {
     const run = isRecord(runValue) ? runValue : {};
-    const conclusion = readOptionalGitHubString(run, "conclusion");
+    const conclusion = readNonBlankString(run.conclusion);
     if (conclusion && FAILING_CHECK_CONCLUSIONS.has(conclusion)) {
       failed += 1;
       continue;

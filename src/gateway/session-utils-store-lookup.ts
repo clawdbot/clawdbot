@@ -12,6 +12,7 @@ import {
   listSessionChildEntriesReadOnly,
   listSessionEntriesCore as listAccessorSessionEntries,
   listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
+  loadExactSessionEntry,
   loadExactSessionEntryReadOnly,
   type SessionEntryListScope,
 } from "../config/sessions/session-accessor.js";
@@ -193,7 +194,7 @@ function loadGatewaySessionLookupStore(
 ): Record<string, SessionEntry> {
   const cache = options.cache;
   const cacheKey = cache
-    ? `${storePath}\u0000${agentId ?? ""}\u0000${clone === false ? "0" : "1"}\u0000${options.readOnly ? "1" : "0"}\u0000${options.projection ?? "full"}\u0000${options.exactKeys?.join("\u0001") ?? ""}`
+    ? `${storePath}\u0000${agentId ?? ""}\u0000${clone === false ? "0" : "1"}\u0000${options.readOnly}\u0000${options.projection ?? "full"}\u0000${options.exactKeys?.join("\u0001") ?? ""}`
     : "";
   if (cache) {
     const cached = cache.get(cacheKey);
@@ -219,10 +220,16 @@ function loadGatewaySessionLookupStoreUncached(
   try {
     if (options.exactKeys) {
       const store: Record<string, SessionEntry> = {};
+      // Borrowed listing views and probes never create stores; ordinary owned reads may.
+      const loadExact =
+        options.readOnly === false && clone !== false
+          ? loadExactSessionEntry
+          : loadExactSessionEntryReadOnly;
       for (const sessionKey of options.exactKeys) {
-        const match = loadExactSessionEntryReadOnly({
+        const match = loadExact({
           ...(agentId ? { agentId } : {}),
           clone: false,
+          projection: options.projection,
           sessionKey,
           storePath,
         });
@@ -291,7 +298,7 @@ function resolveGatewaySessionStoreLookup(params: {
   }
   const loadStore = (target: SessionStoreTarget) =>
     loadGatewaySessionLookupStore(target.storePath, params.clone, target.agentId, {
-      readOnly: params.readOnly || !configured,
+      readOnly: configured ? params.readOnly : true,
       ...(params.exactRead ? { exactKeys: scanTargets } : {}),
       ...(params.projection ? { projection: params.projection } : {}),
       ...(params.storeCache ? { cache: params.storeCache } : {}),
@@ -476,7 +483,11 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
     ...(params.targetDiscoveryCache ? { targetDiscoveryCache: params.targetDiscoveryCache } : {}),
   });
   if (explicitDeletedMainTarget) {
-    return includeDirectChildEntries(explicitDeletedMainTarget, params.includeStoreChildEntries);
+    return includeDirectChildEntries(
+      explicitDeletedMainTarget,
+      params.includeStoreChildEntries,
+      params.projection,
+    );
   }
 
   const requestedAgentId = normalizeOptionalString(params.agentId);
@@ -509,6 +520,7 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
         store,
       },
       params.includeStoreChildEntries,
+      params.projection,
     );
   }
   const { canonicalValidationError, storePath, store } = resolveGatewaySessionStoreLookup({
@@ -537,6 +549,7 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
         ...(canonicalValidationError ? { canonicalValidationError } : {}),
       },
       params.includeStoreChildEntries,
+      params.projection,
     );
   }
 
@@ -553,12 +566,14 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
       ...(canonicalValidationError ? { canonicalValidationError } : {}),
     },
     params.includeStoreChildEntries,
+    params.projection,
   );
 }
 
 function includeDirectChildEntries(
   target: GatewaySessionStoreTargetWithStore,
   include: boolean | undefined,
+  projection: SessionEntryListScope["projection"],
 ): GatewaySessionStoreTargetWithStore {
   if (!include) {
     return target;
@@ -569,6 +584,7 @@ function includeDirectChildEntries(
       for (const { sessionKey, entry } of listSessionChildEntriesReadOnly({
         agentId: target.agentId,
         clone: false,
+        projection,
         sessionKey: parentKey,
         storePath: target.storePath,
       })) {

@@ -1,7 +1,12 @@
 // Session/runtime facade for memory transcript helpers.
 import path from "node:path";
 import { isValidAgentId, normalizeAgentId } from "@openclaw/normalization-core/agent-id";
-import { readTranscriptStatsSync as readAccessorTranscriptStatsSync } from "../../../../src/config/sessions/session-accessor.js";
+import {
+  readTranscriptStatsBatchReadOnlySync,
+  readTranscriptStatsSync as readAccessorTranscriptStatsSync,
+} from "../../../../src/config/sessions/session-accessor.js";
+
+export { readTranscriptStatsBatchReadOnlySync };
 
 export { resolveSessionAgentId } from "../../../../src/agents/agent-scope.js";
 export { stripInternalRuntimeContext } from "../../../../src/agents/internal-runtime-context.js";
@@ -27,6 +32,7 @@ export {
 export { materializeSessionArchiveForRead } from "../../../../src/config/sessions/archive-compression.js";
 export { canonicalizeMainSessionAlias } from "../../../../src/config/sessions/main-session.js";
 export {
+  listSessionTranscriptArchivesReadOnly,
   listSessionTranscriptInstances,
   type SessionTranscriptInstance,
 } from "../../../../src/config/sessions/session-history.js";

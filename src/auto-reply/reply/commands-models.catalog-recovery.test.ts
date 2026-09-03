@@ -1,14 +1,25 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { PreparedModelCatalogConfigReplacedError } from "../../agents/prepared-model-catalog.errors.js";
+import { setPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 const catalogMocks = vi.hoisted(() => ({
   loadSnapshot: vi.fn(),
   loadPublishedOwner: vi.fn(),
+  authStore: { version: 1, profiles: {} } as AuthProfileStore,
 }));
 
 vi.mock("../../agents/prepared-model-catalog.js", () => ({
   loadPreparedModelCatalogSnapshot: catalogMocks.loadSnapshot,
+  loadPreparedModelCatalogOwnerSnapshot: async (...args: unknown[]) => {
+    const owner = {
+      modelCatalog: await catalogMocks.loadSnapshot(...args),
+      authModes: {},
+    };
+    setPreparedModelRuntimeAuthStore(owner, catalogMocks.authStore);
+    return owner;
+  },
   loadPublishedPreparedModelCatalogOwnerSnapshot: catalogMocks.loadPublishedOwner,
 }));
 
@@ -24,9 +35,51 @@ const replacementCfg = {
 
 afterEach(() => {
   vi.clearAllMocks();
+  catalogMocks.authStore = { version: 1, profiles: {} };
 });
 
 describe("/models browse catalog recovery", () => {
+  it.each([false, true])(
+    "projects prepared external OAuth with explicit exclusion=%s",
+    async (excluded) => {
+      catalogMocks.authStore = {
+        version: 1,
+        profiles: {
+          "openai:external": {
+            type: "oauth",
+            provider: "openai",
+            access: "synthetic-access",
+            refresh: "synthetic-refresh",
+            expires: Date.now() + 3_600_000,
+          },
+        },
+        runtimeExternalProfileIds: ["openai:external"],
+        ...(excluded ? { order: { openai: [] } } : {}),
+      };
+      const subscription = {
+        provider: "openai",
+        id: "gpt-5.6-luna",
+        name: "GPT-5.6 Luna",
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+      };
+      catalogMocks.loadSnapshot.mockResolvedValueOnce({
+        entries: [subscription],
+        routeVariants: [subscription],
+      });
+
+      const data = await buildPreparedModelsProviderData(staleCfg);
+
+      expect(data.providers.includes("openai")).toBe(!excluded);
+      if (!excluded) {
+        expect(data.modelCatalog.find((entry) => entry.provider === "openai")).toMatchObject({
+          api: "openai-chatgpt-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+        });
+      }
+    },
+  );
+
   it("returns the exact-config snapshot when the prepared owner matches", async () => {
     catalogMocks.loadSnapshot.mockResolvedValueOnce({
       entries: [{ provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" }],

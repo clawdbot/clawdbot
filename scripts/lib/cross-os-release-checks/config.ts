@@ -2,10 +2,9 @@ import type { ChildProcess } from "node:child_process";
 import { basename, dirname, resolve, win32 as pathWin32 } from "node:path";
 import { parsePermissiveBooleanToken } from "../arg-utils.mts";
 import { trimForSummary } from "./shared.ts";
+import { type CrossOsSuite, parseCrossOsSuiteFilter } from "./suite-filter.mjs";
 
-type CrossOsSuite = "packaged-fresh" | "installer-fresh" | "packaged-upgrade" | "dev-update";
 type CrossOsMode = "fresh" | "upgrade" | "both";
-type CrossOsOsId = "ubuntu" | "windows" | "macos";
 type ProviderId = "openai" | "anthropic" | "minimax";
 export type ProviderConfig = {
   extensionId: string;
@@ -81,7 +80,7 @@ export type CommandInvocation = {
 export type Cleanup = () => Promise<void> | void;
 export type LaneBaseParams = {
   companions: Readonly<
-    ReturnType<typeof import("./companions.ts").resolveCrossOsCompanionPackages>
+    ReturnType<typeof import("./companions.ts").resolveCrossOsPackageSet>["companions"]
   >;
   logsDir: string;
   providerConfig: ProviderConfig;
@@ -127,13 +126,6 @@ export type SummaryPayload = {
 export const PUBLISHED_INSTALLER_BASE_URL = "https://openclaw.ai";
 
 const SUPPORTED_MODES = new Set<CrossOsMode>(["fresh", "upgrade", "both"]);
-const SUPPORTED_SUITES = new Set<CrossOsSuite>([
-  "packaged-fresh",
-  "installer-fresh",
-  "packaged-upgrade",
-  "dev-update",
-]);
-const SUPPORTED_OS_IDS = new Set<CrossOsOsId>(["ubuntu", "windows", "macos"]);
 
 export const CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS = parsePositiveIntegerEnv(
   "OPENCLAW_CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS",
@@ -427,7 +419,7 @@ export function resolveRunnerMatrix(params: {
   ];
   const include = runners.flatMap((runner) =>
     suites
-      .filter((suite) => suiteFilter.matches(runner.os_id as CrossOsOsId, suite))
+      .filter((suite) => suiteFilter.matches(runner.os_id, suite))
       .map((suite) =>
         Object.assign({}, runner, {
           suite,
@@ -444,63 +436,6 @@ export function resolveRunnerMatrix(params: {
   return {
     include,
   };
-}
-
-export function parseCrossOsSuiteFilter(rawFilter: string) {
-  const tokens = rawFilter
-    .split(/[, ]+/u)
-    .map((token) => normalizeCrossOsSuiteFilterToken(token))
-    .filter(Boolean);
-  if (tokens.length === 0) {
-    return {
-      matches: () => true,
-      tokens,
-    };
-  }
-
-  const matchers = tokens.map((token) => {
-    if (SUPPORTED_SUITES.has(token as CrossOsSuite)) {
-      return { osId: "", suite: token as CrossOsSuite };
-    }
-    if (SUPPORTED_OS_IDS.has(token as CrossOsOsId)) {
-      return { osId: token as CrossOsOsId, suite: "" };
-    }
-    for (const separator of ["/", ":", "-"]) {
-      const matchedOs = [...SUPPORTED_OS_IDS].find((osId) =>
-        token.startsWith(`${osId}${separator}`),
-      );
-      if (!matchedOs) {
-        continue;
-      }
-      const suite = token.slice(matchedOs.length + separator.length);
-      if (!SUPPORTED_SUITES.has(suite as CrossOsSuite)) {
-        break;
-      }
-      return { osId: matchedOs, suite: suite as CrossOsSuite };
-    }
-    throw new Error(
-      `Unsupported cross_os_suite_filter token ${JSON.stringify(token)}. Use an OS id, suite id, or os/suite pair such as windows/packaged-upgrade.`,
-    );
-  });
-
-  return {
-    matches: (osId: CrossOsOsId, suite: CrossOsSuite) =>
-      matchers.some((matcher) => {
-        const osMatches = !matcher.osId || matcher.osId === osId;
-        const suiteMatches = !matcher.suite || matcher.suite === suite;
-        return osMatches && suiteMatches;
-      }),
-    tokens,
-  };
-}
-
-function normalizeCrossOsSuiteFilterToken(token: string) {
-  return token
-    .trim()
-    .toLowerCase()
-    .replace(/_/gu, "-")
-    .replace(/\s*[/:-]\s*/gu, (separator) => separator.trim())
-    .replace(/\s+/gu, "-");
 }
 
 export function readRunnerOverrideEnv(env = process.env) {
@@ -739,8 +674,4 @@ function updateStepTimeoutSeconds() {
   return process.platform === "win32"
     ? CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS
     : 1200;
-}
-
-export function isSupportedCrossOsSuite(value: string): value is CrossOsSuite {
-  return SUPPORTED_SUITES.has(value as CrossOsSuite);
 }

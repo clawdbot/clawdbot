@@ -2,7 +2,6 @@ import {
   parseStrictNonNegativeInteger,
   parseStrictPositiveInteger,
 } from "@openclaw/normalization-core/number-coercion";
-// Shared helpers for message CLI actions: common flags, plugin preload, numeric validation, and stop hooks.
 import type { Command } from "commander";
 import { getChannelPlugin } from "../../../channels/plugins/index.js";
 import {
@@ -16,16 +15,21 @@ import { danger, setVerbose } from "../../../globals.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { CHANNEL_TARGET_DESCRIPTION } from "../../../infra/outbound/channel-target.js";
 import { resolveMessageActionOutcome } from "../../../infra/outbound/message-action-contracts.js";
+import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { withActivatedPluginIds } from "../../../plugins/activation-context.js";
 import {
   resolveConfiguredChannelPluginIds,
   resolveDiscoverableScopedChannelPluginIds,
 } from "../../../plugins/channel-plugin-ids.js";
-import { runGlobalGatewayStopSafely } from "../../../plugins/hook-runner-global.js";
+import { createHookRunner } from "../../../plugins/hooks.js";
 import { loadPluginRegistryHandle } from "../../../plugins/loader.js";
 import type { PluginRegistry } from "../../../plugins/registry-types.js";
 import { withPluginRuntimeRegistryScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { defaultRuntime } from "../../../runtime.js";
+import {
+  ABSOLUTE_DEADLINE_EXPIRED,
+  awaitWithinDeadline,
+} from "../../../utils/absolute-deadline.js";
 import { runCommandWithRuntime } from "../../cli-utils.js";
 import { createDefaultDeps } from "../../deps.js";
 
@@ -38,7 +42,6 @@ export type MessageCliHelpers = {
 };
 
 const GATEWAY_STOP_TIMEOUT_MS = 2500;
-const ACTIONS_WITHOUT_STOP_HOOKS = new Set(["read"]);
 const ACTIONS_REQUIRING_CONFIGURED_CHANNEL_PRELOAD = new Set(["broadcast"]);
 const CHANNEL_MESSAGE_ACTION_NAME_SET = new Set<string>(CHANNEL_MESSAGE_ACTION_NAMES);
 const STRICT_POSITIVE_INTEGER_OPTIONS = new Map([
@@ -81,23 +84,16 @@ function validateMessageNumericOptions(opts: Record<string, unknown>): void {
   }
 }
 
-async function runPluginStopHooks(): Promise<void> {
-  let timeout: NodeJS.Timeout | null = null;
-  const hookRun = runGlobalGatewayStopSafely({
-    event: { reason: "cli message action complete" },
-    ctx: {},
-    onError: (err) =>
-      defaultRuntime.error(danger(`gateway_stop hook failed: ${formatErrorMessage(err)}`)),
-  });
-  const bounded = new Promise<"timeout">((resolve) => {
-    timeout = setTimeout(() => resolve("timeout"), GATEWAY_STOP_TIMEOUT_MS);
-    timeout.unref?.();
-  });
-  const result = await Promise.race([hookRun.then(() => "done" as const), bounded]);
-  if (timeout) {
-    clearTimeout(timeout);
-  }
-  if (result === "timeout") {
+async function runPluginStopHooks(registry: PluginRegistry): Promise<void> {
+  const runner = createHookRunner(registry, { logger: createSubsystemLogger("plugins") });
+  const result = await awaitWithinDeadline(
+    () =>
+      withPluginRuntimeRegistryScope(registry, () =>
+        runner.runGatewayStop({ reason: "cli message action complete" }, {}),
+      ),
+    Date.now() + GATEWAY_STOP_TIMEOUT_MS,
+  );
+  if (result === ABSOLUTE_DEADLINE_EXPIRED) {
     defaultRuntime.error(
       danger(`gateway_stop hook exceeded ${GATEWAY_STOP_TIMEOUT_MS}ms; continuing`),
     );
@@ -148,91 +144,82 @@ function resolveMessagePluginPreloadPlan(
 }
 
 /** Create shared option decorators and the common message action runner. */
-export function createMessageCliHelpers(
-  message: Command,
-  messageChannelOptions: string,
-): MessageCliHelpers {
-  const withMessageBase = (command: Command) =>
-    command
-      .option("--channel <channel>", `Channel: ${messageChannelOptions}`)
-      .option("--account <id>", "Channel account id (accountId)")
-      .option("--json", "Output result as JSON", false)
-      .option("--dry-run", "Print payload and skip sending", false)
-      .option("--verbose", "Verbose logging", false);
-
-  const withMessageTarget = (command: Command) =>
-    command.option("-t, --target <dest>", CHANNEL_TARGET_DESCRIPTION);
-  const withRequiredMessageTarget = (command: Command) =>
-    command.requiredOption("-t, --target <dest>", CHANNEL_TARGET_DESCRIPTION);
-
-  const runMessageAction = async (action: string, opts: Record<string, unknown>) => {
-    setVerbose(Boolean(opts.verbose));
-    let failed = false;
-    let result: Awaited<ReturnType<typeof messageCommand>> | undefined;
-    let pluginRegistry: PluginRegistry | undefined;
-    await runCommandWithRuntime(
-      defaultRuntime,
-      async () => {
-        validateMessageNumericOptions(opts);
-        if (action === "poll" && opts.pollAnonymous === true && opts.pollPublic === true) {
-          throw new Error("--poll-anonymous and --poll-public are mutually exclusive.");
-        }
-        const preloadPlan = resolveMessagePluginPreloadPlan(action, opts);
-        if (preloadPlan.preload) {
-          const config = getRuntimeConfig();
-          const pluginIds = preloadPlan.channelId
-            ? resolveDiscoverableScopedChannelPluginIds({
-                config,
-                activationSourceConfig: config,
-                channelIds: [preloadPlan.channelId],
-                env: process.env,
-              })
-            : resolveConfiguredChannelPluginIds({
-                config,
-                activationSourceConfig: config,
-                env: process.env,
-              });
-          const activatedConfig = withActivatedPluginIds({ config, pluginIds }) ?? config;
-          pluginRegistry = loadPluginRegistryHandle({
-            config: activatedConfig,
-            activationSourceConfig: activatedConfig,
-            onlyPluginIds: pluginIds,
-            throwOnLoadError: true,
-          });
-        }
-        const deps = createDefaultDeps();
-        const run = () =>
-          messageCommand(
-            {
-              ...normalizeMessageOptions(opts),
-              action,
-            },
-            deps,
-            defaultRuntime,
-          );
-        result = await withPluginRuntimeRegistryScope(pluginRegistry, run);
-      },
-      (err) => {
-        failed = true;
-        defaultRuntime.error(danger(formatErrorMessage(err)));
-      },
-    );
-    // Outbound actions may start plugin-side resources; run bounded stop hooks even after failure.
-    if (!ACTIONS_WITHOUT_STOP_HOOKS.has(action)) {
-      await withPluginRuntimeRegistryScope(pluginRegistry, runPluginStopHooks);
-    }
-    failed ||= result !== undefined && !resolveMessageActionOutcome(result).ok;
-    defaultRuntime.exit(failed ? 1 : 0);
-  };
-
-  // `message` is only used for `message.help({ error: true })`, keep the
-  // command-specific helpers grouped here.
-  void message;
-
+export function createMessageCliHelpers(messageChannelOptions: string): MessageCliHelpers {
   return {
-    withMessageBase,
-    withMessageTarget,
-    withRequiredMessageTarget,
-    runMessageAction,
+    withMessageBase: (command) =>
+      command
+        .option("--channel <channel>", `Channel: ${messageChannelOptions}`)
+        .option("--account <id>", "Channel account id (accountId)")
+        .option("--json", "Output result as JSON", false)
+        .option("--dry-run", "Print payload and skip sending", false)
+        .option("--verbose", "Verbose logging", false),
+
+    withMessageTarget: (command) =>
+      command.option("-t, --target <dest>", CHANNEL_TARGET_DESCRIPTION),
+    withRequiredMessageTarget: (command) =>
+      command.requiredOption("-t, --target <dest>", CHANNEL_TARGET_DESCRIPTION),
+
+    runMessageAction: async (action, opts) => {
+      setVerbose(Boolean(opts.verbose));
+      let failed = false;
+      let result: Awaited<ReturnType<typeof messageCommand>> | undefined;
+      let pluginRegistry: PluginRegistry | undefined;
+      try {
+        await runCommandWithRuntime(
+          defaultRuntime,
+          async () => {
+            validateMessageNumericOptions(opts);
+            if (action === "poll" && opts.pollAnonymous === true && opts.pollPublic === true) {
+              throw new Error("--poll-anonymous and --poll-public are mutually exclusive.");
+            }
+            const preloadPlan = resolveMessagePluginPreloadPlan(action, opts);
+            if (preloadPlan.preload) {
+              const config = getRuntimeConfig();
+              const pluginIds = preloadPlan.channelId
+                ? resolveDiscoverableScopedChannelPluginIds({
+                    config,
+                    activationSourceConfig: config,
+                    channelIds: [preloadPlan.channelId],
+                    env: process.env,
+                  })
+                : resolveConfiguredChannelPluginIds({
+                    config,
+                    activationSourceConfig: config,
+                    env: process.env,
+                  });
+              const activatedConfig = withActivatedPluginIds({ config, pluginIds }) ?? config;
+              pluginRegistry = loadPluginRegistryHandle({
+                config: activatedConfig,
+                activationSourceConfig: activatedConfig,
+                onlyPluginIds: pluginIds,
+                throwOnLoadError: true,
+              });
+            }
+            const deps = createDefaultDeps();
+            const run = () =>
+              messageCommand(
+                {
+                  ...normalizeMessageOptions(opts),
+                  action,
+                },
+                deps,
+                defaultRuntime,
+              );
+            result = await withPluginRuntimeRegistryScope(pluginRegistry, run);
+          },
+          (err) => {
+            failed = true;
+            defaultRuntime.error(danger(formatErrorMessage(err)));
+          },
+        );
+      } finally {
+        // Finalize only this command's registry, including JSON/expected errors that rethrow.
+        if (pluginRegistry && action !== "read") {
+          await runPluginStopHooks(pluginRegistry);
+        }
+      }
+      failed ||= result !== undefined && !resolveMessageActionOutcome(result).ok;
+      defaultRuntime.exit(failed ? 1 : 0);
+    },
   };
 }

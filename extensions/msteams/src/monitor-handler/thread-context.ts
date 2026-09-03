@@ -80,6 +80,7 @@ export function prepareMSTeamsThreadRouting(params: {
 
   return {
     route,
+    threadRootId: params.conversationMessageId ?? params.context.activity.replyToId,
     deadline,
     resolveTeamAadGroupId,
     getTeamAadGroupId: () => teamAadGroupId,
@@ -129,8 +130,9 @@ export async function resolveMSTeamsThreadContext(params: {
   }
 
   let threadContext: string | undefined;
-  const threadParentId = activity.replyToId;
-  if (threadParentId && params.isChannel && teamAadGroupId) {
+  // Use the same root as session routing; Teams can omit replyToId on replies.
+  const threadParentId = params.routing.threadRootId;
+  if (threadParentId && threadParentId !== activity.id && params.isChannel && teamAadGroupId) {
     try {
       const graphToken = await withMSTeamsRequestDeadline({
         deadline,

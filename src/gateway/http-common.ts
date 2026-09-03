@@ -24,12 +24,15 @@ import { PROXY_ATTRIBUTION_REQUIRED_REASON } from "./ingress-attribution.js";
  */
 export function setDefaultSecurityHeaders(
   res: ServerResponse,
-  opts?: { strictTransportSecurity?: string },
+  opts?: { strictTransportSecurity?: string | false },
 ) {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "no-referrer");
   res.setHeader("Permissions-Policy", "camera=(), microphone=(self), geolocation=()");
-  const strictTransportSecurity = opts?.strictTransportSecurity;
+  const strictTransportSecurity =
+    typeof opts?.strictTransportSecurity === "string"
+      ? opts.strictTransportSecurity.trim()
+      : undefined;
   if (typeof strictTransportSecurity === "string" && strictTransportSecurity.length > 0) {
     res.setHeader("Strict-Transport-Security", strictTransportSecurity);
   }

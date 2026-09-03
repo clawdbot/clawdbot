@@ -4,11 +4,18 @@ import OSLog
 
 private struct WatchConnectivityTransportCallbacks {
     var statusUpdateHandler: (@Sendable (WatchMessagingStatus) -> Void)?
-    var replyHandler: (@Sendable (WatchQuickReplyEvent) -> Void)?
-    var execApprovalResolveHandler: (@Sendable (WatchExecApprovalResolveEvent) -> Void)?
-    var execApprovalSnapshotRequestHandler: (@Sendable (WatchExecApprovalSnapshotRequestEvent) -> Void)?
-    var appSnapshotRequestHandler: (@Sendable (WatchAppSnapshotRequestEvent) -> Void)?
-    var appCommandHandler: (@Sendable (WatchAppCommandEvent) -> Void)?
+    var inboundEventHandler: (@Sendable (WatchMessagingInboundEvent) -> Void)?
+}
+
+func updateWatchSnapshotApplicationContext(_ payload: [String: Any], with session: WCSession, lock: NSLock) throws {
+    try lock.withLock {
+        let context = WatchMessagingPayloadCodec.encodeSnapshotApplicationContext(
+            payload,
+            merging: session.applicationContext)
+        // The caller may retire while another snapshot holds this lock.
+        try Task.checkCancellation()
+        try session.updateApplicationContext(context)
+    }
 }
 
 final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
@@ -57,26 +64,8 @@ final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
         self.updateCallbacks { $0.statusUpdateHandler = handler }
     }
 
-    func setReplyHandler(_ handler: (@Sendable (WatchQuickReplyEvent) -> Void)?) {
-        self.updateCallbacks { $0.replyHandler = handler }
-    }
-
-    func setExecApprovalResolveHandler(_ handler: (@Sendable (WatchExecApprovalResolveEvent) -> Void)?) {
-        self.updateCallbacks { $0.execApprovalResolveHandler = handler }
-    }
-
-    func setExecApprovalSnapshotRequestHandler(
-        _ handler: (@Sendable (WatchExecApprovalSnapshotRequestEvent) -> Void)?)
-    {
-        self.updateCallbacks { $0.execApprovalSnapshotRequestHandler = handler }
-    }
-
-    func setAppSnapshotRequestHandler(_ handler: (@Sendable (WatchAppSnapshotRequestEvent) -> Void)?) {
-        self.updateCallbacks { $0.appSnapshotRequestHandler = handler }
-    }
-
-    func setAppCommandHandler(_ handler: (@Sendable (WatchAppCommandEvent) -> Void)?) {
-        self.updateCallbacks { $0.appCommandHandler = handler }
+    func setInboundEventHandler(_ handler: (@Sendable (WatchMessagingInboundEvent) -> Void)?) {
+        self.updateCallbacks { $0.inboundEventHandler = handler }
     }
 
     func activate() {
@@ -85,63 +74,70 @@ final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
     }
 
     func sendPayload(_ payload: [String: Any]) async throws -> WatchNotificationSendResult {
-        try await self.ensureActivated()
-        let session = try self.requireReadySession()
-        if session.isReachable {
-            do {
-                try await sendReachableWatchMessage(payload, with: session)
-                return WatchNotificationSendResult(
-                    deliveredImmediately: true,
-                    queuedForDelivery: false,
-                    transport: "sendMessage")
-            } catch {
-                Self.logger.error("watch sendMessage failed: \(error.localizedDescription, privacy: .public)")
-            }
-        }
-
-        _ = session.transferUserInfo(payload)
-        return WatchNotificationSendResult(
-            deliveredImmediately: false,
-            queuedForDelivery: true,
-            transport: "transferUserInfo")
+        try await self.sendPayload(payload, isSnapshot: false)
     }
 
     func sendSnapshotPayload(_ payload: [String: Any]) async throws -> WatchNotificationSendResult {
-        try await self.ensureActivated()
-        let session = try self.requireReadySession()
-        if session.isReachable {
-            do {
+        try await self.sendPayload(payload, isSnapshot: true)
+    }
+
+    private func sendPayload(
+        _ payload: [String: Any],
+        isSnapshot: Bool) async throws -> WatchNotificationSendResult
+    {
+        try await Self.deliverPayload(
+            prepareSession: {
+                try await self.ensureActivated()
+                return try self.requireReadySession()
+            },
+            sendImmediately: { session in
+                guard session.isReachable else { return false }
                 try await sendReachableWatchMessage(payload, with: session)
+                return true
+            },
+            enqueue: { session in
+                if isSnapshot {
+                    do {
+                        try updateWatchSnapshotApplicationContext(
+                            payload,
+                            with: session,
+                            lock: self.snapshotContextLock)
+                        return "applicationContext"
+                    } catch {
+                        Self.logger.error(
+                            "watch updateApplicationContext failed: \(error.localizedDescription, privacy: .public)")
+                    }
+                }
+                try Task.checkCancellation()
+                _ = session.transferUserInfo(payload)
+                return "transferUserInfo"
+            })
+    }
+
+    static func deliverPayload<Session>(
+        prepareSession: () async throws -> Session,
+        sendImmediately: (Session) async throws -> Bool,
+        enqueue: (Session) throws -> String) async throws -> WatchNotificationSendResult
+    {
+        let session = try await prepareSession()
+        // Activation may outlive its caller; only a live request may start a transfer.
+        try Task.checkCancellation()
+        do {
+            if try await sendImmediately(session) {
                 return WatchNotificationSendResult(
                     deliveredImmediately: true,
                     queuedForDelivery: false,
                     transport: "sendMessage")
-            } catch {
-                Self.logger.error(
-                    "watch snapshot sendMessage failed: \(error.localizedDescription, privacy: .public)")
             }
-        }
-
-        do {
-            try self.snapshotContextLock.withLock {
-                let context = WatchMessagingPayloadCodec.encodeSnapshotApplicationContext(
-                    payload,
-                    merging: session.applicationContext)
-                try session.updateApplicationContext(context)
-            }
-            return WatchNotificationSendResult(
-                deliveredImmediately: false,
-                queuedForDelivery: true,
-                transport: "applicationContext")
         } catch {
-            Self.logger.error(
-                "watch updateApplicationContext failed: \(error.localizedDescription, privacy: .public)")
-            _ = session.transferUserInfo(payload)
-            return WatchNotificationSendResult(
-                deliveredImmediately: false,
-                queuedForDelivery: true,
-                transport: "transferUserInfo")
+            Self.logger.error("watch sendMessage failed: \(error.localizedDescription, privacy: .public)")
         }
+        // A failed interactive attempt has not admitted a new background transfer.
+        try Task.checkCancellation()
+        return try WatchNotificationSendResult(
+            deliveredImmediately: false,
+            queuedForDelivery: true,
+            transport: enqueue(session))
     }
 
     private func updateCallbacks(_ update: (inout WatchConnectivityTransportCallbacks) -> Void) {
@@ -198,44 +194,8 @@ final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
         }
     }
 
-    private func emitReply(_ event: WatchQuickReplyEvent) {
-        guard let handler = self.callbacksSnapshot().replyHandler else {
-            return
-        }
-        Task { @MainActor in
-            handler(event)
-        }
-    }
-
-    private func emitExecApprovalResolve(_ event: WatchExecApprovalResolveEvent) {
-        guard let handler = self.callbacksSnapshot().execApprovalResolveHandler else {
-            return
-        }
-        Task { @MainActor in
-            handler(event)
-        }
-    }
-
-    private func emitExecApprovalSnapshotRequest(_ event: WatchExecApprovalSnapshotRequestEvent) {
-        guard let handler = self.callbacksSnapshot().execApprovalSnapshotRequestHandler else {
-            return
-        }
-        Task { @MainActor in
-            handler(event)
-        }
-    }
-
-    private func emitAppSnapshotRequest(_ event: WatchAppSnapshotRequestEvent) {
-        guard let handler = self.callbacksSnapshot().appSnapshotRequestHandler else {
-            return
-        }
-        Task { @MainActor in
-            handler(event)
-        }
-    }
-
-    private func emitAppCommand(_ event: WatchAppCommandEvent) {
-        guard let handler = self.callbacksSnapshot().appCommandHandler else {
+    private func emitInboundEvent(_ event: WatchMessagingInboundEvent) {
+        guard let handler = self.callbacksSnapshot().inboundEventHandler else {
             return
         }
         Task { @MainActor in
@@ -312,36 +272,11 @@ extension WatchConnectivityTransport: WCSessionDelegate {
     func session(_: WCSession, didReceiveMessage message: [String: Any]) {
         let type = (message["type"] as? String) ?? "unknown"
         GatewayDiagnostics.log("watch messaging: didReceiveMessage type=\(type)")
-        if let event = WatchMessagingPayloadCodec.parseQuickReplyPayload(message, transport: "sendMessage") {
-            self.emitReply(event)
-            return
-        }
-        if let event = WatchMessagingPayloadCodec.parseExecApprovalResolvePayload(
+        if let event = WatchMessagingPayloadCodec.parseInboundPayload(
             message,
             transport: "sendMessage")
         {
-            self.emitExecApprovalResolve(event)
-            return
-        }
-        if let event = WatchMessagingPayloadCodec.parseExecApprovalSnapshotRequestPayload(
-            message,
-            transport: "sendMessage")
-        {
-            self.emitExecApprovalSnapshotRequest(event)
-            return
-        }
-        if let event = WatchMessagingPayloadCodec.parseAppSnapshotRequestPayload(
-            message,
-            transport: "sendMessage")
-        {
-            self.emitAppSnapshotRequest(event)
-            return
-        }
-        if let event = WatchMessagingPayloadCodec.parseAppCommandPayload(
-            message,
-            transport: "sendMessage")
-        {
-            self.emitAppCommand(event)
+            self.emitInboundEvent(event)
         }
     }
 
@@ -352,82 +287,25 @@ extension WatchConnectivityTransport: WCSessionDelegate {
     {
         let type = (message["type"] as? String) ?? "unknown"
         GatewayDiagnostics.log("watch messaging: didReceiveMessageWithReply type=\(type)")
-        if let event = WatchMessagingPayloadCodec.parseQuickReplyPayload(message, transport: "sendMessage") {
-            replyHandler(["ok": true])
-            self.emitReply(event)
-            return
-        }
-        if let event = WatchMessagingPayloadCodec.parseExecApprovalResolvePayload(
+        guard let event = WatchMessagingPayloadCodec.parseInboundPayload(
             message,
             transport: "sendMessage")
-        {
-            replyHandler(["ok": true])
-            self.emitExecApprovalResolve(event)
+        else {
+            replyHandler(["ok": false, "error": "unsupported_payload"])
             return
         }
-        if let event = WatchMessagingPayloadCodec.parseExecApprovalSnapshotRequestPayload(
-            message,
-            transport: "sendMessage")
-        {
-            replyHandler(["ok": true])
-            self.emitExecApprovalSnapshotRequest(event)
-            return
-        }
-        if let event = WatchMessagingPayloadCodec.parseAppSnapshotRequestPayload(
-            message,
-            transport: "sendMessage")
-        {
-            replyHandler(["ok": true])
-            self.emitAppSnapshotRequest(event)
-            return
-        }
-        if let event = WatchMessagingPayloadCodec.parseAppCommandPayload(
-            message,
-            transport: "sendMessage")
-        {
-            replyHandler(["ok": true])
-            self.emitAppCommand(event)
-            return
-        }
-        replyHandler(["ok": false, "error": "unsupported_payload"])
+        replyHandler(["ok": true])
+        self.emitInboundEvent(event)
     }
 
     func session(_: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
         let type = (userInfo["type"] as? String) ?? "unknown"
         GatewayDiagnostics.log("watch messaging: didReceiveUserInfo type=\(type)")
-        if let event = WatchMessagingPayloadCodec.parseQuickReplyPayload(
+        if let event = WatchMessagingPayloadCodec.parseInboundPayload(
             userInfo,
             transport: "transferUserInfo")
         {
-            self.emitReply(event)
-            return
-        }
-        if let event = WatchMessagingPayloadCodec.parseExecApprovalResolvePayload(
-            userInfo,
-            transport: "transferUserInfo")
-        {
-            self.emitExecApprovalResolve(event)
-            return
-        }
-        if let event = WatchMessagingPayloadCodec.parseExecApprovalSnapshotRequestPayload(
-            userInfo,
-            transport: "transferUserInfo")
-        {
-            self.emitExecApprovalSnapshotRequest(event)
-            return
-        }
-        if let event = WatchMessagingPayloadCodec.parseAppSnapshotRequestPayload(
-            userInfo,
-            transport: "transferUserInfo")
-        {
-            self.emitAppSnapshotRequest(event)
-            return
-        }
-        if let event = WatchMessagingPayloadCodec.parseAppCommandPayload(
-            userInfo,
-            transport: "transferUserInfo")
-        {
-            self.emitAppCommand(event)
+            self.emitInboundEvent(event)
         }
     }
 
