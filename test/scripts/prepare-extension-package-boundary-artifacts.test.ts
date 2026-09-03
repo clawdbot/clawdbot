@@ -173,9 +173,13 @@ describe("prepare-extension-package-boundary-artifacts", () => {
         };
         await run();
         if (mode === "all") {
+          const slackBoundaryEntry = BOUNDARY_PLUGIN_UNITS.find(([id]) => id === "slack")?.[1];
+          if (!slackBoundaryEntry) {
+            throw new Error("Slack extension boundary entry is missing");
+          }
           write(
             "consumer.ts",
-            'import { consume } from "./.artifacts/extension-package-boundary/plugins/slack/api.js"; consume(value => value.toUpperCase());',
+            `import { consume } from "./.artifacts/extension-package-boundary/plugins/slack/${slackBoundaryEntry}.js"; consume(value => value.toUpperCase());`,
           );
           await runNodeStep(
             "isolated-boundary-consumer",
