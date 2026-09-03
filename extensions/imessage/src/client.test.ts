@@ -478,7 +478,7 @@ describe("IMessageRpcClient bridge-stall cache invalidation", () => {
     runIMessageCliJsonCommandMock.mockRejectedValueOnce(recoveryError);
     const client = new IMessageRpcClient({
       cliPath: "/tmp/imsg-stall-recovery-failure",
-      runtime: { error: runtimeError },
+      runtime: { error: runtimeError, exit: vi.fn(), log: vi.fn() },
     });
     await client.start();
     const pending = client.request("send", {}, { timeoutMs: 0 });
@@ -498,7 +498,11 @@ describe("IMessageRpcClient bridge-stall cache invalidation", () => {
       ),
     );
 
-    const error = (await pending.catch((cause: unknown) => cause)) as IMessageRpcRequestError;
+    const error = await pending.catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(IMessageRpcRequestError);
+    if (!(error instanceof IMessageRpcRequestError)) {
+      throw new Error("expected an IMessageRpcRequestError");
+    }
     expect(error).toMatchObject({
       code: -32603,
       data: { disposition: "may_have_completed", retry_safe: false },
