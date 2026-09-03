@@ -2,6 +2,10 @@
 import fs from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import {
+  AuthStorage as PublicAuthStorage,
+  ModelRegistry as PublicModelRegistry,
+} from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const providerOAuthMocks = vi.hoisted(() => ({
@@ -255,7 +259,7 @@ describe("SQLite auth storage", () => {
     ).not.toMatchObject({ expires: 1 });
   });
 
-  it("keeps stored OAuth identity fields when a provider refresh returns only tokens", async () => {
+  it("keeps stored OAuth identity fields through the published agent sessions SDK", async () => {
     const agentDir = makeAgentDir();
     writePersistedAuthProfileStoreRaw(
       {
@@ -276,22 +280,23 @@ describe("SQLite auth storage", () => {
       },
       agentDir,
     );
-    const storage = AuthStorage.forAgent(agentDir);
-    getAuthStorageOAuthProviderRegistry(storage).register({
-      id: "test-oauth",
-      name: "Test OAuth",
-      async login() {
-        throw new Error("not used");
-      },
-      async refreshToken() {
-        return {
-          access: "fake-fresh-access",
-          refresh: "fake-rotated-refresh",
-          expires: Date.now() + 60_000,
-        };
-      },
-      getApiKey(credentials: { access: string }) {
-        return credentials.access;
+    const storage = PublicAuthStorage.forAgent(agentDir);
+    PublicModelRegistry.inMemory(storage).registerProvider("test-oauth", {
+      oauth: {
+        name: "Test OAuth",
+        async login() {
+          throw new Error("not used");
+        },
+        async refreshToken() {
+          return {
+            access: "fake-fresh-access",
+            refresh: "fake-rotated-refresh",
+            expires: Date.now() + 60_000,
+          };
+        },
+        getApiKey(credentials: { access: string }) {
+          return credentials.access;
+        },
       },
     });
 
