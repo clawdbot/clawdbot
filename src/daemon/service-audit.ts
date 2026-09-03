@@ -121,7 +121,7 @@ function parseSystemdUnit(content: string): {
 
   // Parse only unit keys relevant to service resilience; this is not a full
   // systemd parser and intentionally ignores sections.
-  for (const rawLine of content.split(/\r?\n/)) {
+  for (const rawLine of splitSystemdLogicalLines(content)) {
     const line = rawLine.trim();
     if (!line) {
       continue;

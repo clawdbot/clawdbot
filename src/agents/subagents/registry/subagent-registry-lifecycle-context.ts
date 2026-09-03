@@ -97,6 +97,7 @@ export interface SubagentLifecycleWakeContext extends SubagentLifecycleCommonCon
   hasScheduledRequesterSettleWakeRun(runId: string): boolean;
   markRequesterSettleWakeRearm(runId: string): void;
   markRequesterSettleWakeRunScheduled(runId: string): void;
+  runRequesterSettleWake(runId: string, run: () => Promise<unknown>): Promise<unknown>;
   setRequesterSettleWakeTimer(runId: string, value: ScheduledRequesterSettleWake): void;
   takeRequesterSettleWakeRearm(runId: string): boolean;
   unmarkRequesterSettleWakeRunScheduled(runId: string): void;

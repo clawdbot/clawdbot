@@ -61,6 +61,8 @@ describe("agent exec command composition", () => {
         agents: {
           defaults: {
             model: { primary: "construction-cli/model-a" },
+            // The synthetic backend has no reasoning capability to discover.
+            thinkingDefault: "off",
           },
         },
       }),

@@ -568,6 +568,9 @@ function getChatModelSelect(container: Element): HTMLElement {
 type ChatModelControlsProps = Parameters<typeof renderChatModelControls>[0];
 
 function createChatModelControlsProps(state: ChatHeaderTestState): ChatModelControlsProps {
+  const selectedSession = state.sessionsResult?.sessions.find((row) =>
+    areUiSessionKeysEquivalent(row.key, state.sessionKey),
+  );
   return {
     activeRunId: state.chatRunId,
     connected: state.connected,
@@ -575,14 +578,13 @@ function createChatModelControlsProps(state: ChatHeaderTestState): ChatModelCont
     loading: state.chatLoading,
     modelCatalog: state.chatModelCatalog,
     modelOverrides: state.sessions.state.modelOverrides,
+    modelSelectionLocked: selectedSession?.modelSelectionLocked,
     modelSelectionTarget: state.sessionsResult?.defaults.modelSelectionTarget,
     modelSwitching: false,
     modelsLoading: state.chatModelsLoading,
     sending: state.chatSending,
     sessionKey: state.sessionKey,
-    selectedSession: state.sessionsResult?.sessions.find((row) =>
-      areUiSessionKeysEquivalent(row.key, state.sessionKey),
-    ),
+    selectedSession,
     sessionsResult: state.sessionsResult,
     stream: state.chatStream,
     onFastModeSelect: (value, targetSessionKey) =>
@@ -7431,12 +7433,15 @@ describe("chat model controls", () => {
         { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
       ],
     });
+    const session = expectDefined(state.sessionsResult?.sessions[0], "selected session");
+    session.model = "gpt-5.5";
+    session.modelProvider = "openai";
+    session.modelSelectionLocked = true;
+    session.agentRuntime = { id: "codex", source: "model" };
     const onModelSelect = vi.fn(async () => true);
     const onThinkingSelect = vi.fn(async () => true);
     const onFastModeSelect = vi.fn(async () => true);
     const container = renderModelControls(state, {
-      modelSelectionLocked: true,
-      modelSelectionRuntimeId: "codex",
       onFastModeSelect,
       onModelSelect,
       onThinkingSelect,
@@ -7446,13 +7451,17 @@ describe("chat model controls", () => {
     expect(modelSelect.dataset.chatModelLocked).toBe("true");
     expect(modelSelect.getAttribute("aria-disabled")).toBe("false");
     expect(container.querySelector(".chat-controls__locked-model-value")?.textContent).toBe(
-      "Codex-controlled model",
+      "GPT-5.5",
     );
-    expect(
-      container.querySelector(".chat-controls__inline-select-label")?.textContent,
-    ).not.toContain("GPT-5.5");
+    expect(container.querySelector(".chat-controls__inline-select-label")?.textContent).toContain(
+      "GPT-5.5",
+    );
     expect(container.querySelectorAll("[data-chat-model-provider]")).toHaveLength(0);
     expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(0);
+    expect(container.querySelector("[data-chat-model-reset]")).toBeNull();
+    const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");
+    picker!.open = true;
+    picker!.dispatchEvent(new KeyboardEvent("keydown", { key: "1", bubbles: true }));
     expect(onModelSelect).not.toHaveBeenCalled();
 
     const slider = getThinkingSlider(container);
@@ -7469,46 +7478,94 @@ describe("chat model controls", () => {
     expect(onFastModeSelect).toHaveBeenCalledWith("on", "main");
   });
 
-  it.each([
-    {
-      name: "labels a locked session without native model metadata",
-      runtimeId: "codex",
-      expected: "Codex-controlled model",
-      omitSession: true,
-    },
-    {
-      name: "uses a neutral model label for non-Codex locked sessions",
-      runtimeId: "openclaw",
-      expected: "Session model",
-      omitSession: false,
-    },
-  ])("$name", ({ runtimeId, expected, omitSession }) => {
-    const { state } = createChatHeaderState({
-      model: "gpt-5.5",
-      modelProvider: "openai",
-      models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai" }],
-    });
-    if (omitSession) {
-      state.sessionsResult = createSessionsListResult({
-        defaultsModel: "gpt-5.5",
-        defaultsProvider: "openai",
-      });
-    }
-    const container = renderModelControls(state, {
-      modelSelectionLocked: true,
-      modelSelectionRuntimeId: runtimeId,
-    });
+  describe.each(["codex", "openclaw", "claude-cli", undefined])(
+    "locked model labels with runtime %s",
+    (runtimeId) => {
+      it.each([
+        {
+          name: "catalog label",
+          model: "gpt-5.6-sol",
+          catalog: "known",
+          loading: false,
+          expected: "GPT-5.6 Sol",
+        },
+        {
+          name: "missing catalog entry",
+          model: "gpt-5.6-sol",
+          catalog: "other",
+          loading: false,
+          expected: "openai/gpt-5.6-sol",
+        },
+        {
+          name: "empty catalog",
+          model: "gpt-5.6-sol",
+          catalog: "empty",
+          loading: false,
+          expected: "openai/gpt-5.6-sol",
+        },
+        {
+          name: "refreshing catalog",
+          model: "gpt-5.6-sol",
+          catalog: "known",
+          loading: true,
+          expected: "GPT-5.6 Sol",
+        },
+        {
+          name: "loading catalog without a snapshot",
+          model: "gpt-5.6-sol",
+          catalog: "empty",
+          loading: true,
+          expected: "openai/gpt-5.6-sol",
+        },
+        {
+          name: "no current model despite an unrelated default",
+          model: null,
+          catalog: "other",
+          loading: false,
+          expected: "Session model",
+        },
+      ])("preserves the $name", ({ model, catalog, loading, expected }) => {
+        const { state } = createChatHeaderState({
+          model,
+          modelProvider: model ? "openai" : null,
+          models:
+            catalog === "empty"
+              ? []
+              : [
+                  {
+                    id: catalog === "known" ? "gpt-5.6-sol" : "gpt-5.6-luna",
+                    name: catalog === "known" ? "GPT-5.6 Sol" : "GPT-5.6 Luna",
+                    provider: "openai",
+                  },
+                ],
+        });
+        const session = expectDefined(state.sessionsResult?.sessions[0], "selected session");
+        session.modelSelectionLocked = true;
+        session.agentRuntime = runtimeId ? { id: runtimeId, source: "model" } : undefined;
+        const container = renderModelControls(state, {
+          agentDefaultModel: "openai/gpt-5.6-luna",
+          modelCatalogState: {
+            hasSnapshot: catalog !== "empty" || !loading,
+            status: loading ? "loading" : "ready",
+          },
+        });
 
-    expect(container.querySelector(".chat-controls__locked-model-value")?.textContent).toBe(
-      expected,
-    );
-    expect(container.querySelector(".chat-controls__inline-select-label")?.textContent).toContain(
-      expected,
-    );
-    if (runtimeId === "openclaw") {
-      expect(container.textContent).not.toContain("Codex-controlled model");
-    }
-  });
+        expect(container.querySelector(".chat-controls__locked-model-value")?.textContent).toBe(
+          expected,
+        );
+        const trigger = getChatModelSelect(container);
+        expect(
+          trigger.querySelector(".chat-controls__inline-select-label")?.textContent?.trim(),
+        ).toBe(expected);
+        expect(trigger.getAttribute("aria-label")).toBe(`Chat model: ${expected}`);
+        expect(trigger.title).toBe(expected);
+        expect(trigger.dataset.chatModelLocked).toBe("true");
+        expect(
+          container.querySelector(".chat-controls__locked-model-badge")?.textContent?.trim(),
+        ).toBe("Locked");
+      });
+    },
+  );
 
   it("does not patch the model for a locked session", async () => {
     const { state, request } = createOpenAiHeaderState();

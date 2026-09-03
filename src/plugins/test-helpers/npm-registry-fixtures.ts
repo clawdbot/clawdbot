@@ -35,6 +35,7 @@ type PackPluginParams = {
 
 export type RegistryPackage = {
   latest: string;
+  omitIntegrity?: boolean;
   packageName: string;
   versions: PackedVersion[];
 };
@@ -148,12 +149,16 @@ export async function packPlugins(
 
 export async function registryPackages(
   rootDir: string,
-  packages: [PackPluginParams & { latest?: string }, ...(PackPluginParams & { latest?: string })[]],
+  packages: [
+    PackPluginParams & { latest?: string; omitIntegrity?: boolean },
+    ...(PackPluginParams & { latest?: string; omitIntegrity?: boolean })[],
+  ],
 ): Promise<RegistryPackage[]> {
   const versions = await packPlugins(rootDir, packages);
   return packages.map((params, index) => ({
     packageName: params.packageName,
     latest: params.latest ?? params.version ?? "1.0.0",
+    ...(params.omitIntegrity ? { omitIntegrity: true } : {}),
     versions: [expectDefined(versions[index], "packed fixture version")],
   }));
 }
@@ -209,7 +214,7 @@ export async function startStaticRegistry(
                     ? { peerDependenciesMeta: entry.peerDependenciesMeta }
                     : {}),
                   dist: {
-                    integrity: entry.integrity,
+                    ...(pkg.omitIntegrity ? {} : { integrity: entry.integrity }),
                     shasum: entry.shasum,
                     tarball: `${baseUrl}/${pkg.encodedPackageName}/-/${entry.tarballName}`,
                   },
