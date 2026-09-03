@@ -185,7 +185,6 @@ async function runPdfPrompt(params: {
   model: string;
   native: boolean;
   attempts: Array<{ provider: string; model: string; error: string }>;
-  truncationNotices: string[];
 }> {
   const requestedCfg = applyImageModelConfigDefaults(params.cfg, params.pdfModelConfig);
 
@@ -236,13 +235,6 @@ async function runPdfPrompt(params: {
       committedPdfModelConfig,
     );
     let nativePdfs: Array<{ base64: string; filename: string }> | undefined;
-    let extractionCache: PdfExtractedContent[] | null = null;
-    const getExtractions = async (): Promise<PdfExtractedContent[]> => {
-      if (!extractionCache) {
-        extractionCache = await params.getExtractions();
-      }
-      return extractionCache;
-    };
 
     const result = await runWithImageModelFallback({
       cfg: effectiveCfg,
@@ -305,7 +297,7 @@ async function runPdfPrompt(params: {
               },
               signal: params.signal,
             });
-            return { text, provider, model: modelId, native: true, truncationNotices: [] };
+            return { text, provider, model: modelId, native: true };
           }
 
           if (provider === "google") {
@@ -321,7 +313,7 @@ async function runPdfPrompt(params: {
               },
               signal: params.signal,
             });
-            return { text, provider, model: modelId, native: true, truncationNotices: [] };
+            return { text, provider, model: modelId, native: true };
           }
         }
 
@@ -338,7 +330,7 @@ async function runPdfPrompt(params: {
           }),
         );
 
-        const extractions = await getExtractions();
+        const extractions = await params.getExtractions();
         const completeExtraction = async (context: Context) => {
           // A run cancelled mid-dispatch must not buy another provider call.
           params.signal?.throwIfAborted();
@@ -372,16 +364,7 @@ async function runPdfPrompt(params: {
           );
           const message = await completeExtraction(context);
           const text = coercePdfAssistantText({ message, provider, model: modelId });
-          return {
-            text,
-            provider,
-            model: modelId,
-            native: false,
-            truncationNotices: collectPdfTruncationNotices(
-              extractions,
-              params.explicitSelectionLimit,
-            ),
-          };
+          return { text, provider, model: modelId, native: false };
         }
 
         const context = buildPdfExtractionContext(
@@ -392,16 +375,7 @@ async function runPdfPrompt(params: {
         );
         const message = await completeExtraction(context);
         const text = coercePdfAssistantText({ message, provider, model: modelId });
-        return {
-          text,
-          provider,
-          model: modelId,
-          native: false,
-          truncationNotices: collectPdfTruncationNotices(
-            extractions,
-            params.explicitSelectionLimit,
-          ),
-        };
+        return { text, provider, model: modelId, native: false };
       },
     });
 
@@ -415,7 +389,6 @@ async function runPdfPrompt(params: {
         model: a.model,
         error: a.error,
       })),
-      truncationNotices: result.result.truncationNotices,
     };
   } finally {
     preparedRuntimeLease.release();
@@ -635,7 +608,7 @@ export function createPdfTool(options?: {
         });
       }
 
-      const getExtractions = async (): Promise<PdfExtractedContent[]> => {
+      const extractLoadedPdfs = async (): Promise<PdfExtractedContent[]> => {
         const extractedAll: PdfExtractedContent[] = [];
         for (const pdf of loadedPdfs) {
           // Extraction is sequential and can be CPU-heavy. Do not start the next
@@ -654,6 +627,10 @@ export function createPdfTool(options?: {
         }
         return extractedAll;
       };
+      // Native providers remain extraction-free; fallback candidates share one extraction
+      // so provider retries cannot repeat CPU work or observe different document prefixes.
+      let extractionPromise: Promise<PdfExtractedContent[]> | undefined;
+      const getExtractions = () => (extractionPromise ??= extractLoadedPdfs());
 
       // Do not issue a paid PDF-model call for an already-aborted run.
       signal?.throwIfAborted();
@@ -691,7 +668,13 @@ export function createPdfTool(options?: {
             ),
           };
 
-      const text = [...result.truncationNotices, result.text].join("\n");
+      const truncationNotices = result.native
+        ? []
+        : collectPdfTruncationNotices(
+            await getExtractions(),
+            pageSelection?.truncated ? pageSelection.pages.length : undefined,
+          );
+      const text = [...truncationNotices, result.text].join("\n");
       return buildTextToolResult({ ...result, text }, { native: result.native, ...pdfDetails });
     },
   };

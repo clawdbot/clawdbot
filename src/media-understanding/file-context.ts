@@ -205,13 +205,14 @@ async function classifyFileAttachment(params: {
   params.assertCurrent?.();
   const text = extracted?.text?.trim() ?? "";
   const extractedImages = extracted?.images ?? [];
+  const metadata = extracted?.metadata ? { metadata: extracted.metadata } : {};
   if (text) {
     return {
       outcome: {
         kind: "extracted",
         text,
         images: extractedImages,
-        ...(extracted.metadata ? { metadata: extracted.metadata } : {}),
+        ...metadata,
       },
       filename,
       mimeType,
@@ -222,7 +223,7 @@ async function classifyFileAttachment(params: {
       outcome: {
         kind: "rendered-to-images",
         images: extractedImages,
-        ...(extracted.metadata ? { metadata: extracted.metadata } : {}),
+        ...metadata,
       },
       filename,
       mimeType,
@@ -231,7 +232,7 @@ async function classifyFileAttachment(params: {
   return {
     outcome: {
       kind: "no-extractable-text",
-      ...(extracted.metadata ? { metadata: extracted.metadata } : {}),
+      ...metadata,
     },
     filename,
     mimeType,

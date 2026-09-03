@@ -109,7 +109,12 @@ function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): u
   return call;
 }
 
-function firstCompletionContext(): { systemPrompt?: string } | undefined {
+function firstCompletionContext():
+  | {
+      systemPrompt?: string;
+      messages?: Array<{ content?: Array<{ type: string; text?: string }> }>;
+    }
+  | undefined {
   const [, context] = firstMockCall(completeMock, "complete") as [
     unknown,
     { systemPrompt?: string } | undefined,
@@ -667,20 +672,32 @@ describe("createPdfTool", () => {
         content: [{ type: "text", text: "fallback summary" }],
       } as never);
 
-      const cfg = withPdfModel(OPENAI_PDF_MODEL);
+      const cfg = {
+        agents: { defaults: { pdfModel: { primary: OPENAI_PDF_MODEL }, pdfMaxPages: 2 } },
+      } as OpenClawConfig;
       const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
 
       const result = await tool.execute("t1", {
         prompt: "summarize",
         pdf: "/tmp/doc.pdf",
+        pages: "21-23",
       });
 
       expect(extractSpy).toHaveBeenCalledTimes(1);
-      expect(result.content).toEqual([{ type: "text", text: "fallback summary" }]);
+      expect(extractSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ pageNumbers: [21, 22], maxPages: 2 }),
+      );
+      const notice = "[Partial document: requested page selection limited to 2 pages.]";
+      const completionText = firstCompletionContext()
+        ?.messages?.[0]?.content?.map((item) => item.text ?? "")
+        .join("\n");
+      expect(completionText).toContain(notice);
+      expect(completionText).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT");
+      expect(result.content).toEqual([{ type: "text", text: `${notice}\nfallback summary` }]);
       expectFields(result.details, {
         native: false,
         model: OPENAI_PDF_MODEL,
-        text: "fallback summary",
+        text: `${notice}\nfallback summary`,
       });
       expect(firstCompletionContext()?.systemPrompt).toBeUndefined();
     });

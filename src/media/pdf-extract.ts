@@ -11,7 +11,7 @@ export type PdfExtractedImage = DocumentExtractedImage;
 /** Text and extracted image payloads returned by PDF extraction callers. */
 export type PdfExtractedContent = DocumentExtractionResult;
 
-/** Extracts PDF content through the configured document extractor and hides extractor metadata. */
+/** Extracts PDF content through the configured document extractor without exposing its owner id. */
 export async function extractPdfContent(params: {
   buffer: Buffer;
   maxPages: number;

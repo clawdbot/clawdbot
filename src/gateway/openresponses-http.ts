@@ -23,7 +23,10 @@ import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEventForRun } from "../infra/agent-events.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { logWarn } from "../logger.js";
-import { renderDocumentTruncationNotice } from "../media/document-extraction-metadata.js";
+import {
+  type FileAttachmentOutcome,
+  renderFileAttachmentOutcome,
+} from "../media-understanding/file-attachment-outcomes.js";
 import { renderFileContextBlock } from "../media/file-context.js";
 import {
   DEFAULT_INPUT_IMAGE_MAX_BYTES,
@@ -94,7 +97,6 @@ import {
   resolveUnsatisfiedToolChoiceMessage,
   type ToolChoiceConstraint,
 } from "./openai-tool-choice.js";
-import { wrapUntrustedFileContent } from "./openresponses-file-content.js";
 import { buildAgentPrompt } from "./openresponses-prompt.js";
 import { createAssistantOutputItem, createFunctionCallOutputItem } from "./openresponses-shape.js";
 import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
@@ -233,7 +235,6 @@ export const testing = {
   resetResponseSessionState() {
     responseSessionMap.clear();
   },
-  wrapUntrustedFileContent,
   storeResponseSessionAt(
     responseId: string,
     sessionKey: string,
@@ -561,29 +562,21 @@ export async function handleOpenResponsesHttpRequest(
               limits: limits.files,
               signal: abortController.signal,
             });
-            const rawText = file.text;
-            const notice = renderDocumentTruncationNotice(file.metadata);
-            if (rawText?.trim()) {
+            const rawText = file.text?.trim() ?? "";
+            const fileImages = file.images ?? [];
+            const metadata = file.metadata ? { metadata: file.metadata } : {};
+            const outcome: FileAttachmentOutcome = rawText
+              ? { kind: "extracted", text: rawText, images: fileImages, ...metadata }
+              : fileImages.length > 0
+                ? { kind: "rendered-to-images", images: fileImages, ...metadata }
+                : { kind: "no-extractable-text", ...metadata };
+            const content = renderFileAttachmentOutcome(outcome);
+            if (content !== null) {
               fileContexts.push(
                 renderFileContextBlock({
                   filename: file.filename,
-                  content: [notice, wrapUntrustedFileContent(rawText)].filter(Boolean).join("\n"),
-                }),
-              );
-            } else if (file.images && file.images.length > 0) {
-              fileContexts.push(
-                renderFileContextBlock({
-                  filename: file.filename,
-                  content: [notice, "[PDF content rendered to images]"].filter(Boolean).join("\n"),
-                  surroundContentWithNewlines: false,
-                }),
-              );
-            } else {
-              fileContexts.push(
-                renderFileContextBlock({
-                  filename: file.filename,
-                  content: [notice, "[No extractable text]"].filter(Boolean).join("\n"),
-                  surroundContentWithNewlines: false,
+                  content,
+                  surroundContentWithNewlines: outcome.kind === "extracted",
                 }),
               );
             }
