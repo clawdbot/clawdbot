@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { SpawnResult } from "../../process/exec.js";
 import { onSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { StaleWorkerBuildError } from "./admission.js";
 import { createWorkerPlacementDiskSpaceMonitor } from "./placement-disk-space.js";
 import type { WorkerSessionPlacementRecord } from "./placement-store.js";
 import type { WorkerWorkspaceCommand } from "./tunnel-contract.js";
@@ -172,7 +173,42 @@ describe("active worker placement disk-space monitoring", () => {
     expect(harness.monitor.version()).toBe(0);
   });
 
-  it("keeps the last exact-binding sample when a later advisory probe fails", async () => {
+  it("advances the projection fence when an observation loses its active placement", async () => {
+    const harness = createHarness(async () => result(6 * GIB, 10 * GIB));
+
+    await harness.monitor.sweep();
+    expect(harness.monitor.version()).toBe(1);
+
+    harness.setPlacement({ ...activePlacement(), state: "draining" });
+    await harness.monitor.sweep();
+
+    expect(harness.monitor.read(harness.placement)).toBeUndefined();
+    expect(harness.monitor.version()).toBe(2);
+
+    await harness.monitor.sweep();
+    expect(harness.monitor.version()).toBe(2);
+  });
+
+  it("probes and warns once per stale worker build binding", async () => {
+    const harness = createHarness(async () => result(6 * GIB, 10 * GIB));
+    harness.startTunnel.mockRejectedValue(new StaleWorkerBuildError());
+
+    await harness.monitor.sweep();
+    await harness.monitor.sweep();
+    await harness.monitor.sweep();
+
+    expect(harness.warn).toHaveBeenCalledTimes(1);
+    expect(harness.startTunnel).toHaveBeenCalledTimes(1);
+
+    harness.setPlacement(activePlacement({ generation: 4, activeOwnerEpoch: 8 }));
+    await harness.monitor.sweep();
+    await harness.monitor.sweep();
+
+    expect(harness.warn).toHaveBeenCalledTimes(2);
+    expect(harness.startTunnel).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the last exact-binding sample and warns on every failed advisory probe", async () => {
     let fail = false;
     const harness = createHarness(async () =>
       fail
@@ -186,9 +222,11 @@ describe("active worker placement disk-space monitoring", () => {
     fail = true;
 
     await harness.monitor.sweep();
+    await harness.monitor.sweep();
 
     expect(harness.monitor.read(harness.placement)?.status).toBe("warning");
     expect(harness.monitor.version()).toBe(1);
+    expect(harness.warn).toHaveBeenCalledTimes(2);
     expect(harness.warn).toHaveBeenCalledWith(
       expect.stringContaining("Worker disk-space probe command failed"),
     );

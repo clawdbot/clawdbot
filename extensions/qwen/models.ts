@@ -1,12 +1,14 @@
 // Qwen plugin module implements models behavior.
 import {
   applyProviderNativeStreamingUsageCompat,
+  buildManifestModelProviderConfig,
   supportsNativeStreamingUsageCompat,
 } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 export const QWEN_BASE_URL = "https://coding-intl.dashscope.aliyuncs.com/v1";
 export const QWEN_GLOBAL_BASE_URL = QWEN_BASE_URL;
@@ -26,6 +28,11 @@ export const QWEN_36_FLASH_MODEL_ID = "qwen3.6-flash";
 export const QWEN_36_PLUS_MODEL_ID = "qwen3.6-plus";
 export const QWEN_37_MAX_MODEL_ID = "qwen3.7-max";
 export const QWEN_37_PLUS_MODEL_ID = "qwen3.7-plus";
+const QWEN_38_MODEL_IDS = new Set(["qwen3.8-max", "qwen3.8-flash"]);
+
+export function isQwen38ModelId(modelId: string): boolean {
+  return QWEN_38_MODEL_IDS.has(modelId.trim().toLowerCase());
+}
 export const QWEN_DEFAULT_COST = {
   input: 0,
   output: 0,
@@ -68,52 +75,19 @@ export function resolveQwenTokenPlanBaseUrl(region: QwenTokenPlanRegion): string
   return QWEN_TOKEN_PLAN_BASE_URLS[region];
 }
 
-type QwenCatalogModelRow = readonly [
-  id: string,
-  reasoning: boolean,
-  input: ModelDefinitionConfig["input"],
-  contextWindow: number,
-  maxTokens: number,
-];
-
-function buildQwenCatalogModels(rows: readonly QwenCatalogModelRow[]): ModelDefinitionConfig[] {
-  return rows.map(([id, reasoning, input, contextWindow, maxTokens]) => ({
-    id,
-    name: id,
-    reasoning,
-    input,
-    cost: QWEN_DEFAULT_COST,
-    contextWindow,
-    maxTokens,
-  }));
-}
-
 // Token Plan is credit-based, so per-token prices do not map to its billing model.
-// This curated picker catalog keeps current recommendations plus one selectable compatibility row.
 export const QWEN_TOKEN_PLAN_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig> =
-  buildQwenCatalogModels([
-    [QWEN_37_PLUS_MODEL_ID, true, ["text", "image"], 1_000_000, 65_536],
-    [QWEN_36_PLUS_MODEL_ID, true, ["text", "image"], 1_000_000, 65_536],
-    ["qwen3-coder-next", true, ["text"], 262_144, 65_536],
-    ["kimi-k2.5", true, ["text", "image"], 262_144, 98_304],
-    ["glm-5", true, ["text"], 202_752, 16_384],
-    ["MiniMax-M2.5", true, ["text"], 196_608, 32_768],
-  ]);
+  buildManifestModelProviderConfig({
+    providerId: QWEN_TOKEN_PLAN_PROVIDER_ID,
+    catalog: manifest.modelCatalog.providers[QWEN_TOKEN_PLAN_PROVIDER_ID],
+  }).models;
 
-export const QWEN_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig> = buildQwenCatalogModels([
-  [QWEN_DEFAULT_MODEL_ID, false, ["text", "image"], 1_000_000, 65_536],
-  [QWEN_36_FLASH_MODEL_ID, true, ["text", "image"], 1_000_000, 65_536],
-  [QWEN_36_PLUS_MODEL_ID, true, ["text", "image"], 1_000_000, 65_536],
-  [QWEN_37_MAX_MODEL_ID, true, ["text"], 1_000_000, 65_536],
-  [QWEN_37_PLUS_MODEL_ID, true, ["text", "image"], 1_000_000, 65_536],
-  ["qwen3-max-2026-01-23", false, ["text"], 262_144, 65_536],
-  ["qwen3-coder-next", false, ["text"], 262_144, 65_536],
-  ["qwen3-coder-plus", false, ["text"], 1_000_000, 65_536],
-  ["MiniMax-M2.5", true, ["text"], 1_000_000, 65_536],
-  ["glm-5", false, ["text"], 202_752, 16_384],
-  ["glm-4.7", false, ["text"], 202_752, 16_384],
-  ["kimi-k2.5", false, ["text", "image"], 262_144, 32_768],
-]);
+export const QWEN_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig> =
+  buildManifestModelProviderConfig({
+    providerId: "qwen",
+    // Shared seeds span plans; only runtime config selects the Coding Plan default.
+    catalog: { ...manifest.modelCatalog.providers.qwen, baseUrl: QWEN_BASE_URL },
+  }).models;
 
 export function isQwenCodingPlanBaseUrl(baseUrl: string | undefined): boolean {
   const trimmed = baseUrl?.trim();
@@ -138,6 +112,7 @@ export function isQwen36PlusSupportedBaseUrl(_baseUrl: string | undefined): bool
 const QWEN_STANDARD_ONLY_MODEL_IDS = new Set<string>([
   QWEN_36_FLASH_MODEL_ID,
   QWEN_37_MAX_MODEL_ID,
+  ...QWEN_38_MODEL_IDS,
 ]);
 
 export function isQwenStandardOnlyModelId(modelId: string): boolean {

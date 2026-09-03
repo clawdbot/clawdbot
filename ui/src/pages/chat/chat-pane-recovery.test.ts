@@ -4,7 +4,11 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import { createTestChatPane, type TestChatPane } from "./chat-pane.test-support.ts";
+import {
+  createSessionCapabilityFixture,
+  createTestChatPane,
+  type TestChatPane,
+} from "./chat-pane.test-support.ts";
 
 function advertiseSessionRecovery(pane: TestChatPane) {
   pane.context.gateway.snapshot.hello = {
@@ -14,6 +18,37 @@ function advertiseSessionRecovery(pane: TestChatPane) {
 }
 
 describe("chat pane session recovery", () => {
+  it("unlocks the composer when shared session state settles the exact local run", () => {
+    const { pane, state } = createTestChatPane({
+      client: {} as GatewayBrowserClient,
+      sessions: createSessionCapabilityFixture(),
+    });
+    state.chatRunId = "run-missed-terminal";
+    state.chatStream = "answer already rendered";
+
+    pane.applySessionsState({
+      result: {
+        sessions: [
+          {
+            key: state.sessionKey,
+            kind: "direct",
+            updatedAt: 20,
+            status: "done",
+            hasActiveRun: false,
+            lastRunId: "run-missed-terminal",
+          },
+        ],
+      },
+      agentId: "main",
+      loading: false,
+      error: null,
+      deletedSessions: [],
+    } as unknown as Parameters<typeof pane.applySessionsState>[0]);
+
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+  });
+
   it("recovers a tombstoned session into a fresh continuing session", async () => {
     const created = createDeferred<Awaited<ReturnType<SessionCapability["recover"]>>>();
     const sessions = {

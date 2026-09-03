@@ -14,9 +14,7 @@ import { ensureOpenClawAgentBoardSchemaInTransaction } from "../state/openclaw-a
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
-  listOpenClawRegisteredAgentDatabases,
   openOpenClawAgentDatabase,
-  resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
@@ -27,6 +25,7 @@ import {
   createBoardGrantSnapshot,
   createBoardWidgetPutSnapshot,
   normalizeBoardWidgetPutParams,
+  type BoardSessionTarget,
   type BoardStore,
   type BoardSnapshotWithHtmlViewMetadata,
   type BoardWidgetHtmlDocument,
@@ -86,6 +85,26 @@ function boardTablesPresent(database: Pick<OpenClawAgentDatabase, "db">): boolea
   return true;
 }
 
+export function listBoardSessionKeysReadOnly(params: {
+  agentId: string;
+  path: string;
+  env?: NodeJS.ProcessEnv;
+}): ReadonlySet<string> {
+  const result = withOpenClawAgentDatabaseReadOnly((database) => {
+    if (!boardTablesPresent(database)) {
+      return [];
+    }
+    const db = getNodeSqliteKysely<BoardDatabase>(database.db);
+    // Every persisted widget belongs to a tab, so distinct tab owners are the
+    // complete board inventory without reading widget payloads.
+    return executeSqliteQuerySync(
+      database.db,
+      db.selectFrom("board_tabs").select("session_key").distinct(),
+    ).rows.map((row) => row.session_key);
+  }, params);
+  return new Set(result.found ? result.value : []);
+}
+
 function ensureBoardSchema(database: OpenClawAgentDatabase): void {
   if (ensuredBoardDatabases.has(database.db)) {
     return;
@@ -107,7 +126,7 @@ function ensureBoardSchema(database: OpenClawAgentDatabase): void {
 }
 
 type SqliteBoardStoreOptions = {
-  resolveSession: (sessionKey: string) => {
+  resolveSession: (target: BoardSessionTarget) => {
     agentId: string;
     path?: string;
     sessionKey: string;
@@ -358,8 +377,12 @@ function emptyBoardSnapshot(sessionKey: string): BoardSnapshot {
 export class SqliteBoardStore implements BoardStore {
   constructor(private readonly options: SqliteBoardStoreOptions) {}
 
-  private resolve(sessionKey: string): { agentId: string; path?: string; sessionKey: string } {
-    return this.options.resolveSession(sessionKey);
+  private resolve(target: BoardSessionTarget): {
+    agentId: string;
+    path?: string;
+    sessionKey: string;
+  } {
+    return this.options.resolveSession(target);
   }
 
   private requireExistingSession(resolved: {
@@ -383,11 +406,11 @@ export class SqliteBoardStore implements BoardStore {
     }
   }
 
-  private prepareWrite(sessionKey: string): {
+  private prepareWrite(target: BoardSessionTarget): {
     database: OpenClawAgentDatabase;
     resolved: { agentId: string; path?: string; sessionKey: string };
   } {
-    const resolved = this.resolve(sessionKey);
+    const resolved = this.resolve(target);
     this.requireExistingSession(resolved);
     const database = openOpenClawAgentDatabase({
       agentId: resolved.agentId,
@@ -398,8 +421,8 @@ export class SqliteBoardStore implements BoardStore {
     return { database, resolved };
   }
 
-  getSnapshot(sessionKey: string): BoardSnapshot {
-    const resolved = this.resolve(sessionKey);
+  getSnapshot(target: BoardSessionTarget): BoardSnapshot {
+    const resolved = this.resolve(target);
     const result = withOpenClawAgentDatabaseReadOnly(
       (database) =>
         hasSession(database, resolved.sessionKey) && boardTablesPresent(database)
@@ -416,8 +439,8 @@ export class SqliteBoardStore implements BoardStore {
     );
   }
 
-  getSnapshotWithHtmlViewMetadata(sessionKey: string): BoardSnapshotWithHtmlViewMetadata {
-    const resolved = this.resolve(sessionKey);
+  getSnapshotWithHtmlViewMetadata(target: BoardSessionTarget): BoardSnapshotWithHtmlViewMetadata {
+    const resolved = this.resolve(target);
     const result = withOpenClawAgentDatabaseReadOnly(
       (database) =>
         hasSession(database, resolved.sessionKey) && boardTablesPresent(database)
@@ -436,11 +459,11 @@ export class SqliteBoardStore implements BoardStore {
     };
   }
 
-  applyOps(sessionKey: string, ops: readonly BoardOp[]): BoardSnapshot {
+  applyOps(target: BoardSessionTarget, ops: readonly BoardOp[]): BoardSnapshot {
     if (ops.length === 0) {
-      return this.getSnapshot(sessionKey);
+      return this.getSnapshot(target);
     }
-    const { database, resolved } = this.prepareWrite(sessionKey);
+    const { database, resolved } = this.prepareWrite(target);
     return runOpenClawAgentWriteTransaction(
       (transactionDatabase) => {
         if (!hasSession(transactionDatabase, resolved.sessionKey)) {
@@ -470,7 +493,7 @@ export class SqliteBoardStore implements BoardStore {
   }
 
   putWidget(params: BoardWidgetMaterializedPutParams) {
-    const { database, resolved } = this.prepareWrite(params.sessionKey);
+    const { database, resolved } = this.prepareWrite(params);
     const canonicalInput = normalizeBoardWidgetPutParams(params, resolved.sessionKey);
     const viewGeneration = randomBytes(16).toString("hex");
     return runOpenClawAgentWriteTransaction(
@@ -555,13 +578,13 @@ export class SqliteBoardStore implements BoardStore {
   }
 
   grant(
-    sessionKey: string,
+    target: BoardSessionTarget,
     name: string,
     decision: "granted" | "rejected",
     revision: number,
     instanceId?: string,
   ): BoardSnapshot {
-    const { database, resolved } = this.prepareWrite(sessionKey);
+    const { database, resolved } = this.prepareWrite(target);
     return runOpenClawAgentWriteTransaction(
       (transactionDatabase) => {
         if (!hasSession(transactionDatabase, resolved.sessionKey)) {
@@ -579,6 +602,13 @@ export class SqliteBoardStore implements BoardStore {
           instanceId,
         );
         upsertTabs(transactionDatabase, previous, next);
+        const widget = next.widgets.find((candidate) => candidate.name === name)!;
+        if (!widget.contentOwner) {
+          throw new BoardValidationError(
+            "invalid_operation",
+            `board widget ${name} content ownership is unavailable`,
+          );
+        }
         const row = previous.widgetRows.find((candidate) => candidate.name === name)!;
         const manifest = parseManifest(row.manifest);
         const declared = manifest.declared;
@@ -591,6 +621,12 @@ export class SqliteBoardStore implements BoardStore {
               grant_state: decision,
               granted_sha: decision === "granted" ? row.sha256 : null,
               manifest: serializeManifest(
+                {
+                  contentOwner: widget.contentOwner,
+                  ...(widget.registeredContentKind
+                    ? { registeredContentKind: widget.registeredContentKind }
+                    : {}),
+                },
                 declared,
                 decision,
                 manifest.mcpAppInteractive !== undefined && manifest.mcpAppInstanceId
@@ -620,8 +656,8 @@ export class SqliteBoardStore implements BoardStore {
     );
   }
 
-  private readWidgetRow(sessionKey: string, name: string) {
-    const resolved = this.resolve(sessionKey);
+  private readWidgetRow(target: BoardSessionTarget, name: string) {
+    const resolved = this.resolve(target);
     const result = withOpenClawAgentDatabaseReadOnly(
       (database) => {
         if (!hasSession(database, resolved.sessionKey) || !boardTablesPresent(database)) {
@@ -658,13 +694,16 @@ export class SqliteBoardStore implements BoardStore {
     return result.found ? result.value : undefined;
   }
 
-  readWidgetHtml(sessionKey: string, name: string): BoardWidgetHtmlDocument | undefined {
-    const row = this.readWidgetRow(sessionKey, name);
+  readWidgetHtml(target: BoardSessionTarget, name: string): BoardWidgetHtmlDocument | undefined {
+    const row = this.readWidgetRow(target, name);
     return row ? rowToHtmlDocument(row) : undefined;
   }
 
-  readWidgetMcpApp(sessionKey: string, name: string): BoardWidgetMcpAppDocument | undefined {
-    const row = this.readWidgetRow(sessionKey, name);
+  readWidgetMcpApp(
+    target: BoardSessionTarget,
+    name: string,
+  ): BoardWidgetMcpAppDocument | undefined {
+    const row = this.readWidgetRow(target, name);
     if (!row || row.content_kind !== "mcp-app" || row.descriptor_json === null) {
       return undefined;
     }
@@ -683,43 +722,10 @@ export class SqliteBoardStore implements BoardStore {
   }
 
   readWidgetRegistered(
-    sessionKey: string,
+    target: BoardSessionTarget,
     name: string,
   ): BoardWidgetRegisteredDocument | undefined {
-    const row = this.readWidgetRow(sessionKey, name);
+    const row = this.readWidgetRow(target, name);
     return row ? rowToRegisteredDocument(row) : undefined;
-  }
-
-  listSessionsWithBoards(): string[] {
-    const sessionKeys = new Set<string>();
-    const agentIds = new Set(
-      listOpenClawRegisteredAgentDatabases({ env: this.options.env }).map(
-        (registered) => registered.agentId,
-      ),
-    );
-    for (const agentId of agentIds) {
-      const canonicalPath =
-        this.resolve(`agent:${agentId}:main`).path ??
-        resolveOpenClawAgentSqlitePath({ agentId, env: this.options.env });
-      const result = withOpenClawAgentDatabaseReadOnly(
-        (database) => {
-          if (!boardTablesPresent(database)) {
-            return [];
-          }
-          const db = getNodeSqliteKysely<BoardDatabase>(database.db);
-          return executeSqliteQuerySync(
-            database.db,
-            db.selectFrom("board_tabs").select("session_key").distinct(),
-          ).rows;
-        },
-        { agentId, path: canonicalPath, env: this.options.env },
-      );
-      if (result.found) {
-        for (const row of result.value) {
-          sessionKeys.add(row.session_key);
-        }
-      }
-    }
-    return [...sessionKeys].toSorted();
   }
 }

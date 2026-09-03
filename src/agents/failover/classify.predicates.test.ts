@@ -1,16 +1,16 @@
 // Covers message predicates whose truth values intentionally differ from the central outcome.
 import { describe, expect, it } from "vitest";
+import { isTransientHttpError } from "./classification-rules.js";
 import {
   classifyFailoverReason,
   isAuthErrorMessage,
-  isAuthPermanentErrorMessage,
   isBillingErrorMessage,
   isCloudCodeAssistFormatError,
   isContextOverflowError,
   isFailoverErrorMessage,
   isTimeoutErrorMessage,
-  isTransientHttpError,
 } from "./classify.js";
+import { isAuthPermanentErrorMessage } from "./message-patterns.js";
 
 const PLAIN_INTERNAL_SERVER_ERROR_STATUS_SAMPLE = "Proxy notice: Status: Internal Server Error";
 const MIXED_INTERNAL_SERVER_ERROR_STATUS_SAMPLE = `${PLAIN_INTERNAL_SERVER_ERROR_STATUS_SAMPLE}; upstream connect error`;

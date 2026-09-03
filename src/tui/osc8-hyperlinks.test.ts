@@ -1,4 +1,5 @@
 // Verifies OSC8 hyperlink formatting for TUI terminal output.
+import { getOsc8LinkAtColumn } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import { addOsc8Hyperlinks, extractUrls } from "./osc8-hyperlinks.js";
 
@@ -7,6 +8,15 @@ describe("extractUrls", () => {
     const urls = extractUrls("Check out https://example.com for more info");
     expect(urls).toEqual(["https://example.com"]);
   });
+
+  it.each([".", ",", ";", "!", "?", ":", "*", "_", "~", ".?!"])(
+    "excludes trailing GFM punctuation %s from bare URLs",
+    (punctuation) => {
+      expect(extractUrls(`Visit https://example.com/path${punctuation}`)).toEqual([
+        "https://example.com/path",
+      ]);
+    },
+  );
 
   it("stops bare URLs before bidi formatting controls", () => {
     const url = "https://example.com/path";
@@ -21,9 +31,9 @@ describe("extractUrls", () => {
     expect(urls).toHaveLength(2);
   });
 
-  it("extracts markdown link hrefs", () => {
-    const urls = extractUrls("[Click here](https://example.com/path)");
-    expect(urls).toEqual(["https://example.com/path"]);
+  it.each(["", ".", "?", ";"])("preserves authored markdown href suffix %s", (suffix) => {
+    const url = `https://example.com/path${suffix}`;
+    expect(extractUrls(`[Click here](${url})`)).toEqual([url]);
   });
 
   it("extracts markdown links with angle brackets and title text", () => {
@@ -64,6 +74,11 @@ describe("extractUrls", () => {
     expect(extractUrls(`[Wikipedia](${url})`)).toEqual([url]);
   });
 
+  it("keeps balanced URL parentheses and internal query punctuation", () => {
+    const url = "https://example.com/v1.0/URL_(disambiguation)?a=1&b=2#section";
+    expect(extractUrls(`Visit ${url}.`)).toEqual([url]);
+  });
+
   it("does not extract an incomplete markdown link destination", () => {
     expect(extractUrls("[broken](https://)")).toEqual([]);
   });
@@ -92,6 +107,27 @@ describe("extractUrls", () => {
 });
 
 describe("addOsc8Hyperlinks", () => {
+  it.each([
+    { name: "BEL", params: "", terminator: "\x07" },
+    { name: "ST with link identity", params: "id=docs", terminator: "\x1b\\" },
+  ])("preserves authored spans alongside unlinked URLs ($name)", ({ params, terminator }) => {
+    const label = "https://example.test/label";
+    const target = "https://example.test/destination";
+    const bare = "https://example.test/bare";
+    const prefix = "See ";
+    const authored = `\x1b]8;${params};${target}${terminator}\x1b[32m${label}\x1b[0m\x1b]8;;${terminator}`;
+    const line = `${prefix}${authored} then ${bare}`;
+
+    const [rendered] = addOsc8Hyperlinks([line], [target, bare]);
+
+    expect(rendered).toContain(authored);
+    expect(getOsc8LinkAtColumn(rendered!, prefix.length)).toBe(target);
+    expect(getOsc8LinkAtColumn(rendered!, prefix.length + label.length)).toBeUndefined();
+    expect(getOsc8LinkAtColumn(rendered!, prefix.length + label.length + " then ".length)).toBe(
+      bare,
+    );
+  });
+
   it("returns lines unchanged when no URLs", () => {
     const lines = ["Hello world", "No links here"];
     expect(addOsc8Hyperlinks(lines, [])).toEqual(lines);
@@ -107,6 +143,41 @@ describe("addOsc8Hyperlinks", () => {
     // The URL text should be between open and close
     expect(result[0]).toBe(`Visit \x1b]8;;${url}\x07${url}\x1b]8;;\x07 for info`);
   });
+
+  it.each([".", ",", ";", "!", "?", ":", "*", "_", "~", ".?!"])(
+    "keeps trailing GFM punctuation %s outside terminal hyperlink targets",
+    (punctuation) => {
+      const url = "https://example.com/path";
+      const line = `Visit ${url}${punctuation}`;
+
+      expect(addOsc8Hyperlinks([line], extractUrls(line))).toEqual([
+        `Visit \x1b]8;;${url}\x07${url}\x1b]8;;\x07${punctuation}`,
+      ]);
+    },
+  );
+
+  it("preserves punctuation explicitly authored in markdown hyperlink targets", () => {
+    const url = "https://example.com/path.";
+    const line = `Docs (${url})`;
+
+    expect(addOsc8Hyperlinks([line], extractUrls(`[Docs](${url})`))).toEqual([
+      `Docs (\x1b]8;;${url}\x07${url}\x1b]8;;\x07)`,
+    ]);
+  });
+
+  it.each([".", ","])(
+    "keeps authored and bare hyperlink occurrences distinct before %s",
+    (punctuation) => {
+      const bareUrl = "https://example.com/path";
+      const authoredUrl = `${bareUrl}${punctuation}`;
+      const markdown = `[Docs](${authoredUrl}) and ${bareUrl}${punctuation}`;
+      const rendered = `Docs (${authoredUrl}) and ${bareUrl}${punctuation}`;
+
+      expect(addOsc8Hyperlinks([rendered], extractUrls(markdown))).toEqual([
+        `Docs (\x1b]8;;${authoredUrl}\x07${authoredUrl}\x1b]8;;\x07) and \x1b]8;;${bareUrl}\x07${bareUrl}\x1b]8;;\x07${punctuation}`,
+      ]);
+    },
+  );
 
   it("keeps bidi isolation outside the exact OSC 8 target", () => {
     const url = "https://example.com/path";

@@ -1,8 +1,8 @@
 import { createCipheriv, createHash, randomBytes } from "node:crypto";
 import type { Duplex } from "node:stream";
+import { parseRfbVersionBanner } from "./rfb-probe.js";
 
 const RFB_VERSION_BYTES = 12;
-const RFB_3_3_VERSION = Buffer.from("RFB 003.003\n", "ascii");
 const RFB_3_8_VERSION = Buffer.from("RFB 003.008\n", "ascii");
 const RFB_SECURITY_NONE = 1;
 const RFB_SECURITY_VNC = 2;
@@ -153,18 +153,6 @@ class StreamRfbPreauthPeer implements RfbPreauthPeer {
     this.stream.off("close", this.onEnd);
     this.stream.off("error", this.onError);
   }
-}
-
-function parseServerVersion(banner: Buffer): { minor: number; reply: Buffer } {
-  const match = /^RFB 003\.(\d{3})\n$/u.exec(banner.toString("ascii"));
-  if (!match) {
-    throw new Error(`unsupported RFB protocol version ${JSON.stringify(banner.toString("ascii"))}`);
-  }
-  const offeredMinor = Number.parseInt(match[1] ?? "", 10);
-  if (offeredMinor === 889 || offeredMinor >= 7) {
-    return { minor: 8, reply: RFB_3_8_VERSION };
-  }
-  return { minor: 3, reply: RFB_3_3_VERSION };
 }
 
 async function readReason(peer: RfbPreauthPeer, signal: AbortSignal): Promise<string> {
@@ -358,7 +346,10 @@ async function negotiateServer(params: {
     throw new Error("ARD account username and password are required");
   }
   const banner = await params.peer.readExactly(RFB_VERSION_BYTES, params.signal);
-  const version = parseServerVersion(banner);
+  const version = parseRfbVersionBanner(banner);
+  if (version.kind !== "rfb") {
+    throw new Error(`unsupported RFB protocol version ${JSON.stringify(version.banner)}`);
+  }
   await params.peer.write(version.reply, params.signal);
   const requiredType = params.preauth.auth === "ard-account" ? RFB_SECURITY_ARD : RFB_SECURITY_VNC;
   await selectSecurityType({

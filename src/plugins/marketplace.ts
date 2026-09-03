@@ -20,6 +20,7 @@ import { resolveUserPath } from "../utils.js";
 import { isImmutableGitCommitRef } from "./git-install.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
 import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
+import type { PluginInstallArtifactConsentHandler } from "./install-types.js";
 import { installPluginFromPath, type InstallPluginResult } from "./install.js";
 
 const DEFAULT_GIT_TIMEOUT_MS = 120_000;
@@ -1287,6 +1288,8 @@ export async function installPluginFromMarketplace(
     extensionsDir?: string;
     dryRun?: boolean;
     expectedPluginId?: string;
+    onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
+    beforePersistentApply?: () => void;
   },
 ): Promise<MarketplaceInstallResult> {
   const loaded = await loadMarketplace({
@@ -1337,6 +1340,8 @@ export async function installPluginFromMarketplace(
         timeoutMs: params.timeoutMs,
         dryRun: params.dryRun,
         expectedPluginId: params.expectedPluginId,
+        onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
+        beforePersistentApply: params.beforePersistentApply,
         installPolicyRequest: {
           kind: marketplaceInstallPolicyRequestKind({
             marketplaceOrigin: loaded.marketplace.origin,

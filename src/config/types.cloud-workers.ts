@@ -5,6 +5,8 @@ export type CloudWorkerProfileConfig = {
   provider: string;
   /** Worker install method (default: bundle); npm requires a released gateway version. */
   install?: "bundle" | "npm";
+  /** Reclaim an idle worker after this duration; omitted profiles stay running. */
+  suspendAfter?: string;
   /** Provider-owned JSON settings; secret-bearing fields use SecretRef objects. */
   settings?: Record<string, unknown>;
 };

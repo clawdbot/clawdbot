@@ -38,14 +38,19 @@ struct GatewayErrorsTests {
         #expect(!unrelated.isAuthorizationFailure)
     }
 
-    @Test func `bootstrap token invalid is non recoverable`() {
-        let error = GatewayConnectAuthError(
-            message: "setup code expired",
-            detailCode: GatewayConnectAuthDetailCode.authBootstrapTokenInvalid.rawValue,
-            canRetryWithDeviceToken: false)
+    @Test func `terminal auth errors are non recoverable`() {
+        for detail in [
+            GatewayConnectAuthDetailCode.authBootstrapTokenInvalid,
+            .authVerifiedUserRequired,
+        ] {
+            let error = GatewayConnectAuthError(
+                message: "authentication failed",
+                detailCode: detail.rawValue,
+                canRetryWithDeviceToken: false)
 
-        #expect(error.isNonRecoverable)
-        #expect(error.detail == .authBootstrapTokenInvalid)
+            #expect(error.isNonRecoverable)
+            #expect(error.detail == detail)
+        }
     }
 
     @Test func `connect auth error preserves structured metadata`() {
@@ -171,6 +176,27 @@ struct GatewayErrorsTests {
         #expect(problem == Self.transportProblem(
             kind: .connectionRefused,
             technicalDetails: "connection refused"))
+    }
+
+    @Test(arguments: [
+        ("INVALID_REQUEST", 3, 4...4, true),
+        ("INVALID_REQUEST", 3, 3...4, false),
+        ("INVALID_REQUEST", 5, 3...4, true),
+        ("PROTOCOL_MISMATCH", 4, 4...4, true),
+        ("AUTH_TOKEN_MISSING", 5, 4...4, false),
+    ])
+    func `protocol mismatch respects the advertised role range`(
+        detailCode: String,
+        expected: Int,
+        supported: ClosedRange<Int>,
+        mismatch: Bool)
+    {
+        let error = GatewayConnectAuthError(
+            message: "rejected",
+            detailCode: detailCode,
+            canRetryWithDeviceToken: false,
+            expectedProtocol: expected)
+        #expect(error.isProtocolMismatch(supportedProtocols: supported) == mismatch)
     }
 
     @Test func `protocol mismatch maps older app to update problem`() {

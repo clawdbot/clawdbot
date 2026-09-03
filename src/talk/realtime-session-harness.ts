@@ -199,6 +199,12 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
   };
 
   const claimResponseEvent = (event: RealtimeVoiceBridgeEvent): void => {
+    if (event.direction === "client" && event.type === "response.create") {
+      // A rejected request has no response.created event. Admit its turn now while
+      // retaining the previous response's terminal fencing until the server accepts it.
+      responseOwnerTurnId = ensureTurn();
+      return;
+    }
     if (event.direction !== "server" || event.type !== "response.created") {
       return;
     }

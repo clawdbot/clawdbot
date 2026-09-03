@@ -21,6 +21,7 @@ import {
   type ChannelSetupInput,
 } from "openclaw/plugin-sdk/channel-setup";
 import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
@@ -84,6 +85,7 @@ const smsConfigAdapter = createHybridChannelConfigAdapter<ResolvedSmsAccount>({
     "dmPolicy",
     "allowFrom",
     "textChunkLimit",
+    "mediaMaxMb",
   ],
   resolveAllowFrom: (account) => account.allowFrom,
   formatAllowFrom: (allowFrom) =>
@@ -365,9 +367,13 @@ const smsMessageAdapter = defineChannelMessageAdapter({
           return;
         }
         const attemptToken = resolveSmsAttachmentAttemptToken(ctx.attemptToken);
-        // Core can fail after staging but before the adapter starts. Discard only
-        // while the attempt still proves Twilio's HTTP boundary was never crossed.
-        if (!attemptToken || attemptToken.platformDispatchStarted) {
+        // The durable marker precedes Twilio's final credential fence. A typed
+        // rejection still proves the HTTP boundary was never crossed.
+        if (
+          !attemptToken ||
+          (attemptToken.platformDispatchStarted &&
+            !(ctx.error instanceof PlatformMessageNotDispatchedError))
+        ) {
           return;
         }
         await attemptToken.attempt.cleanupHostedMedia();

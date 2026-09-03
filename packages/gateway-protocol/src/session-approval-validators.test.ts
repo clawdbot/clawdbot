@@ -23,7 +23,11 @@ const approval = {
   expiresAtMs: 1_780_001_800_000,
 } as const;
 
-const pending = { ...approval, status: "pending" } as const;
+const pending = {
+  ...approval,
+  status: "pending",
+  sourceSessionKey: "agent:worker:subagent:child",
+} as const;
 const terminal = {
   ...approval,
   status: "denied",

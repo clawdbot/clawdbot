@@ -2,6 +2,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { icons } from "../../../components/icons.ts";
 import { renderPanelEmptyState } from "../../../components/panel-empty-state.ts";
+import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-skeleton.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { partitionTasks } from "../../../lib/tasks/data.ts";
@@ -110,12 +111,12 @@ export function renderBackgroundTasksRail(
         ? html`<div class="chat-tasks-rail__state">${t("tasksPage.disconnected")}</div>`
         : nothing}
       ${backgroundTasks.error
-        ? html`<div class="chat-tasks-rail__state chat-tasks-rail__state--error">
+        ? html`<div class="chat-tasks-rail__state chat-tasks-rail__state--error" role="alert">
             ${backgroundTasks.error}
           </div>`
         : nothing}
       ${backgroundTasks.loading && !loaded
-        ? html`<div class="chat-tasks-rail__state">${t("chat.backgroundTasks.loading")}</div>`
+        ? renderPanelLoadingSkeleton("tasks", t("chat.backgroundTasks.loading"))
         : nothing}
       ${empty
         ? renderPanelEmptyState({

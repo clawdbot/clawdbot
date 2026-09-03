@@ -20,6 +20,7 @@ import {
   notifyDiscordActiveTurnThreadCreated,
   notifyDiscordActiveTurnThreadReplyDelivered,
 } from "../active-turn-thread-route.js";
+import { coerceDiscordComponentParam } from "../components.js";
 import { discordInboundEventDelivery } from "../inbound-event-delivery.js";
 import {
   DISCORD_PRESENTATION_CAPABILITIES,
@@ -193,8 +194,9 @@ export async function handleDiscordMessageAction(
       readStringParam(params, "path", { trim: false }) ??
       readStringParam(params, "filePath", { trim: false });
     const requestedContent = readStringParam(params, "message", { allowEmpty: true });
+    const explicitComponents = coerceDiscordComponentParam(params.components);
     const presentation =
-      params.components == null ? normalizeMessagePresentation(params.presentation) : undefined;
+      explicitComponents == null ? normalizeMessagePresentation(params.presentation) : undefined;
     const adaptedPresentation = presentation
       ? adaptMessagePresentationForChannel({
           presentation,
@@ -216,28 +218,28 @@ export async function handleDiscordMessageAction(
     );
     const rawComponents = presentationFellBack
       ? undefined
-      : (params.components ??
+      : (explicitComponents ??
         presentationComponents ??
         buildDiscordInteractiveComponents(normalizeLegacyInteractiveReply(params.interactive)));
     const hasComponents =
       Boolean(rawComponents) &&
       (typeof rawComponents === "function" || typeof rawComponents === "object");
     const components = hasComponents ? rawComponents : undefined;
+    const rawEmbeds = params.embeds;
+    const embeds = Array.isArray(rawEmbeds) ? rawEmbeds : undefined;
     const content = readStringParam(params, "message", {
-      required: !asVoice && !hasComponents && !mediaUrl && !presentationFellBack,
+      required: !asVoice && !hasComponents && !embeds?.length && !mediaUrl && !presentationFellBack,
       allowEmpty: true,
     });
     const deliveryContent =
-      presentationFellBack && adaptedPresentation
+      presentationFellBack && presentation
         ? renderMessagePresentationFallbackText({
             text: content,
-            presentation: adaptedPresentation,
+            presentation,
           })
         : content;
     const filename = readStringParam(params, "filename");
     const replyTo = readStringParam(params, "replyTo");
-    const rawEmbeds = params.embeds;
-    const embeds = Array.isArray(rawEmbeds) ? rawEmbeds : undefined;
     const silent = readBooleanParam(params, "silent") === true;
     const suppressEmbeds = readBooleanParam(params, "suppressEmbeds");
     const sessionKey = readStringParam(params, "__sessionKey");
@@ -275,6 +277,12 @@ export async function handleDiscordMessageAction(
       readStringParam(params, "path", { trim: false }) ??
       readStringParam(params, "media", { trim: false });
     if (!mediaUrl) {
+      // Buffer attachments are send-only; upload-file covers existing file/media sources.
+      if (readStringParam(params, "buffer", { trim: false })) {
+        throw new Error(
+          'Use action: "send" for base64 buffer attachments; upload-file requires filePath, path, or media.',
+        );
+      }
       throw new Error("upload-file requires filePath, path, or media.");
     }
     const content =
@@ -477,6 +485,7 @@ export async function handleDiscordMessageAction(
         to,
         stickerIds,
         content: readStringParam(params, "message"),
+        ...(readBooleanParam(params, "silent") === true ? { silent: true } : {}),
       },
       cfg,
       actionOptions,

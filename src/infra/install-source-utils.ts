@@ -9,7 +9,7 @@ import {
   satisfies as satisfiesSemver,
   validRange as validSemverRange,
 } from "semver";
-import { runCommandWithTimeout } from "../process/exec.js";
+import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveArchiveKind } from "./archive.js";
 import { pathExists } from "./fs-safe.js";
@@ -17,6 +17,24 @@ import { applyNpmFreshnessBypassEnv, type NpmProjectInstallEnvOptions } from "./
 import { resolveNpmJsonEntries } from "./npm-registry-spec.js";
 import { withTempWorkspace } from "./private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
+
+export function formatNpmCommandFailureOutput(result: SpawnResult): string {
+  const detail = result.stderr.trim() || result.stdout.trim();
+  if (detail) {
+    return detail;
+  }
+  // Timeouts normalize to exit code 124; retain the owner-recorded cause.
+  if (result.termination === "timeout" || result.termination === "no-output-timeout") {
+    return `termination ${result.termination} (no output from npm)`;
+  }
+  if (result.termination === "exit" && result.code !== null) {
+    return `exit code ${result.code} (no output from npm)`;
+  }
+  if (result.signal) {
+    return `signal ${result.signal} (no output from npm)`;
+  }
+  return `termination ${result.termination} (no output from npm)`;
+}
 
 /** Metadata npm reports when resolving a registry spec or packed archive. */
 export type NpmSpecResolution = {
@@ -157,7 +175,7 @@ export async function resolveNpmSpecMetadata(params: {
     },
   );
   if (res.code !== 0) {
-    const raw = res.stderr.trim() || res.stdout.trim();
+    const raw = formatNpmCommandFailureOutput(res);
     if (/E404|is not in this registry/i.test(raw)) {
       return {
         ok: false,
@@ -373,7 +391,7 @@ export async function packNpmSpecToArchive(params: {
     },
   );
   if (res.code !== 0) {
-    const raw = res.stderr.trim() || res.stdout.trim();
+    const raw = formatNpmCommandFailureOutput(res);
     if (/E404|is not in this registry/i.test(raw)) {
       return {
         ok: false,
@@ -449,7 +467,7 @@ export async function resolveNpmPackArchiveMetadata(params: {
   if (res.code !== 0) {
     return {
       ok: false,
-      error: `npm pack metadata read failed: ${res.stderr.trim() || res.stdout.trim()}`,
+      error: `npm pack metadata read failed: ${formatNpmCommandFailureOutput(res)}`,
     };
   }
 

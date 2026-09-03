@@ -7,6 +7,11 @@ import OSLog
 @MainActor
 @Observable
 final class CronJobsStore {
+    enum Consumer: Hashable {
+        case statusMenu
+        case settings
+    }
+
     static let shared = CronJobsStore()
 
     var jobs: [CronJob] = []
@@ -22,12 +27,14 @@ final class CronJobsStore {
     var lastError: String?
     var statusMessage: String?
 
+    @ObservationIgnored private var consumers: Set<Consumer> = []
     private let logger = Logger(subsystem: "ai.openclaw", category: "cron.ui")
     private var refreshTask: Task<Void, Never>?
     private var runsTask: Task<Void, Never>?
     private var eventTask: Task<Void, Never>?
     private var pollTask: Task<Void, Never>?
     private var runsGeneration: UInt64 = 0
+    private var jobsGeneration: UInt64 = 0
 
     private let gateway: GatewayConnection
     private let interval: TimeInterval = 30
@@ -38,8 +45,12 @@ final class CronJobsStore {
         self.isPreview = isPreview
     }
 
-    func start() {
-        guard !self.isPreview, self.eventTask == nil else { return }
+    func start(_ consumer: Consumer) {
+        guard !self.isPreview, self.consumers.insert(consumer).inserted else { return }
+        guard self.eventTask == nil else {
+            self.scheduleRefresh(delayMs: 0)
+            return
+        }
         self.eventTask = Task { [weak self, gateway] in
             for await push in await gateway.subscribe() {
                 guard !Task.isCancelled, let self else { return }
@@ -51,27 +62,44 @@ final class CronJobsStore {
         }
     }
 
-    func stop() {
+    func stop(_ consumer: Consumer) {
+        self.consumers.remove(consumer)
+        // Settings owns history; either visible surface can keep job updates alive.
+        if consumer == .settings || self.consumers.isEmpty {
+            self.invalidateRuns()
+        }
+        guard self.consumers.isEmpty else { return }
+        self.jobsGeneration &+= 1
+        self.isLoadingJobs = false
         SimpleTaskSupport.stop(task: &self.refreshTask)
-        self.invalidateRuns()
         SimpleTaskSupport.stop(task: &self.eventTask)
         SimpleTaskSupport.stop(task: &self.pollTask)
     }
 
     func refreshJobs() async {
-        guard !self.isLoadingJobs else { return }
+        guard !self.isLoadingJobs, !Task.isCancelled else { return }
+        // Manual and scheduled refreshes share the active consumers' lifetime; the final
+        // stop also invalidates callers whose task is not owned by this store.
+        self.jobsGeneration &+= 1
+        let generation = self.jobsGeneration
         self.isLoadingJobs = true
         self.lastError = nil
         self.statusMessage = nil
-        defer { self.isLoadingJobs = false }
+        defer {
+            if self.jobsGeneration == generation { self.isLoadingJobs = false }
+        }
 
         do {
-            if let status = try? await self.gateway.cronStatus() {
+            let status = try? await self.gateway.cronStatus()
+            guard self.jobsGeneration == generation, !Task.isCancelled else { return }
+            let jobs = try await self.gateway.cronList(includeDisabled: true)
+            guard self.jobsGeneration == generation, !Task.isCancelled else { return }
+            if let status {
                 self.schedulerEnabled = status.enabled
                 self.schedulerStorePath = status.sqlitePath ?? status.storePath
                 self.schedulerNextWakeAtMs = status.nextWakeAtMs
             }
-            self.jobs = try await self.gateway.cronList(includeDisabled: true)
+            self.jobs = jobs
             if let selectedJobId = self.selectedJobId,
                !self.jobs.contains(where: { $0.id == selectedJobId })
             {
@@ -81,6 +109,7 @@ final class CronJobsStore {
                 self.statusMessage = "No cron jobs yet."
             }
         } catch {
+            guard self.jobsGeneration == generation, !Task.isCancelled else { return }
             self.logger.error("cron.list failed \(error.localizedDescription, privacy: .public)")
             self.lastError = error.localizedDescription
         }
@@ -179,13 +208,20 @@ final class CronJobsStore {
     private func handle(cronEvent evt: CronEvent) {
         // Keep UI in sync with the gateway scheduler.
         self.scheduleRefresh(delayMs: 250)
-        if evt.action == "finished", let selected = self.selectedJobId, selected == evt.jobId {
+        if self.consumers.contains(.settings), evt.action == "finished",
+           let selected = self.selectedJobId, selected == evt.jobId
+        {
             self.refreshRuns(jobId: selected, delay: 0.2)
         }
     }
 
     private func scheduleRefresh(delayMs: Int = 250) {
-        SimpleTaskSupport.schedule(task: &self.refreshTask, delay: TimeInterval(delayMs) / 1000) { [weak self] in
+        let previousTask = self.refreshTask
+        previousTask?.cancel()
+        self.refreshTask = Task { [weak self] in
+            // Even a canceled debounce must drain its predecessor before a replacement can refresh.
+            await previousTask?.value
+            guard await SimpleTaskSupport.waitForNextOperation(interval: TimeInterval(delayMs) / 1000) else { return }
             await self?.refreshJobs()
         }
     }
@@ -206,3 +242,35 @@ final class CronJobsStore {
         self.isLoadingRuns = false
     }
 }
+
+#if DEBUG
+extension CronJobsStore {
+    /// Screenshot/demo helper (OPENCLAW_DEBUG_MENU_FIXTURES=1): synthetic jobs
+    /// so menu captures show populated automation rows without a gateway.
+    func seedDebugFixtureJobs() {
+        let now = Int(Date().timeIntervalSince1970 * 1000)
+        func job(_ id: String, _ name: String, nextInMinutes: Int) -> CronJob {
+            CronJob(
+                id: id,
+                agentId: nil,
+                name: name,
+                description: nil,
+                enabled: true,
+                deleteAfterRun: nil,
+                createdAtMs: now,
+                updatedAtMs: now,
+                schedule: .at(at: "2099-01-01T00:00:00Z"),
+                sessionTarget: CronSessionTarget.main,
+                wakeMode: .now,
+                payload: .systemEvent(text: "fixture"),
+                delivery: nil,
+                state: CronJobState(nextRunAtMs: now + nextInMinutes * 60000))
+        }
+        self.jobs = [
+            job("fixture-1", "Morning Brief", nextInMinutes: 13),
+            job("fixture-2", "Inbox Sweep With A Deliberately Long Name", nextInMinutes: 180),
+            job("fixture-3", "Weekly Digest", nextInMinutes: 720),
+        ]
+    }
+}
+#endif

@@ -1,12 +1,12 @@
 /** Race preparation and bridge work against the same guest-owned deadline. */
 export async function awaitCodeModeDeadline<T>(params: {
   operation: () => Promise<T>;
-  deadlineMs: number;
+  remainingMs: number;
   signal?: AbortSignal;
   createTimeoutError: () => Error;
   createAbortError: (signal: AbortSignal) => Error;
 }): Promise<T> {
-  const remainingMs = params.deadlineMs - Date.now();
+  const { remainingMs } = params;
   if (remainingMs <= 0) {
     throw params.createTimeoutError();
   }

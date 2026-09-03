@@ -3,6 +3,8 @@ import type {
   SystemAgentChatResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
+import { appendTranscriptTurn } from "../../system-agent/transcript-store.js";
+import type { GatewaySystemAgentSession } from "./shared-types.js";
 
 type SystemAgentChatReply = Awaited<ReturnType<SystemAgentChatEngine["handle"]>>;
 type SystemAgentChatEngineInput = Pick<
@@ -92,7 +94,6 @@ export async function runSystemAgentChatInput(params: {
 export function buildSystemAgentChatResult(params: {
   sessionId: string;
   reply: SystemAgentChatReply;
-  proposalId?: string;
 }): SystemAgentChatResult {
   const action =
     params.reply.action === "open-tui"
@@ -120,6 +121,16 @@ export function buildSystemAgentChatResult(params: {
     ...(params.reply.wizardInputPending === true ? { wizardInputPending: true } : {}),
     ...(params.reply.question ? { question: params.reply.question } : {}),
     ...(params.reply.step ? { step: params.reply.step } : {}),
-    ...(params.proposalId ? { needsApproval: true, proposalId: params.proposalId } : {}),
   };
+}
+
+export function persistSystemAgentEngineHistory(
+  engine: GatewaySystemAgentSession["engine"],
+  startIndex: number,
+): void {
+  const at = Date.now();
+  for (const turn of engine.historySince(startIndex)) {
+    // Engine history has already masked sensitive user input.
+    appendTranscriptTurn({ ...turn, at });
+  }
 }

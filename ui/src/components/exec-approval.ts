@@ -1,14 +1,17 @@
 // Control UI modal presents approvals after an explicit operator action.
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, query, state } from "lit/decorators.js";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
 import { t } from "../i18n/index.ts";
-import { resolveAsciiShortcutKey } from "../lib/keyboard-shortcuts.ts";
+import {
+  KEYBOARD_SHORTCUT_COMBOS,
+  matchesShortcutCombo,
+} from "../lib/keyboard-shortcut-catalog.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import {
   approvalRemainingLabel,
   approvalTitle,
+  compactApprovalCommand,
   renderExecApprovalCard,
   resolveApprovalDecisions,
 } from "./exec-approval-card.ts";
@@ -23,11 +26,6 @@ type ExecApprovalProps = {
   onDecision: (approvalId: string, decision: ExecApprovalDecision) => void | Promise<void>;
 };
 
-function compactCommand(command: string): string {
-  const singleLine = command.replace(/\s+/g, " ").trim();
-  return singleLine.length > 64 ? `${truncateUtf16Safe(singleLine, 61)}…` : singleLine;
-}
-
 function renderApprovalQueueList(params: {
   queue: readonly ExecApprovalRequest[];
   activeId: string;
@@ -41,7 +39,7 @@ function renderApprovalQueueList(params: {
     <div class="exec-approval-list" aria-label=${t("execApproval.otherPending")}>
       <div class="exec-approval-list__heading">${t("execApproval.otherPending")}</div>
       ${others.map((entry) => {
-        const command = compactCommand(entry.request.command);
+        const command = compactApprovalCommand(entry.request.command);
         const agent = entry.request.agentId?.trim() || "—";
         return html`
           <button
@@ -80,14 +78,16 @@ function keyEventComesFromTextEntry(event: KeyboardEvent): boolean {
 // when it opens, so a bare letter typed mid-sentence into the composer could
 // otherwise approve a command the user never read.
 function shortcutDecision(event: KeyboardEvent): ExecApprovalDecision | null {
-  const hasModChord = (event.metaKey || event.ctrlKey) && !event.altKey;
-  if (!hasModChord || keyEventComesFromTextEntry(event)) {
+  if (keyEventComesFromTextEntry(event)) {
     return null;
   }
-  if (event.key === "Enter") {
-    return event.shiftKey ? "allow-always" : "allow-once";
+  if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.approveAlways, event)) {
+    return "allow-always";
   }
-  return !event.shiftKey && resolveAsciiShortcutKey(event) === "d" ? "deny" : null;
+  if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.modifiedEnter, event)) {
+    return "allow-once";
+  }
+  return matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.denyApproval, event) ? "deny" : null;
 }
 
 class ExecApproval extends OpenClawLightDomContentsElement {

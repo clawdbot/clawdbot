@@ -22,59 +22,26 @@ const log = createSubsystemLogger("session-suspension");
 const DEFAULT_QUOTA_SUSPENSION_RESUME_MS = 30 * 60 * 1000; // 30 min
 
 type SessionSuspensionRuntimeState = {
-  pendingSuspensionWrites: Map<
-    string,
-    {
-      generation: number;
-      previousQuotaSuspension: QuotaSuspension | undefined;
-      previousSnapshotCaptured: boolean;
-      activeCount: number;
-    }
-  >;
   suspensionWriteChain: Promise<void>;
   cleanupGeneration: number;
   cleanupActive: boolean;
 };
 
 /**
- * Keep timer shutdown state process-global so bundled gateway chunks cannot
- * leave one module copy scheduling lane resumes after another copy cleaned up.
+ * Bundled gateway chunks share one write queue and shutdown fence so one
+ * module copy cannot persist a suspension after another copy cleaned up.
  */
 const SESSION_SUSPENSION_STATE_KEY = Symbol.for("openclaw.sessionSuspensionRuntimeState");
 
 function getSessionSuspensionState(): SessionSuspensionRuntimeState {
-  const state = resolveGlobalSingleton<SessionSuspensionRuntimeState>(
+  return resolveGlobalSingleton<SessionSuspensionRuntimeState>(
     SESSION_SUSPENSION_STATE_KEY,
     () => ({
-      pendingSuspensionWrites: new Map<
-        string,
-        {
-          generation: number;
-          previousQuotaSuspension: QuotaSuspension | undefined;
-          previousSnapshotCaptured: boolean;
-          activeCount: number;
-        }
-      >(),
       suspensionWriteChain: Promise.resolve(),
       cleanupGeneration: 0,
       cleanupActive: false,
     }),
   );
-  if (!state.pendingSuspensionWrites) {
-    state.pendingSuspensionWrites = new Map<
-      string,
-      {
-        generation: number;
-        previousQuotaSuspension: QuotaSuspension | undefined;
-        previousSnapshotCaptured: boolean;
-        activeCount: number;
-      }
-    >();
-  }
-  if (state.suspensionWriteChain === undefined) {
-    state.suspensionWriteChain = Promise.resolve();
-  }
-  return state;
 }
 
 const deferredSessionSuspension = new AsyncLocalStorage<{
@@ -181,28 +148,7 @@ async function suspendSessionQueued(params: SessionSuspensionParams, queuedGener
     return;
   }
   const suspensionGeneration = state.cleanupGeneration;
-  const pendingWriteKey = `${storePath}\0${sessionKey}`;
-  const existingPendingWrite = state.pendingSuspensionWrites.get(pendingWriteKey);
-  const pendingWrite =
-    existingPendingWrite?.generation === suspensionGeneration
-      ? existingPendingWrite
-      : {
-          generation: suspensionGeneration,
-          previousQuotaSuspension: undefined as QuotaSuspension | undefined,
-          previousSnapshotCaptured: false,
-          activeCount: 0,
-        };
-  pendingWrite.activeCount += 1;
-  state.pendingSuspensionWrites.set(pendingWriteKey, pendingWrite);
-  const releasePendingWrite = () => {
-    pendingWrite.activeCount -= 1;
-    if (
-      pendingWrite.activeCount <= 0 &&
-      getSessionSuspensionState().pendingSuspensionWrites.get(pendingWriteKey) === pendingWrite
-    ) {
-      getSessionSuspensionState().pendingSuspensionWrites.delete(pendingWriteKey);
-    }
-  };
+  let previousQuotaSuspension: QuotaSuspension | undefined;
   // Assigned at the end of the try; the catch path returns, so every read
   // below sees the real patch outcome.
   let persistedSuspension: boolean;
@@ -214,10 +160,7 @@ async function suspendSessionQueued(params: SessionSuspensionParams, queuedGener
         if (getSessionSuspensionState().cleanupGeneration !== suspensionGeneration) {
           return null;
         }
-        if (!pendingWrite.previousSnapshotCaptured) {
-          pendingWrite.previousQuotaSuspension = entry.quotaSuspension;
-          pendingWrite.previousSnapshotCaptured = true;
-        }
+        previousQuotaSuspension = entry.quotaSuspension;
         return {
           quotaSuspension: {
             schemaVersion: 1,
@@ -239,7 +182,6 @@ async function suspendSessionQueued(params: SessionSuspensionParams, queuedGener
       sessionId: params.sessionId,
       error: err instanceof Error ? err.message : String(err),
     });
-    releasePendingWrite();
     return;
   }
 
@@ -256,7 +198,7 @@ async function suspendSessionQueued(params: SessionSuspensionParams, queuedGener
           entry.quotaSuspension.reason === params.reason &&
           entry.quotaSuspension.failedProvider === params.failedProvider &&
           entry.quotaSuspension.failedModel === params.failedModel
-            ? { quotaSuspension: pendingWrite.previousQuotaSuspension }
+            ? { quotaSuspension: previousQuotaSuspension }
             : null,
         {
           skipMaintenance: true,
@@ -269,11 +211,7 @@ async function suspendSessionQueued(params: SessionSuspensionParams, queuedGener
         error: err instanceof Error ? err.message : String(err),
       });
     }
-    releasePendingWrite();
-    return;
   }
-
-  releasePendingWrite();
 }
 
 function resetSessionSuspensionStateForTest(): void {
@@ -281,7 +219,6 @@ function resetSessionSuspensionStateForTest(): void {
   // Invalidate in-flight writes before clearing test state. Rewinding to a
   // reused generation lets a fire-and-forget suspension regain ownership.
   state.cleanupGeneration += 1;
-  state.pendingSuspensionWrites.clear();
   state.suspensionWriteChain = Promise.resolve();
   state.cleanupActive = false;
 }

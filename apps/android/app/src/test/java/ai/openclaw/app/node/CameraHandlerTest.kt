@@ -55,7 +55,7 @@ class CameraHandlerTest {
 
     val error =
       assertThrows(IllegalStateException::class.java) {
-        runBlocking { CameraCaptureManager(app).clip("""{"includeAudio":false}""") }
+        runBlocking { CameraCaptureManager(app).clip("""{"includeAudio":false}""") {} }
       }
 
     assertEquals("CAMERA_PERMISSION_REQUIRED: grant Camera permission", error.message)
@@ -70,7 +70,7 @@ class CameraHandlerTest {
 
     val error =
       assertThrows(IllegalStateException::class.java) {
-        runBlocking { camera.clip("""{"includeAudio":true}""") }
+        runBlocking { camera.clip("""{"includeAudio":true}""") {} }
       }
 
     assertEquals("MIC_PERMISSION_REQUIRED: grant Microphone permission", error.message)
@@ -85,7 +85,6 @@ class CameraHandlerTest {
           appContext = app,
           camera = CameraCaptureManager(app),
           setCameraAudioCaptureActive = { false },
-          showCameraHud = { _, _, _ -> },
           invokeErrorFromThrowable = { "UNAVAILABLE" to (it.message ?: "camera failed") },
         )
 
@@ -160,7 +159,7 @@ class CameraHandlerTest {
       session.ownRecording(AutoCloseable { cleanup += "recording" })
       session.ownFile(tempFile)
 
-      assertSame(tempFile, session.transferFile())
+      assertSame(tempFile, session.transferFile {})
       session.close()
 
       assertEquals(listOf("recording", "unbind"), cleanup)
@@ -168,5 +167,39 @@ class CameraHandlerTest {
     } finally {
       tempFile.delete()
     }
+  }
+
+  @Test
+  fun cameraClipSession_transfersFileToCallerBeforeReleasingOwnership() {
+    val tempFile = File.createTempFile("openclaw-clip-test-", ".mp4")
+    try {
+      val session = CameraClipSession(unbind = {}, deleteTemporaryFile = { it.delete() })
+      session.ownFile(tempFile)
+      var claimedFile: File? = null
+
+      assertSame(tempFile, session.transferFile { claimedFile = it })
+      session.close()
+
+      assertSame(tempFile, claimedFile)
+      assertTrue(tempFile.exists())
+    } finally {
+      tempFile.delete()
+    }
+  }
+
+  @Test
+  fun cameraClipSession_keepsFileWhenCallerCannotClaimOwnership() {
+    val tempFile = File.createTempFile("openclaw-clip-test-", ".mp4")
+    val session = CameraClipSession(unbind = {}, deleteTemporaryFile = { it.delete() })
+    session.ownFile(tempFile)
+
+    val error =
+      assertThrows(IllegalStateException::class.java) {
+        session.transferFile { error("caller already owns a camera clip") }
+      }
+    session.close()
+
+    assertEquals("caller already owns a camera clip", error.message)
+    assertFalse(tempFile.exists())
   }
 }

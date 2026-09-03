@@ -50,6 +50,7 @@ type FinalizableDraftLifecycleParams<TMessageId, TUpdate = string> = Omit<
  */
 export function createFinalizableDraftStreamControls<T = string>(params: {
   throttleMs: number;
+  coalesceInFlight?: boolean;
   isStopped: () => boolean;
   isFinal: () => boolean;
   markStopped: () => void;
@@ -60,6 +61,7 @@ export function createFinalizableDraftStreamControls<T = string>(params: {
 }) {
   const loop = createDraftStreamLoop<T>({
     throttleMs: params.throttleMs,
+    coalesceInFlight: params.coalesceInFlight,
     isStopped: params.isStopped,
     sendOrEditStreamMessage: params.sendOrEditStreamMessage,
     ...(params.emptyValue !== undefined ? { emptyValue: params.emptyValue } : {}),
@@ -110,6 +112,7 @@ export function createFinalizableDraftStreamControls<T = string>(params: {
  */
 export function createFinalizableDraftStreamControlsForState<T = string>(params: {
   throttleMs: number;
+  coalesceInFlight?: boolean;
   state: FinalizableDraftStreamState;
   sendOrEditStreamMessage: (value: T) => Promise<void | boolean>;
   emptyValue?: T;
@@ -117,6 +120,7 @@ export function createFinalizableDraftStreamControlsForState<T = string>(params:
 }) {
   return createFinalizableDraftStreamControls<T>({
     throttleMs: params.throttleMs,
+    coalesceInFlight: params.coalesceInFlight,
     isStopped: () => params.state.stopped,
     isFinal: () => params.state.final,
     markStopped: () => {

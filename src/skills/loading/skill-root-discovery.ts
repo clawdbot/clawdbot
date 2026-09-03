@@ -223,7 +223,7 @@ function hasCandidateSymlinkChild(
   return false;
 }
 
-function isSymlinkPath(filePath: string): boolean {
+export function isSymlinkPath(filePath: string): boolean {
   try {
     return fs.lstatSync(filePath).isSymbolicLink();
   } catch {

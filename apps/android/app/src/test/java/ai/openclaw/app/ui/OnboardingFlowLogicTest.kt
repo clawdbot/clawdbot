@@ -17,7 +17,6 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.util.Base64
 
 class OnboardingFlowLogicTest {
   @Test
@@ -180,21 +179,42 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
-  fun cameraCapabilityStartsOffEvenWhenScannerPermissionWasGranted() {
+  fun deviceCapabilityStartsOffEvenWhenAndroidPermissionWasGranted() {
     assertBooleanCases(
-      false to initialCameraCapabilityEnabled(savedCapabilityEnabled = false, androidCameraPermissionGranted = false),
-      false to initialCameraCapabilityEnabled(savedCapabilityEnabled = false, androidCameraPermissionGranted = true),
-      false to initialCameraCapabilityEnabled(savedCapabilityEnabled = true, androidCameraPermissionGranted = false),
-      true to initialCameraCapabilityEnabled(savedCapabilityEnabled = true, androidCameraPermissionGranted = true),
+      false to initialDeviceCapabilityEnabled(savedCapabilityEnabled = false, androidPermissionGranted = false),
+      false to initialDeviceCapabilityEnabled(savedCapabilityEnabled = false, androidPermissionGranted = true),
+      false to initialDeviceCapabilityEnabled(savedCapabilityEnabled = true, androidPermissionGranted = false),
+      true to initialDeviceCapabilityEnabled(savedCapabilityEnabled = true, androidPermissionGranted = true),
     )
   }
 
   @Test
-  fun cameraPermissionRowDistinguishesAndroidPermissionFromCapabilityOptIn() {
+  fun locationCapabilityRequiresBothTheSavedModeAndAndroidPermission() {
+    listOf(
+      Triple(LocationMode.Off, false, false),
+      Triple(LocationMode.Off, true, false),
+      Triple(LocationMode.WhileUsing, false, false),
+      Triple(LocationMode.WhileUsing, true, true),
+      Triple(LocationMode.Always, false, false),
+      Triple(LocationMode.Always, true, true),
+    ).forEach { (savedMode, androidPermissionGranted, expected) ->
+      assertEquals(
+        "savedMode=$savedMode androidPermissionGranted=$androidPermissionGranted",
+        expected,
+        initialDeviceCapabilityEnabled(
+          savedCapabilityEnabled = savedMode != LocationMode.Off,
+          androidPermissionGranted = androidPermissionGranted,
+        ),
+      )
+    }
+  }
+
+  @Test
+  fun deviceCapabilityRowDistinguishesAndroidPermissionFromCapabilityOptIn() {
     assertEqualsCases(
-      "Not allowed" to cameraPermissionRowStatusText(capabilityEnabled = false, androidCameraPermissionGranted = false).resolveNativeText(),
-      "Off" to cameraPermissionRowStatusText(capabilityEnabled = false, androidCameraPermissionGranted = true).resolveNativeText(),
-      "Enabled" to cameraPermissionRowStatusText(capabilityEnabled = true, androidCameraPermissionGranted = true).resolveNativeText(),
+      "Not allowed" to deviceCapabilityRowStatusText(capabilityEnabled = false, androidPermissionGranted = false).resolveNativeText(),
+      "Off" to deviceCapabilityRowStatusText(capabilityEnabled = false, androidPermissionGranted = true).resolveNativeText(),
+      "Enabled" to deviceCapabilityRowStatusText(capabilityEnabled = true, androidPermissionGranted = true).resolveNativeText(),
     )
   }
 
@@ -207,10 +227,10 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
-  fun cameraPermissionRowTogglesCapabilityWhenAndroidPermissionAlreadyGranted() {
-    assertNull(cameraCapabilityAfterRowTap(currentCapabilityEnabled = false, androidCameraPermissionGranted = false))
-    assertTrue(cameraCapabilityAfterRowTap(currentCapabilityEnabled = false, androidCameraPermissionGranted = true)!!)
-    assertFalse(cameraCapabilityAfterRowTap(currentCapabilityEnabled = true, androidCameraPermissionGranted = true)!!)
+  fun deviceCapabilityRowTogglesOnlyWhenAndroidPermissionAlreadyGranted() {
+    assertNull(deviceCapabilityAfterRowTap(currentCapabilityEnabled = false, androidPermissionGranted = false))
+    assertTrue(deviceCapabilityAfterRowTap(currentCapabilityEnabled = false, androidPermissionGranted = true)!!)
+    assertFalse(deviceCapabilityAfterRowTap(currentCapabilityEnabled = true, androidPermissionGranted = true)!!)
   }
 
   @Test
@@ -219,12 +239,39 @@ class OnboardingFlowLogicTest {
       PermissionApprovalCase(expected = true, requestedCameraEnabled = true),
       PermissionApprovalCase(expected = true, requestedLocationMode = LocationMode.WhileUsing),
       PermissionApprovalCase(expected = true, currentSmsGranted = false),
+      PermissionApprovalCase(expected = true, requestedSmsGranted = false),
+      PermissionApprovalCase(expected = false),
       PermissionApprovalCase(
         expected = false,
         currentCameraEnabled = true,
         requestedCameraEnabled = true,
         currentLocationMode = LocationMode.WhileUsing,
         requestedLocationMode = LocationMode.WhileUsing,
+      ),
+      PermissionApprovalCase(
+        expected = false,
+        currentLocationMode = LocationMode.Always,
+        requestedLocationMode = LocationMode.Always,
+      ),
+      PermissionApprovalCase(
+        expected = true,
+        currentLocationMode = LocationMode.Always,
+        requestedLocationMode = LocationMode.WhileUsing,
+      ),
+      PermissionApprovalCase(
+        expected = true,
+        currentLocationMode = LocationMode.Always,
+        requestedLocationMode = LocationMode.Off,
+      ),
+      PermissionApprovalCase(
+        expected = true,
+        currentLocationMode = LocationMode.WhileUsing,
+        requestedLocationMode = LocationMode.Always,
+      ),
+      PermissionApprovalCase(
+        expected = true,
+        currentLocationMode = LocationMode.Off,
+        requestedLocationMode = LocationMode.Always,
       ),
     ).forEach { case ->
       assertBoolean(
@@ -235,7 +282,7 @@ class OnboardingFlowLogicTest {
           currentLocationMode = case.currentLocationMode,
           requestedLocationMode = case.requestedLocationMode,
           currentSmsGranted = case.currentSmsGranted,
-          requestedSmsGranted = true,
+          requestedSmsGranted = case.requestedSmsGranted,
         ),
       )
     }
@@ -347,6 +394,22 @@ class OnboardingFlowLogicTest {
         currentlyGranted = { true },
       )
     assertFalse(deniedRead)
+
+    val afterUnrelatedPermission =
+      mergedRequiredPermissionGrantState(
+        permissions = mapOf(Manifest.permission.RECORD_AUDIO to true),
+        requiredPermissions = requiredPermissions,
+        currentlyGranted = { true },
+      )
+    assertTrue(afterUnrelatedPermission)
+
+    val afterUnrelatedPermissionWithSmsDenied =
+      mergedRequiredPermissionGrantState(
+        permissions = mapOf(Manifest.permission.RECORD_AUDIO to true),
+        requiredPermissions = requiredPermissions,
+        currentlyGranted = { false },
+      )
+    assertFalse(afterUnrelatedPermissionWithSmsDenied)
   }
 
   @Test
@@ -627,48 +690,6 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
-  fun recoveryGatewayDetailPreservesRetryablePairingGuidance() {
-    assertEquals(
-      "Gateway approval is in progress. OpenClaw will retry automatically.",
-      recoveryGatewayDetail(
-        ready = false,
-        remoteAddress = null,
-        statusText = "Connected (node offline)",
-        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved,
-        gatewayConnectionProblem = pairingRequiredProblem(retryable = true),
-      ),
-    )
-  }
-
-  @Test
-  fun recoveryGatewayDetailPrefersAuthProblemOverStaleAddressWhenNotReady() {
-    assertEquals(
-      "Saved authentication is invalid. Re-authenticate or reset this gateway connection.",
-      recoveryGatewayDetail(
-        ready = false,
-        remoteAddress = "wss://gateway.example.test",
-        statusText = "Connected (node offline)",
-        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Approved,
-        gatewayConnectionProblem = authProblem(),
-      ),
-    )
-  }
-
-  @Test
-  fun recoveryGatewayDetailPrefersAuthProblemWhileNodeApprovalIsLoading() {
-    assertEquals(
-      "Saved authentication is invalid. Re-authenticate or reset this gateway connection.",
-      recoveryGatewayDetail(
-        ready = false,
-        remoteAddress = "wss://gateway.example.test",
-        statusText = "Connected (node offline)",
-        nodeCapabilityApproval = GatewayNodeCapabilityApproval.Loading,
-        gatewayConnectionProblem = authProblem(),
-      ),
-    )
-  }
-
-  @Test
   fun recoveryGatewayAuthDetailShowsSpecificAuthRecoveryActions() {
     val cases =
       listOf(
@@ -851,60 +872,6 @@ class OnboardingFlowLogicTest {
     )
   }
 
-  @Test
-  fun resolvesOnboardingSetupCodeConnectConfigForScannedQr() {
-    val setupCode =
-      encodeSetupCode("""{"url":"ws://10.0.2.2:18789","bootstrapToken":"bootstrap-1"}""")
-    val scanned = resolveScannedSetupCodeResult(setupCode)
-
-    val plan =
-      resolveOnboardingPlanFixture(
-        setupCode = requireNotNull(scanned.setupCode),
-        token = "stale-shared-token",
-        password = "stale-shared-password",
-      )
-
-    assertEquals(GatewaySavedAuthAction.REPLACE_SETUP, plan?.savedAuthAction)
-    assertEquals("10.0.2.2", plan?.config?.host)
-    assertEquals(18789, plan?.config?.port)
-    assertEquals(false, plan?.config?.tls)
-    assertEquals("bootstrap-1", plan?.config?.bootstrapToken)
-    assertEquals("", plan?.config?.token)
-    assertEquals("", plan?.config?.password)
-    assertNull(scanned.error)
-  }
-
-  @Test
-  fun resolvesOnboardingManualConnectConfigWhenSetupCodeIsBlank() {
-    val plan =
-      resolveOnboardingPlanFixture(
-        token = "shared-token",
-        password = "shared-password",
-      )
-
-    assertEquals(GatewaySavedAuthAction.REPLACE_CREDENTIALS, plan?.savedAuthAction)
-    assertEquals("127.0.0.1", plan?.config?.host)
-    assertEquals(18789, plan?.config?.port)
-    assertEquals(false, plan?.config?.tls)
-    assertEquals("", plan?.config?.bootstrapToken)
-    assertEquals("shared-token", plan?.config?.token)
-    assertEquals("", plan?.config?.password)
-  }
-
-  @Test
-  fun onboardingManualEndpointChangeReplacesSavedGatewayAuth() {
-    val plan =
-      resolveOnboardingPlanFixture(
-        manualHost = "10.0.2.2",
-        manualPort = "18790",
-        token = "replacement-token",
-      )
-
-    assertEquals(GatewaySavedAuthAction.REPLACE_ENDPOINT, plan?.savedAuthAction)
-    assertEquals("10.0.2.2", plan?.config?.host)
-    assertEquals("replacement-token", plan?.config?.token)
-  }
-
   private data class PermissionApprovalCase(
     val expected: Boolean,
     val currentCameraEnabled: Boolean = false,
@@ -912,6 +879,7 @@ class OnboardingFlowLogicTest {
     val currentLocationMode: LocationMode = LocationMode.Off,
     val requestedLocationMode: LocationMode = LocationMode.Off,
     val currentSmsGranted: Boolean = true,
+    val requestedSmsGranted: Boolean = true,
   )
 
   private data class GatewayContinueCase(
@@ -1039,29 +1007,4 @@ class OnboardingFlowLogicTest {
       clientMaxProtocol = clientMax,
       expectedProtocol = expected,
     )
-
-  private fun resolveOnboardingPlanFixture(
-    setupCode: String = "",
-    savedManualHost: String = "127.0.0.1",
-    savedManualPort: String = "18789",
-    savedManualTls: Boolean = false,
-    manualHost: String = "127.0.0.1",
-    manualPort: String = "18789",
-    manualTls: Boolean = false,
-    token: String = "",
-    password: String = "",
-  ): GatewayConnectPlan? =
-    resolveOnboardingGatewayConnectPlan(
-      setupCode = setupCode,
-      savedManualHost = savedManualHost,
-      savedManualPort = savedManualPort,
-      savedManualTls = savedManualTls,
-      manualHost = manualHost,
-      manualPort = manualPort,
-      manualTls = manualTls,
-      token = token,
-      password = password,
-    )
-
-  private fun encodeSetupCode(payloadJson: String): String = Base64.getUrlEncoder().withoutPadding().encodeToString(payloadJson.toByteArray(Charsets.UTF_8))
 }

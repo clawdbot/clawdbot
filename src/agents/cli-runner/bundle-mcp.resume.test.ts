@@ -108,6 +108,14 @@ describe("prepareCliBundleMcpConfig resume hash", () => {
     expect(first.mcpConfigHash).not.toBe(approval.mcpConfigHash);
     expect(first.mcpResumeHash).toBe(approval.mcpResumeHash);
     expect(approval.mcpResumeHash).not.toBe(otherSurface.mcpResumeHash);
+    const delegated = await prepare({
+      surface: "cli",
+      operatorApprovalOnly: true,
+      approvalArmed: true,
+      proposalRef: { current: proposed },
+    });
+    expect(delegated.mcpConfigHash).not.toBe(approval.mcpConfigHash);
+    expect(delegated.mcpResumeHash).toBe(approval.mcpResumeHash);
     const binding = {
       sessionId: "native-cli-session",
       authProfileId: "claude-cli:ops",
@@ -142,5 +150,6 @@ describe("prepareCliBundleMcpConfig resume hash", () => {
     await first.cleanup?.();
     await approval.cleanup?.();
     await otherSurface.cleanup?.();
+    await delegated.cleanup?.();
   });
 });

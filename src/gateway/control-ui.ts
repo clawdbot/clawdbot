@@ -44,15 +44,18 @@ import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistan
 import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
+import type { ControlUiAssetRetention } from "./control-ui-asset-retention.js";
 import {
   buildControlUiResourcePath,
   buildControlUiRootAssetPath,
   CONTROL_UI_BASE_PATH_ATTRIBUTE,
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
+  CONTROL_UI_BUILD_ID_ATTRIBUTE,
   CONTROL_UI_ENVIRONMENT_ATTRIBUTE,
   CONTROL_UI_ROOT_PUBLIC_ASSETS,
   CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE,
   isControlUiRootPublicAsset,
+  isControlUiVersionedPublicAsset,
   parseControlUiResourcePath,
   type ControlUiBootstrapConfig,
   type ControlUiEnvironment,
@@ -71,13 +74,14 @@ import {
 } from "./control-ui-routing.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import {
+  isControlUiFileUnmodified,
   isControlUiPrecompressedAssetExtension,
   isControlUiStaticAssetExtension,
   readAndCloseControlUiFile,
-  readAndCloseControlUiFileText,
   resolveControlUiHtmlEncoding,
   resolveOpenedControlUiRepresentation,
   respondControlUiNotAcceptable,
+  respondControlUiNotModified,
   respondHeadForControlUiFile,
   sendControlUiHtmlBody,
   serveControlUiAsset,
@@ -111,7 +115,13 @@ type ControlUiRequestOptions = {
 };
 
 export type ControlUiRootState =
-  | { kind: "bundled"; path: string; realPath?: string }
+  | {
+      kind: "bundled";
+      path: string;
+      realPath?: string;
+      retainedAssets?: ControlUiAssetRetention;
+      publicAssetBuildId?: string;
+    }
   | { kind: "resolved"; path: string; realPath?: string }
   | { kind: "invalid"; path: string }
   | { kind: "preparing" }
@@ -121,19 +131,24 @@ export type ControlUiRootState =
 
 const CONTROL_UI_NAMESPACE_PREFIX = "/__openclaw__/";
 /** Anchors bundled assets before deep-linked documents begin preloading. */
-function rewriteControlUiIndexHtmlAssetHrefs(html: string, basePath: string): string {
+function rewriteControlUiIndexHtmlAssetHrefs(
+  html: string,
+  basePath: string,
+  buildId?: string,
+): string {
   const normalized = normalizeControlUiBasePath(basePath);
   let next = html
     .replaceAll('src="./assets/', `src="${normalized}/assets/`)
     .replaceAll('href="./assets/', `href="${normalized}/assets/`);
   for (const asset of CONTROL_UI_ROOT_PUBLIC_ASSETS) {
-    const assetHref = `href="${buildControlUiRootAssetPath(normalized, asset)}"`;
+    const version =
+      buildId && isControlUiVersionedPublicAsset(asset) ? `?v=${encodeURIComponent(buildId)}` : "";
+    const assetHref = `href="${buildControlUiRootAssetPath(normalized, asset)}${version}"`;
     // Vite's portable ./ base emits relative hrefs, which the browser starts
     // resolving against a nested route before the UI can correct them.
     next = next.replaceAll(`href="./${asset}"`, assetHref);
-    if (normalized) {
-      next = next.replaceAll(`href="/${asset}"`, assetHref);
-    }
+    next = next.replaceAll(`href="/${asset}"`, assetHref);
+    next = next.replaceAll(`href="${buildControlUiRootAssetPath(normalized, asset)}"`, assetHref);
   }
   return next;
 }
@@ -220,7 +235,7 @@ function normalizeAssistantMediaSource(source: string): string | null {
   if (!trimmed) {
     return null;
   }
-  if (trimmed.startsWith("file://")) {
+  if (/^file:/iu.test(trimmed)) {
     try {
       return safeFileURLToPath(trimmed);
     } catch {
@@ -662,9 +677,10 @@ async function serveResolvedIndexHtml(
   basePath?: string,
   allowWasm?: boolean,
   environment?: ControlUiEnvironment,
+  buildId?: string,
 ) {
   const normalizedBasePath = normalizeControlUiBasePath(basePath);
-  const withBasePath = rewriteControlUiIndexHtmlAssetHrefs(body, normalizedBasePath);
+  const withBasePath = rewriteControlUiIndexHtmlAssetHrefs(body, normalizedBasePath, buildId);
   // An empty base path is authoritative for Gateway resources even when the
   // router infers a namespace. Always emit it so resources stay root-mounted.
   const basePathAttribute = ` ${CONTROL_UI_BASE_PATH_ATTRIBUTE}="${escapeHtmlAttribute(normalizedBasePath)}"`;
@@ -673,9 +689,18 @@ async function serveResolvedIndexHtml(
     : "";
   // Let the app initialize fail-closed without guessing whether this document
   // was served with the terminal's WASM CSP allowance.
-  const prepared = withBasePath.replace(
-    /<html\b/i,
-    `<html${basePathAttribute} ${CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE}="${allowWasm === true}"${environmentAttributes}`,
+  // The lifecycle owns bundled identity. Strip the build stamp for custom roots,
+  // whose files may change independently and must keep revalidating.
+  const buildAttribute = buildId
+    ? ` ${CONTROL_UI_BUILD_ID_ATTRIBUTE}="${escapeHtmlAttribute(buildId)}"`
+    : "";
+  const prepared = withBasePath.replace(/<html\b[^>]*>/i, (tag) =>
+    tag
+      .replace(new RegExp(`\\s${CONTROL_UI_BUILD_ID_ATTRIBUTE}="[^"]*"`, "g"), "")
+      .replace(
+        /<html\b/i,
+        `<html${basePathAttribute} ${CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE}="${allowWasm === true}"${environmentAttributes}${buildAttribute}`,
+      ),
   );
   const hashes = computeInlineScriptHashes(prepared);
   // Always set the document CSP here (the index carries inline scripts) so the
@@ -703,7 +728,7 @@ function resolveSafeControlUiFile(
   rootReal: string,
   filePath: string,
   rejectHardlinks: boolean,
-): { path: string; fd: number; size: number } | null {
+): { path: string; fd: number; size: number; mtimeMs: number } | null {
   const opened = openRootFileSync({
     absolutePath: filePath,
     rootPath: rootReal,
@@ -723,7 +748,7 @@ function resolveSafeControlUiFile(
       fallback: () => null,
     });
   }
-  return { path: opened.path, fd: opened.fd, size: opened.stat.size };
+  return { path: opened.path, fd: opened.fd, size: opened.stat.size, mtimeMs: opened.stat.mtimeMs };
 }
 
 function isSafeRelativePath(relPath: string) {
@@ -874,7 +899,11 @@ export async function handleControlUiHttpRequest(
     const assistantAgentId = resolvedIdentity?.agentId;
     const avatarProjection =
       config && resolvedIdentity
-        ? resolveGatewayAssistantAvatar({ cfg: config, identity: resolvedIdentity })
+        ? resolveGatewayAssistantAvatar({
+            cfg: config,
+            identity: resolvedIdentity,
+            httpBasePath: basePath,
+          })
         : { avatar: identity.avatar, resolution: null };
     const avatarMeta = controlUiAvatarResolutionMeta(avatarProjection.resolution);
     sendJson(res, 200, {
@@ -902,6 +931,7 @@ export async function handleControlUiHttpRequest(
       automaticallyFetchFavicons: config?.gateway?.controlUi?.automaticallyFetchFavicons !== false,
       seamColor: config?.ui?.seamColor,
       environment: config?.gateway?.controlUi?.environment,
+      communityInvite: config?.gateway?.controlUi?.communityInvite !== false,
       terminalEnabled,
       cliAgentsEnabled: config?.gateway?.cliAgents?.enabled === true,
       pluginFrameGrants: pluginFrameGrants.map(({ pluginId, path: grantPath, match }) => ({
@@ -982,7 +1012,14 @@ export async function handleControlUiHttpRequest(
     : rel && !rel.endsWith("/")
       ? rel
       : `${rel}index.html`;
-  const fileRel = requested || "index.html";
+  let fileRel: string;
+  try {
+    // Decode the artifact name once, after route ownership and before path validation.
+    fileRel = decodeURIComponent(requested);
+  } catch {
+    respondControlUiNotFound(res);
+    return true;
+  }
   if (!isSafeRelativePath(fileRel)) {
     respondControlUiNotFound(res);
     return true;
@@ -1006,85 +1043,93 @@ export async function handleControlUiHttpRequest(
   const rejectHardlinks = !isBundledRoot;
   // Vite fingerprints every file emitted under the bundled assets directory.
   // Configured roots remain revalidated because their naming is not our contract.
-  const immutableAsset = isBundledRoot && fileRel.startsWith("assets/");
-  const safeFile = resolveSafeControlUiFile(rootReal, filePath, rejectHardlinks);
-  if (safeFile) {
-    if (path.basename(safeFile.path) === "index.html") {
-      if (req.method === "HEAD") {
-        try {
-          const encoding = resolveControlUiHtmlEncoding(req);
-          if (encoding === "not-acceptable") {
-            respondControlUiNotAcceptable(res);
-            return true;
-          }
-          respondHeadForControlUiFile(res, safeFile.path, {
-            encoding: encoding === "identity" ? undefined : encoding,
-          });
-          return true;
-        } finally {
-          fs.closeSync(safeFile.fd);
-        }
-      }
-      const body = await readAndCloseControlUiFileText(safeFile.fd);
-      await serveResolvedIndexHtml(
-        req,
-        res,
-        body,
-        basePath,
-        terminalEnabled,
-        opts?.config?.gateway?.controlUi?.environment,
-      );
-      return true;
+  const fingerprintedAsset = isBundledRoot && fileRel.startsWith("assets/");
+  const publicAssetBuildId = isBundledRoot ? rootState.publicAssetBuildId : undefined;
+  const immutableAsset =
+    fingerprintedAsset ||
+    Boolean(
+      publicAssetBuildId &&
+      url.searchParams.get("v") === publicAssetBuildId &&
+      isControlUiVersionedPublicAsset(fileRel),
+    );
+  let servingRootReal = rootReal;
+  let rejectRepresentationHardlinks = rejectHardlinks;
+  let safeFile = resolveSafeControlUiFile(rootReal, filePath, rejectHardlinks);
+  if (!safeFile && fingerprintedAsset && rootState.kind === "bundled") {
+    const retained = rootState.retainedAssets?.resolveAsset(fileRel);
+    if (retained) {
+      servingRootReal = retained.rootRealPath;
+      rejectRepresentationHardlinks = true;
+      safeFile = resolveSafeControlUiFile(retained.rootRealPath, retained.filePath, true);
     }
+  }
+  // An index alias still owns document preparation when its physical target has
+  // another name. Preserve existing aliases that resolve to a canonical index too.
+  if (
+    safeFile &&
+    path.basename(fileRel) !== "index.html" &&
+    path.basename(safeFile.path) !== "index.html"
+  ) {
+    // Future filesystem clocks must not make later replacements look unmodified;
+    // clamp to response origination as in resolveByteResponse.
+    const lastModifiedMs = Math.floor(Math.min(safeFile.mtimeMs, Date.now()) / 1_000) * 1_000;
     const representation = resolveOpenedControlUiRepresentation({
       req,
       sourceFile: safeFile,
-      precompressed: immutableAsset,
+      contentPath: fileRel,
+      precompressed: fingerprintedAsset,
       openPrecompressedFile: (compressedPath) =>
-        resolveSafeControlUiFile(rootReal, compressedPath, false),
+        resolveSafeControlUiFile(servingRootReal, compressedPath, rejectRepresentationHardlinks),
     });
     if (!representation) {
       respondControlUiNotAcceptable(res);
       return true;
     }
+    // Negotiation failures precede preconditions; release the selected representation on 304.
+    if (isControlUiFileUnmodified(req, lastModifiedMs)) {
+      fs.closeSync(representation.bodyFile.fd);
+      respondControlUiNotModified(res, { immutable: immutableAsset, lastModifiedMs });
+      return true;
+    }
     if (req.method === "HEAD") {
       try {
-        respondHeadForControlUiFile(res, representation.contentPath, {
+        respondHeadForControlUiFile(res, fileRel, {
           immutable: immutableAsset,
           encoding: representation.encoding,
           contentLength: representation.bodyFile.size,
+          lastModifiedMs,
         });
         return true;
       } finally {
         fs.closeSync(representation.bodyFile.fd);
       }
     }
-    const body = await readAndCloseControlUiFile(representation.bodyFile.fd);
-    await serveControlUiAsset(res, representation.contentPath, body, {
+    const body = await readAndCloseControlUiFile(representation.bodyFile);
+    await serveControlUiAsset(res, fileRel, body, {
       immutable: immutableAsset,
       encoding: representation.encoding,
+      lastModifiedMs,
     });
     return true;
   }
 
-  // If the requested path looks like a static asset (known extension), return
-  // 404 rather than falling through to the SPA index.html fallback.  We check
-  // against the same extension set used by the static response helper so
-  // that dotted SPA routes (e.g. /user/jane.doe, /v2.0) still get the
-  // client-side router fallback.
-  if (isControlUiStaticAssetExtension(path.extname(fileRel).toLowerCase())) {
-    respondControlUiNotFound(res);
-    return true;
+  if (!safeFile) {
+    // Missing assets stay 404; dotted routes can still use the SPA document.
+    if (isControlUiStaticAssetExtension(path.extname(fileRel).toLowerCase())) {
+      respondControlUiNotFound(res);
+      return true;
+    }
+    if (!route.spaFallback) {
+      return false;
+    }
+    const indexPath = path.resolve(root, "index.html");
+    if (filePath !== indexPath) {
+      safeFile = resolveSafeControlUiFile(rootReal, indexPath, rejectHardlinks);
+    }
   }
 
-  if (!route.spaFallback) {
-    return false;
-  }
-
-  // SPA fallback (client-side router): serve index.html for unknown paths.
-  const indexPath = path.join(root, "index.html");
-  const safeIndex = resolveSafeControlUiFile(rootReal, indexPath, rejectHardlinks);
-  if (safeIndex) {
+  // Direct documents and SPA fallbacks share rewriting, CSP, encoding and fd ownership.
+  if (safeFile) {
     if (req.method === "HEAD") {
       try {
         const encoding = resolveControlUiHtmlEncoding(req);
@@ -1092,15 +1137,15 @@ export async function handleControlUiHttpRequest(
           respondControlUiNotAcceptable(res);
           return true;
         }
-        respondHeadForControlUiFile(res, safeIndex.path, {
+        respondHeadForControlUiFile(res, "index.html", {
           encoding: encoding === "identity" ? undefined : encoding,
         });
         return true;
       } finally {
-        fs.closeSync(safeIndex.fd);
+        fs.closeSync(safeFile.fd);
       }
     }
-    const body = await readAndCloseControlUiFileText(safeIndex.fd);
+    const body = (await readAndCloseControlUiFile(safeFile)).toString("utf8");
     await serveResolvedIndexHtml(
       req,
       res,
@@ -1108,6 +1153,7 @@ export async function handleControlUiHttpRequest(
       basePath,
       terminalEnabled,
       opts?.config?.gateway?.controlUi?.environment,
+      publicAssetBuildId,
     );
     return true;
   }

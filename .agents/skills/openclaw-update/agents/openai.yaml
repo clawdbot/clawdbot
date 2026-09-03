@@ -1,0 +1,3 @@
+interface:
+  display_name: "Update OpenClaw"
+  short_description: "Update a Gateway through its installation owner"

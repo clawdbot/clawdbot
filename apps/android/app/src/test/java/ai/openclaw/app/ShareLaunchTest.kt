@@ -51,6 +51,78 @@ class ShareLaunchTest {
   }
 
   @Test
+  fun preservesIndexedCaptionsAcrossMultipleAttachmentsWithoutRepeatingSubjectOrClipData() {
+    val first = Uri.parse("content://photos/shared/first")
+    val second = Uri.parse("content://photos/shared/second")
+    val parsed =
+      parseShare(
+        Intent(Intent.ACTION_SEND_MULTIPLE)
+          .setType("image/png")
+          .putExtra(Intent.EXTRA_SUBJECT, "  First caption  ")
+          .putCharSequenceArrayListExtra(Intent.EXTRA_TEXT, arrayListOf("First caption", "Second caption"))
+          .putParcelableArrayListExtra(Intent.EXTRA_STREAM, arrayListOf(first, second))
+          .apply {
+            clipData =
+              ClipData("shared", arrayOf("image/png"), ClipData.Item("First caption", null, first)).apply {
+                addItem(ClipData.Item("Second caption", null, second))
+              }
+          },
+      )
+
+    requireNotNull(parsed)
+    assertEquals("First caption\n\nSecond caption", parsed.text)
+    assertEquals(listOf(first, second), parsed.attachments.map(SharedAttachment::uri))
+    assertEquals(0, parsed.droppedAttachmentCount)
+  }
+
+  @Test
+  fun acceptsTextOnlyMultipleShareArrayAtTheExistingParserBoundary() {
+    val parsed =
+      parseShare(
+        Intent(Intent.ACTION_SEND_MULTIPLE)
+          .setType("text/plain")
+          .putCharSequenceArrayListExtra(Intent.EXTRA_TEXT, arrayListOf("First note", "Second note")),
+      )
+
+    requireNotNull(parsed)
+    assertEquals("First note\n\nSecond note", parsed.text)
+    assertEquals(emptyList<SharedAttachment>(), parsed.attachments)
+  }
+
+  @Test
+  fun readsProviderBackedImageCaptionDirectlyFromClipData() {
+    val image = Uri.parse("content://photos/shared/captioned-clip")
+    val parsed =
+      parseShare(
+        Intent(Intent.ACTION_SEND)
+          .setType("image/png")
+          .apply {
+            clipData = ClipData("shared", arrayOf("image/png"), ClipData.Item("Clip caption", null, image))
+          },
+      )
+
+    requireNotNull(parsed)
+    assertEquals("Clip caption", parsed.text)
+    assertEquals(listOf(image), parsed.attachments.map(SharedAttachment::uri))
+  }
+
+  @Test
+  fun preservesLegacyScalarCaptionForMultipleAttachmentSenders() {
+    val image = Uri.parse("content://photos/shared/legacy-caption")
+    val parsed =
+      parseShare(
+        Intent(Intent.ACTION_SEND_MULTIPLE)
+          .setType("image/png")
+          .putExtra(Intent.EXTRA_TEXT, "Legacy scalar caption")
+          .putParcelableArrayListExtra(Intent.EXTRA_STREAM, arrayListOf(image)),
+      )
+
+    requireNotNull(parsed)
+    assertEquals("Legacy scalar caption", parsed.text)
+    assertEquals(listOf(image), parsed.attachments.map(SharedAttachment::uri))
+  }
+
+  @Test
   fun readsProviderBackedImageFromClipData() {
     val image = Uri.parse("content://photos/shared/clip")
     val parsed =
@@ -251,16 +323,16 @@ class ShareLaunchTest {
 
     assertTrue(queue.enqueue(first, owner))
     assertTrue(queue.enqueue(second, owner))
-    assertEquals(first, queue.head.value)
+    assertEquals(listOf(first, second), queue.queued.value)
     assertFalse(queue.acknowledgeHead(second.id, owner))
-    assertEquals(first, queue.head.value)
+    assertEquals(listOf(first, second), queue.queued.value)
 
     runBlocking { assertTrue(queue.withHeadLease(first.id, owner) {}) }
     assertTrue(queue.acknowledgeHead(first.id, owner))
-    assertEquals(second, queue.head.value)
+    assertEquals(listOf(second), queue.queued.value)
     runBlocking { assertTrue(queue.withHeadLease(second.id, owner) {}) }
     assertTrue(queue.acknowledgeHead(second.id, owner))
-    assertNull(queue.head.value)
+    assertTrue(queue.queued.value.isEmpty())
   }
 
   @Test
@@ -273,7 +345,7 @@ class ShareLaunchTest {
     assertTrue(queue.enqueue(first, owner))
     assertFalse(queue.enqueue(overflow, owner))
     assertEquals(1, queue.size())
-    assertEquals(first, queue.head.value)
+    assertEquals(listOf(first), queue.queued.value)
   }
 
   @Test
@@ -287,10 +359,10 @@ class ShareLaunchTest {
       queue.enqueue(first, ownerA)
       queue.enqueue(second, ownerB)
 
-      assertEquals(first, queue.head.value)
+      assertEquals(listOf(first, second), queue.queued.value)
       assertTrue(queue.withHeadLease(second.id, ownerB) {})
       assertTrue(queue.acknowledgeHead(second.id, ownerB))
-      assertEquals(first, queue.head.value)
+      assertEquals(listOf(first), queue.queued.value)
       assertTrue(queue.withHeadLease(first.id, ownerA) {})
     }
 
@@ -327,7 +399,7 @@ class ShareLaunchTest {
       assertTrue(firstLoader.await())
       assertFalse(staleLoader.await())
       assertFalse(staleLoaderRan)
-      assertEquals(next, queue.head.value)
+      assertEquals(listOf(next), queue.queued.value)
     }
 
   @Test

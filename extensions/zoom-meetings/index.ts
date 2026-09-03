@@ -1,6 +1,7 @@
 import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { Type } from "typebox";
+import { ZOOM_MEETINGS_CLI_METADATA } from "./src/cli-output-mode.js";
 import { zoomMeetingsConfig } from "./src/config.js";
 import { ZoomMeetingsInvalidRequestError, zoomMeetingsInvalidRequest } from "./src/errors.js";
 import { handleZoomMeetingsNodeHostCommand } from "./src/node-host.js";
@@ -41,6 +42,7 @@ export default MeetingPlatformAdapter.createPluginShellEntry({
   createNodePolicy: createZoomMeetingsNodeInvokePolicy,
   registerNodeWhen: (config) => config.enabled,
   cli: {
+    descriptor: ZOOM_MEETINGS_CLI_METADATA.descriptor,
     load: async () => (await import("./src/cli.js")).registerZoomMeetingsCli,
   },
 });

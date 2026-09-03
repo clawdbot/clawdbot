@@ -36,6 +36,15 @@ export const SystemInfoResultSchema = closedObject({
   diskTotalBytes: Type.Optional(Type.Integer()),
   diskAvailableBytes: Type.Optional(Type.Integer()),
   diskPath: Type.Optional(Type.String()),
+  disks: Type.Optional(
+    Type.Array(
+      closedObject({
+        path: Type.String({ minLength: 1 }),
+        totalBytes: Type.Integer({ minimum: 1 }),
+        availableBytes: Type.Integer({ minimum: 0 }),
+      }),
+    ),
+  ),
   /** Resolved utility model for the configured default agent. */
   defaultAgentUtilityModel: Type.Optional(UtilityModelStatusSchema),
 });

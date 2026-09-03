@@ -25,6 +25,20 @@ describe("persisted media image layout", () => {
     },
     { name: "filename-only TIFF", media: { path: "/tmp/scan.tiff" }, image: true },
     {
+      name: "separate image filename with opaque source",
+      media: {
+        url: "https://cdn.example.test/download/opaque",
+        fileName: "photo.png",
+        contentType: "application/octet-stream",
+      },
+      image: true,
+    },
+    {
+      name: "separate SVG filename with opaque source",
+      media: { url: "https://cdn.example.test/download/opaque", fileName: "diagram.svg" },
+      image: false,
+    },
+    {
       name: "generic-binary TIFF",
       media: { path: "/tmp/scan.tif", contentType: "application/octet-stream" },
       image: true,

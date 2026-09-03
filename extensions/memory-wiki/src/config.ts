@@ -5,15 +5,11 @@ import path from "node:path";
 // event-store/kysely graph, which doctor enumeration must not cold-load.
 import {
   resolveDefaultAgentId,
-  resolveSessionAgentId,
+  resolveSessionAgentIdStrict,
 } from "openclaw/plugin-sdk/agent-scope-runtime";
-import { mapPluginConfigIssues } from "openclaw/plugin-sdk/extension-shared";
-import {
-  buildPluginConfigSchema,
-  z,
-  type OpenClawPluginConfigSchema,
-  type OpenClawConfig,
-} from "../api.js";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { z } from "zod";
+import type { OpenClawConfig } from "../api.js";
 
 const WIKI_VAULT_MODES = ["isolated", "bridge", "unsafe-local"] as const;
 const WIKI_VAULT_SCOPES = ["global", "agent"] as const;
@@ -127,7 +123,7 @@ const DEFAULT_WIKI_RENDER_MODE: WikiRenderMode = "native";
 const DEFAULT_WIKI_SEARCH_BACKEND: WikiSearchBackend = "shared";
 const DEFAULT_WIKI_SEARCH_CORPUS: WikiSearchCorpus = "wiki";
 
-const MemoryWikiConfigSource = z
+export const MemoryWikiConfigSource = z
   .strictObject({
     vaultMode: z.enum(WIKI_VAULT_MODES).optional(),
     vault: z
@@ -204,26 +200,6 @@ const MemoryWikiConfigSource = z
     }
   });
 
-const memoryWikiConfigSchemaBase = buildPluginConfigSchema(MemoryWikiConfigSource, {
-  safeParse(value: unknown) {
-    if (value === undefined) {
-      return { success: true, data: resolveMemoryWikiConfig(undefined) };
-    }
-    const result = MemoryWikiConfigSource.safeParse(value);
-    if (result.success) {
-      return { success: true, data: resolveMemoryWikiConfig(result.data) };
-    }
-    return {
-      success: false,
-      error: {
-        issues: mapPluginConfigIssues(result.error.issues),
-      },
-    };
-  },
-});
-
-export const memoryWikiConfigSchema: OpenClawPluginConfigSchema = memoryWikiConfigSchemaBase;
-
 function expandHomePath(inputPath: string, homedir: string): string {
   if (inputPath === "~") {
     return homedir;
@@ -234,34 +210,27 @@ function expandHomePath(inputPath: string, homedir: string): string {
   return inputPath;
 }
 
-function resolveDefaultMemoryWikiVaultPath(homedir = os.homedir()): string {
-  return path.join(homedir, ".openclaw", "wiki", "main");
-}
-
-function resolveDefaultMemoryWikiVaultRoot(homedir = os.homedir()): string {
-  return path.join(homedir, ".openclaw", "wiki");
-}
-
 export function resolveMemoryWikiConfig(
   config: MemoryWikiPluginConfig | undefined,
-  options?: { homedir?: string },
+  options?: { homedir?: string; env?: NodeJS.ProcessEnv },
 ): ResolvedMemoryWikiConfig {
   const homedir = options?.homedir ?? os.homedir();
   const parsed = config ? MemoryWikiConfigSource.safeParse(config) : null;
   const safeConfig = parsed?.success ? parsed.data : (config ?? {});
   const vaultScope = safeConfig.vault?.scope ?? DEFAULT_WIKI_VAULT_SCOPE;
+  const vaultPath =
+    safeConfig.vault?.path ??
+    path.join(
+      resolveStateDir({ ...(options?.env ?? process.env), HOME: homedir }),
+      "wiki",
+      ...(vaultScope === "agent" ? [] : ["main"]),
+    );
 
   return {
     vaultMode: safeConfig.vaultMode ?? DEFAULT_WIKI_VAULT_MODE,
     vault: {
       scope: vaultScope,
-      path: expandHomePath(
-        safeConfig.vault?.path ??
-          (vaultScope === "agent"
-            ? resolveDefaultMemoryWikiVaultRoot(homedir)
-            : resolveDefaultMemoryWikiVaultPath(homedir)),
-        homedir,
-      ),
+      path: expandHomePath(vaultPath, homedir),
       renderMode: safeConfig.vault?.renderMode ?? DEFAULT_WIKI_RENDER_MODE,
     },
     obsidian: {
@@ -313,7 +282,7 @@ export function resolveMemoryWikiConfiguredAgentIds(
     if (!rawId) {
       return [];
     }
-    return [resolveSessionAgentId({ config: appConfig, agentId: rawId })];
+    return [resolveSessionAgentIdStrict({ config: appConfig, agentId: rawId })];
   });
   return [...new Set(ids.length > 0 ? ids : [resolveDefaultAgentId(appConfig ?? {})])];
 }
@@ -336,7 +305,7 @@ export function resolveMemoryWikiAgentConfig(params: {
   if (!requestedAgentId && configuredAgentIds.length > 1) {
     throw new Error("agentId is required for memory-wiki when vault.scope=agent.");
   }
-  const agentId = resolveSessionAgentId({
+  const agentId = resolveSessionAgentIdStrict({
     config: params.appConfig,
     agentId: requestedAgentId ?? resolveDefaultAgentId(params.appConfig ?? {}),
   });

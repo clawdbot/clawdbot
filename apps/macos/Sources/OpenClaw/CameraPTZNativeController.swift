@@ -1,3 +1,4 @@
+import AVFoundation
 import Darwin
 import Foundation
 import OpenClawCameraPTZNative
@@ -53,6 +54,32 @@ enum CameraUVCControlInfo {
 struct NativeCameraPTZBackend: CameraPTZBackend {
     func open(deviceId: String) throws -> any CameraPTZControlling {
         try NativeCameraPTZController(deviceId: deviceId)
+    }
+
+    func withCaptureSession<T>(deviceId: String, body: () throws -> T) throws -> T {
+        guard let device = CameraDeviceResolver.camera(deviceId: deviceId) else {
+            throw CameraPTZError.deviceNotFound(deviceId)
+        }
+        let session = AVCaptureSession()
+        let input = try AVCaptureDeviceInput(device: device)
+        guard session.canAddInput(input) else {
+            throw CameraPTZError.unsupported("camera cannot start a video stream")
+        }
+        session.addInput(input)
+        let output = AVCaptureVideoDataOutput()
+        guard session.canAddOutput(output) else {
+            throw CameraPTZError.unsupported("camera cannot provide a video stream")
+        }
+        session.addOutput(output)
+
+        // UVC controls require a live video stream, which briefly lights the camera privacy indicator.
+        // Without a sample-buffer delegate, video frames are neither delivered nor retained.
+        session.startRunning()
+        defer { session.stopRunning() }
+        guard session.isRunning else {
+            throw CameraPTZError.unsupported("camera video stream did not start")
+        }
+        return try body()
     }
 }
 

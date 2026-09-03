@@ -110,6 +110,26 @@ describe("createCronToolSchema", () => {
     expect(schemaRecord.properties).not.toHaveProperty("patch");
   });
 
+  it.each([undefined, "", " \t ", "agent:main:telegram:direct:alice", " agent:main:main "])(
+    "advertises job retargeting only without session scope (%j)",
+    (agentSessionKey) => {
+      const toolSchema = createCronTool({ agentSessionKey, agentId: "main" }).parameters;
+      for (const projected of [
+        toolSchema,
+        normalizeToolParameterSchema(toolSchema, { modelProvider: "gemini" }),
+        normalizeToolParameterSchema(toolSchema, {
+          modelCompat: { toolSchemaProfile: "llamacpp" },
+        }),
+      ]) {
+        const record = projected as unknown as Record<string, unknown>;
+        expect(keysAt(record, "job").includes("agentId")).toBe(!agentSessionKey?.trim());
+        expect(propertyAt(record, "agentId")).toMatchObject({ type: "string" });
+        expect(propertyAt(record, "agentId")?.description).toContain("list");
+        expect(propertyAt(record, "agentId")?.description).toContain("wake");
+      }
+    },
+  );
+
   it("exposes next_check with its relative duration parameter", () => {
     expect(Value.Check(schema, { action: "next_check", in: "15m" })).toBe(true);
     expect(propertyAt(schemaRecord, "in")?.description).toContain("next_check");

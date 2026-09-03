@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createPluginRuntimeMock } from "../../src/plugin-sdk/plugin-test-runtime.js";
 import { listBundledPluginMetadata } from "../../src/plugins/bundled-plugin-metadata.js";
 import type { PluginManifest } from "../../src/plugins/manifest.js";
 import type {
@@ -219,6 +220,7 @@ export function defineBundledProviderAuthLiteralParityTests(shardIndex: number):
           name: pluginId,
           source: `bundled:${pluginId}`,
         });
+        captured.api.runtime = createPluginRuntimeMock();
         register(captured.api);
         registrationResultByPluginId.set(pluginId, { status: "fulfilled", value: captured });
       } catch (reason) {

@@ -15,5 +15,5 @@ export function openCatalogSessionInTerminal(key: CatalogSessionKey, agentId: st
 }
 
 export function openTerminalSessionInTerminal(terminalSessionId: string): void {
-  openTerminal({ open: true, terminalSessionId });
+  openTerminal({ open: true, terminalSessionId, agentOwned: false });
 }

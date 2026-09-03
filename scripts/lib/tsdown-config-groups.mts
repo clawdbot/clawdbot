@@ -11,3 +11,9 @@ export const TSDOWN_UNIFIED_DTS_CONFIG_GROUPS = [
   "openclaw-dts-extensions-4",
   "openclaw-dts-extensions-5",
 ] as const;
+
+export const TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS = TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.slice(1, 3);
+
+export const TSDOWN_NON_SDK_DTS_CONFIG_GROUPS = TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.filter(
+  (group) => !TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS.includes(group),
+);

@@ -452,12 +452,15 @@ export async function sendMSTeamsMessages(params: {
     message: MSTeamsRenderedMessage,
     messageIndex: number,
   ): Promise<string> => {
+    let activity: Record<string, unknown> | undefined;
     let pendingUploadId: string | undefined;
     let response: unknown;
     try {
       response = await sendWithRetry(
         async () => {
-          const activity = await buildActivity(
+          // Retry failed preparation, but keep its successful I/O and SharePoint work
+          // out of subsequent provider retries.
+          activity ??= await buildActivity(
             message,
             params.conversationRef,
             params.tokenProvider,
@@ -466,14 +469,11 @@ export async function sendMSTeamsMessages(params: {
             { feedbackLoopEnabled: params.feedbackLoopEnabled },
           );
 
-          // Extract and strip the internal-only pending upload tag before sending.
-          pendingUploadId =
+          pendingUploadId ??=
             typeof activity["_pendingUploadId"] === "string"
               ? activity["_pendingUploadId"]
               : undefined;
-          if (pendingUploadId) {
-            delete activity["_pendingUploadId"];
-          }
+          delete activity["_pendingUploadId"];
 
           providerDispatchStarted = true;
           return await sendFn(activity);

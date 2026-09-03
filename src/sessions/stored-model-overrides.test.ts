@@ -45,4 +45,70 @@ describe("resolveStoredModelOverride", () => {
     });
     expect(loadSessionEntry).toHaveBeenCalledWith("agent:main:telegram:dm:parent");
   });
+
+  it("does not inherit active automatic fallback overrides from parent sessions", () => {
+    expect(
+      resolveStoredModelOverride({
+        defaultProvider: "openai",
+        sessionKey: "agent:main:discord:channel:root:thread:child",
+        sessionStore: {
+          "agent:main:discord:channel:root": {
+            sessionId: "parent-session",
+            updatedAt: 1,
+            providerOverride: "google-vertex",
+            modelOverride: "gemini-fallback",
+            modelOverrideSource: "auto",
+            modelOverrideFallbackOriginProvider: "openai",
+            modelOverrideFallbackOriginModel: "gpt-primary",
+          },
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("inherits configured automatic selections without fallback provenance", () => {
+    expect(
+      resolveStoredModelOverride({
+        defaultProvider: "openai",
+        sessionKey: "agent:main:discord:channel:root:thread:child",
+        sessionStore: {
+          "agent:main:discord:channel:root": {
+            sessionId: "legacy-parent-session",
+            updatedAt: 1,
+            providerOverride: "google-vertex",
+            modelOverride: "gemini-fallback",
+            modelOverrideSource: "auto",
+          },
+        },
+      }),
+    ).toEqual({
+      provider: "google-vertex",
+      model: "gemini-fallback",
+      source: "parent",
+      routeResolution: "raw",
+    });
+  });
+
+  it("continues to inherit deliberate parent model pins", () => {
+    expect(
+      resolveStoredModelOverride({
+        defaultProvider: "openai",
+        sessionKey: "agent:main:discord:channel:root:thread:child",
+        sessionStore: {
+          "agent:main:discord:channel:root": {
+            sessionId: "parent-session",
+            updatedAt: 1,
+            providerOverride: "anthropic",
+            modelOverride: "claude-sonnet-4-6",
+            modelOverrideSource: "user",
+          },
+        },
+      }),
+    ).toEqual({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      source: "parent",
+      routeResolution: "raw",
+    });
+  });
 });

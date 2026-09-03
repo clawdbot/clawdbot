@@ -1,4 +1,4 @@
-function isValidTabId(value) {
+export function isValidTabId(value) {
   return Number.isSafeInteger(value) && value >= 0;
 }
 
@@ -23,7 +23,7 @@ function ordinaryDocumentUrl(rawUrl, fileAccessAllowed) {
 }
 
 /** Pure owner of the ordinary-document eligibility boundary. */
-export function tabEligibility(tab, { fileAccessAllowed = true } = {}) {
+export function tabEligibility(tab, { fileAccessAllowed = true, controlledBlank = false } = {}) {
   const urls = [tab?.url, tab?.pendingUrl].filter(
     (url) => typeof url === "string" && url.length > 0,
   );
@@ -33,7 +33,10 @@ export function tabEligibility(tab, { fileAccessAllowed = true } = {}) {
   if (tab.incognito === true) {
     return { eligible: false, reason: "incognito" };
   }
-  return urls.every((url) => ordinaryDocumentUrl(url, fileAccessAllowed))
+  return urls.every(
+    (url) =>
+      (controlledBlank && url === "about:blank") || ordinaryDocumentUrl(url, fileAccessAllowed),
+  )
     ? { eligible: true, reason: null }
     : { eligible: false, reason: "restricted" };
 }

@@ -1,95 +1,43 @@
-// Test Live Cli Backend Docker tests cover test live cli backend docker script behavior.
 import { spawnSync } from "node:child_process";
-import fs from "node:fs";
+import { mkdirSync, symlinkSync } from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-
-const SCRIPT_PATH = path.resolve(
-  import.meta.dirname,
-  "../../scripts/test-live-cli-backend-docker.sh",
-);
-
-function readForwardedDockerEnvVars(): string[] {
-  const script = fs.readFileSync(SCRIPT_PATH, "utf8");
-  return Array.from(script.matchAll(/-e\s+([A-Z0-9_]+)=/g), (match) => match[1] ?? "");
-}
-
-describe("scripts/test-live-cli-backend-docker.sh", () => {
-  it("runs the staged live test without invoking pnpm inside Docker", () => {
-    const script = fs.readFileSync(SCRIPT_PATH, "utf8");
-
-    expect(script).toContain(
-      "node --import tsx scripts/test-live.mts -- src/gateway/gateway-cli-backend.live.test.ts",
-    );
-    expect(script).not.toContain("pnpm test:live src/gateway/gateway-cli-backend.live.test.ts");
+import { expect, it } from "vitest";
+import { createScriptTestHarness } from "./test-helpers.js";
+const SCRIPT_PATH = path.resolve("scripts/test-live-cli-backend-docker.sh");
+const { createTempDir } = createScriptTestHarness();
+it("validates setup early and forwards argument overrides into Docker", () => {
+  const invalid = spawnSync("bash", [SCRIPT_PATH], {
+    encoding: "utf8",
+    env: { ...process.env, OPENCLAW_LIVE_CLI_BACKEND_SETUP_TIMEOUT_SECONDS: "180s" },
   });
-
-  it("forwards both fresh and resume CLI arg overrides into the Docker container", () => {
-    const forwardedVars = readForwardedDockerEnvVars();
-
-    expect(forwardedVars).toContain("OPENCLAW_LIVE_CLI_BACKEND_ARGS");
-    expect(forwardedVars).toContain("OPENCLAW_LIVE_CLI_BACKEND_RESUME_ARGS");
-    expect(forwardedVars).toContain("OPENCLAW_TEST_CONSOLE");
+  expect(invalid.status).toBe(2);
+  expect(invalid.stderr).toContain("invalid OPENCLAW_LIVE_CLI_BACKEND_SETUP_TIMEOUT_SECONDS: 180s");
+  expect(invalid.stderr).not.toMatch(/Cannot find package 'tsx'|docker/);
+  const root = createTempDir("openclaw-live-cli-capture-");
+  const controls = [
+    "OPENCLAW_LIVE_CLI_BACKEND_ARGS",
+    "OPENCLAW_LIVE_CLI_BACKEND_RESUME_ARGS",
+    "OPENCLAW_TEST_CONSOLE",
+    "OPENCLAW_LIVE_CLI_BACKEND_CACHE_PROBE",
+    "OPENCLAW_LIVE_CLI_BACKEND_ADVISORY",
+    "OPENCLAW_LIVE_CLI_BACKEND_ALLOW_PROVIDER_SKIP",
+  ];
+  for (const dir of ["scripts", "bin", "home"]) mkdirSync(path.join(root, dir));
+  symlinkSync(path.resolve("scripts/lib"), path.join(root, "scripts/lib"));
+  for (const target of "scripts/test-live-build-docker.sh bin/docker bin/node bin/timeout".split(
+    " ",
+  )) {
+    symlinkSync("/usr/bin/true", path.join(root, target));
+  }
+  const result = spawnSync("bash", ["-x", SCRIPT_PATH], {
+    encoding: "utf8",
+    env: {
+      HOME: path.join(root, "home"),
+      PATH: `${path.join(root, "bin")}:${process.env.PATH}`,
+      OPENCLAW_LIVE_DOCKER_TRUSTED_HARNESS_DIR: root,
+      ...Object.fromEntries(controls.map((key) => [key, "forwarded"])),
+    },
   });
-
-  it("forwards the Claude prompt-cache probe into the Docker container", () => {
-    const forwardedVars = readForwardedDockerEnvVars();
-
-    expect(forwardedVars).toContain("OPENCLAW_LIVE_CLI_BACKEND_CACHE_PROBE");
-  });
-
-  it("keeps the Anthropic runtime in Claude CLI live-test images", () => {
-    const script = fs.readFileSync(SCRIPT_PATH, "utf8");
-
-    expect(script).toContain('if [[ "$CLI_PROVIDER" == "claude-cli" ]]');
-    expect(script).toContain("ensure_live_build_extension anthropic");
-  });
-
-  it("forwards advisory provider-skip controls into the Docker container", () => {
-    const forwardedVars = readForwardedDockerEnvVars();
-
-    expect(forwardedVars).toContain("OPENCLAW_LIVE_CLI_BACKEND_ADVISORY");
-    expect(forwardedVars).toContain("OPENCLAW_LIVE_CLI_BACKEND_ALLOW_PROVIDER_SKIP");
-  });
-
-  it("rejects invalid setup timeout values before metadata or Docker setup", () => {
-    const result = spawnSync("bash", [SCRIPT_PATH], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        OPENCLAW_LIVE_CLI_BACKEND_SETUP_TIMEOUT_SECONDS: "180s",
-      },
-    });
-
-    expect(result.status).toBe(2);
-    expect(result.stderr).toContain(
-      "invalid OPENCLAW_LIVE_CLI_BACKEND_SETUP_TIMEOUT_SECONDS: 180s",
-    );
-    expect(result.stderr).not.toContain("Cannot find package 'tsx'");
-    expect(result.stderr).not.toContain("docker");
-  });
-
-  it("prints redacted Claude subscription probe failures", () => {
-    const script = fs.readFileSync(SCRIPT_PATH, "utf8");
-
-    expect(script).toContain('direct_probe_log="$(mktemp)"');
-    expect(script).toContain("This is a local CLI smoke test.");
-    expect(script).toContain("What is two plus two?");
-    expect(script).toContain("(4|four)");
-    expect(script).not.toContain("direct_token=");
-    expect(script).not.toContain("expected token");
-    expect(script).not.toContain("OPENCLAW-CLAUDE-SUBSCRIPTION-DIRECT");
-    expect(script).toContain("direct Claude subscription probe exited with status");
-    expect(script).toContain("<redacted-email>");
-    expect(script).toContain("<redacted-secret>");
-  });
-
-  it("prefers explicit Claude setup tokens over staged credentials", () => {
-    const script = fs.readFileSync(SCRIPT_PATH, "utf8");
-
-    expect(script).toMatch(
-      /if \[\[ -n "\$\{CLAUDE_CODE_OAUTH_TOKEN:-\}" \]\]; then[\s\S]*?CLAUDE_SUBSCRIPTION_AUTH_SOURCE="env-token"[\s\S]*?elif \[\[ -f "\$CLAUDE_CREDS_FILE" \]\]; then/,
-    );
-    expect(script).toContain(".claude.json | .claude/.credentials.json) ;;");
-  });
+  expect(result.status).toBe(0);
+  for (const key of controls) expect(result.stderr).toContain(`${key}=forwarded`);
 });

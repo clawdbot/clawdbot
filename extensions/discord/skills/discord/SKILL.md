@@ -1,7 +1,7 @@
 ---
 name: discord
 description: "Discord messaging workflows through OpenClaw's message tool."
-metadata: { "openclaw": { "emoji": "🎮", "requires": { "config": ["channels.discord.token"] } } }
+metadata: { "openclaw": { "emoji": "🎮", "requires": { "config": ["channels.discord"] } } }
 allowed-tools: ["message"]
 ---
 

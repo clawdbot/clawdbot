@@ -116,6 +116,14 @@ describe("audit run inspection protocol", () => {
         provenance: { state: "verified", producer: "receipt-owner" },
       }),
     ).toBe(false);
+    for (const producer of ["cron-lifecycle", "task-lifecycle", "flow-lifecycle"]) {
+      expect(
+        validate.Check({
+          ...display,
+          provenance: { state: "verified", producer },
+        }),
+      ).toBe(true);
+    }
   });
 
   it("exports selector and discovery-pagination invariants for generated clients", () => {

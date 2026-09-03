@@ -2,7 +2,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { chromium, type Browser } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   controlUiE2eWaitTimeoutMs,
@@ -17,14 +18,16 @@ const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
-const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/chat-file-links");
+let artifactDir: string;
+beforeEach(() => {
+  artifactDir = createControlUiE2eArtifactDir("chat-file-links");
+});
 
 let browser: Browser;
 let server: ControlUiE2eServer;
 
 describeControlUiE2e("Control UI chat file links", () => {
   beforeAll(async () => {
-    fs.mkdirSync(artifactDir, { recursive: true });
     server = await startControlUiE2eServer();
     browser = await chromium.launch({ executablePath: chromiumExecutablePath });
   });
@@ -44,7 +47,7 @@ describeControlUiE2e("Control UI chat file links", () => {
     try {
       const file = {
         root: "/workspace",
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         file: {
           content: "export const loaded = true;\n",
           kind: "read",
@@ -136,7 +139,7 @@ describeControlUiE2e("Control UI chat file links", () => {
           },
           "sessions.files.list": {
             root: "/workspace",
-            sessionKey: "main",
+            sessionKey: "agent:main:main",
             files: [],
             browser: {
               entries: [
@@ -193,7 +196,7 @@ describeControlUiE2e("Control UI chat file links", () => {
     const responses = {
       "/workspace/notes.txt": {
         root: "/workspace",
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         file: {
           content: "Exact-head workspace preview proof.\n",
           contentEncoding: "utf8",
@@ -210,7 +213,7 @@ describeControlUiE2e("Control UI chat file links", () => {
       },
       "/workspace/openclaw.png": {
         root: "/workspace",
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         file: {
           content: pngBase64,
           contentEncoding: "base64",
@@ -226,7 +229,7 @@ describeControlUiE2e("Control UI chat file links", () => {
       },
       "/workspace/unsupported-binary.bmp": {
         root: "/workspace",
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         file: {
           kind: "read",
           mimeType: "image/bmp",
@@ -264,7 +267,7 @@ describeControlUiE2e("Control UI chat file links", () => {
             },
             files: [],
             root: "/workspace",
-            sessionKey: "main",
+            sessionKey: "agent:main:main",
           },
         },
       });
@@ -318,12 +321,12 @@ describeControlUiE2e("Control UI chat file links", () => {
       expect(
         (await gateway.getRequests("sessions.files.get")).map((request) => request.params),
       ).toEqual([
-        { agentId: "main", path: "/workspace/notes.txt", sessionKey: "main" },
-        { agentId: "main", path: "/workspace/openclaw.png", sessionKey: "main" },
+        { agentId: "main", path: "/workspace/notes.txt", sessionKey: "agent:main:main" },
+        { agentId: "main", path: "/workspace/openclaw.png", sessionKey: "agent:main:main" },
         {
           agentId: "main",
           path: "/workspace/unsupported-binary.bmp",
-          sessionKey: "main",
+          sessionKey: "agent:main:main",
         },
       ]);
     } finally {

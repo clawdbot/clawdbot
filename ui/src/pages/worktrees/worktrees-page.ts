@@ -13,7 +13,7 @@ import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { renderSessionsHubHeader } from "../../components/sessions-hub-header.ts";
 import {
-  renderDocsLink,
+  renderLearnMoreLink,
   renderSettingsEmpty,
   renderSettingsPage,
   renderSettingsRow,
@@ -382,7 +382,7 @@ class WorktreesPage extends OpenClawLightDomElement {
             type="text"
             aria-label=${t("worktrees.name")}
             ?disabled=${this.creating}
-            placeholder=${t("newSession.worktreeNamePlaceholder")}
+            placeholder=${t("worktrees.namePlaceholder")}
             .value=${this.createName}
             @input=${(event: Event) => {
               this.createName = (event.target as HTMLInputElement).value;
@@ -391,12 +391,12 @@ class WorktreesPage extends OpenClawLightDomElement {
         `,
       })}
       ${renderSettingsRow({
-        title: t("newSession.baseBranch"),
+        title: t("worktrees.baseBranch"),
         control: html`
           <input
             class="settings-input"
             type="text"
-            aria-label=${t("newSession.baseBranch")}
+            aria-label=${t("worktrees.baseBranch")}
             ?disabled=${this.creating}
             list="worktrees-create-branches"
             .value=${this.createBaseRef}
@@ -490,8 +490,7 @@ class WorktreesPage extends OpenClawLightDomElement {
       ${renderSessionsHubHeader({
         active: "worktrees",
         title: titleForRoute("sessions"),
-        subtitle: html`${subtitleForRoute("worktrees")}
-        ${renderDocsLink(WORKTREES_DOCS_URL, t("common.learnMore"))}`,
+        subtitle: html`${subtitleForRoute("worktrees")} ${renderLearnMoreLink(WORKTREES_DOCS_URL)}`,
         onSelect: (tab) => {
           if (tab !== "worktrees") {
             this.context?.navigate(tab);

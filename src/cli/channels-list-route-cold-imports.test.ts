@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import {
   createColdPluginFixture,
   isColdPluginRuntimeLoaded,
@@ -60,50 +61,69 @@ afterAll(() => {
   vi.unstubAllEnvs();
 });
 
-it("renders configured channel metadata without loading the plugin runtime", async () => {
-  const pluginRoot = path.join(tempRoot, "cold-channel-plugin");
-  fs.mkdirSync(pluginRoot, { recursive: true });
-  const fixture = createColdPluginFixture({
-    rootDir: pluginRoot,
-    pluginId: "cold-channel-plugin",
-    channelId: "cold-channel",
-    manifest: {
-      channelConfigs: {
-        "cold-channel": {
-          schema: {
-            type: "object",
-            additionalProperties: false,
-            properties: { token: { type: "string" } },
+it.each([
+  { name: "top-level", channel: { token: "configured" }, accounts: ["default"] },
+  {
+    name: "named",
+    channel: { accounts: { alerts: { token: "configured" }, default: { token: "configured" } } },
+    accounts: ["alerts", "default"],
+  },
+])(
+  "renders $name channel accounts without loading setup or runtime",
+  async ({ name, channel, accounts }) => {
+    resetPluginRuntimeStateForTest();
+    testState.json.length = 0;
+    const pluginRoot = path.join(tempRoot, name);
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    const setupMarker = path.join(pluginRoot, "setup-loaded.txt");
+    const fixture = createColdPluginFixture({
+      rootDir: pluginRoot,
+      pluginId: "cold-channel-plugin",
+      channelId: "cold-channel",
+      setupEntrySource: `require("node:fs").writeFileSync(${JSON.stringify(setupMarker)}, "loaded");
+throw new Error("JSON inventory must not execute setup");`,
+      manifest: {
+        channelConfigs: {
+          "cold-channel": {
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              properties: { token: { type: "string" } },
+            },
+            label: "Cold Channel",
+            description: "Prepared cold channel metadata",
           },
-          label: "Cold Channel",
-          description: "Prepared cold channel metadata",
         },
       },
-    },
-  });
-  vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
-  vi.stubEnv("OPENCLAW_HOME", path.join(tempRoot, "home"));
-  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(tempRoot, "state"));
-  testState.config = {
-    channels: { "cold-channel": { token: "configured" } },
-    plugins: {
-      load: { paths: [pluginRoot] },
-      entries: { "cold-channel-plugin": { enabled: true } },
-    },
-  };
+    });
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+    vi.stubEnv("OPENCLAW_HOME", path.join(tempRoot, "home"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(tempRoot, "state"));
+    testState.config = {
+      channels: { "cold-channel": channel },
+      plugins: {
+        load: { paths: [pluginRoot] },
+        entries: { "cold-channel-plugin": { enabled: true } },
+      },
+    };
 
-  await expect(tryRouteCli(["node", "openclaw", "channels", "list", "--json"])).resolves.toBe(true);
+    for (const flags of [["--json"], ["--all", "--json"]]) {
+      await expect(tryRouteCli(["node", "openclaw", "channels", "list", ...flags])).resolves.toBe(
+        true,
+      );
+    }
 
-  expect(testState.json).toEqual([
-    {
+    const expected = {
       chat: {
         "cold-channel": {
-          accounts: ["default"],
+          accounts,
           installed: true,
           origin: "configured",
         },
       },
-    },
-  ]);
-  expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
-});
+    };
+    expect(testState.json).toEqual([expected, expected]);
+    expect(fs.existsSync(setupMarker)).toBe(false);
+    expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
+  },
+);

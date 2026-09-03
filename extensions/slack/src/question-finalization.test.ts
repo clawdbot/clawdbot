@@ -59,7 +59,7 @@ describe("Slack question finalization", () => {
     const questionId = "ask_0123456789abcdef0123456789abcdef";
     const headers = Array.from({ length: 21 }, (_value, index) => `Column ${String(index)}`);
     const payload = {
-      channelData: { askUser: { questionId } },
+      channelData: { askUser: { questionId, optionValues: ["One", "Two"] } },
       presentation: {
         blocks: [
           {
@@ -146,7 +146,7 @@ describe("Slack question finalization", () => {
     const payload = {
       text: "Pick one",
       mediaUrl: "https://example.invalid/question-context.png",
-      channelData: { askUser: { questionId } },
+      channelData: { askUser: { questionId, optionValues: ["One", "Two"] } },
       presentation: {
         blocks: [
           {
@@ -220,7 +220,7 @@ describe("Slack question finalization", () => {
     const payload = {
       text: "Pick one",
       mediaUrl: "https://example.invalid/question-context.png",
-      channelData: { askUser: { questionId } },
+      channelData: { askUser: { questionId, optionValues: ["One", "Two"] } },
       presentation: {
         blocks: [
           {
@@ -318,7 +318,7 @@ describe("Slack question finalization", () => {
     const cfg = { channels: { slack: { botToken: "xoxb-test" } } };
     const payload = {
       text: "Pick one",
-      channelData: { askUser: { questionId } },
+      channelData: { askUser: { questionId, optionValues: ["One", "Two"] } },
       presentation: {
         blocks: [
           {

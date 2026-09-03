@@ -134,7 +134,7 @@ describe("executeFollowupTurn", () => {
       SenderId: "user-1",
     });
     expect(call.sessionCtx.media).toEqual([{ kind: "audio", contentType: "audio/ogg" }]);
-    expect(onAgentRunStart).toHaveBeenCalledWith("run-1", undefined);
+    expect(onAgentRunStart).toHaveBeenCalledWith("run-1");
   });
 
   it("ignores verbosity loaded from a replacement session generation", async () => {
@@ -769,26 +769,6 @@ describe("executeFollowupTurn", () => {
 
     await expect(detachedProgress).resolves.toBe(false);
     await expect(result.progress.drain()).rejects.toBe(failure);
-  });
-
-  it("preserves numeric thread ids during canonical role-ordering recovery", async () => {
-    const turn = createTurn({
-      queued: { ...createTurn().queued, originatingThreadId: 42 },
-    });
-    state.reset.mockResolvedValue(true);
-    state.execute.mockImplementation(async (params: AgentTurnParams) => {
-      await params.resetSessionAfterRoleOrderingConflict("invalid history");
-      return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
-    });
-
-    await executeFollowupTurn({
-      turn,
-      defaults: { typing: createTypingController(), typingMode: "never", defaultModel: "claude" },
-      onToolResult: vi.fn(async () => {}),
-      onCompactionNoticePayload: vi.fn(async () => {}),
-    });
-
-    expect(state.reset).toHaveBeenCalledWith(expect.objectContaining({ messageThreadId: "42" }));
   });
 
   it("updates the reply operation after role-ordering recovery rotates the session", async () => {

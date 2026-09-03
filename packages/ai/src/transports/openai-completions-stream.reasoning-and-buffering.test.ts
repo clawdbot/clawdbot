@@ -268,7 +268,9 @@ describe("openai completions stream", () => {
       {
         type: "text",
         text: "Interim.",
-        textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+        textSignature: expect.stringMatching(
+          /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
+        ),
       },
       {
         type: "thinking",
@@ -278,7 +280,9 @@ describe("openai completions stream", () => {
       {
         type: "text",
         text: "Final.",
-        textSignature: '{"v":1,"id":"final-answer-0","phase":"final_answer"}',
+        textSignature: expect.stringMatching(
+          /^\{"v":1,"id":"final-answer-0-[0-9a-f]{24}","phase":"final_answer"\}$/u,
+        ),
       },
     ]);
   });

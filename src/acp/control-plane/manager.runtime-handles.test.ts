@@ -1,4 +1,4 @@
-/** Tests ACP runtime handle caching, reuse, re-ensure, and eviction behavior. */
+/** Tests ACP runtime handle caching, reuse, re-ensure, and lifecycle cleanup. */
 import { describe, expect, it, vi } from "vitest";
 import {
   AcpRuntimeError,
@@ -42,7 +42,7 @@ describe("AcpSessionManager runtime handles", () => {
     };
   }
 
-  it("reuses runtime session handles for repeat turns in the same manager process", async () => {
+  it("reuses runtime session handles after idle time in the same manager process", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
       id: "acpx",
@@ -63,18 +63,28 @@ describe("AcpSessionManager runtime handles", () => {
       mode: "prompt",
       requestId: "r1",
     });
-    await manager.runTurn({
-      provenance: "system",
-      cfg: baseCfg,
-      sessionKey: "agent:codex:acp:session-1",
-      text: "second",
-      mode: "prompt",
-      requestId: "r2",
-    });
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 30 * 24 * 60 * 60 * 1_000);
+    try {
+      await manager.runTurn({
+        provenance: "system",
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:session-1",
+        text: "second",
+        mode: "prompt",
+        requestId: "r2",
+      });
+    } finally {
+      clock.mockRestore();
+    }
 
     expect(runtimeState.ensureSession).toHaveBeenCalledTimes(1);
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
     expect(runtimeState.close).not.toHaveBeenCalled();
+    expect(manager.getObservabilitySnapshot().runtimeCache).toStrictEqual({
+      activeSessions: 1,
+      idleTtlMs: 0,
+      evictedTotal: 0,
+    });
   });
 
   it("disposes every retained runtime handle", async () => {

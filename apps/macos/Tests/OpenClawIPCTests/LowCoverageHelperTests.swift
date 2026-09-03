@@ -42,10 +42,20 @@ struct LowCoverageHelperTests {
         #expect(result.errorMessage != nil)
     }
 
-    @Test func `shell executor runs command`() async {
-        let result = await ShellExecutor.runDetailed(command: ["/bin/echo", "ok"], cwd: nil, env: nil, timeout: 2)
-        #expect(result.success == true)
-        #expect(result.stdout.contains("ok") || result.stderr.contains("ok"))
+    @Test func `shell executor stops before spawn when final preflight fails`() async {
+        let marker = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-shell-preflight-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: marker) }
+
+        let result = await ShellExecutor.runDetailed(
+            command: ["/usr/bin/touch", marker.path],
+            cwd: nil,
+            env: nil,
+            timeout: 2,
+            beforeSpawn: { "preflight denied" })
+
+        #expect(result.preflightError == "preflight denied")
+        #expect(!FileManager.default.fileExists(atPath: marker.path))
     }
 
     @Test func `shell executor times out`() async {

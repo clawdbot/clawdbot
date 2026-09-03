@@ -15,6 +15,7 @@ import {
   beginSessionWorkAdmission,
   cancelSessionWorkAdmissionHandoff,
 } from "../../../sessions/session-lifecycle-admission.js";
+import { INTERNAL_PROVENANCE_SOURCE_CHANNEL } from "../../../sessions/input-provenance.js";
 import { resolveInternalSessionEffectsTarget } from "../../internal-session-effects.js";
 import {
   formatSubagentRecoveryWedgedReason,
@@ -567,7 +568,7 @@ export async function recoverInterruptedSubagentRow(
               inputProvenance: {
                 kind: "inter_session",
                 sourceSessionKey: params.entry.requesterSessionKey,
-                sourceChannel: "internal",
+                sourceChannel: INTERNAL_PROVENANCE_SOURCE_CHANNEL,
                 sourceTool: "subagent_interrupted_resume",
               },
               sessionEffects: "internal",

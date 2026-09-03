@@ -1,23 +1,20 @@
 // Shares web fetch provider loading helpers across provider plugins.
 import type { PluginLoadOptions } from "./loader.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { sortPluginEntriesById, sortPluginEntriesForAutoDetect } from "./plugin-entry-order.js";
 import type { PluginWebFetchProviderEntry } from "./types.js";
-import {
-  resolveBundledWebProviderResolutionConfig,
-  sortPluginProviders,
-  sortPluginProvidersForAutoDetect,
-} from "./web-provider-resolution-shared.js";
+import { resolveBundledWebProviderResolutionConfig } from "./web-provider-resolution-shared.js";
 
 export function sortWebFetchProviders(
   providers: PluginWebFetchProviderEntry[],
 ): PluginWebFetchProviderEntry[] {
-  return sortPluginProviders(providers);
+  return sortPluginEntriesById(providers);
 }
 
 export function sortWebFetchProvidersForAutoDetect(
   providers: PluginWebFetchProviderEntry[],
 ): PluginWebFetchProviderEntry[] {
-  return sortPluginProvidersForAutoDetect(providers);
+  return sortPluginEntriesForAutoDetect(providers);
 }
 
 export function resolveBundledWebFetchResolutionConfig(params: {

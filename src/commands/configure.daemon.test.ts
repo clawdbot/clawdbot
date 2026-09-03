@@ -1,5 +1,7 @@
 // Configure daemon tests cover daemon install prompts, progress labels, and runtime install calls.
 
+import { PassThrough } from "node:stream";
+import { select as clackSelect } from "@clack/prompts";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { maybeInstallDaemon } from "./configure.daemon.js";
@@ -13,14 +15,16 @@ const resolveGatewayInstallToken = vi.hoisted(() => vi.fn());
 const buildGatewayInstallPlan = vi.hoisted(() => vi.fn());
 const note = vi.hoisted(() => vi.fn());
 const serviceIsLoaded = vi.hoisted(() => vi.fn(async () => false));
+const serviceReadCommand = vi.hoisted(() => vi.fn());
 const serviceInstall = vi.hoisted(() => vi.fn(async () => {}));
+const serviceUninstall = vi.hoisted(() => vi.fn(async () => {}));
 const serviceRestart = vi.hoisted(() =>
   vi.fn<() => Promise<{ outcome: "completed" } | { outcome: "scheduled" }>>(async () => ({
     outcome: "completed",
   })),
 );
 const ensureSystemdUserLingerInteractive = vi.hoisted(() => vi.fn(async () => {}));
-const select = vi.hoisted(() => vi.fn(async () => "node"));
+const select = vi.hoisted(() => vi.fn<() => Promise<string | symbol>>(async () => "node"));
 
 vi.mock("../cli/progress.js", () => ({
   withProgress,
@@ -49,11 +53,6 @@ vi.mock("./configure.shared.js", () => ({
   select,
 }));
 
-vi.mock("./daemon-runtime.js", () => ({
-  DEFAULT_GATEWAY_DAEMON_RUNTIME: "node",
-  GATEWAY_DAEMON_RUNTIME_OPTIONS: [{ value: "node", label: "Node" }],
-}));
-
 vi.mock("../daemon/service.js", async () => {
   const actual =
     await vi.importActual<typeof import("../daemon/service.js")>("../daemon/service.js");
@@ -61,15 +60,13 @@ vi.mock("../daemon/service.js", async () => {
     ...actual,
     resolveGatewayService: vi.fn(() => ({
       isLoaded: serviceIsLoaded,
+      readCommand: serviceReadCommand,
       install: serviceInstall,
+      uninstall: serviceUninstall,
       restart: serviceRestart,
     })),
   };
 });
-
-vi.mock("./onboard-helpers.js", () => ({
-  guardCancel: (value: unknown) => value,
-}));
 
 vi.mock("./systemd-linger.js", () => ({
   ensureSystemdUserLingerInteractive,
@@ -80,7 +77,11 @@ describe("maybeInstallDaemon", () => {
     vi.clearAllMocks();
     progressSetLabel.mockReset();
     serviceIsLoaded.mockResolvedValue(false);
+    serviceReadCommand.mockResolvedValue(null);
     serviceInstall.mockResolvedValue(undefined);
+    serviceUninstall.mockReset();
+    select.mockReset();
+    select.mockResolvedValue("node");
     serviceRestart.mockResolvedValue({ outcome: "completed" });
     loadConfig.mockReturnValue({});
     resolveGatewayInstallToken.mockResolvedValue({
@@ -113,7 +114,11 @@ describe("maybeInstallDaemon", () => {
     expect(serviceInstall).toHaveBeenCalledTimes(1);
   });
 
-  it("blocks install when token SecretRef is unresolved", async () => {
+  it.each([false, true])("blocks install with unresolved auth (reinstall=%s)", async (loaded) => {
+    serviceIsLoaded.mockResolvedValue(loaded);
+    if (loaded) {
+      select.mockResolvedValueOnce("reinstall");
+    }
     resolveGatewayInstallToken.mockResolvedValue({
       token: undefined,
       tokenRefConfigured: true,
@@ -133,6 +138,87 @@ describe("maybeInstallDaemon", () => {
     );
     expect(buildGatewayInstallPlan).not.toHaveBeenCalled();
     expect(serviceInstall).not.toHaveBeenCalled();
+    expect(serviceUninstall).not.toHaveBeenCalled();
+  });
+
+  it("keeps the installed service when runtime selection is cancelled", async () => {
+    serviceIsLoaded.mockResolvedValue(true);
+    const cancelled = await clackSelect({
+      message: "Runtime",
+      options: [{ value: "node", label: "Node" }],
+      signal: AbortSignal.abort(),
+      input: new PassThrough(),
+      output: new PassThrough(),
+    });
+    select.mockResolvedValueOnce("reinstall").mockResolvedValueOnce(cancelled);
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(() => {
+        throw new Error("setup cancelled");
+      }),
+    };
+
+    await expect(maybeInstallDaemon({ runtime, port: 18789 })).rejects.toThrow("setup cancelled");
+
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(serviceUninstall).not.toHaveBeenCalled();
+    expect(resolveGatewayInstallToken).not.toHaveBeenCalled();
+    expect(serviceInstall).not.toHaveBeenCalled();
+  });
+
+  it("keeps the installed service when replacement planning fails", async () => {
+    serviceIsLoaded.mockResolvedValue(true);
+    select.mockResolvedValueOnce("reinstall");
+    buildGatewayInstallPlan.mockRejectedValueOnce(new Error("replacement plan failed"));
+
+    await expect(
+      maybeInstallDaemon({
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        port: 18789,
+      }),
+    ).rejects.toThrow("replacement plan failed");
+
+    expect(serviceUninstall).not.toHaveBeenCalled();
+    expect(serviceInstall).not.toHaveBeenCalled();
+  });
+
+  it("hands the existing service to the replacement installer", async () => {
+    serviceIsLoaded.mockResolvedValue(true);
+    select.mockResolvedValueOnce("reinstall");
+    const managedDefinition = {
+      programArguments: [
+        "/usr/bin/node",
+        "--max-old-space-size=24576",
+        "--require=/tmp/service-preload.js",
+        "/usr/local/bin/openclaw",
+        "gateway",
+      ],
+      environment: { NODE_OPTIONS: "--max-heap-size=32768", UNRELATED: "not-persisted" },
+    };
+    const existingCommand = {
+      programArguments: ["/operator/drop-in-wrapper", "gateway"],
+      environment: { NODE_OPTIONS: "--max-old-space-size=1024" },
+      managedDefinition,
+      managedOverrides: { environment: { keys: ["NODE_OPTIONS"] } },
+    };
+    serviceReadCommand.mockResolvedValue(existingCommand);
+
+    const outcome = await maybeInstallDaemon({
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      port: 18789,
+    });
+
+    expect(outcome).toBe("succeeded");
+    expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        existingCommand,
+      }),
+    );
+    expect(buildGatewayInstallPlan.mock.calls[0]?.[0]).not.toHaveProperty("existingEnvironment");
+    expect(serviceInstall).toHaveBeenCalledOnce();
+    expect(serviceUninstall).not.toHaveBeenCalled();
+    expect(serviceRestart).not.toHaveBeenCalled();
   });
 
   it("continues daemon install flow when service status probe throws", async () => {

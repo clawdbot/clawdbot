@@ -14,6 +14,7 @@ export function renderReadOnlyTranscript(params: {
     {
       paneId: params.paneId,
       sessionKey: params.sessionKey,
+      selectedSession: chat.selectedSession,
       announceTranscript: false,
       loading: false,
       messages: params.messages,
@@ -34,6 +35,8 @@ export function renderReadOnlyTranscript(params: {
       userId: chat.userId,
       userName: chat.userName,
       userAvatar: chat.userAvatar,
+      // Peer authors link to their Activity feed here exactly as in the live transcript.
+      personActivity: chat.personActivity,
       basePath: chat.basePath,
       fullMessageAgentId: chat.fullMessageAgentId,
       loadFullAssistantMessage: chat.loadFullAssistantMessage,

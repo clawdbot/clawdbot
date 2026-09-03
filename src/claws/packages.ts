@@ -144,7 +144,6 @@ async function probeClawPluginArtifact(
   const request = {
     spec: `clawhub:${pkg.ref}@${pkg.version}`,
     dryRun: true,
-    acknowledgeClawHubRisk: true,
   } as const;
   if (!isolateFromLiveExtensions) {
     return await probePlugin(request);
@@ -180,7 +179,6 @@ export async function preflightClawPackage(
       workspaceDir,
       slug: pkg.ref,
       version: pkg.version,
-      acknowledgeClawHubRisk: true,
     });
     return result.ok ? result : { ok: false, code: result.code, message: result.error };
   }
@@ -354,7 +352,6 @@ async function installClawPackagesUnlocked(
           slug: pkg.ref,
           version: pkg.version,
           expectedIntegrity: pkg.integrity,
-          acknowledgeClawHubRisk: true,
         });
         packageLease.assertCurrent();
         if (!preflight.ok) {
@@ -400,7 +397,6 @@ async function installClawPackagesUnlocked(
           slug: pkg.ref,
           version: pkg.version,
           expectedIntegrity: pkg.integrity,
-          acknowledgeClawHubRisk: true,
           clawManaged: true,
         });
         packageLease.assertCurrent();
@@ -562,7 +558,6 @@ async function installClawPackagesUnlocked(
         raw: `clawhub:${pkg.ref}@${pkg.version}`,
         allowInstallPolicyWarningPrompt: false,
         opts: {
-          acknowledgeClawHubRisk: true,
           expectedIntegrity: pkg.integrity,
           expectedPluginId: pkg.installId,
         },

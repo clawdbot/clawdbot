@@ -21,7 +21,10 @@ const prepareSlackMessageMock = vi.fn(
   async (_params?: {
     ctx: Parameters<typeof createSlackMessageHandler>[0]["ctx"];
     opts: { onVisibleDrop?: () => void };
-  }): Promise<{ ctxPayload: Record<string, unknown> } | null> => ({ ctxPayload: {} }),
+  }): Promise<{
+    ctxPayload: Record<string, unknown>;
+    route?: { sessionKey: string };
+  } | null> => ({ ctxPayload: {} }),
 );
 const dispatchPreparedSlackMessageMock = vi.fn(async (_prepared: unknown) => {});
 const resolveThreadTsMock = vi.fn(async ({ message }: { message: Record<string, unknown> }) => ({
@@ -563,6 +566,47 @@ describe("createSlackMessageHandler", () => {
     expect(flushKeyMock).toHaveBeenCalledWith("slack:default:C111:1709000000.000100:U111");
   });
 
+  it("retires a buffered key when replay filtering drops every entry", async () => {
+    const handler = createSlackMessageHandler({
+      ctx: createContext(),
+      account: { accountId: "default" } as Parameters<
+        typeof createSlackMessageHandler
+      >[0]["account"],
+    });
+    const bufferedMessage = {
+      type: "message" as const,
+      channel: "C111",
+      user: "U111",
+      ts: "1709000000.000300",
+      text: "duplicate buffered text",
+    };
+
+    await handler(bufferedMessage as never, { source: "message" });
+    const first = enqueueMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    await runOnFlush([first]);
+
+    await handler(bufferedMessage as never, { source: "message" });
+    const duplicate = enqueueMock.mock.calls[1]?.[0] as Record<string, unknown>;
+    await runOnFlush([duplicate]);
+    expect(dispatchPreparedSlackMessageMock).toHaveBeenCalledTimes(1);
+    flushKeyMock.mockClear();
+
+    await handler(
+      {
+        type: "message",
+        subtype: "file_share",
+        channel: "C111",
+        user: "U111",
+        ts: "1709000000.000400",
+        text: "file follows",
+        files: [{ id: "F1" }],
+      } as never,
+      { source: "message" },
+    );
+
+    expect(flushKeyMock).not.toHaveBeenCalled();
+  });
+
   it("waits for debounced dispatch completion when requested by relay delivery", async () => {
     const { handler } = createHandlerWithTracker();
     const handled = handler(
@@ -591,12 +635,17 @@ describe("createSlackMessageHandler", () => {
   });
 
   it("carries durable ingress ownership into prepared dispatch", async () => {
+    prepareSlackMessageMock.mockResolvedValueOnce({
+      ctxPayload: {},
+      route: { sessionKey: "agent:main:slack:channel:C111" },
+    });
     const turnAdoptionLifecycle = {
       admission: "exclusive" as const,
       abortSignal: new AbortController().signal,
       onAdopted: vi.fn(),
       onDeferred: vi.fn(),
       onAbandoned: vi.fn(),
+      onSessionRouted: vi.fn(async () => {}),
     };
     const { handler } = createHandlerWithTracker();
     const handled = handler(
@@ -623,6 +672,12 @@ describe("createSlackMessageHandler", () => {
     // The flush wraps the lifecycle to settle dispatch-dedupe claims, so assert
     // ownership forwarding rather than function identity.
     expect(dispatchPreparedSlackMessageMock).toHaveBeenCalledTimes(1);
+    expect(turnAdoptionLifecycle.onSessionRouted).toHaveBeenCalledExactlyOnceWith(
+      "agent:main:slack:channel:C111",
+    );
+    expect(turnAdoptionLifecycle.onSessionRouted.mock.invocationCallOrder[0]).toBeLessThan(
+      dispatchPreparedSlackMessageMock.mock.invocationCallOrder[0] ?? 0,
+    );
     const prepared = dispatchPreparedSlackMessageMock.mock.calls[0]?.[0] as {
       turnAdoptionLifecycle?: typeof turnAdoptionLifecycle;
     };

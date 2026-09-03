@@ -5,6 +5,7 @@ import {
   truncateSanitizedExternalContent,
   wrapExternalContent,
 } from "../security/external-content.js";
+import { isTrustedToolInputError } from "./tool-input-error.js";
 
 const TOOL_TIMEOUT_ERROR_CODES = new Set([
   "ERR_TIMEOUT",
@@ -17,7 +18,6 @@ const TOOL_TIMEOUT_ERROR_CODES = new Set([
 const NETWORK_TOOL_ERROR_MAX_CHARS = 4_000;
 const protectedNetworkToolErrors = new WeakSet<object>();
 const protectedNetworkToolTimeoutErrors = new WeakSet<object>();
-const trustedToolInputErrors = new WeakSet<object>();
 const trustedToolNoStartErrors = new WeakSet<object>();
 
 function readToolErrorField(error: object, key: string): unknown {
@@ -143,22 +143,15 @@ export function resolveToolExecutionErrorKind(error: unknown): "failed" | "timed
 
 /** Authenticates host-owned preflight failures before a tool reaches untrusted network data. */
 export function isTrustedToolExecutionPreflightError(error: unknown): boolean {
-  return (
-    isTrustedSecretSurfaceUnavailableError(error) ||
-    (typeof error === "object" && error !== null && trustedToolInputErrors.has(error))
-  );
+  return isTrustedSecretSurfaceUnavailableError(error) || isTrustedToolInputError(error);
 }
 
-/** Records canonical host-created input failures without loading heavyweight tool implementations. */
-export function registerTrustedToolInputError(error: object): void {
-  trustedToolInputErrors.add(error);
-}
-
-/** Authenticate a wrapper-owned failure that settled before tool implementation start. */
-export function registerTrustedToolNoStartError(error: unknown): void {
+/** Record host-owned proof that the protected operation never started, even if hooks ran. */
+export function registerTrustedToolNoStartError<T>(error: T): T {
   if (typeof error === "object" && error !== null) {
     trustedToolNoStartErrors.add(error);
   }
+  return error;
 }
 
 /** Consume one private no-start fact at the next authoritative lifecycle boundary. */

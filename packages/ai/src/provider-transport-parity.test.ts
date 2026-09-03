@@ -1,8 +1,15 @@
 import path from "node:path";
 import { APIError as AnthropicAPIError } from "@anthropic-ai/sdk/core/error.js";
-import type { AssistantMessageEventStreamLike, Context, Model } from "@openclaw/llm-core";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import type { AssistantMessageEventStreamLike, Model } from "@openclaw/llm-core";
+import { describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "./host.js";
+import {
+  anthropicModel,
+  context,
+  anthropicEvents,
+  createAnthropicResponse,
+  registerParityHostLifecycle,
+} from "./provider-transport-parity.test-support.js";
 
 type OpenAIChunk = Record<string, unknown>;
 
@@ -59,19 +66,6 @@ type ParityFixture = {
   snapshot?: string;
 };
 
-const anthropicModel = {
-  id: "claude-sonnet-4-6",
-  name: "Claude Sonnet 4.6",
-  api: "anthropic-messages",
-  provider: "anthropic",
-  baseUrl: "https://api.anthropic.com",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 200_000,
-  maxTokens: 4096,
-} satisfies Model<"anthropic-messages">;
-
 const openAiModel = {
   id: "gpt-5.5",
   name: "GPT-5.5",
@@ -93,65 +87,10 @@ const openRouterModel = {
   baseUrl: "https://openrouter.ai/api/v1",
 } satisfies Model<"openai-completions">;
 
-const context = {
-  systemPrompt: "Be exact.",
-  messages: [{ role: "user", content: "Find the answer.", timestamp: 1 }],
-  tools: [
-    {
-      name: "lookup",
-      description: "Look up a value.",
-      parameters: {
-        type: "object",
-        properties: { query: { type: "string" } },
-        required: ["query"],
-      },
-    },
-  ],
-} satisfies Context;
-
-const anthropicEvents = [
-  {
-    type: "message_start",
-    message: {
-      id: "msg_parity",
-      model: "claude-sonnet-4-6-response",
-      usage: { input_tokens: 7, output_tokens: 0 },
-    },
-  },
-  {
-    type: "content_block_start",
-    index: 0,
-    content_block: { type: "thinking", thinking: "seed", signature: "seed-signature" },
-  },
-  {
-    type: "content_block_delta",
-    index: 0,
-    delta: { type: "thinking_delta", thinking: " + thought" },
-  },
-  {
-    type: "content_block_delta",
-    index: 0,
-    delta: { type: "signature_delta", signature: "final-signature" },
-  },
-  { type: "content_block_stop", index: 0 },
-  {
-    type: "content_block_start",
-    index: 1,
-    content_block: { type: "text", text: "Hello" },
-  },
-  {
-    type: "content_block_delta",
-    index: 1,
-    delta: { type: "text_delta", text: " world" },
-  },
-  { type: "content_block_stop", index: 1 },
-  {
-    type: "message_delta",
-    delta: { stop_reason: "end_turn" },
-    usage: { input_tokens: 7, output_tokens: 5 },
-  },
-  { type: "message_stop" },
-] satisfies Record<string, unknown>[];
+const openRouterModelWithoutBaseUrl = {
+  ...openRouterModel,
+  baseUrl: undefined,
+} as unknown as Model<"openai-completions">;
 
 const openAiChunks = [
   {
@@ -293,16 +232,6 @@ const anthropicFailure = {
   headers: { "content-type": "application/json", "retry-after": "2" },
 } as const;
 
-function createAnthropicResponse(events: readonly Record<string, unknown>[]): Response {
-  const body = events
-    .map((event) => `event: ${String(event.type)}\ndata: ${JSON.stringify(event)}\n\n`)
-    .join("");
-  return new Response(body, {
-    status: 200,
-    headers: { "content-type": "text/event-stream", "x-request-id": "req-parity" },
-  });
-}
-
 function normalizeRecord(value: Record<string, unknown>, keys: readonly string[]) {
   return Object.fromEntries(
     keys.flatMap((key) => (value[key] === undefined ? [] : [[key, value[key]]])),
@@ -396,6 +325,7 @@ async function runOpenAi(
 async function runAnthropic(
   implementation: "provider" | "transport",
   outcome: ParityFixture["outcome"],
+  events: readonly Record<string, unknown>[] = anthropicEvents,
 ): Promise<ParityOutput> {
   let payload: unknown;
   let stream: AssistantMessageEventStreamLike;
@@ -418,7 +348,7 @@ async function runAnthropic(
                   new Headers(anthropicFailure.headers),
                 );
               }
-              return createAnthropicResponse(anthropicEvents);
+              return createAnthropicResponse(events);
             },
           };
         },
@@ -440,7 +370,7 @@ async function runAnthropic(
           headers: anthropicFailure.headers,
         });
       }
-      return createAnthropicResponse(anthropicEvents);
+      return createAnthropicResponse(events);
     };
     configureAiTransportHost({ ...getAiTransportHost(), buildModelFetch: () => fetchMock });
     stream = await Promise.resolve(
@@ -485,19 +415,7 @@ const fixtures: ParityFixture[] = [
 ];
 
 describe("provider and transport observable parity fixtures", () => {
-  let initialHost: ReturnType<typeof getAiTransportHost>;
-
-  beforeAll(() => {
-    initialHost = getAiTransportHost();
-  });
-
-  afterEach(() => {
-    configureAiTransportHost(initialHost);
-  });
-
-  afterAll(() => {
-    configureAiTransportHost(initialHost);
-  });
+  registerParityHostLifecycle();
 
   it.each(fixtures)("$name", async ({ provider, outcome, snapshot }) => {
     const run = provider === "anthropic" ? runAnthropic : runOpenAi;
@@ -530,6 +448,84 @@ describe("provider and transport observable parity fixtures", () => {
     );
   });
 
+  it.each([
+    {
+      name: "omitted usage after cumulative output updates",
+      updates: [{ output_tokens: 7 }, { output_tokens: 11 }],
+      final: undefined,
+      billing: { input: 37, output: 11, cacheRead: 11, cacheWrite: 5, totalTokens: 64 },
+      contextUsage: { state: "available", promptTokens: 53, totalTokens: 64 },
+    },
+    {
+      name: "omitted usage after compaction iterations",
+      updates: [
+        {
+          iterations: [
+            {
+              type: "compaction",
+              input_tokens: 10,
+              output_tokens: 3,
+              cache_read_input_tokens: 2,
+              cache_creation_input_tokens: 1,
+            },
+            {
+              type: "message",
+              input_tokens: 4,
+              output_tokens: 5,
+              cache_read_input_tokens: 6,
+              cache_creation_input_tokens: 7,
+            },
+          ],
+        },
+      ],
+      final: undefined,
+      billing: { input: 14, output: 8, cacheRead: 8, cacheWrite: 8, totalTokens: 38 },
+      contextUsage: { state: "available", promptTokens: 17, totalTokens: 22 },
+    },
+    {
+      name: "present empty usage after a reported snapshot",
+      updates: [],
+      final: {},
+      billing: { input: 37, output: 2, cacheRead: 11, cacheWrite: 5, totalTokens: 55 },
+      contextUsage: { state: "unavailable" },
+    },
+  ])(
+    "preserves Anthropic accounting for $name",
+    async ({ updates, final, billing, contextUsage }) => {
+      const events = [
+        {
+          type: "message_start",
+          message: {
+            id: "msg_usage_parity",
+            model: anthropicModel.id,
+            usage: {
+              input_tokens: 37,
+              output_tokens: 2,
+              cache_read_input_tokens: 11,
+              cache_creation_input_tokens: 5,
+            },
+          },
+        },
+        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+        { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Done." } },
+        { type: "content_block_stop", index: 0 },
+        ...updates.map((usage) => ({ type: "message_delta", delta: {}, usage })),
+        { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: final },
+        { type: "message_stop" },
+      ];
+      for (const implementation of ["provider", "transport"] as const) {
+        const result = await runAnthropic(implementation, "success", events);
+        expect(result.terminal).toMatchObject({
+          stopReason: "stop",
+          content: [{ type: "text", text: "Done." }],
+          usage: { ...billing, contextUsage },
+        });
+        expect(result.eventTrace.at(-1)).toMatchObject({ type: "done" });
+        expect(result.errorFields).toEqual({});
+      }
+    },
+  );
+
   it("marks content interrupted by native reasoning as commentary", async () => {
     for (const implementation of ["provider", "transport"] as const) {
       for (const chunks of [openAiInterleavedReasoningChunks, openAiCoalescedReasoningChunks]) {
@@ -544,7 +540,9 @@ describe("provider and transport observable parity fixtures", () => {
           {
             type: "text",
             text: "Interim.",
-            textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+            textSignature: expect.stringMatching(
+              /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
+            ),
           },
           {
             type: "thinking",
@@ -554,7 +552,9 @@ describe("provider and transport observable parity fixtures", () => {
           {
             type: "text",
             text: "Final.",
-            textSignature: '{"v":1,"id":"final-answer-0","phase":"final_answer"}',
+            textSignature: expect.stringMatching(
+              /^\{"v":1,"id":"final-answer-0-[0-9a-f]{24}","phase":"final_answer"\}$/u,
+            ),
           },
         ]);
       }
@@ -569,13 +569,17 @@ describe("provider and transport observable parity fixtures", () => {
         {
           type: "text",
           text: "Interim.",
-          textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+          textSignature: expect.stringMatching(
+            /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
+          ),
         },
         { type: "thinking", thinking: "Second thought." },
         {
           type: "text",
           text: "Final.",
-          textSignature: '{"v":1,"id":"final-answer-0","phase":"final_answer"}',
+          textSignature: expect.stringMatching(
+            /^\{"v":1,"id":"final-answer-0-[0-9a-f]{24}","phase":"final_answer"\}$/u,
+          ),
         },
       ]);
 
@@ -593,7 +597,9 @@ describe("provider and transport observable parity fixtures", () => {
         {
           type: "text",
           text: "Interim.",
-          textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+          textSignature: expect.stringMatching(
+            /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
+          ),
         },
         {
           type: "thinking",
@@ -603,7 +609,9 @@ describe("provider and transport observable parity fixtures", () => {
         {
           type: "text",
           text: "Final.",
-          textSignature: '{"v":1,"id":"final-answer-0","phase":"final_answer"}',
+          textSignature: expect.stringMatching(
+            /^\{"v":1,"id":"final-answer-0-[0-9a-f]{24}","phase":"final_answer"\}$/u,
+          ),
         },
       ]);
 
@@ -617,12 +625,16 @@ describe("provider and transport observable parity fixtures", () => {
         {
           type: "text",
           text: "Interim.",
-          textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+          textSignature: expect.stringMatching(
+            /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
+          ),
         },
         {
           type: "text",
           text: "Final.",
-          textSignature: '{"v":1,"id":"final-answer-0","phase":"final_answer"}',
+          textSignature: expect.stringMatching(
+            /^\{"v":1,"id":"final-answer-0-[0-9a-f]{24}","phase":"final_answer"\}$/u,
+          ),
         },
       ]);
       expect(hiddenReasoningResult.terminal.openclawDelivery).toEqual({
@@ -663,7 +675,9 @@ describe("provider and transport observable parity fixtures", () => {
         {
           type: "text",
           text: "Interim.",
-          textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+          textSignature: expect.stringMatching(
+            /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
+          ),
         },
         {
           type: "thinking",
@@ -673,7 +687,9 @@ describe("provider and transport observable parity fixtures", () => {
         {
           type: "text",
           text: "Final.",
-          textSignature: '{"v":1,"id":"final-answer-0","phase":"final_answer"}',
+          textSignature: expect.stringMatching(
+            /^\{"v":1,"id":"final-answer-0-[0-9a-f]{24}","phase":"final_answer"\}$/u,
+          ),
         },
         {
           type: "thinking",
@@ -705,7 +721,9 @@ describe("provider and transport observable parity fixtures", () => {
         {
           type: "text",
           text: "Interim.",
-          textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+          textSignature: expect.stringMatching(
+            /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
+          ),
         },
         {
           type: "thinking",
@@ -737,6 +755,24 @@ describe("provider and transport observable parity fixtures", () => {
     }
   });
 
+  it("fails closed before using the OpenAI default endpoint for another provider", async () => {
+    for (const implementation of ["provider", "transport"] as const) {
+      const result = await runOpenAi(
+        implementation,
+        "success",
+        openAiChunks,
+        true,
+        openRouterModelWithoutBaseUrl,
+      );
+
+      expect(result.terminal.stopReason).toBe("error");
+      expect(result.errorFields.errorMessage).toContain(
+        'Provider "openrouter" requires an explicit base URL',
+      );
+      expect(openAiMockState.payloads).toEqual([]);
+    }
+  });
+
   it("preserves earlier visible details when later ordinary content is interrupted", async () => {
     for (const implementation of ["provider", "transport"] as const) {
       const result = await runOpenAi(
@@ -751,7 +787,9 @@ describe("provider and transport observable parity fixtures", () => {
         {
           type: "text",
           text: "Visible first.",
-          textSignature: '{"v":1,"id":"final-answer-0","phase":"final_answer"}',
+          textSignature: expect.stringMatching(
+            /^\{"v":1,"id":"final-answer-0-[0-9a-f]{24}","phase":"final_answer"\}$/u,
+          ),
         },
         {
           type: "thinking",
@@ -761,7 +799,9 @@ describe("provider and transport observable parity fixtures", () => {
         {
           type: "text",
           text: "Interim.",
-          textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+          textSignature: expect.stringMatching(
+            /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
+          ),
         },
         {
           type: "thinking",
@@ -771,7 +811,9 @@ describe("provider and transport observable parity fixtures", () => {
         {
           type: "text",
           text: "Final.",
-          textSignature: '{"v":1,"id":"final-answer-1","phase":"final_answer"}',
+          textSignature: expect.stringMatching(
+            /^\{"v":1,"id":"final-answer-1-[0-9a-f]{24}","phase":"final_answer"\}$/u,
+          ),
         },
       ]);
     }

@@ -147,6 +147,41 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     });
   });
 
+  it.each([
+    {
+      name: "native value buttons",
+      presentation: {
+        blocks: [{ type: "buttons" as const, buttons: [{ label: "Open", value: "open" }] }],
+      },
+    },
+    {
+      name: "navigation URLs",
+      presentation: {
+        blocks: [
+          {
+            type: "buttons" as const,
+            buttons: [{ label: "Docs", url: "https://example.com/docs" }],
+          },
+        ],
+      },
+    },
+  ])("delivers $name instead of losing them in a preview edit", async ({ presentation }) => {
+    const draftStream = createDraftStreamMock();
+    const deliverFinal = createDeliverFinalMock();
+    const payload = { text: "Choose an option", presentation };
+
+    await deliverDraftPreview({
+      payload,
+      draftStream,
+      effectiveReplyToId: "thread-root-1",
+      deliverPayload: deliverFinal,
+    });
+
+    expect(deliverFinal).toHaveBeenCalledExactlyOnceWith(payload);
+    expect(updateMattermostPostSpy).not.toHaveBeenCalled();
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+  });
+
   it("reports a final already published in a sealed preview generation", async () => {
     const draftStream = createDraftStreamMock(null);
     const deliverFinal = createDeliverFinalMock();
@@ -172,6 +207,26 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
       visibleReplySent: true,
       content: "Already visible",
     });
+  });
+
+  it("delivers unsent presentation controls after preview text was already published", async () => {
+    const draftStream = createDraftStreamMock(null);
+    const deliverFinal = createDeliverFinalMock();
+    const confirmedDelivery = createConfirmedPreviewDelivery("sealed-post-1", "Already visible");
+    const presentation = {
+      blocks: [{ type: "buttons" as const, buttons: [{ label: "Open", value: "open" }] }],
+    };
+
+    const result = await deliverDraftPreview({
+      payload: { text: "Already visible", presentation },
+      draftStream,
+      effectiveReplyToId: "thread-root-1",
+      resolvePreviewFinalText: () => ({ alreadyDelivered: true, confirmedDelivery }),
+      deliverPayload: deliverFinal,
+    });
+
+    expect(deliverFinal).toHaveBeenCalledExactlyOnceWith({ text: "", presentation });
+    expect(result.messageIds).toEqual(["sealed-post-1", "delivered-post-1"]);
   });
 
   it("still delivers media when the text is already published", async () => {

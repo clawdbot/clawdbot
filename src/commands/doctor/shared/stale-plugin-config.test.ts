@@ -106,29 +106,51 @@ describe("doctor stale plugin config helpers", () => {
     });
   });
 
-  it("removes retired thread-ownership config while retaining valid plugin ids", () => {
+  it("preserves an explicit disable marker while removing stale disabled settings", () => {
     const result = maybeRepairStalePluginConfig({
       plugins: {
-        allow: ["discord", "thread-ownership"],
-        deny: ["thread-ownership", "openai"],
         entries: {
-          discord: { enabled: true },
-          "thread-ownership": { enabled: true },
+          "explicitly-disabled": { enabled: false },
+          "disabled-with-settings": { enabled: false, config: { stale: true } },
+          "google-antigravity-auth": { enabled: false },
         },
       },
     } as OpenClawConfig);
 
-    expect(result.config.plugins).toEqual({
-      allow: ["discord"],
-      deny: ["openai"],
-      entries: { discord: { enabled: true } },
-    });
     expect(result.changes).toEqual([
-      "- plugins.allow: removed 1 stale plugin id (thread-ownership)",
-      "- plugins.deny: removed 1 stale plugin id (thread-ownership)",
-      "- plugins.entries: removed 1 stale plugin entry (thread-ownership)",
+      "- plugins.entries: removed 2 stale plugin entries (disabled-with-settings, google-antigravity-auth)",
     ]);
+    expect(result.config.plugins?.entries).toEqual({
+      "explicitly-disabled": { enabled: false },
+    });
   });
+
+  it.each(["thread-ownership", "open-prose"])(
+    "removes retired %s config while retaining valid plugin ids",
+    (retiredPluginId) => {
+      const result = maybeRepairStalePluginConfig({
+        plugins: {
+          allow: ["discord", retiredPluginId],
+          deny: [retiredPluginId, "openai"],
+          entries: {
+            discord: { enabled: true },
+            [retiredPluginId]: { enabled: true },
+          },
+        },
+      } as OpenClawConfig);
+
+      expect(result.config.plugins).toEqual({
+        allow: ["discord"],
+        deny: ["openai"],
+        entries: { discord: { enabled: true } },
+      });
+      expect(result.changes).toEqual([
+        `- plugins.allow: removed 1 stale plugin id (${retiredPluginId})`,
+        `- plugins.deny: removed 1 stale plugin id (${retiredPluginId})`,
+        `- plugins.entries: removed 1 stale plugin entry (${retiredPluginId})`,
+      ]);
+    },
+  );
 
   it("resets stale plugin slots without changing valid slot sentinels", () => {
     const cfg = {
@@ -177,13 +199,14 @@ describe("doctor stale plugin config helpers", () => {
     expect(result.config.plugins?.slots).toEqual({ contextEngine: "none" });
   });
 
-  it("preserves official external plugin config before installation", () => {
+  it("preserves official external plugin lookup ids before installation", () => {
     const result = maybeRepairStalePluginConfig({
       plugins: {
-        allow: ["codex", "missing-plugin"],
-        deny: ["codex", "missing-deny"],
+        allow: ["codex", "qqbot", "missing-plugin"],
+        deny: ["codex", "qqbot", "missing-deny"],
         entries: {
           codex: { enabled: true },
+          qqbot: { enabled: false },
           "missing-plugin": { enabled: true },
         },
       },
@@ -194,9 +217,12 @@ describe("doctor stale plugin config helpers", () => {
       "- plugins.deny: removed 1 stale plugin id (missing-deny)",
       "- plugins.entries: removed 1 stale plugin entry (missing-plugin)",
     ]);
-    expect(result.config.plugins?.allow).toEqual(["codex"]);
-    expect(result.config.plugins?.deny).toEqual(["codex"]);
-    expect(result.config.plugins?.entries).toEqual({ codex: { enabled: true } });
+    expect(result.config.plugins?.allow).toEqual(["codex", "qqbot"]);
+    expect(result.config.plugins?.deny).toEqual(["codex", "qqbot"]);
+    expect(result.config.plugins?.entries).toEqual({
+      codex: { enabled: true },
+      qqbot: { enabled: false },
+    });
   });
 
   it("preserves codex in policy surfaces while the version-bound plugin is absent", () => {

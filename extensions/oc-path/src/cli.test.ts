@@ -4,11 +4,20 @@
  * Tests invoke each subcommand through the retained Commander registration.
  * Assertions inspect captured process output and the resulting exit code.
  */
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
+import {
+  closeSync,
+  constants as fsConstants,
+  openSync,
+  promises as fs,
+  readFileSync,
+  writeFileSync,
+  writeSync,
+} from "node:fs";
 import { join } from "node:path";
 import { Command, CommanderError } from "commander";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerOcPathCli } from "../cli-registration.js";
 import { registerPathCli } from "./cli.js";
 
@@ -114,14 +123,14 @@ async function invokePathCli(args: string[], runtime: TestRuntime): Promise<void
     runtime.error(String(chunk));
     return true;
   }) as typeof process.stderr.write);
-  const program = new Command();
-  program.exitOverride();
-  program.configureOutput({
-    writeOut: (value) => runtime.writeStdout(value),
-    writeErr: (value) => runtime.error(value),
-  });
-  registerPathCli(program);
   try {
+    const program = new Command();
+    program.exitOverride();
+    program.configureOutput({
+      writeOut: (value) => runtime.writeStdout(value),
+      writeErr: (value) => runtime.error(value),
+    });
+    registerPathCli(program);
     await program.parseAsync(["node", "openclaw", "path", ...args]);
     runtime.exitCode = process.exitCode ?? 0;
   } catch (error) {
@@ -198,22 +207,14 @@ async function pathEmitCommand(
 }
 
 describe("openclaw path CLI", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
   it("reports its TTY-aware machine-output mode to the CLI", () => {
     const argv = ["node", "openclaw", "path", "validate", "oc://AGENTS.md"];
     expect(isPathMachineOutput({ argv, stdoutIsTTY: false })).toBe(true);
     expect(isPathMachineOutput({ argv, stdoutIsTTY: true })).toBe(false);
     expect(isPathMachineOutput({ argv: [...argv, "--json"], stdoutIsTTY: true })).toBe(true);
     expect(isPathMachineOutput({ argv: [...argv, "--human"], stdoutIsTTY: false })).toBe(false);
-  });
-
-  let workspaceDir: string;
-
-  beforeEach(() => {
-    workspaceDir = mkdtempSync(join(tmpdir(), "oc-path-cli-"));
-  });
-  afterEach(() => {
-    // mkdtemp leaves a small dir; OS will GC it. Skip cleanup to keep
-    // the test deterministic on Windows where rmdir flakes.
   });
 
   describe("validate", () => {
@@ -245,6 +246,7 @@ describe("openclaw path CLI", () => {
 
   describe("resolve", () => {
     it("CLI-R01 finds a leaf in jsonc and prints it", async () => {
+      const workspaceDir = tempDirs.make("oc-path-cli-");
       const filePath = join(workspaceDir, "gateway.jsonc");
       writeFileSync(filePath, '{ "version": "1.0" }', "utf-8");
       const rt = createTestRuntime();
@@ -257,6 +259,7 @@ describe("openclaw path CLI", () => {
     });
 
     it("CLI-R04 finds a leaf in yaml and prints it", async () => {
+      const workspaceDir = tempDirs.make("oc-path-cli-");
       const filePath = join(workspaceDir, "workflow.yaml");
       writeFileSync(filePath, "name: inbox-triage\nsteps:\n  - id: fetch\n", "utf-8");
       const rt = createTestRuntime();
@@ -273,6 +276,7 @@ describe("openclaw path CLI", () => {
     });
 
     it("CLI-R02 returns 1 for not-found path", async () => {
+      const workspaceDir = tempDirs.make("oc-path-cli-");
       const filePath = join(workspaceDir, "gateway.jsonc");
       writeFileSync(filePath, '{ "version": "1.0" }', "utf-8");
       const rt = createTestRuntime();
@@ -289,24 +293,99 @@ describe("openclaw path CLI", () => {
       expect(stderrText(rt)).toContain("missing required argument");
     });
 
-    it("rejects oversized multibyte JSONC with the typed diagnostic", async () => {
+    it("bounds every file-loading verb before parsing oversized input", async () => {
+      const workspaceDir = tempDirs.make("oc-path-cli-");
       const filePath = join(workspaceDir, "oversized.json");
       const content = `"${"界".repeat(Math.floor(JSONC_INPUT_LIMIT_BYTES / 3) + 1)}"`;
       writeFileSync(filePath, content, "utf-8");
-      const rt = createTestRuntime();
+      const unboundedRead = vi
+        .spyOn(fs, "readFile")
+        .mockRejectedValue(new Error("unbounded file read"));
+      const cases: ReadonlyArray<{
+        code: string;
+        run: (runtime: TestRuntime) => Promise<void>;
+      }> = [
+        {
+          code: "OC_JSONC_INPUT_TOO_LARGE",
+          run: (runtime) =>
+            pathResolveCommand(
+              "oc://oversized.json/value",
+              { file: filePath, json: true },
+              runtime,
+            ),
+        },
+        {
+          code: "OC_JSONC_INPUT_TOO_LARGE",
+          run: (runtime) =>
+            pathFindCommand("oc://oversized.json/*", { file: filePath, json: true }, runtime),
+        },
+        {
+          code: "OC_JSONC_INPUT_TOO_LARGE",
+          run: (runtime) =>
+            pathSetCommand(
+              "oc://oversized.json/value",
+              "next",
+              { file: filePath, json: true, dryRun: true },
+              runtime,
+            ),
+        },
+        {
+          code: "OC_JSONC_INPUT_TOO_LARGE",
+          run: (runtime) => pathEmitCommand(filePath, { json: true }, runtime),
+        },
+        {
+          code: "OC_PATH_INPUT_TOO_LARGE",
+          run: (runtime) =>
+            pathResolveCommand("oc://oversized.md/value", { file: filePath, json: true }, runtime),
+        },
+      ];
 
-      await pathResolveCommand("oc://oversized.json/value", { cwd: workspaceDir, json: true }, rt);
-
-      expect(rt.exitCode).toBe(2);
-      expect(stdoutText(rt)).toBe("");
-      expect(JSON.parse(stderrText(rt))).toMatchObject({
-        error: { code: "OC_JSONC_INPUT_TOO_LARGE" },
-      });
+      try {
+        for (const testCase of cases) {
+          const rt = createTestRuntime();
+          await testCase.run(rt);
+          expect(rt.exitCode).toBe(2);
+          expect(stdoutText(rt)).toBe("");
+          expect(JSON.parse(stderrText(rt))).toMatchObject({
+            error: { code: testCase.code },
+          });
+        }
+        expect(unboundedRead).not.toHaveBeenCalled();
+      } finally {
+        unboundedRead.mockRestore();
+      }
     });
+
+    it.runIf(process.platform !== "win32")(
+      "rejects a FIFO without waiting for a writer",
+      async () => {
+        const workspaceDir = tempDirs.make("oc-path-cli-");
+        const fifoPath = join(workspaceDir, "input.json");
+        execFileSync("mkfifo", [fifoPath]);
+        const releaseBlockedReader = setTimeout(() => {
+          const fd = openSync(fifoPath, fsConstants.O_WRONLY | fsConstants.O_NONBLOCK);
+          writeSync(fd, '{"ok":true}');
+          closeSync(fd);
+        }, 250);
+        const rt = createTestRuntime();
+
+        try {
+          await pathResolveCommand("oc://input.json/ok", { file: fifoPath, json: true }, rt);
+        } finally {
+          clearTimeout(releaseBlockedReader);
+        }
+
+        expect(rt.exitCode).toBe(2);
+        expect(JSON.parse(stderrText(rt))).toMatchObject({
+          error: { code: "OC_PATH_FILE_NOT_REGULAR" },
+        });
+      },
+    );
   });
 
   describe("set", () => {
     it("CLI-S01 writes new bytes when path resolves", async () => {
+      const workspaceDir = tempDirs.make("oc-path-cli-");
       const filePath = join(workspaceDir, "gateway.jsonc");
       writeFileSync(filePath, '{ "version": "1.0" }', "utf-8");
       const rt = createTestRuntime();
@@ -322,6 +401,7 @@ describe("openclaw path CLI", () => {
     });
 
     it("CLI-S02 --dry-run does not write to disk", async () => {
+      const workspaceDir = tempDirs.make("oc-path-cli-");
       const filePath = join(workspaceDir, "gateway.jsonc");
       const before = '{ "version": "1.0" }';
       writeFileSync(filePath, before, "utf-8");
@@ -341,6 +421,7 @@ describe("openclaw path CLI", () => {
     });
 
     it("CLI-S02b --dry-run human output reports the rendered UTF-8 byte count", async () => {
+      const workspaceDir = tempDirs.make("oc-path-cli-");
       const filePath = join(workspaceDir, "gateway.jsonc");
       const before = '{ "version": "1.0" }';
       writeFileSync(filePath, before, "utf-8");
@@ -360,27 +441,53 @@ describe("openclaw path CLI", () => {
       expect(readFileSync(filePath, "utf-8")).toBe(before);
     });
 
-    it("CLI-S05 --dry-run --diff prints a unified diff", async () => {
+    it.runIf(process.platform !== "win32").each([
+      { label: "LF", before: '{ "version": "1.0" }\n', json: false },
+      { label: "CRLF", before: '{ "version": "1.0" }\r\n', json: true },
+      { label: "no final newline", before: '{ "version": "1.0" }', json: true },
+      {
+        label: "middle-of-file",
+        before: `{\n${"  // leading context\n".repeat(5)}  "version": "1.0"\n${"  // trailing context\n".repeat(5)}}\n`,
+        json: true,
+      },
+    ])("emits an applicable $label dry-run patch", async ({ before, json }) => {
+      const workspaceDir = tempDirs.make("oc-path-cli-");
       const filePath = join(workspaceDir, "gateway.jsonc");
-      const before = '{\n  "version": "1.0",\n  "enabled": true\n}\n';
+      const patchPath = join(workspaceDir, "preview.patch");
+      const after = before.replace('"1.0"', '"2.0"');
       writeFileSync(filePath, before, "utf-8");
       const rt = createTestRuntime();
       await pathSetCommand(
         "oc://gateway.jsonc/version",
         "2.0",
-        { cwd: workspaceDir, human: true, dryRun: true, diff: true },
+        { cwd: workspaceDir, human: !json, json, dryRun: true, diff: true },
         rt,
       );
+
       expect(rt.exitCode).toBe(0);
-      const out = stdoutText(rt);
-      expect(out).toContain("--- ");
-      expect(out).toContain("+++ ");
-      expect(out).toContain('-  "version": "1.0",');
-      expect(out).toContain('+  "version": "2.0",');
+      const output = stdoutText(rt);
+      const payload = json ? JSON.parse(output) : undefined;
+      const patch = json ? payload.diff : output;
+      if (json) {
+        expect(payload.bytes).toBe(after);
+      }
+      writeFileSync(patchPath, patch, "utf-8");
       expect(readFileSync(filePath, "utf-8")).toBe(before);
+      execFileSync(
+        "git",
+        ["apply", "--check", `-p${filePath.split("/").filter(Boolean).length}`, patchPath],
+        {
+          cwd: workspaceDir,
+        },
+      );
+      execFileSync("patch", ["--dry-run", "--fuzz=0", filePath, patchPath]);
+      expect(readFileSync(filePath, "utf-8")).toBe(before);
+      execFileSync("patch", ["--fuzz=0", filePath, patchPath]);
+      expect(readFileSync(filePath, "utf-8")).toBe(after);
     });
 
     it("CLI-S05c --dry-run --diff shows line-ending-only byte changes", async () => {
+      const workspaceDir = tempDirs.make("oc-path-cli-");
       const filePath = join(workspaceDir, "AGENTS.md");
       const before = "---\r\nname: x\r\n---\r\n";
       writeFileSync(filePath, before, "utf-8");
@@ -399,6 +506,7 @@ describe("openclaw path CLI", () => {
     });
 
     it("CLI-S06 --dry-run --diff includes diff in JSON output", async () => {
+      const workspaceDir = tempDirs.make("oc-path-cli-");
       const filePath = join(workspaceDir, "gateway.jsonc");
       writeFileSync(filePath, '{ "version": "1.0" }', "utf-8");
       const rt = createTestRuntime();
@@ -417,6 +525,7 @@ describe("openclaw path CLI", () => {
     });
 
     it("CLI-S07 rejects --diff without --dry-run", async () => {
+      const workspaceDir = tempDirs.make("oc-path-cli-");
       const filePath = join(workspaceDir, "gateway.jsonc");
       const before = '{ "version": "1.0" }';
       writeFileSync(filePath, before, "utf-8");
@@ -436,6 +545,7 @@ describe("openclaw path CLI", () => {
     });
 
     it("CLI-S08 sets slash-deep JSONC paths and parsed JSON values", async () => {
+      const workspaceDir = tempDirs.make("oc-path-cli-");
       const filePath = join(workspaceDir, "openclaw.json");
       writeFileSync(
         filePath,
@@ -473,16 +583,12 @@ describe("openclaw path CLI", () => {
     });
 
     it("CLI-S03 sentinel-bearing value is refused at emit", async () => {
+      const workspaceDir = tempDirs.make("oc-path-cli-");
       const filePath = join(workspaceDir, "gateway.jsonc");
       writeFileSync(filePath, '{ "token": "x" }', "utf-8");
       const rt = createTestRuntime();
-      // The sentinel-bearing value is accepted into the AST by setOcPath,
-      // but `emitForKind` refuses to serialize it (defense-in-depth at
-      // the per-kind emit boundary). The CLI handler must catch that
-      // refusal and route it through the structured error boundary —
-      // a thrown error escaping commander would print raw `String(err)`
-      // and bypass our JSON/human scrubbing. Pin the structured shape:
-      // exit code 1, stable code OC_EMIT_SENTINEL, message scrubbed.
+      // Sentinel values can enter the AST, but emit must reject them through
+      // the structured CLI error boundary instead of escaping Commander.
       await pathSetCommand(
         "oc://gateway.jsonc/token",
         "__OPENCLAW_REDACTED__",
@@ -491,12 +597,7 @@ describe("openclaw path CLI", () => {
       );
       expect(rt.exitCode).toBe(1);
       expect(stderrText(rt)).toContain("OC_EMIT_SENTINEL");
-      // F13 — file context in sentinel error. Without fileNameForGuard
-      // plumbing through emitForKind, the message would carry the
-      // empty-slot fallback (`oc:///[raw]`); now it carries the actual
-      // file (`oc://gateway.jsonc/[raw]`). Forensics + audit pipelines
-      // rely on this — without the file context, "sentinel rejected
-      // somewhere" doesn't tell you WHICH file was involved.
+      // Include the actual file in the sentinel error so operators can locate it.
       expect(stderrText(rt)).toContain("gateway.jsonc");
     });
 
@@ -508,6 +609,7 @@ describe("openclaw path CLI", () => {
     });
 
     it("CLI-S05 malformed yaml returns structured parse-error", async () => {
+      const workspaceDir = tempDirs.make("oc-path-cli-");
       const filePath = join(workspaceDir, "workflow.yaml");
       const before = "key: value\n  bad indent: oops\n";
       writeFileSync(filePath, before, "utf-8");
@@ -527,6 +629,7 @@ describe("openclaw path CLI", () => {
 
   describe("find", () => {
     it("CLI-F01 enumerates wildcard matches", async () => {
+      const workspaceDir = tempDirs.make("oc-path-cli-");
       const filePath = join(workspaceDir, "config.jsonc");
       writeFileSync(filePath, '{ "items": [ { "id": "a" }, { "id": "b" } ] }', "utf-8");
       const rt = createTestRuntime();
@@ -537,6 +640,7 @@ describe("openclaw path CLI", () => {
     });
 
     it("CLI-F02 returns 1 when zero matches", async () => {
+      const workspaceDir = tempDirs.make("oc-path-cli-");
       const filePath = join(workspaceDir, "gateway.jsonc");
       writeFileSync(filePath, "{}", "utf-8");
       const rt = createTestRuntime();
@@ -545,10 +649,8 @@ describe("openclaw path CLI", () => {
     });
 
     it("CLI-F03 file-slot wildcard rejected with clear error (no ENOENT)", async () => {
-      // Closes Galin P3 (round 8): `find` resolves `pattern.file` to one
-      // literal path, so `oc://*.jsonc/...` would silently ENOENT during
-      // fs.readFile. The CLI now surfaces a clear error before touching
-      // the filesystem, with stable code OC_PATH_FILE_WILDCARD_UNSUPPORTED.
+      const workspaceDir = tempDirs.make("oc-path-cli-");
+      // File-slot wildcards must fail clearly before filesystem access.
       const rt = createTestRuntime();
       await pathFindCommand("oc://*.jsonc/items", { cwd: workspaceDir, json: true }, rt);
       expect(rt.exitCode).toBe(2);
@@ -559,6 +661,7 @@ describe("openclaw path CLI", () => {
 
   describe("emit", () => {
     it("CLI-E01 round-trips jsonc bytes verbatim (byte-fidelity proof)", async () => {
+      const workspaceDir = tempDirs.make("oc-path-cli-");
       const filePath = join(workspaceDir, "gateway.jsonc");
       const before = '// keep this comment\n{\n  "v": 1\n}\n';
       writeFileSync(filePath, before, "utf-8");
@@ -571,6 +674,7 @@ describe("openclaw path CLI", () => {
     });
 
     it("CLI-E02 round-trips md verbatim", async () => {
+      const workspaceDir = tempDirs.make("oc-path-cli-");
       const filePath = join(workspaceDir, "AGENTS.md");
       const before = "## Tools\n- gh\n## Boundaries\n- never rm -rf\n";
       writeFileSync(filePath, before, "utf-8");
@@ -583,6 +687,7 @@ describe("openclaw path CLI", () => {
     });
 
     it("CLI-E04 round-trips yaml verbatim", async () => {
+      const workspaceDir = tempDirs.make("oc-path-cli-");
       const filePath = join(workspaceDir, "workflow.yaml");
       const before = "# keep comment\nname: inbox-triage\nsteps:\n  - id: fetch\n";
       writeFileSync(filePath, before, "utf-8");
@@ -595,6 +700,7 @@ describe("openclaw path CLI", () => {
     });
 
     it("CLI-S07b reports accurate UTF-8 byte counts for multibyte set output", async () => {
+      const workspaceDir = tempDirs.make("oc-path-cli-");
       const filePath = join(workspaceDir, "gateway.jsonc");
       const before = '{\n  "version": "1.0"\n}\n';
       writeFileSync(filePath, before, "utf-8");
@@ -618,15 +724,11 @@ describe("openclaw path CLI", () => {
     });
 
     it("CLI-E03 emit --cwd resolves <file> against the supplied directory", async () => {
-      // Closes round-10 finding F2: emit advertises --cwd / --file in
-      // the docs but the handler resolved <file> against process.cwd()
-      // ignoring both. Pin the new wiring: a relative <file> resolves
-      // against --cwd, not against process.cwd().
+      // A relative file must resolve against --cwd, not the process directory.
+      const workspaceDir = tempDirs.make("oc-path-cli-");
       const filePath = join(workspaceDir, "AGENTS.md");
       writeFileSync(filePath, "## Tools\n- gh\n", "utf-8");
       const rt = createTestRuntime();
-      // Pass a RELATIVE filename + explicit --cwd. If the handler
-      // ignored --cwd, loadAst would ENOENT against process.cwd().
       await pathEmitCommand("AGENTS.md", { cwd: workspaceDir, json: true }, rt);
       expect(rt.exitCode).toBe(0);
       const out = JSON.parse(stdoutText(rt));

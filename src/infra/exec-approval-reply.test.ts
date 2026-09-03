@@ -19,14 +19,11 @@ vi.mock("./exec-approval-surface.js", () => ({
       if (channel === "matrix") {
         return `Approve it from the Web UI or terminal UI for now. ${label} supports native exec approvals for this account. Configure \`${accountPrefix}.execApprovals.approvers\` or \`${accountPrefix}.dm.allowFrom\`; leave \`${accountPrefix}.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
       }
-      if (channel === "discord") {
-        return `Approve it from the Web UI or terminal UI for now. ${label} supports native exec approvals for this account. Configure \`${accountPrefix}.execApprovals.approvers\` or \`commands.ownerAllowFrom\`; leave \`${accountPrefix}.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
-      }
-      if (channel === "slack") {
-        return `Approve it from the Web UI or terminal UI for now. ${label} supports native exec approvals for this account. Configure \`${accountPrefix}.execApprovals.approvers\` or \`commands.ownerAllowFrom\`; leave \`${accountPrefix}.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
+      if (channel === "discord" || channel === "slack") {
+        return `Approve it from the Web UI or terminal UI for now. ${label} supports native exec approvals for this account. Configure \`${accountPrefix}.execApprovals.approvers\` or \`commands.ownerAllowFrom\`; set \`${accountPrefix}.execApprovals.enabled\` to \`auto\` or \`true\`.`;
       }
       if (channel === "telegram") {
-        return `Approve it from the Web UI or terminal UI for now. ${label} supports native exec approvals for this account. Configure \`${accountPrefix}.execApprovals.approvers\`; if you leave it unset, OpenClaw can infer numeric owner IDs from \`${accountPrefix}.allowFrom\` or direct-message \`${accountPrefix}.defaultTo\` when possible. Leave \`${accountPrefix}.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
+        return `Approve it from the Web UI or terminal UI for now. ${label} supports native exec approvals for this account. Configure \`${accountPrefix}.execApprovals.approvers\` or \`commands.ownerAllowFrom\`; leave \`${accountPrefix}.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
       }
       return null;
     },
@@ -167,8 +164,8 @@ describe("exec approval reply helpers", () => {
     {
       channel: "telegram",
       channelLabel: "Telegram",
-      expected: "`channels.telegram.allowFrom`",
-      unexpected: "`channels.telegram.dm.allowFrom`",
+      expected: "`commands.ownerAllowFrom`",
+      unexpected: "`channels.telegram.allowFrom`",
     },
   ])(
     "uses channel-specific disabled setup guidance for $channelLabel",
@@ -203,8 +200,8 @@ describe("exec approval reply helpers", () => {
       channel: "telegram",
       channelLabel: "Telegram",
       accountId: "work",
-      expected: "`channels.telegram.accounts.work.allowFrom`",
-      unexpected: "`channels.telegram.allowFrom`",
+      expected: "`channels.telegram.accounts.work.execApprovals.approvers`",
+      unexpected: "`channels.telegram.execApprovals.approvers`",
     },
     {
       channel: "matrix",
@@ -267,6 +264,7 @@ describe("exec approval reply helpers", () => {
       cwd: "/tmp/work",
       host: "gateway",
       nodeId: "node-1",
+      scope: { kind: "payment", amount: "49.99", currency: "EUR", target: "Stripe" },
       expiresAtMs: 2500,
       nowMs: 1000,
     });
@@ -324,7 +322,9 @@ describe("exec approval reply helpers", () => {
     expect(payload.text).toContain("Heads up.");
     expect(payload.text).toContain("```txt\n/approve slug-1 allow-once\n```");
     expect(payload.text).toContain("```sh\necho ok\n```");
-    expect(payload.text).toContain("Host: gateway\nNode: node-1\nCWD: /tmp/work\nExpires in: 2s");
+    expect(payload.text).toContain(
+      "Host: gateway\nNode: node-1\nCWD: /tmp/work\nScope: Pay 49.99 EUR to Stripe\nExpires in: 2s",
+    );
     expect(payload.text).toContain("Full id: `req-1`");
   });
 
@@ -352,6 +352,7 @@ describe("exec approval reply helpers", () => {
         },
       ],
     });
+    expect(payload.text).not.toContain("Scope:");
   });
 
   it("compacts structured cwd paths in pending reply payloads", () => {

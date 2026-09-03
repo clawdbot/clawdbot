@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/types.js";
 import type { SecretRef } from "../../config/types.secrets.js";
 import type {
   WorkerNodeEnrollment,
+  WorkerNodeRuntimePreparation,
   WorkerProfile,
   WorkerProvider,
   WorkerSshEndpoint,
@@ -10,18 +11,19 @@ import type {
 } from "../../plugins/types.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { WorkerCredentialBroker } from "./credential-broker.js";
+import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import type {
   WorkerEnvironmentRecord,
   WorkerEnvironmentStore,
   WorkerEnvironmentTransitionPatch,
 } from "./store.js";
-import type { WorkerTunnelManager } from "./tunnel.js";
+import type { WorkerTunnelStopReason } from "./tunnel-contract.js";
 
 export type WorkerProviderLifecycleInputOptions = {
   store: WorkerEnvironmentStore;
   getConfig: () => OpenClawConfig;
-  resolveProvider: (providerId: string) => WorkerProvider<"internal"> | undefined;
+  resolveProvider: (providerId: string) => WorkerProvider | undefined;
   prepareInstallation: (
     install: WorkerInstallationArtifact["install"],
   ) => Promise<WorkerInstallationArtifact>;
@@ -33,19 +35,49 @@ export type WorkerProviderLifecycleInputOptions = {
     signal: AbortSignal;
   }) => Promise<WorkerAdmissionHandshake>;
   resolveSshIdentity?: (params: {
-    provider: WorkerProvider<"internal">;
+    provider: WorkerProvider;
     leaseId: string;
     profile: WorkerProfile;
     keyRef: SecretRef;
   }) => Promise<WorkerSshIdentity>;
-  ensureNodeWorkerBundle?: (deviceId: string) => Promise<WorkerAdmissionHandshake>;
-  prepareNodeEnrollment?: (record: WorkerEnvironmentRecord) => Promise<WorkerNodeEnrollment>;
+  ensureNodeWorkerBundle?: (params: {
+    deviceId: string;
+    artifact: Extract<WorkerInstallationArtifact, { install: "bundle" }>;
+    signal?: AbortSignal;
+  }) => Promise<WorkerAdmissionHandshake>;
+  prepareNodeBootstrap?: (record: WorkerEnvironmentRecord, signal?: AbortSignal) => Promise<void>;
+  prepareNodeRuntime?: (
+    record: WorkerEnvironmentRecord,
+    bundle: Extract<WorkerInstallationArtifact, { install: "bundle" }>,
+    signal?: AbortSignal,
+  ) => Promise<WorkerNodeRuntimePreparation>;
+  closeNodeRuntime?: (preparation: WorkerNodeRuntimePreparation) => void;
+  prepareNodeEnrollment?: (
+    record: WorkerEnvironmentRecord,
+    signal?: AbortSignal,
+  ) => Promise<WorkerNodeEnrollment>;
+  closeNodeEnrollment?: (enrollment: WorkerNodeEnrollment) => void;
   retireNodeEnrollment?: (record: WorkerEnvironmentRecord) => Promise<void>;
+  projectNamespace?: string;
+  placementStore?: WorkerSessionPlacementGate;
   providerCallTimeoutMs?: number;
 };
 
-export type WorkerProviderLifecycleOptions = WorkerProviderLifecycleInputOptions & {
-  tunnelManager?: Pick<WorkerTunnelManager, "stop">;
+export type WorkerProviderLifecycleOptions = Omit<
+  WorkerProviderLifecycleInputOptions,
+  "prepareInstallation"
+> & {
+  prepareInstallation: (
+    install: WorkerInstallationArtifact["install"],
+    signal?: AbortSignal,
+  ) => Promise<WorkerInstallationArtifact>;
+  tunnelManager?: {
+    stop(
+      environmentId: string,
+      ownerEpoch?: number,
+      reason?: WorkerTunnelStopReason,
+    ): Promise<void>;
+  };
   credentialBroker: WorkerCredentialBroker;
   callBootstrap: <T>(
     installation: WorkerInstallationArtifact,

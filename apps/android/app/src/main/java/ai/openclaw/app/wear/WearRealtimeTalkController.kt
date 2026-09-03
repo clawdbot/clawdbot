@@ -309,12 +309,22 @@ internal class WearRealtimeTalkController(
           val owner = activeOwner
           val identityMatches =
             when {
-              owner != null ->
+              owner != null -> {
                 (nodeId == null || owner.nodeId == nodeId) &&
                   (attemptId == null || owner.attemptId == attemptId)
-              nodeId != null && attemptId != null -> true
-              nodeId == null && attemptId == null -> true
-              else -> false
+              }
+
+              nodeId != null && attemptId != null -> {
+                true
+              }
+
+              nodeId == null && attemptId == null -> {
+                true
+              }
+
+              else -> {
+                false
+              }
             }
           if (!identityMatches) {
             null
@@ -433,7 +443,7 @@ internal class WearRealtimeTalkController(
       }
 
     when (obj["type"].asStringOrNull()) {
-      "ready", "inputAudio" ->
+      "ready", "inputAudio" -> {
         updateStateIfCurrent(
           owner = owner,
           sessionId = currentSessionId,
@@ -443,6 +453,8 @@ internal class WearRealtimeTalkController(
           status = WearRealtimeTalkStatus.LISTENING,
           statusText = "Listening",
         )
+      }
+
       "audio" -> {
         val encoded = obj["audioBase64"].asStringOrNull() ?: return
         if (encoded.length > OUTPUT_QUEUE_BASE64_CHAR_CAPACITY) {
@@ -475,23 +487,37 @@ internal class WearRealtimeTalkController(
           statusText = "Speaking…",
         )
       }
+
       "clear" -> {
         enqueueOutput(owner, currentSessionId, WearRealtimeAudioFrameType.CLEAR_OUTPUT, byteArrayOf())
       }
+
       "mark" -> {
         val markName = obj["markName"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty) ?: return
         acknowledgeMark(owner, currentSessionId, markName)
       }
-      "transcript" -> handleTranscriptEvent(owner, currentSessionId, obj)
-      "toolCall" -> handleToolCallEvent(owner, currentSessionId, obj)
-      "toolResult" -> Unit
-      "error" ->
+
+      "transcript" -> {
+        handleTranscriptEvent(owner, currentSessionId, obj)
+      }
+
+      "toolCall" -> {
+        handleToolCallEvent(owner, currentSessionId, obj)
+      }
+
+      "toolResult" -> {}
+
+      "error" -> {
         fail(
           obj["message"].asStringOrNull() ?: "Real-Time Talk failed",
           expectedOwner = owner,
           expectedSessionId = currentSessionId,
         )
-      "close" -> abort(owner, currentSessionId)
+      }
+
+      "close" -> {
+        abort(owner, currentSessionId)
+      }
     }
   }
 
@@ -541,7 +567,10 @@ internal class WearRealtimeTalkController(
             )
           }
         }
-        "assistant" -> upsertConversation(WearRealtimeTalkRole.ASSISTANT, text, final)
+
+        "assistant" -> {
+          upsertConversation(WearRealtimeTalkRole.ASSISTANT, text, final)
+        }
       }
     }
   }
@@ -616,11 +645,15 @@ internal class WearRealtimeTalkController(
                   delivered = false
                 }
               }
+
               WearRealtimeAudioFrameType.CLEAR_OUTPUT -> {
                 sendWatchFrame(owner, message.type, message.payload)
                 delivered = isCurrentOutput(owner, activeSessionId)
               }
-              WearRealtimeAudioFrameType.INPUT_PCM -> error("Phone cannot emit Watch input audio")
+
+              WearRealtimeAudioFrameType.INPUT_PCM -> {
+                error("Phone cannot emit Watch input audio")
+              }
             }
           } catch (err: Throwable) {
             if (err is CancellationException) throw err
@@ -643,6 +676,7 @@ internal class WearRealtimeTalkController(
             WearRealtimeAudioFrameType.OUTPUT_PCM -> {
               schedulePlaybackIdle(owner, activeSessionId)
             }
+
             WearRealtimeAudioFrameType.CLEAR_OUTPUT -> {
               playbackEndsAtMillis = 0L
               playbackIdleJob?.cancel()
@@ -656,7 +690,10 @@ internal class WearRealtimeTalkController(
                 statusText = "Listening",
               )
             }
-            WearRealtimeAudioFrameType.INPUT_PCM -> error("Phone cannot emit Watch input audio")
+
+            WearRealtimeAudioFrameType.INPUT_PCM -> {
+              error("Phone cannot emit Watch input audio")
+            }
           }
         }
       }

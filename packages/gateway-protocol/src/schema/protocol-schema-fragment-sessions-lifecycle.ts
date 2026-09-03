@@ -2,6 +2,9 @@ import * as viewerPresence from "./sessions-viewer-presence.js";
 import * as sessions from "./sessions.js";
 
 export const SessionLifecycleProtocolSchemas = {
+  SessionsGoalUpdateParams: sessions.SessionsGoalUpdateParamsSchema,
+  SessionsGoalClearParams: sessions.SessionsGoalClearParamsSchema,
+  SessionsGoalMutationResult: sessions.SessionsGoalMutationResultSchema,
   SessionsCompactionListParams: sessions.SessionsCompactionListParamsSchema,
   SessionsCompactionBranchParams: sessions.SessionsCompactionBranchParamsSchema,
   SessionsCompactionRestoreParams: sessions.SessionsCompactionRestoreParamsSchema,
@@ -40,6 +43,8 @@ export const SessionLifecycleProtocolSchemas = {
   SessionWorktreeInfo: sessions.SessionWorktreeInfoSchema,
   SessionsCreateParams: sessions.SessionsCreateParamsSchema,
   SessionsCreateResult: sessions.SessionsCreateResultSchema,
+  SessionsTitlePrepareParams: sessions.SessionsTitlePrepareParamsSchema,
+  SessionsTitlePrepareResult: sessions.SessionsTitlePrepareResultSchema,
   SessionsRecoverParams: sessions.SessionsRecoverParamsSchema,
   SessionsRecoverResult: sessions.SessionsRecoverResultSchema,
   SessionsSendParams: sessions.SessionsSendParamsSchema,

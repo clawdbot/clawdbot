@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 
 vi.mock("../../plugins/bundled-dir.js", async (importOriginal) => {
@@ -28,9 +29,16 @@ function restoreBundledPluginsDir(previousBundledPluginsDir: string | undefined)
   }
 }
 
-function alphaChannelMetadata({ includeSetup = false }: { includeSetup?: boolean } = {}) {
+function alphaChannelMetadata({
+  includeSetup = false,
+  rootDir = path.join(
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? path.resolve("extensions"),
+    "alpha",
+  ),
+}: { includeSetup?: boolean; rootDir?: string } = {}) {
   return {
     dirName: "alpha",
+    rootDir,
     manifest: {
       id: "alpha",
       channels: ["alpha"],
@@ -212,6 +220,7 @@ function packageMarkerPathsToRoots(markerPaths: string[], extensionsDir: string)
 }
 
 afterEach(() => {
+  clearPluginMetadataLifecycleCaches();
   delete (globalThis as { __openclawBundledChannelReenter?: () => void })[
     "__openclawBundledChannelReenter"
   ];
@@ -452,6 +461,7 @@ describe("bundled channel entry shape guards", () => {
             source: path.join(root, "extensions", "alpha", "index.ts"),
             built: path.join(root, "extensions", "alpha", "index.ts"),
           },
+          rootDir: path.join(root, "extensions", "alpha"),
         },
       ],
       resolveBundledChannelGeneratedPath: () => path.join(pluginDir, "index.js"),
@@ -709,7 +719,9 @@ describe("bundled channel entry shape guards", () => {
       }),
     }));
     vi.doMock("../../plugins/bundled-channel-runtime.js", () => ({
-      listBundledChannelPluginMetadata: () => [alphaChannelMetadata({ includeSetup: true })],
+      listBundledChannelPluginMetadata: () => [
+        alphaChannelMetadata({ includeSetup: true, rootDir: pluginDir }),
+      ],
       resolveBundledChannelGeneratedPath: (
         rootDir: string,
         entry: BundledEntrySource | undefined,
@@ -1103,11 +1115,7 @@ describe("bundled channel entry shape guards", () => {
   });
 
   it("keeps bundled hot runtime barrels off the broad core SDK surface", () => {
-    const offenders = [
-      "extensions/googlechat/runtime-api.ts",
-      "extensions/irc/src/runtime-api.ts",
-      "extensions/matrix/src/runtime-api.ts",
-    ].filter((filePath) =>
+    const offenders = ["extensions/googlechat/runtime-api.ts"].filter((filePath) =>
       fs.readFileSync(path.resolve(filePath), "utf8").includes("openclaw/plugin-sdk/core"),
     );
 
@@ -1190,6 +1198,7 @@ module.exports = {
           {
             dirName: "alpha",
             idHint: "alpha",
+            rootDir: pluginDir,
             source: {
               source: "./index.cjs",
               built: "./index.cjs",

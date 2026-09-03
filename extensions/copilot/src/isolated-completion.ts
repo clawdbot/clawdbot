@@ -24,6 +24,7 @@ type IsolatedSession = {
 
 type CompletionBoundary = {
   abortSignal?: AbortSignal;
+  assertCurrent?: () => void;
   deadlineMs: number;
   timeoutMs: number;
 };
@@ -110,6 +111,7 @@ async function awaitWithinCompletionBoundary<T>(params: {
       if (boundaryWon) {
         throw boundaryError ?? createTimeoutError(params.boundary.timeoutMs);
       }
+      params.boundary.assertCurrent?.();
       return params.start(remainingMs);
     })
     .then(async (value) => {
@@ -164,6 +166,7 @@ export async function runCopilotIsolatedCompletion(
   }
   const boundary: CompletionBoundary = {
     abortSignal: params.abortSignal,
+    assertCurrent: params.assertCurrent,
     deadlineMs: Date.now() + params.timeoutMs,
     timeoutMs: params.timeoutMs,
   };

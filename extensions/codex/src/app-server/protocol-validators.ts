@@ -12,17 +12,20 @@ import rawThreadResumeResponseSchema from "./protocol-generated/json/v2/ThreadRe
 import rawThreadStartResponseSchema from "./protocol-generated/json/v2/ThreadStartResponse.json" with { type: "json" };
 import rawTurnCompletedNotificationSchema from "./protocol-generated/json/v2/TurnCompletedNotification.json" with { type: "json" };
 import rawTurnStartResponseSchema from "./protocol-generated/json/v2/TurnStartResponse.json" with { type: "json" };
-import type {
-  CodexDynamicToolCallParams,
-  CodexErrorNotification,
-  CodexModelListResponse,
-  CodexThreadForkResponse,
-  CodexThreadForkParams,
-  CodexThreadResumeResponse,
-  CodexThreadStartResponse,
-  CodexTurn,
-  CodexTurnCompletedNotification,
-  CodexTurnStartResponse,
+import {
+  isJsonObject,
+  type CodexDynamicToolCallParams,
+  type CodexErrorNotification,
+  type CodexModelListResponse,
+  type CodexThread,
+  type CodexThreadForkResponse,
+  type CodexThreadForkParams,
+  type CodexThreadItem,
+  type CodexThreadResumeResponse,
+  type CodexThreadStartResponse,
+  type CodexTurn,
+  type CodexTurnCompletedNotification,
+  type CodexTurnStartResponse,
 } from "./protocol.js";
 
 type ValidationError = {
@@ -349,6 +352,26 @@ export function assertCodexThreadResumeResponse(value: unknown): CodexThreadResu
   return assertCodexShape(validateThreadResumeResponse, normalized, "thread/resume response");
 }
 
+export class CodexThreadDirectInputError extends Error {
+  constructor(threadId: string) {
+    super(
+      `Codex thread ${threadId} is controlled by its parent and cannot accept direct input. ` +
+        "Continue its parent thread, or use /new for a separate OpenClaw session.",
+    );
+    this.name = "CodexThreadDirectInputError";
+  }
+}
+
+/** Native V2 children allow observation, but only their parent may supply turn input. */
+export function assertCodexThreadAcceptsDirectInput(
+  thread: Pick<CodexThread, "id" | "canAcceptDirectInput">,
+): void {
+  // Unloaded threads report null; only an explicit native refusal is conclusive.
+  if (thread.canAcceptDirectInput === false) {
+    throw new CodexThreadDirectInputError(thread.id);
+  }
+}
+
 /** Asserts and normalizes a Codex turn/start response. */
 export function assertCodexTurnStartResponse(value: unknown): CodexTurnStartResponse {
   const normalized = normalizeWithDefaults(
@@ -356,6 +379,34 @@ export function assertCodexTurnStartResponse(value: unknown): CodexTurnStartResp
     normalizeTurnStartResponse(value),
   );
   return assertCodexShape(validateTurnStartResponse, normalized, "turn/start response");
+}
+
+/** Only the current text prompt may be echoed; capabilities and historical items are not passive. */
+export function assertCodexPassiveTurnItems(
+  items: readonly CodexThreadItem[],
+  prompt: string,
+  taskLabel: string,
+): void {
+  let promptEchoSeen = false;
+  for (const item of items) {
+    if (item.type === "agentMessage" || item.type === "reasoning") {
+      continue;
+    }
+    if (item.type === "userMessage" && !promptEchoSeen) {
+      const content = Array.isArray(item.content) ? item.content : [];
+      const input = content[0];
+      if (
+        content.length === 1 &&
+        isJsonObject(input) &&
+        input.type === "text" &&
+        input.text === prompt
+      ) {
+        promptEchoSeen = true;
+        continue;
+      }
+    }
+    throw new Error(`Codex ${taskLabel} returned unexpected native item: ${item.type}`);
+  }
 }
 
 /** Reads Codex dynamic-tool call params, returning undefined for invalid payloads. */
@@ -441,7 +492,7 @@ function normalizeThreadItem(value: unknown): unknown {
   const item = value as { type?: unknown };
   switch (item.type) {
     case "agentMessage":
-      return { phase: null, memoryCitation: null, ...value };
+      return { phase: null, delivery: null, memoryCitation: null, ...value };
     case "plan":
       return { text: "", ...value };
     case "reasoning":

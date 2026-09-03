@@ -109,6 +109,8 @@ describe("standing intents", () => {
       "Intent is armed for this channel. The system injects the reminder automatically when it triggers. Do not deliver it early or cancel it unless the user asks.",
     );
     expect(tool.description).toContain("system injects the reminder automatically");
+    expect(tool.description).toContain("Use scheduled tasks for time-based reminders");
+    expect(tool.description).not.toMatch(/\b(?:cron|automations)\b/u);
     expect(tool.description).toContain(
       'Use "channel" (the default) for any "whenever I mention X" request.',
     );

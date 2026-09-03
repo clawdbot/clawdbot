@@ -294,6 +294,100 @@ describe("plugin run context lifecycle", () => {
     ]);
   });
 
+  it("fences retired agent-event callbacks from successor run context", async () => {
+    let releasePriorHandler: (() => void) | undefined;
+    let markPriorHandlerStarted: (() => void) | undefined;
+    let retiredHandlerSawContext: unknown;
+    const priorHandlerStarted = new Promise<void>((resolve) => {
+      markPriorHandlerStarted = resolve;
+    });
+    const priorHandlerRelease = new Promise<void>((resolve) => {
+      releasePriorHandler = resolve;
+    });
+    const prior = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry: prior.registry,
+      config: prior.config,
+      record: createPluginRecord({
+        id: "agent-event-generation",
+        name: "Agent Event Generation",
+      }),
+      register(api) {
+        api.registerAgentEventSubscription({
+          id: "prior",
+          streams: ["tool"],
+          async handle(event, ctx) {
+            if (event.data.name !== "hold") {
+              return;
+            }
+            markPriorHandlerStarted?.();
+            await priorHandlerRelease;
+            retiredHandlerSawContext = ctx.getRunContext("state");
+            ctx.setRunContext("state", { generation: "A" });
+            ctx.clearRunContext("preserved");
+          },
+        });
+      },
+    });
+    const successor = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry: successor.registry,
+      config: successor.config,
+      record: createPluginRecord({
+        id: "agent-event-generation",
+        name: "Agent Event Generation",
+      }),
+      register(api) {
+        api.registerAgentEventSubscription({
+          id: "successor",
+          streams: ["tool"],
+          handle(event, ctx) {
+            if (event.data.name !== "successor") {
+              return;
+            }
+            ctx.setRunContext("state", { generation: "B" });
+            ctx.setRunContext("preserved", { generation: "B" });
+          },
+        });
+      },
+    });
+
+    setActivePluginRegistry(prior.registry.registry);
+    emitAgentEvent({
+      runId: "run-agent-event-generation",
+      stream: "tool",
+      data: { name: "hold" },
+    });
+    await priorHandlerStarted;
+
+    setActivePluginRegistry(successor.registry.registry);
+    emitAgentEvent({
+      runId: "run-agent-event-generation",
+      stream: "tool",
+      data: { name: "successor" },
+    });
+    await waitForPluginEventHandlers();
+
+    // Restoring the same registry object must not revive callbacks admitted before cutover.
+    setActivePluginRegistry(prior.registry.registry);
+    releasePriorHandler?.();
+    await waitForPluginEventHandlers();
+
+    expect(retiredHandlerSawContext).toBeUndefined();
+    expect(
+      getPluginRunContext({
+        pluginId: "agent-event-generation",
+        get: { runId: "run-agent-event-generation", namespace: "state" },
+      }),
+    ).toEqual({ generation: "B" });
+    expect(
+      getPluginRunContext({
+        pluginId: "agent-event-generation",
+        get: { runId: "run-agent-event-generation", namespace: "preserved" },
+      }),
+    ).toEqual({ generation: "B" });
+  });
+
   it("does not let delayed non-terminal subscriptions resurrect closed run context", async () => {
     let releaseToolHandler: (() => void) | undefined;
     let delayedToolHandlerSawContext: unknown;
@@ -894,6 +988,7 @@ describe("plugin run context lifecycle", () => {
     ).toBe(true);
     dispatchPluginAgentEventSubscriptions({
       registry: createEmptyPluginRegistry(),
+      isLive: () => true,
       event: {
         runId: "run-closed",
         seq: 1,

@@ -11,6 +11,20 @@ export function unsupportedPolicyKey(
   return Object.keys(value).find((key) => !allowed.has(key));
 }
 
+export function isChannelDenyRule(value: unknown): value is {
+  readonly id?: string;
+  readonly when?: { readonly provider?: string };
+  readonly reason?: string;
+} {
+  return (
+    isRecord(value) &&
+    (value.id === undefined || typeof value.id === "string") &&
+    (value.reason === undefined || typeof value.reason === "string") &&
+    isRecord(value.when) &&
+    typeof value.when.provider === "string"
+  );
+}
+
 export function policyStringArrayShapeFinding(
   value: unknown,
   params: {

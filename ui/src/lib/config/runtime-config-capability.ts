@@ -61,7 +61,7 @@ export type RuntimeConfigCapability = {
    */
   runExternalMutation: <T>(
     task: (client: GatewayBrowserClient) => Promise<T>,
-    options?: RuntimeConfigExternalMutationOptions,
+    options?: RuntimeConfigExternalMutationOptions<T>,
   ) => Promise<RuntimeConfigExternalMutationResult<T>>;
   lookupSchemaPath: (path: string) => Promise<unknown>;
   subscribe: (listener: (state: RuntimeConfigState) => void) => () => void;
@@ -142,10 +142,11 @@ export function createRuntimeConfigCapability(
       state.connected &&
       state.configNeedsApply &&
       state.configSnapshot?.appliedConfigHash !== undefined,
-    refresh: (isCurrent) => loadOnce("config", () => loadConfig(state, {}, isCurrent)),
+    refresh: (isCurrent) =>
+      loadOnce("config", () => loadConfig(state, { background: true }, isCurrent)),
   });
-  const refreshConnectionState = () => {
-    const config = run(() => loadConfig(state));
+  const refreshConnectionState = (beforeApplySnapshot?: () => void) => {
+    const config = run(() => loadConfig(state, { beforeApplySnapshot }));
     void trackLoad("config", config);
     if (state.configSchemaVersion !== null && canLoadConfigSchema()) {
       void trackLoad(

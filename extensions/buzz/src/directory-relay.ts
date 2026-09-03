@@ -6,14 +6,13 @@ import {
   BUZZ_ROOM_METADATA_KIND,
   type BuzzDirectoryState,
 } from "./directory-state.js";
-import { openBuzzRelaySubscription } from "./relay-subscription.js";
+import { openBuzzRelaySubscription, queryBuzzRelaySnapshot } from "./relay-subscription.js";
 
 const BUZZ_ROOM_QUERY_CHUNK_SIZE = 1_000;
 const PROFILE_SUBSCRIPTION_REPLACED_REASON = "directory profile subscription replaced";
 const PROFILE_SUBSCRIPTION_FAILED_REASON = "directory profile subscription generation failed";
 const DIRECTORY_SHUTDOWN_REASON = "directory shutdown";
 const DIRECTORY_QUERY_COMPLETE_REASON = "directory query complete";
-const DIRECTORY_QUERY_TIMEOUT_MS = 10_000;
 const PROFILE_SUBSCRIPTION_READY_TIMEOUT_MS = 10_000;
 
 type BuzzSubscription = ReturnType<Relay["prepareSubscription"]>;
@@ -32,69 +31,20 @@ async function queryBuzzDirectoryBatch(params: {
   signal?: AbortSignal;
 }): Promise<void> {
   params.signal?.throwIfAborted();
-  await new Promise<void>((resolve, reject) => {
-    let settled = false;
-    let receivedEose = false;
-    const timeout = setTimeout(() => {
-      const error = new Error("Timed out loading Buzz directory snapshot");
-      finish(error);
-      if (params.onTimeout) {
-        params.onTimeout(error);
-      } else {
-        params.relay.close();
-      }
-    }, DIRECTORY_QUERY_TIMEOUT_MS);
-    const subscriptionRef: { current?: BuzzSubscription } = {};
-    const finish = (error?: unknown) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timeout);
-      params.signal?.removeEventListener("abort", onAbort);
-      if (receivedEose) {
-        subscriptionRef.current?.close(DIRECTORY_QUERY_COMPLETE_REASON);
-      }
-      if (error === undefined) {
-        resolve();
-      } else {
-        reject(
-          error instanceof Error
-            ? error
-            : new Error("Buzz directory query failed", { cause: error }),
-        );
-      }
-    };
-    const onAbort = () =>
-      finish(params.signal?.reason ?? new Error("Buzz directory query aborted"));
-    params.signal?.addEventListener("abort", onAbort, { once: true });
-    try {
-      subscriptionRef.current = openBuzzRelaySubscription(params.relay, [params.filter], {
-        onevent: params.onEvent,
-        oneose: () => {
-          receivedEose = true;
-          if (settled) {
-            subscriptionRef.current?.close(DIRECTORY_QUERY_COMPLETE_REASON);
-          } else {
-            finish();
-          }
-        },
-        onclose: (reason) => {
-          if (reason !== DIRECTORY_QUERY_COMPLETE_REASON) {
-            finish(new Error(`Buzz directory query closed: ${reason}`));
-          }
-        },
-      });
-    } catch (error) {
-      finish(error);
-      return;
-    }
-    if (settled && receivedEose) {
-      subscriptionRef.current.close(DIRECTORY_QUERY_COMPLETE_REASON);
-    }
-    if (params.signal?.aborted) {
-      onAbort();
-    }
+  await queryBuzzRelaySnapshot({
+    relay: params.relay,
+    filters: [params.filter],
+    signal: params.signal,
+    timeoutMessage: "Timed out loading Buzz directory snapshot",
+    abortMessage: "Buzz directory query aborted",
+    failureMessage: "Buzz directory query failed",
+    closeReason: DIRECTORY_QUERY_COMPLETE_REASON,
+    closeMessage: (reason) => `Buzz directory query closed: ${reason}`,
+    onEvent: params.onEvent,
+    result: () => {},
+    onTimeout: params.onTimeout,
+    closeRelayOnTimeout: !params.onTimeout,
+    checkAbortAfterSubscribe: true,
   });
 }
 

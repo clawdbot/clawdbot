@@ -37,6 +37,10 @@ export const discordChannelConfigUiHints = {
     },
     progress: { includeCommentary: true },
   }),
+  joinIntro: {
+    label: "Discord Guild Join Introduction",
+    help: "Post one brief, room-specific introduction when the bot joins an allowed Discord guild (default: true). Account settings override the channel-wide setting.",
+  },
   proxy: {
     label: "Discord Proxy URL",
     help: "Proxy URL for Discord gateway + API requests (app-id lookup and allowlist resolution). Set per account via channels.discord.accounts.<id>.proxy.",
@@ -55,11 +59,11 @@ export const discordChannelConfigUiHints = {
   },
   "threadBindings.enabled": {
     label: "Discord Thread Binding Enabled",
-    help: "Enable Discord thread binding features (/focus, bound-thread routing/delivery, and thread-bound subagent sessions). Overrides session.threadBindings.enabled when set.",
+    help: "Enable Discord thread-bound session spawning, routing, and delivery. Overrides session.threadBindings.enabled when set.",
   },
   "threadBindings.idleHours": {
     label: "Discord Thread Binding Idle Timeout (hours)",
-    help: "Inactivity window in hours for Discord thread-bound sessions (/focus and spawned thread sessions). Set 0 to disable idle auto-unfocus (default: 24). Overrides session.threadBindings.idleHours when set.",
+    help: "Inactivity window in hours for Discord thread-bound sessions. Set 0 to disable idle expiry (default: 24). Overrides session.threadBindings.idleHours when set.",
   },
   "threadBindings.maxAgeHours": {
     label: "Discord Thread Binding Max Age (hours)",

@@ -53,17 +53,17 @@ describe("buildQaSuiteSummaryJson", () => {
       ...baseParams,
       channelDriver: "crabline",
       channelDriverSelection: {
-        capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
+        capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
         channel: "telegram",
         channelDriver: "crabline",
-        smokeArtifactPath: "crabline-fake-provider-smoke.json",
+        providerReadinessArtifactPath: "crabline-provider-readiness.json",
       },
     });
 
     expect(json.run.channelDriver).toBe("crabline");
     expect(json.run.channel).toBe("telegram");
-    expect(json.run.channelCapabilityMatrixPath).toBe("crabline-fake-provider-capabilities.json");
-    expect(json.run.channelDriverSmokePath).toBe("crabline-fake-provider-smoke.json");
+    expect(json.run.channelCapabilityMatrixPath).toBe("crabline-channel-driver-capabilities.json");
+    expect(json.run.channelDriverSmokePath).toBe("crabline-provider-readiness.json");
   });
 
   it("records realized non-Crabline channel metadata", () => {

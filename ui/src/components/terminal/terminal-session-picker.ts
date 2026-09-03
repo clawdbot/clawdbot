@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import { icons } from "../icons.ts";
+import { renderPanelLoadingSkeleton } from "../panel-loading-skeleton.ts";
 import type { TerminalSessionInfo } from "./terminal-connection.ts";
 
 type TerminalSessionPickerProps = {
@@ -54,7 +55,7 @@ export function renderTerminalSessionPicker(props: TerminalSessionPickerProps) {
               </button>
             </div>
             ${props.loading
-              ? html`<div class="tp-session-empty">${t("terminal.loadingSessions")}</div>`
+              ? renderPanelLoadingSkeleton("terminal", t("terminal.loadingSessions"), true)
               : props.sessions.length === 0
                 ? html`<div class="tp-session-empty">${t("terminal.noSessions")}</div>`
                 : props.sessions.map((session) => {

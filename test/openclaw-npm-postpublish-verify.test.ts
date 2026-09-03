@@ -578,14 +578,17 @@ describe("collectInstalledPackageErrors", () => {
   ): void {
     const omitted = new Set(omittedIds);
     for (const relativePath of requiredBundledPluginPackPaths) {
-      const match = /^dist\/extensions\/([^/]+)\/package\.json$/u.exec(relativePath);
+      const match = /^dist\/extensions\/([^/]+)\//u.exec(relativePath);
       if (!match || omitted.has(match[1] ?? "")) {
         continue;
       }
-      const packageJsonPath = join(packageRoot, relativePath);
-      mkdirSync(dirname(packageJsonPath), { recursive: true });
-      writeFileSync(packageJsonPath, "{}\n", "utf8");
+      const artifactPath = join(packageRoot, relativePath);
+      mkdirSync(dirname(artifactPath), { recursive: true });
+      writeFileSync(artifactPath, relativePath.endsWith(".json") ? "{}\n" : "export {};\n", "utf8");
     }
+    const inventoryPath = join(packageRoot, "dist", "postinstall-inventory.json");
+    mkdirSync(dirname(inventoryPath), { recursive: true });
+    writeFileSync(inventoryPath, JSON.stringify(requiredBundledPluginPackPaths), "utf8");
   }
 
   it("flags version mismatches", () => {
@@ -643,10 +646,17 @@ describe("collectInstalledPackageErrors", () => {
           "package.json",
         );
         const expectedError = `installed bundled extension manifest missing: ${missingManifestPath}.`;
+        const missingArtifactErrors = requiredBundledPluginPackPaths
+          .filter((relativePath) => relativePath.startsWith(`dist/extensions/${providerId}/`))
+          .map((relativePath) =>
+            relativePath.endsWith("/package.json")
+              ? expectedError
+              : `installed bundled plugin artifact missing: ${relativePath}.`,
+          );
 
-        expect(collectInstalledBundledExtensionManifestErrors(packageRoot)).toStrictEqual([
-          expectedError,
-        ]);
+        expect(collectInstalledBundledExtensionManifestErrors(packageRoot)).toStrictEqual(
+          missingArtifactErrors,
+        );
         expect(
           collectInstalledPackageErrors({
             expectedVersion: "2026.3.23",
@@ -659,6 +669,46 @@ describe("collectInstalledPackageErrors", () => {
       }
     },
   );
+
+  it.each([
+    ["plugin manifest", "dist/extensions/ollama/openclaw.plugin.json"],
+    ["generated plugin artifact", "dist/extensions/ollama/provider-discovery.js"],
+  ])("rejects an installed bundled %s missing after postinstall", (_, relativePath) => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writeExpectedBundledExtensionManifests(packageRoot);
+      rmSync(join(packageRoot, relativePath));
+
+      expect(collectInstalledBundledExtensionManifestErrors(packageRoot)).toContain(
+        `installed bundled plugin artifact missing: ${relativePath}.`,
+      );
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["plugin manifest", "dist/extensions/ollama/openclaw.plugin.json"],
+    ["generated plugin artifact", "dist/extensions/ollama/provider-discovery.js"],
+  ])("rejects an installed bundled %s omitted from its inventory", (_, relativePath) => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writeExpectedBundledExtensionManifests(packageRoot);
+      writeFileSync(
+        join(packageRoot, "dist", "postinstall-inventory.json"),
+        JSON.stringify(requiredBundledPluginPackPaths.filter((entry) => entry !== relativePath)),
+        "utf8",
+      );
+
+      expect(collectInstalledBundledExtensionManifestErrors(packageRoot)).toContain(
+        `installed bundled plugin artifact omitted from dist inventory: ${relativePath}.`,
+      );
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
 
   it("rejects an installed package without its bundled extension root", () => {
     const packageRoot = makeInstalledPackageRoot();
@@ -700,16 +750,16 @@ describe("collectInstalledPackageErrors", () => {
       expect(filteredErrors).toStrictEqual(expectedErrors);
       expect(filteredErrors).toEqual(
         expect.arrayContaining(
-          ["ollama", "lmstudio"].map(
-            (providerId) =>
-              `installed bundled extension manifest missing: ${join(
-                packageRoot,
-                "dist",
-                "extensions",
-                providerId,
-                "package.json",
-              )}.`,
-          ),
+          ["ollama", "lmstudio"].flatMap((providerId) => [
+            `installed bundled extension manifest missing: ${join(
+              packageRoot,
+              "dist",
+              "extensions",
+              providerId,
+              "package.json",
+            )}.`,
+            `installed bundled plugin artifact missing: dist/extensions/${providerId}/openclaw.plugin.json.`,
+          ]),
         ),
       );
     } finally {
@@ -744,16 +794,16 @@ describe("collectInstalledPackageErrors", () => {
       expect(probe.status, probe.stderr).toBe(0);
       expect(JSON.parse(probe.stdout)).toEqual(
         expect.arrayContaining(
-          ["ollama", "lmstudio"].map(
-            (providerId) =>
-              `installed bundled extension manifest missing: ${join(
-                packageRoot,
-                "dist",
-                "extensions",
-                providerId,
-                "package.json",
-              )}.`,
-          ),
+          ["ollama", "lmstudio"].flatMap((providerId) => [
+            `installed bundled extension manifest missing: ${join(
+              packageRoot,
+              "dist",
+              "extensions",
+              providerId,
+              "package.json",
+            )}.`,
+            `installed bundled plugin artifact missing: dist/extensions/${providerId}/openclaw.plugin.json.`,
+          ]),
         ),
       );
     } finally {

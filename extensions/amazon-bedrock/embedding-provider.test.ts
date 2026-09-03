@@ -296,12 +296,16 @@ describe("bedrock embedding endpoint routing", () => {
     });
 
     if ("expectedError" in testCase) {
-      await expect(provider.embedQuery("private memory")).rejects.toThrow(testCase.expectedError);
+      await expect(provider.embed("private memory", { inputType: "query" })).rejects.toThrow(
+        testCase.expectedError,
+      );
       expect(observedRequests).toEqual([]);
       return;
     }
 
-    await expect(provider.embedQuery("private memory")).resolves.toEqual([0.6, 0.8]);
+    await expect(provider.embed("private memory", { inputType: "query" })).resolves.toEqual([
+      0.6, 0.8,
+    ]);
     expect(observedRequests).toEqual([
       {
         hostname,
@@ -398,14 +402,26 @@ describe("bedrock embedding response parsing", () => {
       model: "cohere.embed-english-v3",
       raw: '{"embeddings":[[1],{"bad":true}]}',
     },
+    ...[
+      { model: "amazon.titan-embed-text-v2:0", vector: '"embedding":[3,4]' },
+      { model: "cohere.embed-english-v3", vector: '"embeddings":[[3,4]]' },
+    ].map(({ model, vector }) => ({
+      name: `invalid UTF-8 for ${model}`,
+      model,
+      raw: Buffer.concat([
+        Buffer.from('{"ignored":"bad'),
+        Buffer.from([0xff]),
+        Buffer.from(`",${vector}}`),
+      ]),
+    })),
   ])("rejects $name through the provider boundary", async ({ model, raw }) => {
     vi.spyOn(bedrockRuntimeSdk.BedrockRuntimeClient.prototype, "send").mockResolvedValue({
-      body: new TextEncoder().encode(raw),
+      body: typeof raw === "string" ? new TextEncoder().encode(raw) : raw,
     } as never);
     const { provider } = await createBedrockEmbeddingProvider({ config: {}, model });
     const request = model.startsWith("cohere.")
-      ? provider.embedBatch(["private memory"])
-      : provider.embedQuery("private memory");
+      ? provider.embedBatch(["private memory"], { inputType: "document" })
+      : provider.embed("private memory", { inputType: "query" });
 
     await expect(request).rejects.toThrow(
       "Amazon Bedrock embedding response returned malformed JSON",
@@ -425,7 +441,9 @@ describe("bedrock embedding inference profiles", () => {
         } as never);
       const { provider, client } = await createBedrockEmbeddingProvider({ config: {}, model });
 
-      await expect(provider.embedQuery("private memory")).resolves.toEqual([0.6, 0.8]);
+      await expect(provider.embed("private memory", { inputType: "query" })).resolves.toEqual([
+        0.6, 0.8,
+      ]);
 
       const command = send.mock.calls.at(-1)?.[0] as {
         input?: { body?: string | Uint8Array; modelId?: string };

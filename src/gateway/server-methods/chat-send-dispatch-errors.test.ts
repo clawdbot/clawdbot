@@ -82,6 +82,9 @@ describe("createChatSendDispatchErrorLifecycle", () => {
       sessionKey,
       timeoutMs: 60_000,
     });
+    if (!registration.registered) {
+      throw new Error("expected the chat abort controller to be registered");
+    }
     const entry = registration.entry;
     const removeChatRun = vi.fn();
     const broadcast = vi.fn();
@@ -166,7 +169,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
       expect(terminalizeRestartSafeAdmission).not.toHaveBeenCalled();
     } finally {
       unsubscribe();
-      registration.cleanup({ force: true });
+      registration.cleanup();
     }
   });
 
@@ -377,7 +380,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
       expect(cleanupAdmittedRun).not.toHaveBeenCalled();
       releasePersistence.resolve();
       await finalization;
-      expect(activeRunCleanup).toHaveBeenCalledWith({ force: true });
+      expect(activeRunCleanup).toHaveBeenCalledExactlyOnceWith();
       expect(cleanupAdmittedRun).toHaveBeenCalledOnce();
     } finally {
       releasePersistence.resolve();

@@ -21,7 +21,10 @@ import type { AgentModelEntryConfig } from "../../config/types.agent-defaults.js
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { inspectModelReference } from "./model-reference-validation.js";
-import { canonicalizeModelCatalogProviderRef } from "./provider-aliases.js";
+import {
+  canonicalizeModelCatalogProviderRef,
+  createModelCatalogProviderAliasCanonicalizer,
+} from "./provider-aliases.js";
 
 export { formatTokenK } from "./list.format.js";
 export { ensureFlagCompatibility } from "./list.options.js";
@@ -57,7 +60,10 @@ type UpdateConfigContext = {
 
 /** Reads source config, applies a mutator, and writes only the source-form config. */
 export async function updateConfig(
-  mutator: (cfg: OpenClawConfig, context: UpdateConfigContext) => OpenClawConfig,
+  mutator: (
+    cfg: OpenClawConfig,
+    context: UpdateConfigContext,
+  ) => OpenClawConfig | Promise<OpenClawConfig>,
 ): Promise<OpenClawConfig> {
   const snapshot = await readConfigFileSnapshot();
   if (!snapshot.valid) {
@@ -68,7 +74,7 @@ export async function updateConfig(
   const runtimeConfig = structuredClone(snapshot.runtimeConfig ?? snapshot.config);
   // Mutate source config so SecretRefs and unresolved placeholders do not get
   // overwritten by runtime-resolved secret values.
-  const next = mutator(sourceConfig, { runtimeConfig });
+  const next = await mutator(sourceConfig, { runtimeConfig });
   await replaceConfigFile({
     nextConfig: next,
     baseHash: snapshot.hash,
@@ -112,25 +118,25 @@ function resolveAuthoredModelAliasTarget(params: {
   return resolved?.alias ? resolved.ref : undefined;
 }
 
-/** Resolves model reference strings to canonical provider/model keys. */
+/** Resolves model reference strings to index-aligned canonical provider/model keys. */
 export function resolveModelKeysFromEntries(params: {
   cfg: OpenClawConfig;
   entries: readonly string[];
-}): string[] {
+}): Array<string | undefined> {
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
     defaultProvider: DEFAULT_PROVIDER,
   });
-  return params.entries
-    .map((entry) =>
-      resolveModelRefFromString({
-        raw: entry,
-        defaultProvider: DEFAULT_PROVIDER,
-        aliasIndex,
-      }),
-    )
-    .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
-    .map((entry) => modelKey(entry.ref.provider, entry.ref.model));
+  const canonicalizer = createModelCatalogProviderAliasCanonicalizer({ cfg: params.cfg });
+  return params.entries.map((entry) => {
+    const resolved = resolveModelRefFromString({
+      raw: entry,
+      defaultProvider: DEFAULT_PROVIDER,
+      aliasIndex,
+    });
+    const ref = resolved ? canonicalizer.ref(resolved.ref) : undefined;
+    return ref ? modelKey(ref.provider, ref.model) : undefined;
+  });
 }
 
 function resolveKnownAgentId(cfg: OpenClawConfig, rawAgentId: string): string {
@@ -145,7 +151,7 @@ function resolveKnownAgentId(cfg: OpenClawConfig, rawAgentId: string): string {
 
 type ModelsTargetMode = { kind: "read"; agentDirOverride?: string } | { kind: "mutation" };
 
-/** Resolves the selected model-command agent and its profile directory. */
+/** Resolves model-command scope and retains configured auth ownership through read overrides. */
 export function resolveModelsTargetAgent(
   cfg: OpenClawConfig,
   rawAgentId: string | undefined,
@@ -169,8 +175,8 @@ export function resolveModelsTargetAgent(
         resolveSoleAgentId(cfg, { surface: "the model command", hint: "Pass --agent <id>." }));
   const agentId = resolveKnownAgentId(cfg, resolvedAgentId);
   const agentDirOverride = mode.kind === "read" ? mode.agentDirOverride : undefined;
-  const agentDir = agentDirOverride ?? resolveAgentDir(cfg, agentId);
-  return { agentId, agentDir };
+  const agentDir = resolveAgentDir(cfg, agentId);
+  return { agentId, agentDir: agentDirOverride ?? agentDir };
 }
 
 /** Normalized primary/fallback config shape used by text and image defaults. */

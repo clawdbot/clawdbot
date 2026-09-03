@@ -29,6 +29,8 @@ export type ConfiguredAcpBindingSpec = {
   acpAgentId?: string;
   mode: AcpRuntimeSessionMode;
   model?: string;
+  /** Owner agent's effective thinking default, forwarded as the ACP session's thinking runtime option. */
+  thinking?: string;
   cwd?: string;
   backend?: string;
   label?: string;
@@ -106,6 +108,7 @@ export function toConfiguredAcpBindingRecord(spec: ConfiguredAcpBindingSpec): Se
       ...(spec.acpAgentId ? { acpAgentId: spec.acpAgentId } : {}),
       label: spec.label,
       ...(spec.model ? { model: spec.model } : {}),
+      ...(spec.thinking ? { thinking: spec.thinking } : {}),
       ...(spec.backend ? { backend: spec.backend } : {}),
       ...(spec.cwd ? { cwd: spec.cwd } : {}),
     },
@@ -164,6 +167,7 @@ export function resolveConfiguredAcpBindingSpecFromRecord(
     acpAgentId: normalizeText(record.metadata?.acpAgentId),
     mode: normalizeMode(record.metadata?.mode),
     model: normalizeText(record.metadata?.model),
+    thinking: normalizeText(record.metadata?.thinking),
     cwd: normalizeText(record.metadata?.cwd),
     backend: normalizeText(record.metadata?.backend),
     label: normalizeText(record.metadata?.label),

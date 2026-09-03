@@ -40,19 +40,34 @@ export async function runPreparedReply(
       config: dispatchRuntime.config,
       agentId: dispatchRuntime.agentId,
       agentDir: dispatchRuntime.agentDir,
+      allowGatewaySubagentBinding: true,
       workspaceDir: context.workspaceDir,
+      runtimePluginSelections: [
+        {
+          provider: params.provider,
+          modelId: params.model,
+          runtime: context.thinkingRuntime,
+        },
+      ],
     },
-    { pluginGeneration: dispatchRuntime.pluginGeneration },
+    {
+      catalogMode: "static",
+      pluginGeneration: dispatchRuntime.pluginGeneration,
+      abortSignal: params.opts?.abortSignal,
+    },
   );
+  let leaseActive = true;
   try {
     return await withPreparedModelRuntimePluginGenerationScope(
-      dispatchRuntime.pluginGeneration,
+      lease.pluginGeneration,
       () =>
         withPluginRuntimeGenerationScope(lease.snapshot, () =>
           executePreparedReplyContext(context),
         ),
+      () => (leaseActive ? lease.snapshot : undefined),
     );
   } finally {
+    leaseActive = false;
     lease.release();
   }
 }

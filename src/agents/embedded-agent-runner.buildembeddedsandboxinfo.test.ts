@@ -101,6 +101,24 @@ describe("buildEmbeddedSandboxInfo", () => {
     });
   });
 
+  it("never advertises elevated host execution for a required sandbox", () => {
+    const sandbox = createSandboxContext({ required: true });
+
+    expect(
+      buildEmbeddedSandboxInfo(sandbox, {
+        enabled: true,
+        allowed: true,
+        defaultLevel: "full",
+        fullAccessAvailable: true,
+      })?.elevated,
+    ).toEqual({
+      allowed: false,
+      defaultLevel: "off",
+      fullAccessAvailable: false,
+      fullAccessBlockedReason: "host-policy",
+    });
+  });
+
   it("keeps full-access unavailability truth when provided", () => {
     // Runtime-level blocks are authoritative and must not be overwritten by
     // host exec policy that appears permissive.

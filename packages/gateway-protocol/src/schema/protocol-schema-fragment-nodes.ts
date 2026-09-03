@@ -20,6 +20,7 @@ export const NodeProtocolSchemas = {
   NodeEventResult: nodes.NodeEventResultSchema,
   NodePresenceAlivePayload: nodes.NodePresenceAlivePayloadSchema,
   ...nodePresence.NodePresenceProtocolSchemas,
+  NodeHostStatsPayload: nodes.NodeHostStatsPayloadSchema,
   NodePendingDrainParams: nodes.NodePendingDrainParamsSchema,
   NodePendingDrainResult: nodes.NodePendingDrainResultSchema,
   NodePendingEnqueueParams: nodes.NodePendingEnqueueParamsSchema,

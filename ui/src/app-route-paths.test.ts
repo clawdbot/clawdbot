@@ -1,8 +1,14 @@
 // @vitest-environment node
+import {
+  CONTROL_UI_RESERVED_ROUTE_SEGMENTS,
+  isControlUiReservedRouteSegment,
+} from "@openclaw/session-url-contract";
 import { notFound, type RouteLocation, type RouterHistory } from "@openclaw/uirouter";
 import { describe, expect, it, vi } from "vitest";
 import {
   agentRouteFromPath,
+  APP_ROUTE_IDS,
+  CONTROL_UI_DOCUMENT_ROUTE_PATHS,
   inferBasePathFromPathname,
   memoryTabFromPath,
   pathForMemoryTab,
@@ -12,6 +18,7 @@ import {
   pathForWorkboardBoard,
   pluginsHubTabFromPath,
   routeIdFromPath,
+  routePageSpec,
   type RouteId,
   type MemoryRouteTab,
   type PluginsHubRouteTab,
@@ -31,6 +38,25 @@ const AGENT_PANEL_CASES = [
 ] as const satisfies readonly AgentsPanel[];
 
 const DYNAMIC_STARTUP_CASES = [
+  {
+    label: "person Activity",
+    routeId: "activity",
+    location: {
+      pathname: "/activity/josh-12345678",
+      search: "?time=30d&q=release",
+      hash: "#sessions",
+    },
+  },
+  {
+    label: "mounted person Activity",
+    routeId: "activity",
+    basePath: "/ui",
+    location: {
+      pathname: "/ui/activity/josh-12345678",
+      search: "?time=30d&q=release",
+      hash: "#sessions",
+    },
+  },
   {
     label: "agent panel",
     routeId: "agents",
@@ -56,6 +82,15 @@ const DYNAMIC_STARTUP_CASES = [
       pathname: "/dashboard/main/01JSESSIONA",
       search: "?probe=1",
       hash: "#dashboard",
+    },
+  },
+  {
+    label: "Beam share",
+    routeId: "chat",
+    location: {
+      pathname: "/beam/0123456789ab",
+      search: "",
+      hash: "#message",
     },
   },
   {
@@ -88,10 +123,67 @@ const DYNAMIC_STARTUP_CASES = [
 ] as const satisfies readonly {
   label: string;
   routeId: RouteId;
+  basePath?: string;
   location: RouteLocation;
 }[];
 
 describe("Dynamic route startup bridge", () => {
+  it("keeps share-route reservations aligned with every built-in path and alias", () => {
+    const reservedRouteSegments = [
+      ...new Set([
+        "focus",
+        ...Object.values(CONTROL_UI_DOCUMENT_ROUTE_PATHS).map((path) => path.slice(1)),
+        ...APP_ROUTE_IDS.flatMap((routeId) => {
+          const definition = routePageSpec(routeId);
+          return [definition.path, ...(definition.aliases ?? [])]
+            .map((path) => path.split("/").find(Boolean))
+            .filter((segment): segment is string => Boolean(segment));
+        }),
+      ]),
+    ].toSorted();
+
+    expect([...CONTROL_UI_RESERVED_ROUTE_SEGMENTS].toSorted()).toEqual(reservedRouteSegments);
+    expect(reservedRouteSegments.every(isControlUiReservedRouteSegment)).toBe(true);
+  });
+
+  it("keeps plausible generic catalog share paths on chat", () => {
+    for (const pathname of [
+      "/beam/0123456789ab",
+      "/beam/ABCDEF012345",
+      "/beam/nothexvaluezz",
+      "/beam/0123456789abcdef0123456789abcdef0",
+    ]) {
+      expect(routeIdFromPath(pathname)).toBe("chat");
+    }
+    expect(routeIdFromPath("/openclaw/beam/0123456789ab", "/openclaw")).toBe("chat");
+    expect(inferBasePathFromPathname("/openclaw/beam/0123456789ab")).toBe("/openclaw");
+  });
+
+  it("does not steal mounted routes, docs, app resources, or reserved routes", () => {
+    for (const pathname of [
+      "/ui/chat",
+      "/ui/config",
+      "/concepts/agent-workspace",
+      "/api/files/1",
+      "/control/avatar/main",
+      "/plugins/diffs/view/id/token",
+      "/beam/0123456789a",
+      "/beam/not-valid",
+      "/approve/0123456789ab",
+      "/ask/0123456789ab",
+    ]) {
+      expect(routeIdFromPath(pathname)).toBeNull();
+    }
+    expect(routeIdFromPath("/control/avatar/main", "/control")).toBeNull();
+    expect(routeIdFromPath("/settings/about")).toBe("about");
+    expect(routeIdFromPath("/workboard/0123456789ab")).toBe("workboard");
+    expect(routeIdFromPath("/focus/0123456789ab")).toBeNull();
+    expect(routeIdFromPath("/plugin/0123456789ab")).toBeNull();
+    expect(routeIdFromPath("/usage/0123456789ab")).toBeNull();
+    expect(routeIdFromPath("/settings/0123456789ab")).toBeNull();
+    expect(routeIdFromPath("/openclaw/skills/0123456789ab", "/openclaw")).toBeNull();
+  });
+
   it("registers the Updates settings path", () => {
     expect(pathForRoute("updates")).toBe("/settings/updates");
     expect(routeIdFromPath("/settings/updates")).toBe("updates");
@@ -117,7 +209,9 @@ describe("Dynamic route startup bridge", () => {
 
   it.each(DYNAMIC_STARTUP_CASES)(
     "loads the $label once while publishing its real location",
-    async ({ routeId, location: initialLocation }) => {
+    async (testCase) => {
+      const { routeId, location: initialLocation } = testCase;
+      const basePath = "basePath" in testCase ? testCase.basePath : "";
       let location: RouteLocation = { ...initialLocation };
       const push = vi.fn((next: RouteLocation) => {
         location = next;
@@ -143,8 +237,8 @@ describe("Dynamic route startup bridge", () => {
         route.loader = loader;
         route.component = async () => ({ render: () => null });
 
-        await startApplicationRouter(router, history, "", {
-          basePath: "",
+        await startApplicationRouter(router, history, basePath, {
+          basePath,
         } as unknown as ApplicationContext);
 
         expect(loader).toHaveBeenCalledOnce();
@@ -159,62 +253,72 @@ describe("Dynamic route startup bridge", () => {
     },
   );
 
-  it("loads a later dynamic history destination exactly once", async () => {
-    let location: RouteLocation = {
-      pathname: "/chat/main/01JSESSIONA",
-      search: "",
-      hash: "#first",
-    };
-    let historyListener: ((next: RouteLocation) => void) | undefined;
-    const history: RouterHistory = {
-      location: () => location,
-      push: vi.fn((next: RouteLocation) => {
-        location = next;
-      }),
-      replace: vi.fn((next: RouteLocation) => {
-        location = next;
-      }),
-      listen: (listener) => {
-        historyListener = listener;
-        return () => {
-          historyListener = undefined;
-        };
-      },
-    };
-    const router = createApplicationRouter();
-    const route = router.getRoute("chat");
-    if (!route) {
-      throw new Error("Chat route missing");
-    }
-    const loader = vi.fn<NonNullable<typeof route.loader>>(async () => ({}));
-    const originalLoader = route.loader;
-    const originalComponent = route.component;
-    try {
-      route.loader = loader;
-      route.component = async () => ({ render: () => null });
-
-      await startApplicationRouter(router, history, "", {
-        basePath: "",
-      } as unknown as ApplicationContext);
-      expect(loader).toHaveBeenCalledOnce();
-
-      location = {
-        pathname: "/chat/main/01JSESSIONB",
-        search: "?probe=1",
-        hash: "#second",
+  it.each([
+    { routeId: "chat", firstPath: "/chat/main/01JSESSIONA", nextPath: "/chat/main/01JSESSIONB" },
+    {
+      routeId: "activity",
+      firstPath: "/activity/josh-12345678",
+      nextPath: "/activity/mira-2ab34567",
+    },
+  ] as const)(
+    "loads a later $routeId history destination exactly once",
+    async ({ routeId, firstPath, nextPath }) => {
+      let location: RouteLocation = {
+        pathname: firstPath,
+        search: "",
+        hash: "#first",
       };
-      historyListener?.(location);
+      let historyListener: ((next: RouteLocation) => void) | undefined;
+      const history: RouterHistory = {
+        location: () => location,
+        push: vi.fn((next: RouteLocation) => {
+          location = next;
+        }),
+        replace: vi.fn((next: RouteLocation) => {
+          location = next;
+        }),
+        listen: (listener) => {
+          historyListener = listener;
+          return () => {
+            historyListener = undefined;
+          };
+        },
+      };
+      const router = createApplicationRouter();
+      const route = router.getRoute(routeId);
+      if (!route) {
+        throw new Error(`Route missing: ${routeId}`);
+      }
+      const loader = vi.fn<NonNullable<typeof route.loader>>(async () => ({}));
+      const originalLoader = route.loader;
+      const originalComponent = route.component;
+      try {
+        route.loader = loader;
+        route.component = async () => ({ render: () => null });
 
-      await vi.waitFor(() => {
-        expect(loader).toHaveBeenCalledTimes(2);
-        expect(loader.mock.calls[1]?.[1].location).toEqual(location);
-      });
-    } finally {
-      router.stop();
-      route.loader = originalLoader;
-      route.component = originalComponent;
-    }
-  });
+        await startApplicationRouter(router, history, "", {
+          basePath: "",
+        } as unknown as ApplicationContext);
+        expect(loader).toHaveBeenCalledOnce();
+
+        location = {
+          pathname: nextPath,
+          search: "",
+          hash: "#second",
+        };
+        historyListener?.(location);
+
+        await vi.waitFor(() => {
+          expect(loader).toHaveBeenCalledTimes(2);
+          expect(loader.mock.calls[1]?.[1].location).toEqual(location);
+        });
+      } finally {
+        router.stop();
+        route.loader = originalLoader;
+        route.component = originalComponent;
+      }
+    },
+  );
 
   it("keeps a loader not-found state without rejecting startup", async () => {
     let location: RouteLocation = { pathname: "/", search: "", hash: "" };
@@ -451,6 +555,7 @@ describe("Memory tab route paths", () => {
   );
 
   it("rejects unknown and nested Memory tab segments", () => {
+    expect(memoryTabFromPath("/settings/memory//")).toBeNull();
     expect(memoryTabFromPath("/settings/memory/unknown")).toBeNull();
     expect(memoryTabFromPath("/settings/memory/dreams/extra")).toBeNull();
     expect(routeIdFromPath("/settings/memory/unknown")).toBeNull();
@@ -479,6 +584,7 @@ describe("Plugins hub tab route paths", () => {
   );
 
   it("rejects unknown and nested Plugins hub tab segments", () => {
+    expect(pluginsHubTabFromPath("/settings/plugins//")).toBeNull();
     expect(pluginsHubTabFromPath("/settings/plugins/unknown")).toBeNull();
     expect(pluginsHubTabFromPath("/settings/plugins/discover/extra")).toBeNull();
     expect(routeIdFromPath("/settings/plugins/unknown")).toBeNull();

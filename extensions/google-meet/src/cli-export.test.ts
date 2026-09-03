@@ -17,6 +17,28 @@ const emptyAttendance: GoogleMeetAttendanceResult = {
   attendance: [],
 };
 
+async function expectSiblingZip(params: {
+  suppliedOutputDir: string;
+  outputDir: string;
+  zipPath: string;
+}): Promise<void> {
+  const result = await writeMeetExportBundle({
+    outputDir: params.suppliedOutputDir,
+    artifacts: emptyArtifacts,
+    attendance: emptyAttendance,
+    zip: true,
+  });
+
+  const manifest = JSON.parse(
+    fs.readFileSync(path.join(params.outputDir, "manifest.json"), "utf8"),
+  ) as { zipFile?: string };
+  expect(result.outputDir).toBe(params.suppliedOutputDir);
+  expect(result.zipFile).toBe(params.zipPath);
+  expect(manifest.zipFile).toBe(params.zipPath);
+  expect(fs.existsSync(params.zipPath)).toBe(true);
+  expect(fs.existsSync(path.join(params.outputDir, ".zip"))).toBe(false);
+}
+
 describe("Google Meet export publication", () => {
   let tempDir: string;
 
@@ -85,4 +107,24 @@ describe("Google Meet export publication", () => {
     expect(fs.readFileSync(zipPath)).toEqual(priorZip);
     expect(fs.readdirSync(tempDir).toSorted()).toEqual(["bundle", "bundle.zip"]);
   });
+
+  it.each([
+    { label: "repeated native", trailingSeparators: path.sep.repeat(2) },
+    ...(process.platform === "win32"
+      ? [
+          { label: "repeated alternate", trailingSeparators: "//" },
+          { label: "mixed", trailingSeparators: "\\/" },
+        ]
+      : []),
+  ])(
+    "writes the ZIP beside an output directory with $label trailing separators",
+    async ({ trailingSeparators }) => {
+      const outputDir = path.join(tempDir, "bundle");
+      await expectSiblingZip({
+        suppliedOutputDir: `${outputDir}${trailingSeparators}`,
+        outputDir,
+        zipPath: `${outputDir}.zip`,
+      });
+    },
+  );
 });

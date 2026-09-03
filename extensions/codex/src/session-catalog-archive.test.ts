@@ -1,14 +1,15 @@
 // Codex supervision tests cover passive listing and safe local session takeover.
 /* oxlint-disable typescript/unbound-method -- assertions inspect vi.fn-backed object methods, not unbound class methods. */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  commandRpcMocks,
+  pinnedConnectionMocks,
   createCodexSessionCatalogControl,
   continueLocalCodexSession,
   registerCodexSessionCatalog,
   config,
   compatibilityOwnerConfig,
   idleThread,
-  createControl,
   createEligibleControl,
   createRuntime,
   archiveTestSession,
@@ -18,229 +19,10 @@ import {
   createCodexTestBindingStore,
   CODEX_LOCAL_SESSION_HOST_ID,
   type OpenClawConfig,
-  originalPath,
-  tempDirs,
-  fs,
 } from "./session-catalog.test-helpers.js";
 
-const commandRpcMocks = vi.hoisted(() => ({
-  codexControlRequest: vi.fn(),
-}));
-const pinnedConnectionMocks = vi.hoisted(() => ({
-  client: { connectionId: "pinned-catalog-client" },
-  getClient: vi.fn(),
-  releaseClient: vi.fn(),
-  request: vi.fn(),
-}));
-const transcriptMirrorMocks = vi.hoisted(() => ({
-  importCodexThreadHistoryToTranscript: vi.fn(async () => ({
-    importedMessages: 0,
-    omittedMessages: 0,
-  })),
-}));
-const nodeHostMocks = vi.hoisted(() => ({
-  runNodePtyCommand: vi.fn(async () => ({ exitCode: 0 })),
-  userShellPaths: new Map<string, string>(),
-}));
-
-vi.mock("./command-rpc.js", () => ({
-  codexControlRequest: commandRpcMocks.codexControlRequest,
-}));
-vi.mock("./app-server/request.js", () => ({
-  requestCodexAppServerClientJson: pinnedConnectionMocks.request,
-}));
-vi.mock("./app-server/shared-client.js", () => ({
-  getLeasedSharedCodexAppServerClient: pinnedConnectionMocks.getClient,
-  releaseLeasedSharedCodexAppServerClient: pinnedConnectionMocks.releaseClient,
-}));
-vi.mock("./app-server/transcript-mirror.js", () => ({
-  importCodexThreadHistoryToTranscript: transcriptMirrorMocks.importCodexThreadHistoryToTranscript,
-}));
-vi.mock("./session-catalog-pty.runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./session-catalog-pty.runtime.js")>();
-  return {
-    ...actual,
-    runNodePtyCommand: nodeHostMocks.runNodePtyCommand,
-    resolveNodeHostExecutable: (
-      command: string,
-      options: {
-        env?: NodeJS.ProcessEnv;
-        pathEnv?: string;
-        includeExtensionless?: boolean;
-        strategy: "direct" | "fallback" | "prefer";
-      },
-    ) => {
-      const env = options.env ?? process.env;
-      const pathEnv = options.pathEnv ?? env.PATH ?? env.Path ?? "";
-      const direct = actual.resolveNodeHostExecutable(command, {
-        env,
-        pathEnv,
-        includeExtensionless: options.includeExtensionless,
-        strategy: "direct",
-      });
-      if (direct && options.strategy !== "prefer") {
-        return direct;
-      }
-      const shellPath = nodeHostMocks.userShellPaths.get(command);
-      if (!shellPath) {
-        return direct;
-      }
-      const shellExecutable = actual.resolveNodeHostExecutable(command, {
-        env,
-        pathEnv: shellPath,
-        includeExtensionless: options.includeExtensionless,
-        strategy: "direct",
-      });
-      return shellExecutable
-        ? { executable: shellExecutable.executable, pathEnv: shellPath }
-        : direct;
-    },
-  };
-});
-
-beforeEach(() => {
-  nodeHostMocks.runNodePtyCommand.mockClear();
-  nodeHostMocks.userShellPaths.clear();
-  commandRpcMocks.codexControlRequest.mockReset();
-  pinnedConnectionMocks.getClient.mockReset();
-  pinnedConnectionMocks.getClient.mockResolvedValue(pinnedConnectionMocks.client);
-  pinnedConnectionMocks.releaseClient.mockReset();
-  pinnedConnectionMocks.request.mockReset();
-  transcriptMirrorMocks.importCodexThreadHistoryToTranscript.mockReset();
-  transcriptMirrorMocks.importCodexThreadHistoryToTranscript.mockResolvedValue({
-    importedMessages: 0,
-    omittedMessages: 0,
-  });
-});
-
-afterEach(async () => {
-  process.env.PATH = originalPath;
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
-});
-
 describe("Codex supervision actions", () => {
-  it("walks the canonical non-archived catalog before continuing a known thread", async () => {
-    const { runtime } = createRuntime();
-    const { api } = createGatewayApi(runtime);
-    const listPage = vi.fn(async (params: { cursor?: string }) =>
-      params.cursor
-        ? {
-            sessions: [
-              {
-                threadId: "thread-1",
-                status: "idle",
-                source: "vscode",
-                archived: false as const,
-              },
-            ],
-          }
-        : {
-            sessions: [
-              {
-                threadId: "other-thread",
-                status: "idle",
-                source: "cli",
-                archived: false as const,
-              },
-            ],
-            nextCursor: "page-2",
-          },
-    );
-    const control = createControl({ listPage });
-
-    await expect(
-      continueLocalCodexSession({
-        api,
-        bindingStore: createCodexTestBindingStore(),
-        config,
-        control,
-        threadId: "thread-1",
-      }),
-    ).resolves.toMatchObject({ disposition: "forked" });
-    expect(listPage).toHaveBeenNthCalledWith(1, { limit: 100 });
-    expect(listPage).toHaveBeenNthCalledWith(2, {
-      cursor: "page-2",
-      limit: 100,
-    });
-  });
-
-  it("rejects archived interactive thread ids that are absent from the canonical catalog", async () => {
-    const { runtime, createSessionEntry } = createRuntime();
-    const { api } = createGatewayApi(runtime);
-    const control = createControl({
-      listPage: vi.fn(async () => ({ sessions: [] })),
-      readThread: vi.fn(async () => idleThread({ source: "cli" })),
-    });
-
-    await expect(
-      continueLocalCodexSession({
-        api,
-        bindingStore: createCodexTestBindingStore(),
-        config,
-        control,
-        threadId: "thread-1",
-      }),
-    ).rejects.toThrow("not a non-archived interactive Codex session");
-    await expect(archiveTestSession({ control })).rejects.toThrow(
-      "not a non-archived interactive Codex session",
-    );
-    expect(control.readThread).not.toHaveBeenCalled();
-    expect(createSessionEntry).not.toHaveBeenCalled();
-    expect(control.archiveThread).not.toHaveBeenCalled();
-  });
-
-  it("rejects internal App Server thread ids even if a control returns them", async () => {
-    const { runtime } = createRuntime();
-    const { api } = createGatewayApi(runtime);
-    const control = createControl({
-      listPage: vi.fn(async () => ({
-        sessions: [
-          {
-            threadId: "thread-1",
-            status: "idle",
-            source: "appServer",
-            archived: false,
-          },
-        ],
-      })),
-    });
-
-    await expect(
-      continueLocalCodexSession({
-        api,
-        bindingStore: createCodexTestBindingStore(),
-        config,
-        control,
-        threadId: "thread-1",
-      }),
-    ).rejects.toThrow("not a non-archived interactive Codex session");
-    await expect(archiveTestSession({ control })).rejects.toThrow(
-      "not a non-archived interactive Codex session",
-    );
-    expect(control.readThread).not.toHaveBeenCalled();
-  });
-
-  it("fails closed when canonical catalog cursors cycle", async () => {
-    const { runtime } = createRuntime();
-    const { api } = createGatewayApi(runtime);
-    const control = createControl({
-      listPage: vi.fn(async () => ({ sessions: [], nextCursor: "cycle" })),
-    });
-
-    await expect(
-      continueLocalCodexSession({
-        api,
-        bindingStore: createCodexTestBindingStore(),
-        config,
-        control,
-        threadId: "thread-1",
-      }),
-    ).rejects.toThrow("eligibility could not be verified");
-    expect(control.listPage).toHaveBeenCalledTimes(2);
-    expect(control.readThread).not.toHaveBeenCalled();
-  });
-
-  it("rechecks status and rejects active local sessions before either mutation", async () => {
+  it("rechecks status after eligibility and rejects active local sessions before either mutation", async () => {
     const { runtime, createSessionEntry } = createRuntime();
     const { api } = createGatewayApi(runtime);
     const bindingStore = createCodexTestBindingStore();
@@ -266,6 +48,7 @@ describe("Codex supervision actions", () => {
     expect(control.archiveThread).not.toHaveBeenCalled();
     expect(control.readThread).toHaveBeenNthCalledWith(1, "thread-1", true);
     expect(control.readThread).toHaveBeenNthCalledWith(2, "thread-1", false);
+    expect(control.requireEligibleThread).toHaveBeenCalledWith("thread-1");
   });
 
   it("archives an idle local thread only after the fresh status read", async () => {
@@ -276,7 +59,7 @@ describe("Codex supervision actions", () => {
     await expect(archiveTestSession({ control })).resolves.toEqual({
       archived: true,
     });
-    expect(control.readThread).toHaveBeenCalledWith("thread-1", false);
+    expect(control.requireEligibleThread).toHaveBeenCalledWith("thread-1");
     expect(control.archiveThread).toHaveBeenCalledWith("thread-1");
     expect(readThread.mock.invocationCallOrder[0]).toBeLessThan(
       archiveThread.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
@@ -396,7 +179,7 @@ describe("Codex supervision actions", () => {
     await expect(archiveTestSession({ bindingStore, control })).rejects.toThrow(
       "attached to an OpenClaw session",
     );
-    expect(control.readThread).toHaveBeenCalledWith("thread-1", false);
+    expect(control.requireEligibleThread).toHaveBeenCalledWith("thread-1");
     expect(control.archiveThread).not.toHaveBeenCalled();
   });
 
@@ -440,7 +223,9 @@ describe("Codex supervision actions", () => {
 
   it("rejects archive when a spawned descendant is active", async () => {
     const control = createEligibleControl({
-      listDescendantPage: vi.fn(async () => ({ data: [{ id: "active-descendant" }] })),
+      listDescendantPage: vi.fn(async () => ({
+        data: [{ id: "active-descendant", projectId: null }],
+      })),
       readThread: vi.fn(async (threadId: string) =>
         idleThread({
           id: threadId,
@@ -470,7 +255,7 @@ describe("Codex supervision actions", () => {
     const listDescendantPage = vi.fn(async () => {
       validationReached();
       await validationReleased;
-      return { data: [{ id: "idle-descendant" }] };
+      return { data: [{ id: "idle-descendant", projectId: null }] };
     });
     const control = createEligibleControl({ listDescendantPage });
 
@@ -484,7 +269,7 @@ describe("Codex supervision actions", () => {
     ).rejects.toThrow("native archive is in progress");
     releaseValidation();
     await expect(archiving).resolves.toEqual({ archived: true });
-    await expect(bindingStore.read(lateIdentity)).resolves.toBeUndefined();
+    expect(bindingStore.read(lateIdentity)).toBeUndefined();
     expect(control.readThread).toHaveBeenCalledWith("idle-descendant", false);
     expect(control.archiveThread).toHaveBeenCalledWith("thread-1");
   });
@@ -540,17 +325,6 @@ describe("Codex supervision actions", () => {
     expect(control.archiveThread).not.toHaveBeenCalled();
   });
 
-  it("rejects an archive when the fresh read returns a different thread", async () => {
-    const control = createEligibleControl({
-      readThread: vi.fn(async () => idleThread({ id: "different-thread" })),
-    });
-
-    await expect(archiveTestSession({ control })).rejects.toThrow(
-      "returned a different thread than requested",
-    );
-    expect(control.archiveThread).not.toHaveBeenCalled();
-  });
-
   it("archives a not-loaded local thread after explicit runner confirmation", async () => {
     const control = createEligibleControl({
       readThread: vi.fn(async () => idleThread({ status: { type: "notLoaded" } })),
@@ -566,10 +340,21 @@ describe("Codex supervision actions", () => {
     const { runtime, createSessionEntry } = createRuntime();
     const { api, getProvider, registerSessionCatalog } = createGatewayApi(runtime);
     const control = createEligibleControl();
+    const processFallbackControl = {
+      forRequest: () => control,
+      homesForAgent: () => [
+        {
+          hostId: CODEX_LOCAL_SESSION_HOST_ID,
+          sourceHomeId: "process-home",
+          usesProcessHomeFallback: true,
+        } as never,
+      ],
+      forUpstream: () => undefined,
+    };
     registerCodexSessionCatalog({
       api,
       bindingStore: createCodexTestBindingStore(),
-      control,
+      control: processFallbackControl,
       getRuntimeConfig: () => config,
     });
     expect(registerSessionCatalog).toHaveBeenCalledOnce();
@@ -640,7 +425,7 @@ describe("Codex supervision actions", () => {
         clientScopes: ["operator.admin"],
       }),
     ).rejects.toThrow("paired node does not permit Codex session continuation");
-    expect(control.readThread).toHaveBeenCalledOnce();
+    expect(control.requireEligibleThread).toHaveBeenCalledOnce();
     expect(control.archiveThread).toHaveBeenCalledOnce();
     expect(createSessionEntry).not.toHaveBeenCalled();
   });

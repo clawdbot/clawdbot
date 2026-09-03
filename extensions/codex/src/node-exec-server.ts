@@ -1,4 +1,4 @@
-/** Declares the explicitly approved, lazily loaded paired-node Codex exec-server. */
+/** Declares the explicitly approved, lazily loaded node-backed Codex exec-server. */
 import type {
   OpenClawPluginNodeHostCommand,
   OpenClawPluginNodeInvokePolicy,
@@ -65,7 +65,16 @@ export function createCodexNodeExecServerCommand(): OpenClawPluginNodeHostComman
       } catch {
         throw new Error("Codex node exec-server requires a valid workspace request.");
       }
-      const placement = parseCodexNodePlacementWorkspace(request);
+      if (
+        !isRecord(request) ||
+        Object.keys(request).length !== 2 ||
+        (request.authorization !== "human-approved" && request.authorization !== "session-full")
+      ) {
+        throw new Error(
+          "Codex node exec-server requires an authorized managed placement workspace launch.",
+        );
+      }
+      const placement = parseCodexNodePlacementWorkspace(request.placement);
       if (
         !context?.acquireManagedWorkspace ||
         context.sessionKey !== placement.sessionKey ||
@@ -83,11 +92,18 @@ export function createCodexNodeExecServerCommand(): OpenClawPluginNodeHostComman
       const frames = io.frames;
       let unsubscribe: (() => void) | undefined;
       try {
+        if (!context.prepareExecAuthorization) {
+          throw new Error(
+            "Codex node execution requires node-local exec policy support; update the node.",
+          );
+        }
+        const assertExecAuthorized = context.prepareExecAuthorization(request.authorization);
         const { runCodexNodeExecServer } = await import("./node-exec-server.runtime.js");
         return await runCodexNodeExecServer({
           workspaceDir: workspace.workspaceDir,
           io,
           activeProcesses,
+          assertExecAuthorized,
           // Listener registration announces readiness, so the child must own it first.
           onFrameReceiver: (receiver) => {
             unsubscribe = frames.onMessage(receiver);
@@ -104,18 +120,19 @@ export function createCodexNodeExecServerCommand(): OpenClawPluginNodeHostComman
   };
 }
 
-/** Keeps paired-device exec-server launch behind explicit arming and one-time approval. */
+/** Keeps node launch behind command opt-in and a live Full owner or human decision. */
 export function createCodexNodeExecServerInvokePolicy(): OpenClawPluginNodeInvokePolicy {
   return {
     commands: [CODEX_NODE_EXEC_SERVER_COMMAND],
     dangerous: true,
+    standingApproval: { kind: "placement", scope: CODEX_NODE_EXEC_SERVER_CAPABILITY },
     classifyRisk: () => ({ level: "high", family: CODEX_NODE_EXEC_SERVER_CAPABILITY }),
     handle: async (context) => {
-      if (!context.approvals || context.risk?.level !== "high") {
+      if (context.risk?.level !== "high") {
         return {
           ok: false,
           code: "CODEX_NODE_EXEC_APPROVAL_REQUIRED",
-          message: "Codex paired-device execution requires an available approval reviewer.",
+          message: "Codex node execution requires an available approval reviewer.",
         };
       }
       let placement: ReturnType<typeof parseCodexNodePlacementWorkspace>;
@@ -125,24 +142,58 @@ export function createCodexNodeExecServerInvokePolicy(): OpenClawPluginNodeInvok
         return {
           ok: false,
           code: "CODEX_NODE_EXEC_WORKSPACE_INVALID",
-          message: "Codex paired-device execution requires an exact managed placement workspace.",
+          message: "Codex node execution requires an exact managed placement workspace.",
         };
       }
-      const deviceName = context.node?.displayName ?? context.nodeId;
-      const approval = await context.approvals.request({
-        title: "Run Codex execution on paired device",
-        description: `${deviceName}: ${placement.cwd}; allows arbitrary processes and filesystem access across the paired-device account, not only this workspace.`,
-        severity: "critical",
-        allowedDecisions: ["allow-once"],
+      const workspace = {
+        workspaceDir: placement.cwd,
+        environmentId: placement.environmentId,
+        sessionId: placement.sessionId,
+        ownerEpoch: placement.ownerEpoch,
+        sessionKey: placement.sessionKey,
+      };
+      const fullLaunch = await context.invokeNodeWithSessionFull?.({
+        workspace,
+        createParams: () => ({ placement, authorization: "session-full" }),
       });
-      if (approval.decision !== "allow-once") {
+      if (fullLaunch) {
+        return fullLaunch;
+      }
+      if (!context.approvals) {
         return {
           ok: false,
-          code: "CODEX_NODE_EXEC_APPROVAL_DENIED",
-          message: "Codex paired-device execution requires one-time approval.",
+          code: "CODEX_NODE_EXEC_APPROVAL_REQUIRED",
+          message: "Codex node execution requires an available approval reviewer.",
         };
       }
-      return await context.invokeNode({ params: placement });
+      const nodeName = context.node?.displayName ?? context.nodeId;
+      const approval = await context.approvals.request({
+        title: "Run Codex on this node placement",
+        // Keep the risk visible when the Gateway bounds a long workspace description.
+        description: `Allows arbitrary processes and filesystem access across the node account, not only this workspace. Allow always applies only while this exact placement remains active. ${nodeName}: ${placement.cwd}`,
+        severity: "critical",
+        allowedDecisions: ["allow-once", "allow-always"],
+      });
+      if (approval.decision !== "allow-once" && approval.decision !== "allow-always") {
+        if (approval.decision === "deny") {
+          return {
+            ok: false,
+            code: "CODEX_NODE_EXEC_APPROVAL_DENIED",
+            message:
+              "Codex node execution was denied. Retry the action and choose Allow once or Allow always to continue.",
+          };
+        }
+        return {
+          ok: false,
+          code: "CODEX_NODE_EXEC_APPROVAL_EXPIRED",
+          message:
+            "Codex node execution approval expired before a decision. Retry the action and approve the new request.",
+        };
+      }
+      return await context.invokeNode({
+        workspace,
+        params: { placement, authorization: "human-approved" },
+      });
     },
   };
 }

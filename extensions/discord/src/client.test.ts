@@ -33,6 +33,34 @@ describe("createDiscordClient", () => {
     await expect(request(operation, "send")).resolves.toBe("sent");
     expect(operation).toHaveBeenCalledTimes(3);
   });
+
+  it("keeps explicit-token retries bound to the REST account", async () => {
+    registerGateway("default", { isConnected: false } as GatewayPlugin);
+    registerGateway("ops", { isConnected: true } as GatewayPlugin);
+    const client = createDiscordClient({
+      cfg: {
+        channels: {
+          discord: {
+            defaultAccount: "ops",
+            accounts: { ops: { token: "configured-token" } },
+          },
+        },
+      },
+      token: "explicit-token",
+      rest: {} as RequestClient,
+      retry: { attempts: 3, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+    });
+    const operation = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValue("sent");
+
+    expect(client.account.accountId).toBe("ops");
+    await expect(client.request(operation, "send")).resolves.toBe("sent");
+    expect(operation).toHaveBeenCalledTimes(4);
+  });
 });
 
 describe("createDiscordRestClient", () => {

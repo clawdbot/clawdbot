@@ -1,4 +1,5 @@
 // Gateway readiness checker for channel health and startup sidecar state.
+import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
@@ -87,6 +88,7 @@ export function createReadinessChecker(
   deps: GatewayStartupStateDeps & {
     channelManager: ChannelManager;
     getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
+    getStateDatabaseFailure?: () => Error | undefined;
     shouldSkipChannelReadiness?: () => boolean;
     cacheTtlMs?: number;
   },
@@ -113,11 +115,21 @@ export function createReadinessChecker(
         deps.getEventLoopHealth,
       );
     }
+    if (
+      cachedState &&
+      !isFutureDateTimestampMs(cachedAt, { nowMs: now }) &&
+      now - cachedAt < cacheTtlMs
+    ) {
+      return withEventLoopHealth({ ...cachedState, uptimeMs }, deps.getEventLoopHealth);
+    }
+    if (deps.getStateDatabaseFailure?.()) {
+      return withEventLoopHealth(
+        { ready: false, failing: ["state-database"], uptimeMs },
+        deps.getEventLoopHealth,
+      );
+    }
     if (deps.shouldSkipChannelReadiness?.()) {
       return withEventLoopHealth({ ready: true, failing: [], uptimeMs }, deps.getEventLoopHealth);
-    }
-    if (cachedState && now - cachedAt < cacheTtlMs) {
-      return withEventLoopHealth({ ...cachedState, uptimeMs }, deps.getEventLoopHealth);
     }
 
     const snapshot = channelManager.getRuntimeSnapshot();

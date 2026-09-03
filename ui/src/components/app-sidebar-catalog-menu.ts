@@ -59,6 +59,19 @@ export class SidebarCatalogMenuController {
     this.hooks.requestUpdate();
   }
 
+  retargetTrigger(key: CatalogSessionKey, element: Element | undefined): void {
+    if (!(element instanceof HTMLElement) || !this.isOpenFor(key)) {
+      return;
+    }
+    // Catalog adoption replaces the trigger while popup focus is elsewhere.
+    queueMicrotask(() => {
+      if (element.isConnected && !this.trigger?.isConnected && this.isOpenFor(key)) {
+        this.trigger = element;
+        this.hooks.requestUpdate();
+      }
+    });
+  }
+
   private handleAction(
     menu: SidebarCatalogSessionMenuState,
     action: CatalogSessionMenuAction,

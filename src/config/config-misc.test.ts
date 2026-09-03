@@ -14,6 +14,10 @@ import { OpenClawSchema } from "./zod-schema.js";
 
 const nonBooleanConfigCases = [
   {
+    name: "gateway.controlUi.communityInvite",
+    config: { gateway: { controlUi: { communityInvite: "yes" } } },
+  },
+  {
     name: "gateway.controlUi.sessionObserver",
     config: {
       gateway: {
@@ -518,6 +522,18 @@ describe("ui.seamColor", () => {
   });
 });
 
+describe("ui.prefs.accent", () => {
+  it.each([
+    ["lowercase hex", "#ff5c5c", true],
+    ["uppercase hex", "#AbCdEf", true],
+    ["missing hash", "ff5c5c", false],
+    ["invalid hex", "#gggggg", false],
+    ["invalid length", "#ff5c5c00", false],
+  ])("validates %s", (_label, accent, valid) => {
+    expect(validateConfigObject({ ui: { prefs: { accent } } }).ok).toBe(valid);
+  });
+});
+
 describe("ui.prefs.sidebarEntries", () => {
   it("accepts the route and session entries synchronized by the Control UI", () => {
     const result = validateConfigObject({
@@ -621,11 +637,11 @@ describe("gateway.controlUi.allowExternalEmbedUrls", () => {
   });
 });
 
-describe("gateway.controlUi.sessionObserver", () => {
+describe.each(["sessionObserver", "communityInvite"])("gateway.controlUi.%s", (key) => {
   it("accepts boolean values", () => {
     for (const value of [true, false]) {
       const result = OpenClawSchema.safeParse({
-        gateway: { controlUi: { sessionObserver: value } },
+        gateway: { controlUi: { [key]: value } },
       });
       expect(result.success).toBe(true);
     }

@@ -1,23 +1,25 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import {
+  constants as fsConstants,
   cpSync,
   existsSync,
   linkSync,
   mkdirSync,
   readFileSync,
   readdirSync,
-  realpathSync,
   rmSync,
   statSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { createRequire } from "node:module";
+import { dirname, join, relative, resolve } from "node:path";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { collectClawHubPublishablePluginPackages } from "../../scripts/lib/plugin-clawhub-release.ts";
 import { collectPublishablePluginPackages } from "../../scripts/lib/plugin-npm-release.ts";
+import { collectExtensionPackageJsonCandidates } from "../../scripts/lib/plugin-publication-candidates.ts";
 import {
   canonicalReleasePlanLockJson,
   createReleasePlanLock,
@@ -39,18 +41,23 @@ import { writePublishablePluginFixture } from "../helpers/publishable-plugin-fix
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const templateDirs = useAutoCleanupTempDirTracker(afterAll);
+let defaultFixture: ReturnType<typeof buildFixtureRepo> | undefined;
 const TOOLING_CLOSURE = [
   "packages/normalization-core/src/record-coerce.ts",
   "packages/normalization-core/src/string-coerce.ts",
   "packages/plugin-package-contract/src/index.ts",
+  "scripts/lib/canonical-json.mjs",
   "scripts/release-plan-producer.mts",
   "scripts/release-plan-producer-core.mts",
   "scripts/release-plan-contract.mjs",
   "scripts/release-validation-intent.mjs",
   "scripts/release-tooling-identity.mjs",
   "scripts/lib/npm-publish-plan.mjs",
+  "scripts/lib/npm-core-release-packages.json",
   "scripts/lib/plugin-publication-candidates.ts",
   "scripts/lib/plugin-publication-collector.ts",
+  "scripts/lib/pnpm-lockfile-documents.mjs",
   "scripts/lib/record-shared.mjs",
   "scripts/lib/release-version.mjs",
 ];
@@ -88,17 +95,31 @@ function copyToolingClosure(root: string) {
   }
 }
 
-function createFixtureRepo(
-  version = "2026.8.1-beta.2",
-  options: {
-    conflictingPlatformId?: boolean;
-    corePackageNameCollision?: boolean;
-    duplicateCrossTargetPackageName?: boolean;
-    malformedPlugin?: boolean;
-    malformedPluginJson?: boolean;
-  } = {},
-) {
+type FixtureOptions = {
+  conflictingPlatformId?: boolean;
+  corePackageNameCollision?: boolean;
+  duplicateCrossTargetPackageName?: boolean;
+  malformedPlugin?: boolean;
+  malformedPluginJson?: boolean;
+};
+
+function createFixtureRepo(version = "2026.8.1-beta.2", options: FixtureOptions = {}) {
   const root = tempDirs.make("openclaw-release-plan-");
+  if (version !== "2026.8.1-beta.2" || Object.keys(options).length > 0) {
+    return buildFixtureRepo(root, version, options);
+  }
+  const template = (defaultFixture ??= buildFixtureRepo(
+    templateDirs.make("openclaw-release-plan-template-"),
+    version,
+    options,
+  ));
+  // Copy both commits before any case adds YAML, tags, or mutated tooling.
+  // Independent files keep those authority and loader faults local to each case.
+  cpSync(template.root, root, { recursive: true, mode: fsConstants.COPYFILE_FICLONE });
+  return { ...template, root };
+}
+
+function buildFixtureRepo(root: string, version: string, options: FixtureOptions) {
   execFileSync("git", ["init", "-q", "-b", "tooling"], { cwd: root });
 
   writeFixture(
@@ -212,24 +233,6 @@ function createFixtureRepo(
       "",
     ].join("\n"),
   );
-  writeFixture(
-    root,
-    ".github/workflows/openclaw-npm-release.yml",
-    [
-      "name: NPM Release",
-      "jobs:",
-      "  preflight:",
-      "    steps:",
-      "      - name: Pack publishable core packages",
-      "        env:",
-      "          CORE_PACKAGE_DIRS: packages/ai packages/gateway-protocol packages/gateway-client",
-      "        run: |",
-      '          if [[ "$package_dir" == "packages/ai" ]] && ! node -e \'const pkg = require("./package.json"); process.exit(pkg.dependencies?.["@openclaw/ai"] ? 0 : 1)\'; then',
-      "            exit 0",
-      "          fi",
-      "",
-    ].join("\n"),
-  );
   for (const name of [
     "android-release.yml",
     "docker-release.yml",
@@ -321,6 +324,11 @@ type YamlPackageHarnessParams = {
 
 function runYamlPackageSubprocess(
   options: {
+    main?: {
+      intent: "diagnostic" | "main-qualification";
+      validationIntent?: MainQualificationValidationIntent;
+      comparisonStatus: string;
+    };
     beforeProduce?: (params: YamlPackageHarnessParams) => string;
     environment?: (params: YamlPackageHarnessParams) => Record<string, string>;
     mutate?: (params: YamlPackageHarnessParams) => void;
@@ -341,7 +349,9 @@ function runYamlPackageSubprocess(
     };
   }
   const packageRoot = join(fixture.root, "node_modules/yaml");
-  cpSync(realpathSync(resolve("node_modules/yaml")), packageRoot, { recursive: true });
+  cpSync(dirname(createRequire(import.meta.url).resolve("yaml/package.json")), packageRoot, {
+    recursive: true,
+  });
   const sentinelPath = join(fixture.root, "yaml-executed");
   const tempRoot = join(fixture.root, "yaml-temp");
   mkdirSync(tempRoot);
@@ -355,20 +365,23 @@ ${options.beforeImport?.(params) ?? ""}
 const { produceReleasePlan } = await import("./scripts/release-plan-producer.mts");
 ${options.beforeProduce?.(params) ?? ""}
 
-const toolingFullRef = ${JSON.stringify(fixture.toolingFullRef)};
+const toolingFullRef = ${JSON.stringify(options.main ? "refs/heads/main" : fixture.toolingFullRef)};
 const toolingSha = ${JSON.stringify(fixture.toolingSha)};
-produceReleasePlan({
+const plan = produceReleasePlan({
   repoRoot: ${JSON.stringify(fixture.root)},
-  intent: "publish",
+  intent: ${JSON.stringify(options.main?.intent ?? "publish")},
+  validationIntent: ${JSON.stringify(options.main?.validationIntent)},
   candidateSha: ${JSON.stringify(fixture.candidateSha)},
-  candidateRef: ${JSON.stringify(fixture.candidateRef)},
+  candidateRef: ${JSON.stringify(options.main ? fixture.candidateSha : fixture.candidateRef)},
   toolingSha,
   toolingFullRef,
   runGh: () => JSON.stringify({
+    status: ${JSON.stringify(options.main?.comparisonStatus)},
     ref: toolingFullRef,
     object: { type: "commit", sha: ${JSON.stringify(options.remoteToolingSha?.(params) ?? fixture.toolingSha)} },
   }),
 });
+process.stdout.write(JSON.stringify(plan));
 const moduleApi = await import("node:module");
 const harnessRequire = moduleApi.createRequire(import.meta.url);
 const leakedSnapshotCache = Object.keys(harnessRequire.cache).filter(path =>
@@ -557,6 +570,124 @@ describe("release plan producer", () => {
     ]);
   });
 
+  it("ignores large runtime trees when collecting candidate metadata", () => {
+    const fixture = createFixtureRepo();
+    const params = sourceParams(fixture);
+    const expected = produceReleasePlan(params).inventory;
+    const git = (args: string[], input?: string) =>
+      execFileSync(
+        "git",
+        ["-c", "user.name=OpenClaw Test", "-c", "user.email=test@example.invalid", ...args],
+        { cwd: fixture.root, encoding: "utf8", input },
+      ).trim();
+    const blob = git(["hash-object", "-w", "--stdin"], "");
+    // Git objects reproduce the >1 MiB listing without creating thousands of files.
+    const runtimeTree = git(
+      ["mktree"],
+      Array.from(
+        { length: 6000 },
+        (_, index) => `100644 blob ${blob}\truntime-${index}-${"x".repeat(180)}.ts\n`,
+      ).join(""),
+    );
+    const directoryLeaves = git(
+      ["mktree"],
+      `040000 tree ${runtimeTree}\tpackage.json\n040000 tree ${runtimeTree}\tREADME.md\n`,
+    );
+    const pluginsTree = git(
+      ["mktree"],
+      `040000 tree ${runtimeTree}\tnoise\n040000 tree ${directoryLeaves}\tdirectory-leaves\n120000 blob ${blob}\tlinked-noise\n`,
+    );
+    const rootTree = git(
+      ["mktree"],
+      `${git(["ls-tree", fixture.candidateSha])}\n040000 tree ${pluginsTree}\textensions\n`,
+    );
+    const candidateSha = git([
+      "commit-tree",
+      rootTree,
+      "-p",
+      fixture.candidateSha,
+      "-m",
+      "runtime",
+    ]);
+    expect(produceReleasePlan({ ...params, candidateSha }).inventory).toEqual(expected);
+  });
+
+  it.each([
+    "package.json",
+    "packages/ai/package.json",
+    "extensions/linked/package.json",
+    "extensions/linked/README.md",
+  ])("rejects candidate metadata symlinks at %s", (path) => {
+    const fixture = createFixtureRepo();
+    const target = join(fixture.root, path);
+    mkdirSync(dirname(target), { recursive: true });
+    rmSync(target, { force: true });
+    symlinkSync("must-not-be-read", target);
+    const candidateSha = commit(fixture.root, "linked metadata");
+    expect(() => produceReleasePlan({ ...sourceParams(fixture), candidateSha })).toThrow(
+      "candidate package inventory must not contain symbolic links",
+    );
+  });
+
+  it.each([
+    ["package.json", "100644", true, Buffer.from([0xff])],
+    ["README.md", "100644", true, Buffer.from([0xff])],
+    ["package.json", "120000", true, Buffer.from([0xff])],
+    ["runtime.ts", "100644", false, Buffer.from([0xff])],
+    ["package.json", "160000", false, Buffer.from([0xff])],
+    ["README.md", "100644", false, Buffer.from("tab\tname")],
+  ] as const)(
+    "preserves candidate metadata path bytes: %s/%s/%s",
+    (name, mode, rejectsPath, directory) => {
+      const fixture = createFixtureRepo();
+      const expected = produceReleasePlan(sourceParams(fixture)).inventory;
+      const tree = (input: Buffer) =>
+        execFileSync("git", ["mktree", "-z"], {
+          cwd: fixture.root,
+          input,
+          encoding: "utf8",
+        }).trim();
+      const blob = execFileSync("git", ["hash-object", "-w", "--stdin"], {
+        cwd: fixture.root,
+        input: "outside-inventory",
+        encoding: "utf8",
+      }).trim();
+      const entry =
+        mode === "160000" ? `160000 commit ${fixture.candidateSha}` : `${mode} blob ${blob}`;
+      const child = tree(Buffer.from(`${entry}\t${name}\0`));
+      const extensions = tree(
+        Buffer.concat([Buffer.from(`040000 tree ${child}\tname-`), directory, Buffer.from([0])]),
+      );
+      const candidateTree = tree(
+        Buffer.concat([
+          execFileSync("git", ["ls-tree", "-z", fixture.candidateSha], { cwd: fixture.root }),
+          Buffer.from(`040000 tree ${extensions}\textensions\0`),
+        ]),
+      );
+      fixture.candidateSha = execFileSync(
+        "git",
+        [
+          "-c",
+          "user.name=OpenClaw Test",
+          "-c",
+          "user.email=test@example.invalid",
+          "commit-tree",
+          candidateTree,
+          "-p",
+          fixture.candidateSha,
+          "-m",
+          "candidate with byte paths",
+        ],
+        { cwd: fixture.root, encoding: "utf8" },
+      ).trim();
+      if (rejectsPath) {
+        expect(() => produceReleasePlan(sourceParams(fixture))).toThrow();
+      } else {
+        expect(produceReleasePlan(sourceParams(fixture)).inventory).toEqual(expected);
+      }
+    },
+  );
+
   it("requires the final tag only for postpublish confidence", () => {
     const fixture = createFixtureRepo();
     expect(produceReleasePlan(sourceParams(fixture))).toMatchObject({
@@ -585,7 +716,7 @@ describe("release plan producer", () => {
     });
   });
 
-  it("produces tagless diagnostics from trusted main or protected tooling", () => {
+  it("produces tagless diagnostics from protected tooling", () => {
     const fixture = createFixtureRepo();
     expect(produceReleasePlan(sourceParams(fixture, "diagnostic"))).toMatchObject({
       candidate_sha: fixture.candidateSha,
@@ -602,25 +733,64 @@ describe("release plan producer", () => {
         soak: true,
       },
     });
+  });
 
-    expect(
-      produceReleasePlan({
-        ...sourceParams(fixture, "diagnostic"),
-        toolingFullRef: "refs/heads/main",
-        runGh: (args) => {
-          expect(args[1]).toBe(`repos/openclaw/openclaw/compare/${fixture.toolingSha}...main`);
-          return JSON.stringify({ status: "identical" });
+  it.each([
+    ["diagnostic", undefined, "ahead", "diagnostic-full", "full", true],
+    ["main-qualification", "main-daily", "identical", "main-daily", "beta", false],
+    ["main-qualification", "main-weekly", "ahead", "main-weekly", "full", true],
+  ] as const)(
+    "produces trusted-main %s/%s with %s ancestry through the verified child",
+    (intent, validationIntent, comparisonStatus, expectedIntent, profile, soak) => {
+      const { result, fixture } = runYamlPackageSubprocess({
+        main: { intent, validationIntent, comparisonStatus },
+      });
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        candidate_sha: fixture.candidateSha,
+        purpose: intent,
+        tag: null,
+        target_context_ref: fixture.candidateSha,
+        tooling: { ref: "refs/heads/main", sha: fixture.toolingSha },
+        validation: {
+          intent: expectedIntent,
+          profile,
+          soak,
+          allowed_groups: ["all", "ci", "package"],
         },
-      }),
-    ).toMatchObject({
-      purpose: "diagnostic",
-      tag: null,
-      target_context_ref: fixture.candidateSha,
-      tooling: {
-        ref: "refs/heads/main",
-        sha: fixture.toolingSha,
+      });
+    },
+  );
+
+  it.each(["diverged", "behind"])(
+    "rejects %s main ancestry before the verified child",
+    (comparisonStatus) => {
+      const { result } = runYamlPackageSubprocess({
+        main: { intent: "diagnostic", comparisonStatus },
+      });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        "main release tooling SHA is not reachable from current main",
+      );
+    },
+  );
+
+  it("rejects an uncached request from verified tooling", () => {
+    const { result } = runYamlPackageSubprocess({
+      mutateTooling: (fixture) => {
+        const corePath = join(fixture.root, "scripts/release-plan-producer-core.mts");
+        writeFileSync(
+          corePath,
+          readFileSync(corePath, "utf8").replace(
+            "const params = { ...request.params, runGh: runtime.runGh };",
+            'runtime.runGh(["api", "repos/openclaw/openclaw"]);\nconst params = { ...request.params, runGh: runtime.runGh };',
+          ),
+        );
       },
     });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("verified child rejected an uncached GitHub request");
   });
 
   it("requires main qualification producers to choose daily or weekly", () => {
@@ -809,9 +979,6 @@ exports.parse = source => {
   if (source.includes("rerun_group")) {
     return { on: { workflow_dispatch: { inputs: { rerun_group: { options: ["package", "all", "ci"] } } } } };
   }
-  if (source.includes("CORE_PACKAGE_DIRS")) {
-    return { jobs: { preflight: { steps: [{ env: { CORE_PACKAGE_DIRS: "packages/ai packages/gateway-protocol packages/gateway-client" } }] } } };
-  }
   return {
     jobs: {
       publish_docker: { uses: "./.github/workflows/docker-release.yml" },
@@ -852,12 +1019,29 @@ produceReleasePlan({
     expect(result.stderr).toContain("verified yaml retained tree digest mismatch");
   });
 
-  it("accepts the complete installed yaml package tree", () => {
-    const { result, tempRoot } = runYamlPackageSubprocess();
-    expect(result.stderr).toBe("");
-    expect(result.status).toBe(0);
-    expect(yamlTempEntries(tempRoot)).toEqual([]);
-  });
+  it.each([false, true])(
+    "accepts pinned yaml package bytes (installer metadata=%s)",
+    (installerMetadata) => {
+      const { result, tempRoot, sentinelPath } = runYamlPackageSubprocess({
+        mutate: ({ packageRoot, sentinelPath }) => {
+          const installedDependencies = join(packageRoot, "node_modules");
+          rmSync(installedDependencies, { recursive: true, force: true });
+          if (installerMetadata) {
+            mkdirSync(join(installedDependencies, ".bin"), { recursive: true });
+            writeFileSync(
+              join(installedDependencies, ".bin/yaml"),
+              `require("node:fs").writeFileSync(${JSON.stringify(sentinelPath)}, "executed");\n`,
+            );
+            symlinkSync("must-not-be-read", join(installedDependencies, "foreign-package"));
+          }
+        },
+      });
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(0);
+      expect(yamlTempEntries(tempRoot)).toEqual([]);
+      expect(existsSync(sentinelPath)).toBe(false);
+    },
+  );
 
   it("rejects a changed yaml entry before executing it", () => {
     const { result, sentinelPath } = runYamlPackageSubprocess({
@@ -1122,10 +1306,37 @@ mutateModule.syncBuiltinESMExports();
       encoding: "utf8",
     }).trim();
     execFileSync("git", ["clone", "-q", "--shared", "--no-checkout", resolve("."), root]);
+    const candidates = collectExtensionPackageJsonCandidates();
+    const pluginMetadataPaths = candidates.flatMap(({ packageDir, readmeText }) => [
+      `${packageDir}/package.json`,
+      ...(readmeText === undefined ? [] : [`${packageDir}/README.md`]),
+    ]);
+    // Preserve the exact candidate commit without materializing runtime trees for fixture cleanup.
+    execFileSync("git", ["sparse-checkout", "set", "--no-cone", "--stdin"], {
+      cwd: root,
+      input: [
+        ".github/workflows/",
+        "packages/*/package.json",
+        ...pluginMetadataPaths,
+        ...TOOLING_CLOSURE,
+        ...TOOLING_ROOT_FILES,
+      ]
+        .map((path) => `/${path}`)
+        .join("\n"),
+    });
     execFileSync("git", ["checkout", "-q", "--detach", candidateSha], { cwd: root });
     copyToolingClosure(root);
     const toolingSha = commit(root, "tooling overlay", { allowEmpty: true });
     execFileSync("git", ["update-ref", "refs/heads/main", toolingSha], { cwd: root });
+    expect(candidateSha).not.toBe(toolingSha);
+    expect(existsSync(join(root, "src"))).toBe(false);
+    expect(collectExtensionPackageJsonCandidates(root)).toEqual(candidates);
+    expect(
+      readdirSync(join(root, "extensions"), { recursive: true, withFileTypes: true })
+        .filter((entry) => entry.isFile())
+        .map((entry) => relative(root, join(entry.parentPath, entry.name)).replaceAll("\\", "/"))
+        .toSorted(),
+    ).toEqual(pluginMetadataPaths.toSorted());
 
     const plan = produceReleasePlan({
       repoRoot: root,

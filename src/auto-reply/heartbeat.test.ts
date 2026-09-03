@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   HEARTBEAT_RESPONSE_TOOL_PROMPT,
+  isHeartbeatAcknowledgementText,
   isHeartbeatContentEffectivelyEmpty,
   resolveHeartbeatPromptForResponseTool,
   stripHeartbeatToken,
@@ -151,8 +152,22 @@ describe("stripHeartbeatToken", () => {
   });
 });
 
+describe("isHeartbeatAcknowledgementText", () => {
+  it.each([undefined, "", "NO_REPLY", "HEARTBEAT_OK", "HEARTBEAT_OK all good"])(
+    "recognizes %s as a quiet acknowledgement",
+    (text) => {
+      expect(isHeartbeatAcknowledgementText(text)).toBe(true);
+    },
+  );
+
+  it("preserves substantive replies and the legacy acknowledgement length limit", () => {
+    expect(isHeartbeatAcknowledgementText("NO_REPLY: actual reminder")).toBe(false);
+    expect(isHeartbeatAcknowledgementText("HEARTBEAT_OK all good", 0)).toBe(false);
+  });
+});
+
 describe("isHeartbeatContentEffectivelyEmpty", () => {
-  it("returns false for undefined/null (missing file should not skip)", () => {
+  it("returns false for missing scratch so the monitor can still run", () => {
     expect(isHeartbeatContentEffectivelyEmpty(undefined)).toBe(false);
     expect(isHeartbeatContentEffectivelyEmpty(null)).toBe(false);
   });
@@ -169,9 +184,9 @@ describe("isHeartbeatContentEffectivelyEmpty", () => {
   });
 
   it("returns true for header-only content", () => {
-    expect(isHeartbeatContentEffectivelyEmpty("# HEARTBEAT.md")).toBe(true);
-    expect(isHeartbeatContentEffectivelyEmpty("# HEARTBEAT.md\n")).toBe(true);
-    expect(isHeartbeatContentEffectivelyEmpty("# HEARTBEAT.md\n\n")).toBe(true);
+    expect(isHeartbeatContentEffectivelyEmpty("# Heartbeat scratch")).toBe(true);
+    expect(isHeartbeatContentEffectivelyEmpty("# Heartbeat scratch\n")).toBe(true);
+    expect(isHeartbeatContentEffectivelyEmpty("# Heartbeat scratch\n\n")).toBe(true);
   });
 
   it("returns true for comments only", () => {
@@ -185,7 +200,7 @@ describe("isHeartbeatContentEffectivelyEmpty", () => {
     expect(
       isHeartbeatContentEffectivelyEmpty(`<!--
 Heartbeat template.
-Keep this comment-only file quiet.
+Keep this comment-only scratch quiet.
 -->`),
     ).toBe(true);
     expect(
@@ -206,24 +221,24 @@ tasks:
     expect(
       isHeartbeatContentEffectivelyEmpty(`<!-- runtime template note -->
 
-# HEARTBEAT.md
+# Heartbeat scratch
 `),
     ).toBe(true);
   });
 
   it("returns false when a template includes plain instructional prose", () => {
-    const defaultTemplate = `# HEARTBEAT.md
+    const defaultTemplate = `# Heartbeat scratch
 
-Keep this file empty unless you want a tiny checklist. Keep it small.
+Keep this scratch empty unless you want a tiny checklist. Keep it small.
     `;
     expect(isHeartbeatContentEffectivelyEmpty(defaultTemplate)).toBe(false);
   });
 
-  it("returns true for the current fenced heartbeat template body (#61690)", () => {
-    const content = `# HEARTBEAT.md Template
+  it("returns true for fenced monitor scratch without actionable content", () => {
+    const content = `# Heartbeat scratch
 
 \`\`\`markdown
-# Keep this file empty (or with only comments) to skip heartbeat API calls.
+# Keep this scratch empty (or with only comments) to skip heartbeat API calls.
 
 # Add tasks below when you want the agent to check something periodically.
 \`\`\`
@@ -233,7 +248,7 @@ Keep this file empty unless you want a tiny checklist. Keep it small.
 
   it("returns false when fenced heartbeat content includes a real task", () => {
     const content = `\`\`\`markdown
-# Keep this file empty when you want to skip.
+# Keep this scratch empty when you want to skip.
 
 - Check email
 \`\`\`
@@ -243,24 +258,24 @@ Keep this file empty unless you want a tiny checklist. Keep it small.
 
   it("returns false when a code fence wraps plain instructional prose", () => {
     const content = `\`\`\`markdown
-Keep this file empty unless you want a tiny checklist.
+Keep this scratch empty unless you want a tiny checklist.
 \`\`\`
 `;
     expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(false);
   });
 
   it("returns true for header with only empty lines", () => {
-    expect(isHeartbeatContentEffectivelyEmpty("# HEARTBEAT.md\n\n\n")).toBe(true);
+    expect(isHeartbeatContentEffectivelyEmpty("# Heartbeat scratch\n\n\n")).toBe(true);
   });
 
   it("returns false when actionable content exists", () => {
     expect(isHeartbeatContentEffectivelyEmpty("- Check email")).toBe(false);
-    expect(isHeartbeatContentEffectivelyEmpty("# HEARTBEAT.md\n- Task 1")).toBe(false);
+    expect(isHeartbeatContentEffectivelyEmpty("# Heartbeat scratch\n- Task 1")).toBe(false);
     expect(isHeartbeatContentEffectivelyEmpty("Remind me to call mom")).toBe(false);
   });
 
   it("returns false for content with tasks after header", () => {
-    const content = `# HEARTBEAT.md
+    const content = `# Heartbeat scratch
 
 - Task 1
 - Task 2
@@ -269,7 +284,7 @@ Keep this file empty unless you want a tiny checklist.
   });
 
   it("returns false for mixed content with non-comment text", () => {
-    const content = `# HEARTBEAT.md
+    const content = `# Heartbeat scratch
 ## Tasks
 Check the server logs
 `;
@@ -277,7 +292,7 @@ Check the server logs
   });
 
   it("treats markdown headers as comments (effectively empty)", () => {
-    const content = `# HEARTBEAT.md
+    const content = `# Heartbeat scratch
 ## Section 1
 ### Subsection
 `;

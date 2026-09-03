@@ -1,11 +1,11 @@
 import { html, nothing } from "lit";
 import type { DoctorMemoryStatusPayload } from "../../../../src/gateway/server-methods/doctor.ts";
+import { lobsterPetSeed } from "../../components/lobster-pet-contract.ts";
 import {
   createLobsterPetLook,
   lobsterLookStyle,
-  lobsterPetSeed,
   renderLobsterSvg,
-} from "../../components/lobster-pet.ts";
+} from "../../components/lobster-pet-look.ts";
 import {
   renderSettingsNavRow,
   renderSettingsRow,

@@ -198,7 +198,10 @@ describe("mcp-app-view localization", () => {
 
   it("accepts only focused visible plain-text ui/message requests through the chat seam", async () => {
     const { bridge, frame, view } = await mountBridge(`view-message-${crypto.randomUUID()}`);
-    expect(bridge.capabilities).toMatchObject({ message: { text: {} } });
+    expect(bridge.capabilities).toMatchObject({
+      message: { text: {} },
+      serverResources: {},
+    });
     expect(bridge.messageHandler).toBeTypeOf("function");
 
     const received: string[] = [];
@@ -297,6 +300,7 @@ describe("mcp-app-view localization", () => {
     expect(bridge.capabilities).not.toHaveProperty("message");
     expect(bridge.messageHandler).toBeUndefined();
     expect(bridge.capabilities).not.toHaveProperty("updateModelContext");
+    expect(bridge.capabilities).not.toHaveProperty("serverResources");
     expect(bridge.updateModelContextHandler).toBeUndefined();
   });
 

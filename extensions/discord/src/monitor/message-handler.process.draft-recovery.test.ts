@@ -450,7 +450,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
     expect(firstDispatchParams().replyOptions?.disableBlockStreaming).toBe(true);
   });
 
-  it("shows the agent status above the tool lines in an opted-in Discord progress draft", async () => {
+  it("shows only the authored status in an opted-in Discord progress draft", async () => {
     const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
     const draftStream = createMockDraftStreamForTest();
 
@@ -479,7 +479,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
 
     expect(draftStream.update).toHaveBeenCalledTimes(1);
     expect(draftStream.update).toHaveBeenCalledWith(
-      "Claiming my square footage. Tastefully, but with claws.\n\n🛠️ Exec\n• exec done",
+      "Claiming my square footage. Tastefully, but with claws.",
     );
     // With no label override, the implicit label stays hidden under the status headline.
     expect(String(draftStream.update.mock.calls[0]?.[0])).not.toMatch(/Working/);
@@ -520,7 +520,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(draftStream.update).toHaveBeenLastCalledWith(
-      "Checking private context before replying.\n\n🛠️ Exec",
+      "Checking private context before replying.",
     );
     expectFinalAnswerText("done");
     expect(getDeliveredFinalTexts()[0]).not.toContain("💬");
@@ -551,7 +551,7 @@ describe("processDiscordMessage draft streaming recovery", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(draftStream.update).toHaveBeenCalledWith(
-      "Implementing the change.\n\n✅ Inspect\n▸ Patch\n▢ Test",
+      "Implementing the change.\n\nCompleted: Inspect\nIn progress: Patch\nPending: Test",
     );
     expect(draftStream.flush).toHaveBeenCalledTimes(1);
   });

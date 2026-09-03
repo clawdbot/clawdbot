@@ -325,10 +325,22 @@ describe("plugin session extension SessionEntry projection", () => {
           sessionEntrySlotKey: "contextTokensSource",
         });
         api.registerSessionExtension({
+          namespace: "sandbox-policy",
+          description: "reserved creation-only sandbox requirement",
+          sessionEntrySlotKey: "sandbox",
+        });
+        api.registerSessionExtension({
           namespace: "pending-final-text",
           description: "retired pending-final field",
           sessionEntrySlotKey: "pendingFinalDeliveryText",
         });
+        for (const field of ["execSecurity", "execAsk"]) {
+          api.registerSessionExtension({
+            namespace: `retired-${field.toLowerCase()}`,
+            description: "retired session exec policy",
+            sessionEntrySlotKey: field,
+          });
+        }
       },
     });
 
@@ -366,7 +378,19 @@ describe("plugin session extension SessionEntry projection", () => {
       },
       {
         pluginId: "slot-collision",
+        message: "sessionEntrySlotKey is reserved by SessionEntry: sandbox",
+      },
+      {
+        pluginId: "slot-collision",
         message: "sessionEntrySlotKey is reserved by SessionEntry: pendingFinalDeliveryText",
+      },
+      {
+        pluginId: "slot-collision",
+        message: "sessionEntrySlotKey is reserved by SessionEntry: execSecurity",
+      },
+      {
+        pluginId: "slot-collision",
+        message: "sessionEntrySlotKey is reserved by SessionEntry: execAsk",
       },
     ]);
   });

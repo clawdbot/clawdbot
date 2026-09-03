@@ -6,6 +6,7 @@ import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { loggingState } from "../../logging/state.js";
 import { withEnv } from "../../test-utils/env.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
+import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import type { OpenClawSkillMetadata, SkillEntry } from "../types.js";
 import { createSyntheticSourceInfo } from "./skill-contract.js";
@@ -18,7 +19,7 @@ const buildWorkspaceSkillsPrompt = (
 ): string => buildSkillSnapshot(workspaceDir, opts).prompt;
 
 vi.mock("./plugin-skills.js", () => ({
-  resolvePluginSkillDirs: () => [],
+  resolvePluginSkillRoots: () => [],
 }));
 
 const fixtureSuite = createFixtureSuite("openclaw-skills-prompt-suite-");
@@ -174,13 +175,14 @@ describe("buildWorkspaceSkillsPrompt", () => {
     });
     const warn = captureJsonWarningLogger();
 
-    const entries = loadMergedWorkspaceSkills({
+    const loadOptions = {
       agentWorkspaceDir,
       executionSkillsDir: path.join(executionWorkspaceDir, "skills"),
       managedSkillsDir: path.join(agentWorkspaceDir, ".managed"),
       bundledSkillsDir: "",
       pluginSkillsDir: path.join(agentWorkspaceDir, ".plugin-skills"),
-    });
+    };
+    const entries = loadMergedWorkspaceSkills(loadOptions);
     const warning = JSON.parse(String(warn.mock.calls[0]?.[0])) as Record<string, unknown>;
 
     expect(entries.find((entry) => entry.skill.name === "demo-skill")?.skill.description).toBe(
@@ -192,6 +194,13 @@ describe("buildWorkspaceSkillsPrompt", () => {
       winnerPath: workspaceSkillFile,
       loserPath: executionSkillFile,
     });
+
+    loadMergedWorkspaceSkills(loadOptions);
+    expect(warn).toHaveBeenCalledOnce();
+
+    bumpSkillsSnapshotVersion({ workspaceDir: agentWorkspaceDir, reason: "watch" });
+    loadMergedWorkspaceSkills(loadOptions);
+    expect(warn).toHaveBeenCalledTimes(2);
   });
 
   it("does not report execution-directory collisions for the same canonical skill file", async () => {

@@ -1,8 +1,10 @@
 #!/usr/bin/env node
-// Binds Full Release Validation run metadata to its v3 evidence manifest.
+// Binds Full Release Validation run metadata to its supported evidence manifest.
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { normalizeReleaseCoveragePolicy } from "./full-release-validation-policy.mjs";
+import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
 
 const FULL_RELEASE_WORKFLOW = "Full Release Validation";
 const FULL_RELEASE_WORKFLOW_PATH = ".github/workflows/full-release-validation.yml";
@@ -63,6 +65,11 @@ function displayValue(value) {
  * @property {unknown} [workflowRefType]
  * @property {unknown} [targetRef]
  * @property {unknown} [targetSha]
+ * @property {unknown} [releaseProfile]
+ * @property {unknown} [rerunGroup]
+ * @property {unknown} [runReleaseSoak]
+ * @property {{ package?: { version?: unknown } }} [candidateBinding]
+ * @property {{ coveragePolicy?: unknown, targetVersion?: unknown, targetContextRef?: unknown }} [validationInputs]
  * @property {{ changedPaths?: unknown, evidenceSha?: unknown, policy?: unknown, runId?: unknown, selectedRunId?: unknown }} [evidenceReuse]
  */
 /**
@@ -72,6 +79,7 @@ function displayValue(value) {
  * @property {string} expectedRepository
  * @property {string | number} expectedRunId
  * @property {string} expectedTargetSha
+ * @property {string} [expectedReleaseTag]
  * @property {string} [expectedTrustedWorkflowFullRef]
  * @property {string} [expectedTrustedWorkflowSha]
  * @property {string} [expectedWorkflowBranch]
@@ -118,6 +126,7 @@ export function validateFullReleaseValidationEvidence({
   expectedRepository,
   expectedRunId,
   expectedTargetSha,
+  expectedReleaseTag,
   expectedTrustedWorkflowFullRef,
   expectedTrustedWorkflowSha,
   expectedWorkflowBranch,
@@ -172,9 +181,32 @@ export function validateFullReleaseValidationEvidence({
     );
   }
 
-  if (manifest.version !== 3) {
+  if (manifest.version !== 3 && manifest.version !== 4) {
     throw new Error(
-      `Full release validation manifest must use version 3, got ${displayValue(manifest.version)}.`,
+      `Full release validation manifest must use version 3 or 4, got ${displayValue(manifest.version)}.`,
+    );
+  }
+  const coveragePolicy = normalizeReleaseCoveragePolicy({
+    ...manifest.validationInputs,
+    candidateVersion: manifest.candidateBinding?.package?.version,
+    releaseProfile: manifest.releaseProfile,
+    rerunGroup: manifest.rerunGroup,
+    runReleaseSoak: manifest.runReleaseSoak,
+  });
+  const coveredReleaseTag =
+    coveragePolicy === "npm-stable-v1"
+      ? resolveReleaseContextIdentity(
+          scalarString(manifest.validationInputs?.targetContextRef) ||
+            scalarString(manifest.targetRef),
+          scalarString(manifest.validationInputs?.targetVersion),
+        )?.releaseTag
+      : `v${scalarString(manifest.validationInputs?.targetVersion)}`;
+  if (
+    coveragePolicy &&
+    (manifest.version !== 4 || !coveredReleaseTag || expectedReleaseTag !== coveredReleaseTag)
+  ) {
+    throw new Error(
+      "Release coverage policy requires version 4 evidence for the exact publication tag.",
     );
   }
   const manifestChecks = [
@@ -214,7 +246,7 @@ export function validateFullReleaseValidationEvidence({
           `Direct main validation workflow ${run.headSha} is not reachable from current main.`,
         );
       }
-      return { run, source: "direct" };
+      return { run, source: "direct", coveragePolicy };
     }
     throw new Error(
       `Referenced full release validation run ${expectedRunId} has untrusted head branch ${run.headBranch ?? "<missing>"}.`,
@@ -230,19 +262,20 @@ export function validateFullReleaseValidationEvidence({
       `SHA-pinned validation target ref mismatch: expected ${expectedTargetSha}, got ${displayValue(manifest.targetRef)}.`,
     );
   }
-  if (protectedTag) {
-    if (run.headSha !== expectedTrustedWorkflowSha) {
-      throw new Error(
-        `Protected-tag release evidence workflow SHA ${run.headSha} does not match trusted tooling ${expectedTrustedWorkflowSha}.`,
-      );
-    }
-    return { run, source: "sha-pinned-protected-tag" };
+  // The protected tag authenticates the current publisher. An older validation
+  // producer remains trusted only through its independent current-main lineage.
+  const historicalProtectedProducer = protectedTag && run.headSha !== expectedTrustedWorkflowSha;
+  if ((historicalProtectedProducer || !protectedTag) && !isTrustedMainAncestor?.(run.headSha)) {
+    const subject = protectedTag
+      ? "Protected-tag release evidence workflow SHA"
+      : "SHA-pinned validation workflow";
+    throw new Error(`${subject} ${run.headSha} is not reachable from current main.`);
   }
-  if (!isTrustedMainAncestor?.(run.headSha)) {
-    throw new Error(
-      `SHA-pinned validation workflow ${run.headSha} is not reachable from current main.`,
-    );
-  }
+  const source = protectedTag
+    ? historicalProtectedProducer
+      ? "sha-pinned-protected-tag-main-ancestor"
+      : "sha-pinned-protected-tag"
+    : "sha-pinned-main";
   if (Object.hasOwn(manifest, "evidenceReuse")) {
     const reuse = manifest.evidenceReuse;
     const exactTarget =
@@ -275,7 +308,7 @@ export function validateFullReleaseValidationEvidence({
       targetSha: expectedTargetSha,
     });
     if (
-      strictEvidence?.schema !== "openclaw.release-validation-evidence/v3" ||
+      strictEvidence?.schema !== `openclaw.release-validation-evidence/v${manifest.version}` ||
       strictEvidence.valid !== true ||
       scalarString(strictEvidence.current?.runId) !== String(expectedRunId) ||
       strictEvidence.current?.targetSha !== expectedTargetSha ||
@@ -292,7 +325,7 @@ export function validateFullReleaseValidationEvidence({
       throw new Error("SHA-pinned validation evidence reuse failed strict chain validation.");
     }
   }
-  return { run, source: "sha-pinned-main" };
+  return { run, source, coveragePolicy };
 }
 
 /**
@@ -379,6 +412,7 @@ function main() {
     expectedRepository: process.env.GITHUB_REPOSITORY,
     expectedRunId: process.env.FULL_RELEASE_VALIDATION_RUN_ID,
     expectedTargetSha: process.env.EXPECTED_SHA,
+    expectedReleaseTag: process.env.RELEASE_TAG,
     expectedTrustedWorkflowFullRef: process.env.TRUSTED_WORKFLOW_FULL_REF,
     expectedTrustedWorkflowSha: process.env.TRUSTED_WORKFLOW_SHA,
     expectedWorkflowBranch: process.env.EXPECTED_WORKFLOW_BRANCH,

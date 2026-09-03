@@ -4,7 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
+import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
@@ -34,7 +36,7 @@ const createEmbeddingProviderMock = vi.hoisted(() =>
             }
             return texts.map(() => [1, 0]);
           },
-          embedQuery: async () => {
+          embed: async () => {
             providerQueryCalls += 1;
             return [1, 0];
           },
@@ -64,7 +66,6 @@ function restoreFtsOnlyStateDir(): void {
 
 vi.mock("./embeddings.js", () => ({
   createEmbeddingProvider: createEmbeddingProviderMock,
-  resolveEmbeddingProviderAdapterId: (providerId: string) => providerId,
   resolveEmbeddingProviderAdapterTransport: (providerId: string) =>
     providerId === "local" ? "local" : "remote",
   resolveEmbeddingProviderIndexIdentity: () => undefined,
@@ -107,13 +108,17 @@ describe("memory manager FTS-only reindex", () => {
 
   afterAll(async () => {
     await closeAllMemorySearchManagers();
+    // The agent close releases its leases through shared state and reopens it, so the
+    // shared handle is released second; otherwise Windows fails the removal with EBUSY.
+    closeOpenClawAgentDatabasesForTest();
+    resetPluginStateStoreForTests();
     if (fixtureRoot) {
       await fs.rm(fixtureRoot, { recursive: true, force: true });
     }
   });
 
   async function createManager(
-    params: { provider?: string; vectorEnabled?: boolean } = {},
+    params: { provider?: string; purpose?: "status"; vectorEnabled?: boolean } = {},
   ): Promise<MemoryIndexManager> {
     const store =
       params.vectorEnabled === undefined
@@ -140,7 +145,7 @@ describe("memory manager FTS-only reindex", () => {
         list: [{ id: "main", default: true }],
       },
     } as OpenClawConfig;
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const result = await getMemorySearchManager({ cfg, agentId: "main", purpose: params.purpose });
     if (!result.manager) {
       throw new Error(result.error ?? "manager missing");
     }
@@ -185,6 +190,25 @@ describe("memory manager FTS-only reindex", () => {
     const secondStatus = memoryManager.status();
     expect(secondStatus.chunks).toBeGreaterThan(0);
     expect(countChunksContaining("Alpha topic")).toBeGreaterThan(0);
+  });
+
+  it("keeps a reopened semantic index valid before discovering the provider model", async () => {
+    providerAvailable = true;
+    const indexed = await createManager({ provider: "openai" });
+    await indexed.sync({ force: true });
+    expect(indexed.status().chunks).toBeGreaterThan(0);
+    await indexed.close();
+    await closeAllMemorySearchManagers();
+    await closeAllMemoryIndexManagers();
+    createEmbeddingProviderMock.mockClear();
+
+    const reopened = await createManager({ provider: "openai", purpose: "status" });
+    expect(reopened.status().custom?.indexIdentity).toEqual({ status: "valid" });
+    expect(reopened.status().custom?.providerState).toEqual({
+      mode: "pending",
+      requestedProvider: "openai",
+    });
+    expect(createEmbeddingProviderMock).not.toHaveBeenCalled();
   });
 
   it("returns keyword matches when optional provider construction fails during search bootstrap", async () => {
@@ -589,6 +613,21 @@ describe("memory manager FTS-only reindex", () => {
     });
   });
 
+  it.skipIf(process.platform === "win32")(
+    "syncs regular memory when USER.md is a symlink",
+    async () => {
+      const linkedUserPath = path.join(workspaceDir, "shared-user.md");
+      await fs.writeFile(linkedUserPath, "Linked user content must not be indexed.");
+      await fs.symlink(linkedUserPath, path.join(workspaceDir, "USER.md"));
+      const memoryManager = await createManager({ provider: "none", vectorEnabled: false });
+
+      await expect(memoryManager.sync({ reason: "cli", force: true })).resolves.toBeUndefined();
+
+      expect(countChunksContaining("Alpha topic")).toBeGreaterThan(0);
+      expect(countChunksContaining("Linked user content")).toBe(0);
+    },
+  );
+
   it("reports explicit provider-none probes as FTS-only without resolving providers", async () => {
     const memoryManager = await createManager({ provider: "none", vectorEnabled: false });
 
@@ -614,6 +653,28 @@ describe("memory manager FTS-only reindex", () => {
     expect(createEmbeddingProviderMock).not.toHaveBeenCalled();
     expect(status.vector).toMatchObject({ enabled: false });
     expect(status.custom?.indexIdentity).toEqual({ status: "valid" });
+    expect(countChunksContaining("Alpha topic")).toBeGreaterThan(0);
+  });
+
+  it("ignores persisted vector rebuild debt after reopening an FTS-only index", async () => {
+    const memoryManager = await createManager({ provider: "none" });
+    const db = Reflect.get(memoryManager, "db") as DatabaseSync;
+    db.prepare(
+      `INSERT INTO memory_index_meta (key, value) VALUES ('memory_vector_rebuild_v1', '1')`,
+    ).run();
+
+    await memoryManager.sync({ force: true });
+    await memoryManager.close();
+    manager = null;
+    await closeAllMemorySearchManagers();
+    await closeAllMemoryIndexManagers();
+
+    const reopened = await createManager({ provider: "none", purpose: "status" });
+    expect(reopened.status()).toMatchObject({
+      dirty: false,
+      vector: { enabled: false, index: { state: "empty" } },
+      custom: { indexIdentity: { status: "valid" } },
+    });
     expect(countChunksContaining("Alpha topic")).toBeGreaterThan(0);
   });
 

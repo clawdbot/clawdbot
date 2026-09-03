@@ -1,7 +1,6 @@
 // Assembles streamed backend events into TUI-visible messages.
 import {
   composeThinkingAndContent,
-  extractAssistantAttachmentText,
   extractContentFromMessage,
   extractThinkingFromMessage,
   resolveFinalAssistantText,
@@ -232,7 +231,7 @@ export class TuiStreamAssembler {
       finalText: shouldKeepStreamedText ? streamedContentText : state.contentText,
       streamedText: streamedContentText,
       errorMessage,
-      attachmentText: extractAssistantAttachmentText(message),
+      message,
     });
     // Thinking is optional presentation around the selected response content;
     // it must not hide errors or attachments when the final has no text.
