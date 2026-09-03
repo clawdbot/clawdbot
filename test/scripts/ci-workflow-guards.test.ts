@@ -419,6 +419,18 @@ describe("ci workflow guards", () => {
       );
     }
 
+    const artifactWorkflow = parse(
+      readFileSync(".github/workflows/ci-build-artifacts-testbox.yml", "utf8"),
+    );
+    const cacheSeedStep = artifactWorkflow.jobs["build-artifacts"].steps.find(
+      (step) => step.name === "Resolve release dist cache seeds",
+    );
+    expect(cacheSeedStep.env.CHECKOUT_TOKEN).toBe("${{ github.token }}");
+    expect(cacheSeedStep.run).toContain(
+      '-c "http.https://github.com/${CHECKOUT_REPO}.git.extraheader=AUTHORIZATION: basic ${auth_header}"',
+    );
+    expect(cacheSeedStep.run).toContain('ls-remote --tags origin "refs/tags/${tag}"');
+
     const workflowSanity = readWorkflowSanityWorkflow();
     for (const jobName of ["no-tabs", "actionlint", "generated-doc-baselines"]) {
       const checkoutStep = workflowSanity.jobs[jobName].steps.find(

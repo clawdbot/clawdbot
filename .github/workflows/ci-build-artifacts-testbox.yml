@@ -95,11 +95,15 @@ jobs:
       - name: Resolve release dist cache seeds
         id: dist-cache-seeds
         shell: bash
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
           cache_prefix="${RUNNER_OS}-dist-build-"
           declare -A seen=()
+          auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
 
           resolve_tag_sha() {
             local tag="$1"
@@ -112,7 +116,11 @@ jobs:
               elif [[ "$ref" == "refs/tags/${tag}" ]]; then
                 direct="$sha"
               fi
-            done < <(git ls-remote --tags origin "refs/tags/${tag}" "refs/tags/${tag}^{}")
+            done < <(git \
+              -c protocol.version=2 \
+              -c "http.https://github.com/${CHECKOUT_REPO}.git.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              -c "http.https://github.com/${CHECKOUT_REPO}.git.followRedirects=false" \
+              ls-remote --tags origin "refs/tags/${tag}" "refs/tags/${tag}^{}")
 
             printf '%s\n' "${peeled:-$direct}"
           }
