@@ -1303,7 +1303,13 @@ jobs:
           const uiE2eJobCount = supportsUiE2eProjects
             ? (compactUiE2e ? 7 : 13)
             : usesHostedRunnerProfile ? 14 : 4;
-          const qaSmokeCiPartCount = usesHostedRunnerProfile ? 6 : 4;
+          // The logical profile already owns contributor routing. Reuse the
+          // four-part plan only for normal hybrid first attempts on Blacksmith.
+          const compactHybridQaSmoke = runnerProfile === "hybrid" &&
+            isCanonicalRepository &&
+            (eventName === "push" || eventName === "pull_request") &&
+            process.env.GITHUB_RUN_ATTEMPT === "1";
+          const qaSmokeCiPartCount = usesHostedRunnerProfile && !compactHybridQaSmoke ? 6 : 4;
           const supportsNativeI18n =
             hasPackageScript("native:i18n:check") &&
             hasPackageScript("android:i18n:check") &&
