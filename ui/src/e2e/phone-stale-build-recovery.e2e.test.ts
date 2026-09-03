@@ -24,6 +24,7 @@ import {
   waitForObservedGatewayRequest,
   waitForPhoneProofServiceWorker,
 } from "./login-gate-e2e.test-support.ts";
+import { phoneProofCleanup } from "./phone-stale-build-recovery.test-support.ts";
 
 const proofIdentity = phoneProofIdentity();
 const proofBuildId = proofIdentity.expectedRevisionSha
@@ -52,6 +53,8 @@ suite.define(() => {
     "rearms one bounded build recovery after the visible refresh action with $serviceWorker service-worker state",
     async ({ serviceWorker, serviceWorkers }) => {
       const proofServer = await startPhoneProofServer(proofBuildId);
+      await using proofServerCleanup = phoneProofCleanup(() => proofServer.close());
+      void proofServerCleanup;
       const context = await suite.browser.newContext({
         hasTouch: true,
         isMobile: true,
@@ -62,6 +65,8 @@ suite.define(() => {
         serviceWorkers,
         viewport: { height: 844, width: 390 },
       });
+      await using contextCleanup = phoneProofCleanup(() => closeContext(context));
+      void contextCleanup;
       const page = await context.newPage();
       const documentRequests: PhoneRecoveryObservation["documentRequests"] = [];
       const documentResponses: PhoneRecoveryObservation["documentResponses"] = [];
@@ -405,6 +410,9 @@ suite.define(() => {
         );
         expect(recoveryFocused).toBe(true);
         const terminalInvocationCount = (await gateway.getRequests("terminal.open")).length;
+        expect(
+          await recovery.evaluate((button) => button.closest("[role='status']")?.textContent ?? ""),
+        ).not.toMatch(/openclaw (?:triage|update)|terminal command|run .*terminal/iu);
         observation.reloadRequired = {
           actionCount: await recovery.count(),
           access: recoveryAccess,
@@ -589,8 +597,6 @@ suite.define(() => {
           path.join(RECOVERY_ARTIFACT_DIR, `observed-${serviceWorker}.json`),
           `${JSON.stringify(observation, null, 2)}\n`,
         );
-        await closeContext(context);
-        await proofServer.close();
       }
     },
   );

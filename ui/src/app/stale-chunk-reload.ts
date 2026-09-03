@@ -44,9 +44,9 @@ const recoveryByStorage = new WeakMap<
   { attemptsByBuild: Map<string, number>; latestBuildId: string }
 >();
 const unavailableStorage = {};
-// A successful probe can release several click handlers in the same microtask.
-// Admit one navigation per displayed build before any handler calls reload.
-const initiatedManualReloads = new WeakSet<() => void>();
+// A shared probe can release automatic and manual recovery in the same microtask.
+// Admit one navigation before either path can replace the guard or reload.
+const initiatedReloads = new WeakSet<() => void>();
 let inFlightDocumentProbe: { buildId?: string; promise: Promise<boolean> } | null = null;
 
 export function isStaleChunkImportError(error: unknown): boolean {
@@ -162,10 +162,16 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
   // A reload resets the in-memory state, so without a persisted guard a broken
   // build would reload forever. When storage is unavailable or rejects the
   // write, leave recovery to the manual Retry path instead of reloading.
-  if (recovery.latestBuildId !== buildId || !persistGuardBuildId(storage, buildId)) {
+  const reload = deps.reload ?? reloadControlUiDocument;
+  if (
+    recovery.latestBuildId !== buildId ||
+    initiatedReloads.has(reload) ||
+    !persistGuardBuildId(storage, buildId)
+  ) {
     return false;
   }
-  (deps.reload ?? reloadControlUiDocument)();
+  initiatedReloads.add(reload);
+  reload();
   return true;
 }
 
@@ -239,12 +245,14 @@ export async function retryStaleChunkReloadWhenReachable(
         return false;
       }
       const storage = deps.storage === undefined ? getSafeSessionStorage() : deps.storage;
-      const buildId = CONTROL_UI_BUILD_INFO.buildId;
       const reload = deps.reload ?? reloadControlUiDocument;
-      if (initiatedManualReloads.has(reload)) {
+      const buildId =
+        recoveryByStorage.get(storage ?? unavailableStorage)?.latestBuildId ??
+        CONTROL_UI_BUILD_INFO.buildId;
+      if (initiatedReloads.has(reload)) {
         return false;
       }
-      initiatedManualReloads.add(reload);
+      initiatedReloads.add(reload);
       persistGuardBuildId(storage, buildId);
       reload();
       return true;

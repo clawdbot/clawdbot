@@ -276,6 +276,52 @@ describe("scheduleStaleChunkReload", () => {
     expect(storage.getItem(GUARD_KEY)).toBe("build-b");
   });
 
+  it("preserves the automatic target when a manual retry joins its probe", async () => {
+    const sharedProbe = deferred<Response>();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => sharedProbe.promise),
+    );
+    const reload = vi.fn();
+    const storage = memoryStorage({ [GUARD_KEY]: "displayed-build" });
+
+    const automatic = scheduleStaleChunkReload({
+      now: () => 1000,
+      buildId: "target-build",
+      storage,
+      reload,
+    });
+    const manual = retryStaleChunkReloadWhenReachable({ reload, storage, timeoutMs: 0 });
+    sharedProbe.resolve(new Response(null, { status: 200 }));
+
+    await expect(Promise.all([automatic, manual])).resolves.toEqual([true, false]);
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(storage.getItem(GUARD_KEY)).toBe("target-build");
+  });
+
+  it("preserves the automatic target when it joins a manual probe", async () => {
+    const sharedProbe = deferred<Response>();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => sharedProbe.promise),
+    );
+    const reload = vi.fn();
+    const storage = memoryStorage({ [GUARD_KEY]: "displayed-build" });
+
+    const manual = retryStaleChunkReloadWhenReachable({ reload, storage, timeoutMs: 0 });
+    const automatic = scheduleStaleChunkReload({
+      now: () => 1000,
+      buildId: "target-build",
+      storage,
+      reload,
+    });
+    sharedProbe.resolve(new Response(null, { status: 200 }));
+
+    await expect(Promise.all([manual, automatic])).resolves.toEqual([true, false]);
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(storage.getItem(GUARD_KEY)).toBe("target-build");
+  });
+
   it("settles and aborts a hanging document probe after its deadline", async () => {
     vi.useFakeTimers();
     const reload = vi.fn();

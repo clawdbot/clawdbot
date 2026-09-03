@@ -76,7 +76,11 @@ import {
   pushServerUiPrefs,
 } from "./server-prefs.ts";
 import { setSettingsChangeListener } from "./settings.ts";
-import { isStaleChunkImportError, scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
+import {
+  isStaleChunkImportError,
+  retryStaleChunkReloadWhenReachable,
+  scheduleStaleChunkReload,
+} from "./stale-chunk-reload.ts";
 
 const APP_SIDEBAR_TAG = "openclaw-app-sidebar";
 // Stable references so the sidebar's enabledRouteIds property does not churn
@@ -591,24 +595,21 @@ class OpenClawShell
   }
 
   // Shipped Mac app builds without web chrome still drive these handlers.
-  readonly handleNativeToggleSidebar = () => this.shellChrome.handleNativeToggleSidebar();
-  readonly handleNativeOpenSearch = () => this.shellChrome.handleNativeOpenSearch();
-  readonly handleNativeToggleSearch = (event: Event) =>
-    this.shellChrome.handleNativeToggleSearch(event);
-  readonly handleNativeNewSession = () => this.shellChrome.handleNativeNewSession();
-  readonly handleNativeNavigate = (event: Event) => this.shellChrome.handleNativeNavigate(event);
-  readonly handleNativeHistoryState = (event: Event) =>
-    this.shellChrome.handleNativeHistoryState(event);
-  readonly handleWindowResize = () => this.shellChrome.handleWindowResize();
-  readonly handleDocumentKeydown = (event: KeyboardEvent) =>
-    this.shellChrome.handleDocumentKeydown(event);
-  readonly openPalette = () => this.shellChrome.openPalette();
-  readonly refreshControlUi = () => this.shellChrome.refreshControlUi();
-  readonly handleShellNavDrawerToggle = (event: Event) =>
-    this.shellChrome.handleShellNavDrawerToggle(event);
-  readonly openApprovals = () => this.shellChrome.openApprovals();
-  readonly handleCommandPaletteSlashCommand = (command: string) =>
-    this.shellChrome.handleCommandPaletteSlashCommand(command);
+  readonly handleNativeToggleSidebar = this.shellChrome.handleNativeToggleSidebar;
+  readonly handleNativeOpenSearch = this.shellChrome.handleNativeOpenSearch;
+  readonly handleNativeToggleSearch = this.shellChrome.handleNativeToggleSearch;
+  readonly handleNativeNewSession = this.shellChrome.handleNativeNewSession;
+  readonly handleNativeNavigate = this.shellChrome.handleNativeNavigate;
+  readonly handleNativeHistoryState = this.shellChrome.handleNativeHistoryState;
+  readonly handleWindowResize = this.shellChrome.handleWindowResize;
+  readonly handleDocumentKeydown = this.shellChrome.handleDocumentKeydown;
+  readonly openPalette = this.shellChrome.openPalette;
+  readonly refreshControlUi = (): void => {
+    void retryStaleChunkReloadWhenReachable({ timeoutMs: 0 });
+  };
+  readonly handleShellNavDrawerToggle = this.shellChrome.handleShellNavDrawerToggle;
+  readonly openApprovals = this.shellChrome.openApprovals;
+  readonly handleCommandPaletteSlashCommand = this.shellChrome.handleCommandPaletteSlashCommand;
   readonly restorePendingLazyAction = () => this.shellChrome.restorePendingLazyAction();
   nativeNavCollapsed = () => this.shellChrome.nativeNavCollapsed();
   /** Keep the tab/window title on the active destination. Runs after every
