@@ -494,6 +494,7 @@ describe("buildOpenAIProvider", () => {
         throw new Error("expected fetch headers");
       }
       expect(headers.get("Authorization")).toBe("Bearer sk-discovery");
+      expect(mocks.resolveApiKeyForProvider).not.toHaveBeenCalled();
     } finally {
       fetchSpy.mockRestore();
     }
@@ -574,6 +575,79 @@ describe("buildOpenAIProvider", () => {
     } finally {
       fetchSpy.mockRestore();
     }
+  });
+
+  it("uses a locked runtime key without exposing the selected SecretRef profile", async () => {
+    const profileId = "openai:secretref";
+    const runtimeKey = "sk-runtime-secretref";
+    mocks.resolveApiKeyForProvider.mockResolvedValue({
+      apiKey: runtimeKey,
+      profileId,
+      source: `profile:${profileId}`,
+      mode: "api-key",
+    });
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(Response.json({ data: [{ id: "gpt-5.5", object: "model" }] }));
+
+    try {
+      const result = await buildOpenAIProvider().catalog?.run({
+        resolveProviderAuth: () => ({
+          mode: "api_key",
+          apiKey: "secretref-managed",
+          profileId,
+          source: "profile",
+        }),
+        resolveProviderApiKey: vi.fn(),
+        config: { auth: { profiles: {} } },
+        agentDir: "/tmp/openai-agent",
+        workspaceDir: "/tmp/openai-workspace",
+      } as never);
+
+      if (!result || "provider" in result) {
+        throw new Error("expected OpenAI live provider catalog");
+      }
+      expect(new Headers(fetchSpy.mock.calls[0]?.[1]?.headers).get("authorization")).toBe(
+        `Bearer ${runtimeKey}`,
+      );
+      expect(result.providers.openai?.apiKey).toBe("secretref-managed");
+      expect(JSON.stringify(result)).not.toContain(runtimeKey);
+      expect(result.outcomes).toEqual([{ provider: "openai", profileId, status: "ready" }]);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("does not send a selected SecretRef marker when locked materialization fails", async () => {
+    const profileId = "openai:secretref";
+    mocks.resolveApiKeyForProvider.mockRejectedValue(new Error("secret unavailable"));
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    const result = await buildOpenAIProvider().catalog?.run({
+      resolveProviderAuth: () => ({
+        mode: "api_key",
+        apiKey: "secretref-managed",
+        profileId,
+        source: "profile",
+      }),
+      resolveProviderApiKey: vi.fn(),
+      config: { auth: { profiles: {} } },
+      agentDir: "/tmp/openai-agent",
+      workspaceDir: "/tmp/openai-workspace",
+    } as never);
+
+    if (!result || "provider" in result) {
+      throw new Error("expected OpenAI live provider catalog");
+    }
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(result.outcomes).toEqual([
+      {
+        provider: "openai",
+        profileId,
+        rejectionScope: "catalog",
+        status: "unavailable",
+      },
+    ]);
   });
 
   it("filters the OpenAI API-key catalog against live model ids", async () => {
@@ -697,8 +771,8 @@ describe("buildOpenAIProvider", () => {
       () => new Response("unauthorized", { status: 401 }),
       "secretref-managed",
       true,
-      "auth-rejected",
-      "empty",
+      "unavailable",
+      "fallback",
     ],
     [
       "rejects a concrete API key",
@@ -759,7 +833,11 @@ describe("buildOpenAIProvider", () => {
           status,
         },
       ]);
-      expect(release).toHaveBeenCalledOnce();
+      if (apiKey === "secretref-managed") {
+        expect(release).not.toHaveBeenCalled();
+      } else {
+        expect(release).toHaveBeenCalledOnce();
+      }
     },
   );
 

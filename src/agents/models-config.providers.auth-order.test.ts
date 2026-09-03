@@ -150,4 +150,39 @@ describe("provider catalog auth order", () => {
       source: "profile",
     });
   });
+
+  it("advances when a catalog hook excludes a failed canonical profile", () => {
+    const profileA = "openai:oauth-a";
+    const profileB = "openai:api-key-b";
+    const resolveAuth = createProviderAuthResolver(
+      {},
+      {
+        version: 1,
+        profiles: {
+          [profileA]: {
+            type: "oauth",
+            provider: "openai",
+            access: "oauth-a",
+            refresh: "refresh-a",
+            expires: Date.now() + 60_000,
+          },
+          [profileB]: {
+            type: "api_key",
+            provider: "openai",
+            keyRef: { source: "file", provider: "vault", id: "/openai/profile-b" },
+          },
+        },
+      },
+      { auth: { order: { openai: [profileA, profileB] } } },
+    );
+
+    expect(resolveAuth("openai")).toMatchObject({
+      mode: "oauth",
+      profileId: profileA,
+    });
+    expect(resolveAuth("openai", { excludeProfileIds: [profileA] })).toMatchObject({
+      mode: "api_key",
+      profileId: profileB,
+    });
+  });
 });

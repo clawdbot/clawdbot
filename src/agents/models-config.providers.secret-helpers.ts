@@ -48,7 +48,10 @@ export type ProviderApiKeyResolver = (provider: string) => {
 /** Resolves full provider auth state for callers that need mode and profile provenance. */
 export type ProviderAuthResolver = (
   provider: string,
-  options?: { oauthMarker?: string },
+  options?: {
+    oauthMarker?: string;
+    excludeProfileIds?: readonly string[];
+  },
 ) => {
   apiKey: string | undefined;
   discoveryApiKey?: string;

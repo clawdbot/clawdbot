@@ -10,11 +10,40 @@ import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import type { ProviderCatalogOutcome } from "../src/plugins/provider-catalog.types.js";
 import type { ProviderPlugin } from "../src/plugins/types.js";
 
-const discovery = vi.hoisted(() => ({ providers: new Array<ProviderPlugin>() }));
+type ResolveProviderApiKey =
+  (typeof import("../src/plugin-sdk/provider-auth-runtime.js"))["resolveApiKeyForProvider"];
+
+const discovery = vi.hoisted(() => ({
+  providers: new Array<ProviderPlugin>(),
+  rejectedRuntimeProfiles: new Set<string>(),
+  resolveProviderApiKey: vi.fn(),
+  originalResolveProviderApiKey: undefined as unknown as ResolveProviderApiKey,
+}));
 
 vi.mock("../src/plugins/provider-discovery.runtime.js", () => ({
   resolvePluginDiscoveryProvidersRuntime: () => discovery.providers,
 }));
+
+vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import("../src/plugin-sdk/provider-auth-runtime.js")>();
+  discovery.originalResolveProviderApiKey = original.resolveApiKeyForProvider;
+  return {
+    ...original,
+    resolveApiKeyForProvider: discovery.resolveProviderApiKey,
+  };
+});
+
+function configureRuntimeAuthMock() {
+  discovery.resolveProviderApiKey
+    .mockReset()
+    .mockImplementation(async (params: { profileId?: string }) => {
+      if (params.profileId && discovery.rejectedRuntimeProfiles.has(params.profileId)) {
+        throw new Error(`rejected runtime profile: ${params.profileId}`);
+      }
+      return discovery.originalResolveProviderApiKey(params as never);
+    });
+}
 
 describe("OpenAI model discovery auth order", () => {
   let agentDir: string;
@@ -22,12 +51,14 @@ describe("OpenAI model discovery auth order", () => {
   beforeEach(async () => {
     agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openai-profile-order-"));
     discovery.providers = [buildOpenAIProvider()];
+    configureRuntimeAuthMock();
   });
 
   afterEach(async () => {
     clearLiveCatalogCacheForTests();
     vi.restoreAllMocks();
     discovery.providers = [];
+    discovery.rejectedRuntimeProfiles.clear();
     await fs.rm(agentDir, { recursive: true, force: true });
   });
 
@@ -93,5 +124,73 @@ describe("OpenAI model discovery auth order", () => {
         : undefined;
     expect(providers?.openai?.models?.map((model) => model.id)).toContain("gpt-5.5");
     expect(plan.action === "write" ? plan.contents : "").not.toContain(keyA);
+  });
+
+  it("continues from failed OAuth to the next configured API-key profile", async () => {
+    const profileA = "openai:oauth-a";
+    const profileB = "openai:api-key-b";
+    const keyB = "selected-profile-b";
+    discovery.rejectedRuntimeProfiles.add(profileA);
+    const config: OpenClawConfig = {
+      auth: {
+        order: {
+          openai: [profileA, profileB],
+        },
+      },
+    };
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        [profileA]: {
+          type: "oauth",
+          provider: "openai",
+          access: "rejected-oauth-a",
+          refresh: "refresh-a",
+          expires: Date.now() + 60_000,
+        },
+        [profileB]: {
+          type: "api_key",
+          provider: "openai",
+          key: keyB,
+        },
+      },
+    };
+    const requests: string[] = [];
+    const outcomes: ProviderCatalogOutcome[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+      requests.push(new Headers(init?.headers).get("authorization") ?? "");
+      return Response.json({ data: [{ id: "gpt-5.5", object: "model" }] });
+    });
+
+    const plan = await planOpenClawModelsJson({
+      context: {
+        cfg: config,
+        discoveryAuthConfig: config,
+        sourceConfigForSecrets: config,
+        agentDir,
+        env: {},
+        envFingerprint: {},
+        providerDiscoveryProviderIds: ["openai"],
+        onProviderCatalogOutcome: (outcome) => outcomes.push(outcome),
+      },
+      authStore: store,
+      existingRaw: "",
+      existingParsed: null,
+    });
+
+    expect({
+      runtimeProfiles: discovery.resolveProviderApiKey.mock.calls.map(
+        ([params]) => params.profileId,
+      ),
+      requests,
+      outcomes,
+      action: plan.action,
+    }).toEqual({
+      runtimeProfiles: [profileA, profileB],
+      requests: [`Bearer ${keyB}`],
+      outcomes: [{ provider: "openai", profileId: profileB, status: "ready" }],
+      action: "write",
+    });
+    expect(plan.action === "write" ? plan.contents : "").not.toContain("rejected-oauth-a");
   });
 });

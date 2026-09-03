@@ -186,7 +186,7 @@ export async function runProviderCatalog(params: {
   }
   // Hooks may resolve auth internally, but once a callback selects a profile,
   // profile-scoped outcomes for that provider must retain that exact identity.
-  const selectedProfiles = new Map<string, Set<string>>();
+  const selectedProfiles = new Map<string, string>();
   const captureSelectedProfile = <T extends { profileId?: string }>(
     providerId: string | undefined,
     auth: T,
@@ -200,9 +200,7 @@ export async function runProviderCatalog(params: {
       providerId,
       resolveProviderAuthProviderId: params.resolveProviderAuthProviderId,
     })) {
-      const profiles = selectedProfiles.get(providerKey) ?? new Set<string>();
-      profiles.add(profileId);
-      selectedProfiles.set(providerKey, profiles);
+      selectedProfiles.set(providerKey, profileId);
     }
     return auth;
   };
@@ -220,7 +218,7 @@ export async function runProviderCatalog(params: {
   for (const outcome of copyProviderCatalogOutcomes(result)) {
     const outcomeProvider = normalizeProviderId(outcome.provider);
     const selected = selectedProfiles.get(outcomeProvider);
-    if (outcome.profileId && selected?.size && !selected.has(outcome.profileId)) {
+    if (outcome.profileId && selected && outcome.profileId !== selected) {
       throw new Error(
         `Provider catalog outcome did not match the selected authentication profile (${outcome.provider})`,
       );

@@ -1,5 +1,5 @@
 /** Tests provider discovery normalization, grouping, and manifest contribution handling. */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.js";
 import type { ProviderCatalogOutcome } from "./provider-catalog.types.js";
 import {
@@ -199,6 +199,7 @@ describe("runProviderCatalog", () => {
       catalog: {
         run: async (ctx) => {
           ctx.resolveProviderAuth("proof-alias");
+          ctx.resolveProviderAuth("proof-alias");
           return {
             providers: {},
             outcomes: [
@@ -219,12 +220,20 @@ describe("runProviderCatalog", () => {
         config: {},
         env: {},
         resolveProviderApiKey: () => ({ apiKey: undefined }),
-        resolveProviderAuth: () => ({
-          apiKey: "selected-key",
-          mode: "api_key",
-          profileId: "openai:profile-b",
-          source: "profile",
-        }),
+        resolveProviderAuth: vi
+          .fn()
+          .mockReturnValueOnce({
+            apiKey: "first-key",
+            mode: "api_key",
+            profileId: "openai:profile-a",
+            source: "profile",
+          })
+          .mockReturnValueOnce({
+            apiKey: "selected-key",
+            mode: "api_key",
+            profileId: "openai:profile-b",
+            source: "profile",
+          }),
         resolveProviderAuthProviderId: (providerId) =>
           providerId === "proof-alias" ? "openai" : (providerId ?? "openai"),
         reportCatalogOutcome: (outcome) => outcomes.push(outcome),

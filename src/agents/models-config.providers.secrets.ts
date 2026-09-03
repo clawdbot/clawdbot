@@ -225,10 +225,11 @@ export function createProviderAuthResolver(
   syntheticAuthEnv = env,
 ): ProviderAuthResolver {
   const getLookupCaches = createProviderAuthLookupCaches(env, config);
-  return (provider: string, options?: { oauthMarker?: string }) => {
+  return (provider, options) => {
     const lookupCaches = getLookupCaches();
     const authProvider = resolveProviderIdForAuthFromCaches(provider, lookupCaches);
     const authStore = resolveAuthProfileStoreInput(authStoreInput);
+    const excludedProfileIds = new Set(options?.excludeProfileIds);
     const ids = resolveCatalogAuthProfileOrder({
       config,
       env,
@@ -236,6 +237,9 @@ export function createProviderAuthResolver(
       store: authStore,
     });
     for (const id of ids) {
+      if (excludedProfileIds.has(id)) {
+        continue;
+      }
       const cred = authStore.profiles[id];
       if (!cred) {
         continue;

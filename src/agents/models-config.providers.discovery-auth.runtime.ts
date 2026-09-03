@@ -74,7 +74,7 @@ export async function prepareProviderDiscoveryAuth(
   };
   return {
     resolveProviderApiKey: (provider: string) => enrich(resolveProviderApiKey(provider)),
-    resolveProviderAuth: (provider: string, options?: { oauthMarker?: string }) =>
+    resolveProviderAuth: (provider: string, options?: Parameters<ProviderAuthResolver>[1]) =>
       enrich(resolveProviderAuth(provider, options)),
   };
 }
