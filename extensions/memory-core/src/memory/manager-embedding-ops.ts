@@ -267,7 +267,10 @@ function resolveMemoryIndexConcurrency(params: {
   if (typeof configured === "number" && Number.isFinite(configured)) {
     return Math.max(1, Math.floor(configured));
   }
-  return params.providerId === "ollama" ? 1 : EMBEDDING_INDEX_CONCURRENCY;
+  // Providers embedding on the operator's own host index one job at a time; fan-out
+  // saturates the CPU the Gateway needs to stay responsive during a full rebuild.
+  const { providerId } = params;
+  return providerId === "local" || providerId === "ollama" ? 1 : EMBEDDING_INDEX_CONCURRENCY;
 }
 
 async function runEmbeddingOperationWithTimeout<T>(params: {
