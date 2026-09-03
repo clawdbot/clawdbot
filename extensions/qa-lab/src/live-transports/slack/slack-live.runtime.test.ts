@@ -1178,7 +1178,7 @@ describe("Slack live QA runtime helpers", () => {
     vi.useFakeTimers();
     let historyCalls = 0;
     const observedMessages: Array<{ text: string }> = [];
-    const observation = testing.observeSlackScenarioMessages({
+    const observationParams = {
       channelId: "C123456789",
       client: {
         conversations: {
@@ -1210,8 +1210,10 @@ describe("Slack live QA runtime helpers", () => {
       settleMs: 10,
       sutIdentity: { userId: "U999999999" },
       threadTs: "1.000000",
-    });
-    await vi.advanceTimersByTimeAsync(10);
+    };
+    const observation = testing.observeSlackScenarioMessages(observationParams);
+    // A shorter clock advance strands the observer's final timer.
+    await vi.advanceTimersByTimeAsync(observationParams.settleMs);
     await observation;
 
     expect(historyCalls).toBeGreaterThanOrEqual(2);
