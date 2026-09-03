@@ -57,6 +57,8 @@ import {
   markBackgrounded,
 } from "../agents/bash-process-registry.js";
 import { runExecProcess } from "../agents/bash-tools.exec-runtime.js";
+import type { SessionPlacementTurnParams } from "../agents/session-placement-admission.js";
+import { resolveWorkerToolAuthority } from "../gateway/worker-environments/worker-tool-authority.js";
 import { saveExecApprovals, type ExecApprovalsFile } from "../infra/exec-approvals.js";
 import { runExec } from "../process/exec.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
@@ -133,6 +135,9 @@ type InferencePlan =
   | "tool"
   | "safe-tool"
   | "background-tool"
+  | "node-tool"
+  | "node-tool-workdir"
+  | "other-node-tool"
   | "process-poll"
   | "process-kill"
   | "session-tool"
@@ -623,6 +628,18 @@ class FakeWorkerGateway {
       });
       return;
     }
+    if (plan === "node-tool" || plan === "node-tool-workdir" || plan === "other-node-tool") {
+      this.sendToolCallTurn(socket, frame.params, {
+        args: {
+          command: "printf worker-node",
+          ...(plan === "node-tool-workdir" ? { workdir: "/remote/explicit" } : {}),
+          ...(plan === "other-node-tool" ? { node: "other-worker-node" } : {}),
+        },
+        toolCallId: plan,
+        toolName: "exec",
+      });
+      return;
+    }
     if (plan === "process-poll" || plan === "process-kill") {
       const processResult = this.acceptedTranscriptRequests
         .flatMap((request) => request.messages)
@@ -904,6 +921,7 @@ function descriptor(socketPath: string, workspaceDir: string): WorkerLaunchDescr
       liveEvents: { ackedSeq: 0, nextSeq: 1 },
       toolAuthority: {
         allowedToolNames: ["read", "write", "edit", "apply_patch", "exec", "process"],
+        exec: { host: "gateway", security: "full", ask: "off" },
       },
     },
   };
@@ -2354,6 +2372,247 @@ describe("worker runtime", () => {
 
     await expect(runWorkerDescriptor(launch)).rejects.toThrow(
       "worker workspace path escapes its assigned containment root",
+    );
+  });
+
+  function restrictedTurn(workspaceDir: string, exec: Record<string, unknown>) {
+    return {
+      sessionId: SESSION_ID,
+      sessionKey: `worker:${SESSION_ID}`,
+      sessionFile: path.join(workspaceDir, "session.jsonl"),
+      workspaceDir,
+      cwd: workspaceDir,
+      prompt: "run",
+      timeoutMs: 1_000,
+      runId: RUN_ID,
+      provider: MODEL_REF.provider,
+      model: MODEL_REF.model,
+      agentId: "main",
+      toolsAllow: ["exec", "process"],
+      config: { tools: { exec } },
+    } as SessionPlacementTurnParams;
+  }
+
+  it("does not reconstruct denied exec authority as full across the launch boundary", async () => {
+    const { gateway, workspaceDir, launch } = await setup({ inferencePlans: ["tool", "text"] });
+    // Match the JSON-only handoff to the real worker process: the restricted
+    // Gateway config is not ambient state in the worker, only this descriptor is.
+    launch.assignment.toolAuthority = { allowedToolNames: ["exec", "process"] };
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+
+    await expect(
+      readFile(path.join(workspaceDir, "local-proof.txt"), "utf8"),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    expect(gateway.inferenceRequests).toHaveLength(2);
+    expect(
+      gateway.inferenceRequests[1]?.context.messages.some(
+        (message) => message.role === "toolResult",
+      ),
+    ).toBe(true);
+    expect(
+      resolveWorkerToolAuthority({
+        modelRef: MODEL_REF,
+        turn: restrictedTurn(workspaceDir, { security: "deny", ask: "off" }),
+      }).allowedToolNames,
+    ).toEqual(launch.assignment.toolAuthority.allowedToolNames);
+  });
+
+  it("keeps explicit deny through owner hooks, construction defaults, and plugin filtering", async () => {
+    const { gateway, workspaceDir, launch } = await setup({ inferencePlans: ["tool", "text"] });
+    launch.assignment.permissionMode = "full";
+    launch.assignment.toolAuthority = {
+      allowedToolNames: ["exec", "process"],
+      exec: { host: "gateway", security: "deny", ask: "off" },
+    };
+
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+
+    await expect(
+      readFile(path.join(workspaceDir, "local-proof.txt"), "utf8"),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    expect(gateway.inferenceRequests[0]?.context.tools?.map((tool) => tool.name)).toEqual([
+      "exec",
+      "process",
+    ]);
+    expect(gateway.inferenceRequests).toHaveLength(2);
+  });
+
+  it("preserves resolved deny through serialized descriptor admission and worker execution", async () => {
+    const { gateway, workspaceDir, launch } = await setup({ inferencePlans: ["tool", "text"] });
+    launch.assignment.toolAuthority = resolveWorkerToolAuthority({
+      modelRef: MODEL_REF,
+      turn: restrictedTurn(workspaceDir, { security: "deny", ask: "off" }),
+    });
+    const admitted = parseWorkerLaunchDescriptor(structuredClone(launch));
+
+    expect(admitted.assignment.toolAuthority).toMatchObject({
+      allowedToolNames: ["exec", "process"],
+      exec: { host: "gateway", security: "deny", ask: "off" },
+    });
+    await expect(runWorkerDescriptor(admitted)).resolves.toMatchObject({ status: "completed" });
+    await expect(
+      readFile(path.join(workspaceDir, "local-proof.txt"), "utf8"),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    expect(gateway.inferenceRequests).toHaveLength(2);
+  });
+
+  it("withholds exec for a sandbox-required session at worker launch", async () => {
+    const { gateway, workspaceDir, launch } = await setup({ inferencePlans: ["text"] });
+    const sandboxRequiredTurn = restrictedTurn(workspaceDir, { host: "gateway", mode: "full" });
+    sandboxRequiredTurn.execSession = { sandbox: "required" };
+    sandboxRequiredTurn.config = {
+      ...sandboxRequiredTurn.config,
+      agents: { defaults: { sandbox: { mode: "all" } } },
+    };
+    launch.assignment.toolAuthority = resolveWorkerToolAuthority({
+      modelRef: MODEL_REF,
+      turn: sandboxRequiredTurn,
+    });
+    const admitted = parseWorkerLaunchDescriptor(structuredClone(launch));
+
+    expect(admitted.assignment.toolAuthority.allowedToolNames).toEqual(["exec", "process"]);
+    expect(admitted.assignment.toolAuthority.exec).toEqual({
+      host: "sandbox",
+      security: "full",
+      ask: "off",
+    });
+    await expect(runWorkerDescriptor(admitted)).resolves.toMatchObject({ status: "completed" });
+    expect(gateway.inferenceRequests[0]?.context.tools?.map((tool) => tool.name) ?? []).toEqual([]);
+  });
+
+  it.each(["gateway", "node"] as const)(
+    "leaves resolved full %s-host authority available at worker launch",
+    async (host) => {
+      const { gateway, workspaceDir, launch } = await setup({ inferencePlans: ["text"] });
+      launch.assignment.toolAuthority = resolveWorkerToolAuthority({
+        modelRef: MODEL_REF,
+        turn: restrictedTurn(workspaceDir, { host, mode: "full" }),
+      });
+      const admitted = parseWorkerLaunchDescriptor(structuredClone(launch));
+
+      await expect(runWorkerDescriptor(admitted)).resolves.toMatchObject({ status: "completed" });
+      expect(gateway.inferenceRequests[0]?.context.tools?.map((tool) => tool.name)).toEqual([
+        "exec",
+        "process",
+      ]);
+    },
+  );
+
+  it("dispatches node exec only to the descriptor-bound node", async () => {
+    const { gateway, workspaceDir, launch } = await setup({
+      inferencePlans: ["node-tool", "node-tool-workdir", "other-node-tool", "text"],
+    });
+    const boundNode = "worker-node";
+    const nodeInvokes: Array<Record<string, unknown>> = [];
+    const gatewayTools = await import("../agents/tools/gateway.js");
+    const rpc = vi
+      .spyOn(gatewayTools, "callGatewayTool")
+      .mockImplementation(async (method, _options, rawParams) => {
+        const params = rawParams as Record<string, unknown>;
+        if (method === "node.list") {
+          return {
+            nodes: [boundNode, "other-worker-node"].map((nodeId) => ({
+              nodeId,
+              platform: "linux",
+              commands: ["system.run", "system.run.prepare"],
+              connected: true,
+            })),
+          };
+        }
+        if (method !== "node.invoke") {
+          throw new Error(`unexpected worker node RPC: ${method}`);
+        }
+        nodeInvokes.push(structuredClone(params));
+        const invokeParams = params.params as Record<string, unknown>;
+        if (params.command === "system.run.prepare") {
+          return {
+            payload: {
+              plan: {
+                argv: invokeParams.command,
+                commandText: invokeParams.rawCommand,
+                agentId: invokeParams.agentId,
+                sessionKey: invokeParams.sessionKey,
+              },
+              execPolicy: { security: "full", ask: "off" },
+            },
+          };
+        }
+        if (params.command === "system.run") {
+          return {
+            payload: {
+              success: true,
+              stdout: "worker-node",
+              stderr: "",
+              exitCode: 0,
+              timedOut: false,
+            },
+          };
+        }
+        throw new Error(`unexpected worker node command: ${String(params.command)}`);
+      });
+    launch.assignment.permissionMode = "full";
+    launch.assignment.workerContainmentRoot = workspaceDir;
+    launch.assignment.toolAuthority = {
+      allowedToolNames: ["exec", "process"],
+      exec: {
+        host: "node",
+        node: boundNode,
+        nodeCwd: "/remote/default",
+        security: "full",
+        ask: "off",
+      },
+    };
+    const admitted = parseWorkerLaunchDescriptor(structuredClone(launch));
+
+    try {
+      await expect(runWorkerDescriptor(admitted)).resolves.toMatchObject({ status: "completed" });
+    } finally {
+      rpc.mockRestore();
+    }
+
+    expect(nodeInvokes).toHaveLength(4);
+    const [prepareInvoke, runInvoke, explicitPrepareInvoke, explicitRunInvoke] = nodeInvokes;
+    if (!prepareInvoke || !runInvoke || !explicitPrepareInvoke || !explicitRunInvoke) {
+      throw new Error("expected default and explicit node prepare and run invocations");
+    }
+    expect(prepareInvoke).toEqual(
+      expect.objectContaining({
+        nodeId: boundNode,
+        command: "system.run.prepare",
+        params: expect.objectContaining({ security: "full", ask: "off" }),
+      }),
+    );
+    expect(runInvoke).toEqual(
+      expect.objectContaining({ nodeId: boundNode, command: "system.run" }),
+    );
+    expect((prepareInvoke.params as Record<string, unknown>).cwd).toBe("/remote/default");
+    expect(explicitPrepareInvoke).toEqual(
+      expect.objectContaining({ nodeId: boundNode, command: "system.run.prepare" }),
+    );
+    expect((explicitPrepareInvoke.params as Record<string, unknown>).cwd).toBe("/remote/explicit");
+    expect(explicitRunInvoke).toEqual(
+      expect.objectContaining({ nodeId: boundNode, command: "system.run" }),
+    );
+    expect(gateway.inferenceRequests).toHaveLength(4);
+    const deniedResult = gateway.inferenceRequests[3]?.context.messages.find(
+      (message) => message.role === "toolResult" && message.toolCallId === "other-node-tool",
+    );
+    expect(JSON.stringify(deniedResult)).toContain(
+      "exec node not allowed (bound to worker-node, requested resolved to other-worker-node)",
+    );
+  });
+
+  it("retains explicit full gateway-host execution", async () => {
+    const { workspaceDir, launch } = await setup({ inferencePlans: ["tool", "text"] });
+    launch.assignment.toolAuthority = {
+      allowedToolNames: ["exec", "process"],
+      exec: { host: "gateway", security: "full", ask: "off" },
+    };
+    const admitted = parseWorkerLaunchDescriptor(structuredClone(launch));
+
+    await expect(runWorkerDescriptor(admitted)).resolves.toMatchObject({ status: "completed" });
+    await expect(readFile(path.join(workspaceDir, "local-proof.txt"), "utf8")).resolves.toBe(
+      "worker-local",
     );
   });
 

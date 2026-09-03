@@ -49,9 +49,29 @@ function launchDescriptor(): WorkerLaunchDescriptor {
       ],
       transcript: { baseLeafId: "leaf-7", nextSeq: 8 },
       liveEvents: { ackedSeq: 12, nextSeq: 13 },
-      toolAuthority: { allowedToolNames: ["read", "exec"] },
+      toolAuthority: {
+        allowedToolNames: ["read", "exec"],
+        exec: { host: "gateway", security: "full", ask: "off" },
+      },
     },
   };
+}
+
+// Legacy-shape descriptors may fail closed through whole-descriptor rejection or
+// parsed denied exec authority, so accept either outcome here.
+function expectExecDeniedOrDescriptorRejected(candidate: unknown): void {
+  let parsed: WorkerLaunchDescriptor;
+  try {
+    parsed = parseWorkerLaunchDescriptor(candidate);
+  } catch (error) {
+    expect(error).toMatchObject({ message: "invalid worker launch descriptor" });
+    return;
+  }
+  const { exec } = parsed.assignment.toolAuthority;
+  if (exec !== undefined) {
+    expect(exec).toMatchObject({ security: "deny", ask: "off" });
+  }
+  expect(exec?.security).not.toBe("full");
 }
 
 describe("worker launch descriptor", () => {
@@ -376,6 +396,72 @@ describe("worker launch descriptor", () => {
 
     descriptor.assignment.toolAuthority.allowedToolNames = ["browser"];
     expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
+  });
+
+  it("never gives a name-only legacy descriptor permissive exec authority", () => {
+    const descriptor = launchDescriptor();
+    const { exec: _exec, ...nameOnlyAuthority } = descriptor.assignment.toolAuthority;
+
+    expectExecDeniedOrDescriptorRejected({
+      ...descriptor,
+      assignment: { ...descriptor.assignment, toolAuthority: nameOnlyAuthority },
+    });
+  });
+
+  it("rejects or denies malformed and partially populated exec authority", () => {
+    const descriptor = launchDescriptor();
+    const cases = [
+      null,
+      {},
+      { security: "deny" },
+      { ask: "off" },
+      { security: "full" },
+      { security: "full", ask: "off" },
+      { security: null, ask: "off" },
+      { security: "deny", ask: false },
+      { host: "gateway", security: "full", ask: "off", unexpected: true },
+      { host: "gateway", security: "full", ask: "off", node: "worker-node" },
+      { host: "gateway", security: "full", ask: "off", nodeCwd: "/remote/workspace" },
+      { host: "elsewhere", security: "full", ask: "off" },
+      { host: "gateway", security: "unrestricted", ask: "off" },
+      { host: "gateway", security: "full", ask: "sometimes" },
+      { host: "node", security: "full", ask: "off", node: "" },
+      { host: "node", security: "full", ask: "off", node: " worker-node" },
+      { host: "node", security: "full", ask: "off", nodeCwd: 42 },
+      { host: "node", security: "full", ask: "off", nodeCwd: "" },
+      { host: "node", security: "full", ask: "off", nodeCwd: " /remote/workspace" },
+    ];
+
+    for (const exec of cases) {
+      expectExecDeniedOrDescriptorRejected({
+        ...descriptor,
+        assignment: {
+          ...descriptor.assignment,
+          toolAuthority: { ...descriptor.assignment.toolAuthority, exec },
+        },
+      });
+    }
+  });
+
+  it("round-trips every reachable exec authority the Gateway can resolve", () => {
+    const descriptor = launchDescriptor();
+    for (const host of ["sandbox", "gateway", "node"] as const) {
+      for (const security of ["deny", "allowlist", "full"] as const) {
+        for (const ask of ["off", "on-miss", "always"] as const) {
+          descriptor.assignment.toolAuthority.exec =
+            host === "node"
+              ? {
+                  host,
+                  security,
+                  ask,
+                  node: "worker-node",
+                  nodeCwd: "/remote/workspace",
+                }
+              : { host, security, ask };
+          expect(parseWorkerLaunchDescriptor(structuredClone(descriptor))).toEqual(descriptor);
+        }
+      }
+    }
   });
 
   it("accepts only a closed absolute loopback browser attachment descriptor", () => {

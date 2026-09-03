@@ -1,6 +1,9 @@
 import path from "node:path";
 import { expect, test } from "vitest";
-import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  WORKER_EXEC_AUTHORITY_PROTOCOL_FEATURE,
+  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { approveNodePairing, requestNodePairing } from "../infra/device-pairing-node.js";
 import { withTimeout } from "../infra/fs-safe.js";
 import {
@@ -153,7 +156,10 @@ test("settles an idle paired worker's rootless stop reply during Gateway shutdow
         bootstrapReceipt: {
           bundleHash: BUNDLE_HASH,
           openclawVersion: "2026.8.19",
-          protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+          protocolFeatures: [
+            WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+            WORKER_EXEC_AUTHORITY_PROTOCOL_FEATURE,
+          ],
           installKind: "bundle",
         },
         credential: {

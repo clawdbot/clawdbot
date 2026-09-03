@@ -954,7 +954,7 @@ describe("sessions.dispatch", () => {
       .fn()
       .mockRejectedValue(
         new Error(
-          "Worker environment is not dispatchable with the current execution-context contract: ready",
+          "Worker environment is not dispatchable with the current worker launch contract: ready",
         ),
       );
 
@@ -968,7 +968,7 @@ describe("sessions.dispatch", () => {
     const error = vi.mocked(respond).mock.calls[0]?.[2];
     expect(error).toMatchObject({
       code: ErrorCodes.UNAVAILABLE,
-      message: expect.stringContaining("current execution-context contract"),
+      message: expect.stringContaining("current worker launch contract"),
     });
   });
 

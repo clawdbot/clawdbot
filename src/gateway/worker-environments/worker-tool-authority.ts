@@ -1,6 +1,7 @@
 import { resolveConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
 import { projectConversationToolNames } from "../../agents/conversation-tool-policy-pipeline.js";
 import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
+import { resolveExecDefaults } from "../../agents/exec-defaults.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { resolveSandboxToolPolicyForAgent } from "../../agents/sandbox/tool-policy.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
@@ -87,8 +88,27 @@ export function resolveWorkerToolAuthority(params: {
   portalAvailable?: boolean;
 }): WorkerToolAuthority {
   const turn = params.turn;
+  const {
+    effectiveHost: host,
+    security,
+    ask,
+    node: configuredNode,
+  } = resolveExecDefaults({
+    cfg: turn.config,
+    sessionEntry: turn.execSession,
+    execOverrides: turn.execOverrides,
+    agentId: turn.agentId,
+    sessionKey: turn.sandboxSessionKey?.trim() || turn.sessionKey?.trim() || turn.sessionId,
+  });
+  const node = configuredNode?.trim();
+  const nodeCwd =
+    node && node === turn.execSession?.execNode ? turn.execSession.execCwd?.trim() : undefined;
+  const exec: NonNullable<WorkerToolAuthority["exec"]> =
+    host === "node"
+      ? { host, security, ask, ...(node ? { node } : {}), ...(nodeCwd ? { nodeCwd } : {}) }
+      : { host, security, ask };
   if (turn.disableTools === true || turn.modelRun === true || turn.promptMode === "none") {
-    return { allowedToolNames: [] };
+    return { allowedToolNames: [], exec };
   }
   const runtimeCappedTools = applyEmbeddedAttemptToolsAllow(
     [
@@ -109,5 +129,5 @@ export function resolveWorkerToolAuthority(params: {
     toolNames: runtimeCappedTools.map((tool) => tool.name),
     warn: logWarn,
   });
-  return { allowedToolNames: projected };
+  return { allowedToolNames: projected, exec };
 }

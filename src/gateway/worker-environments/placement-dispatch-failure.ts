@@ -1,5 +1,5 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { supportsWorkerExecutionContextLaunch } from "./admission.js";
+import { supportsCurrentWorkerLaunch } from "./admission.js";
 import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
 import { placementTurnOwner, type WorkerPlacementExecutionMode } from "./placement-record.js";
 import type {
@@ -151,8 +151,8 @@ export function isCurrentActiveWorkerEnvironment(
     isExactAttachedEnvironment(environment, placement) &&
     environment?.bootstrapReceipt?.bundleHash === placement.workerBundleHash &&
     // A persisted bundle hash can still match a worker using an older launch shape.
-    // Recovery may reuse only the currently admitted execution-context dialect.
-    supportsWorkerExecutionContextLaunch(environment?.bootstrapReceipt)
+    // Recovery may reuse only the current launch contract, including exec authority.
+    supportsCurrentWorkerLaunch(environment?.bootstrapReceipt)
   );
 }
 

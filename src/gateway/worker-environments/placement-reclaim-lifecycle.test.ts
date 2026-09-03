@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  WORKER_EXEC_AUTHORITY_PROTOCOL_FEATURE,
+  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../../infra/node-commands.js";
 import type { NodeWorkerWorkspaceExecInput } from "../../worker/node-workspace-protocol.js";
@@ -40,7 +43,10 @@ describe("placement reclaim with provider-owned node teardown", () => {
       const environmentId = harness.ready.environmentId;
       const build = {
         ...support.BOOTSTRAP_RECEIPT,
-        protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+        protocolFeatures: [
+          WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+          WORKER_EXEC_AUTHORITY_PROTOCOL_FEATURE,
+        ],
       };
       support.testState.prepareInstallation = async () => ({
         ...support.BUNDLE_ARTIFACT,

@@ -844,6 +844,7 @@ function createCronPromptExecutor(
           scheduledRuntimeAuthorityRecoveryRequired:
             params.job.runtimeAuthorityRecoveryRequired === true,
           scheduledToolPolicy,
+          execSession: params.cronSession.sessionEntry,
           execOverrides: params.suppressExecNotifyOnExit
             ? {
                 notifyOnExit: false,

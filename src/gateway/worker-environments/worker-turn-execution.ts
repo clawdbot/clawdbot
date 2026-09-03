@@ -19,7 +19,7 @@ import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcr
 import {
   STALE_WORKER_BUILD_REASON,
   StaleWorkerBuildError,
-  supportsWorkerExecutionContextLaunch,
+  supportsCurrentWorkerLaunch,
 } from "./admission.js";
 import { sameWorkerSessionTurnClaim } from "./placement-record.js";
 import { prepareWorkerDesktopLaunchPlan } from "./worker-desktop-launch-plan.js";
@@ -74,9 +74,9 @@ export async function executeWorkerTurn(
   ) {
     throw new Error("Active worker placement does not match its attached environment");
   }
-  if (!supportsWorkerExecutionContextLaunch(bootstrapReceipt)) {
+  if (!supportsCurrentWorkerLaunch(bootstrapReceipt)) {
     throw new Error(
-      "Active worker bundle lacks the current execution-context capability; reprovision the worker before launch",
+      "Active worker bundle lacks the current launch capability; reprovision the worker before launch",
     );
   }
   await recoverWorkspaceBeforeTurn(params);

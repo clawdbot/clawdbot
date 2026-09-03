@@ -4,7 +4,10 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  WORKER_EXEC_AUTHORITY_PROTOCOL_FEATURE,
+  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import type { WorkerNodeEnrollment } from "../../plugins/types.js";
 import {
@@ -70,7 +73,10 @@ describe("worker node provisioning shutdown replay", () => {
     });
     support.testState.prepareInstallation = vi.fn(async () => ({
       ...support.BUNDLE_ARTIFACT,
-      protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+      protocolFeatures: [
+        WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+        WORKER_EXEC_AUTHORITY_PROTOCOL_FEATURE,
+      ],
     }));
     let placements = createWorkerSessionPlacementStore({
       database: support.testState.stateDb,
@@ -111,7 +117,10 @@ describe("worker node provisioning shutdown replay", () => {
     });
     const receipt = {
       ...support.BOOTSTRAP_RECEIPT,
-      protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+      protocolFeatures: [
+        WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+        WORKER_EXEC_AUTHORITY_PROTOCOL_FEATURE,
+      ],
     };
     const first = support.createService(provider, {
       prepareNodeBootstrap: firstEnrollment.prepare,

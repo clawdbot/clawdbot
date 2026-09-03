@@ -1,3 +1,5 @@
+import type { ExecAsk, ExecHost, ExecSecurity } from "../infra/exec-approvals-core.js";
+
 export const WORKER_REQUIRED_LOCAL_TOOL_NAMES = [
   "read",
   "write",
@@ -37,6 +39,19 @@ export function isWorkerToolName(value: unknown): value is WorkerToolName {
   return typeof value === "string" && WORKER_TOOL_NAME_SET.has(value);
 }
 
+type WorkerExecAuthority = {
+  security: ExecSecurity;
+  ask: ExecAsk;
+} & (
+  | { host: Exclude<ExecHost, "node">; node?: never; nodeCwd?: never }
+  | { host: "node"; node?: string; nodeCwd?: string }
+);
+
 export type WorkerToolAuthority = {
   allowedToolNames: WorkerToolName[];
+  /**
+   * Effective exec policy resolved at the Gateway. Optional for protocol compatibility only;
+   * consumers must treat an absent value as denied rather than re-deriving it worker-side.
+   */
+  exec?: WorkerExecAuthority;
 };
