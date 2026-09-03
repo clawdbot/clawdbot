@@ -28,6 +28,7 @@ import { createInMemorySessionStore, type AcpSessionStore } from "@openclaw/acp-
 import type { AcpServerOptions } from "@openclaw/acp-core/types";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayClient } from "../gateway/client.js";
 import { createFixedWindowBudget } from "../infra/fixed-window-rate-limit.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
@@ -45,6 +46,7 @@ const SESSION_CREATE_RATE_LIMIT_DEFAULT_WINDOW_MS = 10_000;
 const loadAcpSdkModule = createLazyRuntimeModule(() => import("@agentclientprotocol/sdk"));
 
 type AcpGatewayAgentOptions = AcpServerOptions & {
+  config?: OpenClawConfig;
   eventLedger?: AcpEventLedger;
   sessionStore?: AcpSessionStore;
 };
@@ -104,6 +106,7 @@ export class AcpGatewayAgent implements Agent {
     this.sessionLifecycle = new AcpTranslatorSessionLifecycle(
       gateway,
       opts,
+      opts.config ?? {},
       sessionStore,
       this.sessionUpdates,
       sessionState,

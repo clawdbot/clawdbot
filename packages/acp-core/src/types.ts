@@ -34,6 +34,7 @@ export type AcpServerOptions = {
   gatewayUrl?: string;
   gatewayToken?: string;
   gatewayPassword?: string;
+  agentId?: string;
   defaultSessionKey?: string;
   defaultSessionLabel?: string;
   requireExistingSession?: boolean;

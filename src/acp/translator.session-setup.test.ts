@@ -1,6 +1,7 @@
 /** Tests ACP translator session setup constraints and initial updates. */
 import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayClient } from "../gateway/client.js";
 import { isAcpSessionKey } from "../sessions/session-key-utils.js";
 import {
@@ -16,6 +17,13 @@ import { createAcpConnection, createAcpGateway } from "./translator.test-helpers
 vi.mock("./commands.js", () => ({
   getAvailableCommands: () => [],
 }));
+
+const explicitMultiAgentConfig = {
+  agents: {
+    ownership: "explicit",
+    entries: { ops: {}, research: {} },
+  },
+} satisfies OpenClawConfig;
 
 describe("acp unsupported bridge session setup", () => {
   it("rejects per-session MCP servers on newSession", async () => {
@@ -58,17 +66,60 @@ describe("acp unsupported bridge session setup", () => {
 });
 
 describe("acp session UX bridge behavior", () => {
-  it("uses a non-runtime namespace for generated bridge sessions", async () => {
+  it("scopes generated bridge sessions to the selected agent without reusing keys", async () => {
     const sessionStore = createInMemorySessionStore();
     const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
+      agentId: "ops",
+      config: explicitMultiAgentConfig,
       sessionStore,
     });
 
-    const result = await agent.newSession(createNewSessionRequest());
-    const sessionKey = sessionStore.getSession(result.sessionId)?.sessionKey;
+    const first = await agent.newSession(createNewSessionRequest());
+    const second = await agent.newSession(createNewSessionRequest());
+    const firstKey = sessionStore.getSession(first.sessionId)?.sessionKey;
+    const secondKey = sessionStore.getSession(second.sessionId)?.sessionKey;
 
-    expect(sessionKey).toMatch(/^acp-bridge:/);
-    expect(isAcpSessionKey(sessionKey)).toBe(false);
+    expect(firstKey).toMatch(/^agent:ops:acp-bridge:/);
+    expect(secondKey).toMatch(/^agent:ops:acp-bridge:/);
+    expect(secondKey).not.toBe(firstKey);
+    expect(isAcpSessionKey(firstKey)).toBe(false);
+  });
+
+  it("rejects generated sessions when an explicit multi-agent fleet has no owner", async () => {
+    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
+      config: explicitMultiAgentConfig,
+    });
+
+    await expect(agent.newSession(createNewSessionRequest())).rejects.toThrow(
+      /ACP bridge session has no explicit owner.*--agent <id>/i,
+    );
+  });
+
+  it("rejects an unknown explicitly selected agent", async () => {
+    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
+      agentId: "missing",
+      config: explicitMultiAgentConfig,
+    });
+
+    await expect(agent.newSession(createNewSessionRequest())).rejects.toThrow(
+      'Unknown agent id "missing"',
+    );
+  });
+
+  it("preserves explicit session routing without an ambient owner", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
+      config: explicitMultiAgentConfig,
+      defaultSessionKey: "agent:research:default",
+      sessionStore,
+    });
+
+    const result = await agent.newSession({
+      ...createNewSessionRequest(),
+      _meta: { sessionKey: "agent:ops:override" },
+    });
+
+    expect(sessionStore.getSession(result.sessionId)?.sessionKey).toBe("agent:ops:override");
   });
 
   it("returns initial modes and thought-level config options for new sessions", async () => {
