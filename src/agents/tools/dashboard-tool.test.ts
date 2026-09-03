@@ -1,6 +1,7 @@
 import { Value } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
 import type { BoardCommand, BoardSnapshot } from "../../../packages/gateway-protocol/src/index.js";
+import { createTestBoardStore } from "../../boards/board-store.test-support.js";
 import {
   createGatewayMethodDescriptorsFromHandlers,
   createGatewayMethodRegistry,
@@ -41,6 +42,23 @@ function recorder(boardSnapshot: BoardSnapshot = snapshot) {
       return 2;
     },
   };
+}
+
+function createBoardBackedCaller() {
+  const store = createTestBoardStore();
+  const callGateway: InProcessGatewayCaller = async <T>(
+    method: string,
+    params: Record<string, unknown>,
+  ): Promise<T> => {
+    if (method === "board.widget.put") {
+      return store.putWidget(params as never) as T;
+    }
+    if (method === "board.get") {
+      return store.getSnapshot(params as never) as T;
+    }
+    throw new Error(`unexpected board method: ${method}`);
+  };
+  return { callGateway, store };
 }
 
 function createGatewayAffinityHarness(revision: number) {
@@ -113,6 +131,50 @@ describe("dashboard tool", () => {
       }),
     ).toBe(true);
     expect(Value.Check(tool.parameters, { action: "unknown" })).toBe(false);
+  });
+
+  it("creates the first plugin widget without an anchor", async () => {
+    const sessionKey = "agent:main:first-widget";
+    const { callGateway, store } = createBoardBackedCaller();
+    store.applyOps({ sessionKey }, [{ kind: "tab_create", tabId: "plugin", title: "Plugin" }]);
+    const dashboard = createDashboardTool({ agentSessionKey: sessionKey, callGateway });
+    const args = {
+      action: "widget_put",
+      name: "first-plugin",
+      pluginKind: "workboard:card",
+      tabId: "plugin",
+      after: null,
+    };
+
+    expect(Value.Check(dashboard.parameters, args)).toBe(true);
+    expect(Value.Check(dashboard.parameters, { ...args, after: "" })).toBe(false);
+    const preparedArgs = dashboard.prepareArguments?.(args) ?? args;
+    expect(preparedArgs).not.toHaveProperty("after");
+
+    await dashboard.execute("first-plugin", preparedArgs);
+    const read = await dashboard.execute("read-first-widget", { action: "read" });
+
+    expect((read.details as BoardSnapshot).widgets).toEqual([
+      expect.objectContaining({ name: "first-plugin", tabId: "plugin", position: 0 }),
+    ]);
+  });
+
+  it("keeps position and after mutually exclusive for widget moves", async () => {
+    const harness = recorder();
+    const tool = createDashboardTool({
+      agentSessionKey: "agent:main:main",
+      callGateway: harness.callGateway,
+    });
+
+    await expect(
+      tool.execute("move", {
+        action: "widget_move",
+        name: "status",
+        position: 0,
+        after: "clock",
+      }),
+    ).rejects.toThrow("either position or after, not both");
+    expect(harness.calls).toEqual([]);
   });
 
   it("reads a compact text plus JSON snapshot", async () => {

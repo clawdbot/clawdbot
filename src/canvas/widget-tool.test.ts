@@ -2,6 +2,7 @@
 import { access, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { InProcessGatewayCaller } from "../agents/tools/in-process-gateway.js";
 import { createTestBoardStore } from "../boards/board-store.test-support.js";
@@ -148,6 +149,43 @@ async function executeWidget(params: {
 }
 
 describe("show_widget", () => {
+  it("pins the first HTML widget without an anchor", async () => {
+    const sessionKey = "agent:main:first-widget";
+    const store = createTestBoardStore();
+    store.applyOps({ sessionKey }, [{ kind: "tab_create", tabId: "html", title: "HTML" }]);
+    const callGateway: InProcessGatewayCaller = async <T>(
+      method: string,
+      params: Record<string, unknown>,
+    ): Promise<T> => {
+      expect(method).toBe("board.widget.put");
+      return store.putWidget(params as never) as T;
+    };
+    const tool = createShowWidgetTool({
+      agentSessionKey: sessionKey,
+      inlineHostEnabled: false,
+      callGateway,
+    });
+    const args = {
+      title: "First HTML",
+      widget_code: "<p>first</p>",
+      pin: true,
+      name: "first-html",
+      tab: "html",
+      after: null,
+    };
+
+    expect(Value.Check(tool.parameters, args)).toBe(true);
+    expect(Value.Check(tool.parameters, { ...args, after: "" })).toBe(false);
+    const preparedArgs = tool.prepareArguments?.(args) ?? args;
+    expect(preparedArgs).not.toHaveProperty("after");
+
+    await tool.execute("first-html", preparedArgs);
+
+    expect(store.getSnapshot({ sessionKey }).widgets).toEqual([
+      expect.objectContaining({ name: "first-html", tabId: "html", position: 0 }),
+    ]);
+  });
+
   it("builds a sorted kind enum and routes registered source through board put", async () => {
     registerDiagramContentKind();
     const stateDir = await createStateDir();

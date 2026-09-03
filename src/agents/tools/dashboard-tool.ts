@@ -5,6 +5,11 @@ import type {
   BoardOp,
   BoardSnapshot,
 } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  BOARD_WIDGET_NAME_PATTERN,
+  omitNullBoardWidgetAnchor,
+  optionalBoardWidgetAnchorSchema,
+} from "../../boards/board-tool-args.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import type { AnyAgentTool } from "./common.js";
 import {
@@ -36,7 +41,6 @@ const DASHBOARD_ACTIONS = [
 ] as const;
 const BOARD_TAB_ID_PATTERN = "^[a-z0-9-]{1,40}$";
 const BOARD_TAB_ID_REGEX = /^[a-z0-9-]{1,40}$/;
-const BOARD_WIDGET_NAME_PATTERN = "^[a-z0-9][a-z0-9._-]{0,63}$";
 const BOARD_PLUGIN_KIND_PATTERN = "^[a-z0-9][a-z0-9-]{0,63}:[a-z0-9][a-z0-9._-]{0,63}$";
 const BOARD_PLUGIN_KIND_REGEX = /^[a-z0-9][a-z0-9-]{0,63}:[a-z0-9][a-z0-9._-]{0,63}$/;
 
@@ -65,12 +69,7 @@ const DashboardToolSchema = Type.Object(
     name: Type.Optional(
       Type.String({ pattern: BOARD_WIDGET_NAME_PATTERN, description: "Stable widget name" }),
     ),
-    after: Type.Optional(
-      Type.String({
-        pattern: BOARD_WIDGET_NAME_PATTERN,
-        description: "Place after stable widget name",
-      }),
-    ),
+    after: optionalBoardWidgetAnchorSchema("Place after stable widget name; null or omit appends"),
     sizeW: Type.Optional(Type.Integer({ minimum: 1, maximum: 12 })),
     sizeH: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
     size: Type.Optional(Type.String({ enum: ["sm", "md", "lg", "xl", "full"] })),
@@ -301,6 +300,7 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
     description:
       "Keep one ad hoc visualization inline; use only for an explicit dashboard request or multiple non-code visualizations. Read layout; widget_put updates plugin widgets only. Read and arrange this session dashboard: read snapshot; tab_create/tab_update/tab_delete/tabs_reorder; widget_put/widget_move/widget_resize/widget_remove; focus_tab; set_chat_dock moves or hides the chat dock (left/right/bottom/hidden). focus_tab and set_chat_dock require a connected Control UI. Widgets use stable names. widget_put creates or updates trusted plugin widgets only; update other content through its owning authoring capability discovered in the tool catalog. Plugin examples: session:progress props {sessionKey?} renders the session's live progress card (omit sessionKey for the current session), workboard:card props {cardId}, workboard:mini props {boardId, limit}, workboard:board props {boardId}. Sizes: sm=3x3, md=6x4, lg=8x6, xl=12x8, full=12x8 single-widget emphasis.",
     parameters: DashboardToolSchema,
+    prepareArguments: omitNullBoardWidgetAnchor,
     execute: async (_toolCallId, rawArgs) => {
       const params = rawArgs as Record<string, unknown>;
       const action = readToolStringParam(params, "action", { required: true });
