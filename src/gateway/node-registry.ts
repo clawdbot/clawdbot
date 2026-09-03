@@ -449,25 +449,28 @@ export class NodeRegistry {
   private refreshSessionPolicy(node: NodeSession): void {
     const policy = expectDefined(NODE_SESSION_POLICIES.get(node), "registered node policy missing");
     const cfg = this.committedConfig;
+    const declaredCommands = node.sessionCommandsCeiling ?? node.declaredCommands;
+    // Withholding describes Gateway policy, not missing pairing approval.
+    // Actual admission below still intersects the independently approved surface.
     const allowlist = cfg
       ? resolveNodeCommandAllowlist(cfg, {
           ...node,
-          caps: policy.approvedCaps,
-          commands: policy.approvedCommands,
-          approvedCommands: policy.approvedCommands,
+          caps: node.sessionCapsCeiling ?? node.declaredCaps,
+          commands: declaredCommands,
+          approvedCommands: declaredCommands,
         })
       : undefined;
-    const declaredCommands = node.sessionCommandsCeiling ?? node.declaredCommands;
     node.commands = policy.approvedCommands.filter(
       (command) => declaredCommands.includes(command) && (!allowlist || allowlist.has(command)),
     );
     if (allowlist) {
       policy.withheldCommands = declaredCommands.filter((command) => !allowlist.has(command));
     }
+    // Capability visibility follows every admission gate, not policy diagnostics alone.
     node.caps = retainFulfilledNodeCapabilities({
       caps: policy.approvedCaps,
       admittedCommands: node.commands,
-      withheldCommands: policy.withheldCommands,
+      withheldCommands: declaredCommands.filter((command) => !node.commands.includes(command)),
     });
     node.computerUse = resolveEffectiveComputerUseDescriptor({
       commands: node.commands,

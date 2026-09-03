@@ -309,6 +309,25 @@ describe("createGatewayCloseHandler", () => {
     expect(closed).toBe(true);
   });
 
+  it("joins update discovery before disposing shared runtime resources", async () => {
+    const updateCheckStopped = createDeferredCore();
+    const updateCheckStop = vi.fn(() => updateCheckStopped.promise);
+    const close = createGatewayCloseHandler(createGatewayCloseTestDeps({ updateCheckStop }));
+    const closing = close({ reason: "test" });
+
+    try {
+      await vi.waitFor(() => expect(updateCheckStop).toHaveBeenCalledOnce());
+      expect(mocks.disposeAllCodeModeRuns).not.toHaveBeenCalled();
+      expect(mocks.closePluginStateDatabase).not.toHaveBeenCalled();
+    } finally {
+      updateCheckStopped.resolve();
+      await closing;
+    }
+
+    expect(mocks.disposeAllCodeModeRuns).toHaveBeenCalledOnce();
+    expect(mocks.closePluginStateDatabase).toHaveBeenCalledOnce();
+  });
+
   it("retains shared state when media cleanup times out", async () => {
     const stopMediaCleanup = vi.fn(async () => "timed-out" as const);
     const close = createGatewayCloseHandler(createGatewayCloseTestDeps({ stopMediaCleanup }));

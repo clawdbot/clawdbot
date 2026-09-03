@@ -9,10 +9,7 @@ import { hasConfiguredInternalHooks } from "../hooks/configured.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
 import { hasRestartSentinel } from "../infra/restart-sentinel.js";
-import type {
-  initializeGatewayUpdateStatus,
-  scheduleGatewayUpdateCheck,
-} from "../infra/update-startup.js";
+import type { createGatewayUpdateCheck } from "../infra/update-startup.js";
 import type { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
 import type { loadOpenClawPlugins } from "../plugins/loader.js";
@@ -1007,10 +1004,9 @@ type GatewayPostAttachRuntimeDeps = {
   refreshLatestUpdateRestartSentinel: () => Awaitable<
     ReturnType<typeof refreshLatestUpdateRestartSentinel>
   >;
-  initializeGatewayUpdateStatus: () => ReturnType<typeof initializeGatewayUpdateStatus>;
-  scheduleGatewayUpdateCheck: (
-    ...args: Parameters<typeof scheduleGatewayUpdateCheck>
-  ) => Awaitable<ReturnType<typeof scheduleGatewayUpdateCheck>>;
+  createGatewayUpdateCheck: (
+    ...args: Parameters<typeof createGatewayUpdateCheck>
+  ) => Awaitable<ReturnType<typeof createGatewayUpdateCheck>>;
   startGatewaySidecars: typeof startGatewaySidecars;
   warmSystemCa: typeof warmMacOSSystemCaOffMainThread;
   loadSubagentRegistryActivation: () => Awaitable<
@@ -1024,10 +1020,8 @@ const defaultGatewayPostAttachRuntimeDeps: GatewayPostAttachRuntimeDeps = {
   logGatewayStartup: async (params) =>
     (await import("./server-startup-log.js")).logGatewayStartup(params),
   refreshLatestUpdateRestartSentinel: refreshLatestUpdateRestartSentinelIfPresent,
-  initializeGatewayUpdateStatus: async () =>
-    (await import("../infra/update-startup.js")).initializeGatewayUpdateStatus(),
-  scheduleGatewayUpdateCheck: async (...args) =>
-    (await import("../infra/update-startup.js")).scheduleGatewayUpdateCheck(...args),
+  createGatewayUpdateCheck: async (...args) =>
+    (await import("../infra/update-startup.js")).createGatewayUpdateCheck(...args),
   startGatewaySidecars,
   warmSystemCa: beginMacOSSystemCaWarmupOnce,
   loadSubagentRegistryActivation: async () =>
@@ -1047,14 +1041,19 @@ function createDeferredGatewayUpdateCheck(params: {
   getClientConnIds: (filter?: (client: GatewayClient) => boolean) => ReadonlySet<string>;
   waitForPostReadyWork?: () => Promise<void>;
   activeWorkInspectors?: Partial<GatewayActiveWorkInspectors>;
-}): { start: () => void; stop: () => void } {
-  let started = false;
+}): { start: () => void; stop: () => Promise<void> } {
   let stopped = false;
-  let stopUpdateCheck: (() => void) | null = null;
+  let owner: ReturnType<typeof createGatewayUpdateCheck> | undefined;
+  let ownerReady: Promise<void> | undefined;
+  let initialization: Promise<unknown> | undefined;
+  let stopPromise: Promise<void> | undefined;
   let latestUpdateAvailable: GatewayUpdateAvailableEventPayload["updateAvailable"] = null;
   let latestSchedule: GatewayUpdateAvailableEventPayload["schedule"];
 
   const broadcastUpdateAvailable = (payload: GatewayUpdateAvailableEventPayload) => {
+    if (stopped) {
+      return;
+    }
     const detailedConnIds = params.getClientConnIds((client) =>
       canReadDetailedUpdateMetadata(client.connect.role ?? "operator", client.connect.scopes ?? []),
     );
@@ -1075,77 +1074,81 @@ function createDeferredGatewayUpdateCheck(params: {
 
   const stop = () => {
     stopped = true;
-    stopUpdateCheck?.();
-    stopUpdateCheck = null;
+    return (stopPromise ??= (async () => {
+      // Fence immediately; a lazy factory that finishes later stops its own
+      // owner below. Never join the post-ready barrier during failed startup.
+      const cleanup = owner?.stop();
+      await ownerReady;
+      await cleanup;
+      await initialization;
+    })());
   };
 
   const start = () => {
-    if (started || stopped) {
+    if (ownerReady || stopped) {
       return;
     }
-    started = true;
-    // Install identity is process-stable and must be ready before clients can
-    // select a channel; registry and upstream discovery stay post-ready.
-    void params.runtimeDeps.initializeGatewayUpdateStatus().catch((err: unknown) => {
-      if (!stopped) {
-        params.log.warn(`gateway update status failed to initialize: ${String(err)}`);
-      }
-    });
-    // Update checks are intentionally post-attach so startup logging, sidecars,
-    // and Tailscale exposure are not serialized behind network I/O.
-    void (async () => {
-      await params.waitForPostReadyWork?.();
-      if (stopped) {
+    ownerReady = (async () => {
+      try {
+        owner = await params.runtimeDeps.createGatewayUpdateCheck({
+          cfg: params.cfg,
+          log: params.log,
+          isNixMode: params.isNixMode,
+          ...(params.activeWorkInspectors
+            ? { activeWorkInspectors: params.activeWorkInspectors }
+            : {}),
+          onUpdateAvailableChange: (updateAvailable) => {
+            latestUpdateAvailable = updateAvailable;
+            const payload: GatewayUpdateAvailableEventPayload = {
+              updateAvailable,
+              ...(latestSchedule ? { schedule: latestSchedule } : {}),
+            };
+            broadcastUpdateAvailable(payload);
+          },
+          onUpdateScheduleChange: (schedule) => {
+            latestSchedule = schedule;
+            const payload: GatewayUpdateAvailableEventPayload = {
+              updateAvailable: latestUpdateAvailable,
+              schedule,
+            };
+            broadcastUpdateAvailable(payload);
+          },
+        });
+      } catch (err) {
+        if (!stopped) {
+          params.log.warn(`gateway update check failed to initialize: ${String(err)}`);
+        }
         return;
       }
-      setImmediate(() => {
-        if (stopped) {
-          return;
+      if (stopped) {
+        await owner.stop();
+        return;
+      }
+      // Local identity is ready before channel selection; remote discovery
+      // stays post-ready, but both already have the same shutdown owner.
+      const updateCheck = owner;
+      initialization = (async () => updateCheck.initialize())().catch((err: unknown) => {
+        if (!stopped) {
+          params.log.warn(`gateway update status failed to initialize: ${String(err)}`);
         }
-        void runWithGatewayIndependentRootWorkAdmission(
+      });
+    })();
+    void ownerReady.catch(() => {});
+    void (async () => {
+      await params.waitForPostReadyWork?.();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      await ownerReady;
+      if (!stopped) {
+        await runWithGatewayIndependentRootWorkAdmission(
           async () =>
             await measureStartup(params.startupTrace, "post-attach.update-check", () =>
-              params.runtimeDeps.scheduleGatewayUpdateCheck({
-                cfg: params.cfg,
-                log: params.log,
-                isNixMode: params.isNixMode,
-                ...(params.activeWorkInspectors
-                  ? { activeWorkInspectors: params.activeWorkInspectors }
-                  : {}),
-                onUpdateAvailableChange: (updateAvailable) => {
-                  latestUpdateAvailable = updateAvailable;
-                  const payload: GatewayUpdateAvailableEventPayload = {
-                    updateAvailable,
-                    ...(latestSchedule ? { schedule: latestSchedule } : {}),
-                  };
-                  broadcastUpdateAvailable(payload);
-                },
-                onUpdateScheduleChange: (schedule) => {
-                  latestSchedule = schedule;
-                  const payload: GatewayUpdateAvailableEventPayload = {
-                    updateAvailable: latestUpdateAvailable,
-                    schedule,
-                  };
-                  broadcastUpdateAvailable(payload);
-                },
-              }),
+              owner?.start(),
             ),
           "startup:update-check",
-        )
-          .then((nextStop) => {
-            if (stopped) {
-              nextStop();
-              return;
-            }
-            stopUpdateCheck = nextStop;
-          })
-          .catch((err: unknown) => {
-            if (stopped) {
-              return;
-            }
-            params.log.warn(`gateway update check failed to start: ${String(err)}`);
-          });
-      });
+        );
+      }
     })().catch((err: unknown) => {
       if (!stopped) {
         params.log.warn(`gateway update check readiness wait failed: ${String(err)}`);
@@ -1346,7 +1349,7 @@ export async function startGatewayPostAttachRuntime(
   const skipStartupLog = () => assignStartupLogOwner(Promise.resolve());
 
   const updateCheck = params.minimalTestGateway
-    ? { start: () => {}, stop: () => {} }
+    ? { start: () => {}, stop: async () => {} }
     : createDeferredGatewayUpdateCheck({
         startupTrace: params.startupTrace,
         runtimeDeps,
@@ -1358,6 +1361,10 @@ export async function startGatewayPostAttachRuntime(
         waitForPostReadyWork: params.waitForPostReadyWork,
         activeWorkInspectors: params.activeWorkInspectors,
       });
+  if (!params.minimalTestGateway) {
+    // Startup failure can precede publication of the post-attach return handle.
+    params.onGatewayLifetimeSidecars?.([updateCheck]);
+  }
 
   let pluginServicesReported = false;
   let reportedPluginServices: PluginServicesHandle | null = null;

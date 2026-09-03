@@ -938,12 +938,18 @@ fs.appendFileSync(env.MOCK_GH_CALLS, JSON.stringify({
 const jobs = JSON.parse(env.MOCK_GH_JOBS);
 const conclusion = env.MOCK_GH_CONCLUSION;
 const url = "https://github.com/openclaw/openclaw/actions/runs/101";
-function nextStatus() {
+function nextRunObservation() {
   const statuses = JSON.parse(env.MOCK_GH_STATUSES);
+  const titles = JSON.parse(env.MOCK_GH_RUN_TITLES);
   let index = 0;
   try { index = Number(fs.readFileSync(env.MOCK_GH_STATUS_POLLS, "utf8")); } catch {}
   fs.writeFileSync(env.MOCK_GH_STATUS_POLLS, String(index + 1));
-  return statuses[Math.min(index, statuses.length - 1)];
+  return {
+    status: statuses[Math.min(index, statuses.length - 1)],
+    title: titles.length > 0
+      ? titles[Math.min(index, titles.length - 1)]
+      : env.MOCK_GH_RUN_TITLE,
+  };
 }
 if (args[0] === "workflow" && args[1] === "run") {
   if (env.MOCK_GH_DISPATCH_ERROR) {
@@ -968,9 +974,10 @@ if (args[0] === "workflow" && args[1] === "run") {
     console.error(env.MOCK_GH_STATUS_ERROR);
     process.exit(1);
   }
+  const observation = nextRunObservation();
   console.log(JSON.stringify({
     conclusion,
-    display_title: env.MOCK_GH_RUN_TITLE,
+    display_title: observation.title,
     event: env.MOCK_GH_RUN_EVENT,
     head_branch: env.MOCK_GH_RUN_HEAD_BRANCH,
     head_sha: env.MOCK_GH_CHILD_SHA,
@@ -978,7 +985,7 @@ if (args[0] === "workflow" && args[1] === "run") {
     id: Number(env.MOCK_GH_RUN_ID),
     path: env.MOCK_GH_RUN_PATH,
     run_attempt: Number(env.MOCK_GH_RUN_ATTEMPT),
-    status: nextStatus(),
+    status: observation.status,
     workflow_id: Number(env.MOCK_GH_RUN_WORKFLOW_ID),
   }));
 } else if (args[0] === "run" && args[1] === "view") {
@@ -999,10 +1006,11 @@ if (args[0] === "workflow" && args[1] === "run") {
       jobs.forEach((job) => console.log(JSON.stringify(job)));
     }
   } else {
+    const status = field === "status" ? nextRunObservation().status : undefined;
     console.log({
       conclusion,
       headSha: env.MOCK_GH_CHILD_SHA,
-      status: field === "status" ? nextStatus() : undefined,
+      status,
       url,
     }[field]);
   }
@@ -1111,6 +1119,7 @@ exit 0
       MOCK_GH_RUN_PATH: `.github/workflows/${child.workflow}`,
       MOCK_GH_RUN_ATTEMPT: "1",
       MOCK_GH_RUN_TITLE: `${child.runName} full-release-validation-77-2${child.nonceSuffix}`,
+      MOCK_GH_RUN_TITLES: "[]",
       MOCK_GH_RUN_WORKFLOW_ID: "789",
       MOCK_GH_STATUSES: '["completed"]',
       MOCK_GH_STATUS_POLLS: statusPath,
@@ -1133,6 +1142,14 @@ exit 0
         },
     );
   return { calls, result };
+}
+
+function fullReleaseChild(kind: string) {
+  const child = FULL_RELEASE_CHILD_DISPATCHES.find((candidate) => candidate.kind === kind);
+  if (!child) {
+    throw new Error(`Expected full release child ${kind}`);
+  }
+  return child;
 }
 
 function runPackageAcceptanceSummary(params: {
@@ -5220,6 +5237,57 @@ test "$package_manager" = "pnpm@12.1.0"
   );
 
   it.each([
+    { exactTitleAt: 2, label: "inside the former window" },
+    { exactTitleAt: 13, label: "after the former window" },
+  ])("adopts a returned child whose title converges $label", ({ exactTitleAt }) => {
+    const child = fullReleaseChild("artifact-docker");
+    const expectedTitle = `${child.runName} full-release-validation-77-2${child.nonceSuffix}`;
+    const titles = Array.from({ length: exactTitleAt }, (_, index) =>
+      index + 1 === exactTitleAt ? expectedTitle : child.runName,
+    );
+
+    const { calls, result } = runFullReleaseChildDispatch(child, {
+      MOCK_GH_DISPATCH_OUTPUT: "https://github.com/openclaw/openclaw/actions/runs/101",
+      MOCK_GH_RUN_TITLES: JSON.stringify(titles),
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(calls.filter(({ args }) => args[0] === "workflow")).toHaveLength(1);
+    expect(
+      calls.filter(({ args }) => args.some((value) => value.endsWith("/runs/101"))),
+    ).toHaveLength(exactTitleAt);
+  });
+
+  it("bounds title convergence without reposting the dispatch", () => {
+    const child = fullReleaseChild("artifact-docker");
+    const { calls, result } = runFullReleaseChildDispatch(child, {
+      MOCK_GH_DISPATCH_OUTPUT: "https://github.com/openclaw/openclaw/actions/runs/101",
+      MOCK_GH_RUN_TITLES: JSON.stringify([child.runName]),
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("run never became readable with display title");
+    expect(calls.filter(({ args }) => args[0] === "workflow")).toHaveLength(1);
+    expect(
+      calls.filter(({ args }) => args.some((value) => value.endsWith("/runs/101"))),
+    ).toHaveLength(60);
+  });
+
+  it("refuses an immutable child mismatch immediately without reposting", () => {
+    const { calls, result } = runFullReleaseChildDispatch(FULL_RELEASE_CHILD_DISPATCHES[0], {
+      MOCK_GH_DISPATCH_OUTPUT: "https://github.com/openclaw/openclaw/actions/runs/101",
+      MOCK_GH_RUN_EVENT: "push",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Refusing to adopt unvalidated");
+    expect(calls.filter(({ args }) => args[0] === "workflow")).toHaveLength(1);
+    expect(
+      calls.filter(({ args }) => args.some((value) => value.endsWith("/runs/101"))),
+    ).toHaveLength(1);
+  });
+
+  it.each([
     ["full", "v2026.8.1", "", "historical_target_tag=v2026.8.1"],
     ["npm-beta", "refs/tags/v2026.8.1-beta.3", "", "historical_target_tag=v2026.8.1-beta.3"],
     ["npm-stable", "v2026.8.1", "", "historical_target_tag=v2026.8.1"],
@@ -5282,6 +5350,9 @@ test "$package_manager" = "pnpm@12.1.0"
     });
     expect(mismatched.result.status).toBe(1);
     expect(mismatched.result.stderr).toContain("expected parent workflow SHA");
+    expect(
+      mismatched.calls.filter(({ args }) => args.some((value) => value.endsWith("/runs/101"))),
+    ).toHaveLength(1);
     expect(
       mismatched.calls.filter(({ args }) => args[0] === "run" && args[1] === "cancel"),
     ).toHaveLength(0);

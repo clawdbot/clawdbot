@@ -237,12 +237,10 @@ function listReloadRules(): ReloadRule[] {
         return rule;
       })
       .concat(
-        (plugin.reload?.noopPrefixes ?? []).map(
-          (prefix): ReloadRule => ({
-            prefix,
-            kind: "none",
-          }),
-        ),
+        (plugin.reload?.noopPrefixes ?? []).map((prefix): ReloadRule => ({
+          prefix,
+          kind: "none",
+        })),
       );
   });
   const channelPluginStateRules: ReloadRule[] = channelPlugins.flatMap((plugin) => [
@@ -258,25 +256,19 @@ function listReloadRules(): ReloadRule[] {
   ]);
   const pluginReloadRules: ReloadRule[] = (registry?.reloads ?? []).flatMap((entry) =>
     (entry.registration.restartPrefixes ?? [])
-      .map(
-        (prefix): ReloadRule => ({
-          prefix,
-          kind: "restart",
-        }),
-      )
+      .map((prefix): ReloadRule => ({
+        prefix,
+        kind: "restart",
+      }))
       .concat(
-        (entry.registration.hotPrefixes ?? []).map(
-          (prefix): ReloadRule => ({
-            prefix,
-            kind: "hot",
-          }),
-        ),
-        (entry.registration.noopPrefixes ?? []).map(
-          (prefix): ReloadRule => ({
-            prefix,
-            kind: "none",
-          }),
-        ),
+        (entry.registration.hotPrefixes ?? []).map((prefix): ReloadRule => ({
+          prefix,
+          kind: "hot",
+        })),
+        (entry.registration.noopPrefixes ?? []).map((prefix): ReloadRule => ({
+          prefix,
+          kind: "none",
+        })),
       ),
   );
   const rules: ReloadRule[] = [

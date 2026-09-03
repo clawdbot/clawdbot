@@ -140,31 +140,37 @@ export async function confirmAndStartUpdateRuntime(
                   <div class="exec-approval-sub" style="white-space: pre-line">${body}</div>
                 </div>
               </div>
-              ${details && !failed
-                ? html`<div class="exec-approval-command mono">${details}</div>`
-                : nothing}
+              ${
+                details && !failed
+                  ? html`<div class="exec-approval-command mono">${details}</div>`
+                  : nothing
+              }
               <div class="exec-approval-actions">
-                ${failed
-                  ? html`<button type="button" class="btn" autofocus @click=${finish}>
-                      ${t("common.close")}
-                    </button>`
-                  : html`
-                      <button
-                        type="button"
-                        class="btn danger ${working ? "btn--busy" : ""}"
-                        ?disabled=${working}
-                        @click=${confirm}
-                      >
-                        ${working
-                          ? html`<span class="btn__spinner" aria-hidden="true"></span>${t(
-                                "chat.updating",
-                              )}`
-                          : route.confirmLabel}
-                      </button>
-                      <button type="button" class="btn" autofocus @click=${finish}>
-                        ${working ? t("common.close") : t("common.cancel")}
-                      </button>
-                    `}
+                ${
+                  failed
+                    ? html`<button type="button" class="btn" autofocus @click=${finish}>
+                        ${t("common.close")}
+                      </button>`
+                    : html`
+                        <button
+                          type="button"
+                          class="btn danger ${working ? "btn--busy" : ""}"
+                          ?disabled=${working}
+                          @click=${confirm}
+                        >
+                          ${
+                            working
+                              ? html`<span class="btn__spinner" aria-hidden="true"></span>${t(
+                                    "chat.updating",
+                                  )}`
+                              : route.confirmLabel
+                          }
+                        </button>
+                        <button type="button" class="btn" autofocus @click=${finish}>
+                          ${working ? t("common.close") : t("common.cancel")}
+                        </button>
+                      `
+                }
               </div>
             </div>
           </openclaw-modal-dialog>
