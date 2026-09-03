@@ -480,6 +480,46 @@ node reconnects once and lets disconnect cleanup remove the old connection state
 See [Active computer presence](/nodes/presence) for selection, privacy, model
 context, and notification-routing behavior.
 
+### Node host stats
+
+Connected CLI node hosts and the macOS app's shared node-host worker send a
+resource snapshot immediately after connecting, then every 60 seconds. They call
+`node.event` with `event: "node.host.stats"` and an object `payload` (or its JSON
+encoding in `payloadJSON`):
+
+```json
+{
+  "event": "node.host.stats",
+  "payload": {
+    "cpuCount": 8,
+    "loadAverage": [1.25, 1.1, 0.9],
+    "memoryTotalBytes": 17179869184,
+    "memoryFreeBytes": 4294967296,
+    "diskTotalBytes": 1000000000000,
+    "diskAvailableBytes": 250000000000
+  }
+}
+```
+
+`cpuCount` is an integer from 1 to 4096. Optional `loadAverage` contains the
+1-, 5-, and 15-minute averages, each finite and between 0 and 100000. Windows
+has no load average; hosts omit the field when all three readings are zero.
+Memory and disk values are non-negative integer bytes, with free or available
+bytes no greater than their total. Disk fields appear together only when the
+host can read capacity for the volume containing its home directory, independent
+of the worker's current directory.
+
+The Gateway accepts updates only from the current node connection and stamps
+`updatedAtMs` with its own receipt time; nodes never send a timestamp. Successful
+updates appear as `hostStats` in `node.list` and `node.describe` and broadcast
+`node.hostStats` with `{ nodeId, hostStats }` to read-scoped operators, using
+`dropIfSlow: true`. Stats are operator-facing, do not update model-visible node
+context, and disappear when the live session ends. They are never persisted.
+
+The structured `node.event` result uses `reason: "updated"`, `"stale_connection"`,
+or `"invalid_payload"`. An older Gateway may return `handled: false`; the node
+continues at the normal cadence without an immediate retry.
+
 ### Node background alive event
 
 Nodes call `node.event` with `event: "node.presence.alive"` to record that a

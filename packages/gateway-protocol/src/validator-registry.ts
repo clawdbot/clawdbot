@@ -197,6 +197,7 @@ export const validateNodeInvokeResultParams = compile(S.NodeInvokeResultParamsSc
 export const validateNodeInvokeProgressParams = compile(S.NodeInvokeProgressParamsSchema);
 export const validateNodeEventParams = compile(S.NodeEventParamsSchema);
 export const validateNodePresenceActivityPayload = compile(S.NodePresenceActivityPayloadSchema);
+export const validateNodeHostStatsPayload = compile(S.NodeHostStatsPayloadSchema);
 export const validateNodePendingDrainParams = compile(S.NodePendingDrainParamsSchema);
 export const validateNodePendingEnqueueParams = compile(S.NodePendingEnqueueParamsSchema);
 export const validatePushTestParams = compile(S.PushTestParamsSchema);

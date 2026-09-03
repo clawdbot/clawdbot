@@ -3319,7 +3319,7 @@ src/node-host/plugin-node-host.ts	1
 src/node-host/pty-command.ts	6
 src/node-host/runtime.ts	2
 src/node-host/skills.ts	1
-src/node-host/worker-support.ts	4
+src/node-host/worker-support.ts	3
 src/plugin-sdk/acp-runtime.ts	1
 src/plugin-sdk/agent-harness-exec-review-runtime.ts	1
 src/plugin-sdk/allowlist-config-edit.ts	6

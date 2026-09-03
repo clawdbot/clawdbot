@@ -20,6 +20,7 @@ describe("GATEWAY_EVENTS", () => {
 
   it("advertises node topology updates", () => {
     expect(GATEWAY_EVENTS).toContain("node.presence");
+    expect(GATEWAY_EVENTS).toContain("node.hostStats");
     expect(GATEWAY_EVENTS).toContain("device.pair.setup.completed");
     expect(GATEWAY_EVENTS).toContain("device.pair.changed");
     expect(GATEWAY_EVENTS).toContain("node.runnerInventory.changed");

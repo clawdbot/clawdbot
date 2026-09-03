@@ -123,10 +123,6 @@ export class NodeHostWorkerBridgeClient implements NodeHostClient {
       this.writeMessage({ type: "invoke-result", generation, result: params ?? {} });
       return {} as T;
     }
-    if (method === "node.event") {
-      this.writeMessage({ type: "node-event", generation, event: params ?? {} });
-      return {} as T;
-    }
 
     const id = `gateway-${this.nextRequestId++}`;
     const timeoutMs = resolveTimerTimeoutMs(opts?.timeoutMs, 15_000);

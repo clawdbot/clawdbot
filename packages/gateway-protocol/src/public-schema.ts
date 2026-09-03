@@ -150,6 +150,7 @@ export {
   NodePresenceAlivePayloadSchema,
   NodePresenceAliveReasonSchema,
   NodePresenceActivityPayloadSchema,
+  NodeHostStatsPayloadSchema,
   NodePendingDrainParamsSchema,
   NodePendingDrainResultSchema,
   NodePendingEnqueueParamsSchema,

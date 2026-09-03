@@ -9,6 +9,7 @@ import {
 // gateway-protocol index would retain the whole ProtocolSchemas registry in
 // the public plugin-sdk dts (check-plugin-sdk-exports guards this).
 import type {
+  NodeHostStatsPayload,
   NodePluginToolDescriptor,
   NodeSkillDescriptor,
 } from "../../packages/gateway-protocol/src/schema/nodes.js";
@@ -21,6 +22,7 @@ import {
   parseComputerUseCapabilityDescriptor,
   type ComputerUseCapabilityDescriptor,
 } from "../plugins/computer-use-contract.js";
+import type { NodeHostStats } from "../shared/node-host-stats.js";
 import { resolveEffectiveComputerUseDescriptor } from "./node-computer-use-descriptor.js";
 import { serializeNodeEvent } from "./node-invoke-request.js";
 import {
@@ -88,6 +90,7 @@ export type NodeSession = {
   connectedAtMs: number;
   lastActiveAtMs?: number;
   presenceUpdatedAtMs?: number;
+  hostStats?: NodeHostStats;
 };
 
 type PairingBoundNodeSession = NodeSession & { pairingIdentity: string };
@@ -759,6 +762,22 @@ export class NodeRegistry {
       this.publishActiveNodeContext();
     }
     return resolution.status === "current";
+  }
+
+  /** Stores the latest resource snapshot for the exact authenticated node connection. */
+  updateHostStats(params: {
+    nodeId: string;
+    connId?: string;
+    stats: NodeHostStatsPayload;
+    observedAtMs?: number;
+  }): NodeHostStats | null {
+    const node = this.getRegisteredSession(params.nodeId);
+    if (!node || node.connId !== params.connId) {
+      return null;
+    }
+    // Resource snapshots are operator-facing; publishing active-node context would churn prompts.
+    node.hostStats = { ...params.stats, updatedAtMs: params.observedAtMs ?? Date.now() };
+    return node.hostStats;
   }
 
   /** Updates recent input activity for the exact authenticated node connection. */
