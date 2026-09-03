@@ -132,7 +132,6 @@ suite.define(() => {
           paddingInlineEnd: Number.parseFloat(scrollerStyle.paddingInlineEnd),
           sidebarPadX: Number.parseFloat(scrollerStyle.getPropertyValue("--sidebar-pad-x")),
           scrollbarGutter: scrollerStyle.scrollbarGutter,
-          scrollbarWidth,
           overflows: scroller.scrollHeight > scroller.clientHeight,
           sessionHeader: bounds(".sidebar-sessions .sidebar-recent-sessions__head"),
           sessionRow: bounds(".sidebar-sessions .sidebar-recent-session"),

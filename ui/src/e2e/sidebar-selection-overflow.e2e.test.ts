@@ -77,11 +77,25 @@ suite.define(() => {
       expect(geometry.maskPosition.split(", ").at(-1)?.split(" ")[0]).toBe("100%");
       expect(geometry.maskSize.split(", ")).toContain("12px 100%");
 
-      const rtlMaskPosition = await active.evaluate((row) => {
+      const rtlGeometry = await active.evaluate((row) => {
         document.documentElement.dir = "rtl";
-        return getComputedStyle(row.closest<HTMLElement>(".sidebar-shell__body")!).maskPosition;
+        const scroller = row.closest<HTMLElement>(".sidebar-shell__body")!;
+        const scrollerStyle = getComputedStyle(scroller);
+        return {
+          contentEdge:
+            scroller.getBoundingClientRect().left + (scroller.offsetWidth - scroller.clientWidth),
+          maskPosition: scrollerStyle.maskPosition,
+          paddingInlineEnd: Number.parseFloat(scrollerStyle.paddingInlineEnd),
+          rowLeft: row.getBoundingClientRect().left,
+          sidebarPadX: Number.parseFloat(scrollerStyle.getPropertyValue("--sidebar-pad-x")),
+        };
       });
-      expect(rtlMaskPosition.split(", ").at(-1)?.split(" ")[0]).toBe("0%");
+      expect(rtlGeometry.maskPosition.split(", ").at(-1)?.split(" ")[0]).toBe("0%");
+      expect(rtlGeometry.paddingInlineEnd).toBe(rtlGeometry.sidebarPadX);
+      expect(
+        rtlGeometry.rowLeft - rtlGeometry.contentEdge,
+        JSON.stringify(rtlGeometry),
+      ).toBeCloseTo(rtlGeometry.sidebarPadX, 1);
       expect(geometry.scrollbarGutter).toBe("stable");
       expect(geometry.scrollbarWidth).toBeGreaterThan(0);
       expect(geometry.paddingInlineEnd).toBe(geometry.sidebarPadX);
