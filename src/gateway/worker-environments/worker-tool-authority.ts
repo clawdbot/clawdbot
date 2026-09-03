@@ -102,8 +102,12 @@ export function resolveWorkerToolAuthority(params: {
     sessionKey: turn.sandboxSessionKey?.trim() || turn.sessionKey?.trim() || turn.sessionId,
   });
   const node = configuredNode?.trim();
+  const nodeCwd =
+    node && node === turn.execSession?.execNode ? turn.execSession.execCwd?.trim() : undefined;
   const exec: NonNullable<WorkerToolAuthority["exec"]> =
-    host === "node" ? { host, security, ask, ...(node ? { node } : {}) } : { host, security, ask };
+    host === "node"
+      ? { host, security, ask, ...(node ? { node } : {}), ...(nodeCwd ? { nodeCwd } : {}) }
+      : { host, security, ask };
   if (turn.disableTools === true || turn.modelRun === true || turn.promptMode === "none") {
     return { allowedToolNames: [], exec };
   }

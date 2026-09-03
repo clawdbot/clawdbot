@@ -136,6 +136,7 @@ type InferencePlan =
   | "safe-tool"
   | "background-tool"
   | "node-tool"
+  | "node-tool-workdir"
   | "other-node-tool"
   | "process-poll"
   | "process-kill"
@@ -640,10 +641,11 @@ class FakeWorkerGateway {
       });
       return;
     }
-    if (plan === "node-tool" || plan === "other-node-tool") {
+    if (plan === "node-tool" || plan === "node-tool-workdir" || plan === "other-node-tool") {
       this.sendToolCallTurn(socket, frame.params, {
         args: {
           command: "printf worker-node",
+          ...(plan === "node-tool-workdir" ? { workdir: "/remote/explicit" } : {}),
           ...(plan === "other-node-tool" ? { node: "other-worker-node" } : {}),
         },
         toolCallId: plan,
@@ -2252,7 +2254,7 @@ describe("worker runtime", () => {
 
   it("dispatches node exec only to the descriptor-bound node", async () => {
     const { gateway, workspaceDir, launch } = await setup({
-      inferencePlans: ["node-tool", "other-node-tool", "text"],
+      inferencePlans: ["node-tool", "node-tool-workdir", "other-node-tool", "text"],
     });
     const boundNode = "worker-node";
     const nodeInvokes: Array<Record<string, unknown>> = [];
@@ -2306,7 +2308,13 @@ describe("worker runtime", () => {
     launch.assignment.workerContainmentRoot = workspaceDir;
     launch.assignment.toolAuthority = {
       allowedToolNames: ["exec", "process"],
-      exec: { host: "node", node: boundNode, security: "full", ask: "off" },
+      exec: {
+        host: "node",
+        node: boundNode,
+        nodeCwd: "/remote/default",
+        security: "full",
+        ask: "off",
+      },
     };
     const admitted = parseWorkerLaunchDescriptor(structuredClone(launch));
 
@@ -2316,10 +2324,10 @@ describe("worker runtime", () => {
       rpc.mockRestore();
     }
 
-    expect(nodeInvokes).toHaveLength(2);
-    const [prepareInvoke, runInvoke] = nodeInvokes;
-    if (!prepareInvoke || !runInvoke) {
-      throw new Error("expected node prepare and run invocations");
+    expect(nodeInvokes).toHaveLength(4);
+    const [prepareInvoke, runInvoke, explicitPrepareInvoke, explicitRunInvoke] = nodeInvokes;
+    if (!prepareInvoke || !runInvoke || !explicitPrepareInvoke || !explicitRunInvoke) {
+      throw new Error("expected default and explicit node prepare and run invocations");
     }
     expect(prepareInvoke).toEqual(
       expect.objectContaining({
@@ -2331,9 +2339,16 @@ describe("worker runtime", () => {
     expect(runInvoke).toEqual(
       expect.objectContaining({ nodeId: boundNode, command: "system.run" }),
     );
-    expect((prepareInvoke.params as Record<string, unknown>).cwd).toBeUndefined();
-    expect(gateway.inferenceRequests).toHaveLength(3);
-    const deniedResult = gateway.inferenceRequests[2]?.context.messages.find(
+    expect((prepareInvoke.params as Record<string, unknown>).cwd).toBe("/remote/default");
+    expect(explicitPrepareInvoke).toEqual(
+      expect.objectContaining({ nodeId: boundNode, command: "system.run.prepare" }),
+    );
+    expect((explicitPrepareInvoke.params as Record<string, unknown>).cwd).toBe("/remote/explicit");
+    expect(explicitRunInvoke).toEqual(
+      expect.objectContaining({ nodeId: boundNode, command: "system.run" }),
+    );
+    expect(gateway.inferenceRequests).toHaveLength(4);
+    const deniedResult = gateway.inferenceRequests[3]?.context.messages.find(
       (message) => message.role === "toolResult" && message.toolCallId === "other-node-tool",
     );
     expect(JSON.stringify(deniedResult)).toContain(

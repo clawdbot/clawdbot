@@ -43,7 +43,10 @@ export function isWorkerToolName(value: unknown): value is WorkerToolName {
 type WorkerExecAuthority = {
   security: ExecSecurity;
   ask: ExecAsk;
-} & ({ host: Exclude<ExecHost, "node">; node?: never } | { host: "node"; node?: string });
+} & (
+  | { host: Exclude<ExecHost, "node">; node?: never; nodeCwd?: never }
+  | { host: "node"; node?: string; nodeCwd?: string }
+);
 
 export type WorkerToolAuthority = {
   allowedToolNames: WorkerToolName[];

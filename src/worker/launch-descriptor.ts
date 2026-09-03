@@ -149,20 +149,32 @@ function parseToolAuthority(value: unknown): WorkerToolAuthority | undefined {
   if (!isRecord(exec)) {
     return undefined;
   }
-  const { host, security, ask, node } = exec;
+  const { host, security, ask, node, nodeCwd } = exec;
   if (
-    !hasExactOwnKeys(exec, ["host", "security", "ask"], host === "node" ? ["node"] : []) ||
+    !hasExactOwnKeys(
+      exec,
+      ["host", "security", "ask"],
+      host === "node" ? ["node", "nodeCwd"] : [],
+    ) ||
     (host !== "sandbox" && host !== "gateway" && host !== "node") ||
     (security !== "deny" && security !== "allowlist" && security !== "full") ||
     (ask !== "off" && ask !== "on-miss" && ask !== "always") ||
     (node !== undefined &&
-      (host !== "node" || typeof node !== "string" || node.length === 0 || node.trim() !== node))
+      (host !== "node" || typeof node !== "string" || node.length === 0 || node.trim() !== node)) ||
+    (Object.hasOwn(exec, "nodeCwd") &&
+      (typeof nodeCwd !== "string" || nodeCwd.length === 0 || nodeCwd.trim() !== nodeCwd))
   ) {
     return undefined;
   }
   const execAuthority: NonNullable<WorkerToolAuthority["exec"]> =
     host === "node"
-      ? { host, security, ask, ...(typeof node === "string" ? { node } : {}) }
+      ? {
+          host,
+          security,
+          ask,
+          ...(typeof node === "string" ? { node } : {}),
+          ...(typeof nodeCwd === "string" ? { nodeCwd } : {}),
+        }
       : { host, security, ask };
   return {
     allowedToolNames,

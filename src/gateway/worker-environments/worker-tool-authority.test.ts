@@ -154,8 +154,18 @@ describe("resolveWorkerToolAuthority", () => {
     },
     {
       name: "node binding",
-      execSession: { execHost: "node" as const, execNode: "session-node" },
-      expected: { host: "node", security: "full", ask: "off", node: "session-node" },
+      execSession: {
+        execHost: "node" as const,
+        execNode: "session-node",
+        execCwd: " /remote/session/workspace ",
+      },
+      expected: {
+        host: "node",
+        security: "full",
+        ask: "off",
+        node: "session-node",
+        nodeCwd: "/remote/session/workspace",
+      },
     },
   ])("preserves session-owned exec $name at the worker boundary", ({ execSession, expected }) => {
     expect(
@@ -165,6 +175,31 @@ describe("resolveWorkerToolAuthority", () => {
         toolsAllow: ["exec", "process"],
       }).exec,
     ).toEqual(expected);
+  });
+
+  it.each([
+    {
+      name: "resolved node differs from the session binding",
+      execOverrides: { host: "node" as const, node: "other-node" },
+      expectedHost: "node",
+    },
+    {
+      name: "resolved host is not node",
+      execOverrides: { host: "gateway" as const },
+      expectedHost: "gateway",
+    },
+  ])("omits the session node cwd when $name", ({ execOverrides, expectedHost }) => {
+    const exec = resolvedAuthority({
+      execSession: {
+        execHost: "node",
+        execNode: "session-node",
+        execCwd: "/remote/session/workspace",
+      },
+      execOverrides,
+    }).exec;
+
+    expect(exec?.host).toBe(expectedHost);
+    expect(exec).not.toHaveProperty("nodeCwd");
   });
 
   it("keeps the resolved node binding authoritative when a worker request names another node", async () => {
