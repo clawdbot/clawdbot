@@ -15,7 +15,7 @@ draft with content, target binding, scanner state, hashes, and rollback
 metadata) that becomes a live skill only when applied.
 
 By default, Skill Workshop writes only under the active agent's
-`<state-dir>/agents/<agentId>/workshop-skills`. When `agents.<id>.agentDir` is
+`<state-dir>/agents/<agentId>/agent/workshop-skills`. When `agents.<id>.agentDir` is
 configured, it writes under `<agentDir>/workshop-skills` instead. Operators edit
 bundled, plugin, ClawHub, extra-root, managed, personal-agent, project, and
 workspace skills through their owning tools or files. The same authoring tool
@@ -73,7 +73,7 @@ The following lifecycle applies to workspace proposals:
 - **Apply is the only live write:** create, update, and revise never change
   active skills.
 - **Directory-owned updates:** creates and updates stay inside
-  `<state-dir>/agents/<agentId>/workshop-skills`. A skill is Workshop-owned
+  `<state-dir>/agents/<agentId>/agent/workshop-skills`. A skill is Workshop-owned
   exactly when it is contained in that agent's directory.
 - **No clobber:** create fails if the target skill already exists.
 - **Hash bound:** update proposals bind to the current target hash and go

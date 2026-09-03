@@ -392,7 +392,7 @@ collection review had released becomes `stale` with a status reason, so the
 skill path it once created stays user-owned and Doctor never relocates it.
 
 Skill Workshop ownership is now the physical
-`<state-dir>/agents/<agentId>/workshop-skills` directory. Startup and `openclaw doctor --fix`
+`<state-dir>/agents/<agentId>/agent/workshop-skills` directory. Startup and `openclaw doctor --fix`
 drop the retired columns and index in the shared schema transaction. Doctor
 then relocates applied legacy Workshop creates to the inferred owner agent and
 rewrites their stored target paths. Conflicts and ambiguous ownership become
