@@ -128,6 +128,13 @@ beforeEach(() => {
 });
 
 describe("prepareEmbeddedAttemptPromptContext", () => {
+  it("carries next-turn runtime context as the delimited body only", () => {
+    const fixture = createInput();
+    const result = prepareEmbeddedAttemptPromptContext(fixture.input);
+    expect(result.runtimeContextMessageForCurrentTurn?.content).toBe(
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nConversation info: channel=telegram\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+    );
+  });
   it.each(["Please recall my preference.", "Current time: noon. Please recall my preference."])(
     "preserves active-memory hook context at the model boundary: %s",
     (prompt) => {
@@ -267,7 +274,7 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     expect(hoisted.warn).not.toHaveBeenCalled();
   });
 
-  it("moves runtime-only context into the active system prompt", () => {
+  it("moves runtime-only context into the active system prompt with its preface", () => {
     const fixture = createInput({
       attempt: createAttempt({
         currentInboundContext: { text: "Room event metadata" },
@@ -284,6 +291,9 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
 
     const result = prepareEmbeddedAttemptPromptContext(fixture.input);
 
+    expect(result.promptSubmission.runtimeSystemContext).toBe(
+      "OpenClaw runtime event.\nThis context is runtime-generated, not user-authored. Keep internal details private.\n\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nRuntime room event\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+    );
     expect(result.promptSubmission.runtimeOnly).toBe(true);
     expect(result.promptForSession).toContain("Room event metadata");
     expect(result.runtimeContextMessageForCurrentTurn).toBeUndefined();

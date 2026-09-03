@@ -1,7 +1,9 @@
 import Foundation
 import OpenClawKit
+import Synchronization
 import Testing
 @preconcurrency import WatchConnectivity
+import XCTest
 @testable import OpenClaw
 
 struct WatchSessionActivationGateTests {
@@ -67,6 +69,212 @@ struct WatchSessionActivationGateTests {
             Issue.record("Unexpected watch message failure: \(error)")
         }
     }
+
+    private enum DeliverySuspension: CaseIterable {
+        case activation
+        case interactiveFailure
+        case acceptedInteractiveReply
+    }
+
+    @Test(arguments: DeliverySuspension.allCases, [false, true])
+    private func `watch delivery cancellation fences new transfers but preserves accepted replies`(
+        suspension: DeliverySuspension,
+        cancelBeforeRelease: Bool) async throws
+    {
+        let gate = WatchSessionActivationGate(timeoutNanoseconds: 10_000_000_000)
+        #expect(gate.beginActivation())
+        let entered = XCTestExpectation(description: "watch delivery suspended")
+        let effects = Mutex<[String]>([])
+        let sender = Task {
+            try await WatchConnectivityTransport.deliverPayload(
+                prepareSession: {
+                    if suspension == .activation {
+                        entered.fulfill()
+                        try await gate.waitUntilActivated()
+                    }
+                },
+                sendImmediately: { _ in
+                    guard suspension != .activation else { return false }
+                    effects.withLock { $0.append("interactive") }
+                    entered.fulfill()
+                    try await gate.waitUntilActivated()
+                    if suspension == .interactiveFailure {
+                        throw URLError(.networkConnectionLost)
+                    }
+                    return true
+                },
+                enqueue: { _ in
+                    effects.withLock { $0.append("background") }
+                    return "transferUserInfo"
+                })
+        }
+        defer {
+            sender.cancel()
+            gate.complete(activated: false, errorDescription: "test cleanup")
+        }
+        let ready = await XCTWaiter.fulfillment(of: [entered], timeout: 5)
+        try #require(ready == .completed)
+        if cancelBeforeRelease {
+            sender.cancel()
+        }
+        gate.complete(activated: true, errorDescription: nil)
+
+        let acceptedReply = suspension == .acceptedInteractiveReply
+        if cancelBeforeRelease, !acceptedReply {
+            await #expect(throws: CancellationError.self) { try await sender.value }
+        } else {
+            let result = try await sender.value
+            #expect(result.deliveredImmediately == acceptedReply)
+            #expect(result.queuedForDelivery == !acceptedReply)
+            #expect(result.transport == (acceptedReply ? "sendMessage" : "transferUserInfo"))
+        }
+        var expectedEffects = suspension == .activation ? [] : ["interactive"]
+        if !cancelBeforeRelease, !acceptedReply {
+            expectedEffects.append("background")
+        }
+        #expect(effects.withLock { $0 } == expectedEffects)
+    }
+
+    #if targetEnvironment(simulator)
+    @Test(
+        .enabled(
+            if: ProcessInfo.processInfo.environment["OPENCLAW_LIVE_TEST"] == "1",
+            "Requires an isolated, unpaired iPhone Simulator; run with OPENCLAW_LIVE_TEST=1."),
+        .serialized,
+        arguments: [false, true])
+    func `native watch snapshot cancellation fences a contended context lock`(
+        cancelBeforeAdmission: Bool) async throws
+    {
+        let session = WCSession.default
+        try #require(!session.isPaired, "Do not probe a paired Watch session")
+        try #require(!session.isReachable, "Do not probe a reachable Watch session")
+        let marker = "openclaw.test.cancelled-snapshot-admission"
+        let originalContext = session.applicationContext
+        defer {
+            if session.applicationContext["type"] as? String == marker {
+                do {
+                    try session.updateApplicationContext(originalContext)
+                } catch {
+                    Issue.record("Could not remove an unexpectedly admitted snapshot probe")
+                }
+            }
+        }
+        let snapshotLock = NSLock()
+        let releaseLock = DispatchSemaphore(value: 0)
+        let holderEntered = XCTestExpectation(description: "snapshot lock held")
+        let holderFinished = XCTestExpectation(description: "snapshot lock released")
+        let holderWasSignalled = Mutex<Bool?>(nil)
+        DispatchQueue(label: "openclaw.test.snapshot-lock-holder").async {
+            snapshotLock.withLock {
+                holderEntered.fulfill()
+                let signalled = releaseLock.wait(timeout: .now() + 15) == .success
+                holderWasSignalled.withLock { $0 = signalled }
+            }
+            holderFinished.fulfill()
+        }
+        defer { releaseLock.signal() }
+        let held = await XCTWaiter.fulfillment(of: [holderEntered], timeout: 5)
+        try #require(held == .completed, "Infrastructure failure: lock holder did not start")
+
+        let senderEntered = XCTestExpectation(description: "outer cancellation fence passed")
+        let senderFinished = XCTestExpectation(description: "snapshot sender completed")
+        // A contended synchronous lock must not occupy the actor running the test driver.
+        let sender = Task.detached { () -> Result<Void, any Error> in
+            defer { senderFinished.fulfill() }
+            do {
+                let session = WCSession.default
+                try Task.checkCancellation()
+                senderEntered.fulfill()
+                try updateWatchSnapshotApplicationContext(
+                    ["type": marker],
+                    with: session,
+                    lock: snapshotLock)
+                return .success(())
+            } catch {
+                let nativeError = error as NSError
+                print("watch snapshot SDK admission: cancelled=\(cancelBeforeAdmission) "
+                    + "domain=\(nativeError.domain) code=\(nativeError.code)")
+                return .failure(error)
+            }
+        }
+        defer { sender.cancel() }
+        let entered = await XCTWaiter.fulfillment(of: [senderEntered], timeout: 5)
+        try #require(entered == .completed, "Infrastructure failure: sender did not reach the locked boundary")
+        try #require(holderWasSignalled.withLock { $0 } == nil, "Infrastructure failure: lock holder expired")
+        if cancelBeforeAdmission {
+            sender.cancel()
+        }
+        releaseLock.signal()
+        let finished = await XCTWaiter.fulfillment(of: [senderFinished, holderFinished], timeout: 5)
+        try #require(finished == .completed, "Infrastructure failure: local snapshot probe did not finish")
+        try #require(
+            holderWasSignalled.withLock { $0 } == true,
+            "Infrastructure failure: lock release was not signalled")
+        let outcome = await sender.value
+        guard case let .failure(error) = outcome else {
+            Issue.record("The unpaired/unreachable SDK snapshot probe unexpectedly succeeded")
+            return
+        }
+        if cancelBeforeAdmission {
+            #expect(error is CancellationError, "Cancellation must win after acquiring the context lock")
+        } else {
+            let nativeError = error as NSError
+            #expect(nativeError.domain == WCErrorDomain)
+            #expect([7002, 7003, 7004, 7005, 7006, 7007, 7016].contains(nativeError.code))
+        }
+    }
+
+    @Test(
+        .enabled(
+            if: ProcessInfo.processInfo.environment["OPENCLAW_LIVE_TEST"] == "1",
+            "Requires an isolated, unpaired iPhone Simulator; run with OPENCLAW_LIVE_TEST=1."),
+        arguments: [false, true])
+    @MainActor
+    func `native watch sender rejects cancellation before SDK admission`(cancelBeforeStart: Bool) async throws {
+        let session = WCSession.default
+        try #require(!session.isPaired, "Do not probe a paired Watch session")
+        try #require(!session.isReachable, "Do not probe a reachable Watch session")
+        let finished = XCTestExpectation(description: "native Watch send completed")
+        let sender = Task { @MainActor () -> Result<Void, any Error> in
+            defer { finished.fulfill() }
+            #expect(Task.isCancelled == cancelBeforeStart)
+            do {
+                try await sendReachableWatchMessage(
+                    ["type": "openclaw.test.cancelled-delivery-admission"],
+                    with: session)
+                return .success(())
+            } catch {
+                let nativeError = error as NSError
+                print("watch SDK admission: cancelled=\(cancelBeforeStart) "
+                    + "domain=\(nativeError.domain) code=\(nativeError.code)")
+                return .failure(error)
+            }
+        }
+        defer { sender.cancel() }
+        // The child inherits this actor and cannot enter the helper before this cancellation.
+        if cancelBeforeStart {
+            sender.cancel()
+        }
+        let completion = await XCTWaiter.fulfillment(of: [finished], timeout: 5)
+        try #require(
+            completion == .completed,
+            "Infrastructure failure: the local WCSession rejection callback did not finish")
+        let outcome = await sender.value
+        guard case let .failure(error) = outcome else {
+            Issue.record("The unpaired/unreachable SDK probe unexpectedly succeeded")
+            return
+        }
+        if cancelBeforeStart {
+            #expect(error is CancellationError, "Cancellation must win before the SDK accepts a send")
+        } else {
+            let nativeError = error as NSError
+            #expect(nativeError.domain == WCErrorDomain)
+            // WCError.h: unsupported, missing delegate, inactive/unactivated, unpaired,
+            // app missing, or unreachable are all local, non-delivery rejections.
+            #expect([7002, 7003, 7004, 7005, 7006, 7007, 7016].contains(nativeError.code))
+        }
+    }
+    #endif
 
     @Test func `startup event buffering is ordered and bounded`() {
         var buffer = WatchMessagingStartupBuffer<String>(maxCount: 3)

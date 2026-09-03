@@ -96,8 +96,9 @@ import fs from 'node:fs';
 import {requestVitestWorkerArtifacts} from ${JSON.stringify(pathToFileURL(path.join(repoRoot, "scripts/lib/vitest-worker-artifacts.mts")).href)};
 const exitFile=${JSON.stringify(borrowerExit)};
 const exitCheck=()=>{if(fs.existsSync(exitFile)) process.exit(1);};
+let exitPoll;
 if(${JSON.stringify(phase)}==='admission') {
-  fs.watchFile(exitFile,{interval:50},exitCheck);
+  exitPoll=setInterval(exitCheck,50);
   exitCheck();
 }
 try {
@@ -105,7 +106,7 @@ try {
   console.log('fixture borrower completed');
 } catch(error) {
   console.error(error);process.exitCode=1;
-} finally {fs.unwatchFile(exitFile,exitCheck);process.disconnect();}
+} finally {clearInterval(exitPoll);process.disconnect();}
 `,
       );
       const preload = writeFixture(
@@ -151,18 +152,18 @@ cp.spawn=(bin,args,options)=>{
 // directly; adding a signal listener could rescue a broken wrapper instead.
 const waitForRelease=()=>new Promise(resolve=>{
   let idle=false, responsive=false;
-  const controls=${JSON.stringify([borrowerClosed, loopRequest, released])};
   const check=()=>{
     if(borrowerClosed && !idle) {idle=true;publish('owner-idle',{owner:process.pid});}
     if(!responsive && fs.existsSync(${JSON.stringify(loopRequest)})) {
       responsive=true;publish('loop-responsive',{owner:process.pid});
     }
     if(fs.existsSync(${JSON.stringify(released)})) {
-      for(const filename of controls) fs.unwatchFile(filename,check);
+      clearInterval(poll);
       resolve();
     }
   };
-  for(const filename of controls) fs.watchFile(filename,{interval:50},check);
+  // Poll state: watchFile's first successful stat can consume a control without notifying.
+  const poll=setInterval(check,50);
   check();
 });
 const readFile=fsp.readFile;

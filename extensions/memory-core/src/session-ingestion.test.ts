@@ -68,17 +68,31 @@ describe("session ingestion", () => {
     },
   );
 
-  it("preserves file-backed scope identity when a session id ends in .jsonl", () => {
+  it.each([
+    {
+      name: "session id ending in .jsonl",
+      sessionFile: path.join(os.tmpdir(), "foo.jsonl.jsonl"),
+      sessionId: "foo.jsonl",
+    },
+    {
+      name: "bounded archive filename",
+      sessionFile: path.join(
+        os.tmpdir(),
+        `session-${"a".repeat(64)}.jsonl.deleted.2026-08-11T08-00-00.000Z.zst`,
+      ),
+      sessionId: `oversized-${"x".repeat(300)}`,
+    },
+  ])("preserves file-backed scope identity for $name", ({ sessionFile, sessionId }) => {
     const source = sessionIngestionSourceFromCorpus({
       agentId: "main",
       artifactKind: "active-session",
-      sessionFile: path.join(os.tmpdir(), "foo.jsonl.jsonl"),
-      sessionId: "foo.jsonl",
+      sessionFile,
+      sessionId,
       sessionKind: "interactive",
     });
 
-    expect(source?.scope).toBe("main:foo.jsonl");
-    expect(source?.sessionOrigin).toEqual({ agentId: "main", sessionId: "foo.jsonl" });
+    expect(source?.scope).toBe(`main:${sessionId}`);
+    expect(source?.sessionOrigin).toEqual({ agentId: "main", sessionId });
   });
 
   it("verifies backfill content despite an unchanged size and mtime", async () => {

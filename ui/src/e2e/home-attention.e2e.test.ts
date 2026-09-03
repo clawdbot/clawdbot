@@ -54,7 +54,7 @@ async function publishSessionRow(
   gateway: MockGatewayControls,
   row: GatewaySessionRow,
 ): Promise<void> {
-  await gateway.setMethodResponse("sessions.list", sessionsList(row));
+  await gateway.setSessionsListResponse(sessionsList(row));
   const requestCount = (await gateway.getRequests("sessions.list")).length;
   await gateway.emitGatewayEvent("sessions.changed", {
     key: row.key,

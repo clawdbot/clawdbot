@@ -1,5 +1,6 @@
 // OpenAI-compatible audio tests cover attribution headers, auth selection,
 // filename normalization, and stable malformed-response errors.
+import { inspect } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "../agents/model-auth-markers.js";
 import { VERSION } from "../version.js";
@@ -141,22 +142,42 @@ describe("transcribeOpenAiCompatibleAudio", () => {
     expect(headers.get("authorization")).toBe("Bearer typed-key");
   });
 
-  it("wraps malformed transcription JSON with a stable provider error", async () => {
-    const fetchFn = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response("{ nope"));
+  it.each([400, 200])(
+    "redacts reflected request credentials from HTTP %s diagnostics",
+    async (status) => {
+      const credential = "synthetic-only";
+      const fetchFn = vi.fn<typeof fetch>().mockImplementationOnce(async (_url, init) => {
+        const authorization = new Headers(init?.headers).get("authorization");
+        expect(authorization).toBe(`Bearer ${credential}`);
+        return new Response(
+          status === 400
+            ? JSON.stringify({ error: { message: `Rejected ${credential}`, code: credential } })
+            : credential,
+          { status, headers: { "x-request-id": credential } },
+        );
+      });
 
-    await expect(
-      transcribeOpenAiCompatibleAudio({
+      const error = await transcribeOpenAiCompatibleAudio({
         buffer: Buffer.from("audio"),
         fileName: "note.mp3",
-        apiKey: "test-key",
+        apiKey: "unused-fixture-key",
+        headers: { authorization: `Bearer ${credential}` },
         timeoutMs: 1000,
         fetchFn,
         provider: "openai",
         defaultBaseUrl: "https://api.openai.com/v1",
         defaultModel: "gpt-4o-transcribe",
-      }),
-    ).rejects.toThrow("Audio transcription failed: malformed JSON response");
-  });
+      }).catch((cause: unknown) => cause);
+      expect(error).toBeInstanceOf(Error);
+      expect(error).toMatchObject({
+        message:
+          status === 400
+            ? "Audio transcription failed (HTTP 400): Rejected *** [code=***] [request_id=***]"
+            : "Audio transcription failed: malformed JSON response",
+      });
+      expect(inspect(error)).not.toContain(credential);
+    },
+  );
 
   it("rejects non-object successful transcription JSON with a stable provider error", async () => {
     const fetchFn = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(JSON.stringify([])));

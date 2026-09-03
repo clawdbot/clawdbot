@@ -94,7 +94,7 @@ Suspension never interrupts work: sessions with an active turn, queued messages,
 
 ## What stays with the Gateway
 
-Placement is disposable; the session is not. The transcript, the last-reconciled workspace files, placement history, and every provider credential live with the Gateway in all placements. After a clean reclaim or idle suspension, the next message provisions a replacement — warm when an image exists, cold otherwise. Failed placements keep their diagnostic visible; resolve pending cleanup, then redispatch and retry. An offline paired device is different by design: the placement stays active and waits for the device to reconnect, and **Continue on Gateway…** is an explicit action that can lose unsynced device files. Workspace changes made after the last reconciliation are the only loss window, and clean stops (including auto-suspension) reconcile before releasing the machine.
+Placement is disposable; the session is not. The transcript, the last-reconciled workspace files, placement history, and every provider credential live with the Gateway in all placements. After a clean reclaim or idle suspension, the next message provisions a replacement — warm when an image exists, cold otherwise. Failed placements keep their diagnostic visible; resolve pending cleanup, then redispatch and retry. An offline paired device is different by design: the placement stays active and waits for the device to reconnect, and **Continue on Gateway…** works while the device is offline, resuming from the last Gateway-synced workspace and discarding unsynced device changes. Workspace changes made after the last reconciliation are the only loss window, and clean stops (including auto-suspension) reconcile before releasing the machine.
 
 ## Related
 

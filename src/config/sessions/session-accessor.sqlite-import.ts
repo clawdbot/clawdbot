@@ -41,6 +41,7 @@ type SqliteSessionImportRowsParams = Pick<
   SessionAccessScope,
   "agentId" | "defaultAgentId" | "env" | "sessionKey" | "storePath"
 > & {
+  beforePersistentApply?: () => void;
   allowMalformedRowRepair?: boolean;
   repairLegacyTranscript?: boolean;
   preserveExactStoredKey?: boolean;
@@ -243,6 +244,9 @@ export async function importSqliteSessionRowsBatch(
       // No filesystem readers or callbacks cross the synchronous SQLite commit boundary.
       for (const validate of validators) {
         validate();
+      }
+      for (const { params: importParams } of prepared) {
+        importParams.beforePersistentApply?.();
       }
       return runOpenClawAgentWriteTransaction(
         (database) =>

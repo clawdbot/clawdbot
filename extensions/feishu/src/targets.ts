@@ -6,7 +6,7 @@ const CHAT_ID_PREFIX = "oc_";
 const OPEN_ID_PREFIX = "ou_";
 const USER_ID_REGEX = /^[a-zA-Z0-9_-]+$/;
 
-function stripProviderPrefix(raw: string): string {
+export function stripFeishuProviderPrefix(raw: string): string {
   return raw.replace(/^(feishu|lark):/i, "").trim();
 }
 
@@ -30,7 +30,7 @@ export function normalizeFeishuTarget(raw: string): string | null {
     return null;
   }
 
-  const withoutProvider = stripProviderPrefix(trimmed);
+  const withoutProvider = stripFeishuProviderPrefix(trimmed);
   const lowered = normalizeLowercaseStringOrEmpty(withoutProvider);
   if (lowered.startsWith("chat:")) {
     return withoutProvider.slice("chat:".length).trim() || null;
@@ -81,7 +81,7 @@ export function resolveReceiveIdType(id: string): "chat_id" | "open_id" | "user_
 }
 
 export function looksLikeFeishuId(raw: string): boolean {
-  const trimmed = stripProviderPrefix(raw.trim());
+  const trimmed = stripFeishuProviderPrefix(raw.trim());
   if (!trimmed) {
     return false;
   }

@@ -24,6 +24,7 @@ defineDiscordVoiceTests(
     lastAgentCommandArgs,
     lastRealtimeBridgeParams,
     createJoinedAgentProxyFixture,
+    emitFinalRealtimeUserTranscript,
     lastAudioResourceInput,
     expectUserMessageIncludes,
     expectUserMessageNotIncludes,
@@ -481,27 +482,80 @@ defineDiscordVoiceTests(
       await manager.leave({ guildId: "g1" });
     });
 
-    it("releases queued speech after an encoder failure without waiting for a missing idle event", async () => {
-      const { bridgeParams, entry, manager, player } = await createJoinedAgentProxyFixture();
-      if (entry.realtimeLifecycle.status !== "active") {
-        throw new Error("expected active Discord realtime session");
-      }
-      const realtime = entry.realtimeLifecycle.instance as unknown as {
-        playback: { enqueueExactSpeechMessage: (text: string) => void };
-      };
-      realtime.playback.enqueueExactSpeechMessage("first answer");
-      bridgeParams.audioSink.sendAudio(Buffer.alloc(24_000));
-      realtime.playback.enqueueExactSpeechMessage("second answer");
-      expectUserMessageNotIncludes("second answer");
+    it.each(["before", "after"] as const)(
+      "releases queued speech after an encoder failure %s provider completion",
+      async (ordering) => {
+        const { bridgeParams, entry, manager, player } = await createJoinedAgentProxyFixture();
+        try {
+          if (entry.realtimeLifecycle.status !== "active") {
+            throw new Error("expected active Discord realtime session");
+          }
+          const realtime = entry.realtimeLifecycle.instance as unknown as {
+            playback: { enqueueExactSpeechMessage: (text: string) => void };
+          };
+          realtime.playback.enqueueExactSpeechMessage("first answer");
+          bridgeParams.audioSink.sendAudio(Buffer.alloc(24_000));
+          realtime.playback.enqueueExactSpeechMessage("second answer");
+          expectUserMessageNotIncludes("second answer");
+          if (ordering === "after") {
+            bridgeParams.onResponseDone?.({ status: "completed" });
+          }
 
-      const output = lastAudioResourceInput() as PassThrough;
-      output.destroy(new Error("encoder failed"));
+          const output = lastAudioResourceInput() as PassThrough;
+          output.destroy(new Error("encoder failed"));
+          await vi.waitFor(() => expect(player.stop).toHaveBeenCalledWith(true));
 
-      await vi.waitFor(() => expectUserMessageIncludes("second answer"));
-      expect(player.stop).toHaveBeenCalledWith(true);
-      expect(realtimeSessionMock.handleBargeIn).not.toHaveBeenCalled();
-      await manager.leave({ guildId: "g1" });
-    });
+          if (ordering === "before") {
+            expectUserMessageNotIncludes("second answer");
+            bridgeParams.onResponseDone?.({ status: "completed" });
+            bridgeParams.onEvent?.({ direction: "server", type: "response.done" });
+          }
+          expectUserMessageIncludes("second answer");
+          realtime.playback.enqueueExactSpeechMessage("third answer");
+          expectUserMessageNotIncludes("third answer");
+          expect(realtimeSessionMock.handleBargeIn).not.toHaveBeenCalled();
+        } finally {
+          await manager.destroy();
+        }
+      },
+    );
+
+    it.each(["before-cancelled", "before-legacy-done", "after-completed"] as const)(
+      "releases exact speech when the provider clears audio %s",
+      async (ordering) => {
+        agentCommandMock
+          .mockResolvedValueOnce({ payloads: [{ text: "first answer" }] })
+          .mockResolvedValueOnce({ payloads: [{ text: "second answer" }] })
+          .mockResolvedValueOnce({ payloads: [{ text: "third answer" }] });
+        const { bridgeParams, entry, manager } = await createJoinedAgentProxyFixture();
+        try {
+          beginSpeakerTurn(entry);
+          await emitFinalRealtimeUserTranscript(bridgeParams, "first question");
+          bridgeParams.audioSink.sendAudio(Buffer.alloc(24_000));
+          beginSpeakerTurn(entry);
+          await emitFinalRealtimeUserTranscript(bridgeParams, "second question");
+          expectUserMessageNotIncludes("second answer");
+
+          if (ordering === "after-completed") {
+            bridgeParams.onResponseDone?.({ status: "completed" });
+          }
+          bridgeParams.audioSink.clearAudio?.();
+          if (ordering === "before-cancelled") {
+            bridgeParams.onResponseDone?.({ status: "cancelled" });
+            bridgeParams.onEvent?.({ direction: "server", type: "response.done" });
+          } else if (ordering === "before-legacy-done") {
+            bridgeParams.onEvent?.({ direction: "server", type: "response.done" });
+          }
+
+          expectUserMessageIncludes("second answer");
+          beginSpeakerTurn(entry);
+          await emitFinalRealtimeUserTranscript(bridgeParams, "third question");
+          expectUserMessageNotIncludes("third answer");
+        } finally {
+          await manager.destroy();
+        }
+      },
+    );
 
     it.each([
       [

@@ -349,6 +349,9 @@ export class SidebarSessionProjection {
     } satisfies SidebarSubtitleParams;
     const value = resolveSidebarSessionSubtitle(params);
     if (!value.subtitle) {
+      if (session.attention.kind === "question") {
+        this.heldSubtitles.delete(session.key);
+      }
       // Transient gaps between event updates keep the last shown line; the
       // hold dies with the run (the hasActiveRun branch above).
       return;

@@ -832,10 +832,10 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
               ? { permissionMode: sessionPermissionPolicy.mode }
               : undefined,
             execOverrides: {
-              host: options?.exec?.host ?? execConfig.host,
-              mode: effectiveExecPolicy.mode,
+              host: scheduledExecTarget?.host ?? options?.exec?.host ?? execConfig.host,
+              mode: scheduledExecTarget?.ask ? undefined : effectiveExecPolicy.mode,
               security: effectiveExecPolicy.security,
-              ask: effectiveExecPolicy.ask,
+              ask: scheduledExecTarget?.ask ?? effectiveExecPolicy.ask,
               node: options?.exec?.node ?? execConfig.node,
             },
             approvalReviewerDeviceIds: options?.approvalReviewerDeviceId

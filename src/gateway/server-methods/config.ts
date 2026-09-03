@@ -23,14 +23,15 @@ import {
   resolveConfigSnapshotHash,
 } from "../../config/io.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
-import {
-  applyMergePatch,
-  createMergePatch,
-  isMergePatchObjectKeyAllowed,
-} from "../../config/merge-patch.js";
+import { applyMergePatch, createMergePatch } from "../../config/merge-patch.js";
 import { normalizeSubmittedConfigModelRefs } from "../../config/model-input-normalization.js";
 import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
-import { normalizeConfigPatchReplacePaths } from "../../config/patch-replace-paths.js";
+import {
+  collectBaseArrayPaths,
+  formatConfigPatchPath,
+  isMergePatchObjectKeyAllowed,
+  normalizeConfigPatchReplacePaths,
+} from "../../config/patch-replace-paths.js";
 import { redactConfigObject, restoreRedactedValues } from "../../config/redact-snapshot.js";
 import { loadGatewayRuntimeConfigSchema } from "../../config/runtime-schema.js";
 import { projectSourceOntoRuntimeShape } from "../../config/runtime-source-projection.js";
@@ -53,9 +54,12 @@ import {
   prepareSecretsRuntimeSnapshot,
   type PreparedSecretsRuntimeSnapshot,
 } from "../../secrets/runtime.js";
-import { diffConfigPaths } from "../config-diff.js";
+import { diffConfigPaths, diffGatewayReloadPaths } from "../config-diff.js";
 import { invalidateConfigGetResponseCache, readConfigGetResponse } from "../config-get-response.js";
-import { resolveConfigReloadMetadata } from "../config-reload-plan.js";
+import {
+  listConfigReloadRefinementPrefixes,
+  resolveConfigReloadMetadata,
+} from "../config-reload-plan.js";
 import type { GatewayConfigRevisionProjector } from "../config-revision-token.js";
 import {
   formatControlPlaneActor,
@@ -144,10 +148,6 @@ function requireConfigBaseHash(
   return true;
 }
 
-function formatConfigPatchPath(parentPath: string, key: string): string {
-  return parentPath ? `${parentPath}.${key}` : key;
-}
-
 function readConfigPatchReplacePaths(params: unknown): Set<string> {
   const rawPaths = (params as { replacePaths?: unknown }).replacePaths;
   return normalizeConfigPatchReplacePaths(Array.isArray(rawPaths) ? rawPaths : undefined);
@@ -212,24 +212,6 @@ function collectDestructiveArrayPatchPaths(params: {
         }),
       );
     }
-  }
-  return paths;
-}
-
-function collectBaseArrayPaths(base: unknown, path: string): string[] {
-  if (Array.isArray(base)) {
-    return [path];
-  }
-  if (!isPlainObject(base)) {
-    return [];
-  }
-  const paths: string[] = [];
-  for (const [key, value] of Object.entries(base)) {
-    const childPath = formatConfigPatchPath(path, key);
-    if (!isMergePatchObjectKeyAllowed(key, path)) {
-      continue;
-    }
-    paths.push(...collectBaseArrayPaths(value, childPath));
   }
   return paths;
 }
@@ -1142,7 +1124,11 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!preparedSecretsSnapshot) {
       return;
     }
-    const changedPaths = diffConfigPaths(snapshot.config, validatedConfig);
+    const changedPaths = diffGatewayReloadPaths(
+      snapshot.config,
+      validatedConfig,
+      listConfigReloadRefinementPrefixes(),
+    );
 
     // No-op: if the validated config is identical to the current config,
     // skip the file write and SIGUSR1 restart entirely. This avoids a full
@@ -1229,7 +1215,11 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!preparedSecretsSnapshot) {
       return;
     }
-    const changedPaths = diffConfigPaths(snapshot.config, parsed.config);
+    const changedPaths = diffGatewayReloadPaths(
+      snapshot.config,
+      parsed.config,
+      listConfigReloadRefinementPrefixes(),
+    );
     const actor = resolveControlPlaneActor(client);
     context?.logGateway?.info(
       `config.apply write ${formatControlPlaneActor(actor)} changedPaths=${summarizeChangedPaths(changedPaths)} restartReason=config.apply`,

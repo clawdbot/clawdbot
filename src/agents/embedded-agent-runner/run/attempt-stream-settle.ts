@@ -38,10 +38,9 @@ import {
   wrapStreamFnWithProviderPromptState,
 } from "../provider-prompt-state.js";
 import {
-  describeEmbeddedAgentStreamStrategy,
   resolveEmbeddedAgentApiKey,
   resolveEmbeddedAgentBaseStreamFn,
-  resolveEmbeddedAgentStreamFn,
+  resolveEmbeddedAgentStream,
 } from "../stream-resolution.js";
 import type { ProviderThinkLevel } from "../utils.js";
 import { joinWithRunLivenessDeadline, RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";
@@ -526,13 +525,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
     resolvedApiKey: attempt.resolvedApiKey,
     authStorage: attempt.authStorage,
   });
-  const streamStrategy = describeEmbeddedAgentStreamStrategy({
-    currentStreamFn: defaultSessionStreamFn,
-    providerStreamFn: directProviderStreamFn,
-    model: attempt.model,
-    resolvedApiKey: transportApiKey,
-  });
-  session.agent.streamFn = resolveEmbeddedAgentStreamFn({
+  const { streamFn, strategy: streamStrategy } = resolveEmbeddedAgentStream({
     currentStreamFn: defaultSessionStreamFn,
     providerStreamFn: directProviderStreamFn,
     sessionId: attempt.sessionId,
@@ -544,6 +537,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
     authProfileId: resolveAttemptStreamAuthProfileId(attempt),
     authStorage: attempt.authStorage,
   });
+  session.agent.streamFn = streamFn;
   // Install inside provider/config wrappers so their full onPayload chain runs
   // before admission hashes the request body that the built-in transport sends.
   session.agent.streamFn = wrapStreamFnWithProviderPromptState({

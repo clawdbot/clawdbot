@@ -970,7 +970,8 @@ async function initSessionStateAttemptLocked(
     sessionEntry.chatType = "direct";
   }
   const threadLabel = normalizeOptionalString(ctx.ThreadLabel);
-  if (threadLabel) {
+  // Derived labels initialize titles; channel renames and generated titles own later changes.
+  if (threadLabel && !sessionEntry.displayName) {
     sessionEntry.displayName = threadLabel;
   }
   const alreadyForked = sessionEntryForkedFromParent(sessionEntry);

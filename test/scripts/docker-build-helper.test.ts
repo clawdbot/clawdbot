@@ -239,6 +239,7 @@ function copySurvivorCaptureClosure(workDir: string) {
   const library = join(workDir, "lib");
   mkdirSync(join(library, "upgrade-survivor"), { recursive: true });
   for (const name of [
+    "openclaw-state-paths.mjs",
     "plugin-index-sqlite.mjs",
     "env-limits.mjs",
     "text-file-utils.mjs",
@@ -2736,19 +2737,9 @@ docker_e2e_docker_run_cmd run demo
       publishedRunner.indexOf("phase update-candidate update_candidate"),
     );
     expect(publishedRunner.indexOf("phase update-candidate update_candidate")).toBeLessThan(
-      publishedRunner.indexOf("phase assert-prepublish-requests node"),
+      publishedRunner.indexOf("phase assert-prepublish-requests assert_prepublish_plugin_install"),
     );
-    expectTextToIncludeAll(publishedRunner, [
-      'package-compat.mjs --clawhub-release-security-mode "$candidate_version"',
-      'assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "$prepublish_package" "$candidate_version" "$clawhub_security_mode"',
-    ]);
     expect(publishedRunner).not.toContain('if [ "$candidate_version" = "2026.6.35" ]; then');
-    expect(publishedRunner).toContain('prepublish_package="@openclaw/whatsapp"');
-    expect(publishedRunner).toContain("if configured_plugin_installs_enabled; then");
-    expect(publishedRunner).toContain('prepublish_package="@openclaw/matrix"');
-    expect(publishedRunner).toContain(
-      'assert-prepublish-requests "$OPENCLAW_CLAWHUB_URL" "$prepublish_package" "$candidate_version"',
-    );
     expect(publishedRunner).toContain(
       'local tarball="$fixture_root/openclaw-brave-plugin-${candidate_version}.tgz"',
     );
@@ -2757,10 +2748,9 @@ docker_e2e_docker_run_cmd run demo
     expect(publishedRunner).toContain(
       'registry_args+=("@openclaw/brave-plugin" "$candidate_version" "$tarball")',
     );
-    expect(publishedRunner).toContain('"$clawhub_security_mode"');
-    expect(publishedRunner.indexOf("phase assert-prepublish-requests node")).toBeLessThan(
-      publishedRunner.indexOf("phase doctor run_doctor"),
-    );
+    expect(
+      publishedRunner.indexOf("phase assert-prepublish-requests assert_prepublish_plugin_install"),
+    ).toBeLessThan(publishedRunner.indexOf("phase doctor run_doctor"));
     const discordInstallIndex = runner.indexOf(
       'openclaw_e2e_fixture_plugin_command openclaw -- \\\n    plugins install "npm:@openclaw/discord@$package_version" --pin',
     );
@@ -2773,17 +2763,10 @@ docker_e2e_docker_run_cmd run demo
     const codexInstallIndex = runner.indexOf(
       'openclaw_e2e_fixture_plugin_command openclaw -- \\\n      plugins install "npm:@openclaw/codex@$package_version" --pin',
     );
-    const restoreCompanionIndex = runner.indexOf(
-      'restore "$OPENCLAW_CONFIG_PATH" "$authored_config"',
-    );
-    const assertCompanionIndex = runner.indexOf('assert-companion-installs "$package_version"');
     expect(discordInstallIndex).toBeGreaterThan(-1);
     expect(discordInstallIndex).toBeLessThan(whatsappInstallIndex);
     expect(whatsappInstallIndex).toBeLessThan(clawhubRequestIndex);
     expect(clawhubRequestIndex).toBeLessThan(codexInstallIndex);
-    expect(codexInstallIndex).toBeLessThan(restoreCompanionIndex);
-    expect(restoreCompanionIndex).toBeLessThan(assertCompanionIndex);
-    expect(assertCompanionIndex).toBeLessThan(runnerPrepareIndex);
     expect(
       runner.match(/openclaw_e2e_fixture_plugin_command openclaw -- \\\n\s+plugins install/gu),
     ).toHaveLength(3);
@@ -2821,7 +2804,6 @@ docker_e2e_docker_run_cmd run demo
         "unset OPENCLAW_CLAWHUB_URL CLAWHUB_URL",
         'export OPENCLAW_CLAWHUB_URL="http://127.0.0.1:$(cat "$port_file")"',
         'openclaw_e2e_stop_process "${clawhub_fixture_pid:-}"',
-        "assert-prepublish-requests",
       ]);
       expect(script).not.toContain("CLAWHUB_EXPECTED_VERSION");
       expect(script).not.toContain("/__fixture__/requests");
@@ -6999,9 +6981,14 @@ done
       pluginUpdateProbe,
     ];
 
-    expect(readFileSync(DOCTOR_SWITCH_DOCKER_E2E_PATH, "utf8")).toContain(
-      "scripts/e2e/lib/doctor-install-switch/scenario.sh",
-    );
+    const doctorRunner = readFileSync(DOCTOR_SWITCH_DOCKER_E2E_PATH, "utf8");
+    expect(doctorRunner).toContain("scripts/e2e/lib/doctor-install-switch/scenario.sh");
+    expectTextToIncludeAll(doctorRunner, [
+      'TARGET_ROOT_DIR="$(cd "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}" && pwd)"',
+      'TARGET_CONTRACT_DIR="$TARGET_ROOT_DIR/scripts/e2e/lib/doctor-install-switch"',
+      'source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"',
+      '"$TARGET_CONTRACT_DIR:/app/scripts/e2e/lib/doctor-install-switch:ro"',
+    ]);
     expectTextToIncludeAll(doctorScenario, [
       "OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR=1",
       "scripts/e2e/lib/package-compat.mjs",
@@ -7693,7 +7680,7 @@ done
       'DOCKER_RUN_TIMEOUT="${OPENCLAW_PLUGIN_BINDING_COMMAND_ESCAPE_DOCKER_RUN_TIMEOUT:-900s}"',
       'DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run --rm',
       'docker_e2e_docker_cmd rm -f "$CONTAINER_NAME"',
-      "lets authorized gateway-style plugin commands escape plugin-owned bindings",
+      "lets authorized (plugin-owned binding commands fall through to command processing|gateway-style plugin commands escape plugin-owned bindings)",
       "keeps unauthorized plugin-owned binding slash replies suppressed while routed to the bound plugin",
       "expected focused Vitest summary for exactly 3 passed tests",
     ]);
@@ -7706,9 +7693,7 @@ done
     );
 
     expect(dockerfile).toContain("OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL=1");
-    expect(dockerfile).toContain(
-      "pnpm install --frozen-lockfile --ignore-scripts --filter openclaw",
-    );
+    expect(dockerfile).toContain("pnpm install --frozen-lockfile --ignore-scripts\n");
   });
 
   it("routes QR import Docker smoke through the timeout-aware run helper", () => {

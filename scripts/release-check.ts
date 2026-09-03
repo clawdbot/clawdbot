@@ -20,6 +20,7 @@ import { basename, dirname, join, resolve, win32 } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { extract } from "tar";
+import { tsImport } from "tsx/esm/api";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../src/cli/completion-runtime.ts";
 import { escapeRegExp } from "../src/shared/regexp.js";
@@ -766,6 +767,10 @@ export function createPackedPluginSdkTypescriptSmokeProject(params: {
 }): void {
   const dependencies: Record<string, string> = {
     openclaw: params.packageSpec,
+    // Strict declaration checking needs the release-declared ws types; without
+    // them skipLibCheck:false reports TS7016 before the __exportAll TS2304.
+    "@types/ws": "8.18.1",
+    typescript: "6.0.3",
   };
   if (params.aiPackageSpec) {
     dependencies["@openclaw/ai"] = params.aiPackageSpec;
@@ -794,7 +799,7 @@ export function createPackedPluginSdkTypescriptSmokeProject(params: {
           moduleResolution: "NodeNext",
           noEmit: true,
           strict: true,
-          skipLibCheck: true,
+          skipLibCheck: false,
           target: "ES2022",
         },
         include: ["src/index.ts"],
@@ -1385,7 +1390,7 @@ async function main() {
     if (packedPackage.name !== "openclaw" || packedPackage.version !== rootPackage.version) {
       throw new Error("release-check: prepared tarball does not match the target package version.");
     }
-    verifyPackedContents(results, packedRoot);
+    await verifyPackedContents(results, packedRoot);
     runPackedBundledChannelEntrySmoke(tarballPath, packedRoot);
     console.log("release-check: final npm tarball contents and installed runtime look OK.");
   } finally {
@@ -1393,9 +1398,24 @@ async function main() {
   }
 }
 
-function verifyPackedContents(results: NpmPackResult[], packedRoot: string): void {
+async function verifyPackedContents(results: NpmPackResult[], packedRoot: string): Promise<void> {
+  // WORKER_BUNDLE_*_PATH exports declare the target's sealed deploy artifacts.
+  // Trusted tooling may be newer than the frozen target in the working directory.
+  const workerBundle = await tsImport(
+    pathToFileURL(resolve("src/shared/worker-bundle-hash.ts")).href,
+    import.meta.url,
+  );
+  const workerDeployEntrypoints = Object.entries(workerBundle)
+    .filter(([name]) => /^WORKER_BUNDLE_.*_PATH$/u.test(name))
+    .map(([name, value]) => {
+      if (typeof value !== "string") {
+        throw new Error(`release-check: target worker artifact ${name} must be a path string.`);
+      }
+      return `dist/worker/${value}`;
+    });
   checkCliBootstrapExternalImports({
     rootDir: packedRoot,
+    workerDeployEntrypoints,
     logger: {
       error: (message: string) => console.error(`release-check: ${message}`),
     },

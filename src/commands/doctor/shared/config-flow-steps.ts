@@ -1,5 +1,6 @@
 // Doctor config-flow steps for legacy compatibility and unknown-key cleanup.
 import { isDeepStrictEqual } from "node:util";
+import { configIncludeOwnsAgentRoster } from "../../../config/agent-roster-provenance.js";
 import { restoreEnvVarRefs } from "../../../config/env-preserve.js";
 import { resolveConfigIncludes } from "../../../config/includes.js";
 import { projectAuthoredAgentRosterForWrite } from "../../../config/io.write-prepare.js";
@@ -159,13 +160,14 @@ export function restoreDoctorConfigEnvRefs(
     authoredRaw: snapshot.parsed,
     resolvedRaw: snapshot.sourceConfig,
   });
-  // Only moved references need help here. The writer owns unchanged paths, and
-  // value comparison prevents restoring an alias that Doctor deliberately changed.
-  const restored = restoreEnvVarRefs(
-    candidate,
-    createMergePatch(authored, migrated.next ?? canonicalAuthored),
-    env,
-  );
+  // The root writer preserves unchanged roster refs after checking include ownership.
+  // Single-file and include-file writers still need references moved with their roster.
+  const referenceBase =
+    containsAuthoredInclude(snapshot.parsed) && !configIncludeOwnsAgentRoster(snapshot)
+      ? canonicalAuthored
+      : authored;
+  const referenceTemplate = createMergePatch(referenceBase, migrated.next ?? canonicalAuthored);
+  const restored = restoreEnvVarRefs(candidate, referenceTemplate, env);
   // SAFETY: Restoring string leaves preserves the candidate's config structure.
   return restored as OpenClawConfig;
 }

@@ -61,7 +61,6 @@ import {
 } from "./message-handler.preflight-logging.js";
 import { resolveDiscordPreflightPluralKitInfo } from "./message-handler.preflight-pluralkit.js";
 import {
-  isPreflightAborted,
   loadPreflightAudioRuntime,
   loadSystemEventsRuntime,
 } from "./message-handler.preflight-runtime.js";
@@ -201,7 +200,7 @@ async function recordDiscordPendingHistoryEntry(params: {
     limit: params.preflight.historyLimit,
     mediaLimit: DISCORD_HISTORY_MEDIA_MAX_ATTACHMENTS,
     messageId: params.message.id,
-    shouldRecord: () => !isPreflightAborted(params.preflight.abortSignal),
+    shouldRecord: () => !params.preflight.abortSignal?.aborted,
     media: async () =>
       toHistoryMediaEntries(
         await resolveDiscordHistoryMediaForPendingRecord({
@@ -216,7 +215,7 @@ async function recordDiscordPendingHistoryEntry(params: {
 export async function preflightDiscordMessage(
   params: DiscordMessagePreflightParams,
 ): Promise<DiscordMessagePreflightContext | null> {
-  if (isPreflightAborted(params.abortSignal)) {
+  if (params.abortSignal?.aborted) {
     return null;
   }
   const logger = getChildLogger({ module: "discord-auto-reply" });
@@ -248,7 +247,7 @@ export async function preflightDiscordMessage(
     messageChannelId,
   });
   message = hydration.message;
-  if (isPreflightAborted(params.abortSignal)) {
+  if (params.abortSignal?.aborted) {
     return null;
   }
 
@@ -270,7 +269,7 @@ export async function preflightDiscordMessage(
   }
   const isGuildMessage = Boolean(params.data.guild_id);
   const channelInfo = await resolveDiscordChannelInfo(params.client, messageChannelId);
-  if (isPreflightAborted(params.abortSignal)) {
+  if (params.abortSignal?.aborted) {
     return null;
   }
   const { isDirectMessage, isGroupDm } = resolveDiscordPreflightConversationKind({
@@ -321,7 +320,7 @@ export async function preflightDiscordMessage(
     config: pluralkitConfig,
     abortSignal: params.abortSignal,
   });
-  if (isPreflightAborted(params.abortSignal)) {
+  if (params.abortSignal?.aborted) {
     return null;
   }
   const sender = resolveDiscordSenderIdentity({
@@ -366,7 +365,7 @@ export async function preflightDiscordMessage(
       allowNameMatching,
       conversationId: messageChannelId,
     });
-    if (isPreflightAborted(params.abortSignal)) {
+    if (params.abortSignal?.aborted) {
       return null;
     }
     if (!access) {
@@ -604,7 +603,7 @@ export async function preflightDiscordMessage(
       cfg: params.cfg,
       abortSignal: params.abortSignal,
     });
-  if (isPreflightAborted(params.abortSignal)) {
+  if (params.abortSignal?.aborted) {
     return null;
   }
 
@@ -856,7 +855,7 @@ export async function preflightDiscordMessage(
     abortSignal: params.abortSignal,
   };
   const preparedMedia = await resolveMediaList(message, params.mediaMaxBytes, mediaResolveOptions);
-  if (isPreflightAborted(params.abortSignal)) {
+  if (params.abortSignal?.aborted) {
     return null;
   }
   const forwardedMedia = await resolveForwardedMediaList(
@@ -864,7 +863,7 @@ export async function preflightDiscordMessage(
     params.mediaMaxBytes,
     mediaResolveOptions,
   );
-  if (isPreflightAborted(params.abortSignal)) {
+  if (params.abortSignal?.aborted) {
     return null;
   }
   preparedMedia.push(...forwardedMedia);

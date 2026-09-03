@@ -30,6 +30,7 @@ import {
   QUESTION_PAGE_ELEMENT,
   TERMINAL_PANEL_ELEMENT,
 } from "./lazy-custom-element.ts";
+import { isNativeWebChromeHost } from "./native-web-chrome.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
 import { isDesktopPanelAvailable } from "./panel-availability.ts";
 import { resolveGatewayCredentialsForUrlEdit } from "./settings.ts";
@@ -115,7 +116,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
         (config, notify) => config.subscribe(notify),
       )
       .watch(
-        () => (this.terminalOnly ? this.context?.agentSelection : undefined),
+        () => this.context?.agentSelection,
         (selection, notify) => selection.subscribe(notify),
       )
       .watch(
@@ -240,6 +241,9 @@ export class OpenClawApp extends OpenClawLightDomElement {
   }
 
   private renderFocusEscape(label: string) {
+    if (isNativeWebChromeHost()) {
+      return nothing;
+    }
     return html`<button
       class="btn btn--ghost"
       type="button"
@@ -425,7 +429,9 @@ export class OpenClawApp extends OpenClawLightDomElement {
       <openclaw-board-document
         .gatewaySnapshot=${gatewaySnapshot}
         .sessionKey=${route.data.sessionKey}
-        .onDocumentClose=${() => this.closeDocument(this.context?.basePath ?? "")}
+        .onDocumentClose=${isNativeWebChromeHost()
+          ? null
+          : () => this.closeDocument(this.context?.basePath ?? "")}
       ></openclaw-board-document>
       ${!gatewayConnected && gatewaySnapshot.lastError === null
         ? renderConnectingSplash(gatewayStartupStatus)
@@ -636,7 +642,12 @@ export class OpenClawApp extends OpenClawLightDomElement {
     }
     return html`
       <openclaw-tooltip-provider>
-        <openclaw-github-link-hovercard-provider .client=${gatewaySnapshot.client}>
+        <openclaw-github-link-hovercard-provider
+          .client=${gatewaySnapshot.client}
+          .agentId=${context.agentSelection.state.selectedId ??
+          gatewaySnapshot.assistantAgentId ??
+          undefined}
+        >
           <openclaw-session-progress-hovercard-provider
             .client=${gatewaySnapshot.client}
             .context=${context}

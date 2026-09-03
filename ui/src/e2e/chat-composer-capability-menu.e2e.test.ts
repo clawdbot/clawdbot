@@ -45,6 +45,7 @@ function sessionsList(
         kind: "direct",
         model: model.id,
         modelProvider: model.provider,
+        sessionId: "capability-menu-session",
         status: "done",
         updatedAt: Date.now(),
         ...(toolOverrides ? { toolOverrides } : {}),
@@ -391,8 +392,7 @@ suite.define(() => {
         .toBe(false);
 
       await gateway.deferNext("tools.effective");
-      await gateway.setMethodResponse(
-        "sessions.list",
+      await gateway.setSessionsListResponse(
         sessionsList(
           { mcpToolsDeny: { github: ["search_items"] } },
           { id: "gpt-5.6", provider: "openai" },

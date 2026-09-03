@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import type { MentionInboxItem } from "../../../packages/gateway-protocol/src/index.js";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
@@ -6,14 +7,17 @@ import type { ScopeUpgradeState } from "../app/device-scope-upgrade-availability
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
 import { t } from "../i18n/index.ts";
+import { formatDateTimeMs, formatRelativeTimestamp } from "../lib/format.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import type { PresenceViewer } from "../lib/presence-users.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { renderSidebarApprovalRow } from "./exec-approval-card.ts";
 import { icons } from "./icons.ts";
 import type { SidebarAttentionItem } from "./sidebar-attention-entries.ts";
 import "./sidebar-update-card.ts";
+import "./viewer-facepile.ts";
 
 type SidebarIssueItemHandlers = {
   basePath: string;
@@ -40,6 +44,89 @@ function renderSidebarDismissButton(itemLabel: string, onDismiss?: () => void) {
   >
     ${icons.x}
   </button>`;
+}
+
+export function renderSidebarMentionItem(params: {
+  mention: MentionInboxItem;
+  context: Pick<ApplicationContext, "basePath" | "navigate">;
+  dismissing: boolean;
+  onDismiss: () => void;
+  onClosePanel: () => void;
+}) {
+  const { mention, context } = params;
+  const sender: PresenceViewer = {
+    id: mention.senderProfileId,
+    identity: { type: "profile", id: mention.senderProfileId },
+    name: mention.senderLabel,
+    avatarUrl: mention.senderAvatarUrl,
+    watchedSessions: [],
+  };
+  const label = t("attention.mentions.from", { sender: mention.senderLabel });
+  const target = sessionNavigationTarget({
+    face: "chat",
+    sessionKey: mention.sessionKey,
+    fallbackAgentId: mention.agentId,
+    basePath: context.basePath,
+    row: { key: mention.sessionKey, displayName: mention.sessionTitle },
+    exactKey: true,
+  });
+  return html`<article
+    class="sidebar-mention-row"
+    data-attention-kind="mention"
+    data-mention-id=${mention.id}
+    aria-label=${label}
+  >
+    <div class="sidebar-issues-panel__summary sidebar-mention-row__summary">
+      <span class="sidebar-mention-row__avatar" aria-hidden="true">
+        <openclaw-viewer-avatar
+          .user=${sender}
+          .markAsViewer=${false}
+          variant="footer"
+        ></openclaw-viewer-avatar>
+      </span>
+      <div class="sidebar-issues-panel__content">
+        <div class="sidebar-mention-row__header">
+          <span class="sidebar-issues-panel__entity" title=${label}>${label}</span>
+          <time
+            class="sidebar-mention-row__age"
+            datetime=${new Date(mention.createdAt).toISOString()}
+            title=${formatDateTimeMs(mention.createdAt)}
+            >${formatRelativeTimestamp(mention.createdAt)}</time
+          >
+        </div>
+        <span class="sidebar-issues-panel__state" title=${mention.sessionTitle}
+          >${mention.sessionTitle}</span
+        >
+        ${mention.excerpt
+          ? html`<p class="sidebar-mention-row__excerpt">${mention.excerpt}</p>`
+          : nothing}
+        <div class="sidebar-issues-panel__actions sidebar-mention-row__actions">
+          <a
+            class="sidebar-issues-panel__action sidebar-issues-panel__action--primary"
+            href=${target.href}
+            data-issue-row-focus
+            @click=${(event: MouseEvent) => {
+              if (!shouldHandleNavigationClick(event)) {
+                return;
+              }
+              event.preventDefault();
+              params.onClosePanel();
+              context.navigate("chat", target.options);
+            }}
+            >${t("attention.mentions.open")}</a
+          >
+          <button
+            type="button"
+            class="sidebar-issues-panel__action"
+            ?disabled=${params.dismissing}
+            @click=${params.onDismiss}
+          >
+            ${t(params.dismissing ? "attention.mentions.dismissing" : "attention.mentions.dismiss")}
+          </button>
+        </div>
+      </div>
+    </div>
+  </article>`;
 }
 
 export function renderSidebarApprovalItem(params: {
@@ -113,7 +200,6 @@ export function renderSidebarUpdateSurface(params: {
     .onHoldUpdate=${() => context.overlays.holdUpdate()}
     .onReviewUpdate=${params.onNavigate}
     .onDismiss=${params.onDismiss}
-    .recoverNativeDecline=${false}
   ></openclaw-sidebar-update-card>`;
 }
 

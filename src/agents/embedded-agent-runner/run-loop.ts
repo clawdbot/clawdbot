@@ -91,6 +91,7 @@ export async function runPreparedEmbeddedLoop(
     () =>
       prepareEmbeddedRunRuntime({
         runParams: params,
+        sessionAdmission: input.sessionAdmission,
         provider,
         modelId,
         agentDir,

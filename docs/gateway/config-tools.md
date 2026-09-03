@@ -250,9 +250,9 @@ OAuth access tokens expire after about eight hours. The Gateway refreshes them b
 
 Omitting `agents.entries.<id>.tools.github` inherits the system identity. An agent object is a complete managed override. Settings shows the effective identity and the selected configuration scope separately, so editing **System** never masquerades as an agent override. If a configured managed profile is missing, tokenless, or corrupt, GitHub status reports `configured_unavailable` rather than reporting the native account. Gateway-brokered publication verifies the selected profile's own credential and pins it for each child operation; a missing profile cannot redirect publication to native authentication. Ordinary agent shell execution continues to use the shared or per-agent selection, with the execution boundaries described below.
 
-Managed identity selects the `gh` CLI/API account and optional Git author/committer metadata. OpenClaw prepares a non-secret overlay containing the private `GH_CONFIG_DIR`, ambient token scrubs, and configured author fields. It does not install a credential helper, rewrite SSH remotes, add HTTP authorization headers, or otherwise override an existing repository's Git network credentials. Commands still use the existing `gh` on `PATH`, including any operator-managed protection or caching wrapper.
+Managed identity selects the `gh` CLI/API account and optional Git author/committer metadata. OpenClaw prepares a non-secret overlay containing the private `GH_CONFIG_DIR`, ambient token scrubs, and configured author fields. For local execution, it does not install a credential helper, rewrite SSH remotes, add HTTP authorization headers, or otherwise override an existing repository's Git network credentials. Commands still use the existing `gh` on `PATH`, including any operator-managed protection or caching wrapper.
 
-For OpenClaw-owned `exec` with `host=gateway`, including Pi `exec` and Codex `gateway_exec`, the local launch owner reads and validates the selected profile immediately before each process launch. It places that access token in `GH_TOKEN` only in the private child environment and clears `GITHUB_TOKEN`; approval payloads, shared run environments, and worker payloads remain non-secret. A missing, tokenless, or insecure profile refuses the local execution before the command starts instead of permitting native-keyring fallback. This also applies to commands that might invoke `gh` indirectly. Reconnect or change the GitHub Identity selection before retrying. A launched command retains its selected credential even if the profile later disappears; the next exec launch reads the profile again.
+For OpenClaw-owned `exec` with `host=gateway`, including Pi `exec` and Codex `gateway_exec`, the local launch owner reads and validates the selected profile immediately before each process launch. It places that access token in `GH_TOKEN` only in the private child environment and clears `GITHUB_TOKEN`; approval payloads and shared run environments remain non-secret. A missing, tokenless, or insecure profile refuses the local execution before the command starts instead of permitting native-keyring fallback. This also applies to commands that might invoke `gh` indirectly. Reconnect or change the GitHub Identity selection before retrying. A launched command retains its selected credential even if the profile later disappears; the next exec launch reads the profile again.
 
 **Codex-native shell is a separate boundary.** Native `exec_command` and shell execution still receive the non-secret profile overlay, not the private launch-time credential binding. `GH_CONFIG_DIR` does not isolate the OS keyring: if the selected profile disappears or loses its token, GitHub CLI can fall back to native keyring credentials. Use `gateway_exec` when the launch-bound managed identity guarantee is required. GitHub status and Gateway-owned publication guarantees do not extend to native shell execution.
 
@@ -260,7 +260,9 @@ Choosing a different identity or inheritance target selects another profile for 
 
 Managed profiles provide execution and coordination identity; they are not an OS-user security sandbox. A process with unrestricted host execution under the same OS account can access account-owned files, including managed `gh` profiles. Use an OpenClaw sandbox, a dedicated host, or a dedicated OS user when adversarial isolation is required.
 
-The Gateway's managed profile and credentials are not forwarded to node hosts, OpenClaw sandboxes, remote-exec placements, or cloud workers. Those execution hosts own their own environment and credential policy. The `github_publish` tool instead records a bounded publication request. For cloud and remote-exec turns, the Gateway waits until the exact workspace result is reconciled and accepted, then commits remaining changes as the verified effective GitHub user, pushes the authoritative session branch through a one-shot HTTPS credential helper, and creates or reuses a draft pull request. The tool and worker payload contain no repository authority or credential.
+OpenClaw `worker-turn` cloud workers receive the effective shared identity per turn through their private launch envelope. The worker writes the access token to a private per-turn profile in its throwaway state directory, with earlier profiles removed before the next binding; the same OS-user limit described above applies on the worker host. The sealed worker launcher gives each `exec` child the same launch-time credential binding as local exec. GitHub CLI must be installed on the worker host; the bundle includes the launcher, not `gh`. The checkout uses the session-owned branch and an HTTPS `origin` for GitHub repositories; HTTPS Git authentication uses `gh auth git-credential`, with inherited credential helpers cleared. Commits and pushes happen directly on the worker. Reconciliation returns file contents to the Gateway worktree, not commit history. Paired devices' own GitHub CLI logins are not used for this binding.
+
+OpenClaw sandboxes, ordinary node-host exec, and Codex `remote-exec` placements still do not receive the Gateway's managed GitHub credentials. The `github_publish` tool remains available for remote-exec sessions: it records a bounded publication request without credentials or repository authority. After the exact workspace result is reconciled and accepted, the Gateway commits remaining changes as the verified effective GitHub user, pushes the authoritative session branch through a one-shot HTTPS credential helper, and creates or reuses a draft pull request.
 
 Local session-owned worktrees can use the same **Publish PR** action in the Control UI. The Gateway derives the managed worktree, repository, branch, base, and head from current session ownership. It never accepts those authority facts from the browser or model. Publication retries use a durable request ID, an exact commit marker, remote branch observation, and pull-request lookup by head branch so a Gateway restart or lost response does not create duplicate commits, pushes, or pull requests.
 
@@ -268,7 +270,7 @@ Verification proves which account answered the GitHub API request. Status report
 
 Removing an agent override or choosing native credentials deletes the associated local refresh record after the config change. Already-running local processes may retain the old profile and its current access token until they exit, restart, or the token expires, while new runs use the updated identity immediately. This local change does not revoke the authorization at GitHub; revoke it separately from the OAuth application's GitHub settings when required.
 
-Control UI repository previews and project discovery use the separate optional `gateway.controlUi.github.token` service credential. They never consume an agent tool identity. When this SecretRef is explicit, OpenClaw excludes its exact environment or store name from agent execution. A custom name does not clear unrelated `GH_TOKEN` or `GITHUB_TOKEN` values used by native identity; a ref named `GH_TOKEN` or `GITHUB_TOKEN` excludes that exact variable.
+Control UI issue and pull request hover previews use the selected agent's effective managed GitHub identity, including an inherited system identity. An unavailable managed identity produces an actionable error rather than switching to another credential. Without a managed selection, previews retain the optional `gateway.controlUi.github.token` service credential, shared `GH_TOKEN`/`GITHUB_TOKEN` environment fallback, and anonymous public access. Previews remain public-only, and their caches are scoped to the credential used. Project discovery continues to use the separate service credential. When this SecretRef is explicit, OpenClaw excludes its exact environment or store name from agent execution. A custom name does not clear unrelated `GH_TOKEN` or `GITHUB_TOKEN` values used by native identity; a ref named `GH_TOKEN` or `GITHUB_TOKEN` excludes that exact variable.
 
 ### `tools.exec`
 
@@ -412,26 +414,34 @@ Configures inbound media understanding (image/audio/video):
 {
   tools: {
     agentToAgent: {
-      enabled: false,
       allow: ["home", "work"],
     },
   },
 }
 ```
 
+Cross-agent access is on by default. `enabled` (default `true`) gates cross-agent session tool calls: `sessions_send` to another agent, and cross-agent `sessions_list`, `sessions_history`, `sessions_search`, and status reads under the default `tools.sessions.visibility: "all"`. Set `enabled: false` to turn cross-agent access off. Same-agent access never consults this policy. Requester-owned native subagent and ACP child sessions are the one exception: under `tree` or `all` visibility they stay reachable across agent boundaries before this policy is consulted, including with `enabled: false`.
+
+`allow` lists the agent ids or `*` patterns that may take part in a cross-agent call. Both the requesting agent and the target agent must match an entry. Exact ids are case-sensitive; wildcard patterns are case-insensitive.
+
+<Note>
+An omitted or empty `allow` counts as unset: with agent-to-agent access enabled by default, every agent can reach every other agent. List every participating agent, requester and target alike, to restrict cross-agent access, as in the example above. A list containing only blank entries denies all cross-agent calls. Deleting an agent (`openclaw agents delete`) prunes its id from `allow`; if that empties the list, the policy falls back to allow-all, so re-check `allow` after removing agents.
+</Note>
+
 ### `tools.sessions`
 
-Controls which sessions can be targeted by the session tools (`sessions_list`, `sessions_history`, `sessions_send`).
+Controls which sessions can be targeted by the session tools (`sessions_list`, `sessions_history`, `sessions_search`, `sessions_send`, `session_status`).
 
-Default: `agent` (all sessions belonging to the current agent, including from
-non-main and retained cron sessions). Explicit visibility settings are unchanged.
+Default: `all` (every session on the Gateway, including other agents' and other
+users' transcripts). Cross-agent access is governed by `tools.agentToAgent` and
+is on by default. Use `agent`, `tree`, or `self` to narrow visibility.
 
 ```json5
 {
   tools: {
     sessions: {
       // "self" | "tree" | "agent" | "all"
-      visibility: "agent",
+      visibility: "all",
     },
   },
 }
@@ -442,8 +452,8 @@ non-main and retained cron sessions). Explicit visibility settings are unchanged
     - `self`: only the current session key.
     - `tree`: current session + sessions spawned by the current session (subagents). When the caller is the canonical main session, it includes every same-agent session for list, history, search, send, and status.
     - `agent`: any session belonging to the current agent id (can include other users if you run per-sender sessions under the same agent id).
-    - `all`: any session. Cross-agent targeting still requires `tools.agentToAgent`.
-    - `self` remains strict for main. Incognito denial remains absolute. Ordinary cross-agent access requires `all` plus `tools.agentToAgent` policy; `tree` also permits owned native/ACP children across agent boundaries. `agent` does not include that exception, so keep explicit `tree` if your workflow relies on it.
+    - `all`: any session. Cross-agent targeting is governed by `tools.agentToAgent`, which is on by default.
+    - `self` remains strict for main. Incognito denial remains absolute. Narrowing visibility to `agent`, `tree`, or `self` blocks ordinary cross-agent access; `tree` also permits owned native/ACP children across agent boundaries. `agent` does not include that exception, so keep explicit `tree` if your workflow relies on it.
     - Sandbox clamp: when the current session is sandboxed and `agents.defaults.sandbox.sessionToolsVisibility="spawned"` (the default), access stays limited to spawned sessions even if the caller is main or `tools.sessions.visibility="all"`.
     - When not `all`, `sessions_list` includes a compact `visibility` field
       describing the effective mode and a warning that some sessions may be
@@ -453,12 +463,13 @@ non-main and retained cron sessions). Explicit visibility settings are unchanged
 </AccordionGroup>
 
 Ambient group watches still queue activity notices and tell the main session
-where something happened. They do not grant access. The default `agent` scope
-already covers same-agent sessions, including conversations with other users.
+where something happened. They do not grant access. The default `all` scope
+already covers sessions across agents, including conversations with other users.
 A per-peer `session.dmScope` separates DM context but does not restrict session
-tools. For narrower access, explicitly choose `tree` or `self`, or use separate
-agents. `tree` retains the canonical main-session exception; `self` restricts
-even main to its current session.
+tools. For narrower access, explicitly choose `agent`, `tree`, or `self`, or
+restrict agent pairs with `tools.agentToAgent.allow`. Set
+`tools.agentToAgent.enabled: false` to block ordinary cross-agent access; requester-owned native subagent and ACP child sessions stay reachable under `tree` or `all`. `tree` retains the
+canonical main-session exception; `self` restricts even main to its current session.
 
 ### `tools.sessions_spawn`
 

@@ -220,15 +220,6 @@ html.openclaw-native-web-chrome .sidebar-brand__desktop-control {
   display: none;
 }
 
-html.openclaw-native-web-chrome .sidebar-brand__new-thread {
-  border-color: transparent;
-  box-shadow: none;
-}
-
-html.openclaw-native-web-chrome .sidebar-brand__new-thread:focus-visible {
-  box-shadow: var(--focus-ring);
-}
-
 html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrome) .sidebar-brand {
   --sidebar-agent-avatar-size: 32px;
 }
@@ -1062,25 +1053,23 @@ openclaw-settings-save-indicator:empty {
   flex: 0 0 auto;
 }
 
-.sidebar-brand__desktop-control svg {
+.sidebar-brand__header-control svg {
   opacity: 0.72;
   stroke-width: 1.6px;
   transition: opacity var(--duration-fast) ease;
 }
 
-.sidebar-brand__icon.sidebar-brand__desktop-control {
+.sidebar-brand__icon.sidebar-brand__header-control {
   width: var(--shell-chrome-control-size);
   height: var(--shell-chrome-control-size);
 }
 
-.sidebar-brand__desktop-control:hover:not(:disabled) svg {
+.sidebar-brand__header-control:hover:not(:disabled, [aria-disabled="true"]) svg {
   opacity: 1;
 }
 
 .sidebar-brand__new-thread {
   margin-inline-start: 5px;
-  color: var(--text);
-  box-shadow: none;
 }
 
 .sidebar-brand__icon {
@@ -1123,6 +1112,12 @@ openclaw-settings-save-indicator:empty {
   stroke-width: 1.7px;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.sidebar-brand__new-thread svg {
+  /* The plus path occupies less of its viewBox than the panel/search artwork. */
+  width: 20px;
+  height: 20px;
 }
 
 .sidebar-shell__content {
@@ -2558,22 +2553,6 @@ wa-dropdown.session-menu::part(menu) {
   box-shadow: var(--overlay-shadow);
 }
 
-.session-menu--compact .session-menu__back {
-  z-index: 1;
-  position: sticky;
-  top: 0;
-  background: var(--wa-color-surface-raised);
-}
-
-.session-menu--compact .session-menu__chevron {
-  display: inline-flex;
-}
-
-wa-dropdown.session-menu--compact::part(menu) {
-  max-height: calc(100dvh - 16px);
-  overflow-y: auto;
-}
-
 /* Popover hosts live in the top layer so menus escape in-page stacking
    contexts (e.g. the sidebar resizer above the nav); the host itself must
    stay a zero-size shell around its fixed-position menu. */
@@ -3502,9 +3481,9 @@ openclaw-sidebar-attention {
   flex: 0 0 32px;
   place-items: center;
   padding: 0;
-  border: 0;
+  border: var(--sidebar-issues-border, 0);
   border-radius: var(--radius-md);
-  background: transparent;
+  background: var(--sidebar-issues-background, transparent);
   color: var(--muted);
   cursor: var(--cursor-action);
 }
@@ -3739,7 +3718,11 @@ openclaw-tooltip.sidebar-hover-tooltip {
 }
 
 .sidebar-footer-bar__status--restarting,
-.sidebar-footer-bar__status--restarting:hover {
+.sidebar-footer-bar__status--restarting:hover,
+.sidebar-footer-bar__status--suspending,
+.sidebar-footer-bar__status--suspending:hover,
+.sidebar-footer-bar__status--suspended,
+.sidebar-footer-bar__status--suspended:hover {
   background: color-mix(in srgb, var(--warn) 12%, transparent);
   color: var(--warn);
   cursor: default;
@@ -3763,12 +3746,15 @@ openclaw-tooltip.sidebar-hover-tooltip {
   background: var(--danger);
 }
 
-.sidebar-footer-bar__status--restarting .sidebar-footer-bar__status-dot {
+.sidebar-footer-bar__status--restarting .sidebar-footer-bar__status-dot,
+.sidebar-footer-bar__status--suspending .sidebar-footer-bar__status-dot,
+.sidebar-footer-bar__status--suspended .sidebar-footer-bar__status-dot {
   background: var(--warn);
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  .sidebar-footer-bar__status--restarting .sidebar-footer-bar__status-dot {
+  .sidebar-footer-bar__status--restarting .sidebar-footer-bar__status-dot,
+  .sidebar-footer-bar__status--suspending .sidebar-footer-bar__status-dot {
     animation: pulse-subtle 1.2s ease-in-out infinite;
   }
 }

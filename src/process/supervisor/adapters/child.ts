@@ -82,6 +82,7 @@ function isServiceManagedRuntime(): boolean {
 }
 
 type ChildAdapterInput = {
+  assertCurrent?: () => void;
   /** Own a separately signalable tree whose private IPC channel gates worker startup. */
   ownedWorker?: true;
   /** Preserve the supplied environment exactly by skipping environment-mutating spawn wrappers. */
@@ -102,6 +103,7 @@ type ChildAdapterInput = {
 export async function createChildAdapter(params: ChildAdapterInput): Promise<WorkerChildAdapter> {
   if (params.anchoredShellCommand !== undefined) {
     return await createServiceChildRelayAdapter({
+      assertCurrent: params.assertCurrent,
       command: process.platform === "win32" ? params.anchoredShellCommand : "/bin/sh",
       args: process.platform === "win32" ? [] : ["-c", params.anchoredShellCommand],
       windowsShellCommand: process.platform === "win32" ? params.anchoredShellCommand : undefined,
@@ -131,6 +133,7 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
     isServiceManagedRuntime()
   ) {
     return await createServiceChildRelayAdapter({
+      assertCurrent: params.assertCurrent,
       command: preparedSpawn.command,
       args: preparedSpawn.args,
       argv0: preparedSpawn.argv0,
@@ -166,6 +169,7 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
   };
 
   const spawned = await spawnWithFallback({
+    assertCurrent: params.assertCurrent,
     argv: [preparedSpawn.command, ...preparedSpawn.args],
     options,
     fallbacks:

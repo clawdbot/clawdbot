@@ -159,6 +159,7 @@ export function handleEmbeddedAttemptMidTurnPrecheck(input: {
 }
 
 export async function prepareEmbeddedAttemptPromptPreflight(input: {
+  appendOnlyRuntimeContext?: boolean;
   attempt: AttemptPromptPreflightParams &
     Pick<EmbeddedRunAttemptParams, "model" | "runtimePlan" | "authProfileId">;
   activeContextEngine?: Pick<AttemptContextEngine, "info">;
@@ -180,13 +181,11 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
   const { attempt } = input;
   let contextBudgetStatus = input.state.contextBudgetStatus;
   const { skipPromptSubmission } = input.state;
-  const boundaryOptions =
-    input.timezone || !input.includeBoundaryTimestamp
-      ? {
-          ...(input.timezone ? { timezone: input.timezone } : {}),
-          ...(input.includeBoundaryTimestamp ? {} : { includeTimestamp: false }),
-        }
-      : undefined;
+  const boundaryOptions = {
+    appendOnlyRuntimeContext: input.appendOnlyRuntimeContext,
+    ...(input.timezone ? { timezone: input.timezone } : {}),
+    ...(input.includeBoundaryTimestamp ? {} : { includeTimestamp: false }),
+  };
   const unwindowedLlmBoundaryMessagesForPrecheck =
     input.contextEnginePromptAuthority === "preassembly_may_overflow" &&
     input.unwindowedContextEngineMessagesForPrecheck

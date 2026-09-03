@@ -30,14 +30,21 @@ export const NPM_PACKAGE_PRODUCER_WORKFLOW = ".github/workflows/openclaw-npm-pre
 export const PREPARED_NPM_BUNDLE_SCHEMA = "openclaw.prepared-npm-bundle/v1";
 export const QUALIFIED_NPM_PREFLIGHT_SCHEMA = "openclaw.qualified-npm-preflight/v1";
 export const NPM_SOURCE_CHECK_SCHEMA = "openclaw.npm-source-check/v1";
+export const NPM_QUALIFICATION_PROOF_SCHEMA = "openclaw.npm-qualification-proof/v1";
 const PACKAGE_MANIFEST_SCHEMA = "openclaw.npm-package-bundle/v1";
 const PREPARE_JOB_NAME = "Prepare publishable npm package";
 const VERIFY_JOB_NAME = "Qualify prepared npm package";
 const SOURCE_JOB_NAME = "Check npm release source";
+const QUALIFICATION_JOB_NAMES = {
+  sdk: "Check npm Plugin SDK",
+  dependencies: "Check npm dependencies",
+  contents: "Check npm package contents",
+};
 const CALLER_WORKFLOWS = new Set([
   ".github/workflows/openclaw-npm-release.yml",
   ".github/workflows/full-release-validation.yml",
   ".github/workflows/full-release-candidate.yml",
+  ".github/workflows/full-release-artifacts.yml",
 ]);
 const CORE_PACKAGE_POLICY = JSON.parse(
   readFileSync(new URL("./lib/npm-core-release-packages.json", import.meta.url), "utf8"),
@@ -159,6 +166,19 @@ function validateCorePackages(corePackages, version) {
   return corePackages;
 }
 
+function validateArtifact(artifact, producer, name) {
+  if (
+    !isRecord(artifact) ||
+    artifact.name !== name ||
+    artifact.runId !== producer.runId ||
+    artifact.runAttempt !== producer.runAttempt
+  ) {
+    throw new Error("Prepared npm bundle artifact identity mismatch.");
+  }
+  decimal(artifact.id, "artifact ID");
+  digest(artifact.digest, "artifact digest");
+}
+
 export function validatePreparedNpmBundleDescriptor({
   descriptor,
   repository,
@@ -191,16 +211,11 @@ export function validatePreparedNpmBundleDescriptor({
   if (descriptor.corePackages.some((entry) => entry.tarballName === pkg.fileName)) {
     throw new Error("Prepared root and core tarball filenames overlap.");
   }
-  if (
-    !isRecord(artifact) ||
-    artifact.name !== `openclaw-npm-package-${producer.runId}-${producer.runAttempt}` ||
-    artifact.runId !== producer.runId ||
-    artifact.runAttempt !== producer.runAttempt
-  ) {
-    throw new Error("Prepared npm bundle artifact identity mismatch.");
-  }
-  decimal(artifact.id, "artifact ID");
-  digest(artifact.digest, "artifact digest");
+  validateArtifact(
+    artifact,
+    producer,
+    `openclaw-npm-package-${producer.runId}-${producer.runAttempt}`,
+  );
   return descriptor;
 }
 
@@ -243,19 +258,38 @@ function readAttemptJobs(repository, producer, runGh) {
   throw new Error("Incomplete npm producer job inventory.");
 }
 
+/**
+ * @param {{
+ *   producer: Record<string, string>,
+ *   repository: string,
+ *   toolingSha: string,
+ *   qualified?: boolean,
+ *   sourceCheck?: boolean,
+ *   proofKind?: string,
+ *   requireCompletedParent?: boolean,
+ *   runGh?: typeof runReleaseToolingGh,
+ * }} options
+ */
 export function verifyNpmBundleProducer({
   producer,
   repository,
   toolingSha,
   qualified = false,
   sourceCheck = false,
+  proofKind,
   requireCompletedParent = false,
   runGh = runReleaseToolingGh,
 }) {
   validateProducer(producer, {
     repository,
     toolingSha,
-    jobName: sourceCheck ? SOURCE_JOB_NAME : qualified ? VERIFY_JOB_NAME : PREPARE_JOB_NAME,
+    jobName: proofKind
+      ? qualificationJobName(proofKind)
+      : sourceCheck
+        ? SOURCE_JOB_NAME
+        : qualified
+          ? VERIFY_JOB_NAME
+          : PREPARE_JOB_NAME,
   });
   const workflow = producerWorkflow(producer);
   const run = githubJson(
@@ -355,6 +389,34 @@ export function verifyPreparedNpmBundleFiles({ descriptor, files }) {
   return manifest;
 }
 
+async function downloadNpmArtifactFiles({
+  artifact,
+  repository,
+  toolingSha,
+  token,
+  runGh,
+  fetchImpl,
+  expectedEntries,
+  maxEntryBytes,
+}) {
+  const metadata = githubJson(repository, `actions/artifacts/${artifact.id}`, runGh);
+  const { archiveBytes } = await downloadExactActionsArtifactArchive({
+    token,
+    fetchImpl,
+    expected: {
+      repository,
+      artifactId: Number(artifact.id),
+      artifactName: artifact.name,
+      artifactDigest: `sha256:${artifact.digest}`,
+      artifactSizeBytes: metadata.size_in_bytes,
+      artifactExpiresAt: metadata.expires_at,
+      runId: Number(artifact.runId),
+      workflowSha: toolingSha,
+    },
+  });
+  return inspectActionsArtifactZipWithPolicy(archiveBytes, { expectedEntries, maxEntryBytes });
+}
+
 export async function downloadPreparedNpmBundle({
   descriptor,
   repository,
@@ -369,22 +431,13 @@ export async function downloadPreparedNpmBundle({
 }) {
   validatePreparedNpmBundleDescriptor({ descriptor, repository, sourceSha, toolingSha });
   verifyNpmBundleProducer({ producer: descriptor.producer, repository, toolingSha, runGh });
-  const metadata = githubJson(repository, `actions/artifacts/${descriptor.artifact.id}`, runGh);
-  const { archiveBytes } = await downloadExactActionsArtifactArchive({
+  const files = await downloadNpmArtifactFiles({
+    artifact: descriptor.artifact,
+    repository,
+    toolingSha,
     token,
+    runGh,
     fetchImpl,
-    expected: {
-      repository,
-      artifactId: Number(descriptor.artifact.id),
-      artifactName: descriptor.artifact.name,
-      artifactDigest: `sha256:${descriptor.artifact.digest}`,
-      artifactSizeBytes: metadata.size_in_bytes,
-      artifactExpiresAt: metadata.expires_at,
-      runId: Number(descriptor.artifact.runId),
-      workflowSha: toolingSha,
-    },
-  });
-  const files = inspectActionsArtifactZipWithPolicy(archiveBytes, {
     expectedEntries: [
       "package-bundle.json",
       ...packageInventory(descriptor).map((entry) => entry.tarballName),
@@ -413,6 +466,136 @@ export async function downloadPreparedNpmBundle({
     copyFileSync(join(outputDir, entry.tarballName), join(coreTarballDir, entry.tarballName));
   }
   return { manifest, tarballPath: join(outputDir, descriptor.package.fileName), coreTarballDir };
+}
+
+function qualificationJobName(kind) {
+  if (!Object.hasOwn(QUALIFICATION_JOB_NAMES, kind)) {
+    throw new Error("Invalid npm qualification proof kind.");
+  }
+  return QUALIFICATION_JOB_NAMES[kind];
+}
+
+function readReleaseSourceIdentity({ sourceDir, releaseRef, releaseTag: requestedReleaseTag }) {
+  const sourceSha = execFileSync("git", ["-C", sourceDir, "rev-parse", "HEAD"], {
+    encoding: "utf8",
+  }).trim();
+  const root = readJson(join(sourceDir, "package.json"));
+  const sourceRefIsSha = /^[a-f0-9]{40}$/u.test(releaseRef);
+  const { releaseTag, baseTag } = resolveReleaseTagPackageIdentity(
+    requestedReleaseTag || (sourceRefIsSha ? `v${root.version}` : releaseRef),
+    root.version,
+  );
+  if (
+    (sourceRefIsSha && releaseRef !== sourceSha) ||
+    (!sourceRefIsSha && releaseRef !== releaseTag)
+  ) {
+    throw new Error("npm package source does not match the release ref.");
+  }
+  return { sourceSha, root, releaseTag, baseTag };
+}
+
+export function describeNpmQualificationProof({
+  kind,
+  sourceDir,
+  directory,
+  releaseRef,
+  releaseTag,
+  npmDistTag,
+  producer,
+  artifact,
+  preparedBundle,
+}) {
+  qualificationJobName(kind);
+  const identity = readReleaseSourceIdentity({ sourceDir, releaseRef, releaseTag });
+  const files =
+    kind === "contents"
+      ? []
+      : readdirSync(directory)
+          .toSorted()
+          .map((name) => ({
+            name,
+            sha256: hash(
+              readBoundedRegularFile(join(directory, name), {
+                label: name,
+                maxBytes: MAX_SDK_EVIDENCE_BYTES,
+              }),
+            ),
+          }));
+  return {
+    schema: NPM_QUALIFICATION_PROOF_SCHEMA,
+    kind,
+    source: { sha: identity.sourceSha },
+    releaseTag: identity.releaseTag,
+    npmDistTag,
+    producer,
+    files,
+    ...(kind === "contents" ? { preparedBundle } : { artifact }),
+  };
+}
+
+async function verifyNpmQualificationProof({
+  proof,
+  kind,
+  descriptor,
+  manifest,
+  token,
+  runGh,
+  fetchImpl,
+}) {
+  if (proof?.schema !== NPM_QUALIFICATION_PROOF_SCHEMA || proof.kind !== kind) {
+    throw new Error(`Missing or invalid npm ${kind} qualification proof.`);
+  }
+  same(proof.source, descriptor.source, `${kind} proof source`);
+  same(proof.releaseTag, manifest.releaseTag, `${kind} proof release tag`);
+  same(proof.npmDistTag, manifest.npmDistTag, `${kind} proof npm dist-tag`);
+  const { repository, workflowSha: toolingSha } = descriptor.producer;
+  verifyNpmBundleProducer({
+    producer: proof.producer,
+    proofKind: kind,
+    repository,
+    toolingSha,
+    runGh,
+  });
+  if (kind === "contents") {
+    same(proof.preparedBundle, descriptor, "Package contents proof input");
+    same(proof.files, [], "Package contents proof files");
+    return new Map();
+  }
+  validateArtifact(
+    proof.artifact,
+    proof.producer,
+    `openclaw-npm-${kind}-proof-${proof.producer.runId}-${proof.producer.runAttempt}`,
+  );
+  if (
+    !Array.isArray(proof.files) ||
+    proof.files.length === 0 ||
+    proof.files.length > 16 ||
+    proof.files.some(
+      (entry) =>
+        !isRecord(entry) ||
+        !/^[A-Za-z0-9][A-Za-z0-9_.-]*\.(?:json|md)$/u.test(entry.name) ||
+        !/^[a-f0-9]{64}$/u.test(entry.sha256),
+    ) ||
+    new Set(proof.files.map((entry) => entry.name)).size !== proof.files.length
+  ) {
+    throw new Error(`Invalid npm ${kind} proof file inventory.`);
+  }
+  const files = await downloadNpmArtifactFiles({
+    artifact: proof.artifact,
+    repository,
+    toolingSha,
+    token,
+    runGh,
+    fetchImpl,
+    expectedEntries: proof.files.map((entry) => entry.name),
+    maxEntryBytes: () => MAX_SDK_EVIDENCE_BYTES,
+  });
+  for (const entry of proof.files) {
+    if (hash(files.get(entry.name)) !== entry.sha256) {
+      throw new Error(`npm ${kind} proof file digest mismatch: ${entry.name}.`);
+    }
+  }
+  return files;
 }
 
 function resolveCurrentProducer(env, jobName, runGh = runReleaseToolingGh) {
@@ -490,21 +673,11 @@ export function prepareNpmPackageBundle({
       timeout: 30 * 60 * 1000,
     }),
 }) {
-  const sourceSha = execFileSync("git", ["-C", sourceDir, "rev-parse", "HEAD"], {
-    encoding: "utf8",
-  }).trim();
-  const root = readJson(join(sourceDir, "package.json"));
-  const sourceRefIsSha = /^[a-f0-9]{40}$/u.test(releaseRef);
-  const { releaseTag, baseTag } = resolveReleaseTagPackageIdentity(
-    requestedReleaseTag || (sourceRefIsSha ? `v${root.version}` : releaseRef),
-    root.version,
-  );
-  if (
-    (sourceRefIsSha && releaseRef !== sourceSha) ||
-    (!sourceRefIsSha && releaseRef !== releaseTag)
-  ) {
-    throw new Error("npm package source does not match the release ref.");
-  }
+  const { sourceSha, root, releaseTag, baseTag } = readReleaseSourceIdentity({
+    sourceDir,
+    releaseRef,
+    releaseTag: requestedReleaseTag,
+  });
   // A correction may retain base-version bytes only at the exact published base source.
   if (
     baseTag &&
@@ -616,14 +789,30 @@ export function describeNpmBundle({ directory, artifact, qualified = false }) {
   };
 }
 
-export function qualifyNpmPackageBundle({
+export async function qualifyNpmPackageBundle({
   descriptor,
   inputDir,
   outputDir,
   producer,
-  pluginSdkApi,
-  dependencyEvidenceDir,
+  sourceCheck,
+  sdkProof,
+  dependencyProof,
+  contentsProof,
+  token,
+  runGh = runReleaseToolingGh,
+  fetchImpl,
 }) {
+  validateProducer(producer, {
+    repository: descriptor.producer.repository,
+    toolingSha: descriptor.producer.workflowSha,
+    jobName: VERIFY_JOB_NAME,
+  });
+  validatePreparedNpmBundleDescriptor({
+    descriptor,
+    repository: producer.repository,
+    sourceSha: descriptor.source.sha,
+    toolingSha: producer.workflowSha,
+  });
   const files = new Map(
     ["package-bundle.json", ...packageInventory(descriptor).map((entry) => entry.tarballName)].map(
       (name) => [
@@ -636,6 +825,37 @@ export function qualifyNpmPackageBundle({
     ),
   );
   const prepared = verifyPreparedNpmBundleFiles({ descriptor, files });
+  const { repository, workflowSha: toolingSha } = descriptor.producer;
+  verifyNpmSourceCheck({
+    descriptor: sourceCheck,
+    repository,
+    sourceSha: descriptor.source.sha,
+    toolingSha,
+    runGh,
+  });
+  // Independent checks may overlap; only this join can mint publishable qualification.
+  // Authenticate every completed job and its exact bytes before creating the output.
+  const [sdkFiles, dependencyFiles] = await Promise.all(
+    [
+      ["sdk", sdkProof],
+      ["dependencies", dependencyProof],
+      ["contents", contentsProof],
+    ].map(([kind, proof]) =>
+      verifyNpmQualificationProof({
+        proof,
+        kind,
+        descriptor,
+        manifest: prepared,
+        token,
+        runGh,
+        fetchImpl,
+      }),
+    ),
+  );
+  const pluginSdkApi = JSON.parse(sdkFiles.get("plugin-sdk-api-release-evidence.json"));
+  if (!dependencyFiles.has("dependency-evidence-manifest.json")) {
+    throw new Error("Dependency qualification proof is missing its manifest.");
+  }
   mkdirSync(outputDir, { recursive: true });
   if (readdirSync(outputDir).length !== 0) {
     throw new Error("Qualified npm bundle output directory must be empty.");
@@ -643,12 +863,30 @@ export function qualifyNpmPackageBundle({
   for (const entry of packageInventory(descriptor)) {
     writeFileSync(join(outputDir, entry.tarballName), files.get(entry.tarballName));
   }
-  cpSync(dependencyEvidenceDir, join(outputDir, "dependency-evidence"), { recursive: true });
+  for (const [kind, evidenceFiles] of [
+    ["sdk", sdkFiles],
+    ["dependencies", dependencyFiles],
+  ]) {
+    const evidenceDir = join(inputDir, "qualification", kind);
+    mkdirSync(evidenceDir, { recursive: true });
+    for (const [name, bytes] of evidenceFiles) {
+      writeFileSync(join(evidenceDir, name), bytes, { flag: "wx" });
+    }
+  }
+  cpSync(join(inputDir, "qualification", "dependencies"), join(outputDir, "dependency-evidence"), {
+    recursive: true,
+  });
   const { schema: _schema, producer: _producer, ...identity } = prepared;
   const manifest = {
     version: 3,
     producer,
     preparedBundle: descriptor,
+    qualificationProofs: {
+      sourceCheck,
+      sdk: sdkProof,
+      dependencies: dependencyProof,
+      contents: contentsProof,
+    },
     ...identity,
     pluginSdkApi,
     dependencyEvidenceDir: "dependency-evidence",
@@ -684,8 +922,11 @@ async function main() {
         "release-ref",
         "release-tag",
         "npm-dist-tag",
-        "plugin-sdk-evidence",
-        "dependency-evidence-dir",
+        "proof-kind",
+        "source-check",
+        "sdk-proof",
+        "dependency-proof",
+        "contents-proof",
         "artifact-id",
         "artifact-name",
         "artifact-digest",
@@ -728,14 +969,35 @@ async function main() {
       npmDistTag: values["npm-dist-tag"],
       producer: resolveCurrentProducer(process.env, PREPARE_JOB_NAME),
     });
+  } else if (command === "proof") {
+    result = describeNpmQualificationProof({
+      kind: values["proof-kind"],
+      sourceDir: resolve(values["source-dir"]),
+      directory: values["input-dir"],
+      releaseRef: values["release-ref"],
+      releaseTag: values["release-tag"],
+      npmDistTag: values["npm-dist-tag"],
+      producer: resolveCurrentProducer(process.env, qualificationJobName(values["proof-kind"])),
+      artifact: {
+        id: values["artifact-id"],
+        name: values["artifact-name"],
+        digest: values["artifact-digest"],
+        runId: process.env.GITHUB_RUN_ID,
+        runAttempt: process.env.GITHUB_RUN_ATTEMPT,
+      },
+      preparedBundle: values.descriptor ? readJson(values.descriptor) : undefined,
+    });
   } else if (command === "qualify") {
-    result = qualifyNpmPackageBundle({
+    result = await qualifyNpmPackageBundle({
       descriptor: readJson(values.descriptor),
       inputDir: resolve(values["input-dir"]),
       outputDir: resolve(values["output-dir"]),
       producer: resolveCurrentProducer(process.env, VERIFY_JOB_NAME),
-      pluginSdkApi: readJson(values["plugin-sdk-evidence"], MAX_SDK_EVIDENCE_BYTES),
-      dependencyEvidenceDir: values["dependency-evidence-dir"],
+      sourceCheck: readJson(values["source-check"]),
+      sdkProof: readJson(values["sdk-proof"]),
+      dependencyProof: readJson(values["dependency-proof"]),
+      contentsProof: readJson(values["contents-proof"]),
+      token: process.env.GH_TOKEN,
     });
   } else if (command === "describe" || command === "describe-qualified") {
     result = describeNpmBundle({
@@ -751,7 +1013,7 @@ async function main() {
     });
   } else {
     throw new Error(
-      "Usage: npm-prepared-bundle.mjs <prepare|download|qualify|describe|describe-qualified> [options]",
+      "Usage: npm-prepared-bundle.mjs <prepare|download|proof|qualify|describe|describe-qualified> [options]",
     );
   }
   if (process.env.GITHUB_OUTPUT) {
@@ -760,6 +1022,8 @@ async function main() {
         process.env.GITHUB_OUTPUT,
         `tarball_path=${result.tarballPath}\ncore_tarball_dir=${result.coreTarballDir}\n`,
       );
+    } else if (command === "proof") {
+      appendFileSync(process.env.GITHUB_OUTPUT, `proof_json=${JSON.stringify(result)}\n`);
     } else if (command.startsWith("describe") || command === "source-evidence") {
       appendFileSync(process.env.GITHUB_OUTPUT, `bundle_json=${JSON.stringify(result)}\n`);
     } else {

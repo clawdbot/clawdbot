@@ -1,0 +1,32 @@
+title: Gateway config hot reload
+scenario:
+  id: gateway-config-hot-reload
+  surface: gateway
+  coverage:
+    primary:
+      - gateway.config-reload-hot-apply
+      - gateway.config-reload-hot-reload
+    secondary:
+      - gateway.config-reload-lifecycle
+  objective: Prove setting changes affect real Gateway HTTP, RPC, PTYs, nodes, push requests, and browser pages without replacing the Gateway boot.
+  successCriteria:
+    - Hot setting changes preserve the Gateway PID, boot identity, and original authenticated WebSocket.
+    - Real requests exercise endpoints, image limits, tool policy, CLI gating, terminal shells, HSTS, GitHub credentials, title generation, node routing, pairing, APNs relay settings, and observer output.
+    - Real browser reloads exercise environment presentation, external embeds, sandbox permissions, and favicon preferences.
+    - A startup-only terminal enablement change closes the original socket as a positive restart control.
+    - Disposable Testbox SSH with generated keys proves stale pairing probes cannot approve after a policy change.
+    - All external upstream fixtures and synthetic node/catalog behavior are identified in the evidence.
+  plugins: [qa-lab, browser]
+  docsRefs: [docs/gateway/configuration.md]
+  codeRefs:
+    - test/e2e/qa-lab/runtime/gateway-config-hot-reload-runtime.ts
+    - src/gateway/config-reload-plan.ts
+  execution:
+    kind: script
+    parallelSafe: false
+    path: test/e2e/qa-lab/runtime/gateway-config-hot-reload-runtime.ts
+    config:
+      requiredProviderMode: mock-openai
+    args: [--output-dir, "${outputDir}"]
+    timeoutMs: 600000
+    summary: Requires a disposable Linux Testbox with OPENCLAW_TESTBOX=1, Chromium, and sudo sshd. Real Gateway and browser behavior; simulated provider, GitHub, favicon, APNs, and node upstreams.

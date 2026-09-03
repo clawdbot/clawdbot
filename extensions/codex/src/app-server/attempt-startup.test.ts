@@ -1,6 +1,7 @@
 // Codex tests cover attempt startup plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   AgentHarnessPreflightError,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
@@ -32,6 +33,7 @@ import {
   resolveCodexAppServerRuntimeOptions,
   resolveCodexComputerUseConfig,
 } from "./config.js";
+import { setManagedCodexPluginRoot } from "./managed-binary.js";
 import { defaultCodexPluginMetadataCache } from "./plugin-metadata-cache.js";
 import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
 import { releaseCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.js";
@@ -86,9 +88,7 @@ vi.mock("./computer-use.js", async (importOriginal) => {
 
 const tempRoots = new Set<string>();
 
-const pluginConfig: CodexPluginConfig = {
-  appServer: { command: "codex" },
-};
+const pluginConfig: CodexPluginConfig = { appServer: { command: "codex" } };
 
 function startThreadWithHarness(
   startupTimeoutMs: number,
@@ -206,9 +206,7 @@ async function startIsolatedPairedAttempt(params: {
   return { result, sandbox, environmentId };
 }
 
-function threadStartResult(threadId = "thread-1") {
-  return createThreadStartResult(threadId, "/repo");
-}
+const threadStartResult = (threadId = "thread-1") => createThreadStartResult(threadId, "/repo");
 
 function isProcessAlive(pid: number): boolean {
   try {
@@ -225,6 +223,8 @@ describe("startCodexAttemptThread", () => {
     vi.stubEnv("CODEX_API_KEY", "");
     vi.stubEnv("OPENAI_API_KEY", "");
     clearSharedCodexAppServerClient();
+    // Direct runtime tests supply the plugin root normally owned by loader registration.
+    setManagedCodexPluginRoot(fileURLToPath(new URL("../../", import.meta.url)));
     defaultCodexPluginMetadataCache.clear();
     resetCodexTestBindingStore();
     desktopGeneration.current = undefined;
@@ -234,6 +234,7 @@ describe("startCodexAttemptThread", () => {
   afterEach(async () => {
     vi.useRealTimers();
     clearSharedCodexAppServerClient();
+    setManagedCodexPluginRoot(undefined);
     defaultCodexPluginMetadataCache.clear();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
@@ -485,12 +486,10 @@ describe("startCodexAttemptThread", () => {
       '[plugins."computer-use@openai-bundled"]\nenabled = true\n',
     );
 
-    const restart = result.restartContextEngineCodexThread();
-    const read = JSON.parse(await harness.waitForWrite(writesBeforeRestart));
-    expect(read.method).toBe("thread/read");
-    harness.send({ id: read.id, result: { thread: threadStartResult("thread-original").thread } });
-    await expect(restart).rejects.toThrow("codex app-server client is closed");
-    expect(harness.writes).toHaveLength(writesBeforeRestart + 1);
+    await expect(result.restartContextEngineCodexThread()).rejects.toThrow(
+      "codex app-server client is closed",
+    );
+    expect(harness.writes).toHaveLength(writesBeforeRestart);
 
     result.turnRoute.release();
     result.releaseSharedClientLease();
@@ -578,15 +577,17 @@ describe("startCodexAttemptThread", () => {
     const sibling = retainSharedCodexAppServerClientIfCurrent(harness.client);
     expect(sibling).toBeTypeOf("function");
     const before = harness.writes.length;
-    await expect(startThreadWithHarness(5_000, undefined, common).run).rejects.toMatchObject({
-      name: "CodexAdoptedThreadActiveError",
-    });
-    expect(harness.writes).toHaveLength(before);
-    const reacquired = retainSharedCodexAppServerClientIfCurrent(harness.client);
-    expect(reacquired).toBeTypeOf("function");
-    reacquired?.();
+    const refused = new AgentHarnessPreflightError("session owner revoked");
+    const attemptParams = createAttemptParams(paths);
+    const assertActive = () => {
+      throw refused;
+    };
+    const hostCapabilities = { ...attemptParams.hostCapabilities, assertActive };
+    const buildAttemptParams = () => ({ ...attemptParams, hostCapabilities });
+    await expect(
+      startThreadWithHarness(5_000, undefined, { ...common, buildAttemptParams }).run,
+    ).rejects.toBe(refused);
     sibling?.();
-    expect(harness.client.getCloseError()).toBeUndefined();
     const continued = await startThreadWithHarness(5_000, undefined, incognito).run;
     expect(continued.client).toBe(harness.client);
     expect(continued.thread.threadId).toBe(previous.thread.threadId);

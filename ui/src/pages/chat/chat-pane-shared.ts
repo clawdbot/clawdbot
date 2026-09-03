@@ -6,7 +6,7 @@ import { createDockPanelLayout } from "../../components/dock-panel-layout.ts";
 import type { BoardProvider } from "../../lib/board/provider.ts";
 import type { BoardFace, BoardVisibleChatDock } from "../../lib/board/settings.ts";
 import type { BoardSnapshot, BoardTab } from "../../lib/board/types.ts";
-import type { ChatAttachment, ChatGoalDraftMode } from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment, ChatGoalDraftMode, HumanMention } from "../../lib/chat/chat-types.ts";
 import { clampText } from "../../lib/format.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
@@ -19,6 +19,7 @@ export type PaneSessionHandoff = {
   attachments: ChatAttachment[];
   composerFallbacks?: ChatPageHost["chatComposerFallbackByScope"];
   draft: string;
+  mentions?: readonly HumanMention[];
   restore?: boolean;
   send?: boolean;
   storageFailed?: boolean;

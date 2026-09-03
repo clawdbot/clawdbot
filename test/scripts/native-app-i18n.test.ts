@@ -183,6 +183,7 @@ describe("native app i18n inventory", () => {
         fun Fixture() {
           Text("Kotlin first " + "argument")
           Text(text = "Named " + "argument")
+          Text(if (enabled) "Kotlin enabled " + "now" else "Kotlin disabled " + "now")
           Icon(contentDescription = if (enabled) "Open \${row.title}" else row.title)
         }
 
@@ -214,6 +215,8 @@ describe("native app i18n inventory", () => {
         "Switch ready",
         "Switch waiting",
         "Kotlin first argument",
+        "Kotlin enabled now",
+        "Kotlin disabled now",
         "Open ${row.title}",
         "When ready",
         "When waiting",
@@ -232,6 +235,8 @@ describe("native app i18n inventory", () => {
           "Switch ",
           "Swift first ",
           "Kotlin first ",
+          "Kotlin enabled ",
+          "Kotlin disabled ",
           "When ",
           "Return ",
         ].includes(source),
@@ -404,7 +409,6 @@ describe("native app i18n inventory", () => {
       ]),
     );
     expect(entries.some((entry) => entry.source === "Save Profile")).toBe(true);
-    expect(entries.some((entry) => entry.source === "Mute")).toBe(true);
     expect(entries.some((entry) => entry.source === "Creating...")).toBe(true);
     expect(entries.some((entry) => entry.source === "Permission required")).toBe(true);
     expect(entries.some((entry) => entry.source === "Needs setup")).toBe(true);

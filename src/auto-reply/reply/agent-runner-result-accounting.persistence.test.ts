@@ -395,6 +395,53 @@ describe("cancelled followup compaction accounting", () => {
 });
 
 describe.each(["ordinary", "followup"] as const)("%s context-pressure accounting", (lane) => {
+  it.each([
+    { runtimeOwned: true, finalizer: false },
+    { runtimeOwned: true, finalizer: true },
+    { runtimeOwned: false, finalizer: false },
+  ])(
+    "records runtime-selected models without inventing host fallback (owned: $runtimeOwned, finalizer: $finalizer)",
+    async ({ runtimeOwned, finalizer }) => {
+      const fixture = await createFixture();
+      const outer = { provider: "outer-provider", model: "outer-model" };
+      const selection = {
+        provider: diagnostic.provider,
+        model: finalizer ? "native-selected-model" : diagnostic.model,
+      };
+      const models = fixture.context.cfg.models!.providers!.openai!.models;
+      models.push({
+        ...models[0]!,
+        id: "native-selected-model",
+        cost: { input: 10, output: 20, cacheRead: 5, cacheWrite: 10 },
+      });
+      Object.assign(fixture.context.followupRun.run, outer);
+      const entry = fixture.context.activeSessionEntry!;
+      Object.assign(entry, { modelProvider: outer.provider, model: outer.model });
+      await fixture.replace(entry);
+
+      await fixture.account(lane, {
+        provider: diagnostic.provider,
+        model: diagnostic.model,
+        agentHarnessId: "codex",
+        ...(runtimeOwned ? { runtimeModelSelection: selection } : {}),
+        usage: { input: 120, output: 8 },
+      });
+
+      const persisted = fixture.read();
+      expect(persisted?.fallbackNotice === undefined).toBe(runtimeOwned);
+      expect(persisted).toMatchObject({
+        modelProvider: runtimeOwned ? selection.provider : outer.provider,
+        model: runtimeOwned ? selection.model : outer.model,
+        inputTokens: 120,
+        outputTokens: 8,
+        estimatedCostUsd: 0.000136,
+      });
+      if (runtimeOwned) {
+        expect(persisted?.agentHarnessId).toBe("codex");
+      }
+    },
+  );
+
   it("does not infer a durable target from publisher compaction metadata", async () => {
     const fixture = await createFixture();
     fixture.context.execution.autoCompactionCount = 2;

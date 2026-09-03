@@ -14,6 +14,7 @@ import {
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
+import * as runtimeUtils from "../../utils.js";
 import { VERSION } from "../../version.js";
 import { runDaemonRestart } from "../daemon-cli/lifecycle.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
@@ -106,7 +107,10 @@ vi.mock("../../gateway/probe.js", () => ({ probeGateway: mocks.probe }));
 vi.mock("../../daemon/systemd.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/systemd.js")>()),
   readSystemdServiceExecStart: mocks.command,
-  readSystemdServiceRuntime: async () => ({ status: mocks.running ? "running" : "stopped" }),
+  readSystemdServiceRuntime: async () => ({
+    status: mocks.running ? "running" : "stopped",
+    ...(mocks.running ? { pid: 4242 } : {}),
+  }),
   isSystemdServiceEnabled: async () => mocks.loaded,
   findInstalledSystemdGatewayScope: async () => null,
   isSystemdUserServiceAvailable: async () => true,
@@ -131,8 +135,7 @@ vi.mock("../../infra/gateway-processes.js", async (importOriginal) => ({
   signalVerifiedGatewayPidSync: mocks.signal,
 }));
 vi.mock("../../commands/doctor.js", () => ({ doctorCommand: mocks.doctor }));
-vi.mock("./update-command-config.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./update-command-config.js")>()),
+vi.mock("./update-command-config-snapshot.js", () => ({
   createUpdateConfigSnapshot: mocks.configSnapshot,
 }));
 vi.mock("./restart-helper.js", () => ({ runRestartScript: mocks.script }));
@@ -180,6 +183,10 @@ beforeEach(async () => {
     delete process.env[key];
   }
   process.env.HOME = root;
+  // This fixture models an installed service even though its manager calls are simulated.
+  const unitPath = path.join(root, ".config/systemd/user/openclaw-gateway.service");
+  await fs.mkdir(path.dirname(unitPath), { recursive: true });
+  await fs.writeFile(unitPath, "[Service]\nExecStart=/fixture/openclaw gateway\n");
   configPath = path.join(root, ".openclaw", "openclaw.json");
   await fs.mkdir(path.dirname(configPath));
   await fs.mkdir(path.join(root, "dist"));
@@ -277,6 +284,11 @@ describe("preserved update activation with real version guards", () => {
   ])(
     "handles $phase $denial denial for $channel $mode activation ($outcome)",
     async ({ mode, denial, outcome, channel, phase }) => {
+      let nowMs = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => nowMs);
+      vi.spyOn(runtimeUtils, "sleep").mockImplementation(async (ms) => {
+        nowMs += ms;
+      });
       const late = phase === "late";
       const serviceCommand = await mocks.command(process.env);
       if (!serviceCommand) {

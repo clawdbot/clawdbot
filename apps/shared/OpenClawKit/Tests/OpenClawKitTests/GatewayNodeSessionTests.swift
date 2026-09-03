@@ -388,6 +388,16 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         self.emitInbound(.success(.data(data)))
     }
 
+    func emitInvokeCancel(id: String) {
+        let frame: [String: Any] = [
+            "type": "event",
+            "event": "node.invoke.cancel",
+            "payload": ["invokeId": id, "nodeId": "test-node"],
+        ]
+        let data = (try? JSONSerialization.data(withJSONObject: frame)) ?? Data()
+        self.emitInbound(.success(.data(data)))
+    }
+
     private func emitInbound(_ result: ReceiveResult) {
         let handler = self.lock.withLock { () -> (@Sendable (ReceiveResult) -> Void)? in
             guard let handler = self.pendingReceiveHandler else {
@@ -1416,7 +1426,7 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
-    func `stale old invoke is rejected before onInvoke after route switch`() async throws {
+    func `route switch rejects a decoded invoke before detached admission`() async throws {
         let session = FakeGatewayWebSocketSession()
         let gateway = GatewayNodeSession()
         let invocations = DisconnectProbe()
@@ -1426,25 +1436,38 @@ struct GatewayNodeSessionTests {
             clientId: "openclaw-macos",
             clientDisplayName: "macOS Test")
 
-        try await gateway.connectForTest(testURL("ws://first.example.invalid"), options: options, session: session)
-        let oldRoute = try #require(await gateway.currentRoute())
+        let onInvoke: @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse = { request in
+            await invocations.record(request.id)
+            return BridgeInvokeResponse(id: request.id, ok: true)
+        }
+        try await gateway.connectForTest(
+            testURL("ws://first.example.invalid"),
+            options: options,
+            session: session,
+            onInvoke: onInvoke)
+        let oldSocket = try #require(session.latestTask())
+
+        func retireBeforeDetachedAdmission(to gateway: isolated GatewayNodeSession) async {
+            await gateway._test_handlePush(
+                nodeInvokePush(id: "stale-computer", command: OpenClawComputerCommand.act.rawValue),
+                socketGeneration: 1)
+            await gateway.disconnect()
+        }
+        await retireBeforeDetachedAdmission(to: gateway)
 
         try await gateway.connectForTest(
             testURL("ws://replacement.example.invalid"),
             options: options,
-            session: session)
+            session: session,
+            onInvoke: onInvoke)
+        let replacementSocket = try #require(session.latestTask())
+        replacementSocket.emitInvokeRequest(id: "current-computer", command: OpenClawComputerCommand.act.rawValue)
+        try await waitUntil("replacement invoke completed") {
+            replacementSocket.sentRequestCount(method: "node.invoke.result") == 1
+        }
 
-        let response = await gateway.invokeIfCurrentRoute(
-            BridgeInvokeRequest(id: "stale-computer", command: "computer.act", paramsJSON: "{}"),
-            expectedRoute: oldRoute,
-            onInvoke: { request in
-                await invocations.record(request.id)
-                return BridgeInvokeResponse(id: request.id, ok: true, payloadJSON: nil, error: nil)
-            })
-
-        #expect(response.ok == false)
-        #expect(response.error?.code == .unavailable)
-        #expect(await invocations.values() == [])
+        #expect(await invocations.values() == ["current-computer"])
+        #expect(oldSocket.sentRequestCount(method: "node.invoke.result") == 0)
         await gateway.disconnect()
     }
 
@@ -1508,80 +1531,35 @@ struct GatewayNodeSessionTests {
         await gateway.disconnect()
     }
 
-    @Test
-    func `route switch cancels an in flight push to talk start`() async throws {
-        let session = FakeGatewayWebSocketSession()
-        let gateway = GatewayNodeSession()
-        let invokeStarted = AsyncGate()
-        let cancellations = DisconnectProbe()
-        let options = nodeConnectOptions(caps: ["talk"], commands: ["talk.ptt.start"], clientId: "openclaw-ios")
-
-        try await gateway.connectForTest(testURL("ws://first.example.invalid"), options: options, session: session)
-        let route = try #require(await gateway.currentRoute())
-        let invoking = Task {
-            await gateway.invokeIfCurrentRoute(
-                BridgeInvokeRequest(id: "stale-ptt", command: "talk.ptt.start", paramsJSON: nil),
-                expectedRoute: route,
-                onInvoke: { request in
-                    await invokeStarted.wait()
-                    do {
-                        try await Task.sleep(nanoseconds: 60 * 1_000_000_000)
-                    } catch {
-                        await cancellations.record(request.id)
-                    }
-                    return BridgeInvokeResponse(
-                        id: request.id,
-                        ok: false,
-                        error: OpenClawNodeError(code: .unavailable, message: "UNAVAILABLE: route changed"))
-                })
-        }
-        try await waitUntil("push to talk invoke started") {
-            await invokeStarted.hasStarted()
-        }
-        await invokeStarted.release()
-
-        try await gateway.connectForTest(
-            testURL("ws://replacement.example.invalid"),
-            options: options,
-            session: session)
-
-        #expect(await (invoking.value).ok == false)
-        #expect(await cancellations.values() == ["stale-ptt"])
-        await gateway.disconnect()
-    }
-
-    @Test
-    func `route switch cancels queued PTZ control and waits for invoke cleanup`() async throws {
+    @Test(arguments: [
+        OpenClawComputerCommand.act.rawValue,
+        OpenClawCameraCommand.ptzControl.rawValue,
+        OpenClawTalkCommand.pttStart.rawValue,
+    ])
+    func `route switch cancels queued device work and waits for invoke cleanup`(command: String) async throws {
         let session = FakeGatewayWebSocketSession()
         let gateway = GatewayNodeSession()
         let invokeGate = AsyncGate()
         let cancellations = DisconnectProbe()
-        let options = nodeConnectOptions(
-            caps: ["camera"],
-            commands: [OpenClawCameraCommand.ptzControl.rawValue],
-            clientId: "openclaw-macos")
+        let options = nodeConnectOptions(commands: [command], clientId: "openclaw-macos")
 
-        try await gateway.connectForTest(testURL("ws://first.example.invalid"), options: options, session: session)
-        let route = try #require(await gateway.currentRoute())
-        let invoking = Task {
-            await gateway.invokeIfCurrentRoute(
-                BridgeInvokeRequest(
-                    id: "queued-ptz",
-                    command: OpenClawCameraCommand.ptzControl.rawValue,
-                    paramsJSON: nil),
-                expectedRoute: route,
-                onInvoke: { request in
-                    await invokeGate.wait()
-                    if Task.isCancelled {
-                        await cancellations.record(request.id)
-                    }
-                    return BridgeInvokeResponse(
-                        id: request.id,
-                        ok: false,
-                        error: OpenClawNodeError(code: .unavailable, message: "UNAVAILABLE: route changed"))
-                })
-        }
-        try await waitUntil("PTZ invoke queued before hardware admission") {
+        try await gateway.connectForTest(
+            testURL("ws://first.example.invalid"),
+            options: options,
+            session: session,
+            onInvoke: { request in
+                await invokeGate.wait()
+                if Task.isCancelled {
+                    await cancellations.record(request.id)
+                }
+                return BridgeInvokeResponse(
+                    id: request.id,
+                    ok: false,
+                    error: OpenClawNodeError(code: .unavailable, message: "UNAVAILABLE: route changed"))
+            })
+        let socket = try #require(session.latestTask())
+        socket.emitInvokeRequest(id: "queued-device-work", command: command)
+        try await waitUntil("invoke queued before device admission") {
             await invokeGate.hasStarted()
         }
 
@@ -1591,76 +1569,180 @@ struct GatewayNodeSessionTests {
                 options: options,
                 session: session)
         }
-        try await waitUntil("replacement detached old PTZ route") {
+        try await waitUntil("replacement detached old device route") {
             await gateway.currentRoute() == nil
         }
         #expect(session.snapshotMakeCount() == 1)
 
         await invokeGate.release()
-        #expect(await (invoking.value).ok == false)
         try await replacement.value
-        #expect(await cancellations.values() == ["queued-ptz"])
+        #expect(await cancellations.values() == ["queued-device-work"])
         #expect(session.snapshotMakeCount() == 2)
         await gateway.disconnect()
     }
 
-    @Test
-    func `node invoke cancel cancels queued PTZ control and preserves callback`() async throws {
+    @Test(arguments: [
+        OpenClawComputerCommand.act.rawValue,
+        OpenClawCameraCommand.ptzControl.rawValue,
+        OpenClawTalkCommand.pttStart.rawValue,
+        OpenClawSystemCommand.notify.rawValue,
+        OpenClawChatCommand.push.rawValue,
+        OpenClawWatchCommand.notify.rawValue,
+    ])
+    func `node invoke cancellation retires suspended side effects and preserves callbacks`(
+        command: String) async throws
+    {
         let session = FakeGatewayWebSocketSession()
         let gateway = GatewayNodeSession()
         let invokeGate = AsyncGate()
         let taskCancellations = DisconnectProbe()
         let admissions = DisconnectProbe()
         let callback = NodeInvokeControlProbe()
-        let options = nodeConnectOptions(
-            caps: ["camera"],
-            commands: [OpenClawCameraCommand.ptzControl.rawValue],
-            clientId: "openclaw-macos")
+        let options = nodeConnectOptions(commands: [command], clientId: "openclaw-macos")
 
         try await gateway.connectForTest(
             testURL("ws://gateway.example.invalid"),
             options: options,
             session: session,
+            onInvoke: { request in
+                await invokeGate.wait()
+                if Task.isCancelled {
+                    await taskCancellations.record(request.id)
+                    return BridgeInvokeResponse(
+                        id: request.id,
+                        ok: false,
+                        error: OpenClawNodeError(code: .unavailable, message: "UNAVAILABLE: canceled"))
+                }
+                await admissions.record(request.id)
+                return BridgeInvokeResponse(id: request.id, ok: true)
+            },
             onInvokeCancel: { invokeID in await callback.recordCancellation(invokeID) })
-        let route = try #require(await gateway.currentRoute())
-        let invoking = Task {
-            await gateway.invokeIfCurrentRoute(
-                BridgeInvokeRequest(
-                    id: "queued-ptz",
-                    command: OpenClawCameraCommand.ptzControl.rawValue,
-                    paramsJSON: nil),
-                expectedRoute: route,
-                onInvoke: { request in
-                    await invokeGate.wait()
-                    if Task.isCancelled {
-                        await taskCancellations.record(request.id)
-                        return BridgeInvokeResponse(
-                            id: request.id,
-                            ok: false,
-                            error: OpenClawNodeError(code: .unavailable, message: "UNAVAILABLE: canceled"))
-                    }
-                    await admissions.record(request.id)
-                    return BridgeInvokeResponse(id: request.id, ok: true)
-                })
-        }
-        try await waitUntil("PTZ invoke queued before explicit cancellation") {
+        let socket = try #require(session.latestTask())
+        socket.emitInvokeRequest(id: "suspended-effect", command: command)
+        try await waitUntil("invoke suspended before explicit cancellation") {
             await invokeGate.hasStarted()
         }
-
-        await gateway._test_handlePush(
-            .event(EventFrame(
-                type: "event",
-                event: "node.invoke.cancel",
-                payload: AnyCodable(["invokeId": AnyCodable("queued-ptz")]),
-                seq: nil,
-                stateversion: nil)),
-            socketGeneration: 1)
+        socket.emitInvokeCancel(id: "suspended-effect")
+        try await waitUntil("wire cancellation delivered") {
+            await (callback.values()).1 == ["suspended-effect"]
+        }
         await invokeGate.release()
+        try await waitUntil("cancelled invoke result returned") {
+            socket.sentRequestCount(method: "node.invoke.result") == 1
+        }
 
-        #expect(await (invoking.value).ok == false)
-        #expect(await taskCancellations.values() == ["queued-ptz"])
+        let result = try #require(socket.sentRequests(method: "node.invoke.result").first)
+        let params = try #require(result["params"] as? [String: Any])
+        #expect(params["id"] as? String == "suspended-effect")
+        #expect(params["ok"] as? Bool == false)
+        #expect(await taskCancellations.values() == ["suspended-effect"])
         #expect(await admissions.values() == [])
-        #expect(await (callback.values()).1 == ["queued-ptz"])
+        #expect(await (callback.values()).1 == ["suspended-effect"])
+        await gateway.disconnect()
+    }
+
+    @Test
+    func `node invoke cancellation before detached admission prevents the side effect`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let cancellation = InvokeCancellationFlag()
+        let admissions = DisconnectProbe()
+        let command = OpenClawCameraCommand.ptzControl.rawValue
+        try await gateway.connectForTest(
+            testURL("ws://gateway.example.invalid"),
+            options: nodeConnectOptions(commands: [command], clientId: "openclaw-macos"),
+            session: session,
+            onInvoke: { request in
+                #expect(cancellation.isCancelled(), "The cancel event must precede native admission")
+                guard !Task.isCancelled else {
+                    return BridgeInvokeResponse(id: request.id, ok: false)
+                }
+                await admissions.record(request.id)
+                return BridgeInvokeResponse(id: request.id, ok: true)
+            },
+            onInvokeCancel: { _ in cancellation.markCancelled() })
+
+        /// Both decoded frames arrive in one actor turn: detached work cannot
+        /// register between them. The socket tests above exercise wire decoding.
+        func deliverBeforeDetachedAdmission(to gateway: isolated GatewayNodeSession) async {
+            await gateway._test_handlePush(
+                nodeInvokePush(id: "cancel-before-admission", command: command),
+                socketGeneration: 1)
+            await gateway._test_handlePush(
+                .event(EventFrame(
+                    type: "event",
+                    event: "node.invoke.cancel",
+                    payload: AnyCodable(["invokeId": AnyCodable("cancel-before-admission")]),
+                    seq: nil,
+                    stateversion: nil)),
+                socketGeneration: 1)
+        }
+        await deliverBeforeDetachedAdmission(to: gateway)
+        let socket = try #require(session.latestTask())
+        try await waitUntil("early-cancel invoke settled") {
+            socket.sentRequestCount(method: "node.invoke.result") == 1
+        }
+
+        #expect(cancellation.isCancelled())
+        #expect(await admissions.values() == [])
+        let result = try #require(socket.sentRequests(method: "node.invoke.result").first)
+        let params = try #require(result["params"] as? [String: Any])
+        #expect(params["ok"] as? Bool == false)
+        await gateway.disconnect()
+    }
+
+    @Test(arguments: [
+        OpenClawSystemCommand.notify.rawValue,
+        OpenClawChatCommand.push.rawValue,
+        OpenClawWatchCommand.notify.rawValue,
+    ])
+    func `route replacement cancels notification work without awaiting its permission callback`(
+        command: String) async throws
+    {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let permission = AsyncGate()
+        let settled = DisconnectProbe()
+        let cancellation = InvokeCancellationFlag()
+        let options = nodeConnectOptions(commands: [command], clientId: "openclaw-ios")
+        try await gateway.connectForTest(
+            testURL("ws://first.example.invalid"),
+            options: options,
+            session: session,
+            onInvoke: { request in
+                await permission.wait()
+                if Task.isCancelled {
+                    cancellation.markCancelled()
+                }
+                await settled.record(request.id)
+                return BridgeInvokeResponse(id: request.id, ok: !Task.isCancelled)
+            })
+        let firstSocket = try #require(session.latestTask())
+        firstSocket.emitInvokeRequest(id: "pending-permission", command: command)
+        try await waitUntil("permission callback suspended") { await permission.hasStarted() }
+
+        let replacement = Task {
+            try await gateway.connectForTest(
+                testURL("ws://replacement.example.invalid"),
+                options: options,
+                session: session)
+        }
+        do {
+            try await waitUntil("replacement can connect before permission returns", timeoutSeconds: 2) {
+                session.snapshotMakeCount() == 2
+            }
+        } catch {
+            await permission.release()
+            _ = try? await replacement.value
+            await gateway.disconnect()
+            throw error
+        }
+        try await replacement.value
+        #expect(await settled.values().isEmpty)
+        await permission.release()
+        try await waitUntil("retired permission callback returned") { await !settled.values().isEmpty }
+        #expect(cancellation.isCancelled())
+        #expect(firstSocket.sentRequestCount(method: "node.invoke.result") == 0)
         await gateway.disconnect()
     }
 

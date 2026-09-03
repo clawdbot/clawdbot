@@ -243,7 +243,7 @@ export function readTranscriptSnapshot(
 
 /** Reads transcript rows without decoding payloads for snapshot comparison. */
 export function readTranscriptEventRows(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,
 ): SqliteTranscriptSnapshotRow[] {
   const db = getSessionKysely(database.db);
@@ -472,7 +472,7 @@ export async function findTranscriptEvent(
 }
 
 export function findTranscriptEventInDatabase(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,
   match: (event: TranscriptEvent) => boolean,
 ): { event: TranscriptEvent } | undefined {

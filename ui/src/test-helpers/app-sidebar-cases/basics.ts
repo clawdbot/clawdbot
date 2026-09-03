@@ -128,7 +128,7 @@ describe("AppSidebar new session navigation", () => {
         capabilities: {
           continueSession: true,
           archive: false,
-          createSession: { model: "anthropic/claude-opus-4-8" },
+          startTerminal: true,
         },
         hosts: [],
       },
@@ -289,9 +289,7 @@ describe("AppSidebar agent chip", () => {
     sidebar.offline = true;
     await sidebar.updateComplete;
     const card = sidebar.querySelector<HTMLButtonElement>(".sidebar-identity-card");
-    expect(card?.querySelector(".sidebar-identity-card__name")?.textContent?.trim()).toBe(
-      "Account",
-    );
+    expect(card?.querySelector(".sidebar-identity-card__name")?.textContent?.trim()).toBe("Owner");
     expect(card?.querySelector(".sidebar-identity-card__subtitle")).toBeNull();
     const connectionStatus = sidebar.querySelector(".sidebar-footer-bar__status");
     expect(connectionStatus?.getAttribute("aria-live")).toBe("polite");

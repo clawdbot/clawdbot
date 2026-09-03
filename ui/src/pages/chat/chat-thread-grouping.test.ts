@@ -172,3 +172,65 @@ describe("forwarded source-session grouping", () => {
     expect(refreshed[0]).not.toBe(initial[0]);
   });
 });
+
+describe("cached group content classification", () => {
+  beforeEach(() => resetChatThreadState());
+
+  it.each(["user", "assistant", "toolResult"])(
+    "preserves %s messages when normalization skips malformed content blocks",
+    (role) => {
+      for (const content of [[null], [null, { type: "text", text: "Still visible" }]]) {
+        const message = { role, content };
+        expect(groupMessages([{ kind: "message", key: "malformed", message }])).toMatchObject([
+          { kind: "group", messages: [{ key: "malformed", message }] },
+        ]);
+      }
+    },
+  );
+
+  it("keeps media visible and folds commentary after the same message changes in place", () => {
+    const content: Record<string, unknown>[] = [
+      { type: "image", url: "https://example.com/diagram.png" },
+    ];
+    const preview = {
+      role: "assistant",
+      content,
+      timestamp: 2,
+    };
+    const messages = [
+      { role: "user", content: "Build a diagram", timestamp: 1 },
+      preview,
+      {
+        role: "toolResult",
+        toolCallId: "render-diagram",
+        toolName: "render",
+        content: "Ready",
+        timestamp: 3,
+      },
+      { role: "assistant", content: "Done", timestamp: 4 },
+    ];
+    const project = () =>
+      collapseCompletedTurnWork(cachedGroups([...messages]), {
+        sessionKey: "agent:target:dashboard:history",
+        runWorking: false,
+      });
+
+    expect(project()).toMatchObject([
+      { kind: "group", role: "user" },
+      { kind: "group", role: "assistant", messages: [{ message: preview }] },
+      { kind: "work-group", groups: [{ role: "tool" }] },
+      { kind: "group", role: "assistant" },
+    ]);
+
+    preview.content.splice(0, 1, { type: "text", text: "Preparing a diagram" });
+
+    expect(project()).toMatchObject([
+      { kind: "group", role: "user" },
+      {
+        kind: "work-group",
+        groups: [{ role: "assistant", messages: [{ message: preview }] }, { role: "tool" }],
+      },
+      { kind: "group", role: "assistant" },
+    ]);
+  });
+});

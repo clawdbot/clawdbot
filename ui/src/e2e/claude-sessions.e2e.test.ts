@@ -613,10 +613,10 @@ suite.define(() => {
     await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
     const initialReadCount = (await gateway.getRequests("sessions.catalog.read")).length;
     await gateway.deferNext("sessions.catalog.read");
-    await thread.evaluate((element) => {
-      element.scrollTop = 0;
-      element.dispatchEvent(new Event("scroll"));
-    });
+    // Reader input cancels pending restoration; a direct scrollTop write can
+    // be overwritten before the history sentinel observes the top boundary.
+    await thread.hover();
+    await page.mouse.wheel(0, -10_000);
     await page.clock.runFor(100);
     await catalogPane.locator(".chat-virtual-row").first().waitFor();
     await expect

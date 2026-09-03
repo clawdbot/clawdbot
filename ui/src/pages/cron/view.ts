@@ -47,7 +47,7 @@ import {
   isCronJobRunning,
   resolveCronJobLastRunStatus,
 } from "../../lib/cron-status.ts";
-import { parseCronEveryMs } from "../../lib/cron/decimal.ts";
+import { parseCronDurationMs } from "../../lib/cron/decimal.ts";
 import type {
   CronFieldErrors,
   CronFieldKey,
@@ -92,6 +92,7 @@ type CronProps = {
   error: string | null;
   busy: boolean;
   form: CronFormState;
+  heartbeatScratch: string;
   fieldErrors: CronFieldErrors;
   canSubmit: boolean;
   editingJob: CronJob | null;
@@ -1377,6 +1378,8 @@ function renderPromptSection(
   // block carries no aria-invalid/describedby because validateCronForm skips payloadText
   // for locked payloads, so this branch can never render a payload error.
   const codeLanguage = ctx.payloadLocked ? CRON_PAYLOAD_CODE_LANGUAGES[props.form.payloadKind] : "";
+  const payloadText =
+    props.form.payloadKind === "heartbeat" ? props.heartbeatScratch : props.form.payloadText;
   const promptRow = renderFieldRow({
     label: promptLabel,
     controlId: codeLanguage ? "" : "cron-payload-text",
@@ -1395,7 +1398,7 @@ function renderPromptSection(
             tabindex="0"
             aria-label=${promptLabel}
           ><code class="hljs">${unsafeHTML(
-            highlightCodeHtml(props.form.payloadText, codeLanguage),
+            highlightCodeHtml(payloadText, codeLanguage),
           )}</code></pre>
         `
       : html`
@@ -1403,7 +1406,7 @@ function renderPromptSection(
             id="cron-payload-text"
             class="settings-input"
             rows="6"
-            .value=${props.form.payloadText}
+            .value=${payloadText}
             ?readonly=${ctx.payloadLocked}
             aria-required="true"
             placeholder=${t("cron.form.promptPlaceholder")}
@@ -1515,7 +1518,7 @@ function renderGeneralSection(props: CronProps) {
 function describeFormSchedule(form: CronFormState): string | null {
   if (form.scheduleKind === "every") {
     const amount = form.everyAmount.trim();
-    if (parseCronEveryMs(amount, form.everyUnit) === undefined) {
+    if (parseCronDurationMs(amount, form.everyUnit) === undefined) {
       return null;
     }
     if (Number(amount) === 1) {
@@ -1947,13 +1950,13 @@ function renderFailureAlertRows(props: CronProps, channelOptions: readonly Chann
             label: t("cron.form.failureAlertAfter"),
             help: t("cron.form.failureAlertAfterHelp"),
             errorKey: "failureAlertAfter",
-            placeholder: "2",
+            placeholder: t("cron.form.failureAlertInherit"),
           })}
           ${renderCronInputField(props, "failureAlertCooldownSeconds", {
             label: t("cron.form.failureAlertCooldown"),
             help: t("cron.form.failureAlertCooldownHelp"),
             errorKey: "failureAlertCooldownSeconds",
-            placeholder: "3600",
+            placeholder: t("cron.form.failureAlertInherit"),
           })}
           ${renderCronSelectField(props, "failureAlertChannel", {
             label: t("cron.form.failureAlertChannel"),
@@ -1969,8 +1972,8 @@ function renderFailureAlertRows(props: CronProps, channelOptions: readonly Chann
           })}
           ${renderCronSelectField(props, "failureAlertDeliveryMode", {
             label: t("cron.form.failureAlertMode"),
-            value: props.form.failureAlertDeliveryMode || "announce",
             options: [
+              { value: "", label: t("cron.form.failureAlertInherit") },
               { value: "announce", label: t("cron.form.failureAlertAnnounce") },
               { value: "webhook", label: t("cron.form.failureAlertWebhook") },
             ],

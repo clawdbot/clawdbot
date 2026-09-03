@@ -90,6 +90,9 @@ export async function runWriteConfigHealth(
           ...(ctx.configResult.explicitSetPaths
             ? { explicitSetPaths: ctx.configResult.explicitSetPaths }
             : {}),
+          persistCanonicalAgentRoster: configResultWritePending
+            ? ctx.configResult.persistCanonicalAgentRoster
+            : undefined,
           preservedLegacyRootKeys: ctx.configResult.preservedLegacyRootKeys,
           ...(legacyParentVersionOverride
             ? { lastTouchedVersionOverride: legacyParentVersionOverride }

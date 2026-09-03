@@ -202,13 +202,13 @@ export function renderApplicationShell(host: ShellViewHost) {
   const lazyElementState = host.lazyCustomElements.visibleState;
   const activeRoute = host.routeState.routeId ?? "chat";
   const sessionRoute = isSessionRouteId(activeRoute);
-  // Chat has an offline outbox, New Session keeps a local draft, and Appearance
-  // persists local preference intent for replay. Their server actions are
-  // independently gated; other pages cannot submit useful disconnected work.
+  // Session routes have an offline outbox, New Session keeps a local draft, and
+  // Appearance persists local preference intent for replay. Their server actions
+  // are independently gated; other pages cannot submit useful disconnected work.
   const pageActionsBlocked =
     gatewaySnapshot.phase === "reload-required" ||
     (!gatewayConnected &&
-      activeRoute !== "chat" &&
+      !sessionRoute &&
       activeRoute !== "new-session" &&
       activeRoute !== "appearance");
   // Plugin tabs share one route; the search picks the active item.
@@ -253,15 +253,13 @@ export function renderApplicationShell(host: ShellViewHost) {
     navDrawerOpen,
     mobileNavLayout,
   });
-  if (
-    floatingSidebarAttentionVisible({
-      navigationSurfaceHidden,
-      mobileNavLayout,
-      onboarding,
-      settingsTakeover,
-      compact: mergedChatChrome,
-    })
-  ) {
+  const floatingAttentionVisible = floatingSidebarAttentionVisible({
+    navigationSurfaceHidden,
+    mobileNavLayout,
+    onboarding,
+    compact: mergedChatChrome,
+  });
+  if (onboarding || floatingAttentionVisible) {
     host.lazyCustomElements.preload(SIDEBAR_ATTENTION_ELEMENT, { reportError: true });
   }
   const shellWidth = Math.max(globalThis.innerWidth || 0, NAV_WIDTH_MAX);
@@ -306,6 +304,7 @@ export function renderApplicationShell(host: ShellViewHost) {
       connected: gatewayConnected,
       offline: gatewaySnapshot.offlineStable,
       restartPending: gatewaySnapshot.restartPending === true,
+      suspensionPhase: gatewaySnapshot.suspensionPhase,
       queuedOutboxCount: storedOutboxes?.total ?? 0,
       lastError: gatewaySnapshot.lastError,
       outboxAttentionCountForSession: storedOutboxes?.attentionCountForSession ?? (() => 0),
@@ -349,6 +348,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         activeHash: host.routeState.location?.hash ?? "",
         offline: gatewaySnapshot.offlineStable,
         restartPending: gatewaySnapshot.restartPending,
+        suspensionPhase: gatewaySnapshot.suspensionPhase,
         queuedOutboxCount: storedOutboxes?.total ?? 0,
         lastError: gatewaySnapshot.lastError,
         gatewayVersion: config.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? "",
@@ -574,7 +574,6 @@ export function renderApplicationShell(host: ShellViewHost) {
           navigationSurfaceHidden,
           mobileNavLayout,
           onboarding,
-          settingsTakeover,
           compact: mergedChatChrome,
           updateAvailable: overlaySnapshot.updateAvailable,
           updateSchedule: overlaySnapshot.updateSchedule,

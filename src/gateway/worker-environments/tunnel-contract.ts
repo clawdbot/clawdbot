@@ -45,7 +45,10 @@ export type WorkerTunnelRequest = {
 };
 
 /** Provider teardown fences local work first; only its confirmed result releases physical ownership. */
-export type WorkerTunnelStopReason = "provider-destroying" | "provider-destroyed";
+export type WorkerTunnelStopReason =
+  | "provider-destroying"
+  | "provider-destroyed"
+  | "operator-abandon";
 
 export type WorkerWorkspaceCommand = {
   argv: readonly string[];

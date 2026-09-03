@@ -471,6 +471,7 @@ final class NodeAppModel {
     // Secondary "operator" connection: used for chat/talk/config/voicewake requests.
     private let operatorGateway = GatewayNodeSession()
     private var nodeGatewayTask: Task<Void, Never>?
+    @ObservationIgnored private var nodeHostStatsTask: Task<Void, Never>?
     private var operatorGatewayTask: Task<Void, Never>?
     @ObservationIgnored private var gatewaySessionResetTask: Task<Void, Never>?
     @ObservationIgnored private var gatewaySessionResetGeneration: UInt64 = 0
@@ -2568,6 +2569,7 @@ final class NodeAppModel {
 
         let shouldSpeak = params.speak ?? true
         let status = await notificationAuthorizationStatus()
+        try Task.checkCancellation()
         let notificationsAllowed = Self.isNotificationServingEnabled(status)
         if !notificationsAllowed, !shouldSpeak {
             return BridgeInvokeResponse(
@@ -2599,6 +2601,9 @@ final class NodeAppModel {
         }
 
         if shouldSpeak {
+            try Task.checkCancellation()
+            // This synchronous handoff commits speech, like enqueueing a notification;
+            // playback intentionally outlives the command's immediate receipt.
             let toSpeak = text
             Task { @MainActor in
                 try? await TalkSystemSpeechSynthesizer.shared.speak(text: toSpeak)
@@ -3212,38 +3217,34 @@ extension NodeAppModel {
                         code: .invalidRequest,
                         message: "INVALID_REQUEST: empty watch notification"))
             }
-            do {
-                let gatewayStableID = currentWatchChatGatewayStableID()
-                self.watchMessageOutbox.recordPromptRoute(
-                    promptID: normalizedParams.promptId,
-                    gatewayStableID: gatewayStableID)
-                let result = try await watchMessagingService.sendNotification(
-                    id: req.id,
-                    params: normalizedParams,
-                    gatewayStableID: gatewayStableID)
-                if result.queuedForDelivery || !result.deliveredImmediately {
-                    let invokeID = req.id
-                    Task { @MainActor in
-                        await WatchPromptNotificationBridge.scheduleMirroredWatchPromptNotificationIfNeeded(
-                            invokeID: invokeID,
-                            params: normalizedParams,
-                            gatewayStableID: gatewayStableID,
-                            sendResult: result)
-                    }
+            let gatewayStableID = currentWatchChatGatewayStableID()
+            self.watchMessageOutbox.recordPromptRoute(
+                promptID: normalizedParams.promptId,
+                gatewayStableID: gatewayStableID)
+            let result = try await watchMessagingService.sendNotification(
+                id: req.id,
+                params: normalizedParams,
+                gatewayStableID: gatewayStableID)
+            try Task.checkCancellation()
+            if result.queuedForDelivery || !result.deliveredImmediately {
+                let invokeID = req.id
+                let notificationCenter = self.notificationCenter
+                // Watch delivery is committed. The accepted best-effort phone mirror
+                // intentionally outlives this invoke's receipt and cancellation owner.
+                Task { @MainActor in
+                    await WatchPromptNotificationBridge.scheduleMirroredWatchPromptNotificationIfNeeded(
+                        invokeID: invokeID,
+                        params: normalizedParams,
+                        gatewayStableID: gatewayStableID,
+                        sendResult: result,
+                        notificationCenter: notificationCenter)
                 }
-                let payload = OpenClawWatchNotifyPayload(
-                    deliveredImmediately: result.deliveredImmediately,
-                    queuedForDelivery: result.queuedForDelivery,
-                    transport: result.transport)
-                return try Self.successfulInvokeResponse(req, payload: payload)
-            } catch {
-                return BridgeInvokeResponse(
-                    id: req.id,
-                    ok: false,
-                    error: OpenClawNodeError(
-                        code: .unavailable,
-                        message: error.localizedDescription))
             }
+            let payload = OpenClawWatchNotifyPayload(
+                deliveredImmediately: result.deliveredImmediately,
+                queuedForDelivery: result.queuedForDelivery,
+                transport: result.transport)
+            return try Self.successfulInvokeResponse(req, payload: payload)
         default:
             return Self.unknownInvokeResponse(req)
         }
@@ -3587,6 +3588,7 @@ extension NodeAppModel {
         }
 
         self.gatewayRouteGeneration &+= 1
+        self.stopNodeHostStatsPublisher()
         self.activeGatewayConnectConfig = nextConfig
         prepareForGatewayConnect(
             stableID: effectiveStableID,
@@ -3679,6 +3681,7 @@ extension NodeAppModel {
         self.talkMode.updateGatewayConnected(false)
         self.voiceWake.invalidatePendingCommand()
         self.gatewayRouteGeneration &+= 1
+        self.stopNodeHostStatsPublisher()
         nodeGatewayTask?.cancel()
         self.nodeGatewayTask = nil
         operatorGatewayTask?.cancel()
@@ -4416,6 +4419,8 @@ extension NodeAppModel {
         let shouldContinue = self.gatewayRouteCheck(
             generation: routeGeneration,
             stableID: stableID)
+        await self.startNodeHostStatsPublisher(shouldContinue: shouldContinue)
+        guard shouldContinue() else { return }
         await onNodeGatewayConnected(shouldContinue: shouldContinue)
         guard shouldContinue() else { return }
         SignificantLocationMonitor.startIfNeeded(
@@ -4604,7 +4609,50 @@ extension NodeAppModel {
 
     private func handleNodeGatewayRouteInvalidated(routeGeneration: UInt64, stableID: String) {
         guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID) else { return }
+        self.stopNodeHostStatsPublisher()
         self.invalidateNodePushToTalkRoute()
+    }
+
+    private func stopNodeHostStatsPublisher() {
+        self.nodeHostStatsTask?.cancel()
+        self.nodeHostStatsTask = nil
+    }
+
+    private func startNodeHostStatsPublisher(
+        shouldContinue: @escaping @MainActor @Sendable () -> Bool) async
+    {
+        self.stopNodeHostStatsPublisher()
+        guard let route = await self.nodeGateway.currentRoute(), shouldContinue(), self.gatewayConnected else { return }
+        let gateway = self.nodeGateway
+        self.nodeHostStatsTask = Task {
+            var failureLogged = false
+            let logger = Logger(subsystem: "ai.openclawfoundation.app", category: "NodeHostStats")
+            // App route generations survive socket reconnects; the captured route fences both.
+            while !Task.isCancelled, shouldContinue(), await gateway.currentRoute() == route {
+                guard !Task.isCancelled, shouldContinue() else { return }
+                let sent: Bool
+                do {
+                    let payload = try NodeHostStatsReporter.makePayload()
+                    let payloadJSON = try Self.encodePayload(payload)
+                    sent = await gateway.sendEvent(
+                        event: NodeHostStatsReporter.eventName,
+                        payloadJSON: payloadJSON,
+                        ifCurrentRoute: route)
+                } catch {
+                    sent = false
+                }
+                guard !Task.isCancelled, shouldContinue() else { return }
+                if !sent, !failureLogged {
+                    logger.debug("Node host stats publish failed")
+                    failureLogged = true
+                }
+                do {
+                    try await Task.sleep(for: .seconds(NodeHostStatsReporter.intervalSeconds))
+                } catch {
+                    return
+                }
+            }
+        }
     }
 
     func invalidateNodePushToTalkRoute() {

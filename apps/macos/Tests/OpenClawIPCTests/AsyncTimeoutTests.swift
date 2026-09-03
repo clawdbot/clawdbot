@@ -210,10 +210,11 @@ struct AsyncTimeoutTests {
         }
 
         task.cancel()
+        let cancelledWhenCallReturned = cancellation.cancelled()
+        #expect(cancelledWhenCallReturned, "Cancellation must reach the operation before cancel() returns")
         await #expect(throws: CancellationError.self) {
             try await task.value
         }
-        #expect(cancellation.cancelled())
         #expect(await !operation.finished())
 
         await operation.release()

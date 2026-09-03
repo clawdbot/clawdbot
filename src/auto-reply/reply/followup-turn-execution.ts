@@ -240,10 +240,10 @@ export async function executeFollowupTurn(params: {
           )
       : undefined,
     onCompactionEnd: sourceOpts?.onCompactionEnd
-      ? () =>
+      ? (payload) =>
           enqueueProgressResult(async () =>
             progressAllowed()
-              ? (await settleProgressVisibilityCallbackResult(sourceOpts.onCompactionEnd!()))
+              ? (await settleProgressVisibilityCallbackResult(sourceOpts.onCompactionEnd!(payload)))
                   .visible
               : false,
           )

@@ -19,6 +19,7 @@ import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const FULL_RELEASE = ".github/workflows/full-release-validation.yml";
+const FULL_RELEASE_ARTIFACTS = ".github/workflows/full-release-artifacts.yml";
 const RELEASE_CHECKS = ".github/workflows/openclaw-release-checks.yml";
 const PACKAGE_ACCEPTANCE = ".github/workflows/package-acceptance.yml";
 const PLUGIN_PRERELEASE = ".github/workflows/plugin-prerelease.yml";
@@ -550,7 +551,10 @@ describe("release validation no-push transport", () => {
     expect(candidateAcquisition.if).toContain(
       "needs.resolve_target.outputs.candidate_required == 'true'",
     );
-    expect(candidateAcquisition.uses).toBe("./.github/workflows/full-release-candidate.yml");
+    expect(candidateAcquisition.env?.ARTIFACT_STAGE).toBe("candidate");
+    expect(job(readWorkflow(FULL_RELEASE_ARTIFACTS), "candidate").uses).toBe(
+      "./.github/workflows/full-release-candidate.yml",
+    );
     expect(capture.run).toContain(
       "release_check_groups=(install-smoke cross-os package qa-parity)",
     );
@@ -768,7 +772,6 @@ describe("release validation no-push transport", () => {
   });
 
   it.each([
-    "all",
     "ci",
     "plugin-prerelease",
     "install-smoke",
@@ -782,7 +785,7 @@ describe("release validation no-push transport", () => {
     const { output, result } = executeParentFilterValidation(group, "", "windows/packaged-upgrade");
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("cross_os_suite_filter requires rerun_group=cross-os");
+    expect(result.stderr).toContain("cross_os_suite_filter requires rerun_group=all or cross-os");
     expect(output).toBe("");
   });
 
@@ -790,6 +793,7 @@ describe("release validation no-push transport", () => {
     ["qa-live", "qa-live-matrix", ""],
     ["live-e2e", " Repo-E2E,\trepo-smoke ", ""],
     ["cross-os", "", " Windows/Packaged-Upgrade "],
+    ["all", "", " Ubuntu,macOS "],
   ])(
     "parent accepts rerun_group=%s with its owned selector",
     (group, liveSuiteFilter, crossOsSuiteFilter) => {
@@ -881,13 +885,13 @@ describe("release validation no-push transport", () => {
     },
   );
 
-  it.each(["all", "install-smoke", "live-e2e", "package", "qa", "qa-parity", "qa-live"])(
+  it.each(["install-smoke", "live-e2e", "package", "qa", "qa-parity", "qa-live"])(
     "rejects a cross-OS selector with rerun_group=%s",
     (group) => {
       const { result } = executeReleaseGroupCapture(group, false, "", "windows/packaged-upgrade");
 
       expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("cross_os_suite_filter requires rerun_group=cross-os");
+      expect(result.stderr).toContain("cross_os_suite_filter requires rerun_group=all or cross-os");
     },
   );
 
@@ -900,10 +904,29 @@ describe("release validation no-push transport", () => {
     expect(outputs.rerun_group).toBe(group);
   });
 
-  it("accepts a cross-OS selector only for the cross-OS group", () => {
-    const outputs = runReleaseGroupCapture("cross-os", false, "", "windows/packaged-upgrade");
-    expect(outputs.cross_os_suite_filter).toBe("windows/packaged-upgrade");
+  it.each([
+    ["cross-os", "windows/packaged-upgrade"],
+    ["all", "ubuntu,macos"],
+    ["all", "ubuntu/packaged-fresh,ubuntu/installer-fresh,ubuntu/packaged-upgrade"],
+  ])("accepts cross-OS selection %s/%s without changing scheduled groups", (group, filter) => {
+    const outputs = runReleaseGroupCapture(group, false, "", filter);
+    const unfiltered = runReleaseGroupCapture(group);
+    expect(outputs).toEqual({ ...unfiltered, cross_os_suite_filter: filter });
+    expect(outputs.cross_os_scheduled).toBe("true");
   });
+
+  it.each(["windows,macos", "packaged-fresh", "ubuntu/packaged-upgrade"])(
+    "rejects all-group selection %s that omits required Linux suites at either entry point",
+    (filter) => {
+      for (const { result } of [
+        executeParentFilterValidation("all", "", filter),
+        executeReleaseGroupCapture("all", false, "", filter),
+      ]) {
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("requires all Linux cross-OS suites");
+      }
+    },
+  );
 
   it("builds planned live images locally without entering pull fallback", () => {
     const workflow = readWorkflow(LIVE_E2E);
@@ -1005,7 +1028,7 @@ describe("release validation no-push transport", () => {
 
   it("keeps every local reusable-workflow permission request within its caller ceiling", () => {
     const readOnlyCalls = [
-      [FULL_RELEASE, "candidate_acquisition"],
+      [FULL_RELEASE_ARTIFACTS, "candidate"],
       [PLUGIN_PRERELEASE, "plugin-prerelease-docker-suite"],
       [RELEASE_CHECKS, "live_repo_e2e_release_checks"],
       [RELEASE_CHECKS, "docker_e2e_release_checks"],

@@ -296,8 +296,9 @@ NODE
 node "$ROOT_DIR/scripts/prepare-apple-mermaid.mjs"
 
 # pnpm build owns the Control UI and content-checked build stamps as well.
-mkdir -p "$(dirname "$APP_DESTINATION")"
-APP_STAGE_DIR="$(mktemp -d "$ROOT_DIR/dist/.openclaw-package.XXXXXX")"
+# Private Swift and worker staging must stay outside the published dist tree.
+mkdir -p "$(dirname "$APP_DESTINATION")" "$ROOT_DIR/.artifacts"
+APP_STAGE_DIR="$(mktemp -d "$ROOT_DIR/.artifacts/.openclaw-package.XXXXXX")"
 APP_ROOT="$APP_STAGE_DIR/OpenClaw.app"
 
 echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [${BUILD_ARCHS[*]}]"
@@ -563,7 +564,7 @@ fi
 "$ROOT_DIR/scripts/codesign-mac-app.sh" "$APP_ROOT"
 codesign --verify --deep --strict "$APP_ROOT"
 for arch in "${BUILD_ARCHS[@]}"; do
-  env -i HOME="$APP_STAGE_DIR" PATH="/usr/bin:/bin:/usr/sbin:/sbin" TMPDIR="$APP_STAGE_DIR" \
+  env -i HOME="$APP_STAGE_DIR" PATH="/usr/bin:/bin:/usr/sbin:/sbin" TMPDIR="${TMPDIR:-/tmp}" \
     "$APP_ROOT/Contents/Resources/node-worker/$arch/bin/node" \
     "$ROOT_DIR/scripts/verify-mac-node-worker.mjs" \
     "$APP_ROOT/Contents/Resources/node-worker/$arch" "$ROOT_DIR/dist/build-info.json"

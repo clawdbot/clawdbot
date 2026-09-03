@@ -452,13 +452,18 @@ async function persistProviderAuthResult(params: {
       throw error;
     }
     persistedProfiles.push(profile);
-    await promoteAuthProfileInOrder({
+    const promotion = await promoteAuthProfileInOrder({
       agentDir: params.agentDir,
       provider: profile.credential.provider,
       profileId: profile.profileId,
       createIfMissing: configuredSelection.createIfMissing,
       ...(configuredSelection.order ? { createFromOrder: configuredSelection.order } : {}),
     });
+    if (!promotion.ok) {
+      throw new Error(
+        "The auth profile was saved, but its order could not be updated because the auth store is busy. Wait a moment, then retry the login.",
+      );
+    }
   }
 
   // Auth login owns the credential store. Keep openclaw.json untouched unless

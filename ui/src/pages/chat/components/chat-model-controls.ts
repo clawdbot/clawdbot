@@ -39,8 +39,8 @@ type ChatModelControlsProps = {
   modelCatalogState?: ChatModelCatalogState;
   modelOverrides?: Readonly<Record<string, string | null | undefined>>;
   modelSelectionLocked?: boolean;
-  modelSelectionTarget?: SessionsListResult["defaults"]["modelSelectionTarget"];
   modelSelectionRuntimeId?: string;
+  modelSelectionTarget?: SessionsListResult["defaults"]["modelSelectionTarget"];
   modelPickerTargetGroups?: readonly ChatModelPickerTargetGroup[];
   modelPickerOpen?: boolean;
   modelSwitching: boolean;
@@ -163,9 +163,25 @@ function formatPickerModelLabel(label: string): string {
   return match?.[1] ?? label;
 }
 
+function resolveModelSelectionScopeDescription(
+  target: SessionsListResult["defaults"]["modelSelectionTarget"],
+): string | undefined {
+  switch (target) {
+    case "session":
+      return t("chat.modelControls.selectionScopeSession");
+    case "agent":
+      return t("chat.modelControls.selectionScopeAgent");
+    case "global":
+      return t("chat.modelControls.selectionScopeGlobal");
+    default:
+      return undefined;
+  }
+}
+
 function resolveCatalogTriggerStatus(
   state: ChatModelCatalogState,
   optionCount: number,
+  selectionKnown: boolean,
 ): string | undefined {
   if (state.status === "offline") {
     return undefined;
@@ -174,7 +190,7 @@ function resolveCatalogTriggerStatus(
     return optionCount === 0 ? t("chat.modelControls.modelsUnavailable") : undefined;
   }
   if (!state.hasSnapshot && ["idle", "loading"].includes(state.status)) {
-    return t("chat.modelControls.loadingModels");
+    return selectionKnown ? undefined : t("chat.modelControls.loadingModels");
   }
   if (state.hasSnapshot && optionCount === 0) {
     return t("chat.modelControls.noModelsAvailable");
@@ -365,7 +381,14 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   };
   const catalogLoadingWithoutSnapshot =
     !managedCatalog.hasSnapshot && ["idle", "loading"].includes(managedCatalog.status);
-  const catalogTriggerStatus = resolveCatalogTriggerStatus(managedCatalog, modelOptions.length);
+  // The session owns the selected model; its account-scoped catalog only owns
+  // picker availability. Refreshing that catalog must not hide a known selection.
+  const selectionKnown = Boolean(currentOverride || (modelOverrideSource === null && defaultModel));
+  const catalogTriggerStatus = resolveCatalogTriggerStatus(
+    managedCatalog,
+    modelOptions.length,
+    selectionKnown,
+  );
   // A verified-empty catalog means there is nothing to reason about: the effort
   // picker would only steer a model that cannot be selected, so it hides with it.
   const hasResolvableModel =
@@ -425,7 +448,9 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         modelCatalogState: managedCatalog,
         open: props.modelPickerOpen,
         modelSelectionLocked: props.modelSelectionLocked === true,
-        modelSelectionTarget: props.modelSelectionTarget,
+        selectionScopeDescription: resolveModelSelectionScopeDescription(
+          props.modelSelectionTarget,
+        ),
         modelOptions,
         targetGroups: props.modelPickerTargetGroups,
         selectedModelValue: pickerValue,
@@ -433,7 +458,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         sessionKey: props.sessionKey,
         triggerModelLabel: formatPickerModelLabel(committedModelLabel),
         triggerStatusLabel: catalogTriggerStatus,
-        triggerLoading: catalogLoadingWithoutSnapshot,
+        triggerLoading: catalogLoadingWithoutSnapshot && !selectionKnown,
         onModelSetup: props.onModelSetup,
         onOpen: props.onModelPickerOpen,
         onOpenChange: props.onModelPickerOpenChange,

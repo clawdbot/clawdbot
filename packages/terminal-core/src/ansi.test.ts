@@ -1,6 +1,6 @@
 // Terminal Core tests cover ansi behavior.
 import { describe, expect, it } from "vitest";
-import { AnsiSequenceStripper } from "./ansi-sequences.js";
+import { AnsiSequenceStripper, iterateAnsiSegments } from "./ansi-sequences.js";
 import {
   sanitizeForLog,
   splitGraphemes,
@@ -349,5 +349,20 @@ describe("terminal ansi helpers", () => {
       truncateToVisibleWidth("\u001B]8;;https://openclaw.ai\u001B\\link\u001B]8;;\u001B\\", 2),
     ).toBe("\u001B]8;;https://openclaw.ai\u001B\\li\u001B]8;;\u001B\\");
     expect(truncateToVisibleWidth("\u001B[32mxy\u001B[0m", 1)).toBe("\u001B[32mx\u001B[0m");
+  });
+
+  it("isolates interleaved segment scans and closes an unfinished iterator", () => {
+    const input = "before\x1b]8;;https://example.test/\x07link\x1b]8;;\x07after";
+    const expected = [...iterateAnsiSegments(input)];
+    const outer = iterateAnsiSegments(input);
+    const inner = iterateAnsiSegments("other" + input);
+    const first = outer.next().value;
+    expect(inner.next().value).toEqual({ kind: "text", value: "otherbefore" });
+    expect(stripAnsi("nested" + input)).toBe("nestedbeforelinkafter");
+    expect([first, ...outer]).toEqual(expected);
+
+    inner.return();
+    expect(inner.next().done).toBe(true);
+    expect([...iterateAnsiSegments(input)]).toEqual(expected);
   });
 });

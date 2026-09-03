@@ -17,6 +17,7 @@ function group(
     kind: "group",
     key: `group:${key}`,
     role,
+    visibleContent: "text",
     messages: [
       {
         key,

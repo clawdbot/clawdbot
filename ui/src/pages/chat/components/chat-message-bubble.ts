@@ -6,6 +6,7 @@ import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { icons, type IconName } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
+import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
@@ -31,6 +32,7 @@ import {
   isToolCardError,
 } from "../../../lib/chat/tool-cards.ts";
 import { type EmbedSandboxMode, resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
+import "../../../styles/chat/reply-preview.css";
 import { isPendingSendMessage } from "../chat-thread-items.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
@@ -38,19 +40,15 @@ import { renderAssistantAttachments, renderOmittedMedia } from "./chat-message-a
 import { renderMessageImages } from "./chat-message-images.ts";
 import type { MessageActionDetails } from "./chat-message-markdown.ts";
 import {
-  extractImages,
-  extractMessageAttachments,
-  extractPairingQrExpiryNotices,
+  projectMessageMedia,
   schedulePairingQrExpiryRefresh,
   type ArtifactDownloadResolver,
-  type PairingQrExpiryNotice,
 } from "./chat-message-media.ts";
 import {
   detectJson,
   renderMessageJson,
   renderMessageMarkdown,
   resolveMessageDisplayMarkdown,
-  resolveMessageMarkdownRenderOptions,
   type AssistantMessageDisclosure,
 } from "./chat-message-text.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
@@ -175,25 +173,30 @@ function renderReplyPreview(
   `;
 }
 
-function renderPairingQrExpiryNotices(notices: PairingQrExpiryNotice[]) {
-  if (notices.length === 0) {
+function renderPairingQrExpiryNotices(count: number) {
+  if (count === 0) {
     return nothing;
   }
   return html`
     <div class="chat-pairing-qr-notices">
-      ${notices.map(
-        (notice) => html`
+      ${Array.from(
+        { length: count },
+        () => html`
           <div
             class="chat-assistant-attachment-card chat-assistant-attachment-card--blocked chat-pairing-qr-expired"
           >
             <div class="chat-assistant-attachment-card__header">
               <span class="chat-assistant-attachment-card__icon">${icons.alertTriangle}</span>
-              <span class="chat-assistant-attachment-card__title">${notice.title}</span>
+              <span class="chat-assistant-attachment-card__title"
+                >${t("chat.pairingQrExpired.title")}</span
+              >
               <span class="chat-assistant-attachment-badge chat-assistant-attachment-badge--muted"
                 >${t("chat.pairingQrExpired.badge")}</span
               >
             </div>
-            <div class="chat-assistant-attachment-card__reason">${notice.reason}</div>
+            <div class="chat-assistant-attachment-card__reason">
+              ${t("chat.pairingQrExpired.reason")}
+            </div>
           </div>
         `,
       )}
@@ -260,8 +263,13 @@ export function renderGroupedMessage(
 
   const toolCards = (opts.showToolCalls ?? true) ? extractToolCardsCached(message) : [];
   const hasToolCards = toolCards.length > 0;
-  schedulePairingQrExpiryRefresh(messageKey, message, opts.onRequestUpdate);
-  const images = extractImages(message);
+  const {
+    images,
+    attachments: visibleAttachments,
+    expiredPairingQrCount,
+    nextPairingQrExpiresAt,
+  } = projectMessageMedia(message, normalizedMessage.content);
+  schedulePairingQrExpiryRefresh(messageKey, nextPairingQrExpiresAt, opts.onRequestUpdate);
   const hasImages = images.length > 0;
   const imageRenderOptions = {
     ...(hasImages ? imageMessageIdentity(message, opts.sessionKey) : {}),
@@ -274,12 +282,8 @@ export function renderGroupedMessage(
     onOpenImage: opts.onOpenImage,
     resolveArtifactDownload: opts.resolveArtifactDownload,
   };
-  const pairingQrExpiryNotices = extractPairingQrExpiryNotices(message);
-  const hasPairingQrExpiryNotices = pairingQrExpiryNotices.length > 0;
-
   const displayMarkdown = resolveMessageDisplayMarkdown(message, normalizedMessage);
   const actionText = opts.messageActions?.markdown ?? displayMarkdown;
-  const visibleAttachments = extractMessageAttachments(message, normalizedMessage.content);
   const omittedMedia = normalizedMessage.content.filter(
     (item): item is Extract<MessageContentItem, { type: "omitted_media" }> =>
       item.type === "omitted_media",
@@ -293,12 +297,16 @@ export function renderGroupedMessage(
   const markdown =
     (normalizedRole === "user" ? opts.messageActions?.markdown : undefined) ??
     (displayMarkdown || null);
-  const markdownRenderOptions = resolveMessageMarkdownRenderOptions({
-    role,
-    isStreaming: opts.isStreaming,
+  const markdownRenderOptions: MarkdownRenderOptions = {
+    assistantTranscriptRoleHeaders: role === "assistant",
+    codeBlockChrome: role === "user" ? "none" : "copy",
+    codeBlockInteraction: role === "assistant" ? "interactive" : "static",
+    fileLinks: true,
     interactiveImages: opts.onOpenImage !== undefined,
-    linkFavicons: Boolean(opts.fetchLinkFavicon),
-  });
+    sessionLinks: true,
+    tableInteractions: "enabled",
+    linkFavicons: Boolean(opts.fetchLinkFavicon) && !opts.isStreaming,
+  };
 
   // Detect pure-JSON messages and render as collapsible block
   const jsonResult = markdown && !opts.isStreaming ? detectJson(markdown) : null;
@@ -319,7 +327,7 @@ export function renderGroupedMessage(
     !reasoningMarkdown &&
     !hasToolCards &&
     !hasImages &&
-    !hasPairingQrExpiryNotices &&
+    expiredPairingQrCount === 0 &&
     omittedMedia.length === 0 &&
     visibleAttachments.length === 0 &&
     assistantViewBlocks.length === 0 &&
@@ -385,6 +393,7 @@ export function renderGroupedMessage(
               canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
               boardProvider: opts.boardProvider,
               embedSandboxMode: opts.embedSandboxMode ?? "scripts",
+              allowExternalEmbedUrls: opts.allowExternalEmbedUrls,
               sessionKey: opts.sessionKey,
             })}
             ${block.rawText
@@ -412,7 +421,7 @@ export function renderGroupedMessage(
     hasToolCards &&
     !markdown &&
     !hasImages &&
-    !hasPairingQrExpiryNotices &&
+    expiredPairingQrCount === 0 &&
     omittedMedia.length === 0 &&
     visibleAttachments.length === 0 &&
     assistantViewBlocks.length === 0 &&
@@ -421,7 +430,7 @@ export function renderGroupedMessage(
   const toolRenderOptions = { ...opts, messageKey, onOpenSidebar };
   // Collapsed tool results must not load attachments or render hidden markdown.
   const renderBody = () => html`
-    ${renderPairingQrExpiryNotices(pairingQrExpiryNotices)}
+    ${renderPairingQrExpiryNotices(expiredPairingQrCount)}
     ${renderMessageImages(images, imageRenderOptions)} ${renderOmittedMedia(omittedMedia)}
     ${renderAssistantAttachments(
       visibleAttachments,

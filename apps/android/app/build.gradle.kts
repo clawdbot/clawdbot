@@ -9,18 +9,20 @@ import java.util.Properties
 val dnsjavaInetAddressResolverService = "META-INF/services/java.net.spi.InetAddressResolverProvider"
 val openClawAndroidApplicationId = "ai.openclaw.app"
 val openClawAndroidVersionFile = rootProject.file("Config/Version.properties")
+val openClawMobileCutterInstruction =
+  "Run scripts/mobile-release-version.ts --prepare, capture the iOS release plan, then run --finalize."
 val thirdPartyLicensesDir = rootProject.file("THIRD_PARTY_LICENSES")
 val openClawAndroidVersionProperties =
   Properties().apply {
     if (!openClawAndroidVersionFile.isFile) {
-      error("Missing Android version properties. Run `pnpm android:version:sync`.")
+      error("Missing Android version properties. $openClawMobileCutterInstruction")
     }
     openClawAndroidVersionFile.inputStream().use(::load)
   }
 
 fun requireOpenClawAndroidVersionProperty(name: String): String =
   openClawAndroidVersionProperties.getProperty(name)?.trim()?.takeIf { it.isNotEmpty() }
-    ?: error("Missing $name in Config/Version.properties. Run `pnpm android:version:sync`.")
+    ?: error("Missing $name in Config/Version.properties. $openClawMobileCutterInstruction")
 
 val openClawAndroidVersionName = requireOpenClawAndroidVersionProperty("OPENCLAW_ANDROID_VERSION_NAME")
 val openClawAndroidVersionCode =
@@ -97,22 +99,6 @@ val resolvedAndroidStoreFile =
 
 val hasAndroidReleaseSigning =
   listOf(resolvedAndroidStoreFile, androidStorePassword, androidKeyAlias, androidKeyPassword).all { it != null }
-
-val wantsAndroidReleaseBuild =
-  gradle.startParameter.taskNames.any { taskName ->
-    taskName.contains("Release", ignoreCase = true) ||
-      Regex("""(^|:)(bundle|assemble)$""").containsMatchIn(taskName)
-  }
-val missingAndroidBuildMetadata =
-  explicitOpenClawBuildCommit == null || explicitOpenClawBuildTimestamp == null
-
-if (wantsAndroidReleaseBuild && !hasAndroidReleaseSigning) {
-  error(
-    "Missing Android release signing properties. Set OPENCLAW_ANDROID_STORE_FILE, " +
-      "OPENCLAW_ANDROID_STORE_PASSWORD, OPENCLAW_ANDROID_KEY_ALIAS, and " +
-      "OPENCLAW_ANDROID_KEY_PASSWORD in ~/.gradle/gradle.properties.",
-  )
-}
 
 plugins {
   alias(libs.plugins.android.application)
@@ -348,7 +334,6 @@ dependencies {
   implementation(libs.androidx.compose.ui)
   implementation(libs.androidx.compose.ui.tooling.preview)
   implementation(libs.androidx.compose.material3)
-  implementation(libs.androidx.compose.material3.adaptive.navigation.suite)
   // material-icons-extended pulled in full icon set (~20 MB DEX). Only ~18 icons used.
   // R8 will tree-shake unused icons when minify is enabled on release builds.
   implementation(libs.androidx.compose.material.icons.extended)
@@ -413,30 +398,44 @@ tasks.withType<Test>().configureEach {
   }
 }
 
+val validateOpenClawReleaseSigning =
+  tasks.register("validateOpenClawReleaseSigning") {
+    val signingConfigured = hasAndroidReleaseSigning
+    doLast {
+      check(signingConfigured) {
+        "Missing Android release signing properties. Set OPENCLAW_ANDROID_STORE_FILE, " +
+          "OPENCLAW_ANDROID_STORE_PASSWORD, OPENCLAW_ANDROID_KEY_ALIAS, and " +
+          "OPENCLAW_ANDROID_KEY_PASSWORD in ~/.gradle/gradle.properties."
+      }
+    }
+  }
+
 val validateOpenClawReleaseBuildMetadata =
   tasks.register("validateOpenClawReleaseBuildMetadata") {
+    val metadataProvided =
+      explicitOpenClawBuildCommit != null && explicitOpenClawBuildTimestamp != null
     doLast {
-      if (missingAndroidBuildMetadata) {
-        error(
-          "Android release builds require -PopenclawBuildCommit and -PopenclawBuildTimestamp. " +
-            "Use the repository Android release helper.",
-        )
+      check(metadataProvided) {
+        "Android release builds require -PopenclawBuildCommit and -PopenclawBuildTimestamp. " +
+          "Use the repository Android release helper."
       }
     }
   }
 
 val validateThirdPartyLicenseAssets =
   tasks.register("validateThirdPartyLicenseAssets") {
-    inputs.dir(thirdPartyLicensesDir)
+    val licensesDir = thirdPartyLicensesDir
+    val licensesPath = licensesDir.relativeTo(rootProject.projectDir).path
+    inputs.dir(licensesDir)
     doLast {
-      if (!thirdPartyLicensesDir.isDirectory) {
-        error("Missing Android third-party license directory: ${thirdPartyLicensesDir.relativeTo(rootProject.projectDir)}")
+      if (!licensesDir.isDirectory) {
+        error("Missing Android third-party license directory: $licensesPath")
       }
       val invalidFiles =
-        thirdPartyLicensesDir
+        licensesDir
           .walkTopDown()
           .filter { file -> file.isFile && file.extension.lowercase() != "txt" }
-          .map { file -> file.relativeTo(thirdPartyLicensesDir).path }
+          .map { file -> file.relativeTo(licensesDir).path }
           .toList()
 
       if (invalidFiles.isNotEmpty()) {
@@ -477,9 +476,10 @@ tasks.matching { task -> task.name.startsWith("merge") && task.name.endsWith("As
 
 androidComponents {
   onVariants(selector().withBuildType("release")) { variant ->
+    // Validate the selected variant graph, not task arguments that can also contain "Release".
+    variant.lifecycleTasks.registerPreBuild(validateOpenClawReleaseSigning, validateOpenClawReleaseBuildMetadata)
     val variantName = variant.name
     val variantNameCapitalized = variantName.replaceFirstChar(Char::titlecase)
-    val preBuildTaskName = "pre${variantNameCapitalized}Build"
     val stripTaskName = "strip${variantNameCapitalized}DnsjavaServiceDescriptor"
     val mergeTaskName = "merge${variantNameCapitalized}JavaResource"
     val minifyTaskName = "minify${variantNameCapitalized}WithR8"
@@ -487,10 +487,6 @@ androidComponents {
       layout.buildDirectory.file(
         "intermediates/merged_java_res/$variantName/$mergeTaskName/base.jar",
       )
-
-    tasks.matching { task -> task.name == preBuildTaskName }.configureEach {
-      dependsOn(validateOpenClawReleaseBuildMetadata)
-    }
 
     val stripTask =
       tasks.register(stripTaskName) {

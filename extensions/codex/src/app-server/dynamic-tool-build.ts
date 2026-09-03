@@ -200,19 +200,11 @@ type CodexDynamicToolBuildStageSummary = {
 };
 const CODEX_DYNAMIC_TOOL_BUILD_WARN_TOTAL_MS = 1_000;
 const CODEX_DYNAMIC_TOOL_BUILD_WARN_STAGE_MS = 500;
-/** Creates cheap optional timing instrumentation for the dynamic-tool hot path. */
-export function createCodexDynamicToolBuildStageTracker(options: { enabled?: boolean } = {}): {
+/** Captures bounded preparation stages before a slow turn needs diagnosis. */
+export function createCodexDynamicToolBuildStageTracker(): {
   mark: (name: string) => void;
   snapshot: () => CodexDynamicToolBuildStageSummary;
 } {
-  if (!options.enabled) {
-    return {
-      mark() {},
-      snapshot() {
-        return { totalMs: 0, stages: [] };
-      },
-    };
-  }
   const startedAt = Date.now();
   let previousAt = startedAt;
   const stages: CodexDynamicToolBuildStageTiming[] = [];
@@ -238,10 +230,13 @@ export function createCodexDynamicToolBuildStageTracker(options: { enabled?: boo
 /** Returns true when dynamic-tool construction is slow enough to warrant a warning log. */
 export function shouldWarnCodexDynamicToolBuildStageSummary(
   summary: CodexDynamicToolBuildStageSummary,
+  profilerEnabled = false,
 ): boolean {
+  const totalWarnMs = profilerEnabled ? CODEX_DYNAMIC_TOOL_BUILD_WARN_TOTAL_MS : 10_000;
+  const stageWarnMs = profilerEnabled ? CODEX_DYNAMIC_TOOL_BUILD_WARN_STAGE_MS : 5_000;
   return (
-    summary.totalMs >= CODEX_DYNAMIC_TOOL_BUILD_WARN_TOTAL_MS ||
-    summary.stages.some((stage) => stage.durationMs >= CODEX_DYNAMIC_TOOL_BUILD_WARN_STAGE_MS)
+    summary.totalMs >= totalWarnMs ||
+    summary.stages.some((stage) => stage.durationMs >= stageWarnMs)
   );
 }
 /** Formats per-stage timings into the compact form used by Codex app-server logs. */
@@ -275,11 +270,7 @@ export async function buildDynamicTools(
     input.onWebSearchPolicyResolved?.(false);
     return [];
   }
-  // Dynamic tool construction is on the reply hot path, so per-stage
-  // Date.now/span bookkeeping runs only when the Codex profiler flag is set.
-  const toolBuildStages = createCodexDynamicToolBuildStageTracker({
-    enabled: input.profilerEnabled,
-  });
+  const toolBuildStages = createCodexDynamicToolBuildStageTracker();
   const modelHasVision = params.model.input?.includes("image") ?? false;
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, input.sessionAgentId);
   const injectedOpenClawCodingToolsFactory = dynamicToolBuildState.openClawCodingToolsFactory;
@@ -583,7 +574,7 @@ export async function buildDynamicTools(
     );
   }
   const summary = toolBuildStages.snapshot();
-  if (shouldWarnCodexDynamicToolBuildStageSummary(summary)) {
+  if (shouldWarnCodexDynamicToolBuildStageSummary(summary, input.profilerEnabled)) {
     const phase = input.forceHeartbeatTool ? "registered-tools" : "runtime-tools";
     embeddedAgentLog.warn(
       `codex app-server dynamic tool build timings runId=${params.runId} sessionId=${params.sessionId} phase=${phase} totalMs=${summary.totalMs} stages=${formatCodexDynamicToolBuildStageSummary(summary)}`,

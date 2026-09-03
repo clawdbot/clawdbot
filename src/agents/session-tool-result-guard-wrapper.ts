@@ -140,6 +140,13 @@ export function guardSessionManager(
         message.role === "user"
           ? { ...message, __openclaw: { ...Reflect.get(message, "__openclaw") } }
           : undefined;
+      if (preparedMessage?.["__openclaw"].humanMentions !== undefined) {
+        // Hooks may mutate text and spans in place; compare against the submitted selection.
+        preparedMessage.content = structuredClone(preparedMessage.content);
+        preparedMessage["__openclaw"].humanMentions = structuredClone(
+          preparedMessage["__openclaw"].humanMentions,
+        );
+      }
       const next = runAgentHarnessBeforeMessageWriteHook({
         message,
         agentId: opts?.agentId,
@@ -266,8 +273,10 @@ export function guardSessionManager(
       const runtimeMessage = runtimeUserMessageByPersistedMessage.get(message);
       runtimeUserMessageByPersistedMessage.delete(message);
       const recorder = takeRuntimeUserTurnTranscriptRecorder(message);
-      recorder?.markRuntimePersisted(message, persistence.anchor);
-      await opts?.onUserMessagePersisted?.(message, runtimeMessage);
+      recorder?.markRuntimePersisted(persistence.persistedMessage, persistence.anchor, {
+        appended: persistence.appended,
+      });
+      await opts?.onUserMessagePersisted?.(persistence.persistedMessage, runtimeMessage);
     },
     onUserMessagePersistenceSuppressed: async (message) => {
       const runtimeMessage = runtimeUserMessageByPersistedMessage.get(message);

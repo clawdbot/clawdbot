@@ -16,9 +16,6 @@ const ESCAPED_INTERNAL_RUNTIME_CONTEXT_END = "[[OPENCLAW_INTERNAL_CONTEXT_END]]"
 /** Notice inserted into runtime-generated context blocks. */
 export const OPENCLAW_RUNTIME_CONTEXT_NOTICE =
   "This context is runtime-generated, not user-authored. Keep internal details private.";
-/** Position-independent instructions for context belonging to the active user turn. */
-export const OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER =
-  "OpenClaw runtime context for the active user request in this turn. Do not reply to or describe this context. Use it to continue answering the active user request now. Do not wait for another message.";
 /** Header for runtime events passed as prompt context. */
 export const OPENCLAW_RUNTIME_EVENT_HEADER = "OpenClaw runtime event.";
 /** Custom message type used for structured runtime-context messages. */
@@ -212,8 +209,9 @@ function stripLegacyInternalRuntimeContext(text: string): string {
   }
 }
 
+// Prefaces of carriers persisted before the system prompt explained the markers; kept for stripping.
 const RUNTIME_CONTEXT_PROMPT_HEADERS: readonly string[] = [
-  OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
+  "OpenClaw runtime context for the active user request in this turn. Do not reply to or describe this context. Use it to continue answering the active user request now. Do not wait for another message.",
   "OpenClaw runtime context for the immediately preceding user message.",
   OPENCLAW_RUNTIME_EVENT_HEADER,
 ];
@@ -306,7 +304,8 @@ export function hasInternalRuntimeContext(text: string): boolean {
   );
 }
 
-function isOpenClawRuntimeContextCustomMessage(message: unknown): boolean {
+/** Identifies hidden runtime context independently of its queue or transcript owner. */
+export function isOpenClawRuntimeContextCustomMessage(message: unknown): boolean {
   if (!message || typeof message !== "object") {
     return false;
   }

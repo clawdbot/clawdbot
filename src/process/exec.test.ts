@@ -246,56 +246,60 @@ describe("runCommandWithTimeout", () => {
     },
   );
 
-  it("preserves matching output lines even when tail capture truncates them", async () => {
-    const result = await runCommandWithTimeout(
-      [
-        process.execPath,
-        "-e",
+  it.each([
+    [undefined, 2],
+    [0, 0],
+    [-1, 0],
+    [1, 1],
+    [2, 2],
+  ])(
+    "preserves matching output up to quota %s while tail capture continues",
+    async (limit, count) => {
+      const result = await runCommandWithTimeout(
         [
-          "process.stdout.write('Visit https://example.com/device and enter code ABCD-EFGH\\n')",
-          "process.stdout.write('x'.repeat(200))",
-        ].join(";"),
-      ],
-      {
-        timeoutMs: 3_000,
-        maxOutputBytes: 24,
-        preserveOutputLine: (line) => line.includes("enter code"),
-      },
-    );
+          process.execPath,
+          "-e",
+          [
+            "process.stdout.write('Visit https://example.com/device and enter code ABCD-EFGH\\n')",
+            "process.stdout.write('x'.repeat(200) + 'enter code TAIL')",
+          ].join(";"),
+        ],
+        {
+          timeoutMs: 3_000,
+          maxOutputBytes: 24,
+          maxPreservedOutputLines: limit,
+          preserveOutputLine: (line) => line.includes("enter code"),
+        },
+      );
 
-    expect(result.stdout).toBe("x".repeat(24));
-    expect(result.stdoutTruncatedBytes).toBeGreaterThan(0);
-    expect(result.preservedStdoutLines).toEqual([
-      "Visit https://example.com/device and enter code ABCD-EFGH",
-    ]);
-  });
+      const tail = `${"x".repeat(9)}enter code TAIL`;
+      expect(result.stdout).toBe(tail);
+      expect(result.stdoutTruncatedBytes).toBeGreaterThan(0);
+      expect(result.preservedStdoutLines).toEqual(
+        count
+          ? ["Visit https://example.com/device and enter code ABCD-EFGH", tail].slice(0, count)
+          : undefined,
+      );
+    },
+  );
 
-  it("bounds preserved matching output for long lines without newlines", async () => {
+  it.each([
+    ["long unterminated", "x".repeat(10_000), "x".repeat(24)],
+    ["UTF-8 boundary", `😀${"x".repeat(22)}`, "x".repeat(22)],
+  ])("bounds preserved %s line tails", async (_name, input, expected) => {
     const result = await runCommandWithTimeout(
-      [process.execPath, "-e", "process.stdout.write('x'.repeat(10_000))"],
+      [process.execPath, "-e", "process.stdin.pipe(process.stdout)"],
       {
+        input,
         timeoutMs: 3_000,
         maxOutputBytes: 24,
         preserveOutputLine: () => true,
       },
     );
 
-    expect(result.stdout).toBe("x".repeat(24));
+    expect(result.stdout).toBe(expected);
     expect(result.stdoutTruncatedBytes).toBeGreaterThan(0);
-    expect(result.preservedStdoutLines).toEqual(["x".repeat(24)]);
-  });
-
-  it("keeps preserved line tails on a UTF-8 boundary", async () => {
-    const result = await runCommandWithTimeout(
-      [process.execPath, "-e", "process.stdout.write('😀' + 'x'.repeat(22))"],
-      {
-        timeoutMs: 3_000,
-        maxOutputBytes: 24,
-        preserveOutputLine: () => true,
-      },
-    );
-
-    expect(result.preservedStdoutLines).toEqual(["x".repeat(22)]);
+    expect(result.preservedStdoutLines).toEqual([expected]);
   });
 
   it("supports independent stdout head and stderr tail caps", async () => {

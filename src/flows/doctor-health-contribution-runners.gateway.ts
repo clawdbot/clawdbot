@@ -130,7 +130,7 @@ export async function runWhatsappResponsivenessHealth(ctx: DoctorHealthFlowConte
 
 export async function runDevicePairingHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteDevicePairingHealth } = await import("../commands/doctor-device-pairing.js");
-  await noteDevicePairingHealth({ cfg: ctx.cfg, healthOk: ctx.healthOk ?? false });
+  await noteDevicePairingHealth({ cfg: ctx.cfg, healthOk: ctx.healthOk ?? false, env: ctx.env });
 }
 
 export async function runGatewayDaemonHealth(ctx: DoctorHealthFlowContext): Promise<void> {

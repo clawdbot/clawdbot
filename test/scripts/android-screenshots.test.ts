@@ -1,8 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { chmodSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT = "scripts/android-screenshots.sh";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function runAndroidScreenshots(args: string[], env: NodeJS.ProcessEnv = {}) {
   return spawnSync("bash", [SCRIPT, ...args], {
@@ -66,6 +69,44 @@ describe("android screenshots script", () => {
     ]) {
       expect(script).toContain(marker);
     }
+  });
+
+  it("rejects a physical device selected during screenshot discovery", () => {
+    const root = tempDirs.make("openclaw-android-screenshot-adb-");
+    const adb = path.join(root, "adb");
+    writeFileSync(
+      adb,
+      `#!/usr/bin/env bash
+if [[ "$1" == "devices" ]]; then
+  printf 'List of devices attached\\nphysical-serial\\tdevice\\n'
+  exit 0
+fi
+if [[ "$1" == "-s" && "$2" == "physical-serial" && "$3" == "emu" && "$4" == "avd" && "$5" == "name" ]]; then
+  exit 1
+fi
+if [[ "$1" == "-s" && "$2" == "physical-serial" && "$3" == "shell" && "$4" == "getprop" && "$5" == "ro.kernel.qemu" ]]; then
+  printf '0\\n'
+  exit 0
+fi
+printf 'unexpected adb invocation: %s\\n' "$*" >&2
+exit 97
+`,
+      "utf8",
+    );
+    chmodSync(adb, 0o755);
+
+    const result = runAndroidScreenshots(
+      ["--form-factor", "phone", "--skip-build", "--skip-install"],
+      { ADB: adb },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "Android screenshot capture requires an emulator; 'physical-serial' is not an emulator.",
+    );
+    expect(result.stderr).toContain("Pass --avd <name> or --device <emulator-serial>.");
+    expect(result.stderr).not.toContain("Connected emulator 'unknown'");
+    expect(result.stderr).not.toContain("unexpected adb invocation");
   });
 
   it.each(["../escape", "en/US", ".hidden", "en..US", ""])(
