@@ -2,7 +2,11 @@
 import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildExecApprovalCustomId, parseExecApprovalData } from "../approval-custom-id.js";
+import {
+  buildDiscordApprovalCustomId,
+  buildExecApprovalCustomId,
+  parseExecApprovalData,
+} from "../approval-custom-id.js";
 import { parseCustomId, type ButtonInteraction, type ComponentData } from "../internal/discord.js";
 
 const resolveApprovalOverGatewayMock = vi.hoisted(() => vi.fn());
@@ -71,6 +75,7 @@ describe("discord exec approval monitor helpers", () => {
   it.each([
     ["exec", "plugin:looks-like-plugin", "allow-once"],
     ["plugin", "plain-plugin-id", "deny"],
+    ["system-agent", "system-agent-request", "allow-always"],
   ] as const)("round-trips %s approval custom ids", (approvalKind, approvalId, action) => {
     const customId = buildExecApprovalCustomId(approvalId, approvalKind, action);
     const parsed = parseCustomId(customId);
@@ -80,6 +85,25 @@ describe("discord exec approval monitor helpers", () => {
       approvalId,
       approvalKind,
       action,
+    });
+  });
+
+  it("builds and parses a custom id for system-agent approvals through the shared-interactive path", () => {
+    // The shared-interactive emit path builds buttons via the guarded
+    // buildDiscordApprovalCustomId helper, which previously dropped
+    // system-agent approvals before they could be rendered.
+    const customId = buildDiscordApprovalCustomId({
+      type: "approval",
+      approvalId: "system-agent-request",
+      approvalKind: "system-agent",
+      decision: "allow-once",
+    });
+    expect(customId).not.toBeUndefined();
+    const parsed = parseCustomId(customId!);
+    expect(parseExecApprovalData(parsed.data)).toEqual({
+      approvalId: "system-agent-request",
+      approvalKind: "system-agent",
+      action: "allow-once",
     });
   });
 

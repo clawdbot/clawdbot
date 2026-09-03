@@ -34,7 +34,9 @@ function encodeBoundedDiscordApprovalCustomId(action: DiscordApprovalAction): st
 export function buildDiscordApprovalCustomId(action: DiscordApprovalAction): string | undefined {
   if (
     !action.approvalId ||
-    (action.approvalKind !== "exec" && action.approvalKind !== "plugin") ||
+    (action.approvalKind !== "exec" &&
+      action.approvalKind !== "plugin" &&
+      action.approvalKind !== "system-agent") ||
     (action.decision !== "allow-once" &&
       action.decision !== "allow-always" &&
       action.decision !== "deny")
@@ -78,7 +80,11 @@ export function parseExecApprovalData(data: ComponentData): {
   const rawId = coerce(data.id);
   const rawKind = coerce(data.kind);
   const rawAction = coerce(data.action);
-  if (!rawId || (rawKind !== "exec" && rawKind !== "plugin") || !rawAction) {
+  if (
+    !rawId ||
+    (rawKind !== "exec" && rawKind !== "plugin" && rawKind !== "system-agent") ||
+    !rawAction
+  ) {
     return null;
   }
   if (rawAction !== "allow-once" && rawAction !== "allow-always" && rawAction !== "deny") {
