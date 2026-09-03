@@ -600,6 +600,9 @@ final class MacNodeModeCoordinator: NSObject {
                 completedRouteAuthorityGeneration: self.completedRouteAuthorityGeneration,
                 isPaused: false)
         else { return nil }
+        // Node credentials belong to the selected endpoint, matching the operator route.
+        // A missing owner must not unlock legacy role-global token storage.
+        let deviceAuth = Self.nodeDeviceAuthBinding(for: endpoint)
         let options = GatewayConnectOptions(
             role: "node",
             scopes: [],
@@ -614,7 +617,9 @@ final class MacNodeModeCoordinator: NSObject {
             clientId: "openclaw-macos",
             clientMode: "node",
             clientDisplayName: InstanceIdentity.displayName,
-            deviceIdentityProfile: Self.nodeIdentityProfile)
+            deviceIdentityProfile: Self.nodeIdentityProfile,
+            allowStoredDeviceAuth: deviceAuth.allowStoredDeviceAuth,
+            deviceAuthGatewayID: deviceAuth.gatewayID)
         let sessionBox = self.buildSessionBox(url: config.url, tls: endpoint.tls)
 
         // Resolve compatibility fallback before node admission. Operator recovery
@@ -1102,6 +1107,12 @@ extension MacNodeModeCoordinator {
 }
 
 extension MacNodeModeCoordinator {
+    nonisolated static func nodeDeviceAuthBinding(
+        for endpoint: GatewayConnection.EndpointSnapshot) -> (allowStoredDeviceAuth: Bool, gatewayID: String?)
+    {
+        (endpoint.deviceAuthGatewayID != nil, endpoint.deviceAuthGatewayID)
+    }
+
     static func endpointTransitionRequiresDisconnect(
         from previous: GatewayEndpointState,
         to next: GatewayEndpointState) -> Bool
