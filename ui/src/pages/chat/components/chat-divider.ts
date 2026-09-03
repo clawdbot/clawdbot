@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { toolIcons } from "../../../components/icons-tools.ts";
+import { icons } from "../../../components/icons.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
@@ -10,20 +11,31 @@ function renderSystemLine(params: {
   icon?: keyof typeof toolIcons;
   label: string;
   metric?: string;
+  compaction?: "active" | "complete";
 }) {
   return html`
     <div
       class="chat-divider__rule"
-      role="separator"
+      role=${params.compaction ? "status" : "separator"}
+      aria-live=${params.compaction ? "polite" : nothing}
       aria-label=${params.metric ? `${params.label}, ${params.metric}` : params.label}
     >
       <span class="chat-divider__line"></span>
       <span class="chat-divider__label">
-        ${params.icon
-          ? html`<span class="chat-divider__icon" aria-hidden="true"
-              >${toolIcons[params.icon]}</span
-            >`
-          : nothing}
+        ${params.compaction
+          ? html`<span class="chat-compaction__glyph" aria-hidden="true">
+              <span class="chat-compaction__line"></span>
+              <span class="chat-compaction__line"></span>
+              <span class="chat-compaction__line"></span>
+              <span class="chat-compaction__line"></span>
+              <span class="chat-compaction__line"></span>
+              ${icons.check}
+            </span>`
+          : params.icon
+            ? html`<span class="chat-divider__icon" aria-hidden="true"
+                >${toolIcons[params.icon]}</span
+              >`
+            : nothing}
         <span class="chat-divider__title">${params.label}</span>
         ${params.metric
           ? html`
@@ -46,7 +58,13 @@ export function renderChatDivider(
       ? item.action
       : undefined;
   return html`
-    <div class="chat-divider" data-chat-row-key=${item.key} data-ts=${String(item.timestamp)}>
+    <div
+      class="chat-divider ${item.compaction
+        ? `chat-compaction chat-compaction--${item.compaction}`
+        : ""}"
+      data-chat-row-key=${item.key}
+      data-ts=${String(item.timestamp)}
+    >
       ${renderSystemLine(item)}
       ${item.description || action
         ? html`

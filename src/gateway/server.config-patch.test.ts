@@ -111,6 +111,7 @@ function configWithGatewayTokenSecretRef(config: Record<string, unknown>, envVar
 async function getCurrentConfigObject() {
   const current = await rpcReq<{
     raw?: string | null;
+    valid?: boolean;
     hash?: string;
     path?: string;
     config?: Record<string, unknown>;
@@ -122,6 +123,7 @@ async function getCurrentConfigObject() {
     hash: String(current.payload?.hash),
     path: String(current.payload?.path),
     raw: current.payload?.raw,
+    valid: current.payload?.valid,
     config: requireConfigObject(current.payload?.config, "current config"),
   };
 }
@@ -409,43 +411,130 @@ describe("gateway config methods", () => {
     },
   );
 
-  it("rejects config.set when a stale snapshot drops an agent entry without changing disk", async () => {
-    const { resetConfigRuntimeState } = await import("../config/config.js");
-    const original = await getCurrentConfigObject();
-    const rosterConfig = structuredClone(original.config);
-    const agents = requireConfigObject(rosterConfig.agents ?? {}, "agents config");
-    rosterConfig.agents = {
-      ...agents,
-      entries: {
-        main: { default: true },
-        worker: { workspace: "/srv/worker" },
-      },
-    };
-    delete (rosterConfig.agents as Record<string, unknown>).list;
+  it.each([
+    { source: "a stale snapshot", legacyDuplicate: false },
+    { source: "an invalid duplicate legacy roster", legacyDuplicate: true },
+  ])(
+    "rejects config.set when $source drops an agent entry without changing disk",
+    async ({ legacyDuplicate }) => {
+      const config = await import("../config/config.js");
+      const { resetConfigRuntimeState } = config;
+      const { invalidateConfigGetResponseCache } = await import("./config-get-response.js");
+      const original = await getCurrentConfigObject();
+      const spies: Array<{ mockRestore: () => void }> = [];
+      const includedGateway = { mode: "local", reload: { mode: "off" } };
+      const includeRaw = `${JSON.stringify(includedGateway, null, 3)}\n`;
+      let includePath: string | undefined;
+      let rosterConfig = structuredClone(original.config);
+      const agents = requireConfigObject(rosterConfig.agents ?? {}, "agents config");
+      rosterConfig.agents = {
+        ...agents,
+        entries: {
+          main: { default: true },
+          worker: { workspace: "/srv/worker" },
+        },
+      };
+      delete (rosterConfig.agents as Record<string, unknown>).list;
 
-    try {
-      await writeJsonFile(original.path, rosterConfig);
-      resetConfigRuntimeState();
-      const current = await getCurrentConfigObject();
-      const staleConfig = structuredClone(current.config);
-      const staleAgents = requireConfigObject(staleConfig.agents, "stale agents config");
-      const staleEntries = requireConfigObject(staleAgents.entries, "stale agent entries");
-      delete staleEntries.worker;
-      const before = await fs.readFile(original.path, "utf-8");
+      try {
+        if (legacyDuplicate) {
+          const configIo = await import("../config/io.js");
+          const actualIo =
+            await vi.importActual<typeof import("../config/io.js")>("../config/io.js");
+          // The shared fixture normally substitutes config IO. This row needs actual
+          // invalid snapshots, include ownership, lock-time CAS, and the atomic writer.
+          spies.push(
+            vi
+              .spyOn(config, "readConfigFileSnapshot")
+              .mockImplementation(actualIo.readConfigFileSnapshot),
+            vi
+              .spyOn(configIo, "readConfigFileSnapshotForWrite")
+              .mockImplementation(actualIo.readConfigFileSnapshotForWrite),
+            vi.spyOn(configIo, "createConfigIO").mockImplementation(actualIo.createConfigIO),
+            vi.spyOn(configIo, "writeConfigFile").mockImplementation(actualIo.writeConfigFile),
+          );
+          const fixtureIncludePath = path.join(
+            path.dirname(original.path),
+            "retention-gateway.json",
+          );
+          await fs.writeFile(fixtureIncludePath, includeRaw, { encoding: "utf-8", flag: "wx" });
+          includePath = fixtureIncludePath;
+          rosterConfig = {
+            agents: {
+              list: [
+                { id: "Research", name: "First research agent" },
+                { id: "Research", name: "Second research agent" },
+              ],
+            },
+            gateway: { $include: path.basename(includePath) },
+            plugins: { enabled: false },
+          };
+          await writeJsonFile(original.path, rosterConfig);
+          const snapshot = await actualIo.readConfigFileSnapshot();
+          expect(snapshot.valid).toBe(false);
+          expect(snapshot.parsed).toEqual(rosterConfig);
+          expect(snapshot.sourceConfig.gateway).toEqual(includedGateway);
+        } else {
+          await writeJsonFile(original.path, rosterConfig);
+        }
+        resetConfigRuntimeState();
+        // Read a cold public revision for the exact malformed file, not an earlier cache hit.
+        if (legacyDuplicate) {
+          invalidateConfigGetResponseCache();
+        }
+        const current = await getCurrentConfigObject();
+        const staleConfig = legacyDuplicate
+          ? {
+              agents: { entries: { research: { name: "First research agent" } } },
+              gateway: includedGateway,
+              plugins: { enabled: false },
+            }
+          : structuredClone(current.config);
+        if (legacyDuplicate) {
+          expect(current.valid).toBe(false);
+          expect(current.raw).toBeNull();
+          expect(current.hash).not.toBe(original.hash);
+        } else {
+          const staleAgents = requireConfigObject(staleConfig.agents, "stale agents config");
+          const staleEntries = requireConfigObject(staleAgents.entries, "stale agent entries");
+          delete staleEntries.worker;
+        }
+        const before = await fs.readFile(original.path, "utf-8");
 
-      const res = await sendConfigSet(configRawPayload(staleConfig, current.hash));
+        const res = await sendConfigSet(configRawPayload(staleConfig, current.hash));
 
-      expect(res.ok).toBe(false);
-      expect(res.error?.code).toBe("INVALID_REQUEST");
-      expect(res.error?.message ?? "").toContain("worker");
-      expect(res.error?.message ?? "").toContain("agents.delete RPC");
-      expect(res.error?.message ?? "").toContain("openclaw agents delete");
-      await expect(fs.readFile(original.path, "utf-8")).resolves.toBe(before);
-    } finally {
-      await restoreConfigFileForTest(original);
-      resetConfigRuntimeState();
-    }
-  });
+        await expect(
+          fs.readFile(original.path, "utf-8"),
+          `config.set response ok=${String(res.ok)}`,
+        ).resolves.toBe(before);
+        if (includePath) {
+          await expect(fs.readFile(includePath, "utf-8")).resolves.toBe(includeRaw);
+        }
+
+        expect(res.ok).toBe(false);
+        if (legacyDuplicate) {
+          expect(res.error?.message ?? "").toContain(
+            "Config write would drop agent roster entries without an explicit deletion: research-2.",
+          );
+        } else {
+          expect(res.error?.code).toBe("INVALID_REQUEST");
+          expect(res.error?.message ?? "").toContain("worker");
+          expect(res.error?.message ?? "").toContain("agents.delete RPC");
+          expect(res.error?.message ?? "").toContain("openclaw agents delete");
+        }
+      } finally {
+        for (const spy of spies.toReversed()) {
+          spy.mockRestore();
+        }
+        await restoreConfigFileForTest(original);
+        if (includePath) {
+          await fs.rm(includePath, { force: true });
+          invalidateConfigGetResponseCache();
+        }
+        resetConfigRuntimeState();
+      }
+    },
+  );
 
   it("accepts config.set when the submitted roster keeps every agent entry", async () => {
     const { resetConfigRuntimeState } = await import("../config/config.js");

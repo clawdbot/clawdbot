@@ -293,6 +293,15 @@ Use the shared message presentation fields for portable choices. LINE renders
 `buttons` blocks as Flex controls and `select` blocks as quick replies. A two-button
 block is the portable confirm-style form.
 
+A `buttons` block renders a Flex card that carries the presentation's title and
+text. A presentation whose only control is a `select` renders no card, because
+quick replies attach to the reply's own text message; its title and text blocks
+are appended to that text instead. LINE draws at most 13 quick replies on one
+message, counted across every `select` block in the reply rather than per block.
+Each select keeps its prompt and any overflow options together in that text.
+Prompts and overflow option names remain complete; only native quick-reply button
+labels are shortened to LINE's 20-character limit.
+
 ```json5
 {
   action: "send",
@@ -367,6 +376,14 @@ The LINE plugin also ships a `/card` command for Flex message presets:
 /card info "Welcome" "Thanks for joining!"
 ```
 
+Card images and icons must use HTTPS. OpenClaw removes images with malformed or
+non-HTTPS URLs and adds an "Image unavailable" note when it fits within LINE's
+30 KB bubble and 50 KB carousel limits. Video
+heroes keep their required alternative content: an unusable video or preview URL
+falls back to that content, and an unusable alternative image becomes a text box.
+Invalid template thumbnails are removed; carousel thumbnails are removed together
+so every column keeps the same image layout. Text and action buttons stay intact.
+
 ## ACP support
 
 LINE supports ACP (Agent Communication Protocol) conversation bindings:
@@ -401,6 +418,14 @@ link-local, and private-network targets.
   and that the gateway is reachable from LINE.
 - **Media download errors:** raise `channels.line.mediaMaxMb` if media exceeds the
   default limit.
+- **Pushes refused with HTTP 429:** Run
+  `openclaw channels status --channel line --probe --json`. For a limited allowance,
+  the account’s `quota` contains `used` and `limit`. Missing quota is unknown, not unlimited.
+  A healthy bot identity can coexist with an exhausted push allowance. Check the
+  account allowance or plan in LINE Official Account Manager before retrying;
+  429 can also reflect rate limits or temporary message reservations. Ordinary
+  reply-token messages do not consume this monthly allowance, unlike pushes.
+  See [LINE message pricing](https://developers.line.biz/en/docs/messaging-api/pricing/).
 - **Bot silently skips messages (events dead-lettered):** `openclaw logs` shows
   `line: spooled update <id> ... dead-lettered` lines with the failure reason.
   Inspect with `openclaw channels dead-letters list --channel line --account default`

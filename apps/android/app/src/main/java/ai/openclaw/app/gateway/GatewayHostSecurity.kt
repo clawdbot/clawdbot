@@ -89,8 +89,14 @@ internal fun isLocalCleartextGatewayHost(
 
   val address = runCatching { InetAddress.getByName(host) }.getOrNull() ?: return false
   return when {
-    address.isLinkLocalAddress -> true
-    address.isSiteLocalAddress -> true
+    address.isLinkLocalAddress -> {
+      true
+    }
+
+    address.isSiteLocalAddress -> {
+      true
+    }
+
     else -> {
       val bytes = address.address
       bytes.size == 16 && (bytes[0].toInt() and 0xfe) == 0xfc

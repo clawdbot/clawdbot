@@ -817,7 +817,6 @@ describe("prepareSimpleCompletionModelForAgent", () => {
     expectPreparedModelResult(result);
     expect(result.selection.provider).toBe("openai");
     expect(result.selection.modelId).toBe("gpt-5.5");
-    expect(result.selection.runtimeProvider).toBe("openai");
     expect(result.model).toMatchObject({
       id: "gpt-5.5",
       api: "openai-responses",

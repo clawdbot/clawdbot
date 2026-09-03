@@ -14,6 +14,14 @@ export const SessionsCreateParamsSchema = closedObject({
   idempotencyKey: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
   label: Type.Optional(SessionLabelString),
+  displayName: Type.Optional(
+    Type.String({
+      minLength: 1,
+      maxLength: 500,
+      description:
+        "Prepared presentation title for a newly created session. Unlike label it is not unique and never claims a label; ignored when adopting an existing key.",
+    }),
+  ),
   category: Type.Optional(SessionLabelString),
   model: Type.Optional(NonEmptyString),
   contextWindow: Type.Optional(NonEmptyString),

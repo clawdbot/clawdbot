@@ -23,7 +23,7 @@ import {
 } from "./plugin-model-catalog.js";
 import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-catalog-owner.js";
 import { getPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
-import { startSerializedSnapshotBuild } from "./prepared-model-runtime.build.js";
+import { startSerializedSnapshotBuildBatch } from "./prepared-model-runtime.build.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 import { writeSyntheticAuthDiscoveryFixture } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
@@ -45,6 +45,34 @@ export const DURABLE_AUTH_PROVIDER_ID = `${PROVIDER_ID}-durable-auth`;
 export const DURABLE_AUTH_KEY = "post-startup-durable-key-not-real";
 export const EXTERNAL_AUTH_PROFILE_ID = `${PROVIDER_ID}:external`;
 export const EXTERNAL_AUTH_PATH_ENV = "OPENCLAW_WORKER_EXTERNAL_AUTH_PATH";
+export const UNRELATED_PLUGIN_ID = "worker-catalog-unrelated";
+export const UNRELATED_PLUGIN_WORKER_MARKER_ENV = "OPENCLAW_WORKER_UNRELATED_PLUGIN_MARKER";
+
+export function writeUnrelatedFixturePlugin(root: string): string {
+  const pluginDir = path.join(root, "unrelated-plugin");
+  fs.mkdirSync(pluginDir, { recursive: true });
+  const pluginFile = path.join(pluginDir, "index.cjs");
+  fs.writeFileSync(
+    pluginFile,
+    `const fs = require("node:fs");
+const { isMainThread } = require("node:worker_threads");
+if (!isMainThread) {
+  fs.writeFileSync(process.env.${UNRELATED_PLUGIN_WORKER_MARKER_ENV}, "loaded", "utf8");
+}
+module.exports = { id: ${JSON.stringify(UNRELATED_PLUGIN_ID)}, register() {} };
+`,
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(pluginDir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: UNRELATED_PLUGIN_ID,
+      configSchema: { type: "object", additionalProperties: false, properties: {} },
+    }),
+    "utf8",
+  );
+  return pluginFile;
+}
 
 export function createJwtWithExp(exp: number, marker?: string): string {
   const payload = Buffer.from(JSON.stringify({ exp, ...(marker ? { marker } : {}) })).toString(
@@ -310,6 +338,8 @@ export async function expectNativeHarnessModelsPublished(params: {
       preparedAuthStore: fullAuth.authStore,
       preparedRuntimeAuthModes: fullAuth.authModes,
       pluginRegistry: registry,
+      isCurrent: params.snapshot.isCurrent,
+      observationConfig: params.snapshot.observationConfig,
     });
     const hostEvaluation = await projector.evaluateEntry(nativeEntry!);
     expect(projector.evaluateNative(nativeEntry!, hostEvaluation)).toMatchObject({
@@ -440,16 +470,21 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
   params.retireAfterTest(() => {
     current = false;
   });
-  const build = await startSerializedSnapshotBuild(
-    {
-      input,
-      catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),
-      isGenerationCurrent: () => current,
-    },
-    new Map(),
-    30_000,
-    "static",
-  ).pending;
+  const build = (
+    await startSerializedSnapshotBuildBatch(
+      [
+        {
+          input,
+          catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),
+          isGenerationCurrent: () => current,
+          isBuildCurrent: () => current,
+        },
+      ],
+      new Map(),
+      30_000,
+      "static",
+    ).pending
+  )[0]!;
   await expectNativeHarnessModelsPublished({
     config,
     metadataSnapshot: build.pluginGeneration.pluginMetadataSnapshot,

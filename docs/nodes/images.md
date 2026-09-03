@@ -60,6 +60,10 @@ The 16MB audio/video and 100MB document figures above are the shared per-kind me
 - When media is present, the web sender resolves local paths or URLs using the same pipeline as `openclaw message send`.
 - Multiple media entries are sent sequentially if provided.
 
+When a channel converts Markdown image links into attachments, image syntax inside
+code blocks or inline code, and escaped image syntax, stays in the text. Inline
+image destinations retain their URL punctuation.
+
 ## Inbound Media To Commands
 
 - When inbound web messages include media, OpenClaw downloads it to a temp file and exposes templating variables:

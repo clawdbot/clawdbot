@@ -12,13 +12,14 @@ export type PublishedModelCatalogOwnerCandidate = Readonly<{
   agentDir: string;
   workspaceDir?: string;
   config: OpenClawConfig;
+  observationConfig: OpenClawConfig;
   authModes: PreparedAgentCredentialModes;
   authStore?: AuthProfileStore;
   metadataSnapshot: PluginMetadataSnapshot;
   /** Registry owned by this prepared generation; omitted from read-only builds. */
   pluginRegistry?: PluginRegistry;
   /** Reports whether this exact lifecycle generation is still published. */
-  isCurrent?: () => boolean;
+  isCurrent: () => boolean;
   modelCatalog: ModelCatalogSnapshot;
 }>;
 
@@ -28,10 +29,11 @@ export type ResolvedPublishedModelCatalogOwner = Readonly<{
   agentDir: string;
   workspaceDir: string;
   config: OpenClawConfig;
+  observationConfig: OpenClawConfig;
   authModes: PreparedAgentCredentialModes;
   authStore: AuthProfileStore;
   metadataSnapshot: PluginMetadataSnapshot;
   pluginRegistry?: PluginRegistry;
-  isCurrent?: () => boolean;
+  isCurrent: () => boolean;
   modelCatalog: ModelCatalogSnapshot;
 }>;

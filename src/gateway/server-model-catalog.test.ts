@@ -57,6 +57,8 @@ function ownerSnapshot(
     ...(agentId ? { agentId } : {}),
     agentDir: "/tmp/gateway-agent",
     config,
+    observationConfig: config,
+    isCurrent: () => true,
     authModes: {},
     authStore: { version: 1, profiles: {} },
     metadataSnapshot: { index: { plugins: [] }, plugins: [] } as never,

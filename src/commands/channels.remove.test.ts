@@ -110,6 +110,13 @@ describe("channelsRemoveCommand", () => {
   it("asks users to add an external channel plugin before removing its account", async () => {
     configMocks.readConfigFileSnapshot.mockResolvedValue(
       createTestConfigSnapshot({
+        agents: {
+          ownership: "explicit",
+          entries: {
+            research: { workspace: "/tmp/research-workspace" },
+            ops: { workspace: "/tmp/ops-workspace" },
+          },
+        },
         channels: {
           "external-chat": {
             enabled: true,
@@ -124,6 +131,7 @@ describe("channelsRemoveCommand", () => {
     await channelsRemoveCommand(
       {
         channel: "external-chat",
+        agent: "ops",
         account: "default",
         delete: true,
       },
@@ -133,6 +141,9 @@ describe("channelsRemoveCommand", () => {
 
     expect(ensureChannelSetupPluginInstalled).not.toHaveBeenCalled();
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(1);
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: "/tmp/ops-workspace" }),
+    );
     expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
     expect(runtime.error).toHaveBeenCalledWith(
       'Channel plugin "external-chat" is not installed. Run openclaw channels add --channel external-chat first.',

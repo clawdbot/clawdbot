@@ -1,9 +1,10 @@
 // Coordinates process-wide root work admission with reversible host suspension.
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { GatewaySuspension } from "../../packages/gateway-protocol/src/schema/gateway-suspend.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
-type GatewaySuspendAdmissionPhase = "accepting" | "preparing" | "draining" | "prepared";
+type GatewaySuspendAdmissionPhase = GatewaySuspension["phase"];
 
 type AdmissionCloseReason = "restart-signal fence" | "restart drain" | "suspend phase";
 type AdmissionReopenReason = "restart-signal fence" | "suspend phase";
@@ -33,6 +34,7 @@ type GatewayWorkAdmissionState = {
   activeRootWork: Set<GatewayRootWorkAdmission>;
   currentRootWork: AsyncLocalStorage<GatewayRootWorkAdmission>;
   suspendOpenWaiters: Set<() => void>;
+  suspendListeners: Set<(phase: GatewaySuspendAdmissionPhase) => void>;
 };
 
 const admissionLog = createSubsystemLogger("gateway/admission");
@@ -49,6 +51,7 @@ const GATEWAY_WORK_ADMISSION_STATE = resolveGlobalSingleton(
     activeRootWork: new Set(),
     currentRootWork: new AsyncLocalStorage(),
     suspendOpenWaiters: new Set(),
+    suspendListeners: new Set(),
   }),
 );
 
@@ -132,6 +135,9 @@ function invalidateSuspendAdmission(): void {
     logAdmissionReopened("suspend phase");
   }
   callback?.();
+  if (wasClosed) {
+    notifyGatewaySuspendAdmission();
+  }
 }
 
 function clearRestartSignalFence(): boolean {
@@ -191,11 +197,45 @@ export function getGatewaySuspendAdmissionPhase(): GatewaySuspendAdmissionPhase 
   return GATEWAY_WORK_ADMISSION_STATE.suspendPhase;
 }
 
+export function onGatewaySuspendAdmissionChange(
+  listener: (phase: GatewaySuspendAdmissionPhase) => void,
+): () => void {
+  GATEWAY_WORK_ADMISSION_STATE.suspendListeners.add(listener);
+  return () => {
+    GATEWAY_WORK_ADMISSION_STATE.suspendListeners.delete(listener);
+  };
+}
+
+function notifyGatewaySuspendAdmission(): void {
+  // Presentation observers must never interrupt admission, rollback, or reopening.
+  const phase = getGatewaySuspendAdmissionPhase();
+  // Snapshot the listeners because observers can subscribe or unsubscribe while notified.
+  const listeners = Array.from(GATEWAY_WORK_ADMISSION_STATE.suspendListeners);
+  for (const listener of listeners) {
+    try {
+      listener(phase);
+    } catch (error) {
+      admissionLog.warn(`suspension observer failed: ${String(error)}`);
+    }
+  }
+}
+
 export function isGatewayRestartDraining(): boolean {
   return (
     GATEWAY_WORK_ADMISSION_STATE.restartDraining ||
     GATEWAY_WORK_ADMISSION_STATE.restartSignalPending
   );
+}
+
+/** Resolves when one-way drain commits or the reversible signal fence clears. */
+export async function waitForGatewayRestartFenceSettlement(): Promise<void> {
+  if (!GATEWAY_WORK_ADMISSION_STATE.restartSignalPending) {
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    GATEWAY_WORK_ADMISSION_STATE.suspendOpenWaiters.add(resolve);
+  });
+  await waitForGatewayRestartFenceSettlement();
 }
 
 export function getGatewayRestartDrainSignal(): AbortSignal {
@@ -504,6 +544,7 @@ export function tryBeginGatewaySuspendAdmission(
   const generation = ++GATEWAY_WORK_ADMISSION_STATE.suspendGeneration;
   GATEWAY_WORK_ADMISSION_STATE.suspendInvalidated = onInvalidated;
   logAdmissionClosed("suspend phase");
+  notifyGatewaySuspendAdmission();
 
   const transition = (
     expected: GatewaySuspendAdmissionPhase,
@@ -521,6 +562,7 @@ export function tryBeginGatewaySuspendAdmission(
       resolveSuspendOpenWaiters();
       logAdmissionReopened("suspend phase");
     }
+    notifyGatewaySuspendAdmission();
     return true;
   };
 

@@ -34,6 +34,7 @@ export type PreparedSlackMessage = {
   };
   replyToMode: "off" | "first" | "all" | "batched";
   forcedReplyThreadTs?: string;
+  sessionDisplayName?: string;
   slackMessageMetadata?: MessageMetadata;
   requireMention: boolean;
   isDirectMessage: boolean;

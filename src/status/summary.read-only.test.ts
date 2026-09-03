@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { getAgentLocalStatuses } from "../commands/status.agent-local.js";
 import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
@@ -49,6 +50,7 @@ describe("getStatusSummary read-only session access", () => {
   });
 
   afterEach(() => {
+    cliBackendsTesting.resetDepsForTest();
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
   });
@@ -199,6 +201,78 @@ describe("getStatusSummary read-only session access", () => {
         }
       },
     );
+  });
+
+  it("keeps an authored context cap through a runtime provider alias", async () => {
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: ({ backend }) =>
+        backend === "claude-cli"
+          ? {
+              pluginId: "anthropic",
+              backend: {
+                id: "claude-cli",
+                modelProvider: "anthropic",
+                config: { command: "claude" },
+                bundleMcp: false,
+              },
+            }
+          : undefined,
+      resolvePluginSetupRegistry: () => {
+        throw new Error("setup registry should not load for a targeted runtime alias");
+      },
+      resolveRuntimeCliBackends: () => [],
+    });
+    await withOpenClawTestState({ prefix: "openclaw-status-runtime-alias-cap-" }, async (state) => {
+      const storePath = resolveSessionStorePathCore(undefined, {
+        agentId: "main",
+        env: state.env,
+      });
+      const config = {
+        agents: { defaults: { model: "anthropic/claude-opus-5" } },
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://api.anthropic.com",
+              models: [
+                {
+                  id: "claude-opus-5",
+                  name: "Claude Opus 5",
+                  reasoning: true,
+                  input: ["text" as const],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 1_000_000,
+                  contextTokens: 272_000,
+                  maxTokens: 8_192,
+                },
+              ],
+            },
+          },
+        },
+        session: { store: storePath },
+      };
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: "agent:main:main", storePath },
+        {
+          sessionId: "runtime-alias-authored-cap",
+          updatedAt: 10,
+          modelProvider: "claude-cli",
+          model: "claude-opus-5",
+          agentHarnessId: "claude-cli",
+          contextTokens: 272_000,
+          contextTokensSource: "resolved",
+          totalTokens: 121_000,
+          totalTokensFresh: true,
+          totalTokensVersion: 1,
+        },
+      );
+      closeOpenClawAgentDatabasesForTest();
+
+      const summary = await getStatusSummary({ includeChannelSummary: false, config });
+      const session = summary.sessions.recent[0];
+
+      expect(session?.contextTokens).toBe(272_000);
+      expect(session?.percentUsed).toBe(44);
+    });
   });
 
   it("bounds session payload hydration to the recent status window", async () => {

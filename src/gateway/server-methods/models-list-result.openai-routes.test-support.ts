@@ -70,6 +70,8 @@ export async function listModels(params: {
       catalogComplete: params.catalogComplete ?? false,
       workspaceDir: params.workspaceDir ?? "/tmp/models-list-openai-workspace",
       config,
+      observationConfig: config,
+      isCurrent: () => true,
       authModes: params.preparedAuthModes ?? {},
       authStore: loadAuthProfileStoreWithoutExternalProfiles(
         params.agentDir ?? "/tmp/models-list-openai-agent",

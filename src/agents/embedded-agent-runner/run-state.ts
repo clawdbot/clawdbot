@@ -65,6 +65,8 @@ export type EmbeddedAgentQueueHandle = {
   isStopped?: () => boolean;
   /** True after this handle has accepted an abort, even while cleanup retains it. */
   isAborted?: () => boolean;
+  /** True only while this exact runtime owns a live wait, not unresolved host work or cleanup. */
+  ownsLiveness?: () => boolean;
   isAbortable?: () => boolean;
   isCompacting: () => boolean;
   supportsTranscriptCommitWait?: boolean;
@@ -177,22 +179,22 @@ export function registerActiveEmbeddedRunHumanInputWait(
 export function resolveActiveEmbeddedRunRecoveryBlocker(
   sessionId: string,
   expectedHandle?: object,
-): "human_input_wait" | "stale_session_state" | undefined {
+): "human_input_wait" | "runtime_owned_wait" | "stale_session_state" | undefined {
   const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
   if (expectedHandle && handle !== expectedHandle) {
     return "stale_session_state";
   }
   const registration = handle && ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle);
   const authority = registration?.delegatedAuthority;
-  if (!handle || !authority || !registration.humanInputWaits) {
+  if (!handle || !authority) {
     return undefined;
   }
-  for (const isPending of registration.humanInputWaits) {
+  for (const isPending of registration.humanInputWaits ?? []) {
     // Question validation can synchronously close authority or replace the run.
     const pending = isPending() && !handle.isAborted?.();
     if (
       ACTIVE_EMBEDDED_RUNS.get(sessionId) !== handle ||
-      !registration.humanInputWaits.has(isPending)
+      !registration.humanInputWaits?.has(isPending)
     ) {
       return "stale_session_state";
     }
@@ -200,7 +202,25 @@ export function resolveActiveEmbeddedRunRecoveryBlocker(
       return "human_input_wait";
     }
   }
-  return undefined;
+  let ownsLiveness = false;
+  try {
+    ownsLiveness =
+      handle.ownsLiveness?.() === true && !handle.isAborted?.() && !handle.isStopped?.();
+  } catch {
+    // A failed runtime probe cannot exempt work from recovery.
+  }
+  // Runtime probes may synchronously replace a handle or close its admission.
+  if (
+    ACTIVE_EMBEDDED_RUNS.get(sessionId) !== handle ||
+    ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle) !== registration
+  ) {
+    return "stale_session_state";
+  }
+  return ownsLiveness &&
+    ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(authority.operationalRunInstance.runId) === handle &&
+    getActiveAgentRunDelegatedAuthority(authority.operationalRunInstance) === authority
+    ? "runtime_owned_wait"
+    : undefined;
 }
 const ACTIVE_EMBEDDED_RUN_LIFECYCLE_GENERATIONS =
   embeddedRunState.activeRunLifecycleGenerations ??

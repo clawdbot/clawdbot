@@ -24,6 +24,7 @@ export const SIDEBAR_NAV_ROUTES = [
   "tasks",
   "sessions",
   "activity",
+  "meetings",
   "plugins",
   "apps",
   "portals",
@@ -264,6 +265,7 @@ const SETTINGS_NAVIGATION_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
 const NAVIGATION_ICONS: NavigationItem = {
   agents: "bot",
   activity: "activity",
+  meetings: "book",
   apps: "layoutGrid",
   portals: "monitor",
   approvals: "badgeCheck",
@@ -374,6 +376,7 @@ export function cancelRoutePreload(
 const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey: string }> = {
   agents: { titleKey: "tabs.agents", subtitleKey: "subtitles.agents" },
   activity: { titleKey: "tabs.activity", subtitleKey: "subtitles.activity" },
+  meetings: { titleKey: "tabs.meetings", subtitleKey: "subtitles.meetings" },
   apps: { titleKey: "tabs.apps", subtitleKey: "subtitles.apps" },
   portals: { titleKey: "tabs.portals", subtitleKey: "subtitles.portals" },
   approvals: { titleKey: "tabs.approvals", subtitleKey: "subtitles.approvals" },

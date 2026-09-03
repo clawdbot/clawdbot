@@ -156,6 +156,9 @@ function createRootTestLintFixture() {
     "test/tsconfig/tsconfig.test.json",
     "test/tsconfig/tsconfig.test.root.json",
     "test/vitest/vitest.test-shards.d.mts",
+    "src/gateway/server-methods-list.ts",
+    "src/gateway/events.ts",
+    "scripts/protocol-event-coverage.allowlist.json",
   ]) {
     writeRepoFile(dir, file, readFileSync(path.join(repoRoot, file), "utf8"));
   }
@@ -169,8 +172,13 @@ function createRootTestLintFixture() {
     writeRepoFile(dir, file, source);
   }
   symlinkSync(path.join(repoRoot, "node_modules"), path.join(dir, "node_modules"), "junction");
-  mkdirSync(path.join(dir, "scripts"));
-  for (const script of ["run-oxlint.mjs", "report-test-temp-creations.mjs"]) {
+  // All-lane plans run the real coverage guard against unchanged mobile inputs.
+  symlinkSync(path.join(repoRoot, "apps"), path.join(dir, "apps"), "junction");
+  for (const script of [
+    "run-oxlint.mjs",
+    "report-test-temp-creations.mjs",
+    "check-protocol-event-coverage.mjs",
+  ]) {
     symlinkSync(path.join(repoRoot, "scripts", script), path.join(dir, "scripts", script));
   }
   // Stub unrelated package gates at the executable boundary: real pnpm could
@@ -1055,6 +1063,80 @@ describe("scripts/changed-lanes", () => {
     expect(isChangedLaneTestPath("src/latest.ts")).toBe(false);
   });
 
+  it.each([
+    ...[
+      "src/gateway/server-methods-list.ts",
+      "src/gateway/events.ts",
+      "apps/ios/Sources/RootTabs.swift",
+      "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatGatewayPayloadCodec.swift",
+      "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt",
+      "scripts/protocol-event-coverage.allowlist.json",
+      "scripts/check-protocol-event-coverage.mjs",
+      "scripts/check-protocol-event-coverage.mts",
+      "scripts/tsx.mjs",
+      "scripts/lib/tsx-cli-shim.mjs",
+      "scripts/lib/local-check-runtime.mts",
+      "scripts/lib/record-shared.mjs",
+      "scripts/changed-lanes.mjs",
+      "scripts/changed-lanes.mts",
+      "scripts/check-changed.mjs",
+      "scripts/check-changed.mts",
+      "unknown-surface.foo",
+      "vitest.config.ts",
+    ].map((file) => ({ name: file, paths: [file], selected: true })),
+    {
+      name: "mixed normalized paths",
+      paths: ["docs/ci.md", "./src/gateway/events.ts", "src\\gateway\\events.ts"],
+      selected: true,
+    },
+    ...[
+      "src/gateway/server-runtime-state.ts",
+      "src/gateway/events.test.ts",
+      "test/scripts/check-protocol-event-coverage.test.ts",
+      "docs/ci.md",
+      "apps/ios/Tests/ProtocolTests.swift",
+      "apps/shared/OpenClawKit/Tests/ProtocolTests.swift",
+      "apps/ios/Sources/Nested/Tests/ProtocolTests.swift",
+      "apps/shared/OpenClawKit/Sources/.build/Generated.swift",
+      "apps/android/app/src/test/java/ai/openclaw/app/GatewayTest.kt",
+      "apps/android/app/src/main/java/ai/openclaw/app/build/Generated.kt",
+      "apps/android/app/src/main/java/ai/openclaw/application/Other.kt",
+      "apps/ios/Sources/README.md",
+      "apps/android/app/src/main/AndroidManifest.xml",
+      "apps/macos/Sources/OpenClaw/AppDelegate.swift",
+      "scripts/check-protocol-event-coverage.mts.bak",
+    ].map((file) => ({ name: file, paths: [file], selected: false })),
+    { name: "no changes", paths: [], selected: false },
+  ])("selects early protocol coverage=$selected for $name", ({ paths, selected }) => {
+    const plan = createChangedCheckPlan(detectChangedLanes(paths), {
+      env: { OPENCLAW_LOCAL_CHECK: "0", PATH: "/usr/bin" },
+    });
+    const coverage = plan.commands.filter(
+      (command) => command.args[0] === "scripts/check-protocol-event-coverage.mjs",
+    );
+
+    expect(coverage).toHaveLength(selected ? 1 : 0);
+    if (selected) {
+      expect(plan.commands[0]).toEqual(coverage[0]);
+      expect(coverage[0]).toMatchObject({
+        bin: "node",
+        args: ["scripts/check-protocol-event-coverage.mjs"],
+        env: { OPENCLAW_LOCAL_CHECK: "1", PATH: "/usr/bin" },
+      });
+    }
+  });
+
+  it("selects protocol coverage for deleted mobile handlers without filtering absent files", () => {
+    const changedPath = "apps/ios/Sources/DeletedProtocolCoverageFixture.swift";
+    expect(existsSync(changedPath)).toBe(false);
+    const plan = createChangedCheckPlan(detectChangedLanes([changedPath]));
+
+    expect(plan.commands[0]).toMatchObject({
+      bin: "node",
+      args: ["scripts/check-protocol-event-coverage.mjs"],
+    });
+  });
+
   it("routes core production changes to core prod and core test lanes", () => {
     const result = detectChangedLanes(["packages/normalization-core/src/string-normalization.ts"]);
     const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
@@ -1245,13 +1327,44 @@ describe("scripts/changed-lanes", () => {
       path: "tsconfig.ui.json",
       expected: { includes: ["tsgo:ui", "tsgo:core:test", "lint:core"], excludes: [] },
     },
+    {
+      name: "routes the shared Mermaid renderer through browser typechecking",
+      path: "packages/mermaid-renderer/src/renderer.ts",
+      expected: { includes: ["tsgo:ui", "tsgo:core:test"], excludes: ["tsgo:core"] },
+    },
+    {
+      name: "routes the native Mermaid build through browser typechecking",
+      path: "packages/mermaid-renderer/vite.config.ts",
+      expected: { includes: ["tsgo:ui", "tsgo:core:test"], excludes: ["tsgo:core"] },
+    },
+    ...[
+      "packages/normalization-core/src/record-coerce.ts",
+      "packages/normalization-core/package.json",
+    ].map((filePath) => ({
+      name: `keeps core checks and adds browser typechecking for ${filePath}`,
+      path: filePath,
+      expected: {
+        includes: ["tsgo:core", "tsgo:core:test", "tsgo:ui"],
+        excludes: [],
+        lanes: { core: true, coreTests: true, ui: true },
+      },
+    })),
+    {
+      name: "keeps tooling checks and adds browser typechecking for root tsconfig",
+      path: "tsconfig.json",
+      expected: {
+        includes: ["tsgo:ui", "lint:scripts"],
+        excludes: [],
+        lanes: { tooling: true, ui: true },
+      },
+    },
   ])("$name", ({ path: changedPath, expected }) => {
     const result = detectChangedLanes([changedPath]);
     const commands = createChangedCheckPlan(result, {
       env: { PATH: "/usr/bin" },
     }).commands.map((command) => command.args[0]);
 
-    expectLanes(result.lanes, { coreTests: true, ui: true });
+    expectLanes(result.lanes, expected.lanes ?? { coreTests: true, ui: true });
     for (const command of expected.includes) {
       expect(commands).toContain(command);
     }
@@ -2007,6 +2120,7 @@ describe("scripts/changed-lanes", () => {
       "apps/android/version.json",
       "apps/ios/CHANGELOG.md",
       "apps/macos/Sources/OpenClaw/Resources/Info.plist",
+      "apps/mobile/version.json",
       "docs/.generated/config-baseline.counts.json",
       "docs/.generated/config-baseline.sha256",
       "package.json",
@@ -2308,6 +2422,7 @@ describe("scripts/changed-lanes", () => {
   });
 
   it("runs wrapper shadowing for source and guard-owner changes", () => {
+    expect(shouldRunWrapperShadowingCheck(["scripts/lib/source-file-scan-cache.mts"])).toBe(true);
     expect(
       shouldRunWrapperShadowingCheck([
         "src/channels/turn/run-channel-turn.ts",

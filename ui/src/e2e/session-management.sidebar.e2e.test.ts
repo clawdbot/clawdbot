@@ -222,9 +222,7 @@ suite.define(() => {
       );
       const shell = page.locator(".shell");
       const shellNav = page.locator(".shell-nav");
-      const collapseButton = page
-        .locator(".shell-chrome-controls")
-        .getByRole("button", { name: "Collapse sidebar" });
+      const collapseButton = page.locator(".sidebar-brand__collapse");
       const expandButton = page.locator(".shell-chrome-controls__nav-toggle");
       const drawerToggle = page
         .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
@@ -844,7 +842,7 @@ suite.define(() => {
       // Add work metadata only after first layout so the WebKit overlap
       // regression still exercises in-place row growth.
       const listRequests = (await gateway.getRequests("sessions.list")).length;
-      await gateway.setMethodResponse("sessions.list", sessionsListResponse(rows(true)));
+      await gateway.setSessionsListResponse(sessionsListResponse(rows(true)));
       await gateway.emitGatewayEvent("sessions.changed", {
         reason: "update",
         sessionKey: "agent:main:dashboard:0f9d5c1e-6d0f-4c9a-9d84-1c2f3a4b5c6e",

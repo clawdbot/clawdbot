@@ -26,6 +26,8 @@ import {
   resolveDefaultAgentDir,
   createCodexTestBindingStore,
   CODEX_TERMINAL_RESUME_COMMAND,
+  CODEX_TERMINAL_START_COMMAND,
+  createCodexSessionCatalogNodeHostCommands,
   CODEX_LOCAL_SESSION_HOST_ID,
   createCodexSessionCatalogNodeInvokePolicies,
   type OpenClawConfig,
@@ -167,7 +169,7 @@ describe("Codex supervision actions", () => {
       }
       throw new Error(`unexpected command: ${command}`);
     });
-    const { runtime, createSessionEntry, patchSessionEntry } = createRuntime({
+    const { runtime, entries, createSessionEntry, patchSessionEntry } = createRuntime({
       nodes: [
         {
           nodeId: "devbox",
@@ -197,6 +199,13 @@ describe("Codex supervision actions", () => {
     const pendingList = await provider?.list({ agentId: "alpha", hostIds: ["node:devbox"] });
     expect(pendingList?.[0]?.sessions[0]?.sessionKey).toBeUndefined();
     await first?.afterConversationBound?.();
+    const adopted = entries.find((entry) => entry.sessionKey === first?.sessionKey)?.entry;
+    if (!adopted) {
+      throw new Error("expected adopted session entry");
+    }
+    adopted.archivedAt = 123;
+    adopted.archivedBy = { type: "human", id: "operator-1" };
+    adopted.archiveReason = "manual";
     runtimeConfig = {
       agents: { list: [{ id: "alpha" }, { id: "beta", default: true }] },
     } as OpenClawConfig;
@@ -260,6 +269,10 @@ describe("Codex supervision actions", () => {
     );
     // One finalize patch per continue; the restore rides afterConversationBound.
     expect(patchSessionEntry).toHaveBeenCalledTimes(2);
+    const restored = entries.find((entry) => entry.sessionKey === second?.sessionKey)?.entry;
+    expect(restored?.archivedAt).toBeUndefined();
+    expect(restored?.archivedBy).toBeUndefined();
+    expect(restored?.archiveReason).toBeUndefined();
 
     const listed = await provider?.list({ hostIds: ["node:devbox"] });
     expect(listed?.[0]?.sessions[0]).toMatchObject({
@@ -534,6 +547,28 @@ describe("Codex supervision actions", () => {
     expect(policy.handle({ command: CODEX_TERMINAL_RESUME_COMMAND, invokeNode } as never)).toEqual({
       ok: true,
     });
+    for (const [terminal, admin, allowed] of [
+      [undefined, true, true],
+      [true, true, true],
+      [false, true, false],
+      [undefined, false, false],
+    ] as const) {
+      expect(
+        await policy.handle({
+          command: CODEX_TERMINAL_START_COMMAND,
+          nodeId: "node",
+          params: {},
+          invokeNode,
+          config: {
+            gateway: {
+              cliAgents: { enabled: true },
+              ...(terminal === undefined ? {} : { terminal: { enabled: terminal } }),
+            },
+          },
+          client: { scopes: admin ? ["operator.admin"] : [] },
+        }),
+      ).toMatchObject({ ok: allowed });
+    }
     expect(invokeNode).not.toHaveBeenCalled();
     const node = {
       nodeId: "devbox",
@@ -580,7 +615,14 @@ describe("Codex supervision actions", () => {
         cwd: "/workspace/node-new",
         nodeId: "devbox",
       }),
-    ).rejects.toThrow("omit hostId to start on the gateway host");
+    ).resolves.toEqual({
+      kind: "node",
+      nodeId: "devbox",
+      command: CODEX_TERMINAL_START_COMMAND,
+      paramsJSON: JSON.stringify({ cwd: "/workspace/node-new" }),
+      cwd: "/workspace/node-new",
+      title: "codex",
+    });
 
     await fs.writeFile(executable, process.platform === "win32" ? "@echo off\r\n" : "#!/bin/sh\n");
     if (process.platform !== "win32") {
@@ -636,6 +678,99 @@ describe("Codex supervision actions", () => {
     await expect(
       getProvider()?.startTerminalSession?.({ agentId: "main", cwd: "/workspace/blank" }),
     ).resolves.toMatchObject({ argv: [executable], cwd: "/workspace/blank" });
+    const fresh = createCodexSessionCatalogNodeHostCommands(control, {
+      getPluginConfig: () => pluginConfig,
+      getRuntimeConfig: () => ({ agents: { ownership: "explicit", entries: { unrelated: {} } } }),
+    }).find((command) => command.command === CODEX_TERMINAL_START_COMMAND)!;
+    process.env.PATH = binDir;
+    const io = { signal: new AbortController().signal, emitChunk: vi.fn(), onInput: vi.fn() };
+    await fresh.handle(
+      JSON.stringify({ cwd: binDir, initialMessage: "--help", cols: 100, rows: 30 }),
+      io,
+    );
+    expect(nodeHostMocks.runNodePtyCommand).toHaveBeenCalledWith(
+      {
+        file: executable,
+        args: ["--", "--help"],
+        cwd: binDir,
+        requiredCwd: true,
+        cols: 100,
+        rows: 30,
+      },
+      io,
+    );
+    for (const field of ["agentId", "argv", "env", "executable"]) {
+      await expect(
+        fresh.handle(JSON.stringify({ cwd: binDir, cols: 80, rows: 24, [field]: "injected" }), io),
+      ).rejects.toThrow("unknown terminal start parameter");
+    }
+    const hosts = [
+      { nodeId: "ready", connected: true, invocableCommands: [CODEX_TERMINAL_START_COMMAND] },
+      {
+        nodeId: "resume-only",
+        connected: true,
+        invocableCommands: [CODEX_TERMINAL_RESUME_COMMAND],
+      },
+      { nodeId: "offline", connected: false, invocableCommands: [CODEX_TERMINAL_START_COMMAND] },
+      {
+        nodeId: "denied",
+        connected: true,
+        commands: [CODEX_TERMINAL_START_COMMAND],
+        invocableCommands: [],
+      },
+    ];
+    const localList = vi.spyOn(control, "listPage").mockRejectedValue(new Error("app-server down"));
+    const localProgress = vi.fn();
+    let rejectNodes!: (error: Error) => void;
+    const pending = getProvider()!.list({
+      onHost: localProgress,
+      listNodes: () =>
+        new Promise((_, reject) => {
+          rejectNodes = reject;
+        }),
+    });
+    await vi.waitFor(() =>
+      expect(localProgress).toHaveBeenCalledWith(
+        expect.objectContaining({
+          hostId: CODEX_LOCAL_SESSION_HOST_ID,
+          connected: false,
+          canStartTerminal: true,
+        }),
+      ),
+    );
+    rejectNodes(new Error("node registry down"));
+    expect(await pending).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ hostId: CODEX_LOCAL_SESSION_HOST_ID, canStartTerminal: true }),
+        expect.objectContaining({ hostId: "node:registry", canStartTerminal: false }),
+      ]),
+    );
+    localList.mockRestore();
+    invoke.mockClear();
+    const onHost = vi.fn();
+    const catalogHosts = await getProvider()?.list({
+      onHost,
+      agentId: "main",
+      listNodes: async () => ({ nodes: hosts }),
+    });
+    const terminalHosts = catalogHosts?.filter((host) => host.canStartTerminal);
+    expect(terminalHosts?.filter((host) => host.hostId.startsWith("node:"))).toEqual([
+      expect.objectContaining({ hostId: "node:ready", label: "ready", sessions: [] }),
+    ]);
+    expect(onHost.mock.calls.map(([host]) => host)).toEqual(expect.arrayContaining(catalogHosts!));
+    expect(invoke).not.toHaveBeenCalled();
+    const userSource = terminalHosts?.find((host) => host.label === "Local Codex · user");
+    expect(userSource).toBeDefined();
+    await expect(
+      getProvider()?.startTerminalSession?.({
+        agentId: "main",
+        hostId: userSource!.hostId,
+        cwd: binDir,
+      }),
+    ).resolves.toMatchObject({
+      env: { CODEX_HOME: resolveCodexAppServerUserHomeDir(process.env) },
+      cwd: binDir,
+    });
     pluginConfig = { appServer: { homeScope: "user" } };
     registerCodexSessionCatalog({
       api,

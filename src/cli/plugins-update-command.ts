@@ -43,7 +43,10 @@ import {
 import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { resolveInstalledPluginLifecycleOwnership } from "../plugins/installed-plugin-package-ownership.js";
 import { configReferencesNpmInstallPath } from "../plugins/installs.js";
-import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
+import {
+  withPluginLifecycleLease,
+  type PluginLifecycleLeaseContext,
+} from "../plugins/plugin-lifecycle-lease.js";
 import {
   capturePluginPackageUpdateSnapshot,
   pluginPackageUpdateMayMutateConfig,
@@ -196,20 +199,32 @@ export async function runPluginUpdateCommand(params: RunPluginUpdateCommandParam
   assertConfigWriteAllowedInCurrentMode();
   return await withPluginLifecycleLease(
     {},
-    async () => await runPluginUpdateCommandUnlocked(params),
+    async (lease) => await runPluginUpdateCommandUnlocked(params, lease),
   );
 }
 
-async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandParams) {
+async function runPluginUpdateCommandUnlocked(
+  params: RunPluginUpdateCommandParams,
+  lease?: PluginLifecycleLeaseContext,
+) {
   if (!params.opts.dryRun) {
     assertConfigWriteAllowedInCurrentMode();
   }
 
   const sourceSnapshotPromise = readConfigFileSnapshotForWrite()
-    .then((prepared) => ({
-      ...prepared,
-      writeOptions: selectInstallMutationWriteOptions(prepared.writeOptions),
-    }))
+    .then((prepared) => {
+      const writeOptions = selectInstallMutationWriteOptions(prepared.writeOptions);
+      return {
+        ...prepared,
+        writeOptions: {
+          ...writeOptions,
+          assertConfigPathForWrite: () => {
+            lease?.assertOwned();
+            writeOptions.assertConfigPathForWrite?.();
+          },
+        },
+      };
+    })
     .catch(() => null);
   const mutationSnapshot = params.opts.dryRun ? null : await sourceSnapshotPromise;
   if (!params.opts.dryRun && !mutationSnapshot) {
@@ -403,7 +418,7 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
     dangerouslyForceUnsafeInstall: params.opts.dangerouslyForceUnsafeInstall,
     allowPrompt: !params.opts.dryRun,
   });
-  const deferredPluginTransactions: PluginInstallTransaction[] = [];
+  const deferredInstallTransactions: PluginInstallTransaction[] = [];
   let pluginResult;
   try {
     pluginResult =
@@ -444,12 +459,12 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
                   );
                 },
               },
-              deferredPluginTransactions,
+              deferredInstallTransactions,
             ),
           )
         : { config: cfgWithPluginInstallRecords, changed: false, outcomes: [] };
   } catch (error) {
-    await settlePluginInstallTransactions(deferredPluginTransactions, "rollback");
+    await settlePluginInstallTransactions(deferredInstallTransactions, "rollback");
     throw error;
   }
   let packageUpdatePersisted = false;
@@ -468,7 +483,7 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
         installOwnerMigrations: resolvePluginInstallOwnerMigrations(pluginResult),
       });
       if (!reconciled.ok) {
-        await settlePluginInstallTransactions(deferredPluginTransactions, "rollback");
+        await settlePluginInstallTransactions(deferredInstallTransactions, "rollback");
         defaultRuntime.error(reconciled.error);
         return defaultRuntime.exit(1);
       }
@@ -476,30 +491,37 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
     }
     const hookResult =
       hookSelection.hookIds.length > 0
-        ? await updateNpmInstalledHookPacks({
-            config: pluginResult.config,
-            hookIds: hookSelection.hookIds,
-            specOverrides: hookSelection.specOverrides,
-            dryRun: params.opts.dryRun,
-            ...installPolicyWarningAcknowledgement,
-            logger,
-            onIntegrityDrift: async (drift) => {
-              const specLabel = drift.resolvedSpec ?? drift.spec;
-              defaultRuntime.log(
-                theme.warn(
-                  `Integrity drift detected for hook pack "${drift.hookId}" (${specLabel})` +
-                    `\nExpected: ${drift.expectedIntegrity}` +
-                    `\nActual:   ${drift.actualIntegrity}`,
-                ),
-              );
-              if (drift.dryRun) {
-                return true;
-              }
-              return await promptYesNo(
-                `Continue updating hook pack "${drift.hookId}" with this artifact?`,
-              );
-            },
-          })
+        ? await updateNpmInstalledHookPacks(
+            requestDeferredPluginInstall(
+              {
+                config: pluginResult.config,
+                lease,
+                beforePersistentApply: mutationSnapshot?.writeOptions.assertConfigPathForWrite,
+                hookIds: hookSelection.hookIds,
+                specOverrides: hookSelection.specOverrides,
+                dryRun: params.opts.dryRun,
+                ...installPolicyWarningAcknowledgement,
+                logger,
+                onIntegrityDrift: async (drift) => {
+                  const specLabel = drift.resolvedSpec ?? drift.spec;
+                  defaultRuntime.log(
+                    theme.warn(
+                      `Integrity drift detected for hook pack "${drift.hookId}" (${specLabel})` +
+                        `\nExpected: ${drift.expectedIntegrity}` +
+                        `\nActual:   ${drift.actualIntegrity}`,
+                    ),
+                  );
+                  if (drift.dryRun) {
+                    return true;
+                  }
+                  return await promptYesNo(
+                    `Continue updating hook pack "${drift.hookId}" with this artifact?`,
+                  );
+                },
+              },
+              deferredInstallTransactions,
+            ),
+          )
         : { config: pluginResult.config, changed: false, outcomes: [] };
 
     if (!params.opts.dryRun && (pluginResult.changed || hookResult.changed)) {
@@ -515,7 +537,7 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
           !currentSnapshot.ok ||
           !isDeepStrictEqual([...currentSnapshot.value], [...packageUpdateSnapshot])
         ) {
-          await settlePluginInstallTransactions(deferredPluginTransactions, "rollback");
+          await settlePluginInstallTransactions(deferredInstallTransactions, "rollback");
           defaultRuntime.error(
             currentSnapshot.ok
               ? "Plugin package ownership changed during update; no config or index changes were committed. Refresh the plugin registry and retry."
@@ -575,7 +597,7 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
         });
       }
       packageUpdatePersisted = true;
-      await settlePluginInstallTransactions(deferredPluginTransactions, "commit").catch(() =>
+      await settlePluginInstallTransactions(deferredInstallTransactions, "commit").catch(() =>
         logger.warn("Plugin update committed, but cleanup failed. Restart is required."),
       );
       if (pluginResult.changed) {
@@ -603,7 +625,7 @@ async function runPluginUpdateCommandUnlocked(params: RunPluginUpdateCommandPara
     }
   } catch (error) {
     if (!packageUpdatePersisted) {
-      await settlePluginInstallTransactions(deferredPluginTransactions, "rollback");
+      await settlePluginInstallTransactions(deferredInstallTransactions, "rollback");
     }
     throw error;
   }

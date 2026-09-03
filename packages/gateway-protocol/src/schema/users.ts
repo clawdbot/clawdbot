@@ -1,6 +1,16 @@
 // Gateway Protocol schemas for durable user profiles and email aliases.
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import {
+  GitHubIdentityFactsSchema,
+  ToolsGitHubAuthorizePendingResultSchema,
+  ToolsGitHubAuthorizeSlowDownResultSchema,
+  ToolsGitHubAuthorizeAccessDeniedResultSchema,
+  ToolsGitHubAuthorizeExpiredResultSchema,
+  ToolsGitHubAuthorizeIncorrectDeviceCodeResultSchema,
+  ToolsGitHubAuthorizeNetworkErrorResultSchema,
+  ToolsGitHubAuthorizeFailedResultSchema,
+} from "./agents-models-skills.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
@@ -133,3 +143,67 @@ export type UsersPrefsGetResult = Static<typeof UsersPrefsGetResultSchema>;
 export type UsersPrefsSetParams = Static<typeof UsersPrefsSetParamsSchema>;
 export type UsersPrefsSetResult = Static<typeof UsersPrefsSetResultSchema>;
 export type UsersPrefsChangedEvent = Static<typeof UsersPrefsChangedEventSchema>;
+
+export const PersonalGitHubGenerationSchema = Type.String({ format: "uuid", maxLength: 36 });
+export const PersonalGitHubAccountSchema = closedObject({
+  accountId: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+  login: Type.String({
+    minLength: 1,
+    maxLength: 39,
+    pattern: "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$",
+  }),
+});
+export const UsersGitHubAuthorizeStartParamsSchema = closedObject({});
+export const UsersGitHubAuthorizeStartResultSchema = closedObject({
+  requestId: PersonalGitHubGenerationSchema,
+  userCode: Type.String({ pattern: "^[A-Z0-9]{4}-[A-Z0-9]{4}$" }),
+  verificationUri: Type.Literal("https://github.com/login/device"),
+  expiresInMs: Type.Integer({ minimum: 0, maximum: 900000 }),
+  pollAfterMs: Type.Integer({ minimum: 1, maximum: 60000 }),
+});
+export const UsersGitHubAuthorizePollParamsSchema = closedObject({
+  requestId: PersonalGitHubGenerationSchema,
+});
+export const UsersGitHubAuthorizeCancelParamsSchema = closedObject({
+  requestId: PersonalGitHubGenerationSchema,
+});
+export const UsersGitHubAuthorizeCancelResultSchema = closedObject({ cancelled: Type.Boolean() });
+export const UsersGitHubDisconnectParamsSchema = closedObject({});
+export const UsersGitHubDisconnectResultSchema = closedObject({ disconnected: Type.Literal(true) });
+export const PersonalGitHubStatusSchema = closedObject({
+  state: Type.Union([
+    Type.Literal("connected"),
+    Type.Literal("disconnected"),
+    Type.Literal("unavailable"),
+  ]),
+  generation: Type.Union([PersonalGitHubGenerationSchema, Type.Null()]),
+  account: Type.Union([PersonalGitHubAccountSchema, Type.Null()]),
+  accessExpiresAtMs: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
+  refreshState: Type.Union([
+    Type.Literal("available"),
+    Type.Literal("refreshing"),
+    Type.Literal("expired"),
+    Type.Literal("failed"),
+    Type.Literal("not_applicable"),
+  ]),
+  pending: Type.Union([UsersGitHubAuthorizeStartResultSchema, Type.Null()]),
+});
+export const UsersGitHubStatusParamsSchema = closedObject({});
+export const UsersGitHubStatusResultSchema = closedObject({
+  personal: PersonalGitHubStatusSchema,
+  system: GitHubIdentityFactsSchema,
+});
+export const UsersGitHubAuthorizePollResultSchema = Type.Union([
+  ToolsGitHubAuthorizePendingResultSchema,
+  ToolsGitHubAuthorizeSlowDownResultSchema,
+  ToolsGitHubAuthorizeAccessDeniedResultSchema,
+  ToolsGitHubAuthorizeExpiredResultSchema,
+  ToolsGitHubAuthorizeIncorrectDeviceCodeResultSchema,
+  ToolsGitHubAuthorizeNetworkErrorResultSchema,
+  ToolsGitHubAuthorizeFailedResultSchema,
+  closedObject({ status: Type.Literal("success"), personal: PersonalGitHubStatusSchema }),
+]);
+export type PersonalGitHubStatus = Static<typeof PersonalGitHubStatusSchema>;
+export type UsersGitHubStatusResult = Static<typeof UsersGitHubStatusResultSchema>;
+export type UsersGitHubAuthorizeStartResult = Static<typeof UsersGitHubAuthorizeStartResultSchema>;
+export type UsersGitHubAuthorizePollResult = Static<typeof UsersGitHubAuthorizePollResultSchema>;

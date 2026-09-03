@@ -24,6 +24,7 @@ import { formatCliCommand } from "./command-format.js";
 import { formatUnsupportedChannelActionMessage } from "./error-format.js";
 
 type ChannelAuthOptions = {
+  agent?: string;
   channel?: string;
   account?: string;
   verbose?: boolean;
@@ -116,6 +117,7 @@ async function resolveChannelPluginForMode(
   const resolved = await resolveInstallableChannelPlugin({
     cfg,
     runtime,
+    agentId: opts.agent,
     rawChannel: channelInput,
     ...(normalizedChannelId ? { channelId: normalizedChannelId } : {}),
     allowInstall: true,

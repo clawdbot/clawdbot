@@ -261,6 +261,7 @@ describe("models.list plugin metadata handoff", () => {
             agentDir: state.agentDir("main"),
             workspaceDir: state.workspaceDir,
             config: cfg,
+            observationConfig: cfg,
             catalogComplete: true,
             authModes: {},
             authStore: { version: 1, profiles: {} },

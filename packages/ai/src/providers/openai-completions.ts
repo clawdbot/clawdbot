@@ -480,14 +480,14 @@ function buildParams(
   const thinkingLevelMap = model.thinkingLevelMap as
     | Partial<Record<NonNullable<OpenAICompletionsOptions["reasoningEffort"]>, string | null>>
     | undefined;
+  const offReasoningEffort = reasoningEffortMap.off ?? model.thinkingLevelMap?.off;
   const reasoningEffort =
     options?.reasoningEffort === undefined
-      ? undefined
+      ? (offReasoningEffort ?? undefined)
       : (reasoningEffortMap[options.reasoningEffort] ??
         thinkingLevelMap?.[options.reasoningEffort] ??
         options.reasoningEffort);
   const reasoningEnabled = reasoningEffort !== undefined && reasoningEffort !== "none";
-  const offReasoningEffort = reasoningEffortMap.off ?? model.thinkingLevelMap?.off;
 
   if (compat.thinkingFormat === "zai" && model.reasoning) {
     params.thinking = reasoningEnabled

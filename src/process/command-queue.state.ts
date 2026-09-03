@@ -1,6 +1,7 @@
 // Shared command-queue runtime state, split out of command-queue.ts so the
 // capacity-group policy can read lane state without importing the queue itself.
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type { CommandQueueEnqueueOptions } from "./command-queue.types.js";
 import { CommandLane } from "./lanes.js";
 
 export type CommandLaneTaskMarker = Readonly<{
@@ -24,6 +25,7 @@ export type QueueEntry = {
   activeAheadAtEnqueue: number;
   taskTimeoutMs?: number;
   taskTimeoutProgressAtMs?: () => number | undefined;
+  taskTimeoutSubscribe?: CommandQueueEnqueueOptions["taskTimeoutSubscribe"];
   taskTimeoutAbortSignal?: AbortSignal;
   taskTimeoutAbortGraceMs?: number;
   taskTimeoutReleaseSignal?: AbortSignal;

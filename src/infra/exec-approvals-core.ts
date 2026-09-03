@@ -3,7 +3,7 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import type { ApprovalScope } from "./approval-scope.js";
 import type { CommandExplanationSummary } from "./command-analysis/explain.js";
 import type { ExecApprovalPolicySnapshot } from "./exec-approval-policy-snapshot.js";
-import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
+import type { ExecAllowlistEntry, McpToolGrant } from "./exec-approvals.types.js";
 
 export type ExecHost = "sandbox" | "gateway" | "node";
 export type ExecTarget = "auto" | ExecHost;
@@ -244,6 +244,7 @@ export type ExecApprovalsDefaults = {
 
 export type ExecApprovalsAgent = ExecApprovalsDefaults & {
   allowlist?: ExecAllowlistEntry[];
+  mcpTools?: McpToolGrant[];
 };
 
 export type ExecApprovalsFile = {

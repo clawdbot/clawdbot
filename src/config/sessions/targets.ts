@@ -17,7 +17,7 @@ import {
 import { resolveStateDir } from "../paths.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveAgentsDirFromSessionStorePath, resolveSessionStorePathCore } from "./paths.js";
-import { readSessionEntryKeys } from "./session-accessor.sqlite-entry-store.js";
+import { iterateSessionEntryKeys } from "./session-accessor.sqlite-entry-store.js";
 import {
   listDurableSqliteTargetOwnersForSessionStorePath,
   listDurableSqliteTargetPathsForSessionStorePath,
@@ -113,7 +113,7 @@ export function listKnownSessionStoreAgentIds(
       try {
         const logicalOwners = withOpenClawAgentDatabaseReadOnly(
           (database) =>
-            readSessionEntryKeys(database).flatMap((sessionKey) => {
+            Array.from(iterateSessionEntryKeys(database)).flatMap((sessionKey) => {
               const parsed = parseAgentSessionKey(sessionKey);
               return parsed ? [normalizeAgentId(parsed.agentId)] : [];
             }),
@@ -387,15 +387,18 @@ export function resolveExistingAgentSessionStoreTargetsSync(
           ? normalizeAgentId(resolvedTarget.agentId ?? defaultAgentId)
           : requested;
         const result = withOpenClawAgentDatabaseReadOnly(
-          (database) =>
-            readSessionEntryKeys(database).some((sessionKey) => {
+          (database) => {
+            for (const sessionKey of iterateSessionEntryKeys(database)) {
               const parsed = parseAgentSessionKey(sessionKey);
               // Unscoped keys belong to the validated database owner. Explicit agent keys must
               // match so a fixed store containing only another agent's rows proves nothing.
-              return parsed
-                ? normalizeAgentId(parsed.agentId) === requested
-                : databaseAgentId === requested;
-            }),
+              const ownerAgentId = parsed ? normalizeAgentId(parsed.agentId) : databaseAgentId;
+              if (ownerAgentId === requested) {
+                return true;
+              }
+            }
+            return false;
+          },
           { agentId: databaseAgentId, env, path: sqlitePath },
         );
         return result.found && result.value ? [fixedTarget] : [];
@@ -662,6 +665,9 @@ export function resolveSessionStoreTargets(
   const requestedAgent = opts.agent?.trim();
   if (opts.agent !== undefined && !requestedAgent) {
     throw new Error("--agent must not be blank");
+  }
+  if (opts.store !== undefined && !opts.store.trim()) {
+    throw new Error("--store must not be blank");
   }
   const hasAgent = requestedAgent !== undefined;
   const allAgents = opts.allAgents === true;

@@ -64,7 +64,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
               path.join(root, ".artifacts", "vitest-workers"),
             );
             expect(fileURLToPath(generation)).toBe(
-              path.join(generationDirectory, "dist/infra/runtime-process-entrypoints.js"),
+              path.join(generationDirectory, "dist/infra/sqlite-readonly-location.worker.js"),
             );
             expect(observed.args[0]).toBe(
               path.join(generationDirectory, "dist/infra/sqlite-readonly-location.worker.js"),
@@ -72,7 +72,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
             expect(fileURLToPath(observed.knn)).toBe(
               path.join(
                 generationDirectory,
-                "dist/extensions/memory-core/manager-search-knn-entrypoint.js",
+                "dist/extensions/memory-core/memory-search-knn.child.js",
               ),
             );
             // Each completed repository invocation must dispose before the next starts.
@@ -80,11 +80,11 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
           } else {
             expect(result.stderr).not.toContain("[vitest-workers] prepared");
             expect(fileURLToPath(generation)).toBe(
-              path.join(root, "src/infra/runtime-process-entrypoints.ts"),
+              path.join(root, "src/infra/sqlite-readonly-location.worker.ts"),
             );
             expect(observed.args.slice(0, 2)).toEqual(["--import", "tsx"]);
             expect(fileURLToPath(observed.knn)).toBe(
-              path.join(root, "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts"),
+              path.join(root, "extensions/memory-core/src/memory/manager-search-knn.child.ts"),
             );
           }
           console.log(

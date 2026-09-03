@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { recordInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
 import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
+import type { OfficialExternalPluginCatalogEntry } from "./official-external-plugin-catalog.js";
 
 const mocks = vi.hoisted(() => ({
   metadata: vi.fn(),
   officialCatalog: vi.fn(),
+  bundledEntries: undefined as OfficialExternalPluginCatalogEntry[] | undefined,
 }));
 
 vi.mock("./plugin-metadata-snapshot.js", () => ({
@@ -12,11 +14,16 @@ vi.mock("./plugin-metadata-snapshot.js", () => ({
   resolvePluginMetadataSnapshot: (...args: unknown[]) => mocks.metadata(...args),
 }));
 
-vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./official-external-plugin-catalog.js")>()),
-  loadConfiguredHostedOfficialExternalPluginCatalogEntries: (...args: unknown[]) =>
-    mocks.officialCatalog(...args),
-}));
+vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./official-external-plugin-catalog.js")>();
+  return {
+    ...actual,
+    listOfficialExternalPluginCatalogEntries: () =>
+      mocks.bundledEntries ?? actual.listOfficialExternalPluginCatalogEntries(),
+    loadConfiguredHostedOfficialExternalPluginCatalogEntries: (...args: unknown[]) =>
+      mocks.officialCatalog(...args),
+  };
+});
 
 const { clearManagedPluginOfficialCatalogCache, listManagedPlugins, resolveManagedPluginIconUrl } =
   await import("./management-service.js");
@@ -144,6 +151,22 @@ function hostedFeedEntry(params: {
   };
 }
 
+// Composition fixtures preserve array occurrences that the native catalog producer deduplicates.
+function compositionEntry(
+  id: string,
+  install: { clawhubSpec?: string; npmSpec?: string; localPath?: string } = {},
+  { order = 7 }: { order?: number } = {},
+) {
+  return {
+    featured: true,
+    openclaw: {
+      plugin: { id, label: id },
+      catalog: { featured: true, order },
+      install,
+    },
+  };
+}
+
 const hostedFeedDiffsEntry = hostedFeedEntry({
   packageName: "@openclaw/diffs",
   title: "Diffs",
@@ -195,6 +218,7 @@ describe("plugin management Featured authority", () => {
   });
 
   beforeEach(() => {
+    mocks.bundledEntries = undefined;
     clearManagedPluginOfficialCatalogCache();
     mocks.metadata.mockReset();
     mocks.officialCatalog.mockReset();
@@ -658,4 +682,319 @@ describe("plugin management Featured authority", () => {
       }),
     ]);
   });
+
+  it.each([
+    { mode: "one dual-source occurrence", expectedId: "bundled" },
+    { mode: "split source occurrences", expectedId: "remote" },
+    { mode: "repeated object occurrence", expectedId: "remote" },
+    { mode: "cloned occurrence", expectedId: "remote" },
+    { mode: "different source", expectedId: "remote" },
+    { mode: "different ClawHub case", expectedId: "remote" },
+  ])("preserves overlay identity for $mode", async ({ mode, expectedId }) => {
+    const both = { clawhubSpec: "clawhub:@acme/shared", npmSpec: "@acme/shared" };
+    const bundled = compositionEntry("bundled", both, { order: 41 });
+    const hosted = compositionEntry("remote", both);
+    let bundledEntries = [bundled];
+    if (mode === "split source occurrences") {
+      bundledEntries = [
+        compositionEntry("bundled-clawhub", { clawhubSpec: both.clawhubSpec }),
+        compositionEntry("bundled-npm", { npmSpec: both.npmSpec }),
+      ];
+    } else if (mode === "repeated object occurrence") {
+      bundledEntries = [bundled, bundled];
+    } else if (mode === "cloned occurrence") {
+      bundledEntries = [bundled, { ...bundled }];
+    } else if (mode === "different source") {
+      hosted.openclaw.install = { clawhubSpec: both.clawhubSpec };
+      bundled.openclaw.install = { npmSpec: both.npmSpec };
+    } else if (mode === "different ClawHub case") {
+      hosted.openclaw.install = { clawhubSpec: "clawhub:@acme/Shared" };
+      bundled.openclaw.install = { clawhubSpec: both.clawhubSpec };
+    }
+    mocks.bundledEntries = bundledEntries;
+    mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
+    mocks.officialCatalog.mockResolvedValue(hostedCatalog([hosted]));
+
+    const catalog = await listManagedPlugins({ config: {}, env: {} });
+
+    expect(catalog.plugins).toEqual([
+      expect.objectContaining({
+        id: expectedId,
+        featured: true,
+        order: expectedId === "bundled" ? 41 : 7,
+      }),
+    ]);
+  });
+
+  it.each([
+    "one",
+    "repeated object",
+    "clone",
+    "npm source only",
+    "dual-source feed",
+    "npm namesake",
+  ])(
+    "preserves installed identity and package suppression for %s hosted occurrence",
+    async (mode) => {
+      const localIcon = "https://cdn.example.test/local.png";
+      const hostedIcon = "https://cdn.example.test/hosted.png";
+      mocks.metadata.mockReturnValue(
+        metadataSnapshot({
+          id: "installed",
+          name: "Local",
+          packageName: "@acme/installed",
+          icon: localIcon,
+        }),
+      );
+      mocks.bundledEntries = [
+        {
+          ...compositionEntry("catalog-runtime", {
+            clawhubSpec: "clawhub:@acme/shared",
+            npmSpec: "@acme/installed",
+          }),
+          name: "@acme/installed",
+        },
+      ];
+      const hosted = {
+        ...compositionEntry(
+          "remote",
+          mode === "npm source only" || mode === "npm namesake"
+            ? { npmSpec: mode === "npm namesake" ? "@acme/shared" : "@acme/installed" }
+            : { clawhubSpec: "clawhub:@acme/shared" },
+        ),
+        title: "Remote",
+        icon: hostedIcon,
+        ...(mode === "dual-source feed"
+          ? {
+              state: "available",
+              publisher: { trust: "official" },
+              install: {
+                candidates: [
+                  { sourceRef: "public-npm", package: "@acme/installed" },
+                  { sourceRef: "public-clawhub", package: "@acme/shared" },
+                ],
+              },
+            }
+          : {}),
+      };
+      // The declared ClawHub counterpart suppresses duplicates without inventing npm identity.
+      const entries =
+        mode === "repeated object"
+          ? [hosted, hosted]
+          : mode === "clone"
+            ? [hosted, { ...hosted }]
+            : [hosted];
+      mocks.officialCatalog.mockResolvedValue(hostedCatalog(entries));
+
+      const catalog = await listManagedPlugins({ config: {}, env: {} });
+      const icon = await resolveManagedPluginIconUrl({
+        config: {},
+        env: {},
+        pluginId: "installed",
+      });
+      const curated = mode === "one" || mode === "dual-source feed";
+
+      expect(catalog.plugins).toEqual([
+        ...(mode === "npm namesake"
+          ? [
+              expect.objectContaining({
+                id: "remote",
+                installed: false,
+                packageName: "@acme/shared",
+              }),
+            ]
+          : []),
+        expect.objectContaining({
+          id: "installed",
+          installed: true,
+          name: curated ? "Remote" : "Local",
+          featured: curated,
+          hasIcon: true,
+        }),
+      ]);
+      expect(icon).toBe(curated ? hostedIcon : localIcon);
+    },
+  );
+
+  it.each([
+    { mode: "first hosted icon", firstIcon: "https://cdn.example.test/first.png" },
+    { mode: "first missing icon", firstIcon: undefined },
+    {
+      mode: "normalized manifest fallback",
+      firstIcon: undefined,
+      fallbackIcon: "https://cdn.example.test/normalized.png",
+    },
+  ])("retains normalized first-record selection for $mode", async ({ firstIcon, fallbackIcon }) => {
+    const first = metadataSnapshot({
+      id: "Alias",
+      name: "First",
+      origin: "global",
+      packageName: "@acme/first",
+      icon: "https://cdn.example.test/raw-first.png",
+      installRecord: {
+        source: "clawhub",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubChannel: "official",
+        clawhubPackage: "@acme/first",
+      },
+    });
+    const second = metadataSnapshot({
+      id: "ALIAS",
+      name: "Second",
+      origin: "global",
+      packageName: "@acme/second",
+      installRecord: {
+        source: "clawhub",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubChannel: "official",
+        clawhubPackage: "@acme/second",
+      },
+    });
+    const normalizedManifest = {
+      ...first.plugins[0]!,
+      id: "alias",
+      icon: fallbackIcon,
+    };
+    mocks.metadata.mockReturnValue({
+      ...first,
+      index: {
+        plugins: [...first.index.plugins, ...second.index.plugins],
+        installRecords: { ...first.index.installRecords, ...second.index.installRecords },
+      },
+      plugins: [...first.plugins, ...second.plugins],
+      byPluginId: new Map([
+        ...first.byPluginId,
+        ...second.byPluginId,
+        ["alias", normalizedManifest],
+      ]),
+      normalizePluginId: (id: string) => id.trim().toLowerCase(),
+    });
+    const officialCatalog = {
+      entries: [
+        { ...compositionEntry("first", { clawhubSpec: "clawhub:@acme/first" }), icon: firstIcon },
+        {
+          ...compositionEntry("second", { clawhubSpec: "clawhub:@acme/second" }),
+          icon: "https://cdn.example.test/second.png",
+        },
+      ],
+    };
+    const expected = firstIcon ?? fallbackIcon;
+
+    const catalog = await listManagedPlugins({ config: {}, env: {}, officialCatalog });
+    const icon = await resolveManagedPluginIconUrl({
+      config: {},
+      env: {},
+      pluginId: "ALIAS",
+      officialCatalog,
+    });
+
+    expect(catalog.plugins).toHaveLength(2);
+    for (const plugin of catalog.plugins) {
+      expect(plugin.hasIcon).toBe(expected ? true : undefined);
+    }
+    expect(icon).toBe(expected);
+  });
+
+  it.each([undefined, "https://cdn.example.test/first.png"])(
+    "resolves the first uninstalled duplicate catalog ID with icon %s",
+    async (firstIcon) => {
+      mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
+      const officialCatalog = {
+        entries: [
+          { ...compositionEntry("duplicate"), icon: firstIcon },
+          { ...compositionEntry("duplicate"), icon: "https://cdn.example.test/second.png" },
+        ],
+      };
+
+      const catalog = await listManagedPlugins({ config: {}, env: {}, officialCatalog });
+      const icon = await resolveManagedPluginIconUrl({
+        config: {},
+        env: {},
+        pluginId: "duplicate",
+        officialCatalog,
+      });
+
+      expect(catalog.plugins.map((plugin) => plugin.hasIcon)).toEqual([
+        firstIcon ? true : undefined,
+        true,
+      ]);
+      expect(icon).toBe(firstIcon);
+    },
+  );
+
+  it.each([
+    {
+      name: "unversioned ClawHub",
+      install: { clawhubSpec: "clawhub:@acme/action" },
+      source: "clawhub",
+    },
+    {
+      name: "pinned ClawHub",
+      install: { clawhubSpec: "clawhub:@acme/action@1.2.3" },
+      source: "official",
+    },
+    { name: "npm", install: { npmSpec: "@acme/action@1.2.3" }, source: "official" },
+    {
+      name: "npm with unversioned ClawHub",
+      install: { npmSpec: "@acme/action@1.2.3", clawhubSpec: "clawhub:@acme/action" },
+      source: "official",
+    },
+    { name: "local", install: { localPath: "./plugin" }, source: "official" },
+    { name: "malformed ClawHub", install: { clawhubSpec: "clawhub:" }, source: "official" },
+    {
+      name: "malformed npm selector",
+      install: { npmSpec: "@acme/action@^1.2.3" },
+      source: "official",
+    },
+    {
+      name: "malformed npm selector with unversioned ClawHub",
+      install: {
+        npmSpec: "@acme/action@^1.2.3",
+        clawhubSpec: "clawhub:@acme/action",
+      },
+      source: "official",
+    },
+    { name: "no install", install: {}, source: undefined },
+    {
+      name: "rejected state",
+      install: { npmSpec: "@acme/action" },
+      source: undefined,
+      state: "rejected",
+      publisher: { trust: "official" },
+    },
+    {
+      name: "rejected publisher",
+      install: { npmSpec: "@acme/action" },
+      source: undefined,
+      state: "available",
+      publisher: { trust: "community" },
+    },
+    {
+      name: "incomplete authority",
+      install: { npmSpec: "@acme/action" },
+      source: undefined,
+      state: "available",
+    },
+  ])(
+    "preserves the public install action for $name",
+    async ({ install, source, state, publisher }) => {
+      mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
+      const entry = { ...compositionEntry("action", install), state, publisher };
+
+      const catalog = await listManagedPlugins({
+        config: {},
+        env: {},
+        officialCatalog: { entries: [entry] },
+      });
+
+      expect(catalog.plugins).toHaveLength(1);
+      expect(catalog.plugins[0]?.install).toEqual(
+        source === "clawhub"
+          ? { source: "clawhub", packageName: "@acme/action" }
+          : source === "official"
+            ? { source: "official", pluginId: "action" }
+            : undefined,
+      );
+    },
+  );
 });

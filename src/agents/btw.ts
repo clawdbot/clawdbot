@@ -33,7 +33,7 @@ import { prepareCliRunContext } from "./cli-runner/prepare.runtime.js";
 import { EmbeddedBlockChunker, type BlockReplyChunking } from "./embedded-agent-block-chunker.js";
 import { resolveModelAsync, resolveModelWithRegistry } from "./embedded-agent-runner/model.js";
 import { getActiveEmbeddedRunSnapshot } from "./embedded-agent-runner/runs.js";
-import { resolveEmbeddedAgentStreamFn } from "./embedded-agent-runner/stream-resolution.js";
+import { resolveEmbeddedAgentStream } from "./embedded-agent-runner/stream-resolution.js";
 import { createAgentHarnessHostCapabilities } from "./harness/host-capability.js";
 import { resolveAgentHarnessOwnerPluginId } from "./harness/registry.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
@@ -1274,7 +1274,7 @@ export async function runBtwSideQuestion(
       env: process.env,
       apiRegistry: modelRegistryRuntime.apiRegistry,
     });
-    const streamFn = resolveEmbeddedAgentStreamFn({
+    const { streamFn } = resolveEmbeddedAgentStream({
       llmRuntime: modelRegistryRuntime.llmRuntime,
       currentStreamFn: modelRegistryRuntime.llmRuntime.streamSimple,
       providerStreamFn,

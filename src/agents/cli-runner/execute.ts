@@ -465,6 +465,7 @@ export async function executePreparedCliRun(
       delete env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST;
 
       let executionCommand = backend.command;
+      let executionArgv0: string | undefined;
       let executionLeadingArgv: readonly string[] = [];
       context.runtimeOwnerFingerprint = undefined;
       context.runtimeArtifactFingerprint = undefined;
@@ -508,6 +509,7 @@ export async function executePreparedCliRun(
           });
         }
         executionCommand = executableIdentity.invocation.command;
+        executionArgv0 = executableIdentity.invocation.argv0;
         executionLeadingArgv = executableIdentity.invocation.leadingArgv;
         context.runtimeArtifactFingerprint = fingerprintCliRuntimeArtifact({
           provider: params.provider,
@@ -570,12 +572,12 @@ export async function executePreparedCliRun(
         nodeEnv: nodeEnv && Object.keys(nodeEnv).length > 0 ? nodeEnv : undefined,
         nodeClearEnv: nodeClearEnv.length > 0 ? nodeClearEnv : undefined,
         useManagedClaudeLiveSession,
-        usePluginOwnedExecution,
         initialGatewayCaptureKey,
         useResume,
         cliSessionIdToUse,
         resolvedSessionId,
         executionCommand,
+        executionArgv0,
         executionLeadingArgv,
         executionArgs: args,
         env,

@@ -770,19 +770,32 @@ describe("loadPluginManifestRegistry", () => {
     writeManifest(globalDir, manifest);
     writeManifest(configDir, manifest);
 
-    const registry = loadRegistry([
-      createPluginCandidate({
-        idHint: "external-chat",
-        rootDir: globalDir,
-        origin: "global",
-      }),
-      createPluginCandidate({
-        idHint: "external-chat",
-        rootDir: configDir,
-        origin: "config",
-      }),
-    ]);
+    const registry = loadPluginManifestRegistryCore({
+      candidates: [
+        createPluginCandidate({
+          idHint: "external-chat",
+          rootDir: globalDir,
+          origin: "global",
+        }),
+        createPluginCandidate({
+          idHint: "external-chat",
+          rootDir: configDir,
+          origin: "config",
+        }),
+      ],
+      diagnostics: [globalDir, configDir, globalDir].map((source) => ({
+        level: "warn" as const,
+        pluginId: "external-chat",
+        source,
+        message: "extension entry unreadable (I/O error): ./index.js",
+      })),
+    });
 
+    expect(
+      registry.diagnostics
+        .filter((diagnostic) => diagnostic.message.includes("extension entry unreadable"))
+        .map((diagnostic) => diagnostic.source),
+    ).toEqual([globalDir, configDir]);
     const channelConfigWarnings = registry.diagnostics.filter((diagnostic) =>
       diagnostic.message.includes("without channelConfigs metadata"),
     );

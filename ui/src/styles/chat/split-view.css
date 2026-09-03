@@ -179,6 +179,45 @@ openclaw-chat-pane {
   -webkit-user-select: none;
 }
 
+.chat-pane__header--centered {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+}
+
+.chat-pane__header-leading,
+.chat-pane__header-center,
+.chat-pane__header-trailing {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+}
+
+.chat-pane__header-leading,
+.chat-pane__header-trailing {
+  gap: 8px;
+}
+
+/* Equal outer tracks keep the face switch on the pane centerline even when
+   either chrome cluster grows; the identity trail owns the shrinkable text. */
+.chat-pane__header-center {
+  position: relative;
+  justify-self: center;
+}
+
+.chat-pane__header-center:has(.chat-pane__face-switch) {
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--panel-strong) 76%, transparent);
+}
+
+.chat-pane__header-trailing {
+  margin-left: auto;
+  justify-self: end;
+}
+
+.chat-pane__header--centered .chat-pane__header-trailing {
+  margin-left: 0;
+}
+
 /* Identity trail: project, then session. One flex row owns the alignment of
    every segment, so the 26px project chip and the 12px text segments centre on
    a single line and a future parent-session segment inherits it for free. */
@@ -611,12 +650,15 @@ openclaw-chat-pane {
 .chat-pane__actions {
   display: flex;
   align-items: center;
+  border: 0;
   gap: 4px;
   flex: 0 0 auto;
+  min-width: 0;
+  padding: 0;
   /* With the title text-hugging, this claims the leftover width so the
      action cluster stays pinned to the right edge (and doubles as the
      native window-drag surface between chip and actions). */
-  margin-left: auto;
+  margin: 0 0 0 auto;
 }
 
 /* One box model for every action, whatever wraps it. A custom element defaults
@@ -674,6 +716,26 @@ openclaw-chat-pane {
   flex: 0 0 auto;
 }
 
+.chat-pane__header-center .chat-pane__sharing-menu,
+.chat-pane__header-center .chat-pane__draft-indicator {
+  position: absolute;
+  inset-block-start: 50%;
+  inset-inline-start: 100%;
+  display: inline-flex;
+  transform: translateY(-50%);
+}
+
+.chat-pane__header-center .chat-pane__sharing-trigger {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+  border-left: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: 0 var(--radius-full) var(--radius-full) 0;
+  background: color-mix(in srgb, var(--panel-strong) 76%, transparent);
+}
+
 .chat-pane__sharing-menu::part(menu) {
   width: 260px;
   min-width: min(260px, calc(100vw - 24px));
@@ -701,13 +763,36 @@ openclaw-chat-pane {
   padding: 6px 12px;
 }
 
-.chat-pane__sharing-visibility-item[disabled] {
-  opacity: 1;
-  color: var(--muted);
-}
-
 .chat-pane__sharing-members-title {
   margin-top: 8px;
+}
+
+.chat-pane__sharing-member-skeleton {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  min-height: 36px;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+}
+
+.chat-pane__sharing-member-skeleton-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+}
+
+.chat-pane__sharing-member-skeleton-label {
+  width: 72%;
+  height: 10px;
+}
+
+.chat-pane__sharing-member-skeleton:nth-child(2) .chat-pane__sharing-member-skeleton-label {
+  width: 56%;
+}
+
+.chat-pane__sharing-member-skeleton:nth-child(3) .chat-pane__sharing-member-skeleton-label {
+  width: 64%;
 }
 
 .chat-pane__sharing-member {
@@ -743,6 +828,16 @@ openclaw-chat-pane {
 
 .chat-pane__draft-indicator {
   font-size: 13px;
+}
+
+.chat-pane__header-center .chat-pane__draft-indicator {
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  border-left: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: 0 var(--radius-full) var(--radius-full) 0;
+  background: color-mix(in srgb, var(--panel-strong) 76%, transparent);
 }
 
 /* A full split header measures 793px including insets, so secondary controls

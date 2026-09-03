@@ -29,10 +29,6 @@ import { mergeGatewayTailscaleConfig } from "./startup-auth.js";
 type GatewayRuntimeConfig = {
   bindHost: string;
   controlUiEnabled: boolean;
-  openAiChatCompletionsEnabled: boolean;
-  openAiChatCompletionsConfig?: import("../config/types.gateway.js").GatewayHttpChatCompletionsConfig;
-  openResponsesEnabled: boolean;
-  openResponsesConfig?: import("../config/types.gateway.js").GatewayHttpResponsesConfig;
   strictTransportSecurityHeader?: string;
   controlUiBasePath: string;
   controlUiRoot?: string;
@@ -50,8 +46,6 @@ export async function resolveGatewayRuntimeConfig(params: {
   bind?: GatewayBindMode;
   host?: string;
   controlUiEnabled?: boolean;
-  openAiChatCompletionsEnabled?: boolean;
-  openResponsesEnabled?: boolean;
   auth?: GatewayAuthConfig;
   tailscale?: GatewayTailscaleConfig;
 }): Promise<GatewayRuntimeConfig> {
@@ -96,11 +90,6 @@ export async function resolveGatewayRuntimeConfig(params: {
   }
   const controlUiEnabled =
     params.controlUiEnabled ?? params.cfg.gateway?.controlUi?.enabled ?? true;
-  const openAiChatCompletionsConfig = params.cfg.gateway?.http?.endpoints?.chatCompletions;
-  const openAiChatCompletionsEnabled =
-    params.openAiChatCompletionsEnabled ?? openAiChatCompletionsConfig?.enabled ?? false;
-  const openResponsesConfig = params.cfg.gateway?.http?.endpoints?.responses;
-  const openResponsesEnabled = params.openResponsesEnabled ?? openResponsesConfig?.enabled ?? false;
   const strictTransportSecurityConfig =
     params.cfg.gateway?.http?.securityHeaders?.strictTransportSecurity;
   // HSTS is opt-in and must stay absent for blank strings; local HTTP and reverse-proxy
@@ -191,14 +180,6 @@ export async function resolveGatewayRuntimeConfig(params: {
   return {
     bindHost,
     controlUiEnabled,
-    openAiChatCompletionsEnabled,
-    openAiChatCompletionsConfig: openAiChatCompletionsConfig
-      ? { ...openAiChatCompletionsConfig, enabled: openAiChatCompletionsEnabled }
-      : undefined,
-    openResponsesEnabled,
-    openResponsesConfig: openResponsesConfig
-      ? { ...openResponsesConfig, enabled: openResponsesEnabled }
-      : undefined,
     strictTransportSecurityHeader,
     controlUiBasePath,
     controlUiRoot,

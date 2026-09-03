@@ -94,6 +94,45 @@ suite.define(() => {
       );
     },
   );
+
+  it("does not repeat an auth failure below the composer when the run error is visible", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const message =
+        "Your refresh token has already been used to generate a new access token. Please try signing in again.";
+      const gateway = await installMockGateway(page, {
+        inFlightRun: { runId: "auth-failed-run", text: "" },
+        models: [
+          {
+            id: "gpt-5.5",
+            name: "GPT-5.5",
+            provider: "openai",
+            available: false,
+            unavailableReason: "auth-failed",
+          },
+        ],
+      });
+
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("chat.startup");
+      await gateway.emitGatewayEvent("chat", {
+        errorDetail: {
+          provider: "openai",
+          failoverReason: "refresh_token_reused",
+          providerRuntimeFailureKind: "auth_refresh",
+          providerErrorType: "invalid_request_error",
+          httpStatus: 401,
+        },
+        errorMessage: `⚠️ ${message}`,
+        runId: "auth-failed-run",
+        sessionKey: "main",
+        state: "error",
+      });
+      await expect.poll(() => page.locator(".chat-error").textContent()).toContain(message);
+      await expect.poll(() => page.locator(".agent-chat__composer-status-band").count()).toBe(0);
+      await expect.poll(() => page.locator(".agent-chat__input textarea").isDisabled()).toBe(true);
+    });
+  });
+
   it("keeps the loading model picker beside the microphone", async () => {
     const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const artifactDir = artifactRoot
@@ -236,6 +275,7 @@ suite.define(() => {
         : {}),
     };
     await suite.withPage(pageOptions, async ({ page }) => {
+      await page.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
       const gateway = await installMockGateway(page, {
         assistantName: "Rosita",
         deferredMethods: ["chat.send"],
@@ -428,7 +468,11 @@ suite.define(() => {
           (voiceBeforeHold?.x ?? 0) - ((pickerBeforeHold?.x ?? 0) + (pickerBeforeHold?.width ?? 0)),
         ),
       ).toBeLessThanOrEqual(0.5);
+      // Measure the arming layout without letting slow browser round trips
+      // cross the 500 ms hold threshold and open the unavailable-device picker.
+      await page.clock.pauseAt(new Date("2026-01-01T01:00:00Z"));
       await page.mouse.down();
+      await page.clock.runFor(150);
       await expect
         .poll(() =>
           voice.evaluate((node) => node.classList.contains("chat-send-btn--dictation-arming")),
@@ -443,6 +487,7 @@ suite.define(() => {
       );
       await page.mouse.up();
       await page.mouse.move(0, 0);
+      await page.clock.resume();
       await expect.poll(pickerWidth).toBe(0);
       await voice.hover();
       await voice.press("Tab");

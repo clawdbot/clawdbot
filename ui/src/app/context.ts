@@ -18,7 +18,8 @@ import type { NativeChatDrafts } from "./native-bridge.ts";
 import type { NativeNotificationsCapability } from "./native-notifications.ts";
 import type { ApplicationOverlays } from "./overlays-types.ts";
 import type { ApplicationPlacementStartup } from "./session-placement-startup.ts";
-import type { UiSettings } from "./settings.ts";
+import type { UiPreferences } from "./settings.ts";
+import type { SidebarAttentionStore } from "./sidebar-attention-store.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
 import type { WebPushCapability } from "./web-push.ts";
 
@@ -36,7 +37,7 @@ export type ApplicationThemeServerSelection = {
 };
 
 export type ApplicationTheme = {
-  readonly settings: UiSettings;
+  readonly settings: UiPreferences;
   readonly mode: ThemeMode;
   readonly resolvedMode: "dark" | "light";
   readonly serverSelection: ApplicationThemeServerSelection | null;
@@ -100,6 +101,7 @@ export type ApplicationContext<TRouteId extends string = string> = {
   readonly channels: ChannelCapability;
   readonly config: ApplicationConfigCapability;
   readonly scopeUpgrade: ScopeUpgradeCapability;
+  readonly sidebarAttention: SidebarAttentionStore;
   readonly runtimeConfig: RuntimeConfigCapability;
   readonly sessions: SessionCapability;
   readonly placementStartup: ApplicationPlacementStartup;

@@ -2,7 +2,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import { guard } from "lit/directives/guard.js";
 import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/index.js";
 import { hasOperatorApprovalsAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
-import { loadSettings, patchSettings } from "../../app/settings.ts";
+import { patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import {
   acquireBoardProviderForSession,
@@ -301,9 +301,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     const snapshot = provider.snapshot$.value;
     const hasBoard = snapshot.tabs.length > 0 || snapshot.widgets.length > 0;
     const sessionKey = this.resolveBoardSessionKey(snapshot.sessionKey);
-    const saved =
-      loadSettings().boardSessionViews?.[sessionKey] ??
-      this.state?.settings?.boardSessionViews?.[sessionKey];
+    const saved = this.context.theme.settings.boardSessionViews?.[sessionKey];
     const savedTab = snapshot.tabs.some((tab) => tab.tabId === saved?.activeTabId)
       ? saved?.activeTabId
       : undefined;
@@ -347,12 +345,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     if (!sessionKey) {
       return;
     }
-    const settings = this.state?.settings;
-    const persistedSettings = loadSettings();
-    const boardSessionViews = {
-      ...settings?.boardSessionViews,
-      ...persistedSettings.boardSessionViews,
-    };
+    const boardSessionViews = this.context.theme.settings.boardSessionViews;
     const next = patchSettings({
       boardSessionViews: updateBoardSessionView(boardSessionViews, sessionKey, persistedPatch),
     });
@@ -409,9 +402,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       return;
     }
     const sessionKey = this.resolveBoardSessionKey(board.snapshot.sessionKey);
-    const saved =
-      loadSettings().boardSessionViews?.[sessionKey] ??
-      this.state?.settings?.boardSessionViews?.[sessionKey];
+    const saved = this.context.theme.settings.boardSessionViews?.[sessionKey];
     this.persistBoardSessionView({
       reopenDockByTab: {
         ...saved?.reopenDockByTab,

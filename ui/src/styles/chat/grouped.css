@@ -998,7 +998,8 @@ img.chat-avatar.chat-avatar--logo {
 
 /* User bubbles have different styling */
 .chat-group.user .chat-bubble {
-  background: var(--accent-subtle);
+  --chat-bubble-background: var(--accent-subtle);
+  background: var(--chat-bubble-background);
   border-color: transparent;
 }
 
@@ -1014,9 +1015,11 @@ img.chat-avatar.chat-avatar--logo {
   box-shadow: inset 0 1px 0 var(--card-highlight);
 }
 
-:root[data-theme-mode="light"] .chat-group.user .chat-bubble {
+/* Theme selection must not outrank the bare sent-media shell below. */
+:where(:root[data-theme-mode="light"]) .chat-group.user .chat-bubble {
+  --chat-bubble-background: color-mix(in srgb, var(--accent) 15%, var(--bg));
   border-color: transparent;
-  background: color-mix(in srgb, var(--accent) 15%, var(--bg));
+  background: var(--chat-bubble-background);
   color: var(--text-strong);
   box-shadow: none;
 }
@@ -1036,7 +1039,8 @@ img.chat-avatar.chat-avatar--logo {
    every hue. Order contract: stays below the light-mode reset above — the
    dark rule outranks it by specificity, so light mode needs its own skin. */
 .chat-group:is(.user, .chat-group--forwarded).chat-group--sender-tint .chat-bubble {
-  background: hsl(var(--chat-sender-hue) 48% 42% / 0.16);
+  --chat-bubble-background: hsl(var(--chat-sender-hue) 48% 42% / 0.16);
+  background: var(--chat-bubble-background);
 }
 
 .chat-group.user.chat-group--sender-tint .chat-bubble:hover {
@@ -1047,8 +1051,8 @@ img.chat-avatar.chat-avatar--logo {
   color: hsl(var(--chat-sender-hue) 45% 70%);
 }
 
-:root[data-theme-mode="light"] .chat-group.user.chat-group--sender-tint .chat-bubble {
-  background: hsl(var(--chat-sender-hue) 65% 94%);
+:where(:root[data-theme-mode="light"]) .chat-group.user.chat-group--sender-tint .chat-bubble {
+  --chat-bubble-background: hsl(var(--chat-sender-hue) 65% 94%);
 }
 
 /* Keep tinted user turns borderless when the generic light hover skin applies. */
@@ -1071,11 +1075,6 @@ img.chat-avatar.chat-avatar--logo {
   padding: 0;
   border: 0;
   background: transparent;
-}
-
-.chat-group.user:not(.chat-group--peer) .chat-bubble--with-images:hover {
-  border: 0;
-  background: transparent;
   box-shadow: none;
 }
 
@@ -1086,14 +1085,13 @@ img.chat-avatar.chat-avatar--logo {
   max-width: 100%;
   padding: 10px 14px;
   border-radius: var(--radius-md);
-  background: var(--accent-subtle);
+  background: var(--chat-bubble-background);
 }
 
-:root[data-theme-mode="light"]
+:where(:root[data-theme-mode="light"])
   .chat-group.user:not(.chat-group--peer)
   .chat-bubble--with-images
   > :is(.chat-text, .chat-message-disclosure, .chat-json-collapse) {
-  background: color-mix(in srgb, var(--accent) 15%, var(--bg));
   color: var(--text-strong);
 }
 

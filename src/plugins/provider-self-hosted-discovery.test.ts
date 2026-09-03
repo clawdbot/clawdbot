@@ -80,6 +80,7 @@ describe("discoverOpenAICompatibleLocalModels raw discovery", () => {
 
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce(guarded(new Response(null, { status: 200 })))
+      .mockResolvedValueOnce(guarded(new Response("<html></html>", { status: 200 })))
       .mockResolvedValueOnce(guarded(new Response("{", { status: 200 })));
     await expect(
       discoverOpenAICompatibleLocalModels({
@@ -89,7 +90,21 @@ describe("discoverOpenAICompatibleLocalModels raw discovery", () => {
         modelsPathOrder: "server-first",
         rawResult: true,
       }),
-    ).resolves.toMatchObject({ kind: "invalid-response", path: "/models" });
+    ).resolves.toMatchObject({ kind: "invalid-response", path: "/v1/models" });
+  });
+
+  it.each([401, 403, 503])("keeps root model-list HTTP %s failures terminal", async (status) => {
+    fetchWithSsrFGuardMock.mockResolvedValueOnce(guarded(new Response(null, { status })));
+
+    await expect(
+      discoverOpenAICompatibleLocalModels({
+        baseUrl: "http://127.0.0.1:8080/v1",
+        label: "llama-server",
+        modelsPathOrder: "server-first",
+        rawResult: true,
+      }),
+    ).resolves.toEqual({ kind: "http-error", path: "/models", status });
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
   });
 
   it("probes only available router models without autoloading", async () => {

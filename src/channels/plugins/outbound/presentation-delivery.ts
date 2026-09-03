@@ -14,6 +14,7 @@ export async function renderPresentationForDelivery(
     presentationCapabilities?: ChannelPresentationCapabilities;
     renderPresentation?: (
       payload: ReplyPayload & { presentation: MessagePresentation },
+      sourcePresentation?: MessagePresentation,
     ) => ReplyPayload | null | Promise<ReplyPayload | null>;
   },
   payload: ReplyPayload,
@@ -55,7 +56,7 @@ export async function renderPresentationForDelivery(
     presentation: adaptedPresentation,
   };
   const rendered = handler.renderPresentation
-    ? await handler.renderPresentation(adaptedPayload)
+    ? await handler.renderPresentation(adaptedPayload, presentation)
     : null;
   if (rendered) {
     const {

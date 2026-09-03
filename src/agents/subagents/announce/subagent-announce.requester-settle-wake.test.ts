@@ -580,10 +580,17 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
 
   it.each([
     {
-      name: "visible",
-      terminalReply: { disposition: "visible", text: "authoritative final output" } as const,
+      name: "visible local route change",
+      terminalReply: {
+        disposition: "visible",
+        text: "authoritative final output",
+        modelRouteChange: "Model route changed: requested/model → actual/model.",
+      } as const,
       resultText: "stale child output",
       expected: "authoritative final output",
+      expectedRouteInstruction:
+        "Preserve this runtime-authored model-route change notice in your final answer.",
+      expectedRouteChange: "Model route changed: requested/model → actual/model.",
     },
     {
       name: "silent",
@@ -599,7 +606,13 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     },
   ])(
     "keeps producer-owned $name terminal evidence in the requester settle wake",
-    async ({ terminalReply, resultText, expected }) => {
+    async ({
+      terminalReply,
+      resultText,
+      expected,
+      expectedRouteChange,
+      expectedRouteInstruction,
+    }) => {
       registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
         makeSettledChild({
           runId: "run-b",
@@ -620,6 +633,10 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       expect(message).not.toContain("stale child output");
       if (expected) {
         expect(message).toContain(expected);
+      }
+      if (expectedRouteInstruction) {
+        expect(message).toContain(expectedRouteChange);
+        expect(message).toContain(expectedRouteInstruction);
       }
     },
   );

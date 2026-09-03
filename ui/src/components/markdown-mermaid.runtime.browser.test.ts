@@ -1,5 +1,5 @@
+import { renderMermaidSvg, type MermaidTheme } from "@openclaw/mermaid-renderer";
 import { afterEach, describe, expect, it } from "vitest";
-import { renderMermaidSvg, type MermaidTheme } from "./markdown-mermaid.runtime.ts";
 
 const theme: MermaidTheme = {
   background: "#18181b",

@@ -142,7 +142,7 @@ export async function runDoctorHealthFlow(runtime?: RuntimeEnv, options: DoctorO
     }
     if (options.repair === true || options.yes === true) {
       // Contributions can report optional migration warnings, but repair must not
-      // complete while startup would still reject a legacy session store.
+      // complete while required state still blocks runtime access.
       const { assertSessionStoreMigrationComplete } =
         await import("../config/sessions/startup-migration.js");
       assertSessionStoreMigrationComplete({ cfg: ctx.cfg, env: process.env });
@@ -160,6 +160,9 @@ export async function runDoctorHealthFlow(runtime?: RuntimeEnv, options: DoctorO
       const { assertConfiguredWorkspaceStateReady } =
         await import("../agents/workspace-state-dirs.js");
       assertConfiguredWorkspaceStateReady({ cfg: ctx.cfg });
+      const { assertNoPendingLegacyExecApprovals } =
+        await import("../infra/exec-approvals-migration-gate.js");
+      assertNoPendingLegacyExecApprovals();
     }
     await maintenance?.finish(ctx.cfg);
     if (ctx.postInstallDoctorResult) {

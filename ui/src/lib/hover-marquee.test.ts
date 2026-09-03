@@ -89,7 +89,7 @@ describe("hover marquee", () => {
     }).not.toThrow();
   });
 
-  it("remeasures an active marquee when its available width changes", () => {
+  it("remeasures any active marquee host when its available width changes", () => {
     let resizeCallback: ResizeObserverCallback | undefined;
     class TestResizeObserver implements ResizeObserver {
       constructor(callback: ResizeObserverCallback) {
@@ -108,7 +108,6 @@ describe("hover marquee", () => {
     vi.stubGlobal("ResizeObserver", TestResizeObserver);
     let labelWidth = 180;
     const row = document.createElement("div");
-    row.className = "session-row-host";
     Object.defineProperty(row, "matches", {
       value: (selector: string) => selector === ":hover",
     });

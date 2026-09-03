@@ -26,7 +26,10 @@ import {
   type CliTimeoutContext,
 } from "./failover/error.js";
 import type { FailoverClassification, FailoverReason, FailoverSignal } from "./failover/signal.js";
-import { AgentHarnessSessionSupersededError } from "./harness/errors.js";
+import {
+  AgentHarnessSessionSupersededError,
+  isAgentHarnessPreflightError,
+} from "./harness/errors.js";
 
 export {
   FailoverError,
@@ -45,6 +48,7 @@ const RUNTIME_COORDINATION_ERROR_NAMES = new Set([
   "WorkerRunnerUnavailableError",
   "WorkerRunnerCapacityError",
   "WorkerWorkspaceReconciliationError",
+  "ActiveTurnClaimError",
 ]);
 
 function resolveNestedErrors(candidate: Record<string, unknown>): unknown[] {
@@ -506,6 +510,11 @@ function resolveFailoverClassificationFromError(
   err: unknown,
   providerHint?: string,
 ): FailoverClassification | null {
+  // A direct preflight owns the refusal; its cause is diagnostic, not a failed
+  // provider attempt that may rotate credentials or replay the turn.
+  if (isAgentHarnessPreflightError(err)) {
+    return null;
+  }
   return resolveFailoverClassificationFromErrorInternal(err, new Set<object>(), 0, providerHint);
 }
 
@@ -590,6 +599,9 @@ export function describeFailoverError(err: unknown): {
   sessionId?: string;
   lane?: string;
 } {
+  if (isAgentHarnessPreflightError(err)) {
+    return { message: err.message };
+  }
   if (isFailoverError(err)) {
     return {
       message: err.message,
@@ -721,6 +733,9 @@ export function resolveModelFallbackError(
   // Keep the wrapper identity before coercion can discard the terminal fact.
   if (findCliMaxTurnsError(err)) {
     return { kind: "terminal", error: err };
+  }
+  if (isAgentHarnessPreflightError(err)) {
+    return { kind: "coordination", error: err };
   }
   const failoverError = coerceToFailoverError(err, context);
   if (failoverError) {

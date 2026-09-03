@@ -35,7 +35,6 @@ import {
 import { activateSwarmRun, removeQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
 import { readParentExecutionIdentity } from "./execution-identity-spawn-context.js";
 import { materializeSubagentAttachments } from "./subagent-attachments.js";
-import { resolveSubagentSpawnAcceptedNote } from "./subagent-spawn-accepted-note.js";
 import { resolveSubagentChildPlan } from "./subagent-spawn-child-plan.js";
 import {
   cleanupFailedSpawnBeforeAgentStart,
@@ -67,11 +66,8 @@ import {
   persistInitialChildSessionRuntimeModel,
 } from "./subagent-spawn-session-patch.js";
 import { bindThreadForSubagentSpawn } from "./subagent-spawn-thread-binding.js";
-import {
-  buildSubagentSystemPrompt,
-  emitSessionLifecycleEvent,
-  mergeDeliveryContext,
-} from "./subagent-spawn.runtime.js";
+import { emitSessionLifecycleEvent, mergeDeliveryContext } from "./subagent-spawn.runtime.js";
+import { buildSubagentSpawnEnvelope } from "./subagent-system-prompt.js";
 
 export { SUBAGENT_SPAWN_CONTEXT_MODES, SUBAGENT_SPAWN_MODES } from "./subagent-spawn.types.js";
 
@@ -177,6 +173,7 @@ export async function spawnSubagentDirect(
     const spawnedByKey = requesterInternalKey;
     const { resolvedModel, thinkingOverride } = plan;
     const initialSession = await createInitialSubagentSession({
+      assertActive,
       cfg,
       targetAgentId,
       childSessionKey,
@@ -284,7 +281,19 @@ export async function spawnSubagentDirect(
     }
     const mountPathHint = sanitizeMountPathHint(params.attachMountPath);
 
-    let childSystemPrompt = buildSubagentSystemPrompt({
+    // Binding owns direct delivery. Resolve once afterward so the launch, child
+    // instructions, and requester receipt cannot disagree about completion.
+    const completionMode = params.collect
+      ? "collector"
+      : requestThreadBinding && spawnMode === "session" && hasBoundThreadDeliveryOrigin
+        ? "thread-direct"
+        : expectsCompletionMessage
+          ? "announce"
+          : "quiet";
+    const envelope = buildSubagentSpawnEnvelope({
+      completionMode,
+      spawnMode,
+      task,
       requesterSessionKey,
       requesterOrigin: childSessionOrigin,
       childSessionKey,
@@ -299,6 +308,7 @@ export async function spawnSubagentDirect(
       childDepth,
       maxSpawnDepth,
     });
+    let childSystemPrompt = envelope.systemPrompt;
     if (params.outputSchema) {
       childSystemPrompt = `${childSystemPrompt}\n\nCall structured_output with {"result": <your final result>} until one payload is accepted, with at most one retry after a rejected attempt. The result value must match the requested JSON Schema. Do not call structured_output again after acceptance.`;
     }
@@ -330,28 +340,22 @@ export async function spawnSubagentDirect(
       childSystemPrompt = `${childSystemPrompt}\n\n${materializedAttachments.systemPromptSuffix}`;
     }
 
-    const deliverInitialChildRunDirectly =
-      requestThreadBinding && spawnMode === "session" && hasBoundThreadDeliveryOrigin;
-    const { childLaunch, queuedLaunch, progressOrigin, shouldAnnounceCompletion, spawnedMetadata } =
+    const { childLaunch, queuedLaunch, progressOrigin, spawnedMetadata } =
       buildSubagentLaunchRequest({
-        childDepth,
-        maxSpawnDepth,
+        completionMode,
         spawnMode,
-        task,
+        message: envelope.message,
         spawnedByKey,
         toolSpawnMetadata,
         spawnedWorkspaceDir,
         childSessionKey,
-        collect: params.collect === true,
         childSessionOrigin,
         childIdem,
-        deliverInitialChildRunDirectly,
         outputSchema: params.outputSchema,
         childSystemPrompt,
         thinkingOverride,
         runTimeoutSeconds,
         lightContext: params.lightContext === true,
-        expectsCompletionMessage,
         requesterOrigin,
         currentMessagingTarget: ctx.currentMessagingTarget,
         currentChannelId: ctx.currentChannelId,
@@ -554,7 +558,7 @@ export async function spawnSubagentDirect(
           agentDir: targetAgentDir,
           workspaceDir: spawnedMetadata.workspaceDir,
           runTimeoutSeconds,
-          expectsCompletionMessage: shouldAnnounceCompletion,
+          expectsCompletionMessage: completionMode === "announce",
           spawnMode,
           collect: params.collect === true,
           swarmRequesterSessionKey: params.collect ? requesterInternalKey : undefined,
@@ -687,22 +691,18 @@ export async function spawnSubagentDirect(
       label: label || undefined,
     });
 
-    const acceptedNote = resolveSubagentSpawnAcceptedNote({
-      spawnMode,
-      agentSessionKey: ctx.agentSessionKey,
-    });
     return {
       status: "accepted",
       childSessionKey,
       ...(collectorSessionKey ? { sessionKey: collectorSessionKey } : {}),
       runId: childRunId,
       mode: spawnMode,
-      expectsCompletionMessage: shouldAnnounceCompletion,
+      expectsCompletionMessage: completionMode === "announce",
       context: preparedSpawnContext.mode,
       taskName,
-      note: preparedSpawnContext.forkFallbackNote
-        ? `${acceptedNote} ${preparedSpawnContext.forkFallbackNote}`
-        : acceptedNote,
+      note:
+        [envelope.acceptedNote, preparedSpawnContext.forkFallbackNote].filter(Boolean).join(" ") ||
+        undefined,
       ...resolvedModelMetadata,
       modelApplied: resolvedModel ? modelApplied : undefined,
       attachments: attachmentsReceipt,

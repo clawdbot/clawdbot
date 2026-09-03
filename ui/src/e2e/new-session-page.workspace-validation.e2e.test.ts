@@ -1,10 +1,11 @@
 import type { BrowserContextOptions, Page } from "playwright";
 import { expect, it } from "vitest";
+import type { ApplicationContext } from "../app/context.ts";
 import {
   waitForControlUiGatewayReady,
   waitForControlUiGatewayReconnecting,
 } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
+import { holdModuleResponse, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import {
   SOURCE_REPO,
   TARGET_REPO,
@@ -14,6 +15,7 @@ import {
   installMockGateway,
   pollLocatorText,
   replaceGatewayClient,
+  waitForGatewayRecoveryScope,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
@@ -98,6 +100,17 @@ async function reconnectForBranchRediscovery(page: Page, gateway: MockGateway) {
   await expect
     .poll(async () => (await gateway.getRequests("worktrees.branches")).length)
     .toBe(branchRequests + 1);
+}
+
+async function expectPendingNewSession(page: Page, message: string) {
+  const startup = page.locator(".new-session-page__starting");
+  const submittedPrompt = startup.locator(".chat-group.user");
+  await expect.poll(() => submittedPrompt.isVisible()).toBe(true);
+  await pollLocatorText(submittedPrompt).toContain(message);
+  await pollLocatorText(startup.locator('.chat-working-indicator[role="status"]')).toContain(
+    "Starting…",
+  );
+  expect(await page.locator(".new-session-page__message").isVisible()).toBe(false);
 }
 
 suite.define(() => {
@@ -408,6 +421,76 @@ suite.define(() => {
     });
   });
 
+  it.each(["before acceptance", "during chat preparation"] as const)(
+    "keeps a local start owned when recovery scope hydrates %s",
+    async (hydration) => {
+      await withNewSessionPage(DESKTOP_CONTEXT, async (page) => {
+        await page.addInitScript(() => {
+          const digest = crypto.subtle.digest.bind(crypto.subtle);
+          const ready = new Promise<void>((resolve) => {
+            window.addEventListener("test-release-recovery-scope", () => resolve(), { once: true });
+          });
+          crypto.subtle.digest = async (algorithm, data) => {
+            if (new TextDecoder().decode(data) === "e2e-device-token") {
+              await ready;
+            }
+            return digest(algorithm, data);
+          };
+        });
+        const chatModule = await holdModuleResponse(page, /\/assets\/chat-page-[^/]+\.js/);
+        const sessionKey = "agent:main:late-recovery-scope";
+        const gateway = await installMockGateway(page, {
+          deferredMethods: ["sessions.create"],
+          methodResponses: {
+            "sessions.create": { key: sessionKey, runStarted: true, runId: "late-scope-run" },
+          },
+        });
+        try {
+          await page.goto(`${suite.server.baseUrl}new`);
+          const message = page.locator(".new-session-page__message");
+          const start = page.locator("button.new-session-page__start-submit");
+          await message.fill("keep this admitted task");
+          await waitForGatewayRecoveryScope(page, false);
+          await start.click();
+          await gateway.waitForRequest("sessions.create");
+          if (hydration === "during chat preparation") {
+            await gateway.resolveDeferred("sessions.create");
+            // Navigation selects the accepted session before awaiting route preparation.
+            await expect
+              .poll(() =>
+                page.locator("openclaw-app").evaluate((element) => {
+                  const app = element as HTMLElement & {
+                    runtime: { context: ApplicationContext };
+                  };
+                  return app.runtime.context.gateway.snapshot.sessionKey;
+                }),
+              )
+              .toBe(sessionKey);
+            await chatModule.request;
+          }
+
+          await page.evaluate(() => window.dispatchEvent(new Event("test-release-recovery-scope")));
+          await waitForGatewayRecoveryScope(page);
+          await page.locator("openclaw-new-session-page").evaluate(async (element) => {
+            await (element as HTMLElement & { updateComplete: Promise<unknown> }).updateComplete;
+          });
+          expect(await page.locator(".new-session-page__error").allTextContents()).toEqual([]);
+          await expectPendingNewSession(page, "keep this admitted task");
+          expect(await gateway.getSocketCount()).toBe(1);
+          expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
+
+          if (hydration === "before acceptance") {
+            await gateway.resolveDeferred("sessions.create");
+          }
+          chatModule.release();
+          await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey));
+        } finally {
+          chatModule.release();
+        }
+      });
+    },
+  );
+
   for (const reconnectKind of ["same-client reconnect", "client replacement"] as const) {
     it(`automatically resumes an idempotent session creation after ${reconnectKind}`, async () => {
       await withNewSessionPage(DESKTOP_CONTEXT, async (page) => {
@@ -422,14 +505,15 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}new`);
         await page.getByRole("heading", { name: "Original agent" }).waitFor();
         const message = page.locator(".new-session-page__message");
-        const projectTrigger = page.locator("#new-session-project-trigger");
         const start = page.locator("button.new-session-page__start-submit");
-        await message.fill("retry this draft after reconnect");
+        const submittedMessage = "retry this draft after reconnect";
+        await message.fill(submittedMessage);
         await gateway.deferNext("sessions.create");
         await start.click();
         const originalCreate = await gateway.waitForRequest("sessions.create");
-        await expect.poll(() => start.isDisabled()).toBe(true);
+        await expectPendingNewSession(page, submittedMessage);
         await gateway.deferNext("sessions.create");
+        const agentRequestsBefore = (await gateway.getRequests("agents.list")).length;
 
         if (reconnectKind === "client replacement") {
           await gateway.setMethodResponse(
@@ -439,32 +523,27 @@ suite.define(() => {
           const socketsBefore = await gateway.getSocketCount();
           await replaceGatewayClient(page);
           await expect.poll(() => gateway.getSocketCount()).toBe(socketsBefore + 1);
-          await page.getByRole("heading", { name: "Replacement agent" }).waitFor();
+          await waitForControlUiGatewayReady(page);
         } else {
-          const agentRequestsBefore = (await gateway.getRequests("agents.list")).length;
           await gateway.setOnline(false);
           await waitForControlUiGatewayReconnecting(page);
-          expect(await message.isDisabled()).toBe(true);
-          expect(await projectTrigger.isDisabled()).toBe(true);
-          expect(await start.getAttribute("aria-busy")).toBe("true");
+          await expectPendingNewSession(page, submittedMessage);
           await gateway.setOnline(true);
           await waitForControlUiGatewayReady(page);
-          await expect
-            .poll(async () => (await gateway.getRequests("agents.list")).length)
-            .toBe(agentRequestsBefore + 1);
         }
+        await expect
+          .poll(async () => (await gateway.getRequests("agents.list")).length)
+          .toBe(agentRequestsBefore + 1);
         await expect
           .poll(async () => (await gateway.getRequests("sessions.create")).length)
           .toBe(2);
         const resumedCreate = (await gateway.getRequests("sessions.create")).at(-1);
         expect(originalCreate.params).toMatchObject({
           idempotencyKey: expect.any(String),
-          message: "retry this draft after reconnect",
+          message: submittedMessage,
         });
         expect(resumedCreate?.params).toEqual(originalCreate.params);
-        expect(await message.inputValue()).toBe("retry this draft after reconnect");
-        expect(await message.isDisabled()).toBe(true);
-        expect(await projectTrigger.isDisabled()).toBe(true);
+        await expectPendingNewSession(page, submittedMessage);
         await gateway.resolveDeferred("sessions.create", { key: sessionKey });
         await gateway.resolveDeferred("sessions.create", { key: sessionKey });
         await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey));
@@ -472,42 +551,81 @@ suite.define(() => {
     });
   }
 
-  it("keeps an interrupted creation fail-closed after the Gateway process restarts", async () => {
-    await withNewSessionPage(DESKTOP_CONTEXT, async (page) => {
-      const gateway = await installMockGateway(page, {
-        methodResponses: {
-          "agents.list": mainAgentList(),
-          "worktrees.branches": branchList(),
-        },
+  it.each(["process restarts", "recovery owner changes", "recovery owner disappears"] as const)(
+    "keeps an interrupted creation fail-closed after the Gateway %s",
+    async (change) => {
+      await withNewSessionPage(DESKTOP_CONTEXT, async (page) => {
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "agents.list": mainAgentList(),
+            "worktrees.branches": branchList(),
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}new`);
+        await page.getByRole("heading", { name: "Main" }).waitFor();
+        await waitForGatewayRecoveryScope(page);
+        await page.locator(".new-session-page__message").fill("do not duplicate this task");
+        await gateway.deferNext("sessions.create");
+        await page.getByRole("button", { name: "Start session" }).click();
+        await gateway.waitForRequest("sessions.create");
+        await expectPendingNewSession(page, "do not duplicate this task");
+
+        if (change === "process restarts") {
+          await gateway.setGatewayBootId("different-gateway-process");
+        } else {
+          const hello = await page.evaluate(() => {
+            const app = document.querySelector("openclaw-app") as HTMLElement & {
+              runtime: { context: ApplicationContext };
+            };
+            return app.runtime.context.gateway.snapshot.hello;
+          });
+          await gateway.setMethodResponse("connect", {
+            ...hello,
+            auth: {
+              role: hello?.auth?.role,
+              scopes: hello?.auth?.scopes,
+              ...(change === "recovery owner changes"
+                ? { recoveryScope: "different-recovery-owner" }
+                : {}),
+            },
+          });
+        }
+        await gateway.setOnline(false);
+        await waitForControlUiGatewayReconnecting(page);
+        await gateway.setOnline(true);
+        await waitForControlUiGatewayReady(page);
+        await waitForGatewayRecoveryScope(page);
+
+        await page
+          .getByRole("alert")
+          .filter({
+            hasText:
+              "The Gateway changed while this session was starting. Check recent sessions before starting this task again.",
+          })
+          .waitFor();
+        // Restarts keep the same draft owner; changed or missing owners cannot inherit its text.
+        const expectedMessage = change === "process restarts" ? "do not duplicate this task" : "";
+        await expect
+          .poll(() => page.locator(".new-session-page__message").inputValue())
+          .toBe(expectedMessage);
+        expect(await page.locator(".new-session-page__starting").isVisible()).toBe(false);
+        expect(await page.getByRole("button", { name: "Start session" }).isDisabled()).toBe(true);
+        expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
+        expect(new URL(page.url()).pathname).toBe("/new");
       });
-      await page.goto(`${suite.server.baseUrl}new`);
-      await page.getByRole("heading", { name: "Main" }).waitFor();
-      await page.locator(".new-session-page__message").fill("do not duplicate this task");
-      await gateway.deferNext("sessions.create");
-      await page.getByRole("button", { name: "Start session" }).click();
-      await gateway.waitForRequest("sessions.create");
-
-      await gateway.setOnline(false);
-      await waitForControlUiGatewayReconnecting(page);
-      await gateway.setGatewayBootId("different-gateway-process");
-      await gateway.setOnline(true);
-      await waitForControlUiGatewayReady(page);
-
-      await page
-        .getByRole("alert")
-        .filter({
-          hasText:
-            "The Gateway changed while this session was starting. Check recent sessions before starting this task again.",
-        })
-        .waitFor();
-      expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
-      expect(new URL(page.url()).pathname).toBe("/new");
-    });
-  });
+    },
+  );
 
   it("resets agent-derived workspace state when retargeted to a catalog", async () => {
     await withNewSessionPage(DESKTOP_CONTEXT, async (page) => {
       const gateway = await installMockGateway(page, {
+        cliAgentsEnabled: true,
+        terminalEnabled: true,
+        featureMethods: [
+          "sessions.catalog.list",
+          "sessions.catalog.startTerminal",
+          "terminal.open",
+        ],
         methodResponses: {
           "agents.list": {
             agents: [
@@ -539,13 +657,22 @@ suite.define(() => {
                 capabilities: {
                   continueSession: true,
                   archive: false,
-                  createSession: { model: "anthropic/claude-opus-4-8" },
+                  startTerminal: true,
                 },
-                hosts: [],
+                hosts: [
+                  {
+                    hostId: "gateway:local",
+                    label: "Local Claude Code",
+                    kind: "gateway",
+                    connected: true,
+                    canStartTerminal: true,
+                    sessions: [],
+                  },
+                ],
               },
             ],
           },
-          "sessions.create": { key: "agent:main:claude-retarget" },
+          "sessions.catalog.startTerminal": { sessionId: "claude-retarget" },
         },
       });
       await page.goto(`${suite.server.baseUrl}new?agent=research`);
@@ -562,16 +689,16 @@ suite.define(() => {
       await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("Claude Code");
       await pollLocatorText(folderLabel).toBe("openclaw");
       await page.locator(".new-session-page__message").fill("retarget this draft");
-      await page.getByRole("button", { name: "Start session" }).click();
+      await page.getByRole("button", { name: "Start in terminal" }).click();
 
-      const create = await gateway.waitForRequest("sessions.create");
+      const create = await gateway.waitForRequest("sessions.catalog.startTerminal");
       expect(create.params).toMatchObject({
         agentId: "main",
-        message: "retarget this draft",
+        initialMessage: "retarget this draft",
         catalogId: "claude",
       });
       expect(create.params).not.toHaveProperty("model");
-      expect(create.params).not.toHaveProperty("cwd");
+      expect(create.params).toHaveProperty("cwd", WORKSPACE);
     });
   });
 });

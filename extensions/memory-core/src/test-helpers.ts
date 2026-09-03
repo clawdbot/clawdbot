@@ -10,6 +10,7 @@ import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-r
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterAll, beforeAll } from "vitest";
+import { consolidateMemory } from "./dreaming-consolidation.js";
 import {
   normalizeDailyIngestionState,
   normalizeSessionIngestionState,
@@ -30,12 +31,26 @@ import {
   writeMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntry,
 } from "./dreaming-state.js";
+import { applyShortTermPromotions } from "./short-term-promotion-apply.js";
 import { normalizeShortTermPhaseSignalStore } from "./short-term-promotion-store.js";
 import type { ShortTermLockEntry } from "./short-term-promotion-types.js";
 import { normalizeShortTermRecallStore } from "./short-term-promotion-utils.js";
 import type { ShortTermRecallEntry } from "./short-term-promotion.js";
 
 const MEMORY_CORE_PLUGIN_ID = "memory-core";
+const MEMORY_CORE_TEST_AGENT_ID = "memory-core-test";
+
+export function consolidateMemoryForTests(
+  params: Omit<Parameters<typeof consolidateMemory>[0], "agentId">,
+) {
+  return consolidateMemory({ ...params, agentId: MEMORY_CORE_TEST_AGENT_ID });
+}
+
+export function applyShortTermPromotionsForTests(
+  params: Omit<Parameters<typeof applyShortTermPromotions>[0], "agentId">,
+) {
+  return applyShortTermPromotions({ ...params, agentId: MEMORY_CORE_TEST_AGENT_ID });
+}
 
 export async function configureMemoryCoreDreamingStateForTests(
   env: NodeJS.ProcessEnv = process.env,

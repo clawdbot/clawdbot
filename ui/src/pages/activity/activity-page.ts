@@ -497,7 +497,7 @@ class ActivityPage extends OpenClawLightDomElement {
       return;
     }
     if (event.event === "sessions.changed") {
-      this.syncSessionActivity(true);
+      this.sessionActivity.invalidate();
     }
     if (event.event === "presence") {
       const presence = readPresenceEntries(event.payload);

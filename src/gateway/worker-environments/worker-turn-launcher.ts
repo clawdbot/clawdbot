@@ -7,6 +7,7 @@ import type {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
 import { StaleWorkerBuildError } from "./admission.js";
+import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
 import { placementTurnOwner, sameWorkerSessionTurnClaim } from "./placement-record.js";
 import { createRemoteExecPlacementSandbox } from "./placement-sandbox.js";
 import type {
@@ -88,46 +89,30 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
       ) {
         return null;
       }
+      const assertCurrentPlacement = (phase: "managed workspace" | "sandbox") => {
+        const current = options.placements.get(params.sessionId);
+        if (
+          !matchesWorkerPlacementTarget(current, placement) ||
+          current?.executionMode !== "remote-exec" ||
+          current.agentId !== placement.agentId ||
+          current.sessionKey !== placement.sessionKey
+        ) {
+          throw new Error(`Remote-exec placement changed while preparing its ${phase}`);
+        }
+      };
       const localWorkspaceDir = await options.resolveWorkspacePath({
         sessionId: placement.sessionId,
         agentId: placement.agentId,
         sessionKey: placement.sessionKey,
       });
-      const preparedPlacement = options.placements.get(params.sessionId);
-      if (
-        preparedPlacement?.state !== "active" ||
-        preparedPlacement.executionMode !== "remote-exec" ||
-        preparedPlacement.agentId !== placement.agentId ||
-        preparedPlacement.sessionKey !== placement.sessionKey ||
-        preparedPlacement.environmentId !== placement.environmentId ||
-        preparedPlacement.activeOwnerEpoch !== placement.activeOwnerEpoch ||
-        preparedPlacement.generation !== placement.generation
-      ) {
-        throw new Error("Remote-exec placement changed while preparing its managed workspace");
-      }
+      assertCurrentPlacement("managed workspace");
       const sandbox = await createRemoteExecPlacementSandbox({
         config: params.config,
-        environments: {
-          get: options.environments.get,
-          ...(options.environments.resolveSshIdentity
-            ? { resolveSshIdentity: options.environments.resolveSshIdentity }
-            : {}),
-        },
+        environments: options.environments,
         localWorkspaceDir,
         placement,
       });
-      const current = options.placements.get(params.sessionId);
-      if (
-        current?.state !== "active" ||
-        current.executionMode !== "remote-exec" ||
-        current.agentId !== placement.agentId ||
-        current.sessionKey !== placement.sessionKey ||
-        current.environmentId !== placement.environmentId ||
-        current.activeOwnerEpoch !== placement.activeOwnerEpoch ||
-        current.generation !== placement.generation
-      ) {
-        throw new Error("Remote-exec placement changed while preparing its sandbox");
-      }
+      assertCurrentPlacement("sandbox");
       const currentEnvironment = options.environments.get(placement.environmentId);
       if (
         currentEnvironment?.state !== "attached" ||
@@ -262,10 +247,9 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
           turn,
           turnClaim,
         };
-        const result = remoteExec
+        return remoteExec
           ? await executeRemoteExecTurn({ ...executionParams, runLocal })
           : await executeWorkerTurn(executionParams);
-        return result;
       } catch (error) {
         if (error instanceof StaleWorkerBuildError) {
           await options.reconcileActivePlacement(placement.environmentId);
@@ -299,45 +283,26 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
           error instanceof WorkerRunnerCapacityError ||
           (error instanceof WorkerRunnerUnavailableError && !handedOff) ||
           // Canceling the exact worker turn must not destroy its reusable placement.
-          (!remoteExec && handedOff && turn.abortSignal?.aborted)
+          (!remoteExec && handedOff && turn.abortSignal?.aborted) ||
+          // Recovery precedes launch; only this admission claim belongs to the attempt.
+          (error instanceof WorkerWorkspaceReconciliationError && !handedOff) ||
+          (error instanceof WorkerTurnExecutionError &&
+            options.placements.validateTurnClaim(turnClaim))
         ) {
           await releaseClaimIfOwned(options.placements, turnClaim);
           throw error;
         }
         const settledPlacement = options.placements.get(turnClaim.sessionId);
         if (
-          remoteExec &&
+          (remoteExec || error instanceof WorkerTurnExecutionError) &&
           settledPlacement?.state === "active" &&
           settledPlacement.environmentId === placement.environmentId &&
           settledPlacement.activeOwnerEpoch === placement.activeOwnerEpoch &&
           settledPlacement.turnClaim === null
         ) {
-          // Reconciliation released the placement before the local harness error
-          // crossed back to this owner; do not turn a model error into box teardown.
+          // Reconciliation already released this turn. Neither runtime's model
+          // error may turn its reusable placement into box teardown.
           throw error;
-        }
-        if (error instanceof WorkerWorkspaceReconciliationError && !handedOff) {
-          // Recovery runs before remote launch. Preserve the journal's active
-          // generation; only the new admission claim belongs to this attempt.
-          await releaseClaimIfOwned(options.placements, turnClaim);
-          throw error;
-        }
-        if (error instanceof WorkerTurnExecutionError) {
-          if (options.placements.validateTurnClaim(turnClaim)) {
-            await releaseClaimIfOwned(options.placements, turnClaim);
-            throw error;
-          }
-          const workerSettledPlacement = options.placements.get(turnClaim.sessionId);
-          if (
-            workerSettledPlacement?.state === "active" &&
-            workerSettledPlacement.environmentId === placement.environmentId &&
-            workerSettledPlacement.activeOwnerEpoch === placement.activeOwnerEpoch &&
-            workerSettledPlacement.turnClaim === null
-          ) {
-            // Workspace result settlement durably released this failed model turn.
-            // The outer fallback cycle owns run-terminal normalization.
-            throw error;
-          }
         }
         if (handedOff) {
           const terminalOwner = activeWorkerTurn;

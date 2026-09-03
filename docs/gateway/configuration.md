@@ -109,10 +109,11 @@ does. If `openclaw.json` remains invalid after eligible startup migrations (incl
 plugin-local validation), Gateway startup fails. An invalid hot reload is skipped and
 the current runtime keeps the last accepted config. A rejected write is also saved as
 `<path>.rejected.<timestamp>` for inspection.
-The Gateway blocks writes that look like accidental clobbers - dropping `gateway.mode`,
-losing the `meta` block, or shrinking the file by more than half - unless the write
-explicitly allows destructive changes. Promotion to last-known-good is skipped when a
-candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
+The Gateway blocks writes that look like accidental clobbers - dropping the effective
+`gateway.mode` or shrinking the file by more than half - unless the write explicitly
+allows destructive changes. Mode checks resolve `$include` and environment references
+first. Missing `meta` is recorded as a write anomaly. Promotion to last-known-good is
+skipped when a candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
 
 ## Common tasks
 
@@ -536,6 +537,15 @@ config`, inspect the config, run `openclaw config validate`, then run `openclaw
 doctor --fix` for repair. See [Gateway troubleshooting](/gateway/troubleshooting#gateway-rejected-invalid-config)
 for the checklist.
 
+A live change that selects a workspace with retired setup state is also rejected,
+with an `openclaw doctor --fix` hint. The Gateway keeps its last-good runtime.
+Gateway-managed writes, including `config.set`, reject the candidate before
+persistence; hand edits and writes from a separate CLI process can remain on disk
+even though the watcher refuses to activate them. Stop the Gateway and, if the
+write was rejected before persistence, save the intended workspace path while
+it is stopped. Then run [`openclaw doctor --fix`](/cli/doctor) and restart.
+Reload never migrates workspace state.
+
 ### Reload modes
 
 | Mode                   | Behavior                                                                      |
@@ -568,20 +578,37 @@ Hot reload and secrets reload preserve that distinction: catalog compatibility
 metadata does not become a custom request override that switches a native runtime
 back to OpenClaw.
 
-| Category            | Fields                                                                  | Gateway restart needed?      |
-| ------------------- | ----------------------------------------------------------------------- | ---------------------------- |
-| Channels            | `channels.*`, `web` (WhatsApp) - all built-in and plugin channels       | No (restarts that channel)   |
-| Agent & models      | `agent`, `agents`, `models`, `routing`                                  | No                           |
-| Automation          | `hooks`, `cron`, `agent.heartbeat`                                      | No (restarts that subsystem) |
-| Sessions & messages | `session`, `messages`                                                   | No                           |
-| Tools & media       | `tools`, `skills`, `mcp`, `audio`, `talk`                               | No                           |
-| Plugin config       | `plugins.entries.*`, `plugins.allow`, `plugins.deny`, `plugins.enabled` | No (reloads plugin runtime)  |
-| UI & misc           | `ui`, `logging`, `identity`, `bindings`                                 | No                           |
-| Gateway server      | `gateway.*` (port, bind, auth, tailscale, TLS, HTTP, push)              | **Yes**                      |
-| Infrastructure      | `discovery`, `browser`, `plugins.load`, `plugins.installs`              | **Yes**                      |
+| Category                | Fields                                                                                      | Gateway restart needed?      |
+| ----------------------- | ------------------------------------------------------------------------------------------- | ---------------------------- |
+| Channels                | `channels.*`, `web` (WhatsApp) - all built-in and plugin channels                           | No (restarts that channel)   |
+| Agent & models          | `agent`, `agents`, `models`, `routing`                                                      | No                           |
+| Automation              | `hooks`, `cron`, `agent.heartbeat`                                                          | No (restarts that subsystem) |
+| Sessions & messages     | `session`, `messages`                                                                       | No                           |
+| Tools & media           | `tools`, `skills`, `mcp`, `audio`, `talk`                                                   | No                           |
+| Plugin config           | `plugins.entries.*`, `plugins.allow`, `plugins.deny`, `plugins.enabled`                     | No (reloads plugin runtime)  |
+| UI & misc               | `ui`, `logging`, `identity`, `bindings`                                                     | No                           |
+| Gateway HTTP APIs       | `gateway.http.endpoints`                                                                    | No (next request)            |
+| Gateway tools & nodes   | `gateway.tools`, `gateway.nodes.browser`                                                    | No (next operation)          |
+| Gateway client features | `gateway.cliAgents`, selected `gateway.controlUi` settings below                            | No                           |
+| Gateway push            | `gateway.push.apns.relay`                                                                   | No (next push)               |
+| Gateway server          | Other `gateway.*` settings (port, bind, auth, roles, tailscale, TLS, HTTP security headers) | **Yes**                      |
+| Infrastructure          | `discovery`, `browser`, `plugins.load`, `plugins.installs`                                  | **Yes**                      |
+
+Under `gateway.controlUi`, the `environment`, `github`, `toolTitles`,
+`sessionObserver`, `embedSandbox`, `allowExternalEmbedUrls`, and
+`automaticallyFetchFavicons` settings hot-apply. Reload open Control UI pages to
+pick up the environment label, CLI agent picker, embed preferences, and favicon
+display preference; the Gateway process keeps running. Control UI serving paths,
+origin policy, and authentication still require a Gateway restart.
+
+Node command allowlists and node-published tools or skills still require a
+Gateway restart because they also configure services created at startup. Browser
+node routing applies to subsequent operations. Node pairing policy
+(`gateway.nodes.pairing`) still requires a restart because approvals can outlive
+the connection that started them.
 
 <Note>
-`gateway.reload` and `gateway.remote` are exceptions under `gateway.*` - changing them does **not** trigger a restart. Individual plugins can also override this table: a loaded plugin may declare its own restart-triggering config prefixes (for example the bundled Canvas plugin restarts the Gateway for `plugins.enabled`, `plugins.allow`, and `plugins.deny`, not just its own `plugins.entries.canvas`), so the actual behavior depends on which plugins are active.
+Changing `gateway.reload` or `gateway.remote` also does **not** trigger a restart. Individual plugins can override this table: a loaded plugin may declare its own restart-triggering config prefixes (for example the bundled Canvas plugin restarts the Gateway for `plugins.enabled`, `plugins.allow`, and `plugins.deny`, not just its own `plugins.entries.canvas`), so the actual behavior depends on which plugins are active.
 </Note>
 
 Plugin hot reload uses the package metadata discovered at Gateway startup.

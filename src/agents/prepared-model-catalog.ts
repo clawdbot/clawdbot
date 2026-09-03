@@ -324,7 +324,7 @@ async function loadScopedReadOnlyModelCatalog(
     try {
       const prepared = await prepareModelRuntimeSnapshot(candidate);
       if (!preparedModelRuntimeConfigsMatch(prepared.config, candidate.config)) {
-        throw new PreparedModelCatalogConfigReplacedError(candidate.agentDir);
+        continue;
       }
       if (isPreparedModelCatalogFull(prepared.modelCatalog)) {
         return prepared.modelCatalog;
@@ -396,7 +396,7 @@ export async function loadProviderScopedThinkingCatalog(params: {
     const entries = normalizeThinkingCatalogProviders(augmented.entries);
     return params.requiredInputRoute !== undefined && !entryResolved(entries) ? [] : entries;
   };
-  const publishedCatalog = getPreparedModelCatalogSnapshot(scopedParams);
+  const publishedCatalog = getAvailablePreparedModelCatalogSnapshot(scopedParams);
   if (publishedCatalog && entryResolved(publishedCatalog.entries)) {
     return await augmentHarnessCatalog(publishedCatalog);
   }

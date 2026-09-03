@@ -5,7 +5,11 @@ describe("resolveSubagentCompletionResultText", () => {
   it.each([
     {
       name: "visible",
-      terminalReply: { disposition: "visible", text: "authoritative reply" } as const,
+      terminalReply: {
+        disposition: "visible",
+        text: "authoritative reply",
+        modelRouteChange: "Model route changed: requested/model → actual/model.",
+      } as const,
       expected: "authoritative reply",
     },
     {

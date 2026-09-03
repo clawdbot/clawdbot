@@ -11,6 +11,18 @@ struct ChatCodeBlockView: View {
     let block: ChatCodeBlock
 
     var body: some View {
+        #if os(iOS) || os(macOS)
+        if self.block.language == "mermaid", self.block.isComplete {
+            ChatMermaidBlockView(source: self.block.code)
+        } else {
+            self.codeBody
+        }
+        #else
+        self.codeBody
+        #endif
+    }
+
+    private var codeBody: some View {
         VStack(alignment: .leading, spacing: 6) {
             if let language = self.block.language {
                 Text(language)
@@ -89,10 +101,6 @@ private struct ChatMathPlatformView: NSViewRepresentable {
     }
 
     func updateNSView(_ view: MTMathUILabel, context: Context) {
-        self.configure(view)
-    }
-
-    private func configure(_ view: MTMathUILabel) {
         view.displayErrorInline = false
         view.labelMode = .display
         view.textAlignment = .center
@@ -101,6 +109,11 @@ private struct ChatMathPlatformView: NSViewRepresentable {
         if view.latex != self.latex {
             view.latex = self.latex
         }
+    }
+
+    /// SwiftMath reports fittingSize on macOS; SwiftUI's default bridge can collapse it in split views.
+    func sizeThatFits(_ _: ProposedViewSize, nsView: MTMathUILabel, context _: Context) -> CGSize? {
+        nsView.fittingSize
     }
 }
 #else

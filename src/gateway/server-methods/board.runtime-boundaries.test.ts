@@ -8,6 +8,8 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createDashboardTool } from "../../agents/tools/dashboard-tool.js";
+import type { InProcessGatewayCaller } from "../../agents/tools/in-process-gateway.js";
 import { resetBoardEventNoticeStateForTest } from "../../boards/board-notices.js";
 import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.entry.js";
@@ -565,5 +567,72 @@ describe("board gateway runtime boundaries", () => {
     });
     expect(respond.mock.calls[0]?.[0]).toBe(true);
     expect(boardStore.getSnapshot({ sessionKey }).widgets).toHaveLength(1);
+  });
+
+  it("replaces a dashboard widget through Gateway while preserving layout patches", async () => {
+    const sessionKey = "agent:main:board-put-proof";
+    const stateDir = tempDirs.make("openclaw-board-put-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey, storePath: database.path },
+      { sessionId: "board-put-proof", updatedAt: Date.now() },
+    );
+    const createTool = () => {
+      const store = new SqliteBoardStore({
+        resolveSession: () => ({ agentId: "main", sessionKey }),
+        env,
+      });
+      const { invoke } = createHarness(undefined, {}, store);
+      const callGateway: InProcessGatewayCaller = async <T>(
+        method: string,
+        params: Record<string, unknown>,
+      ) => {
+        const response = await invoke(method, params);
+        expect(response.mock.calls[0]?.[0]).toBe(true);
+        return response.mock.calls[0]?.[1] as T;
+      };
+      return createDashboardTool({ agentSessionKey: sessionKey, agentId: "main", callGateway });
+    };
+    let tool = createTool();
+    const put = (name: string, props?: Record<string, unknown>) =>
+      tool.execute(`put-${name}`, {
+        action: "widget_put",
+        name,
+        pluginKind: "proof:card",
+        ...(props ? { props } : {}),
+      });
+
+    await put("target", { cardId: "card-123", compact: true });
+    await put("sibling", { side: "right" });
+    const moved = (
+      await tool.execute("move", { action: "widget_move", name: "target", after: "sibling" })
+    ).details as BoardSnapshot;
+    expect(moved.widgets.map((widget) => widget.name)).toEqual(["sibling", "target"]);
+    expect(moved.widgets[1]?.props).toEqual({ cardId: "card-123", compact: true });
+
+    const replaced = (await put("target")).details as BoardSnapshot;
+    expect(replaced.widgets.map((widget) => widget.name)).toEqual(["sibling", "target"]);
+    expect(replaced.widgets[0]?.props).toEqual({ side: "right" });
+    expect(replaced.widgets[1]).not.toHaveProperty("props");
+    const read = (await tool.execute("read", { action: "read" })).details as BoardSnapshot;
+    expect(read.widgets).toEqual(replaced.widgets);
+
+    const descriptor = JSON.parse(
+      (
+        database.db
+          .prepare(
+            "SELECT descriptor_json FROM board_widgets WHERE session_key = ? AND name = 'target'",
+          )
+          .get(sessionKey) as { descriptor_json: string }
+      ).descriptor_json,
+    );
+    expect(descriptor).not.toHaveProperty("props");
+
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    tool = createTool();
+    const reopened = (await tool.execute("reopen", { action: "read" })).details as BoardSnapshot;
+    expect(reopened.widgets).toEqual(read.widgets);
   });
 });

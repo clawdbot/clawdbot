@@ -1,6 +1,7 @@
 // Tests media-only get-reply runs and sandboxed media attachment handling.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import {
@@ -547,6 +548,59 @@ describe("runPreparedReply media-only handling", () => {
     }
     expect(requireRunReplyAgentCall().followupRun.run.workspaceDir).toBe("/tmp/session-worktree");
   });
+
+  it.each([
+    {
+      name: "unset",
+      defaultCwd: undefined,
+      agentCwd: undefined,
+      spawnedCwd: undefined,
+      expected: undefined,
+    },
+    {
+      name: "defaults",
+      defaultCwd: "/tmp/default-repo",
+      agentCwd: undefined,
+      spawnedCwd: undefined,
+      expected: "/tmp/default-repo",
+    },
+    {
+      name: "agent override",
+      defaultCwd: "/tmp/default-repo",
+      agentCwd: "/tmp/agent-repo",
+      spawnedCwd: undefined,
+      expected: "/tmp/agent-repo",
+    },
+    {
+      name: "spawned override",
+      defaultCwd: "/tmp/default-repo",
+      agentCwd: "/tmp/agent-repo",
+      spawnedCwd: "/tmp/session-repo",
+      expected: "/tmp/session-repo",
+    },
+  ])(
+    "keeps workspace separate from $name run cwd",
+    async ({ defaultCwd, agentCwd, spawnedCwd, expected }) => {
+      await runPreparedReply(
+        baseParams({
+          cfg: {
+            agents: { defaults: { cwd: defaultCwd }, entries: { default: { cwd: agentCwd } } },
+          },
+          workspaceDir: "/tmp/agent-workspace",
+          sessionEntry: {
+            sessionId: "session-1",
+            updatedAt: Date.now(),
+            spawnedCwd,
+            spawnedBy: spawnedCwd ? "agent:default:main" : undefined,
+          },
+        }),
+      );
+      expect(requireRunReplyAgentCall().followupRun.run).toMatchObject({
+        cwd: expected,
+        workspaceDir: "/tmp/agent-workspace",
+      });
+    },
+  );
 
   beforeEach(async () => {
     preparedReplyMockState.unexpectedCalls.length = 0;
@@ -2312,6 +2366,50 @@ describe("runPreparedReply media-only handling", () => {
     expect(embeddedAgentRuntime.waitForEmbeddedAgentRunEnd).not.toHaveBeenCalled();
     expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
   });
+  it.each(["interrupt", "steer"] as const)(
+    "queues in %s mode behind admitted recovery after heartbeat preemption",
+    async (mode) => {
+      const queueSettings = await import("./queue/settings-runtime.js");
+      const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
+      const storePath = "/tmp/recovery-admission-sessions.json";
+      const recoveryAdmission = await beginSessionWorkAdmission({
+        scope: storePath,
+        identities: ["session-key", "session-recovery-starting"],
+        owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER,
+        assertAllowed: () => {},
+      });
+      vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode });
+      vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId).mockReturnValue(
+        "session-embedded-heartbeat",
+      );
+      vi.mocked(embeddedAgentRuntime.preemptAndDrainEmbeddedHeartbeatRun).mockResolvedValue(
+        "drained",
+      );
+
+      try {
+        await expect(
+          runPrepared({
+            isNewSession: false,
+            sessionId: "session-recovery-starting",
+            storePath,
+          }),
+        ).resolves.toEqual({ text: "ok" });
+
+        const call = requireRunReplyAgentCall();
+        expect(call.isActive).toBe(true);
+        expect(call.shouldSteer).toBe(false);
+        expect(call.shouldFollowup).toBe(true);
+      } finally {
+        recoveryAdmission.release();
+        vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId).mockReturnValue(
+          undefined,
+        );
+        vi.mocked(embeddedAgentRuntime.preemptAndDrainEmbeddedHeartbeatRun).mockResolvedValue(
+          "not-heartbeat",
+        );
+      }
+    },
+  );
   it("interrupts an embedded-only heartbeat before running a visible Telegram turn", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
     const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");

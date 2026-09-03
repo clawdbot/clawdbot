@@ -14,11 +14,9 @@ import {
 } from "openclaw/plugin-sdk/runtime-env";
 import {
   canonicalizeWebhookRouteKey,
-  isRequestBodyLimitError,
   normalizePluginHttpPath,
   normalizeWebhookPath,
   registerWebhookTargetWithPluginRoute,
-  requestBodyErrorToText,
   resolveSingleWebhookTarget,
 } from "openclaw/plugin-sdk/webhook-ingress";
 import {
@@ -42,7 +40,11 @@ import {
 } from "./send.js";
 import { buildTemplateMessageFromPayload } from "./template-messages.js";
 import type { LineChannelData, ResolvedLineAccount } from "./types.js";
-import { createLineNodeWebhookHandler, readLineWebhookRequestBody } from "./webhook-node.js";
+import {
+  createLineNodeWebhookHandler,
+  readLineWebhookRequestBody,
+  rejectLineWebhookRequest,
+} from "./webhook-node.js";
 import { LineWebhookTerminalDeliveryError } from "./webhook-spool.js";
 import { parseLineWebhookBody, validateLineSignature } from "./webhook-utils.js";
 
@@ -426,16 +428,7 @@ export async function monitorLineProvider(
           res.setHeader("Content-Type", "application/json");
           res.end(JSON.stringify({ status: "ok" }));
         } catch (err) {
-          if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
-            res.statusCode = 413;
-            res.setHeader("Content-Type", "application/json");
-            res.end(JSON.stringify({ error: "Payload too large" }));
-            return;
-          }
-          if (isRequestBodyLimitError(err, "REQUEST_BODY_TIMEOUT")) {
-            res.statusCode = 408;
-            res.setHeader("Content-Type", "application/json");
-            res.end(JSON.stringify({ error: requestBodyErrorToText("REQUEST_BODY_TIMEOUT") }));
+          if (await rejectLineWebhookRequest(req, res, err)) {
             return;
           }
           runtime.error?.(danger(`line webhook error: ${formatErrorMessage(err)}`));

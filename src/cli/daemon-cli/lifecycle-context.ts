@@ -3,6 +3,7 @@ import { createConfigIO } from "../../config/io.js";
 import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
+import { waitForGatewayHealthyRestart } from "./restart-health.js";
 
 export async function resolveGatewayLifecycleContext(
   service = resolveGatewayService(),
@@ -32,4 +33,25 @@ export async function resolveGatewayLifecycleContext(
 export async function resolveGatewayConfigPorts() {
   const config = await readBestEffortConfig({ observe: false }).catch(() => undefined);
   return { explicit: config?.gateway?.port, fallback: resolveGatewayPort(config, process.env) };
+}
+
+// The detached update helper imports this through the stable daemon CLI entry.
+// Native manager acceptance alone never proves that a restored Gateway is ready.
+export async function waitForGatewayUpdateRecovery(
+  expectedVersion: string,
+  expectedBuildId?: string,
+) {
+  if (!expectedVersion?.trim()) {
+    throw new Error("Recovery Gateway version is unavailable.");
+  }
+  const service = resolveGatewayService();
+  const { port, env } = await resolveGatewayLifecycleContext(service, true);
+  return await waitForGatewayHealthyRestart({
+    service,
+    port,
+    env,
+    expectedVersion,
+    expectedBuildId,
+    requireRunningService: true,
+  });
 }

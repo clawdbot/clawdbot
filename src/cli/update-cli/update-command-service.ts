@@ -24,7 +24,7 @@ import {
 } from "../daemon-cli/restart-health.js";
 import { runRestartScript } from "./restart-helper.js";
 import type { UpdateCommandOptions } from "./shared.js";
-import { createUpdateConfigSnapshot } from "./update-command-config.js";
+import { createUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import {
   DEFINITION_DENIAL,
   runUpdatedInstallGatewayCommand,
@@ -49,7 +49,6 @@ import {
 } from "./update-command-service-recovery.js";
 
 export {
-  createAggregateErrorWithCause,
   maybeResumeWindowsTaskAutoStartAfterPackageUpdate,
   maybeRestartServiceAfterFailedMutableUpdate,
   maybeStopManagedServiceBeforeMutableUpdate,
@@ -424,11 +423,15 @@ export async function maybeRestartService(params: {
       // Refresh can start the service directly. Once its version and source
       // build are healthy, another restart only interrupts the new process.
       if (!refreshedGatewayAlreadyHealthy && restartScriptPath) {
-        await createUpdateConfigSnapshot();
+        if (!preserveDefinition) {
+          await createUpdateConfigSnapshot();
+        }
         await runRestartScript(restartScriptPath);
         restartInitiated = true;
       } else if (!refreshedGatewayAlreadyHealthy && canRestartUpdatedInstall()) {
-        await createUpdateConfigSnapshot();
+        if (!preserveDefinition) {
+          await createUpdateConfigSnapshot();
+        }
         restarted = await runUpdatedInstallGatewayCommand(
           activation,
           "restart",
@@ -453,7 +456,9 @@ export async function maybeRestartService(params: {
         shouldUseLegacyProcessRestartAfterUpdate({ updateMode: activation.result.mode }) &&
         !activation.skipLegacyServiceRestart
       ) {
-        await createUpdateConfigSnapshot();
+        if (!preserveDefinition) {
+          await createUpdateConfigSnapshot();
+        }
         restarted = await runDaemonRestart();
       } else if (!refreshedGatewayAlreadyHealthy && !activation.opts.json) {
         defaultRuntime.log(theme.muted("Gateway: restart skipped (no installed service found)."));

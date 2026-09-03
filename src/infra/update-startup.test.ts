@@ -14,7 +14,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import type { GatewayActiveWorkInspectors } from "./gateway-active-work.js";
 import { writeUpdateInstallReceiptRowSync } from "./restart-sentinel-store.js";
-import { readRestartSentinel } from "./restart-sentinel.js";
+import { readRestartSentinel, writeRestartSentinel } from "./restart-sentinel.js";
 import { UpdateCampaignController } from "./update-campaign.js";
 import type { UpdateCheckResult } from "./update-check.js";
 
@@ -23,6 +23,7 @@ const {
   checkTelemetryUpdateMock,
   detectRespawnSupervisorMock,
   getRuntimeConfigMock,
+  runUpdateFailureTriageMock,
   refreshRemoteModelCatalogMock,
   runGatewayUpdatePreflightMock,
   scheduleGatewaySigusr1RestartMock,
@@ -35,6 +36,7 @@ const {
   checkTelemetryUpdateMock: vi.fn<typeof import("./telemetry.js").checkTelemetryUpdate>(),
   detectRespawnSupervisorMock: vi.fn(),
   getRuntimeConfigMock: vi.fn(() => ({})),
+  runUpdateFailureTriageMock: vi.fn<typeof import("./update-triage.js").runUpdateFailureTriage>(),
   refreshRemoteModelCatalogMock: vi.fn<
     typeof import("../model-catalog/remote-refresh.js").refreshRemoteModelCatalog
   >(async () => ({
@@ -62,6 +64,8 @@ const {
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: getRuntimeConfigMock,
 }));
+
+vi.mock("./update-triage.js", () => ({ runUpdateFailureTriage: runUpdateFailureTriageMock }));
 
 vi.mock("../model-catalog/remote-refresh.js", async () => {
   const actual = await vi.importActual<typeof import("../model-catalog/remote-refresh.js")>(
@@ -161,6 +165,10 @@ type PersistedUpdateCheckState = {
 describe("update-startup", () => {
   let tempDir: string;
   let testState: OpenClawTestState;
+  let triageResult: Extract<
+    Awaited<ReturnType<typeof runUpdateFailureTriageMock>>,
+    { status: "completed" }
+  >;
 
   let resolveOpenClawPackageRoot: (typeof import("./openclaw-root.js"))["resolveOpenClawPackageRoot"];
   let checkUpdateStatus: (typeof import("./update-check.js"))["checkUpdateStatus"];
@@ -206,6 +214,12 @@ describe("update-startup", () => {
       },
     });
     tempDir = testState.stateDir;
+    triageResult = {
+      status: "completed",
+      hint: `Triage prompt: ${path.join(tempDir, "triage-prompt.md")}`,
+      contextPath: path.join(tempDir, "update-failure.json"),
+    };
+    runUpdateFailureTriageMock.mockReset().mockResolvedValue(triageResult);
 
     // Perf: load mocked modules once (after timers/env are set up).
     if (!loaded) {
@@ -1323,8 +1337,18 @@ describe("update-startup", () => {
     expect((await terminalSentinels.at(-1))?.payload).toMatchObject({
       kind: "update",
       status: "error",
+      doctorHint: expect.stringContaining(triageResult.hint),
       stats: { reason: "preflight-no-good-commit" },
     });
+    expect(runUpdateFailureTriageMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        mode: "json",
+        failure: {
+          result: expect.objectContaining({ status: "error", reason: "preflight-no-good-commit" }),
+          error: expect.any(String),
+        },
+      }),
+    );
   });
 
   it("continues managed dev campaigns from a detached tracked deployment", async () => {
@@ -1933,6 +1957,7 @@ describe("update-startup", () => {
 
       expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
       expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+      expect(runUpdateFailureTriageMock).not.toHaveBeenCalled();
     } finally {
       stop();
     }
@@ -1999,11 +2024,52 @@ describe("update-startup", () => {
         }
         expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
         expect(await readRestartSentinel()).toBeNull();
+        expect(runUpdateFailureTriageMock).not.toHaveBeenCalled();
       } finally {
         stop();
       }
     },
   );
+
+  it("does not publish triage from a stopped scheduler over a newer restart", async () => {
+    mockPackageUpdateStatus("beta", "2.0.0-beta.1");
+    detectRespawnSupervisorMock.mockReturnValue("systemd");
+    startManagedServiceUpdateHandoffMock.mockRejectedValueOnce(new Error("spawn ENOENT"));
+    let releaseTriage!: (report: typeof triageResult) => void;
+    runUpdateFailureTriageMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseTriage = resolve;
+        }),
+    );
+    process.env.NODE_ENV = "production";
+    const stop = scheduleGatewayUpdateCheck({
+      cfg: createBetaAutoUpdateConfig(),
+      log: { info: vi.fn() },
+      isNixMode: false,
+      activeWorkInspectors: idleActiveWorkInspectors(),
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(runUpdateFailureTriageMock).toHaveBeenCalledOnce();
+      stop();
+      await writeRestartSentinel({
+        kind: "restart",
+        status: "ok",
+        ts: Date.now(),
+        message: "newer restart",
+      });
+      const newer = await readRestartSentinel();
+      releaseTriage(triageResult);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(await readRestartSentinel()).toEqual(newer);
+      expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+      expect(runUpdateFailureTriageMock).toHaveBeenCalledOnce();
+    } finally {
+      stop();
+    }
+  });
 
   it("defers stable auto-update until rollout window is due", async () => {
     mockPackageUpdateStatus("latest", "2.0.0");
@@ -2275,55 +2341,78 @@ describe("update-startup", () => {
       logPath: "/tmp/openclaw-handoff.log",
     });
     expect(getUpdateSchedule()?.campaign?.state).toBe("applying");
+    expect(runUpdateFailureTriageMock).not.toHaveBeenCalled();
   });
 
-  it("does not restart after a managed auto-update handoff spawn failure", async () => {
-    mockPackageInstallStatus();
-    mockNpmChannelTag("beta", "2.0.0-beta.1");
-    detectRespawnSupervisorMock.mockReturnValue("launchd");
-    startManagedServiceUpdateHandoffMock.mockRejectedValueOnce(
-      Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" }),
-    );
-    const log = { info: vi.fn() };
-    const terminalSentinels: Array<ReturnType<typeof readRestartSentinel>> = [];
+  it.each([false, true])(
+    "preserves a failed handoff when automatic triage fails=%s",
+    async (triageFails) => {
+      const helperPath = "/private/temporary-update-handoff/handoff.cjs";
+      const startupError = Object.assign(
+        new Error(`ENOENT: no such file or directory, open '${helperPath}'`),
+        { code: "ENOENT", path: helperPath },
+      );
+      mockPackageInstallStatus();
+      mockNpmChannelTag("beta", "2.0.0-beta.1");
+      detectRespawnSupervisorMock.mockReturnValue("launchd");
+      startManagedServiceUpdateHandoffMock.mockRejectedValueOnce(startupError);
+      if (triageFails) {
+        runUpdateFailureTriageMock.mockResolvedValueOnce({
+          status: "failed",
+          hint: "Triage could not complete: collector failed. Run openclaw triage.",
+        });
+      }
+      const log = { info: vi.fn() };
+      const terminalSentinels: Array<ReturnType<typeof readRestartSentinel>> = [];
 
-    await runGatewayUpdateCheck({
-      cfg: createBetaAutoUpdateConfig(),
-      log,
-      isNixMode: false,
-      allowInTests: true,
-      activeWorkInspectors: idleActiveWorkInspectors(),
-      onUpdateScheduleChange: (schedule) => {
-        if (!schedule.campaign) {
-          terminalSentinels.push(readRestartSentinel());
-        }
-      },
-    });
-    await vi.advanceTimersByTimeAsync(60_000);
+      await runGatewayUpdateCheck({
+        cfg: createBetaAutoUpdateConfig(),
+        log,
+        isNixMode: false,
+        allowInTests: true,
+        activeWorkInspectors: idleActiveWorkInspectors(),
+        onUpdateScheduleChange: (schedule) => {
+          if (!schedule.campaign) {
+            terminalSentinels.push(readRestartSentinel());
+          }
+        },
+      });
+      await vi.advanceTimersByTimeAsync(60_000);
 
-    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
-    expect(log.info).toHaveBeenCalledWith("auto-update attempt failed", {
-      channel: "beta",
-      version: "2.0.0-beta.1",
-      tag: "beta",
-      forced: false,
-      reason: "managed-service-handoff-failed",
-      message: expect.stringContaining("spawn ENOENT"),
-    });
-    expect(log.info).toHaveBeenCalledWith(
-      "update campaign ended",
-      expect.objectContaining({
-        campaignId: expect.any(String),
+      expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+      expect(log.info).toHaveBeenCalledWith("auto-update attempt failed", {
         channel: "beta",
-      }),
-    );
-    expect(getUpdateSchedule()?.campaign).toBeUndefined();
-    expect((await terminalSentinels.at(-1))?.payload).toMatchObject({
-      kind: "update",
-      status: "error",
-      stats: { reason: "managed-service-handoff-failed" },
-    });
-  });
+        version: "2.0.0-beta.1",
+        tag: "beta",
+        forced: false,
+        reason: "managed-service-handoff-failed",
+        message: expect.stringContaining("ENOENT"),
+        triage: expect.stringContaining(triageFails ? "openclaw triage" : triageResult.hint),
+      });
+      expect(log.info).toHaveBeenCalledWith(
+        "update campaign ended",
+        expect.objectContaining({
+          campaignId: expect.any(String),
+          channel: "beta",
+        }),
+      );
+      expect(getUpdateSchedule()?.campaign).toBeUndefined();
+      expect((await terminalSentinels.at(-1))?.payload).toMatchObject({
+        kind: "update",
+        status: "error",
+        doctorHint: expect.stringContaining(triageFails ? "openclaw triage" : triageResult.hint),
+        stats: { reason: "managed-service-handoff-failed" },
+      });
+      expect(runUpdateFailureTriageMock).toHaveBeenCalledOnce();
+      expect(JSON.stringify(runUpdateFailureTriageMock.mock.calls[0]?.[0].failure)).not.toContain(
+        helperPath,
+      );
+      expect(JSON.stringify((await terminalSentinels.at(-1))?.payload)).not.toContain(helperPath);
+      expect(log.info).toHaveBeenCalledWith("automatic update handoff failed", {
+        error: String(startupError),
+      });
+    },
+  );
 
   it("does not schedule another restart when auto-update joins an active handoff", async () => {
     mockPackageInstallStatus();
@@ -2342,6 +2431,7 @@ describe("update-startup", () => {
     });
 
     expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expect(runUpdateFailureTriageMock).not.toHaveBeenCalled();
   });
 
   it("uses managed systemd handoff for Linux gateway service auto-updates", async () => {

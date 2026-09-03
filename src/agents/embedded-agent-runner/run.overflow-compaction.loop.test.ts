@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import {
+  prepareSystemAgentRunAdmission,
+  type AdmittedRunContext,
+} from "../admitted-run-context.js";
 import { createSubscribedSessionHarness } from "../embedded-agent-subscribe.e2e-harness.js";
 import {
   createEmbeddedRunReplayState,
@@ -9,6 +13,7 @@ import {
   observeReplayMetadata,
 } from "./replay-state.js";
 import type { EmbeddedRunAttemptInternalParams } from "./run/internal-params.js";
+import { createEmbeddedRunLaneController } from "./run/lane-controller.js";
 import { dispatchEmbeddedRunAttempt } from "./run/run-attempt-dispatch.js";
 
 const mocks = vi.hoisted(() => ({
@@ -50,19 +55,39 @@ vi.mock("./run/skill-workshop-attempt-params.js", () => ({
   resolveSkillWorkshopAttemptParams: vi.fn(() => ({})),
 }));
 
+let admittedRunContext: AdmittedRunContext;
+
 function makeDispatchInput(
   sessionManager: object,
   replayState: EmbeddedRunReplayState,
 ): Parameters<typeof dispatchEmbeddedRunAttempt>[0] {
+  const params = {
+    admittedRunContext,
+    sessionId: "session-1",
+    sessionFile: "agent:main:session-1",
+    workspaceDir: "/tmp/workspace",
+    prompt: "hello",
+    runId: "run-1",
+    timeoutMs: 30_000,
+    config: {},
+  };
+  let lifecycleGeneration = getAgentEventLifecycleGeneration();
+  const { createAttemptControls } = createEmbeddedRunLaneController({
+    getLifecycleGeneration: () => lifecycleGeneration,
+    getParams: () => params,
+    globalLane: "retry-dispatch-global",
+    sessionLane: "retry-dispatch-session",
+    initialQueuedLifecycleGeneration: lifecycleGeneration,
+    setLifecycleGeneration: (value) => {
+      lifecycleGeneration = value;
+    },
+    setParams: () => {},
+  });
   return {
     params: {
-      sessionFile: "agent:main:session-1",
-      runId: "run-1",
-      timeoutMs: 30_000,
-      config: {},
+      ...params,
       contextEngineLogicalTurnLease: { owner: "logical-turn" },
       onContextEngineTurnCandidate: vi.fn(),
-      admittedRunContext: createTestAdmittedRunContext("run-1"),
     },
     transcriptOwnership: { kind: "caller-owned", sessionManager },
     runtime: {
@@ -107,11 +132,9 @@ function makeDispatchInput(
       captureRuntimeArtifact: false,
     },
     control: {
-      lifecycleGeneration: "test-generation",
+      lifecycleGeneration,
       pluginHarnessOwnsTransport: true,
-      laneTaskAbortController: new AbortController(),
-      laneTaskReleaseController: new AbortController(),
-      noteLaneTaskProgress: vi.fn(),
+      createAttemptControls,
       onToolOutcome: vi.fn(),
       isTurnTainted: vi.fn(() => false),
       allocateToolOutcomeOrdinal: vi.fn(() => 1),
@@ -124,7 +147,8 @@ function makeDispatchInput(
       getPostCompactionAbortError: vi.fn(() => undefined),
       setPostCompactionAbortController: vi.fn(),
       clearPostCompactionAbortController: vi.fn(),
-    },
+    } satisfies Parameters<typeof dispatchEmbeddedRunAttempt>[0]["control"],
+    runStartedAtMs: Date.now(),
     bootstrapPromptWarningSignaturesSeen: [],
     suppressNextUserMessagePersistence: false,
     beforeAgentFinalizeRevisionAttempts: 0,
@@ -133,10 +157,14 @@ function makeDispatchInput(
 }
 
 describe("embedded run retry dispatch", () => {
-  beforeEach(() => {
+  let admission: ReturnType<typeof prepareSystemAgentRunAdmission>;
+  beforeEach(async () => {
     mocks.runAttempt.mockReset().mockResolvedValue({ terminal: { kind: "ok" } });
     mocks.settleRequesterAfterSessionSpawns.mockReset();
+    admission = prepareSystemAgentRunAdmission({}, "run-1", "main", "dispatch-test");
+    admittedRunContext = await admission.admit("plugin-harness", "dispatch-test");
   });
+  afterEach(() => admission.close());
 
   it.each([undefined, "global", "agent:main:policy"])(
     "dispatches a global plugin attempt with its prepared owner (%s)",

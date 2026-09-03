@@ -38,7 +38,6 @@ import type { GatewayRequestContext } from "./types.js";
 type PreparedAgentFacts = {
   agentId: string;
   owner: PreparedModelRuntimeSnapshot;
-  isCurrent: () => boolean;
   authStore: AuthProfileStore;
   authModes: PreparedAgentCredentialModes;
   authStoreRevision: string;
@@ -148,18 +147,9 @@ function captureGenerationFacts(deps: ChatMetadataRuntimeDeps): PreparedGenerati
     if (fullModelCatalog && !fullCatalogAuth) {
       throw new Error("prepared full model catalog omitted its auth generation");
     }
-    const isCurrent = () => {
-      const currentOwner = deps.getPreparedOwner({ agentId, config: deps.getConfig() });
-      return (
-        currentOwner === owner ||
-        (owner.pluginRegistry !== undefined &&
-          currentOwner?.pluginRegistry === owner.pluginRegistry)
-      );
-    };
     return {
       agentId,
       owner,
-      isCurrent,
       authStore: fullCatalogAuth?.authStore ??
         deps.getPreparedAuthStore(owner.agentDir, owner.inheritedAuthDir) ?? {
           version: 1,
@@ -264,7 +254,8 @@ async function defaultBuildProjection(params: {
       params.facts.owner,
     ),
     pluginRegistry: params.facts.owner.pluginRegistry,
-    isCurrent: params.facts.isCurrent,
+    isCurrent: params.facts.owner.isCurrent,
+    observationConfig: params.facts.owner.observationConfig,
     ...(params.preferredProfileId ? { preferredProfileId: params.preferredProfileId } : {}),
     ...(params.lockedProfileId ? { lockedProfileId: params.lockedProfileId } : {}),
   });
@@ -304,6 +295,7 @@ export function createGatewayChatMetadataRuntime(params: {
   invalidate: () => void;
   fail: (error: unknown) => void;
   refresh: () => Promise<void>;
+  stop: () => Promise<void>;
   read: (params: ChatMetadataReadParams) => Promise<ChatMetadataResult>;
   readStartup: (
     params: ChatStartupProjectionReadParams,
@@ -328,6 +320,19 @@ export function createGatewayChatMetadataRuntime(params: {
   let refreshVersion = 0;
   let lastSettlement: PreparedMetadataGeneration | number | undefined;
   let refreshTail: Promise<void> = Promise.resolve();
+  let stoppedError: ChatMetadataSnapshotUnavailableError | undefined;
+  const activeWork = new Set<Promise<unknown>>();
+  const trackWork = <T>(work: Promise<T>): Promise<T> => {
+    activeWork.add(work);
+    const settled = () => activeWork.delete(work);
+    void work.then(settled, settled);
+    return work;
+  };
+  const assertOpen = () => {
+    if (stoppedError) {
+      throw stoppedError;
+    }
+  };
   let pending:
     | {
         facts?: PreparedGenerationFacts;
@@ -340,6 +345,7 @@ export function createGatewayChatMetadataRuntime(params: {
     agent: PreparedAgentMetadata,
     sessionEntry?: ChatMetadataSessionEntry,
   ): Promise<PreparedAgentProjection> => {
+    assertOpen();
     const profiles = resolveSessionProfiles(sessionEntry);
     const neutral =
       profiles.preferredProfileId === undefined && profiles.lockedProfileId === undefined;
@@ -386,6 +392,7 @@ export function createGatewayChatMetadataRuntime(params: {
         }
         throw error;
       });
+    void trackWork(projection);
     const entry: AgentProjectionEntry = { state: "pending", promise: projection };
     projections.set(key, entry);
     if (!neutral) {
@@ -404,8 +411,9 @@ export function createGatewayChatMetadataRuntime(params: {
       facts.agents.map(async (agent): Promise<PreparedAgentMetadata> => {
         let commands: unknown[] | undefined;
         try {
-          commands = (await deps.buildCommands({ cfg: facts.config, agentId: agent.agentId }))
-            .commands;
+          commands = (
+            await trackWork(deps.buildCommands({ cfg: facts.config, agentId: agent.agentId }))
+          ).commands;
         } catch (error) {
           params.log.warn(
             `chat metadata continuing without text commands for ${agent.agentId}: ${formatErrorMessage(error)}`,
@@ -433,6 +441,7 @@ export function createGatewayChatMetadataRuntime(params: {
   };
 
   const runRefresh = async (version: number) => {
+    assertOpen();
     await params.beforeRefresh?.();
     // Ownership can change during preparation; build completion checks it again after suspension.
     if (version !== refreshVersion) {
@@ -470,6 +479,9 @@ export function createGatewayChatMetadataRuntime(params: {
   };
 
   const refresh = (): Promise<void> => {
+    if (stoppedError) {
+      return Promise.reject(stoppedError);
+    }
     const trackRefresh = (
       promise: Promise<void>,
       facts?: PreparedGenerationFacts,
@@ -537,6 +549,7 @@ export function createGatewayChatMetadataRuntime(params: {
     project: (generation: PreparedMetadataGeneration) => Promise<PreparedProjection<Result>>,
   ): Promise<Result> => {
     for (;;) {
+      assertOpen();
       const replacementPromise = replacement?.promise;
       if (replacementPromise) {
         await replacementPromise;
@@ -681,6 +694,9 @@ export function createGatewayChatMetadataRuntime(params: {
   };
 
   const invalidate = () => {
+    if (stoppedError) {
+      return;
+    }
     invalidationEpoch += 1;
     current = undefined;
     lastError = undefined;
@@ -698,11 +714,33 @@ export function createGatewayChatMetadataRuntime(params: {
     failedReplacement?.reject(replacementError);
     // Unavailable reads may retry capture. Notify once for the failed epoch, not once per reader.
     // A later ready generation is a different settlement even without another invalidation.
-    if (lastSettlement !== invalidationEpoch) {
+    if (!stoppedError && lastSettlement !== invalidationEpoch) {
       lastSettlement = invalidationEpoch;
       params.onChanged?.();
     }
   };
 
-  return { fail, invalidate, read, readStartup, refresh };
+  const stop = async () => {
+    if (!stoppedError) {
+      stoppedError = new ChatMetadataSnapshotUnavailableError(
+        "gateway chat metadata runtime is stopped",
+      );
+      invalidationEpoch += 1;
+      fail(stoppedError);
+    }
+    // Retain preparation and readers through shutdown, including evicted projections
+    // and superseded refreshes no longer reachable from the current generation.
+    while (activeWork.size > 0) {
+      await Promise.allSettled(activeWork);
+    }
+  };
+
+  return {
+    fail,
+    invalidate,
+    read: (readParams) => trackWork(read(readParams)),
+    readStartup: (startupParams) => trackWork(readStartup(startupParams)),
+    refresh: () => trackWork(refresh()),
+    stop,
+  };
 }

@@ -16,6 +16,7 @@ import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { deriveAvatarInitial, resolveAgentAvatarUrl } from "../lib/avatar.ts";
+import { redactLoginFailureError } from "../lib/connection-hints.ts";
 import {
   formatKeyboardShortcutCombo,
   KEYBOARD_SHORTCUT_COMBOS,
@@ -43,7 +44,6 @@ import { renderSidebarSessionSectionHeader } from "./app-sidebar-session-section
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import type { SidebarWorkboardBoard } from "./app-sidebar-workboard.ts";
 import { icons } from "./icons.ts";
-import { redactLoginFailureError } from "./login-gate.ts";
 import { renderNewSessionLink } from "./new-session-link.ts";
 import { HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import {
@@ -52,7 +52,11 @@ import {
   sessionAttentionSubtitle,
 } from "./session-attention-presentation.ts";
 import { renderSessionGlyph, renderSessionUnreadBadge } from "./session-glyph.ts";
-import { renderSessionRowBadges, renderSidebarConnectionStatus } from "./session-row-badges.ts";
+import {
+  renderSessionRowBadges,
+  renderSidebarConnectionStatus,
+  resolveSidebarConnectionStatus,
+} from "./session-row-badges.ts";
 import { formatSidebarBuildSubtitle } from "./sidebar-build-chip-format.ts";
 
 type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
@@ -121,6 +125,7 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
     (cardAgent ? resolveAgentTextAvatar(cardAgent, cardIdentity) : cardIdentity?.emoji) ??
     (deriveAvatarInitial(cardName || cardAgentId) || "?");
   const newSessionAccess = host.readNewSessionAccess();
+  const collapseLabel = t("nav.collapse");
   return html`
     <div class="sidebar-brand">
       <openclaw-sidebar-agent-card
@@ -131,7 +136,6 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
         .authToken=${avatarAuthToken}
         .avatarAuthReady=${avatarAuthReady}
         .avatarText=${cardAvatarText}
-        .subtitle=${host.agentChipSubtitle(cardAgentId)}
         .environment=${host.sessionDataContext?.config?.current?.environment ?? null}
         .menuOpen=${host.sidebarMenus.agentMenuPosition !== null}
         .menuUnread=${menuUnread}
@@ -151,10 +155,37 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
         }}
       ></openclaw-sidebar-agent-card>
       <div class="sidebar-brand__actions">
+        <openclaw-tooltip
+          .content=${`${collapseLabel} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar)})`}
+        >
+          <button
+            type="button"
+            class="sidebar-brand__icon sidebar-brand__desktop-control sidebar-brand__collapse"
+            aria-label=${collapseLabel}
+            aria-expanded="true"
+            ?disabled=${!host.onToggleSidebar}
+            @click=${() => host.onToggleSidebar?.()}
+          >
+            ${icons.panelLeftClose}
+          </button>
+        </openclaw-tooltip>
+        <openclaw-tooltip
+          .content=${`${t("chat.openCommandPalette")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.commandPalette)})`}
+        >
+          <button
+            type="button"
+            class="sidebar-brand__icon sidebar-brand__desktop-control sidebar-brand__search"
+            aria-label=${t("chat.openCommandPalette")}
+            ?disabled=${!host.onOpenPalette}
+            @click=${() => host.onOpenPalette?.()}
+          >
+            ${icons.search}
+          </button>
+        </openclaw-tooltip>
         ${renderNewSessionLink({
           basePath: host.basePath,
           agentId: host.expandedAgentId(),
-          className: "sidebar-brand__icon sidebar-brand__new-thread",
+          className: "shell-chrome-controls__button sidebar-brand__new-thread",
           label: t("chat.runControls.newSession"),
           disabledReason: newSessionAccess.allowed ? undefined : newSessionAccess.reason,
           onOpen: (agentId, target) => host.requestOpenNewSession(agentId, target),
@@ -166,7 +197,7 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
 
 /** Home: the first page. Opens the rolling main session on its saved face. */
 export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
-  const agentId = host.activeChipAgent().activeId;
+  const agentId = host.expandedAgentId();
   const mainKey = host.selectedAgentMainSessionKey(agentId);
   const mainRow = host.mainSessionRow(agentId);
   const attention = host.resolveHomeSessionAttention(mainKey, mainRow);
@@ -291,7 +322,7 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
                 >${collapsed ? icons.chevronRight : icons.chevronDown}</span
               >
             </span>
-            <span class="sidebar-recent-sessions__label-text">${label}</span>
+            <span class="sidebar-recent-sessions__label-text hover-marquee">${label}</span>
             ${collapsed
               ? html`<span class="sidebar-online__facepile">
                   <openclaw-viewer-facepile
@@ -339,6 +370,7 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
 
 /** Zone 5: product chrome recedes to one slim footer bar. */
 export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
+  const connectionStatus = resolveSidebarConnectionStatus(host);
   const selfUser = resolveCurrentSelfUser({
     snapshotUser: host.sessionDataContext?.gateway.snapshot.selfUser,
     presenceEntries: readPresenceEntries(host.sessionData.presencePayload),
@@ -377,9 +409,9 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
           <span class="sidebar-identity-card__name" title=${selfLabel}>${selfLabel}</span>
         </span>
       </button>
-      ${host.restartPending || host.offline
+      ${connectionStatus
         ? renderSidebarConnectionStatus({
-            kind: host.restartPending ? "restarting" : "offline",
+            kind: connectionStatus,
             queuedOutboxCount: host.queuedOutboxCount,
             title: host.lastError
               ? redactLoginFailureError(host.lastError)

@@ -9,6 +9,7 @@ import {
   resolveInboundSessionEnvelopeContext,
   toInboundMediaFactsWithMetadata,
   toLocationContext,
+  type BuildChannelInboundEventContextParams,
   type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
 import type {
@@ -44,6 +45,10 @@ type StickerEventMessage = webhook.StickerMessageContent;
 
 type MediaRef = Pick<ChannelInboundMediaInput, "contentType" | "fileName"> & { path: string };
 
+export type LineInboundMentionAccess = NonNullable<
+  NonNullable<BuildChannelInboundEventContextParams["access"]>["mentions"]
+>;
+
 interface BuildLineMessageContextParams {
   event: MessageEvent;
   allMedia: MediaRef[];
@@ -54,8 +59,8 @@ interface BuildLineMessageContextParams {
   resolveChannelIngress?: (
     contextBinding: ChannelIngressContextBinding,
   ) => Promise<ResolvedChannelMessageIngress>;
-  channelIngress?: ResolvedChannelMessageIngress;
   inboundHistory?: HistoryEntry[];
+  mentions?: LineInboundMentionAccess;
   buildContext?: typeof buildChannelInboundEventContext;
 }
 
@@ -268,6 +273,7 @@ async function finalizeLineInboundContext(params: {
   locationContext?: ReturnType<typeof toLocationContext>;
   verboseLog: { kind: "inbound" | "postback"; mediaCount?: number };
   inboundHistory?: Pick<HistoryEntry, "sender" | "body" | "timestamp">[];
+  mentions?: LineInboundMentionAccess;
   buildContext?: typeof buildChannelInboundEventContext;
 }) {
   const senderId = params.source.userId ?? "unknown";
@@ -362,7 +368,7 @@ async function finalizeLineInboundContext(params: {
       commandBody: params.commandBody ?? params.rawBody,
       inboundHistory: params.inboundHistory,
     },
-    access: { commands: { authorized: params.commandAuthorized } },
+    access: { commands: { authorized: params.commandAuthorized }, mentions: params.mentions },
     media,
     extra: {
       ...params.locationContext,
@@ -497,18 +503,17 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
     // The agent still reads the message as sent; only command parsing drops the
     // mention, which LINE requires before a group message reaches the bot.
     commandBody: resolveLineMentionStrippedText(message) || rawBody,
+    mentions: params.mentions,
     timestamp,
     messageSid: messageId,
     commandAuthorized,
     // Configured conversation bindings can replace the base route; bind only to the final route.
-    channelIngress: params.resolveChannelIngress
-      ? await params.resolveChannelIngress({
-          agentId: route.agentId,
-          sessionKey: route.sessionKey,
-          messageId,
-          inboundEventKind: "user_request",
-        })
-      : params.channelIngress,
+    channelIngress: await params.resolveChannelIngress?.({
+      agentId: route.agentId,
+      sessionKey: route.sessionKey,
+      messageId,
+      inboundEventKind: "user_request",
+    }),
     buildContext: params.buildContext,
     media: mediaFacts,
     locationContext,
@@ -539,7 +544,6 @@ export async function buildLinePostbackContext(params: {
   resolveChannelIngress?: (
     contextBinding: ChannelIngressContextBinding,
   ) => Promise<ResolvedChannelMessageIngress>;
-  channelIngress?: ResolvedChannelMessageIngress;
   buildContext?: typeof buildChannelInboundEventContext;
 }) {
   const { event, cfg, account, commandAuthorized } = params;
@@ -587,14 +591,12 @@ export async function buildLinePostbackContext(params: {
     messageSid,
     commandAuthorized,
     // Configured conversation bindings can replace the base route; bind only to the final route.
-    channelIngress: params.resolveChannelIngress
-      ? await params.resolveChannelIngress({
-          agentId: route.agentId,
-          sessionKey: route.sessionKey,
-          messageId: messageSid,
-          inboundEventKind: "user_request",
-        })
-      : params.channelIngress,
+    channelIngress: await params.resolveChannelIngress?.({
+      agentId: route.agentId,
+      sessionKey: route.sessionKey,
+      messageId: messageSid,
+      inboundEventKind: "user_request",
+    }),
     buildContext: params.buildContext,
     media: [],
     verboseLog: { kind: "postback" },

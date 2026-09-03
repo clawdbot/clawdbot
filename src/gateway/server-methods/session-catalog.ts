@@ -308,6 +308,7 @@ function catalogResult(
       archive: Boolean(provider.archive),
       ...(provider.openTerminal ? { openTerminal: true } : {}),
       ...(createSession ? { createSession } : {}),
+      ...(provider.startTerminalSession ? { startTerminal: true } : {}),
     },
     ...(shareRoute ? { shareRoute } : {}),
     hosts,
@@ -665,10 +666,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     }
   },
 
-  "sessions.catalog.startTerminal": catalogStartHandler(
-    resolveSessionCatalogProvider,
-    resolveRegisteredCatalogCreateTarget,
-  ),
+  "sessions.catalog.startTerminal": catalogStartHandler(resolveSessionCatalogProvider),
 
   "sessions.catalog.archive": async ({ params, respond, context, client }) => {
     if (

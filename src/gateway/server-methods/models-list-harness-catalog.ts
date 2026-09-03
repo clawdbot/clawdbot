@@ -17,6 +17,7 @@ export async function prepareModelsListHarnessCatalog(params: {
   metadataSnapshot: PluginMetadataSnapshot;
   pluginRegistry?: PluginRegistry;
   isCurrent?: () => boolean;
+  observationConfig?: OpenClawConfig;
   allowHarnessDiscovery: boolean;
   onError?: (error: unknown) => void;
 }) {
@@ -32,6 +33,7 @@ export async function prepareModelsListHarnessCatalog(params: {
         snapshot: params.snapshot,
         pluginRegistry: params.pluginRegistry,
         isCurrent: params.isCurrent,
+        observationConfig: params.observationConfig,
         onError: params.onError,
       })
     : params.snapshot;

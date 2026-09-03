@@ -101,6 +101,7 @@ export function createGatewayAgentModelCatalogProjector(params: {
   preparedRuntimeAuthMaterializations?: readonly RuntimeAuthMaterialization[];
   pluginRegistry?: PluginRegistry;
   isCurrent?: () => boolean;
+  observationConfig?: OpenClawConfig;
   preferredProfileId?: string;
   lockedProfileId?: string;
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
@@ -119,6 +120,7 @@ export function createGatewayAgentModelCatalogProjector(params: {
     lockedProfileId: params.lockedProfileId,
     pluginRegistry: params.pluginRegistry,
     isCurrent: params.isCurrent,
+    observationConfig: params.observationConfig,
   });
   const projectionCatalog =
     params.snapshot.routeVariants.length > 0
@@ -171,13 +173,14 @@ export function createGatewayAgentModelCatalogProjector(params: {
     authModes: params.preparedRuntimeAuthModes,
     authMaterializations: params.preparedRuntimeAuthMaterializations,
     pluginRegistry: params.pluginRegistry,
+    isCurrent: params.isCurrent ?? (() => params.observationConfig === undefined),
+    observationConfig: params.observationConfig,
     projectCatalog: () =>
       (projectedCatalog ??= Promise.all(
         logicalEntries.map(async (entry) => {
           const routeVariants = resolveRouteVariants(entry);
           const evaluation = evaluateNative(entry, await evaluateEntry(entry, routeVariants));
           const state = resolveLogicalModelCatalogEntryState({
-            entry,
             evaluation,
             routePolicy: openAIModelCatalogRoutePolicy,
           });
@@ -457,9 +460,9 @@ export async function prepareModelsListResult(
   const metadataSnapshot = preparedProjectionOwner?.metadataSnapshot;
   const preparedAuthStore = ownerSnapshot?.authStore ?? params.catalogProjector?.authStore;
   const preparedPluginRegistry = preparedProjectionOwner?.pluginRegistry;
-  const preparedOwnerIsCurrent = ownerSnapshot?.isCurrent ?? (() => true);
+  const preparedOwnerIsCurrent = preparedProjectionOwner?.isCurrent;
   const isCurrent = () =>
-    params.context.getRuntimeConfig() === initialConfig && preparedOwnerIsCurrent();
+    params.context.getRuntimeConfig() === initialConfig && preparedOwnerIsCurrent?.() === true;
   if (!metadataSnapshot || !preparedAuthStore) {
     throw new Error("Gateway model catalog owner omitted prepared metadata or auth state");
   }
@@ -473,6 +476,7 @@ export async function prepareModelsListResult(
     metadataSnapshot,
     pluginRegistry: preparedPluginRegistry,
     isCurrent,
+    observationConfig: preparedProjectionOwner?.observationConfig,
     allowHarnessDiscovery: params.preloadedOnly !== true && !preparedOnly,
     onError: (error) =>
       params.context.logGateway.debug(
@@ -490,6 +494,7 @@ export async function prepareModelsListResult(
       workspaceDir,
       pluginRegistry: preparedPluginRegistry,
       isCurrent,
+      observationConfig: preparedProjectionOwner?.observationConfig,
     });
   const evaluateNative: typeof nativeEvaluator = (entry, host) => {
     const native = nativeEvaluator(entry, host);
@@ -548,6 +553,7 @@ export async function prepareModelsListResult(
       preparedRuntimeAuthMaterializations,
       pluginRegistry: preparedPluginRegistry,
       isCurrent,
+      observationConfig: preparedProjectionOwner?.observationConfig,
       ...(params.routeResolverFactory ? { routeResolverFactory: params.routeResolverFactory } : {}),
     });
     const inventory = await inventoryProjector.projectCatalog();
@@ -628,7 +634,6 @@ export async function prepareModelsListResult(
           evaluation.availability === undefined &&
           evaluation.evidence === "synthetic";
         return resolveLogicalModelCatalogEntryState({
-          entry,
           evaluation,
           authBacked: evaluation.availability === true || syntheticLocal,
           routePolicy: openAIModelCatalogRoutePolicy,

@@ -20,8 +20,10 @@ export function createAgentHarnessCatalogEvaluator(
     lockedProfileId?: string;
     pluginRegistry?: PluginRegistry;
     isCurrent?: () => boolean;
+    observationConfig?: AgentHarnessModelCatalogParams["config"];
   },
 ) {
+  const isCurrent = () => params.isCurrent?.() ?? params.observationConfig === undefined;
   return (
     entry: ModelCatalogEntry,
     host: ModelAuthAvailabilityEvaluation,
@@ -74,7 +76,10 @@ export function createAgentHarnessCatalogEvaluator(
     ) {
       return host;
     }
-    const resolveRegistry = () => params.pluginRegistry ?? getActivePluginRegistry();
+    const resolveRegistry = () =>
+      params.observationConfig
+        ? params.pluginRegistry
+        : (params.pluginRegistry ?? getActivePluginRegistry());
     const registry = resolveRegistry();
     const harness = registry?.agentHarnesses.find(
       (registration) => registration.harness.id === runtime,
@@ -85,7 +90,7 @@ export function createAgentHarnessCatalogEvaluator(
     let ready = false;
     try {
       ready =
-        params.isCurrent?.() !== false &&
+        isCurrent() &&
         harness?.authBootstrap === "harness" &&
         harness.supports({
           provider,
@@ -93,8 +98,15 @@ export function createAgentHarnessCatalogEvaluator(
           requestedRuntime: runtime,
           modelProvider: { preparedAuth: { source: "harness" } },
         }).supported &&
-        harness.readModelCatalogReadiness?.({ ...params, provider, modelId: entry.id }) !==
-          undefined &&
+        harness.readModelCatalogReadiness?.({
+          config: params.observationConfig ?? params.config,
+          agentId: params.agentId,
+          agentDir: params.agentDir,
+          workspaceDir: params.workspaceDir,
+          provider,
+          modelId: entry.id,
+        }) !== undefined &&
+        isCurrent() &&
         resolveRegistry() === registry;
     } catch {
       // A failed/disposed owner supplies no account observation; do not infer host readiness.

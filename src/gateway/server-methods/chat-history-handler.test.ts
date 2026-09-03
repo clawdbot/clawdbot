@@ -272,11 +272,13 @@ describe("chat history exact-entry snapshots", () => {
         };
         const childScope = { agentId: "main", sessionKey: "agent:main:subagent:history-child" };
         const toolOverrides = { mcpToolsDeny: { synthetic: ["blocked"] } };
+        const skillsSnapshot = { prompt: "history unused saved prompt", skills: [] };
         await upsertSessionEntryCore(scope, {
           sessionId: scope.sessionId,
           updatedAt: now,
           thinkingLevel: "high",
           toolOverrides,
+          skillsSnapshot,
         });
         await upsertSessionEntryCore(childScope, {
           sessionId: "history-child",
@@ -284,12 +286,14 @@ describe("chat history exact-entry snapshots", () => {
           parentSessionKey: scope.sessionKey,
           spawnedBy: scope.sessionKey,
           status: "running",
+          skillsSnapshot,
         });
         const context = createDirectChatContext();
         const handler = expectDefined(chatHistoryHandlers[method], "history handler");
         const call = async () => {
           const respond = vi.fn();
           const cloneSpy = vi.spyOn(globalThis, "structuredClone");
+          const parseSpy = vi.spyOn(JSON, "parse");
           try {
             const pending = handler({
               params: { sessionKey: scope.sessionKey },
@@ -303,6 +307,9 @@ describe("chat history exact-entry snapshots", () => {
             const preparationCopies = cloneSpy.mock.calls.filter(
               ([value]) => asOptionalRecord(value)?.sessionId === scope.sessionId,
             ).length;
+            expect(
+              parseSpy.mock.calls.some(([value]) => value.includes(skillsSnapshot.prompt)),
+            ).toBe(false);
             await pending;
             const [ok, payload, error] = expectDefined(respond.mock.calls[0], "history response");
             expect(error).toBeUndefined();
@@ -311,6 +318,7 @@ describe("chat history exact-entry snapshots", () => {
             return expectDefined(asOptionalRecord(payload), "history payload");
           } finally {
             cloneSpy.mockRestore();
+            parseSpy.mockRestore();
           }
         };
 

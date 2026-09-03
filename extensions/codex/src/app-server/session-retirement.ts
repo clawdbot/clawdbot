@@ -23,7 +23,10 @@ import type {
 } from "./session-binding.js";
 import { getCodexSessionInitializationRollback } from "./session-initialization.js";
 import { retainSharedCodexAppServerClientByInstanceId } from "./shared-client.js";
-import { withCodexAppServerThreadMutation } from "./thread-ownership.js";
+import {
+  isSameCodexAppServerThreadOwner,
+  withCodexAppServerThreadMutation,
+} from "./thread-ownership.js";
 
 async function releaseSessionSubscription(
   client: NonNullable<ReturnType<typeof retainSharedCodexAppServerClientByInstanceId>>["client"],
@@ -163,27 +166,29 @@ export async function retireCodexAppServerSessionGeneration(params: {
     // callers need the original absent/conflict result for reset reclamation.
     return await retireGeneration();
   }
-  return await params.bindingStore.withLease(params.identity, async () => {
-    const binding = await params.bindingStore.read(params.identity);
-    if (binding?.threadId !== expectedBinding.threadId) {
-      return "conflict";
-    }
-    const result = await retireGeneration();
-    if (result !== "applied" || !binding?.clientId) {
-      return result;
-    }
+  return await withCodexAppServerThreadMutation(expectedBinding.threadId, () =>
+    params.bindingStore.withLease(params.identity, async () => {
+      const binding = await params.bindingStore.read(params.identity);
+      if (!binding || !isSameCodexAppServerThreadOwner(binding, expectedBinding)) {
+        return "conflict";
+      }
+      const result = await retireGeneration();
+      if (result !== "applied" || !binding?.clientId) {
+        return result;
+      }
 
-    // Locate the original physical client only after its exact binding was
-    // retired; delayed reset events must never unsubscribe a newer generation.
-    const clientLease = retainSharedCodexAppServerClientByInstanceId(binding.clientId);
-    if (!clientLease) {
+      // Locate the original physical client only after its exact binding was
+      // retired; delayed reset events must never unsubscribe a newer generation.
+      const clientLease = retainSharedCodexAppServerClientByInstanceId(binding.clientId);
+      if (!clientLease) {
+        return result;
+      }
+      try {
+        await releaseSessionSubscription(clientLease.client, binding, params.identity.sessionKey);
+      } finally {
+        clientLease.release();
+      }
       return result;
-    }
-    try {
-      await releaseSessionSubscription(clientLease.client, binding, params.identity.sessionKey);
-    } finally {
-      clientLease.release();
-    }
-    return result;
-  });
+    }),
+  );
 }

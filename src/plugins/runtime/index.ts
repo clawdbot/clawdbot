@@ -75,6 +75,9 @@ function createRuntimeMediaUnderstandingFacade(): PluginRuntime["mediaUnderstand
     loadMediaUnderstandingRuntime,
   );
   return {
+    resolveAudioInputBudget: bindMediaUnderstandingRuntime(
+      (runtime) => runtime.resolveAudioInputBudget,
+    ),
     runFile: bindMediaUnderstandingRuntime((runtime) => runtime.runMediaUnderstandingFile),
     describeImageFile: bindMediaUnderstandingRuntime((runtime) => runtime.describeImageFile),
     describeImageFileWithModel: bindMediaUnderstandingRuntime(

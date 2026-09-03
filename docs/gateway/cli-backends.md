@@ -38,6 +38,8 @@ mechanics in `openclaw.json`.
 OpenClaw auto-loads an owning bundled plugin when model selection or a
 model-scoped `agentRuntime.id` references its backend.
 
+Utility completions for session digests, progress narration, and tool-call titles use the selected model's runtime too: Claude CLI runs a fresh, tool-free completion with its own authentication, including canonical `anthropic/*` refs configured with `agentRuntime.id: "claude-cli"`.
+
 ## Using it as a fallback
 
 Add the CLI backend to your fallback list so it only runs when primary models fail:
@@ -343,6 +345,13 @@ When bundle MCP is enabled, OpenClaw:
 - binds tool access to the Gateway-selected session, account, and channel context instead of trusting child-process headers;
 - loads enabled bundle-MCP servers for the current workspace and merges them with any existing backend MCP config/settings shape;
 - rewrites the launch config using the backend-owned integration mode from the owning plugin.
+
+The node-only `exec` tool is offered only when policy permits it and a connected
+node advertises `system.run`. Offline paired devices and approval-only phones do
+not make remote execution available. A configured node binding must identify an
+eligible node; it never redirects to another device. When several eligible nodes
+are connected, select one explicitly. When local execution is allowed by policy,
+use the CLI's native shell for local work.
 
 `tools.allow` and `tools.deny` also constrain configured native MCP servers.
 OpenClaw lists each server through its session-scoped runtime, assigns the same

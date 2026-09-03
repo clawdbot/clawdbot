@@ -4,6 +4,7 @@ import type {
   WorkerSessionsSpawnParams,
   WorkerSessionToolResult,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { WorkerSkillWorkshopParams } from "../../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
 import { buildSubagentExecutionSessionSpawnContext } from "../../agents/subagents/spawn/subagent-spawn-execution-identity.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import {
@@ -52,14 +53,15 @@ import {
   workerSessionRelationKey as relationKey,
   type WorkerSessionToolSource as ExactSource,
 } from "./worker-session-tool-topology.js";
+import { invokeWorkerSkillAuthoring } from "./worker-skill-authoring.js";
 
 type WorkerSessionToolRequest =
   | WorkerPortalToolRequest
   | WorkerSessionOperationRequest
-  | ({ identity: WorkerConnectionIdentity; signal?: AbortSignal } & {
-      toolName: "github_publish";
-      request: WorkerGitHubPublishParams;
-    });
+  | ({ identity: WorkerConnectionIdentity; signal?: AbortSignal } & (
+      | { toolName: "skill_workshop"; request: WorkerSkillWorkshopParams }
+      | { toolName: "github_publish"; request: WorkerGitHubPublishParams }
+    ));
 
 type WorkerSessionToolAuthority = {
   assertSource: () => void;
@@ -461,6 +463,16 @@ export function createWorkerSessionToolExecutor(params: {
 
   return async (request: WorkerSessionToolRequest): Promise<WorkerSessionToolResult> => {
     const source = exactSource({ identity: request.identity, placements: params.placements });
+    if (request.toolName === "skill_workshop") {
+      if (!params.placements.isWorkerTurnToolAuthorized(source.turnClaim, "skill_workshop")) {
+        throw new Error("Worker Workshop is not authorized.");
+      }
+      request.signal?.throwIfAborted();
+      const result = await invokeWorkerSkillAuthoring(source.turnClaim, request.request);
+      exactSource({ identity: request.identity, placements: params.placements });
+      request.signal?.throwIfAborted();
+      return { resultJson: serializeResult(result) };
+    }
     if (request.toolName === "portal") {
       return await executePortal(request);
     }

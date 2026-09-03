@@ -2,6 +2,10 @@ import { vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import {
+  getPreparedModelFullCatalogAuth,
+  setPreparedModelFullCatalogAuth,
+} from "./prepared-model-runtime-auth.js";
 import type { AuthStorageData } from "./sessions/auth-storage.js";
 
 type LoadStaticCatalog =
@@ -31,6 +35,7 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
     },
   },
   preparedAuthStore: undefined as import("./auth-profiles/types.js").AuthProfileStore | undefined,
+  credentialsRevision: 0,
   preparedAuthMaterializations:
     [] as import("./auth-profiles/runtime-materializations.js").RuntimeAuthMaterialization[],
   authStorage: {
@@ -120,8 +125,18 @@ vi.mock("./prepared-model-catalog-worker.js", () => ({
     ...args: Parameters<typeof preparedModelRuntimeMocks.createPreparedModelCatalogWorkerInput>
   ) => preparedModelRuntimeMocks.createPreparedModelCatalogWorkerInput(...args),
   createPreparedModelCatalogWorker: () => ({
-    loadCatalog: (...args: unknown[]) =>
-      preparedModelRuntimeMocks.runPreparedModelCatalogWorker(...args),
+    loadCatalog: async (...args: unknown[]) => {
+      const catalog = await preparedModelRuntimeMocks.runPreparedModelCatalogWorker(...args);
+      // Real worker replies always pair inventory with the observed auth generation.
+      setPreparedModelFullCatalogAuth(
+        catalog,
+        getPreparedModelFullCatalogAuth(catalog) ?? {
+          authStore: preparedModelRuntimeMocks.preparedAuthStore ?? { version: 1, profiles: {} },
+          authModes: {},
+        },
+      );
+      return catalog;
+    },
     loadAuth: () =>
       Promise.resolve({
         authStore: preparedModelRuntimeMocks.preparedAuthStore ?? { version: 1, profiles: {} },
@@ -312,6 +327,8 @@ vi.mock("./auth-profiles/runtime-snapshots.js", () => ({
   getPreparedRuntimeAuthProfileStoreSnapshotCore: () => preparedModelRuntimeMocks.preparedAuthStore,
   getRuntimeAuthProfileStoreSnapshot: () => preparedModelRuntimeMocks.preparedAuthStore,
   getRuntimeAuthProfileStoreSnapshotRevision: () => 0,
+  getRuntimeAuthProfileStoreCredentialsRevision: () =>
+    preparedModelRuntimeMocks.credentialsRevision,
   registerRuntimeAuthProfileStoreMutationListener: (
     listener: (event: { agentDir?: string; affectsInheritedStores: boolean }) => void,
   ) => {
@@ -390,6 +407,7 @@ export function resetPreparedModelRuntimeHarness(state: OpenClawTestState): void
   });
   preparedModelRuntimeMocks.authStorage.getOAuthProviders.mockReset().mockReturnValue([]);
   preparedModelRuntimeMocks.preparedAuthStore = undefined;
+  preparedModelRuntimeMocks.credentialsRevision = 0;
   preparedModelRuntimeMocks.preparedAuthMaterializations = [];
   preparedModelRuntimeMocks.modelRegistry.fork
     .mockReset()

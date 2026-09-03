@@ -293,7 +293,7 @@ export function buildFailureWarning(params: {
   suppressToolErrorWarnings?: boolean;
   verboseLevel?: VerboseLevel;
   useMarkdown: boolean;
-}): { text: string; nonTerminalToolErrorWarning: boolean } | undefined {
+}): string | undefined {
   if (
     params.hasUserFacingReply ||
     params.suppressToolErrors ||
@@ -301,12 +301,9 @@ export function buildFailureWarning(params: {
   ) {
     return undefined;
   }
-  return {
-    text: formatToolErrorWarningText({
-      lastToolError: params.lastToolError,
-      includeDetails: params.verboseLevel === "full",
-      useMarkdown: params.useMarkdown,
-    }),
-    nonTerminalToolErrorWarning: params.lastToolError.middlewareError === true,
-  };
+  return formatToolErrorWarningText({
+    lastToolError: params.lastToolError,
+    includeDetails: params.verboseLevel === "full",
+    useMarkdown: params.useMarkdown,
+  });
 }

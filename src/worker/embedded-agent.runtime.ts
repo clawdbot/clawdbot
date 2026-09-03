@@ -1,3 +1,4 @@
+import type { SkillResourceDelivery } from "../../packages/gateway-protocol/src/schema/skill-resources.js";
 import type {
   WorkerLiveEvent,
   WorkerTranscriptMessage,
@@ -28,6 +29,7 @@ import { wrapToolWithGatewayCallerIdentity } from "../agents/tools/gateway-calle
 import { DEFAULT_AGENTS_FILENAME, loadWorkspaceBootstrapFiles } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AssistantMessage, AssistantMessageEventStreamLike } from "../llm/types.js";
+import { materializeSkillResources } from "../skills/runtime/resources.js";
 import { createWorkerBrowserToolRuntime, type WorkerBrowserRuntime } from "./browser-runtime.js";
 import { createWorkerComputerTool } from "./computer-runtime.js";
 import { createWorkerLiveRuntime } from "./embedded-agent-live.runtime.js";
@@ -74,6 +76,8 @@ type WorkerEmbeddedLiveClient = {
 };
 
 type RunWorkerEmbeddedTurnParams = {
+  skillResources?: SkillResourceDelivery;
+  skillAuthoring?: import("../../packages/gateway-protocol/src/schema/worker-skill-workshop.js").WorkerSkillWorkshopBinding;
   agentId: string;
   operationalRunInstance: OperationalRunInstanceRef;
   agentRuntimeIdentityToken: string;
@@ -104,6 +108,42 @@ type RunWorkerEmbeddedTurnParams = {
 const WORKER_TOOL_CONFIG = { plugins: { enabled: false } } satisfies OpenClawConfig;
 
 export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams): Promise<void> {
+  const resources = params.skillResources
+    ? await materializeSkillResources(params.skillResources, params.stateDir, () =>
+        params.signal?.throwIfAborted(),
+      )
+    : undefined;
+  try {
+    await runWorkerEmbeddedTurnWithResources(
+      {
+        ...params,
+        prompt: resources
+          ? typeof params.prompt === "string"
+            ? resources.rewriteReferences(params.prompt)
+            : params.prompt.map((part) =>
+                part.type === "text"
+                  ? { ...part, text: resources.rewriteReferences(part.text) }
+                  : part,
+              )
+          : params.prompt,
+        systemPrompt:
+          [params.systemPrompt, resources?.snapshot.prompt].filter(Boolean).join("\n\n") ||
+          undefined,
+      },
+      resources?.snapshot,
+    );
+  } finally {
+    await resources?.cleanup();
+  }
+}
+
+async function runWorkerEmbeddedTurnWithResources(
+  params: RunWorkerEmbeddedTurnParams,
+  skillsSnapshot?: import("../skills/types.js").SkillSnapshot,
+): Promise<void> {
+  if (params.allowedToolNames.includes("skill_workshop") !== Boolean(params.skillAuthoring)) {
+    throw new Error("Worker Workshop capability and tool authority must agree.");
+  }
   const browserAuthorized = params.allowedToolNames.includes("browser");
   if (browserAuthorized !== (params.browser !== undefined)) {
     throw new Error("Worker Browser authority and launch descriptor must be provided together.");
@@ -165,6 +205,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
     ? `Exec denied (approval_required) in worker ${params.permissionMode} permission mode. Run this command locally for interactive approval, or ask an administrator to clear the session permission mode.`
     : undefined;
   const coreTools = createCoreCodingTools({
+    skillsSnapshot,
     codingRoot: params.cwd,
     containmentRoot: params.workerContainmentRoot,
     includeBaseCodingTools: true,
@@ -284,7 +325,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
         throw new Error("Worker session tool client unavailable");
       }
       const sessionTools = params.sessions
-        ? createWorkerSessionTools(params.sessions).filter((tool) =>
+        ? createWorkerSessionTools(params.sessions, params.skillAuthoring).filter((tool) =>
             allowedToolNameSet.has(tool.name),
           )
         : [];

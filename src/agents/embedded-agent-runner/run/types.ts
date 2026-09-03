@@ -10,6 +10,7 @@ import type {
 import type { ContextEngine, ContextEnginePromptCacheInfo } from "../../../context-engine/types.js";
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import type { AssistantMessage, Model } from "../../../llm/types.js";
+import type { CommandQueueTaskDeadline } from "../../../process/command-queue.types.js";
 import type { AgentHarnessTaskRuntimeScope } from "../../../tasks/agent-harness-task-runtime-scope.js";
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
@@ -175,8 +176,10 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   onToolOutcome?: ToolOutcomeObserver;
   /** Reads the sticky untrusted-content flag for the current user turn. */
   isTurnTainted?: () => boolean;
-  /** Signals that the attempt's own run-timeout watchdog is active. */
+  /** Shipped harness notification; core uses onAttemptDeadlineChanged for queue ownership. */
   onAttemptTimeoutArmed?: () => void;
+  /** Hands the lane an authoritative deadline, never a progress-idle estimate. */
+  onAttemptDeadlineChanged?: (deadline: CommandQueueTaskDeadline) => void;
   /** Signals that this attempt's timeout has fired and must unwind promptly. */
   onAttemptTimeout?: (reason: Error) => void;
   /** Signals an explicit cancellation through the active native run handle. */
@@ -260,7 +263,11 @@ export type EmbeddedRunAttemptResult = {
     providerStarted?: boolean;
   };
   codexAppServerFailure?: {
-    kind: "client_closed_before_turn_completed" | "turn_completion_idle_timeout";
+    kind:
+      | "client_closed_before_turn_completed"
+      | "turn_settlement_timeout"
+      // Published harness result contract: older plugins may still report idle-watch failures.
+      | "turn_completion_idle_timeout";
     turnWatchTimeoutKind?: "progress" | "completion" | "terminal";
     transport: "stdio" | "unix" | "websocket";
     threadId?: string;

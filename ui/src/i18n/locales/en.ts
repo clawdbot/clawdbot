@@ -499,6 +499,15 @@ export const en: TranslationMap & {
     retry: "Retry",
     stylesFailed: "Styles failed to load, so the page may look broken.",
   },
+  communityInvite: {
+    cardLabel: "Join the OpenClaw community on Discord",
+    artAlt: "A lobster beside the Discord mark on a lit seafloor pedestal",
+    title: "Come build with us",
+    body: "Ask anything, show what you're making, and find out what everyone else is building.",
+    bodyGreeting: "Or just say hi.",
+    action: "Join us on Discord",
+    dismissForever: "Dismiss and don't show again",
+  },
   updates: {
     adminRequired: "Administrator access is required to change update settings or start an update.",
     campaign: {
@@ -510,15 +519,7 @@ export const en: TranslationMap & {
     holdOneHour: "Hold 1 h",
     reviewUpdate: "Review update",
     confirm: {
-      message: "Installs the available update on the connected Gateway and restarts it.",
-      macMessage:
-        "Hands this update to the OpenClaw Mac app, which installs it and restarts the Gateway it manages.",
-      impact:
-        "Running sessions are interrupted and this Control UI disconnects until the Gateway is back.",
-      versions: "Installed {installed} · Available {available}",
-      versionsBehind: "Installed {installed} · {available}",
       action: "Update and restart",
-      macAction: "Update Mac app and restart",
     },
     target: {
       version: "v{version}",
@@ -536,10 +537,10 @@ export const en: TranslationMap & {
       waitingForIdle: "Waiting for active work",
     },
     dialog: {
-      installing: "Installing the update on the Gateway. It restarts once the install finishes.",
-      restarting: "The Gateway is restarting. This page disconnects and reconnects on its own.",
-      notStarted:
-        "The update request went unanswered. Try again, or run `openclaw update` in the terminal.",
+      disconnected:
+        "The Gateway disconnected during the update. This page reconnects on its own. If it stays disconnected, run `openclaw triage` on the Gateway host to open a local coding agent for diagnosis and repair.",
+      restarting:
+        "The Gateway is restarting. This page disconnects and reconnects on its own. If it stays disconnected, run `openclaw triage` on the Gateway host to open a local coding agent for diagnosis and repair.",
     },
     channel: {},
     installKind: {},
@@ -548,16 +549,16 @@ export const en: TranslationMap & {
       "Update installed. A gateway restart is already in progress; status will refresh after it reconnects.",
     error: "Update error: {error}",
     status: "Update {status}: {reason}. {guidance}",
-    verificationFailed:
-      "Update installed but running version did not change — restart may have been blocked.",
-    verificationFailedWithVersions:
-      "Update installed but running version did not change — restart may have been blocked. Expected v{expectedVersion}, running v{actualVersion}.",
     verificationFailedWithIdentity:
-      "Update finished, but the running install does not match the expected revision. Expected {expected}, running {actual}.",
+      "Update finished, but the running install does not match the expected revision. Expected {expected}, running {actual}. Run `openclaw triage` on the Gateway host before retrying.",
     handoffTimeout:
-      "Update completion was not confirmed. Check `openclaw gateway status` and `openclaw update status` before retrying.",
+      "Update completion was not confirmed. Run `openclaw triage` on the Gateway host and inspect the result before retrying.",
     outcomeUnknown:
-      "The update outcome is unknown. Check `openclaw gateway status` and `openclaw update status` before retrying.",
+      "The update outcome is unknown. Run `openclaw triage` on the Gateway host and inspect the result before retrying.",
+    triage: {
+      hostHint:
+        "If Ask OpenClaw is unavailable, run `openclaw triage` on the Gateway host to open a local coding agent for diagnosis and repair. Diagnose the cause before retrying.",
+    },
     failureReasons: {
       dirty: "Commit or stash changes, then retry.",
       noUpstream: "Set an upstream branch, then retry.",
@@ -924,10 +925,25 @@ export const en: TranslationMap & {
     draft: "Draft",
     draftDescription: "Keep this session to yourself until you publish it",
     messagePlaceholder: "What should this session work on?",
+    titlePreparationDisclosure:
+      "When you pause, draft text is sent to your title provider to prepare a session name. Not used in incognito.",
+    preparedTitle: "Session name: {title}",
     dictate: "Dictate",
     readingAttachment: "Reading attachment",
     start: "Start session",
     startInTerminal: "Start in terminal",
+    nativeTerminalHint:
+      "Start the native CLI on the selected machine using its own account and configuration. This does not create an OpenClaw Chat.",
+    chooseNativeHost: "Choose a native CLI host",
+    nativeTerminalPrompt: "Optional initial prompt for the native CLI",
+    terminalNodeFolder: "Existing absolute folder on this node",
+    terminalHostUnavailable:
+      "Native CLI host unavailable. Check that the CLI is installed and the node is connected with its fresh-start command approved, then retry the catalog.",
+    terminalDisabled: "Enable CLI agents and terminals in Gateway settings to start a native CLI.",
+    terminalAttachmentsUnsupported:
+      "Remove attachments before starting a native CLI. Add files from the terminal after it opens.",
+    terminalPlacementUnsupported:
+      "Native CLI sessions use a specific host, not OpenClaw worker placement. Reset this draft and choose a native host.",
     starting: "Starting…",
     createFailed: "Couldn't create the session.",
     createOutcomeUnknown:
@@ -989,14 +1005,23 @@ export const en: TranslationMap & {
     createdBy: "Created by {name}",
     ownedBy: "Owned by {name}",
     archivedBy: "Archived by {name}",
+    archiveReason: "Archive reason",
+    archiveReasonManual: "Archived manually",
+    archiveReasonActiveSessionCap:
+      "Automatically archived because the active-session limit was reached",
+    archiveReasonStaleDashboard: "Automatically archived after dashboard inactivity",
+    archiveReasonRestartRecovery: "Archived when a replacement session was recovered",
     viewingNow: "viewing now",
     owners: "Owners",
     allOwners: "All owners",
     involvingMe: "Involving me",
+    specificOwner: "Specific owner",
+    specificOwnerAvailable: "Specific owner: {count} available",
+    specificOwnerSelected: "Specific owner: {name}",
     ownerYou: "{name} (You)",
     withParticipant: "with {name}",
     withMoreParticipants: "+{count} more",
-    assignToMe: "Assign to me",
+    assignToMe: "Me",
     assignTo: "Assign to…",
     filterControls: "Session filters",
     filters: "Filters",
@@ -1233,7 +1258,7 @@ export const en: TranslationMap & {
     groupByDate: "Date",
     group: "Group",
     ungrouped: "Ungrouped",
-    newGroup: "New group…",
+    newGroup: "New group",
     newGroupPrompt: "New group name",
     newGroupTitle: "New group",
     newGroupCreate: "Create group",
@@ -1248,7 +1273,7 @@ export const en: TranslationMap & {
     moveBackToGroups: "Move back to Groups",
     groupMenu: "Group options for {group}",
     newSessionInGroup: "New session in {group}",
-    groupDefaultsMenu: "New session defaults…",
+    groupDefaultsMenu: "New session defaults",
     groupDefaultsTitle: 'New session defaults for "{group}"',
     groupDefaultsDescription: "Choose where new sessions in this group start.",
     groupDefaultsCwd: "Working directory",
@@ -1260,10 +1285,10 @@ export const en: TranslationMap & {
     groupDefaultsWorktreeHint: "Runs each session in an isolated Git worktree.",
     groupDefaultsFailed: "Could not save the group defaults.",
     groupDefaultsStale: "Gateway connection replaced before the defaults were saved. Try again.",
-    renameGroupMenu: "Rename group…",
+    renameGroupMenu: "Rename group",
     renameGroupTitle: 'Rename group "{group}"',
     groupNameLabel: "Group name",
-    deleteGroupMenu: "Delete group…",
+    deleteGroupMenu: "Delete group",
     deleteGroupTitle: 'Delete group "{group}"',
     deleteGroupConfirm: "The group is removed. Its sessions move back to the session list.",
     deleteGroupStale: 'Gateway connection replaced before "{group}" was deleted. Try again.',
@@ -1894,52 +1919,26 @@ export const en: TranslationMap & {
     openControlUi: "Open Control UI",
   },
   agentTools: {
-    githubTitle: "GitHub Identity",
-    githubSubtitle:
-      "GitHub CLI account and Git author for local agent tools and the Codex harness.",
     githubVerify: "Verify",
-    githubVerifying: "Verifying…",
     githubConnection: "Gateway connection",
     githubDisconnected: "Disconnected",
     githubAccessRequired: "Access required",
     githubReadRequired: "GitHub identity status requires operator.read access.",
     githubAdminRequired:
       "Connecting, replacing, or removing a GitHub identity requires operator.admin access.",
-    githubAccount: "Account",
-    githubEffectiveAccount: "Effective account",
-    githubSelectedAccount: "Selected scope account",
-    githubEffectiveStatus: "Effective status",
     githubEffectiveAuthor: "Effective Git Author",
     githubEffectiveCredential: "Effective credential",
     githubEffectiveAccessExpiry: "Effective access expiry",
     githubEffectiveRefresh: "Effective refresh token",
     githubEffectiveScopes: "Effective OAuth scopes",
-    githubSelectedStatus: "Selected scope status",
-    githubSelectedAuthor: "Selected scope Git Author",
-    githubSelectedCredential: "Selected scope credential",
-    githubSelectedAccessExpiry: "Selected scope access expiry",
-    githubSelectedRefresh: "Selected scope refresh token",
-    githubSelectedScopes: "Selected scope OAuth scopes",
     githubNoAccount: "No verified account",
-    githubAuthor: "Git Author",
     githubAuthorUnset: "Not set",
     githubErrorTitle: "Error",
-    githubSourceDetected: "Native credentials detected on this machine",
-    githubSourceSystem: "Managed system identity",
-    githubSourceAgent: "Managed override for this agent",
     githubStateVerified: "Verified",
     githubStateUnverified: "Not verified",
     githubStateRateLimited: "Rate limited",
     githubStateUnavailable: "No credentials",
     githubStateConfiguredUnavailable: "Configured, but unavailable",
-    githubEvidenceApi: "Confirmed via the GitHub API. Write permissions are not checked remotely.",
-    githubEvidenceRateLimited: "The GitHub API rate limit blocked verification — try again later.",
-    githubEvidenceUnverified: "The stored credentials have not been verified against GitHub yet.",
-    githubScope: "Applies To",
-    githubScopeSystemDesc: "One identity shared by every agent without an override.",
-    githubScopeAgentDesc: "Overrides the system identity for this agent only.",
-    githubSystem: "System",
-    githubAgentOverride: "This Agent",
     githubAuthorization: "GitHub authorization",
     githubStarting: "Requesting code…",
     githubCancelling: "Requesting cancellation…",
@@ -1975,23 +1974,16 @@ export const en: TranslationMap & {
     githubAuthorName: "Author Name",
     githubAuthorEmail: "Author Email",
     githubConfigure: "Save Identity",
-    githubCredentialKind: "Credential",
-    githubSelectedConfiguration: "Selected {scope} configuration",
     githubConfiguredHere: "Configured here",
     githubInheritedHere: "Inherited",
-    githubSelectedConfigured: "This scope owns its identity",
-    githubSelectedInherited: "This scope inherits the effective identity",
     githubKindNative: "Native GitHub CLI",
     githubKindPat: "Managed personal access token",
     githubKindOAuth: "Managed GitHub authorization",
-    githubAccessExpiry: "Access expires",
-    githubRefresh: "Refresh token",
     githubRefreshAvailable: "Available",
     githubRefreshExpired: "Expired — reconnect required",
     githubRefreshUnavailable: "Unavailable — reconnect required",
     githubRefreshRefreshing: "Refreshing…",
     githubRefreshFailed: "Refresh failed — retrying",
-    githubOAuthScopes: "OAuth scopes",
     githubUseSystemNewRuns: "Use system for new runs",
     githubUseNativeNewRuns: "Use native for new runs",
     githubUseSystemConfirmTitle: "Use the system GitHub identity for new runs?",
@@ -2002,9 +1994,6 @@ export const en: TranslationMap & {
       "New runs without an agent override will use the native GitHub identity. Active runs keep their current identity until they exit or restart. Revoke the GitHub authorization or PAT separately on GitHub if needed.",
     githubAgentMutationHint: "Authorization and removal below apply to This Agent for new runs.",
     githubSystemMutationHint: "Authorization and removal below apply to System for new runs.",
-    githubCloudNoteTitle: "Execution boundary",
-    githubCloudNote:
-      "Cloud workers stay credential-free; the Gateway publishes over HTTPS without rewriting Git remotes or helpers.",
     connectedSource: "Connected: {id}",
     connected: "Connected",
     channelSource: "Channel: {id}",
@@ -2335,6 +2324,7 @@ export const en: TranslationMap & {
   tabs: {
     agents: "Agents",
     activity: "Activity",
+    meetings: "Meetings",
     apps: "Apps",
     portals: "Portals",
     approvals: "Approvals",
@@ -2378,6 +2368,7 @@ export const en: TranslationMap & {
   subtitles: {
     agents: "Workspaces, tools, identities.",
     activity: "Recent sessions across people using this gateway.",
+    meetings: "Meeting notes and transcripts across this gateway.",
     apps: "Companion apps for phone, watch, desktop, and browser.",
     portals: "Live previews from agent-run applications.",
     approvals: "Recent exec, plugin, and system-agent approvals.",
@@ -3140,6 +3131,8 @@ export const en: TranslationMap & {
     tryAgain: "Try again",
     loading: "Loading plugins…",
     searching: "Searching ClawHub…",
+    searchResultCountOne: "{count} result",
+    searchResultCount: "{count} results",
     fromClawHub: "From ClawHub",
     noClawHubResultsBody: "ClawHub has no results for “{query}”.",
     noDiscoverMatchTitle: "Nothing to discover matches",
@@ -3479,6 +3472,74 @@ export const en: TranslationMap & {
     notViewing: "Not viewing a session right now.",
     notFoundTitle: "Person not found",
     notFoundDescription: "No online presence or visible session association matches this identity.",
+  },
+  githubPublication: {
+    personal: "My GitHub",
+    system: "System",
+    agent: "Agent override",
+    publishAs: "Publish as @{account}",
+    account: "Publication account",
+    choose: "Choose an account",
+    newAction: "Choose a new publication",
+    confirm: "Confirm original publication",
+    check: "Check publication",
+    refresh: "Refresh publication",
+    unknown:
+      "The outcome is unknown. Retry keeps the original account and request; it does not switch accounts.",
+    target: "Pull request: {repository} \u2192 {base}",
+    pushTarget: "Push: {repository} \u00b7 {branch}",
+    snapshot: "Original accepted snapshot",
+    head: "HEAD",
+    index: "Index tree",
+    workspace: "Workspace tree",
+    dispatched: "GitHub {kind} was dispatched; its remote outcome may still be unknown.",
+    observed: "GitHub {kind} was observed. Disconnecting does not undo this effect.",
+    effectLink: "View GitHub effect",
+    effectPush: "push",
+    effectPullRequest: "pull request",
+    personalWorkspace:
+      "My GitHub requires an idle, reconciled local workspace. Wait for work to finish and reclaim the workspace. System and agent publication keep their existing shared flow.",
+    scopeHelp:
+      "My GitHub applies only to this explicit Publish PR action. Agent commands, previews, and cloud workers keep the shared account.",
+    unidentified: "Sign in with a personal profile to use My GitHub.",
+    connectHelp:
+      "Connect or repair My GitHub in Settings \u2192 Profile \u2192 GitHub connections.",
+  },
+  githubConnections: {
+    title: "GitHub connections",
+    description:
+      "Choose the account for each purpose. Your verified sign-in identity and co-author credit stay separate.",
+    mine: "My GitHub",
+    system: "System GitHub",
+    personalDescription: "Your account for explicitly selected Publish PR actions.",
+    systemDescription: "Shared account for agents and default publication.",
+    unboundDescription:
+      "Sign in with a personal Gateway profile to connect My GitHub. Administrators can still manage System GitHub.",
+    signInRequired: "Personal sign-in required",
+    connected: "Connected",
+    disconnected: "Not connected",
+    notLoaded: "Not verified",
+    reconnectRequired: "Reconnect required",
+    connectMine: "Connect My GitHub",
+    changeMine: "Change My GitHub",
+    changeSystem: "Change System GitHub",
+    disconnectMine: "Disconnect My GitHub",
+    disconnectDescription:
+      "Stops unfinished personal publication. Published work stays intact; revoke the app grant separately in GitHub settings.",
+    adminManaged: "Admin managed",
+    purpose: "Connect GitHub",
+    forMe: "For me",
+    forSystem: "For the system",
+    purposeHint: "Only the selected connection changes.",
+    continue: "Continue with GitHub",
+    usage: "Where these accounts are used",
+    usageDescription:
+      "My GitHub is used only when you explicitly select it for Gateway-brokered Publish PR on an idle, reconciled local workspace. Publication still needs write access to the session. Agent git/gh, model actions, previews, and workers keep the shared account. Finish and reclaim remote work before personal publication. Connecting My GitHub changes no defaults.",
+    details: "Connection details",
+    agentTitle: "GitHub account",
+    agentOverride: "Agent override",
+    advancedOverride: "Advanced: agent GitHub override",
+    manageCommon: "Manage connections in Profile",
   },
   profilePage: {
     offline: "Connect to the gateway to meet your agent.",
@@ -3869,7 +3930,7 @@ export const en: TranslationMap & {
       noOtherTabs: "No other tabs",
       resize: "Resize",
       autoHeight: "Auto height",
-      remove: "Remove",
+      remove: "Delete",
       needsApproval: "Needs approval",
       needsApprovalDetail: "This widget requested additional access.",
       networkAccess: "Network origins",
@@ -4138,6 +4199,8 @@ export const en: TranslationMap & {
     queuedCount: "{count} queued",
     reconnecting: "Reconnecting…",
     restarting: "Restarting…",
+    suspending: "Suspending…",
+    suspended: "Suspended",
     retryNow: "Retry now",
     actionsUnavailable: "Actions are unavailable while the Gateway reconnects.",
     settingsChangesUnavailable:
@@ -4993,6 +5056,15 @@ export const en: TranslationMap & {
         stepAdmin:
           "If this continues, ask a Gateway administrator to check the identity provider and GitHub API credential.",
       },
+      verifiedUserRequired: {
+        title: "Verified identity required",
+        summary:
+          "This Gateway has named roles enabled. Device and setup tokens cannot identify a person.",
+        stepIdentity:
+          "Reconnect through the trusted proxy or Tailscale so the Gateway can verify your identity.",
+        stepSharedSecret:
+          "For trusted local operator access, use the shared Gateway token or password.",
+      },
       authRequired: {
         title: "Auth required",
         summary:
@@ -5013,6 +5085,16 @@ export const en: TranslationMap & {
           "Replace stale token/password values; do not reuse a token from another Gateway URL.",
         stepMode:
           "Use one matching auth mode at a time: gateway token for token mode, password for password mode.",
+      },
+      trustedProxy: {
+        title: "Proxy authentication required",
+        summary:
+          "The Gateway is reachable, but it rejected the proxy identity or forwarding information.",
+        stepSignIn:
+          "Open the configured authenticated proxy or SSO dashboard URL and sign in there, rather than visiting the Gateway directly.",
+        stepHeaders:
+          "Ask the Gateway administrator to check for missing identity headers and required-header forwarding on WebSocket upgrade requests, and confirm your account is permitted.",
+        stepNoToken: "A Gateway token cannot replace proxy authentication.",
       },
       rateLimited: {
         title: "Too many failed attempts",
@@ -5081,6 +5163,7 @@ export const en: TranslationMap & {
   chat: {
     cloudWorkerFailed: "Runner failed: {error}",
     errorDetails: "Error details",
+    details: "Details",
     copyError: "Copy error",
     diskSpace: {
       warningTitle: "Cloud session disk space is low",
@@ -5777,11 +5860,11 @@ export const en: TranslationMap & {
       fastMode: "Fast mode",
       searchModels: "Search models",
       noMatchingModels: "No models match your search",
-      onlyForSession: "Only for this session",
-      selectionTargetSession: "Selection target: This session only",
-      selectionTargetAgent: "Selection target: This agent's default",
-      selectionTargetGlobal: "Selection target: Global default",
-      useDefaultModel: "Use default ({model})",
+      selectionTargetSession: "This session",
+      selectionTargetAgent: "Agent default",
+      selectionTargetGlobal: "Global default",
+      resetSessionModel: "Reset session model",
+      useDefaultModel: "Use default ({model}) for this session",
       defaultWithModel: "Default ({model})",
       defaultWithLevel: "Default ({level})",
       fastHelp: "Faster responses, higher usage of limits.",
@@ -5803,12 +5886,12 @@ export const en: TranslationMap & {
     permissionControls: {
       label: "Permissions",
       help: "Choose permissions for this session.",
-      applying: "Applying permissions…",
       default: "Default",
       defaultDescription: "Follow the agent's configured policy.",
       defaultWithMode: "Default ({mode})",
       fullRequiresAdmin: "Full access requires operator.admin access.",
       updateFailed: "Failed to update permissions: {error}",
+      refreshFailed: "Permissions were saved, but refreshing the session failed: {error}",
       modes: {
         "read-only": {
           label: "Read Only",
@@ -5940,7 +6023,6 @@ export const en: TranslationMap & {
       noMatches: "No matching messages",
     },
     pendingInputs: {
-      queued: "Message received. Waiting for the agent to start it.",
       cancelled:
         "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
       interrupted:
@@ -5954,6 +6036,7 @@ export const en: TranslationMap & {
       badge: "Expired",
     },
     composer: {
+      composerInput: "Chat composer",
       placeholder: "Message {name}",
       emptyHint: "Write a message to send.",
       placeholderWithAttachments: "Add a message or paste more images...",

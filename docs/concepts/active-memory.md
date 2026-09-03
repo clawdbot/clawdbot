@@ -61,10 +61,13 @@ This does not merge transcripts, change session keys or delivery routes, widen
 workspace memory (`MEMORY.md` and `memory/*.md`) keeps its existing behavior.
 
 Active Memory must remain enabled. Retrieval adds a bounded blocking step to
-eligible replies; timeout, unavailable search, and empty results all continue
-the reply without recalled transcript context. OpenClaw's built-in memory
-provider supports this protected transcript-recall path. Other memory providers keep their own recall behavior but do
-not automatically receive private transcript authorization. `openclaw doctor`
+eligible replies. An intentional no-intent skip or an unavailable search adds a
+short hidden outcome note instead of recalled transcript context. This tells
+the main model that recall did not run or could not finish without exposing
+provider errors. Timeout and empty results keep their existing behavior.
+OpenClaw's built-in memory provider supports this protected transcript-recall
+path. Other memory providers keep their own recall behavior but do not
+automatically receive private transcript authorization. `openclaw doctor`
 reports an unsupported provider or missing `memory_search` tool.
 
 ## Advanced Active Memory quick start
@@ -132,17 +135,20 @@ flowchart LR
   U["User Message"] --> D["Deterministic Trigger Recall"]
   D -->|strong trusted match| I["Inject Bounded Hidden Context"]
   D -->|weak or empty| H["Check Recall Intent"]
-  H -->|no| M["Main Reply"]
+  H -->|no| O["Inject Bounded Recall Outcome"]
   H -->|yes| R["Active Memory Deep Recall Sub-Agent"]
   R -->|NONE| M
+  R -->|unavailable| O
   R -->|relevant summary| I
+  O --> M["Main Reply"]
   I --> M
 ```
 
 The deep-recall sub-agent can call only the configured memory recall tools (see
 [Memory tools](#memory-tools)). If the connection between the query and
-available memory is weak, it returns `NONE` and the main reply proceeds
-without extra context.
+available memory is weak, it returns `NONE` and the main reply proceeds without
+extra context. Intentional no-intent skips and unavailable recall add only a
+fixed, bounded outcome note.
 
 Active memory is a conversational enrichment feature, not a platform-wide
 inference feature:

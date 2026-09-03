@@ -107,18 +107,21 @@ describe("message-normalizer", () => {
       expect(result.audioAsVoice).toBeUndefined();
     });
 
-    it("normalizes message with array content", () => {
-      const result = normalizeMessage({
+    it("normalizes mixed text, thinking, and tool content", () => {
+      const message = {
         role: "assistant",
         content: [
           { type: "text", text: "Here is the result" },
           { type: "tool_use", name: "bash", args: { command: "ls" } },
+          { type: "thinking", thinking: "Checking the result." },
         ],
         timestamp: 2000,
-      });
+      };
+      const result = normalizeMessage(message);
 
       expect(result.role).toBe("toolResult");
-      expect(result.content).toHaveLength(2);
+      expect(isStandaloneToolMessageForDisplay(message)).toBe(false);
+      expect(result.content).toHaveLength(3);
       expect(result.content[0]).toEqual({
         type: "text",
         text: "Here is the result",
@@ -131,6 +134,7 @@ describe("message-normalizer", () => {
         name: "bash",
         args: { command: "ls" },
       });
+      expect(result.content[2]).toEqual({ type: "thinking", thinking: "Checking the result." });
     });
 
     it("normalizes persisted Responses text blocks as renderable text", () => {
@@ -564,6 +568,18 @@ describe("message-normalizer", () => {
               width: value,
               height: value,
             },
+            {
+              type: "attachment",
+              attachment: {
+                kind: "document",
+                url: "/media/document",
+                label: "Document",
+                sizeBytes: value,
+                durationMs: value,
+                width: value,
+                height: value,
+              },
+            },
           ],
         });
         expect(result.content).toEqual([
@@ -578,6 +594,10 @@ describe("message-normalizer", () => {
             rawText: null,
           },
           { type: "attachment", attachment: { kind: "video", url: "/media/clip", label: "Video" } },
+          {
+            type: "attachment",
+            attachment: { kind: "document", url: "/media/document", label: "Document" },
+          },
         ]);
       },
     );

@@ -39,6 +39,7 @@ import { createAgentRunModelSelectionHandler } from "../server-methods/agent-run
 import { resolveSessionRuntimeCwd } from "../server-methods/agent-session-reset.js";
 import { emitSessionsChanged } from "../server-methods/session-change-event.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
+import { prepareGatewaySkillAuthoring } from "../skill-library-authoring.js";
 import { formatForLog } from "../ws-log.js";
 import { setAbortedAgentDedupeEntries, setGatewayDedupeEntries } from "./agent-dedupe.js";
 import type { AgentDeliveryPhaseResult } from "./agent-delivery-phase.js";
@@ -309,6 +310,30 @@ export function startAgentRunExecution(params: {
       }
       // Awaited routing can retire this owner before final dispatch.
       params.assertContextCurrent?.();
+      const gatewayContext = params.context.resolveGatewayContext?.();
+      const skillLibraryAuthoring =
+        gatewayContext && params.resolvedSessionKey
+          ? prepareGatewaySkillAuthoring(
+              {
+                client: params.client,
+                context: gatewayContext,
+                sessionMutationCommitGuard: params.assertContextCurrent,
+              },
+              params.resolvedSessionKey,
+              !params.inputProvenance &&
+                !params.restoredCronContinuation &&
+                !params.isOneShotModelRun &&
+                !params.isRestartRecoveryResumeRun &&
+                !params.request.internalEvents &&
+                !params.request.internalRuntimeHandoffId &&
+                !params.request.internalExecutionIdentityRetry &&
+                !params.request.execApprovalFollowupExpectedSessionId &&
+                params.sessionEffects !== "internal" &&
+                !params.request.suppressPromptPersistence &&
+                !params.request.swarmCollector &&
+                params.request.lane !== "subagent",
+            )
+          : undefined;
       finalizePreparedAgentRunUserTurn(prepared.userTurn);
       dispatchAdmittedAgentRun(
         withAgentRunDispatchExecutionIdentity(
@@ -319,6 +344,7 @@ export function startAgentRunExecution(params: {
             },
             cronCreatorAuthority: prepared.cronCreatorAuthority,
             ingressOpts: {
+              skillLibraryAuthoring,
               message,
               images: params.images,
               imageOrder: params.imageOrder,
@@ -401,6 +427,7 @@ export function startAgentRunExecution(params: {
               ...(executionIdentityAdmission ? { executionIdentityAdmission } : {}),
               operationalRunInstance: prepared.operationalRunInstance,
               onAdmittedRunContext: (admittedRunContext) => {
+                skillLibraryAuthoring?.bind(admittedRunContext);
                 bindGatewayContextResolver(
                   admittedRunContext,
                   params.context.resolveGatewayContext,

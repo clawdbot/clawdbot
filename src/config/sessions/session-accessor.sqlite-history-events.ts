@@ -6,13 +6,14 @@ import {
 } from "../../infra/kysely-sync.js";
 import type {
   SessionTranscriptMessageAnchorPage,
-  SessionTranscriptMessageEvent,
   SessionTranscriptMessageEventPage,
 } from "./session-accessor.sqlite-active-events.js";
 import {
   getActiveTranscriptKysely,
+  readTranscriptProjectionGeneration,
   withCurrentProjectionSnapshot,
   type CurrentTranscriptProjection,
+  type SessionTranscriptMessageEvent,
 } from "./session-accessor.sqlite-active-projection.js";
 import type {
   SessionTranscriptRawDeltaLimits,
@@ -29,7 +30,6 @@ import {
   readTranscriptDisplaySource,
 } from "./session-accessor.sqlite-display-position.js";
 import {
-  readTranscriptProjectionGeneration,
   readVisibleMessageMetadata,
   readVisibleMessageRange,
   resolveVisibleMessagePositions,

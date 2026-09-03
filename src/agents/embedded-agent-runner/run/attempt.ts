@@ -22,6 +22,7 @@ import {
   type ToolSearchCatalogToolExecutor,
 } from "../../tool-search.js";
 import { log } from "../logger.js";
+import { remapSkillReferencePaths } from "../sandbox-skills.js";
 import { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
 import { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
 import { runEmbeddedAttemptExecutionPhase } from "./attempt-execution-phase.js";
@@ -54,8 +55,9 @@ import { clearToolActivityRun } from "./tool-activity-heartbeat.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 export async function runEmbeddedAttempt(
-  params: EmbeddedRunAttemptParams,
+  input: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
+  let params = input;
   const runAbortController = new AbortController();
   const {
     agentCoreThinkingLevel,
@@ -167,6 +169,16 @@ export async function runEmbeddedAttempt(
     );
     restoreSkillEnv = preparedSkills.restoreSkillEnv;
     const { codeModeSkills, skillUsagePaths, skillsPrompt, skillsSnapshotForRun } = preparedSkills;
+    if (params.skillsSnapshot?.librarySelections?.length && sandbox?.enabled) {
+      const remapped = remapSkillReferencePaths(params.prompt, skillUsagePaths);
+      if (remapped !== params.prompt) {
+        params = {
+          ...params,
+          prompt: remapped,
+          transcriptPrompt: params.transcriptPrompt ?? params.prompt,
+        };
+      }
+    }
     prepStages.mark("skills");
 
     const isRawModelRun = params.modelRun === true || params.promptMode === "none";

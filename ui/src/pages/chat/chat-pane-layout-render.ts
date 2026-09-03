@@ -107,6 +107,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
           catalog,
           agentWorkspace,
           workspaceGit,
+          chatProps.placementStartup,
           sidebarLayout,
         );
     const recovery = html`<openclaw-chat-outbox-recovery

@@ -22,6 +22,7 @@ import {
   resolveSelectedPublishablePluginPackages,
   type PublishablePluginPackage,
 } from "../scripts/lib/plugin-npm-release.ts";
+import { createDeferred } from "./helpers/promise.js";
 import { writePublishablePluginFixture } from "./helpers/publishable-plugin-fixture.js";
 import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "./helpers/temp-dir.js";
 import { writeJsonFile } from "./helpers/temp-repo.js";
@@ -47,6 +48,7 @@ const tempDirs: string[] = [];
 
 afterEach(() => {
   childProcessMock.execFileSyncOverride = undefined;
+  vi.unstubAllGlobals();
   cleanupTempDirs(tempDirs);
 });
 
@@ -432,6 +434,95 @@ describe("collectPluginReleaseDependencyFreshnessErrors", () => {
     ],
   };
 
+  const approvedPlugin: PublishablePluginPackage = {
+    ...plugin,
+    version: "2026.8.2",
+    requiredLatestDependencies: [{ packageName: "@openai/codex", version: "0.151.0" }],
+  };
+  const approvedSha = "0965053fe6b9341776df147a6934b7485c60b5ca";
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each(["0.152.0", "0.153.0"])(
+    "retains the approved frozen pin while reporting actual npm latest %s",
+    (latest) => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      childProcessMock.execFileSyncOverride = ((
+        command: string,
+        args: readonly string[],
+        options: unknown,
+      ) => {
+        expect(command).toBe("git");
+        expect(args).toEqual(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]);
+        expect(options).toMatchObject({ cwd: approvedPlugin.packageDir });
+        return approvedSha;
+      }) as unknown as ExecFileSync;
+      const resolveLatest = vi.fn(() => latest);
+      expect(
+        collectPluginReleaseDependencyFreshnessErrors([approvedPlugin], resolveLatest),
+      ).toEqual([]);
+      expect(resolveLatest).toHaveBeenCalledWith("@openai/codex");
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining(`npm latest is "${latest}"`),
+      );
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(approvedSha));
+    },
+  );
+
+  it.each(["another checkout", "missing git"])("keeps the pin strict for %s", (scenario) => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    childProcessMock.execFileSyncOverride = (() => {
+      if (scenario === "missing git") {
+        throw new Error("not a git repository");
+      }
+      return "8fc5024659a9915406aed0d5d0ad2f368c8557e4";
+    }) as unknown as ExecFileSync;
+    expect(
+      collectPluginReleaseDependencyFreshnessErrors([approvedPlugin], () => "0.152.0"),
+    ).toHaveLength(1);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { packageName: "@openclaw/other" },
+    { version: "2026.8.3" },
+    { requiredLatestDependencies: [{ packageName: "another-runtime", version: "0.151.0" }] },
+    { requiredLatestDependencies: [{ packageName: "@openai/codex", version: "0.150.0" }] },
+  ])("does not broaden the approved package tuple %j", (change) => {
+    const git = vi.fn(() => approvedSha);
+    childProcessMock.execFileSyncOverride = git as unknown as ExecFileSync;
+    expect(
+      collectPluginReleaseDependencyFreshnessErrors(
+        [{ ...approvedPlugin, ...change }],
+        () => "0.152.0",
+      ),
+    ).toHaveLength(1);
+    expect(git).not.toHaveBeenCalled();
+  });
+
+  it("retains unrelated failures after the approved exception", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    childProcessMock.execFileSyncOverride = (() => approvedSha) as unknown as ExecFileSync;
+    expect(
+      collectPluginReleaseDependencyFreshnessErrors([approvedPlugin, plugin], () => "0.152.0"),
+    ).toEqual([
+      '@openclaw/codex@2026.6.11: @openai/codex must match npm latest for release; found "0.139.0", latest is "0.152.0".',
+    ]);
+  });
+
+  it("never uses the approved exception when the live registry lookup fails", () => {
+    const git = vi.fn(() => approvedSha);
+    childProcessMock.execFileSyncOverride = git as unknown as ExecFileSync;
+    expect(
+      collectPluginReleaseDependencyFreshnessErrors([approvedPlugin], () => {
+        throw new Error("registry unavailable");
+      }),
+    ).toEqual([
+      "@openclaw/codex@2026.8.2: could not resolve npm latest for @openai/codex: registry unavailable",
+    ]);
+    expect(git).not.toHaveBeenCalled();
+  });
+
   it("rejects release dependencies older than the npm latest dist-tag", () => {
     expect(collectPluginReleaseDependencyFreshnessErrors([plugin], () => "0.142.5")).toEqual([
       '@openclaw/codex@2026.6.11: @openai/codex must match npm latest for release; found "0.139.0", latest is "0.142.5".',
@@ -455,6 +546,15 @@ describe("collectPluginReleaseDependencyFreshnessErrors", () => {
         () => "0.142.5",
       ),
     ).toEqual([]);
+  });
+
+  it.each([
+    { npm: "<=11", payload: "0.139.0" },
+    { npm: "12", payload: ["0.139.0"] },
+  ])("reads npm $npm latest metadata through the default resolver", ({ payload }) => {
+    childProcessMock.execFileSyncOverride = (() =>
+      JSON.stringify(payload)) as unknown as ExecFileSync;
+    expect(collectPluginReleaseDependencyFreshnessErrors([plugin])).toEqual([]);
   });
 
   it("fails closed when npm latest cannot be resolved", () => {
@@ -496,27 +596,65 @@ describe("collectPluginReleaseDependencyFreshnessErrors", () => {
 });
 
 describe("collectPluginReleasePlan", () => {
-  it("fails closed when the published-version lookup times out", () => {
+  it("fails closed when the registry refuses the published-version lookup", async () => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
     writePublishablePluginFixture(repoDir, {
       version: "2026.4.10",
       publishTo: "npm",
     });
-    childProcessMock.execFileSyncOverride = ((command: string, args?: readonly string[]) => {
-      expect(command).toBe("npm");
-      expect(args).toEqual([
-        "view",
-        "@openclaw/demo-plugin@2026.4.10",
-        "version",
-        "--userconfig",
-        expect.stringContaining("openclaw-plugin-npm-view-"),
-      ]);
-      throw Object.assign(new Error("spawnSync npm ETIMEDOUT"), { code: "ETIMEDOUT" });
-    }) as unknown as ExecFileSync;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 401 })));
 
-    expect(() => collectPluginReleasePlan({ rootDir: repoDir })).toThrow(
-      "npm view timed out after 60000ms.",
+    await expect(collectPluginReleasePlan({ rootDir: repoDir })).rejects.toThrow(
+      "npm registry returned HTTP 401",
     );
+  });
+
+  it("bounds parallel registry reads and partitions every selected package", async () => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
+    const version = "2026.4.10";
+    const names = Array.from({ length: 10 }, (_, index) => {
+      const extensionId = `demo-${index}`;
+      return writePublishablePluginFixture(repoDir, {
+        extensionId,
+        version,
+        publishTo: "npm",
+      }).packageName;
+    });
+    const release = createDeferred();
+    let active = 0;
+    let maximumActive = 0;
+    const fetchMock = vi.fn(async (url: string) => {
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      await release.promise;
+      active -= 1;
+      const name = decodeURIComponent(new URL(url).pathname.slice(1));
+      if (name === names[0]) {
+        return new Response(null, { status: 404 });
+      }
+      const versions = names.indexOf(name) % 2 === 0 ? { [version]: { version } } : {};
+      return Response.json({ versions });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const pending = collectPluginReleasePlan({ rootDir: repoDir });
+    try {
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(8));
+    } finally {
+      release.resolve();
+      await pending;
+    }
+    const plan = await pending;
+
+    expect(maximumActive).toBe(8);
+    expect(plan.all.map((plugin) => plugin.packageName)).toEqual(names);
+    expect(plan.candidates.map((plugin) => plugin.packageName)).toEqual(
+      names.filter((_, index) => index === 0 || index % 2 === 1),
+    );
+    expect(plan.skippedPublished.map((plugin) => plugin.packageName)).toEqual(
+      names.filter((_, index) => index !== 0 && index % 2 === 0),
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(names.length);
   });
 });
 

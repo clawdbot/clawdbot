@@ -91,8 +91,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   let acceptedFinal = false;
   let sessionWriterDeliveryRevoked = false;
   let channelTransformSuppressedFinal = false;
-  const finalDeliveries: Promise<ReplyDispatchDeliveryOutcome>[] = [];
-  let allQueuedFinalsObserved = true;
+  const finalDeliveries: Array<Promise<ReplyDispatchDeliveryOutcome> | undefined> = [];
   const sentFinalPayloadDedupeKeys = new Set<string>();
   let deferredTtsTextPending = state.progressState.accumulatedBlockTtsText;
   for (const [replyIndex, reply] of replies.entries()) {
@@ -196,11 +195,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       queuedFinal = finalReply.queuedFinal || queuedFinal;
       routedFinalCount += finalReply.routedFinalCount;
       if (finalReply.queuedFinal) {
-        if (finalReply.dispatcherOutcome) {
-          finalDeliveries.push(finalReply.dispatcherOutcome);
-        } else {
-          allQueuedFinalsObserved = false;
-        }
+        finalDeliveries.push(finalReply.dispatcherOutcome);
       }
       if (continuationSettlement) {
         if (finalReply.queuedFinal) {
@@ -222,13 +217,13 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       throw error;
     }
   }
-  const channelTransformSuppressed =
+  let channelTransformSuppressed =
     (state.progressState.channelTransformSuppressed || channelTransformSuppressedFinal) &&
     !state.progressState.acceptedReplyPayload &&
     !acceptedFinal;
 
   if (attemptedFinalDelivery) {
-    if (queuedFinal && allQueuedFinalsObserved) {
+    if (queuedFinal && finalDeliveries.every((outcome) => outcome !== undefined)) {
       // Delivery observers run from the queue itself, so direct low-level callers
       // reconcile too; the settle task only makes lifecycle owners await it.
       const reconcilePendingFinal = Promise.all(finalDeliveries)
@@ -361,6 +356,13 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     queuedSettleResult = await turnLedger.settleQueued(getDispatchAbortSignal());
   }
   if (queuedSettleResult === "settled") {
+    // Adapter-owned presentation may capture a final after sending hooks. Keep that
+    // intentional suppression distinct from invisible, cancelled, or failed delivery.
+    channelTransformSuppressed ||=
+      noVisibleReplyFallbackAllowed() &&
+      finalDeliveries.length > 0 &&
+      finalDeliveries.every((outcome) => outcome !== undefined) &&
+      (await Promise.all(finalDeliveries)).every((outcome) => outcome === "channel-transform");
     sessionWriterDeliveryRevoked ||= replies.some(
       (reply) => !state.isSessionWriterDeliveryAuthorized(reply),
     );

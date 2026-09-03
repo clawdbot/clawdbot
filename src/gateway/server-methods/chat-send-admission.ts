@@ -15,7 +15,6 @@ import {
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
-import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -32,7 +31,6 @@ import {
   registerChatAbortController,
   resolveChatRunExpiresAtMs,
 } from "../chat-abort.js";
-import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "../server-shared.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
@@ -59,9 +57,8 @@ import {
   captureAdmittedChatSendSessionSettings,
   SESSION_SETTINGS_CHANGED_ERROR_REASON,
 } from "./chat-send-session-settings.js";
-import type { PreparedChatSendSession } from "./chat-send-session.js";
+import { prepareGoalChatSendSession, type PreparedChatSendSession } from "./chat-send-session.js";
 import { normalizeOptionalChatText, normalizeUnknownChatText } from "./chat-text-normalization.js";
-import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 /** Reserve the session lifecycle and register the abortable run before attachment work. */
@@ -185,6 +182,7 @@ export async function admitChatSend(params: {
   let restartSafeAdmission: ReturnType<typeof resolveRestartSafeChatAdmission>;
   let initialSessionEntry: SessionEntry | undefined;
   let admittedSessionSettings: ReturnType<typeof captureAdmittedChatSendSessionSettings>;
+  let assertInitialSkillSelection: (() => void) | undefined;
   let messageInjectionTarget: ReturnType<
     typeof replyRunRegistry.resolveCurrentMessageInjectionTarget
   >;
@@ -328,32 +326,15 @@ export async function admitChatSend(params: {
     }
     admittedSessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
     if (request.goalOperation?.action === "start" && !latestEntry && !requestedSessionId) {
-      const creationError = authorizeGatewaySessionCreation({
+      const prepared = prepareGoalChatSendSession({
         cfg: latestSession.cfg,
         client,
         agentId,
+        getRuntimeConfig: context.getRuntimeConfig,
       });
-      if (creationError) {
-        throw new Error(creationError.message);
-      }
-      const creation = resolveOperatorSessionCreation(client);
-      const createdAt = Date.now();
-      // A caller's retry ID must never revive a retained transcript window.
-      admittedSessionId = randomUUID();
-      // Keep the seed in memory until the input, Goal, run claim, and receipt commit together.
-      initialSessionEntry = {
-        ...buildSessionCreationStamp({
-          ...creation,
-          sandbox: resolveCreatorSandbox(latestSession.cfg, creation),
-          now: createdAt,
-        }),
-        sessionId: admittedSessionId,
-        lifecycleRevision: randomUUID(),
-        updatedAt: createdAt,
-        sessionStartedAt: createdAt,
-        lastInteractionAt: createdAt,
-        chatType: "direct",
-      };
+      initialSessionEntry = prepared.entry;
+      assertInitialSkillSelection = prepared.assertSkillSelection;
+      admittedSessionId = initialSessionEntry.sessionId;
     }
     restartSafeAdmission = resolveRestartSafeChatAdmission({
       agentId,
@@ -699,6 +680,7 @@ export async function admitChatSend(params: {
       onSessionPrepared,
       initialSessionEntry,
       chatSendTraceAttributes,
+      assertInitialSkillSelection,
       cleanupAdmittedRun,
       finishAbortedChatSend,
       gatewayWorkAdmission,
@@ -717,6 +699,7 @@ export async function admitChatSend(params: {
         // admission until the aggregate commits or settles.
         if (
           gatewayWorkAdmissionRetains === 0 ||
+          !acquiredGatewayWorkAdmission.isActive() ||
           lifecycleGeneration !== getAgentEventLifecycleGeneration() ||
           (activeRunAbort.controller.signal.aborted &&
             !(queued?.controller === activeRunAbort.controller && queued.abortable === false))

@@ -19,6 +19,8 @@ import { t } from "../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import "../../styles/chat/grouped.css";
 import "../../styles/chat/layout.css";
+import "../../styles/chat/message-layout.css";
+import "../../styles/chat/composer.css";
 import "../../styles/chat/text.css";
 import "../../styles/custodian.css";
 import { renderCustodianAlertCard } from "./custodian-alert-card.ts";
@@ -88,8 +90,10 @@ class CustodianSurface extends OpenClawLightDomElement {
 
   override updated(): void {
     const store = this.store;
-    if (store.canSend && !store.hasUnresolvedQuestion()) {
-      custodianAlertStore.askIfReady((question) => void store.send(question));
+    if (store.canSend && !store.sensitive && !store.hasUnresolvedQuestion()) {
+      custodianAlertStore.askIfReady(
+        (question, admission, display) => void store.send(question, display, false, admission),
+      );
     }
     const transcript = this.querySelector<HTMLElement>(".custodian__messages");
     if (transcript) {

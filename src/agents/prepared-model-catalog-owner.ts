@@ -60,6 +60,7 @@ export function resolvePublishedModelCatalogOwner(
     agentDir: snapshot.agentDir,
     workspaceDir,
     config: snapshot.config,
+    observationConfig: snapshot.observationConfig,
     authModes: snapshot.authModes,
     authStore,
     metadataSnapshot: snapshot.metadataSnapshot,

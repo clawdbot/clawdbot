@@ -69,7 +69,6 @@ import type {
   RunEmbeddedAgentParamsWithSessionFile,
 } from "./run/internal-params.js";
 import { createEmbeddedRunLaneController } from "./run/lane-controller.js";
-import { withEmbeddedRunLaneProgressHeartbeat } from "./run/lane-runtime.js";
 import type { RunEmbeddedAgentParams } from "./run/params.js";
 import { bindRunToPreparedModelRuntime } from "./run/prepared-runtime-context.js";
 import { createEmbeddedRunProgressController } from "./run/progress-controller.js";
@@ -311,27 +310,30 @@ async function runEmbeddedAgentInternal(
       startupStages.mark("harness-selection");
       // Configless direct hosts reuse one idle generation. The prepared-runtime lifecycle keeps
       // gateway run generations in its own bounded cache so one-off paths cannot accumulate.
-      // Cold plugin loading and provider discovery can exceed the lane no-progress budget.
-      // Active runtime acquisition is progress, not a hung lane task.
-      const preparedModelRuntimeLease = await withEmbeddedRunLaneProgressHeartbeat(
-        noteLaneTaskProgress,
-        () =>
-          params.preparedModelRuntimeMode === "isolated-read-only"
-            ? // Probe homes outlive only the attempt client, not independent live catalog clients.
-              acquireReadOnlyPreparedModelRuntime(preparedInput, params.abortSignal, "static")
-            : acquireAgentRunPreparedModelRuntime(preparedInput, {
-                retainIdleRunOwner,
-                // Turns need only configured admission facts. Full live model inventory remains
-                // available through the snapshot's lazy control-plane loader.
-                catalogMode: "static",
-                ...(params.pluginGeneration ? { pluginGeneration: params.pluginGeneration } : {}),
-                abortSignal: params.abortSignal,
-              }),
-      );
+      // Runtime acquisition owns its build bound before the attempt budget starts.
+      // Suspend lane-idle inference without inventing progress; Stop still cancels admission.
+      laneController.setLaneTaskDeadline({ kind: "unlimited" });
+      const preparedModelRuntimeLease = await (
+        params.preparedModelRuntimeMode === "isolated-read-only"
+          ? // Probe homes outlive only the attempt client, not independent live catalog clients.
+            acquireReadOnlyPreparedModelRuntime(preparedInput, laneController.abortSignal, "static")
+          : acquireAgentRunPreparedModelRuntime(preparedInput, {
+              retainIdleRunOwner,
+              // Turns need only configured admission facts. Full live model inventory remains
+              // available through the snapshot's lazy control-plane loader.
+              catalogMode: "static",
+              ...(params.pluginGeneration ? { pluginGeneration: params.pluginGeneration } : {}),
+              abortSignal: laneController.abortSignal,
+            })
+      ).finally(() => {
+        noteLaneTaskProgress();
+        laneController.setLaneTaskDeadline(undefined);
+      });
       startupStages.mark("prepared-runtime");
       const preparedModelRuntimeOwnerSnapshot = preparedModelRuntimeLease.snapshot;
       let preparedLeaseActive = true;
       try {
+        throwIfAborted();
         if (
           params.pluginGeneration &&
           preparedModelRuntimeOwnerSnapshot.metadataSnapshot !==

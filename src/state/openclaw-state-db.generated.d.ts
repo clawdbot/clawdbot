@@ -686,6 +686,44 @@ export interface GatewayRestartSentinel {
   version: number;
 }
 
+export interface GithubPersonalPublicationRequests {
+  agent_id: string;
+  base_branch: string;
+  body: string | null;
+  branch: string;
+  connection_generation: string;
+  created_at_ms: number;
+  effect_state: string | null;
+  error_code: string | null;
+  execution_id: string | null;
+  gateway_instance_id: string | null;
+  head_commit: string | null;
+  idempotency_key: string;
+  identity_account_id: number;
+  identity_login: string;
+  identity_profile_id: string;
+  identity_source: string;
+  last_effect: string | null;
+  next_action: string | null;
+  owner_profile_id: string;
+  pull_request_url: string | null;
+  push_repository: string;
+  reported_at_ms: number | null;
+  repository: string;
+  repository_fingerprint: string;
+  request_digest: string;
+  request_id: string;
+  session_id: string;
+  session_key: string;
+  source_head_commit: string;
+  source_index_tree: string;
+  status: string;
+  title: string | null;
+  updated_at_ms: number;
+  workspace_tree: string;
+  worktree_id: string;
+}
+
 export interface GithubPublicationRequests {
   agent_id: string;
   base_branch: string | null;
@@ -1115,6 +1153,47 @@ export interface SessionWatchCursors {
   target_session_key: string;
   updated_at: number;
   watcher_session_key: string;
+}
+
+export interface SkillLibraryEntries {
+  author_profile_id: string;
+  created_at: number;
+  current_revision: string;
+  enabled: number;
+  owner_profile_id: string | null;
+  removed: number;
+  shared: number;
+  skill_id: string;
+  slug: string;
+  updated_at: number;
+}
+
+export interface SkillLibraryEvents {
+  action: string;
+  actor_profile_id: string;
+  created_at: number;
+  event_id: string;
+  revision: string;
+  skill_id: string;
+}
+
+export interface SkillLibraryRevisions {
+  created_at: number;
+  description: string;
+  files_json: string;
+  revision: string;
+  skill_id: string;
+}
+
+export interface SkillLibraryUploads {
+  archive_blob: Uint8Array;
+  expires_at: number;
+  owner_profile_id: string;
+  published_skill_id: string | null;
+  sha256: string;
+  size_bytes: number;
+  slug: string;
+  upload_id: string;
 }
 
 export interface SkillUploadChunks {
@@ -1571,6 +1650,7 @@ export interface DB {
   gateway_restart_handoff: GatewayRestartHandoff;
   gateway_restart_intent: GatewayRestartIntent;
   gateway_restart_sentinel: GatewayRestartSentinel;
+  github_personal_publication_requests: GithubPersonalPublicationRequests;
   github_publication_requests: GithubPublicationRequests;
   macos_port_guardian_records: MacosPortGuardianRecords;
   managed_outgoing_image_records: ManagedOutgoingImageRecords;
@@ -1604,6 +1684,10 @@ export interface DB {
   session_state_heads: SessionStateHeads;
   session_upstream_links: SessionUpstreamLinks;
   session_watch_cursors: SessionWatchCursors;
+  skill_library_entries: SkillLibraryEntries;
+  skill_library_events: SkillLibraryEvents;
+  skill_library_revisions: SkillLibraryRevisions;
+  skill_library_uploads: SkillLibraryUploads;
   skill_upload_chunks: SkillUploadChunks;
   skill_uploads: SkillUploads;
   skill_usage: SkillUsage;

@@ -9,6 +9,7 @@ export {
   loadSessionTranscriptClassificationForAgent,
   normalizeSessionTranscriptPathForComparison,
   parseCanonicalSessionSyncTargetFromPath,
+  readTranscriptStatsBatchReadOnlySync,
   resolveSessionIdentityForTranscriptFile,
   resolveSessionFileForSyncTarget,
   sessionPathForFile,

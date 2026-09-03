@@ -221,23 +221,15 @@ final class ControlChannel {
     }
 
     func health(timeout: TimeInterval? = nil) async throws -> Data {
-        do {
-            let start = Date()
-            var params: [String: AnyHashable]?
-            if let timeout {
-                params = ["timeout": AnyHashable(Int(timeout * 1000))]
-            }
-            let timeoutMs = (timeout ?? 15) * 1000
-            let payload = try await self.request(method: "health", params: params, timeoutMs: timeoutMs)
-            let ms = Date().timeIntervalSince(start) * 1000
-            self.lastPingMs = ms
-            self.setStateThrottled(.connected)
-            return payload
-        } catch {
-            let message = Self.friendlyGatewayMessage(error, configRoot: OpenClawConfigFile.loadDict())
-            self.setStateThrottled(.degraded(message))
-            throw ControlChannelError.badResponse(message)
+        let start = Date()
+        var params: [String: AnyHashable]?
+        if let timeout {
+            params = ["timeout": AnyHashable(Int(timeout * 1000))]
         }
+        let timeoutMs = (timeout ?? 15) * 1000
+        let payload = try await self.request(method: "health", params: params, timeoutMs: timeoutMs)
+        self.lastPingMs = Date().timeIntervalSince(start) * 1000
+        return payload
     }
 
     func lastHeartbeat() async throws -> ControlHeartbeatEvent? {
@@ -251,21 +243,15 @@ final class ControlChannel {
         timeoutMs: Double? = nil,
         retryTransportFailures: Bool = true) async throws -> Data
     {
-        do {
+        try await self.performRequest {
             let rawParams = params?.reduce(into: [String: OpenClawKit.AnyCodable]()) {
                 $0[$1.key] = OpenClawKit.AnyCodable($1.value.base)
             }
-            let data = try await GatewayConnection.shared.request(
+            return try await GatewayConnection.shared.request(
                 method: method,
                 params: rawParams,
                 timeoutMs: timeoutMs,
                 retryTransportFailures: retryTransportFailures)
-            self.setStateThrottled(.connected)
-            return data
-        } catch {
-            let message = Self.friendlyGatewayMessage(error, configRoot: OpenClawConfigFile.loadDict())
-            self.setStateThrottled(.degraded(message))
-            throw ControlChannelError.badResponse(message)
         }
     }
 
@@ -273,13 +259,22 @@ final class ControlChannel {
         _ request: OpenClawChatGatewayRequest,
         retryTransportFailures: Bool = true) async throws -> Data
     {
+        try await self.performRequest {
+            try await GatewayConnection.shared.request(request, retryTransportFailures: retryTransportFailures)
+        }
+    }
+
+    private func performRequest(_ operation: () async throws -> Data) async throws -> Data {
+        try Task.checkCancellation()
         do {
-            let data = try await GatewayConnection.shared.request(
-                request,
-                retryTransportFailures: retryTransportFailures)
+            let data = try await operation()
+            try Task.checkCancellation()
             self.setStateThrottled(.connected)
             return data
         } catch {
+            // Closing a view cancels its requests, not the shared connection.
+            // Only failures belonging to a live caller may trigger recovery.
+            try Task.checkCancellation()
             let message = Self.friendlyGatewayMessage(error, configRoot: OpenClawConfigFile.loadDict())
             self.setStateThrottled(.degraded(message))
             throw ControlChannelError.badResponse(message)

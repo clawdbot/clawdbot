@@ -147,17 +147,93 @@ describe("resolveAuthHintKind", () => {
     ).toBe("failed");
   });
 
-  it("does not treat generic connect failures as auth failures", () => {
+  it.each([
+    ["empty credentials", false, false, "unauthorized"],
+    ["token", true, false, "connect failed"],
+    ["password", false, true, "unauthorized"],
+    ["both credentials", true, true, "connect failed"],
+  ])("uses the identity-header code with %s", (_name, hasToken, hasPassword, lastError) => {
     expect(
       resolveAuthHintKind({
         connected: false,
-        lastError: "disconnected (4008): connect failed",
-        lastErrorCode: ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
-        hasToken: true,
+        lastError,
+        lastErrorCode: ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED,
+        hasToken,
+        hasPassword,
+      }),
+    ).toBe("trusted-proxy");
+  });
+
+  it.each([
+    ["connected clients", true, "unauthorized"],
+    ["missing errors", false, null],
+    ["empty errors", false, ""],
+  ])("ignores the identity-header code for %s", (_name, connected, lastError) => {
+    expect(
+      resolveAuthHintKind({
+        connected,
+        lastError,
+        lastErrorCode: ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED,
+        hasToken: false,
         hasPassword: false,
       }),
     ).toBeNull();
   });
+
+  it.each([ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED, "UNKNOWN_CONNECT_ERROR"])(
+    "does not infer auth from unauthorized when the structured code is %s",
+    (lastErrorCode) => {
+      expect(
+        resolveAuthHintKind({
+          connected: false,
+          lastError: "unauthorized",
+          lastErrorCode,
+          hasToken: true,
+          hasPassword: false,
+        }),
+      ).toBeNull();
+    },
+  );
+
+  it.each([
+    "trusted_proxy_no_request",
+    "trusted_proxy_untrusted_source",
+    "trusted_proxy_loopback_source",
+    "trusted_proxy_local_interface_check_failed",
+    "trusted_proxy_local_interface_source",
+    "trusted_proxy_user_missing",
+    "trusted_proxy_user_not_allowed",
+    "trusted_proxy_config_missing",
+    "trusted_proxy_no_proxies_configured",
+    "proxy_attribution_required",
+  ])("classifies the structured proxy denial %s without token advice", (lastErrorAuthReason) => {
+    expect(
+      resolveAuthHintKind({
+        connected: false,
+        lastError: "unauthorized",
+        lastErrorCode: ConnectErrorDetailCodes.AUTH_UNAUTHORIZED,
+        lastErrorAuthReason,
+        hasToken: true,
+        hasPassword: true,
+      }),
+    ).toBe("trusted-proxy");
+  });
+
+  it.each([undefined, "unknown", "trusted_proxy_unknown"])(
+    "does not infer proxy authentication from an unrecognized reason %s",
+    (lastErrorAuthReason) => {
+      expect(
+        resolveAuthHintKind({
+          connected: false,
+          lastError: "unauthorized: trusted_proxy_user_missing",
+          lastErrorCode: ConnectErrorDetailCodes.AUTH_UNAUTHORIZED,
+          lastErrorAuthReason,
+          hasToken: false,
+          hasPassword: false,
+        }),
+      ).toBe("failed");
+    },
+  );
 
   it("falls back to unauthorized string matching without structured codes", () => {
     expect(

@@ -182,19 +182,21 @@ type PositionedNode = {
 };
 
 type MarkdownOwnership = {
+  blockCodeSpans: Array<[number, number]>;
   codeSpans: Array<[number, number]>;
   retainStart: number;
 };
 
 export function parseMarkdownOwnership(text: string): MarkdownOwnership {
   if (!text) {
-    return { codeSpans: [], retainStart: 0 };
+    return { blockCodeSpans: [], codeSpans: [], retainStart: 0 };
   }
   const tree = fromMarkdown(text, {
     extensions: [DISABLE_HTML_MARKDOWN, gfmTable()],
     mdastExtensions: [gfmTableFromMarkdown()],
   }) as PositionedNode;
   const spans: Array<[number, number]> = [];
+  const blockSpans: Array<[number, number]> = [];
   const pending: PositionedNode[] = [tree];
   while (pending.length > 0) {
     const node = pending.pop();
@@ -206,6 +208,9 @@ export function parseMarkdownOwnership(text: string): MarkdownOwnership {
       const end = node.position?.end?.offset;
       if (start !== undefined && end !== undefined) {
         spans.push([start, end]);
+        if (node.type === "code") {
+          blockSpans.push([start, end]);
+        }
       }
     }
     const children = node.children ?? [];
@@ -218,9 +223,26 @@ export function parseMarkdownOwnership(text: string): MarkdownOwnership {
   }
   const rootChildren = tree.children ?? [];
   return {
+    blockCodeSpans: blockSpans.toSorted((left, right) => left[0] - right[0]),
     codeSpans: spans.toSorted((left, right) => left[0] - right[0]),
     retainStart: rootChildren.at(-1)?.position?.start?.offset ?? text.length,
   };
+}
+
+/** Returns parser-owned CommonMark/GFM code ranges with block ownership. */
+export function findMarkdownCodeRegions(
+  text: string,
+): Array<{ block: boolean; end: number; start: number }> {
+  if (!/[`~\t]| {4}/u.test(text)) {
+    return [];
+  }
+  const ownership = parseMarkdownOwnership(text);
+  const blockStarts = new Set(ownership.blockCodeSpans.map(([start]) => start));
+  return ownership.codeSpans.map(([start, end]) => ({
+    block: blockStarts.has(start),
+    end,
+    start,
+  }));
 }
 
 /** Returns parser-owned CommonMark/GFM code ranges, including their delimiters. */
@@ -433,6 +455,7 @@ export function reduceReasoningText(
 type ReasoningTagStripOptions = {
   mode: "strict" | "preserve";
   scope: "all" | "leading";
+  recoverUnclosed?: boolean;
 };
 
 /** Strips reasoning tags using the same reducer as streamed partitioning. */
@@ -443,7 +466,12 @@ export function stripReasoningTagsFromMarkdown(
   const state: ReductionState = { depth: 0, visibleEver: false };
   return reduceReasoningText(text, findMarkdownCodeSpans(text), state, {
     final: true,
-    mode: options.mode === "preserve" ? "static-preserve" : "static-strict",
+    mode:
+      options.recoverUnclosed === false
+        ? "hide"
+        : options.mode === "preserve"
+          ? "static-preserve"
+          : "static-strict",
     scope: options.scope,
   })
     .filter((delta) => delta.kind === "text")

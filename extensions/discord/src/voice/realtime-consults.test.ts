@@ -1,4 +1,5 @@
 import type { PassThrough } from "node:stream";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { RealtimeVoiceSessionHarness } from "openclaw/plugin-sdk/realtime-voice";
 import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
 
@@ -11,6 +12,7 @@ defineDiscordVoiceTests(
     createAudioResourceMock,
     resolveAgentRouteMock,
     agentCommandMock,
+    loggerWarnMock,
     resolveRealtimeBootstrapContextInstructionsMock,
     realtimeSessionMock,
     createClient,
@@ -428,42 +430,75 @@ defineDiscordVoiceTests(
       await vi.waitFor(() => expectUserMessageIncludes("local retry answer"));
     });
 
-    it("suppresses late forced agent-proxy tool calls when the forced consult rejects", async () => {
-      let rejectAgentTurn: ((error: unknown) => void) | undefined;
-      agentCommandMock.mockReturnValueOnce(
-        new Promise((_, reject) => {
-          rejectAgentTurn = reject;
-        }),
-      );
-      const { bridgeParams, entry } = await createJoinedAgentProxyFixture();
+    it.each(
+      ["Error", "TimeoutError"].flatMap((name) =>
+        ["native", "forced-suppressed", "forced-unsuppressed"].map((delivery) => ({
+          name,
+          delivery,
+        })),
+      ),
+    )(
+      "preserves $name failure reporting through $delivery consult delivery",
+      async ({ name, delivery }) => {
+        const hostTurn = createDeferred<{ payloads: Array<{ text: string }> }>();
+        agentCommandMock.mockReturnValueOnce(hostTurn.promise);
+        const { bridgeParams, entry, manager } = await createJoinedAgentProxyFixture();
+        let submission: Promise<void> | void = undefined;
+        try {
+          beginSpeakerTurn(entry);
+          if (delivery !== "native") {
+            await emitFinalRealtimeUserTranscript(bridgeParams, "late question");
+          }
+          realtimeSessionMock.bridge.supportsToolResultSuppression =
+            delivery !== "forced-unsuppressed";
+          submission = bridgeParams.onToolCall?.(
+            {
+              itemId: "item-late",
+              callId: "call-late",
+              name: "openclaw_agent_consult",
+              args: { question: "late question" },
+            },
+            realtimeSessionMock,
+          );
+          await vi.waitFor(() => expect(agentCommandMock).toHaveBeenCalledTimes(1));
+          hostTurn.reject(Object.assign(new Error("agent broke"), { name }));
+          await submission;
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
 
-      beginSpeakerTurn(entry);
-      await emitFinalRealtimeUserTranscript(bridgeParams, "late question");
-
-      void bridgeParams?.onToolCall?.(
-        {
-          itemId: "item-late",
-          callId: "call-late",
-          name: "openclaw_agent_consult",
-          args: { question: "late question" },
-        },
-        realtimeSessionMock,
-      );
-      rejectAgentTurn?.(new Error("agent broke"));
-      await vi.waitFor(() =>
-        expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledWith(
-          "call-late",
-          {
-            status: "already_delivered",
-            message: "OpenClaw already delivered this answer to Discord voice. Do not repeat it.",
-          },
-          { suppressResponse: true },
-        ),
-      );
-
-      expect(agentCommandMock).toHaveBeenCalledTimes(1);
-      expectUserMessageIncludes("I hit an error while checking that. Please try again.");
-    });
+          expect(agentCommandMock).toHaveBeenCalledTimes(1);
+          expect(loggerWarnMock).toHaveBeenCalledWith(expect.stringContaining("consult failed"));
+          expect(realtimeSessionMock.submitToolResult.mock.calls).toEqual([
+            delivery === "forced-suppressed"
+              ? [
+                  "call-late",
+                  {
+                    status: "already_delivered",
+                    message:
+                      "OpenClaw already delivered this answer to Discord voice. Do not repeat it.",
+                  },
+                  { suppressResponse: true },
+                ]
+              : ["call-late", { error: "agent broke" }],
+          ]);
+          if (delivery === "forced-suppressed") {
+            expectUserMessageIncludes("I hit an error while checking that. Please try again.");
+            expect(realtimeSessionMock.sendUserMessage).toHaveBeenCalledOnce();
+          } else {
+            expect(realtimeSessionMock.sendUserMessage).not.toHaveBeenCalled();
+          }
+        } finally {
+          entry.stop();
+          hostTurn.resolve({ payloads: [] });
+          await submission;
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+          await manager.destroy();
+        }
+      },
+    );
 
     it("does not reuse recent agent-proxy answers over newer speaker audio", async () => {
       agentCommandMock

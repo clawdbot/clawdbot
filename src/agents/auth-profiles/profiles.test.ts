@@ -29,12 +29,10 @@ import {
   removeAuthProfilesAcrossOwnerStores,
   removeProviderAuthProfilesWithLock,
   setAuthProfileOrder,
+  upsertAuthProfileAfterLoginWithLockOrThrow,
   upsertAuthProfileWithLock,
 } from "./profiles.js";
-import {
-  getRuntimeExternalCliProfileIds,
-  getRuntimeLocalProfileIds,
-} from "./runtime-external-profile-references.js";
+import { getRuntimeExternalCliProfileIds } from "./runtime-external-profile-references.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   getRuntimeAuthProfileStoreSnapshotCore as getInternalRuntimeAuthProfileStoreSnapshot,
@@ -1354,7 +1352,10 @@ describe("promoteAuthProfileInOrder", () => {
         createIfMissing: true,
       });
 
-      expect(updated?.order?.["openai"]).toEqual([newProfileId, staleProfileId]);
+      expect(updated).toMatchObject({
+        ok: true,
+        value: { order: { openai: [newProfileId, staleProfileId] } },
+      });
       expect(loadAuthProfileStoreForRuntime(agentDir).order?.["openai"]).toEqual([
         newProfileId,
         staleProfileId,
@@ -1414,7 +1415,10 @@ describe("promoteAuthProfileInOrder", () => {
         createFromOrder: [backupProfileId, primaryProfileId],
       });
 
-      expect(updated?.order?.["openai"]).toEqual([newProfileId, backupProfileId, primaryProfileId]);
+      expect(updated).toMatchObject({
+        ok: true,
+        value: { order: { openai: [newProfileId, backupProfileId, primaryProfileId] } },
+      });
       expect(loadAuthProfileStoreForRuntime(agentDir).order?.["openai"]).toEqual([
         newProfileId,
         backupProfileId,
@@ -1500,7 +1504,8 @@ describe("promoteAuthProfileInOrder", () => {
         profileId: newProfileId,
       });
 
-      expect(updated?.order?.["openai"]).toBeUndefined();
+      expect(updated).toMatchObject({ ok: true });
+      expect(updated.ok && updated.value.order?.["openai"]).toBeUndefined();
       expect(loadAuthProfileStoreForRuntime(agentDir).order?.["openai"]).toBeUndefined();
     });
   });
@@ -1570,6 +1575,79 @@ describe("promoteAuthProfileInOrder", () => {
     );
   });
 
+  it.each(
+    (["main", "secondary", "shared"] as const).flatMap((scope) =>
+      [false, true].map((selected) => ({ scope, selected })),
+    ),
+  )(
+    "clears only the $scope credential owners before replacing an expired login (selected=$selected)",
+    async ({ scope, selected }) => {
+      await withAuthProfileTestState("openclaw-auth-force-owner-", async ({ agentDirFor }) => {
+        const mainAgentDir = agentDirFor("main");
+        const secondaryAgentDir = agentDirFor("secondary");
+        const profileId = "openai:default";
+        const expired = {
+          type: "token" as const,
+          provider: "openai",
+          token: "synthetic-expired",
+          expires: 1,
+        };
+        const retainedId = "openai:retained";
+        const unrelated = { type: "api_key" as const, provider: "other", key: "synthetic-other" };
+        await upsertAuthProfileWithLock({ profileId, credential: expired });
+        await upsertAuthProfileWithLock({ profileId: retainedId, credential: expired });
+        await upsertAuthProfileWithLock({ profileId: "other:default", credential: unrelated });
+        for (const agentDir of [mainAgentDir, secondaryAgentDir]) {
+          saveAuthProfileStore(
+            {
+              version: AUTH_STORE_VERSION,
+              profiles: { [profileId]: expired, [retainedId]: expired, "other:default": unrelated },
+              order: { openai: [profileId, retainedId] },
+              lastGood: { openai: profileId },
+              usageStats: { [profileId]: { disabledUntil: Date.now() + 60_000 } },
+            },
+            agentDir,
+          );
+        }
+        const selectedDir = scope === "shared" ? undefined : agentDirFor(scope);
+
+        expect(
+          await removeProviderAuthProfilesWithLock({
+            provider: "openai",
+            agentDir: selectedDir,
+            ...(selected ? { profileIds: [profileId] } : {}),
+          }),
+        ).not.toBeNull();
+
+        for (const [owner, removed] of [
+          [undefined, scope !== "secondary"],
+          [mainAgentDir, scope === "main"],
+          [secondaryAgentDir, scope === "secondary"],
+        ] as const) {
+          const stored = loadPersistedAuthProfileStore(owner);
+          expect(stored?.profiles[profileId]).toEqual(removed ? undefined : expired);
+          expect(stored?.profiles[retainedId]).toEqual(removed && !selected ? undefined : expired);
+          expect(stored?.profiles["other:default"]).toEqual(unrelated);
+          if (removed) {
+            expect(stored?.order?.openai).toEqual(selected && owner ? [retainedId] : undefined);
+            expect(stored?.lastGood?.openai).toBeUndefined();
+            expect(stored?.usageStats?.[profileId]).toBeUndefined();
+          }
+        }
+        const fresh = { ...expired, token: "synthetic-fresh", expires: Date.now() + 60_000 };
+        await upsertAuthProfileAfterLoginWithLockOrThrow({
+          agentDir: selectedDir,
+          profileId,
+          credential: fresh,
+        });
+        closeOpenClawAgentDatabasesForTest();
+        closeOpenClawStateDatabaseForTest();
+        clearRuntimeAuthProfileStoreSnapshots();
+        expect(loadAuthProfileStoreForRuntime(selectedDir).profiles[profileId]).toEqual(fresh);
+      });
+    },
+  );
+
   it("narrows provider removal to selected profiles", async () => {
     await withAuthProfileTestState("openclaw-auth-remove-selected-", async ({ agentDir }) => {
       fs.mkdirSync(agentDir, { recursive: true });
@@ -1602,11 +1680,13 @@ describe("promoteAuthProfileInOrder", () => {
       };
       saveAuthProfileStore(initialStore, agentDir);
 
-      const removedStore = await removeProviderAuthProfilesWithLock({
-        agentDir,
-        provider: "openrouter",
-        profileIds: ["openrouter:oauth"],
-      });
+      const removedStore: RuntimeAuthProfileStore | null = await removeProviderAuthProfilesWithLock(
+        {
+          agentDir,
+          provider: "openrouter",
+          profileIds: ["openrouter:oauth"],
+        },
+      );
 
       expect(loadAuthProfileStoreForRuntime(agentDir)).toMatchObject({
         profiles: { "openrouter:api-key": expect.any(Object) },
@@ -1616,13 +1696,27 @@ describe("promoteAuthProfileInOrder", () => {
       expect(loadAuthProfileStoreForRuntime(agentDir).profiles["openrouter:oauth"]).toBeUndefined();
       expect(loadAuthProfileStoreForRuntime(agentDir).lastGood).toBeUndefined();
       expect(removedStore?.runtimePersistedProfileIds ?? []).not.toContain("openrouter:oauth");
-      expect(removedStore ? getRuntimeLocalProfileIds(removedStore) : []).not.toContain(
-        "openrouter:oauth",
-      );
+      expect(removedStore?.runtimeLocalProfileIds ?? []).not.toContain("openrouter:oauth");
       expect(removedStore?.runtimeExternalProfileIds ?? []).not.toContain("openrouter:oauth");
       expect(removedStore ? getRuntimeExternalCliProfileIds(removedStore) : []).not.toContain(
         "openrouter:oauth",
       );
+    });
+  });
+
+  it("does not materialize credentials while force-clearing a fresh main store", async () => {
+    await withAuthProfileTestState("openclaw-auth-force-fresh-", async ({ agentDir }) => {
+      await removeProviderAuthProfilesWithLock({ provider: "openai", agentDir });
+      expect(loadPersistedAuthProfileStore(agentDir)).toBeNull();
+
+      const credential = { type: "token" as const, provider: "openai", token: "synthetic-fresh" };
+      await upsertAuthProfileAfterLoginWithLockOrThrow({
+        agentDir,
+        profileId: "openai:default",
+        credential,
+      });
+      expect(loadPersistedAuthProfileStore()?.profiles["openai:default"]).toEqual(credential);
+      expect(loadPersistedAuthProfileStore(agentDir)).toBeNull();
     });
   });
 

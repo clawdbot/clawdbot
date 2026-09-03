@@ -1,5 +1,7 @@
 package ai.openclaw.app.node
 
+import ai.openclaw.app.AppearanceThemeFamily
+import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.gateway.parseInvokeErrorFromThrowable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -82,6 +84,30 @@ fun parseHexColorArgb(raw: String?): Long? {
 fun resolveProfileAccentArgb(entries: JsonObject?): Long? {
   val value = entries?.get("ui.accent")?.takeIf { it !is JsonNull }
   return parseHexColorArgb((value as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull)
+}
+
+fun resolveGatewayThemeFamily(config: JsonObject?): AppearanceThemeFamily {
+  val raw =
+    config
+      ?.get("ui")
+      .asObjectOrNull()
+      ?.get("prefs")
+      .asObjectOrNull()
+      ?.get("theme")
+      .asStringOrNull()
+  return AppearanceThemeFamily.entries.firstOrNull { it.rawValue == raw } ?: AppearanceThemeFamily.Claw
+}
+
+fun resolveGatewayThemeMode(config: JsonObject?): AppearanceThemeMode {
+  val raw =
+    config
+      ?.get("ui")
+      .asObjectOrNull()
+      ?.get("prefs")
+      .asObjectOrNull()
+      ?.get("themeMode")
+      .asStringOrNull()
+  return AppearanceThemeMode.entries.firstOrNull { it.rawValue == raw } ?: AppearanceThemeMode.System
 }
 
 fun resolveGatewayAccentArgb(config: JsonObject?): Long? {

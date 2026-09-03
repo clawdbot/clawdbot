@@ -580,7 +580,7 @@ export async function deliverChatQueueItem(
       candidate.queue.some((entry) => entry.id === item.id),
     );
     if (!outbox) {
-      setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
+      // Admission succeeded; removal or another drain can retire the row while we yield.
       return "pending";
     }
     let drainResult: QueuedChatSendResult | undefined;

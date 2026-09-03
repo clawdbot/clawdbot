@@ -54,7 +54,7 @@ import {
   loadPreparedModelRuntimeAuth,
   setPreparedModelRuntimeAuthLoader,
 } from "./prepared-model-runtime-auth.js";
-import { startSerializedSnapshotBuild } from "./prepared-model-runtime.build.js";
+import { startSerializedSnapshotBuildBatch } from "./prepared-model-runtime.build.js";
 import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
 import {
   getPreparedModelRuntimeSnapshot,
@@ -208,18 +208,23 @@ async function createStaticSnapshot(
     options?.provideMetadataToWorker && loadedMetadataSnapshot
       ? markPluginMetadataSnapshotProvided(loadedMetadataSnapshot)
       : loadedMetadataSnapshot;
-  const build = await startSerializedSnapshotBuild(
-    {
-      input,
-      catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),
-      isGenerationCurrent: isCurrent,
-      prepareInboundPluginRegistry: options?.prepareInboundPluginRegistry,
-    },
+  const results = await startSerializedSnapshotBuildBatch(
+    [
+      {
+        input,
+        catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),
+        isGenerationCurrent: isCurrent,
+        isBuildCurrent: isCurrent,
+        prepareInboundPluginRegistry: options?.prepareInboundPluginRegistry,
+      },
+    ],
     new Map(),
     30_000,
     "static",
+    undefined,
     providedMetadataSnapshot,
   ).pending;
+  const build = results[0]!;
   return {
     ...fixture,
     pluginMetadataSnapshot: build.pluginGeneration.pluginMetadataSnapshot,
@@ -316,20 +321,24 @@ describe("prepared model catalog worker boundary", () => {
       current = false;
     };
     retireAfterTest(supersede);
-    const build = startSerializedSnapshotBuild(
-      {
-        input,
-        catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),
-        isGenerationCurrent: () => current,
-      },
+    const isCurrent = () => current;
+    const build = startSerializedSnapshotBuildBatch(
+      [
+        {
+          input,
+          catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),
+          isGenerationCurrent: isCurrent,
+          isBuildCurrent: isCurrent,
+        },
+      ],
       new Map(),
       30_000,
       "static",
     );
-    let snapshot: Awaited<typeof build.pending>["snapshot"] | undefined;
+    let snapshot: Awaited<typeof build.pending>[number]["snapshot"] | undefined;
     let driftedAgentDir: string | undefined;
     try {
-      snapshot = (await build.pending).snapshot;
+      snapshot = (await build.pending)[0]!.snapshot;
       const modelCatalog = await snapshot.loadFullModelCatalog!();
       expect(modelCatalog.entries).toContainEqual(
         expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
@@ -729,13 +738,9 @@ describe("prepared model catalog worker boundary", () => {
 
     writeDurableProfile();
     const removed = await projectModels();
-    expect(removed).toMatchObject({
-      result: {
-        models: expect.arrayContaining([
-          expect.objectContaining({ id: "durable-model", available: false }),
-        ]),
-      },
-    });
+    expect(removed.result.models).toContainEqual(
+      expect.objectContaining({ id: "durable-model", available: false }),
+    );
     expect(removed.projected.authStore).toBeDefined();
     expect(
       removed.projected.authStore?.profiles[`${DURABLE_AUTH_PROVIDER_ID}:default`],
@@ -869,11 +874,9 @@ describe("prepared model catalog worker boundary", () => {
       return await buildModelsListResult({ context, params: { view: "all", refresh: true } });
     };
 
-    await expect(listModels()).resolves.toMatchObject({
-      models: expect.arrayContaining([
-        expect.objectContaining({ id: "gpt-5.4", available: false }),
-      ]),
-    });
+    expect((await listModels()).models).toContainEqual(
+      expect.objectContaining({ id: "gpt-5.4", available: false }),
+    );
     fs.writeFileSync(
       path.join(codexHome, "auth.json"),
       JSON.stringify({
@@ -886,15 +889,13 @@ describe("prepared model catalog worker boundary", () => {
       "utf8",
     );
 
-    await expect(listModels()).resolves.toMatchObject({
-      models: expect.arrayContaining([expect.objectContaining({ id: "gpt-5.4", available: true })]),
-    });
+    expect((await listModels()).models).toContainEqual(
+      expect.objectContaining({ id: "gpt-5.4", available: true }),
+    );
     fs.rmSync(path.join(codexHome, "auth.json"));
-    await expect(listModels()).resolves.toMatchObject({
-      models: expect.arrayContaining([
-        expect.objectContaining({ id: "gpt-5.4", available: false }),
-      ]),
-    });
+    expect((await listModels()).models).toContainEqual(
+      expect.objectContaining({ id: "gpt-5.4", available: false }),
+    );
   });
 
   it("refreshes and removes a Codex login that existed in the prepared generation", async () => {

@@ -6,11 +6,6 @@ import {
   listCacheFiles,
   portableRelativePath,
   publishArtifactFiles,
-  restoreBuildStepCacheOutputs,
-  finalizeBuildStepCache,
-  type BuildCacheStep,
-  type BuildCacheState,
-  type BuildCacheParams,
 } from "./build-artifact-cache.mts";
 
 function declarationReferences(file: string, contents: string) {
@@ -55,29 +50,47 @@ function declarationReferences(file: string, contents: string) {
 /** Publish a declaration subset only after its complete canonical build succeeds. */
 export async function publishStagedDeclarations(
   plan: NonNullable<ReturnType<typeof prepareTsdownBuildExecution>>,
+  sources: { output: string; required: string[] }[],
   staging: string,
   dist: string,
   required: string[],
   previous: string[],
-  cache?: {
-    step: BuildCacheStep;
-    state: BuildCacheState;
-    params: BuildCacheParams;
-    sealInputs?: () => { signature: string; inputs: string[] };
-  },
+  sealInputs?: () => void,
 ) {
-  const reused = cache?.state.fresh === true;
-  if (reused) {
-    if (!restoreBuildStepCacheOutputs(cache.state, cache.params)) {
-      throw new Error("Declaration cache changed before restoration; rerun the build");
-    }
-    console.log(`[${cache.step.label}] restored complete cached generation`);
-  } else {
+  if (plan.invocations.length) {
     const code = await executeTsdownBuildPlan(plan);
     if (code !== 0) {
       throw Object.assign(new Error(`Declaration build failed with exit ${code}`), {
         exitCode: code,
       });
+    }
+  }
+  for (const source of sources) {
+    const files = listCacheFiles(
+      source.output,
+      [{ path: ".", extensions: [".d.ts", ".d.mts", ".d.cts"] }],
+      fs,
+    );
+    const emitted = new Set(files.map((file) => portableRelativePath(source.output, file)));
+    for (const entry of source.required) {
+      if (!emitted.has(entry)) {
+        throw new Error(`Missing canonical declaration: ${entry}`);
+      }
+    }
+    for (const file of files) {
+      const relative = portableRelativePath(source.output, file);
+      const target = path.join(staging, relative);
+      const bytes = fs.readFileSync(file);
+      // Shared chunks may be identical across groups. A differing owner must
+      // fail before publication; last-writer-wins can corrupt nominal identity.
+      if (fs.existsSync(target)) {
+        if (!fs.readFileSync(target).equals(bytes)) {
+          throw new Error(`Conflicting canonical declaration owners: ${relative}`);
+        }
+        continue;
+      }
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, bytes, { flag: "wx" });
     }
   }
   const files = listCacheFiles(
@@ -126,15 +139,6 @@ export async function publishStagedDeclarations(
   for (const file of files) {
     visit(file);
   }
-  if (cache?.sealInputs && !reused) {
-    const { signature, inputs } = cache.sealInputs();
-    cache.state.signature = signature;
-    cache.state.consumedInputs = inputs;
-  }
+  sealInputs?.();
   publishArtifactFiles(staging, dist, ordered, previous);
-  if (cache && !reused) {
-    // Seal only the validated private generation; live dist also contains declarations
-    // owned by other compiler groups and must never become this snapshot.
-    finalizeBuildStepCache(cache.step, cache.state, cache.params);
-  }
 }

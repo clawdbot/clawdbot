@@ -2022,7 +2022,7 @@ describe("subagent registry seam flow", () => {
     expect(mod.getSubagentRunByRunId(runId)?.execution.endedAt).toBeUndefined();
   });
 
-  it("requeues durable requester-settle obligations after a worker error", async () => {
+  it("settles a requester-settle wake rejected before attempt admission", async () => {
     const endedAt = Date.now() - 1_000;
     mod.addSubagentRunForTests({
       runId: "run-settle-retry",
@@ -2043,10 +2043,13 @@ describe("subagent registry seam flow", () => {
     );
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
 
+    expect(mod.getSubagentRunByRunId("run-settle-retry")).toMatchObject({
+      delivery: { status: "delivered" },
+      requesterSettleWake: undefined,
+    });
+
     await mod.testing.sweepOnceForTests();
-    await waitForFast(() =>
-      expect(mocks.maybeWakeRequesterAfterAllChildrenSettled).toHaveBeenCalledTimes(2),
-    );
+    expect(mocks.maybeWakeRequesterAfterAllChildrenSettled).toHaveBeenCalledTimes(1);
   });
 
   it("keeps runs active instead of terminally failing on recoverable wait transport errors", async () => {
