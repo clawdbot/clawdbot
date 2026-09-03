@@ -7,6 +7,7 @@ import {
 const generationIdSchema = z.string().regex(/^[a-f0-9]{32}$/u);
 const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u);
 const nonEmptyStringSchema = z.string().min(1);
+const nonBlankStringSchema = z.string().refine((value) => value.trim().length > 0);
 const nonNegativeIntegerSchema = z.number().int().nonnegative().safe();
 const relativeEntrypointSchema = nonEmptyStringSchema.refine((value) => {
   const normalized = value.replaceAll("\\", "/");
@@ -105,7 +106,7 @@ const cleanupEvidenceSchema = z
   .strict();
 
 const receiptBase = {
-  formatVersion: z.literal(1),
+  formatVersion: z.literal(2),
   transactionId: nonEmptyStringSchema.regex(/^[A-Za-z0-9._:@/-]+$/u),
   sequence: nonNegativeIntegerSchema,
   receiptId: nonEmptyStringSchema,
@@ -122,8 +123,8 @@ const updateGenerationTransactionReceiptUnion = z.discriminatedUnion("kind", [
       previousSelection: updateGenerationSelectionSchema.nullable(),
       previousPackageVersion: nonEmptyStringSchema.nullable(),
       stableBindingAlreadyVerified: z.boolean(),
-      brokerId: nonEmptyStringSchema,
-      brokerRevision: nonEmptyStringSchema.nullable(),
+      brokerId: nonBlankStringSchema,
+      brokerRevision: nonBlankStringSchema.nullable(),
     })
     .strict(),
   z
@@ -281,7 +282,7 @@ export const updateGenerationTransactionReceiptSchema =
 
 export const updateGenerationTransactionRecordSchema = z
   .object({
-    formatVersion: z.literal(1),
+    formatVersion: z.literal(2),
     transactionId: nonEmptyStringSchema,
     namespaceKey: nonEmptyStringSchema,
     receipts: z.array(updateGenerationTransactionReceiptSchema).min(1),

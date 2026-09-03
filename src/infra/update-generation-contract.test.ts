@@ -50,7 +50,7 @@ function receipt<Kind extends ReceiptKind>(
   fields: ReceiptFields<Kind>,
 ): ReceiptOf<Kind> {
   return {
-    formatVersion: 1,
+    formatVersion: 2,
     transactionId: TRANSACTION_ID,
     sequence,
     receiptId: buildUpdateGenerationReceiptId({
@@ -793,7 +793,7 @@ describe("durable update generation transaction contract", () => {
     ).toThrow("Previous generation selection and package version must be recorded together");
     expect(() =>
       parseUpdateGenerationTransactionRecord({
-        formatVersion: 1,
+        formatVersion: 2,
         transactionId: TRANSACTION_ID,
         namespaceKey: NAMESPACE_KEY,
         receipts: [intent(null, true)],
@@ -971,6 +971,15 @@ describe("durable update generation transaction contract", () => {
 
   it("rejects corrupt durable records before adjudication", () => {
     const record = append(null, intent(selection("a"), true));
+    const legacyPathRecord = structuredClone(record) as Record<string, unknown>;
+    legacyPathRecord.formatVersion = 1;
+    expect(() => parseUpdateGenerationTransactionRecord(legacyPathRecord)).toThrow(
+      "Legacy path-backed update generation records cannot be promoted to broker evidence",
+    );
+    expect(() =>
+      append(null, { ...intent(selection("a"), true), brokerRevision: "   " }),
+    ).toThrow();
+
     const corruptSequence = structuredClone(record) as Record<string, unknown>;
     const receipts = corruptSequence.receipts as Array<Record<string, unknown>>;
     const firstReceipt = receipts.at(0);

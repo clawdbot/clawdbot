@@ -41,7 +41,7 @@ function receipt<Kind extends ReceiptKind>(
   fields: ReceiptFields<Kind>,
 ): ReceiptOf<Kind> {
   return {
-    formatVersion: 1,
+    formatVersion: 2,
     transactionId: TRANSACTION_ID,
     sequence,
     receiptId: buildUpdateGenerationReceiptId({ transactionId: TRANSACTION_ID, sequence, kind }),
@@ -232,7 +232,7 @@ describe("update generation ledger hook", () => {
       receipt: nextIntent,
     });
     expect(next.record).toEqual({
-      formatVersion: 1,
+      formatVersion: 2,
       transactionId: nextTransactionId,
       namespaceKey: NAMESPACE_KEY,
       receipts: [nextIntent],

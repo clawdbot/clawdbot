@@ -217,6 +217,7 @@ function signedRecoveryObservation(): UpdateGenerationBrokerReceipt {
 class FixtureConfinedFilesystem extends UpdateGenerationConfinedFilesystem {
   readonly brokerId: string;
   readonly namespaceKey: string;
+  invokeCount = 0;
 
   constructor(
     private readonly receipt: UpdateGenerationBrokerReceipt,
@@ -228,6 +229,7 @@ class FixtureConfinedFilesystem extends UpdateGenerationConfinedFilesystem {
   }
 
   protected async invokeBroker(): Promise<UpdateGenerationBrokerReceipt> {
+    this.invokeCount += 1;
     return this.receipt;
   }
 
@@ -306,6 +308,52 @@ describe("confined update-generation filesystem contract", () => {
         request,
       }),
     ).rejects.toThrow("signature was not authenticated");
+  });
+
+  it("rejects malformed operation literals before invoking the broker", async () => {
+    const materialization = materializationRequest();
+    Reflect.set(materialization, "role", "rollback");
+    const materializationProvider = new FixtureConfinedFilesystem(
+      signedMaterializationReceipt(materializationRequest()),
+    );
+    await expect(materializationProvider.perform(materialization)).rejects.toThrow(
+      "role is invalid",
+    );
+    expect(materializationProvider.invokeCount).toBe(0);
+
+    const sync = {
+      formatVersion: 1,
+      kind: "sync-parent-directory",
+      brokerId: "protected-update-broker",
+      namespaceKey: "openclaw-global-owner",
+      transactionId: "transaction-1",
+      operationId: "sync-malformed",
+      expectedRevision: "revision-8",
+      parent: "generations",
+      afterOperationId: "materialize-operation",
+    } satisfies Extract<UpdateGenerationBrokerRequest, { kind: "sync-parent-directory" }>;
+    Reflect.set(sync, "parent", "outside");
+    const syncProvider = new FixtureConfinedFilesystem(signedParentSyncReceipt());
+    await expect(syncProvider.perform(sync)).rejects.toThrow("target is invalid");
+    expect(syncProvider.invokeCount).toBe(0);
+
+    const selector = {
+      formatVersion: 1,
+      kind: "switch-selector",
+      brokerId: "protected-update-broker",
+      namespaceKey: "openclaw-global-owner",
+      transactionId: "transaction-1",
+      operationId: "selector-malformed",
+      expectedRevision: "revision-9",
+      expected: null,
+      next: selection("b"),
+    } satisfies Extract<UpdateGenerationBrokerRequest, { kind: "switch-selector" }>;
+    Reflect.set(selector, "expected", 0);
+    const selectorProvider = new FixtureConfinedFilesystem(signedRecoveryObservation());
+    await expect(selectorProvider.perform(selector)).rejects.toThrow(
+      "Invalid generation selection",
+    );
+    expect(selectorProvider.invokeCount).toBe(0);
   });
 
   it("rejects invalid mutating revisions even when re-signed", () => {

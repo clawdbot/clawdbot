@@ -65,7 +65,7 @@ export type UpdateGenerationCleanupEvidence = {
 };
 
 type UpdateGenerationReceiptBase = {
-  formatVersion: 1;
+  formatVersion: 2;
   transactionId: string;
   sequence: number;
   receiptId: string;
@@ -166,7 +166,7 @@ export type UpdateGenerationTransactionReceipt =
     });
 
 export type UpdateGenerationTransactionRecord = {
-  formatVersion: 1;
+  formatVersion: 2;
   transactionId: string;
   namespaceKey: string;
   receipts: UpdateGenerationTransactionReceipt[];
@@ -207,7 +207,7 @@ export function buildUpdateGenerationReceiptId(params: {
 
 function assertReceiptIdentity(receipt: UpdateGenerationTransactionReceipt): void {
   if (
-    receipt.formatVersion !== 1 ||
+    receipt.formatVersion !== 2 ||
     !receipt.transactionId ||
     !RECEIPT_ID_SAFE.test(receipt.transactionId) ||
     !Number.isSafeInteger(receipt.sequence) ||
@@ -623,7 +623,7 @@ export function appendUpdateGenerationReceipt(
       throw new Error("Unreachable update generation receipt state");
     }
     return {
-      formatVersion: 1,
+      formatVersion: 2,
       transactionId: receipt.transactionId,
       namespaceKey: receipt.namespaceKey,
       receipts: [structuredClone(receipt)],

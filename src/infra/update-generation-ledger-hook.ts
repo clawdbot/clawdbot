@@ -145,7 +145,7 @@ export async function persistUpdateGenerationReceipt(params: {
   if (result.status === "conflict") {
     throw new Error("Authoritative update ledger revision changed during generation transaction");
   }
-  if (!result.snapshot.revision) {
+  if (!result.snapshot.revision.trim()) {
     throw new Error("Authoritative update ledger returned an invalid revision");
   }
   await authenticateUpdateGenerationTransactionRecord(params.filesystem, result.snapshot.record);

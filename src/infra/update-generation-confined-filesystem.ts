@@ -209,13 +209,22 @@ function selectionsEqual(
   );
 }
 
-function assertSelection(selection: UpdateGenerationSelection): void {
-  const normalizedEntrypoint = selection.entrypointRelativePath.replaceAll("\\", "/");
+function assertSelection(selection: unknown): asserts selection is UpdateGenerationSelection {
+  if (!selection || typeof selection !== "object") {
+    throw new TypeError("Invalid generation selection in broker operation");
+  }
+  // SAFETY: Every selection field is validated below before the value escapes this function.
+  const candidate = selection as UpdateGenerationSelection;
+  const normalizedEntrypoint = candidate.entrypointRelativePath?.replaceAll("\\", "/");
   if (
-    selection.formatVersion !== 1 ||
-    !GENERATION_ID.test(selection.generationId) ||
-    !SHA256.test(selection.manifestSha256) ||
-    !selection.entrypointRelativePath ||
+    candidate.formatVersion !== 1 ||
+    typeof candidate.generationId !== "string" ||
+    !GENERATION_ID.test(candidate.generationId) ||
+    typeof candidate.manifestSha256 !== "string" ||
+    !SHA256.test(candidate.manifestSha256) ||
+    typeof candidate.entrypointRelativePath !== "string" ||
+    !candidate.entrypointRelativePath ||
+    !normalizedEntrypoint ||
     normalizedEntrypoint.startsWith("/") ||
     /^[A-Za-z]:\//u.test(normalizedEntrypoint) ||
     normalizedEntrypoint.split("/").some((part) => part === "" || part === "." || part === "..")
@@ -224,8 +233,12 @@ function assertSelection(selection: UpdateGenerationSelection): void {
   }
 }
 
-function assertDistinctGenerationIds(ids: string[], label: string): void {
-  if (ids.some((id) => !GENERATION_ID.test(id)) || new Set(ids).size !== ids.length) {
+function assertDistinctGenerationIds(ids: unknown, label: string): asserts ids is string[] {
+  if (
+    !Array.isArray(ids) ||
+    ids.some((id) => typeof id !== "string" || !GENERATION_ID.test(id)) ||
+    new Set(ids).size !== ids.length
+  ) {
     throw new TypeError(`${label} must contain distinct generation ids`);
   }
 }
@@ -246,6 +259,9 @@ function assertRequest(request: UpdateGenerationBrokerRequest): void {
     assertNonEmpty(request.expectedRevision, "expected broker revision");
   }
   if (request.kind === "materialize-generation") {
+    if (request.role !== "previous" && request.role !== "candidate") {
+      throw new TypeError("Materialization role is invalid");
+    }
     assertNonEmpty(request.sourceArtifactId, "source artifact id");
     assertSelection(request.generation);
     assertNonEmpty(request.generation.packageVersion, "generation package version");
@@ -260,9 +276,12 @@ function assertRequest(request: UpdateGenerationBrokerRequest): void {
       throw new TypeError("Materialization request manifest is invalid");
     }
   } else if (request.kind === "sync-parent-directory") {
+    if (request.parent !== "generations" && request.parent !== "selector") {
+      throw new TypeError("Parent-directory sync target is invalid");
+    }
     assertNonEmpty(request.afterOperationId, "parent sync predecessor operation id");
   } else if (request.kind === "switch-selector") {
-    if (request.expected) {
+    if (request.expected !== null) {
       assertSelection(request.expected);
     }
     assertSelection(request.next);

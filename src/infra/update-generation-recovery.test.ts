@@ -48,7 +48,7 @@ function receipt<Kind extends ReceiptKind>(
   fields: ReceiptFields<Kind>,
 ): ReceiptOf<Kind> {
   return {
-    formatVersion: 1,
+    formatVersion: 2,
     transactionId: TRANSACTION_ID,
     sequence,
     receiptId: buildUpdateGenerationReceiptId({

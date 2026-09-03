@@ -9,6 +9,11 @@ import {
 export function parseUpdateGenerationTransactionRecord(
   value: unknown,
 ): UpdateGenerationTransactionRecord {
+  if (value !== null && typeof value === "object" && Reflect.get(value, "formatVersion") === 1) {
+    throw new TypeError(
+      "Legacy path-backed update generation records cannot be promoted to broker evidence",
+    );
+  }
   const decoded = updateGenerationTransactionRecordSchema.parse(value);
   let rebuilt: UpdateGenerationTransactionRecord | null = null;
   for (const decodedReceipt of decoded.receipts) {
