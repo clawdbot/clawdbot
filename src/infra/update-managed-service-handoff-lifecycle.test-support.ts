@@ -437,7 +437,7 @@ export function registerManagedHandoffOwnerTests(
     kind: "systemd",
     options?: ManagedServiceManagerBoundaryOptions,
   ) => Promise<ManagedServiceManagerBoundaryResult>,
-  itUnix: typeof import("vitest").it,
+  itUnix: ReturnType<typeof import("vitest").it.runIf>,
   expect: typeof import("vitest").expect,
 ): void {
   itUnix.each(["revoked", "unchanged", "internal", "channel-less"] as const)(
