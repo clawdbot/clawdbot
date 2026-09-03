@@ -326,6 +326,7 @@ jobs:
     timeout-minutes: 75
     steps:
       - name: Qualify fresh native runner isolation
+        id: native_isolation
         shell: pwsh
         env:
           NATIVE_RUNNER_ENVIRONMENT: ${{ runner.environment }}
@@ -336,8 +337,9 @@ jobs:
           $evidence = [ordered]@{ result = "unqualified"; runnerEnvironment = $env:NATIVE_RUNNER_ENVIRONMENT; image = $env:ImageOS }
           try {
             # Standard GitHub-hosted Windows jobs receive a fresh VM per job.
-            if ($env:NATIVE_RUNNER_ENVIRONMENT -ne "github-hosted" -or $env:RUNNER_OS -ne "Windows" -or $env:ImageOS -ne "win25") {
-              throw "Expected a newly allocated GitHub-hosted windows-2025 runner."
+            # ImageOS also names toolchain variants; it is evidence, not isolation authority.
+            if ($env:NATIVE_RUNNER_ENVIRONMENT -ne "github-hosted" -or $env:RUNNER_OS -ne "Windows") {
+              throw "Expected a newly allocated GitHub-hosted Windows runner."
             }
             if ($env:EXPECTED_HEAD -notmatch '^[0-9a-f]{40}$') {
               throw "Native proof requires an exact 40-character target_ref."
@@ -458,9 +460,10 @@ jobs:
           mkdir -p .artifacts/windows-schtasks
           pnpm test:windows:schtasks:integration
 
+      # Qualification/setup failures cannot have created this run's native task.
       - name: Clean native Scheduled Task residue
         id: native_cleanup
-        if: ${{ always() && inputs.run_windows_ci }}
+        if: ${{ always() && inputs.run_windows_ci && steps.native_isolation.outcome == 'success' && contains(fromJSON('["success","failure","cancelled"]'), steps.native_schtasks.outcome) }}
         shell: pwsh
         env:
           TEST_ID: ${{ github.run_id }}-${{ github.run_attempt }}
