@@ -579,7 +579,9 @@ export function resolveRequiredNodeCommandAuthority(params: {
   const declaredCommands = new Set(params.declaredCommands);
   const effectiveCommands = new Set(params.effectiveCommands);
   const denied = params.requiredCommands.find((cmd) => params.withheldCommands.includes(cmd));
-  if (denied) return { command: denied, state: "unauthorized" };
+  if (denied) {
+    return { command: denied, state: "unauthorized" };
+  }
   for (const command of params.requiredCommands) {
     if (
       effectiveCommands.has(command) &&
