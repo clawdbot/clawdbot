@@ -81,7 +81,7 @@ describe("subagent spawn cleanup identity", () => {
     });
   });
 
-  it("does not retry guarded deletion after a matching abort already stopped the run", async () => {
+  it("transfers guarded deletion after a matching abort already stopped the run", async () => {
     const callGateway = vi
       .fn()
       .mockResolvedValueOnce({ ok: true, aborted: true, runIds: ["gateway-run"] })
@@ -99,7 +99,18 @@ describe("subagent spawn cleanup identity", () => {
       }),
     ).resolves.toBe("released");
 
-    expect(callGateway).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(callGateway).toHaveBeenCalledTimes(3));
+    expect(callGateway).toHaveBeenNthCalledWith(3, {
+      method: "sessions.delete",
+      params: {
+        key: "agent:main:subagent:child",
+        emitLifecycleHooks: false,
+        deleteTranscript: true,
+        expectedSessionId: "session-id",
+        expectedLifecycleRevision: "session-revision",
+      },
+      timeoutMs: 60_000,
+    });
   });
 
   it("stops cleanup when guarded deletion observes a successor lifecycle", async () => {

@@ -1,6 +1,8 @@
 import { promises as fs } from "node:fs";
 import type { callGateway } from "../../../gateway/call.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
+import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/gateway-work-admission.js";
+import { defaultRuntime } from "../../../runtime.js";
 import { deleteSubagentSessionForCleanup } from "../registry/subagent-session-cleanup.js";
 import { callSubagentGateway } from "./subagent-spawn-gateway.js";
 
@@ -82,6 +84,18 @@ async function waitForProvisionalSessionDeletion(
   return deleted;
 }
 
+function transferProvisionalSessionDeletion(
+  childSessionKey: string,
+  options: SessionCleanupOptions,
+): void {
+  void runWithGatewayIndependentRootWorkContinuation(
+    () => waitForProvisionalSessionDeletion(childSessionKey, options),
+    "subagents:accepted-run-cleanup",
+  ).catch((error: unknown) => {
+    defaultRuntime.log(`[warn] accepted subagent cleanup continuation failed: ${String(error)}`);
+  });
+}
+
 export async function cleanupFailedSpawnBeforeAgentStart(params: {
   childSessionKey: string;
   attachmentAbsDir?: string;
@@ -149,6 +163,17 @@ export async function terminateAcceptedCollectorRun(params: {
     });
     // A changed lifecycle proves the accepted run no longer owns this session.
     ownership = cleanup === "changed" ? "changed" : ownership;
+    if (runAborted && cleanup === "failed") {
+      // The caller can return after the run stops, but exact-session deletion still needs an owner.
+      transferProvisionalSessionDeletion(params.childSessionKey, {
+        deleteTranscript: true,
+        expectedSessionId: params.expectedSessionId,
+        expectedLifecycleRevision: params.expectedLifecycleRevision,
+        callGateway: call,
+        timeoutMs,
+      });
+      return true;
+    }
     return runAborted || cleanup !== "failed";
   });
   return ownership;
