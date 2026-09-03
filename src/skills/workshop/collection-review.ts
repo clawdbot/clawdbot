@@ -116,6 +116,7 @@ async function runSkillCollectionReview(params: {
         : {}),
       modelSelectionLocked: true,
       modelFallbacksOverride: [],
+      cliBackendDispatch: "subscription-auth",
       timeoutMs: COLLECTION_REVIEW_TIMEOUT_MS,
       runId,
       toolsAllow: ["skill_workshop"],
