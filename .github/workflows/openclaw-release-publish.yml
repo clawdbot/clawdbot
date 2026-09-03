@@ -281,7 +281,7 @@ jobs:
             sha_pinned_release_publish=true
           fi
           # Docker-only recovery dispatches no publishing children and may use main.
-          if [[ "${tideclaw_alpha_publish}" != "true" && "${sha_pinned_release_publish}" != "true" && !( "${PUBLISH_DOCKER_ONLY}" == "true" && "${WORKFLOW_REF}" == "refs/heads/main" ) ]]; then
+          if [[ "${tideclaw_alpha_publish}" != "true" && "${sha_pinned_release_publish}" != "true" && ! ( "${PUBLISH_DOCKER_ONLY}" == "true" && "${WORKFLOW_REF}" == "refs/heads/main" ) ]]; then
             publish_tag="release-publish/${WORKFLOW_SHA:0:12}-$(date +%s)"
             echo "Publishing children requires the parent to run from a protected release-publish tag (or a matching Tideclaw alpha branch), so parent approval and child provenance use the same ref." >&2
             echo "Mint the tooling tag: git tag ${publish_tag} ${WORKFLOW_SHA} && git push origin refs/tags/${publish_tag}" >&2
