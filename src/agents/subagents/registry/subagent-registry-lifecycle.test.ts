@@ -5903,11 +5903,13 @@ describe("requester settle wake trigger", () => {
       releases.get(entries[2]!.runId)?.();
       await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
     } finally {
-      for (let attempt = 0; attempt < entries.length; attempt += 1) {
+      while (releases.size > 0) {
         const pending = Array.from(releases.values());
         releases.clear();
         pending.forEach((release) => release());
-        await new Promise<void>((resolve) => setImmediate(resolve));
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
       }
       controller.clearScheduledResumeTimers();
       resetGatewayWorkAdmission();
@@ -6008,11 +6010,13 @@ describe("requester settle wake trigger", () => {
       controller.resumeRequesterSettleWake(rejected.runId, rejected);
       await waitForLifecycleState(() => expect(settleWake).toHaveBeenCalledTimes(4));
     } finally {
-      for (let attempt = 0; attempt < entries.length; attempt += 1) {
+      while (releases.size > 0) {
         const pending = Array.from(releases.values());
         releases.clear();
         pending.forEach((release) => release());
-        await new Promise<void>((resolve) => setImmediate(resolve));
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
       }
       await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
       controller.clearScheduledResumeTimers();

@@ -747,11 +747,13 @@ describe("subagent registry persistence resume", () => {
           await vi.waitFor(() => expect(wakeRequester).toHaveBeenCalledTimes(3));
           expect(maxActiveWakes).toBe(2);
         } finally {
-          for (let attempt = 0; attempt <= restoredRuns.length; attempt += 1) {
+          while (wakeResolvers.length > 0) {
             while (wakeResolvers.length > 0) {
               wakeResolvers.shift()?.();
             }
-            await new Promise<void>((resolve) => setImmediate(resolve));
+            await new Promise<void>((resolve) => {
+              setImmediate(resolve);
+            });
             if (activeWakes === 0) {
               break;
             }
