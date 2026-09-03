@@ -740,11 +740,14 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
       gatewayPortClosed: gateway ? await isPortClosed("127.0.0.1", gateway.port) : true,
       proxyPortClosed: proxy ? await isPortClosed("127.0.0.1", proxy.port) : true,
     };
-    await writeFile(
-      path.join(artifactDir, "cleanup-summary.json"),
-      `${JSON.stringify(cleanup, null, 2)}\n`,
-      "utf8",
-    );
+    // Setup can reject before this invocation allocates retained evidence.
+    if (artifactDir) {
+      await writeFile(
+        path.join(artifactDir, "cleanup-summary.json"),
+        `${JSON.stringify(cleanup, null, 2)}\n`,
+        "utf8",
+      );
+    }
     expect(cleanup).toEqual({
       gatewayPortClosed: true,
       proxyPortClosed: true,
