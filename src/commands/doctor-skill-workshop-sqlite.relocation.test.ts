@@ -42,7 +42,7 @@ const readSkillProposalRecord = (proposalId: string, options: { env?: NodeJS.Pro
 function seedLegacyV15ProposalRows(
   env: NodeJS.ProcessEnv,
   rows: readonly {
-    record: SkillProposalRecord & { appliedAt: string };
+    record: SkillProposalRecord;
     workspaceDir: string;
     claimReleasedTime: number | null;
     ownerAgentId?: string | null;
@@ -59,7 +59,7 @@ function seedLegacyV15ProposalRows(
     `INSERT INTO skill_workshop_proposals (
       proposal_id, record_json, owner_agent_id, workspace_dir, kind, status,
       created_at, updated_at, draft_hash, applied_at, claim_released_time
-    ) VALUES (?, ?, ?, ?, 'create', 'applied', ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   for (const { record, workspaceDir, claimReleasedTime, ownerAgentId = "main" } of rows) {
     insertProposal.run(
@@ -67,10 +67,12 @@ function seedLegacyV15ProposalRows(
       JSON.stringify(record),
       ownerAgentId,
       workspaceDir,
+      record.kind,
+      record.status,
       record.createdAt,
       record.updatedAt,
       record.draftHash,
-      record.appliedAt,
+      record.appliedAt ?? null,
       claimReleasedTime,
     );
   }
@@ -177,6 +179,86 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
     await expect(
       migrateLegacySkillWorkshopProposals({ config: {}, env: testState.env }),
     ).resolves.toEqual({ changes: [], warnings: [], detected: 0, migrated: 0 });
+  });
+
+  it("retargets a pending update for a relocated applied skill", async () => {
+    const workspaceDir = await fs.realpath(
+      await tempDirs.make("openclaw-workshop-relocation-update-workspace-"),
+    );
+    const skillDir = path.join(workspaceDir, "skills", "relocate-update");
+    const skillFile = path.join(skillDir, "SKILL.md");
+    const skillContent =
+      "---\nname: relocate-update\ndescription: Relocated update\n---\n\n# Original\n";
+    const updatedContent =
+      "---\nname: relocate-update\ndescription: Relocated update\n---\n\n# Updated\n";
+    const now = "2026-09-01T00:00:00.000Z";
+    const create: SkillProposalRecord = {
+      schema: SKILL_WORKSHOP_SCHEMA,
+      id: "relocate-update-create-20260901-1234567890",
+      kind: "create",
+      status: "applied",
+      title: "Create Relocate Update",
+      description: "Relocated update",
+      createdAt: now,
+      updatedAt: now,
+      createdBy: "skill-workshop",
+      proposedVersion: "v1",
+      draftFile: "PROPOSAL.md",
+      draftHash: hashSkillProposalContent(skillContent),
+      target: {
+        skillName: "relocate-update",
+        skillKey: "relocate-update",
+        skillDir,
+        skillFile,
+        source: "openclaw-workspace",
+      },
+      scan: { state: "clean", scannedAt: now, critical: 0, warn: 0, info: 0, findings: [] },
+      appliedAt: now,
+    };
+    const update: SkillProposalRecord = {
+      ...create,
+      id: "relocate-update-pending-20260901-1234567890",
+      kind: "update",
+      status: "pending",
+      draftHash: hashSkillProposalContent(updatedContent),
+      target: {
+        ...create.target,
+        currentContentHash: hashSkillProposalContent(skillContent),
+      },
+      appliedAt: undefined,
+    };
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(skillFile, skillContent, "utf8");
+    seedLegacyV15ProposalRows(testState.env, [
+      { record: create, workspaceDir, claimReleasedTime: null },
+      { record: update, workspaceDir, claimReleasedTime: null },
+    ]);
+
+    const result = await migrateLegacySkillWorkshopProposals({
+      config: {},
+      env: testState.env,
+    });
+    const workshopSkillFile = path.join(
+      resolveWorkshopSkillsDir({}, "main", testState.env),
+      "relocate-update",
+      "SKILL.md",
+    );
+
+    expect(result.changes.join("\n")).toContain(
+      "Relocated 1 Skill Workshop skill, retargeted 2 proposals, marked 0 stale",
+    );
+    await expect(fs.access(skillDir)).rejects.toThrow();
+    await expect(fs.readFile(workshopSkillFile, "utf8")).resolves.toBe(skillContent);
+    await expect(readSkillProposalRecord(update.id, { env: testState.env })).resolves.toMatchObject(
+      {
+        status: "pending",
+        target: {
+          skillDir: path.dirname(workshopSkillFile),
+          skillFile: workshopSkillFile,
+          source: "openclaw-workshop",
+        },
+      },
+    );
   });
 
   it.runIf(process.platform !== "win32")(

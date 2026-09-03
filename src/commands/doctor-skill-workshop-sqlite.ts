@@ -317,7 +317,19 @@ async function planWorkshopRelocation(
   const updatesByMove = new Map<string, WorkshopProposalUpdate[]>();
   for (const entry of external) {
     const record = entry.record;
-    const moveKey = moveKeysByProposal.get(record.id);
+    const ownerAgentId = ownersByProposal.get(record.id);
+    const moveKey =
+      moveKeysByProposal.get(record.id) ??
+      (record.status === "pending" && record.kind === "update" && ownerAgentId
+        ? `${path.resolve(record.target.skillDir)}\0${
+            resolveSkillProposalTarget({
+              skillName: record.target.skillKey,
+              config,
+              agentId: ownerAgentId,
+              env,
+            }).skillDir
+          }`
+        : undefined);
     const move = moveKey ? movesByKey.get(moveKey) : undefined;
     const conflictReason = staleReasons.get(record.id);
     if (move && moveKey) {
@@ -344,7 +356,6 @@ async function planWorkshopRelocation(
       });
       continue;
     }
-    const ownerAgentId = ownersByProposal.get(record.id);
     if (record.status === "pending" && record.kind === "create" && ownerAgentId) {
       updates.push({
         record: retargetWorkshopProposal(
