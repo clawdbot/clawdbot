@@ -10,18 +10,14 @@ type IndexConcurrencyHarness = { getIndexConcurrency: () => number };
 function createIndexConcurrencyHarness(params: {
   providerId?: string;
   batch?: { enabled: boolean; concurrency: number };
-  nonBatchConcurrency?: number;
   /** Full rebuilds resolve the id through an active sync generation instead. */
   generationProviderId?: string;
 }): IndexConcurrencyHarness {
   return Object.assign(Object.create(MemoryManagerEmbeddingOps.prototype), {
     batch: params.batch ?? { enabled: false, concurrency: 8 },
-    settings: {
-      remote:
-        params.nonBatchConcurrency === undefined
-          ? undefined
-          : { nonBatchConcurrency: params.nonBatchConcurrency },
-    },
+    // `remote.nonBatchConcurrency` is a retired config key that resolution never
+    // populates, so the resolved settings reaching this policy carry no override.
+    settings: { remote: undefined },
     provider: params.providerId
       ? { id: params.providerId, model: `${params.providerId}-model` }
       : undefined,
@@ -42,15 +38,6 @@ describe("memory index concurrency", () => {
 
   it("keeps the parallel default for remote embedding providers", () => {
     expect(createIndexConcurrencyHarness({ providerId: "openai" }).getIndexConcurrency()).toBe(4);
-  });
-
-  it("lets an explicit non-batch concurrency override the local default", () => {
-    expect(
-      createIndexConcurrencyHarness({
-        providerId: "local",
-        nonBatchConcurrency: 4,
-      }).getIndexConcurrency(),
-    ).toBe(4);
   });
 
   it("indexes one job at a time when a full rebuild runs under a local sync generation", () => {
