@@ -20,6 +20,7 @@ describe("chat session sharing menu", () => {
   it("shows the owner picker with policy-gated modes and known identities", () => {
     const onVisibilityChange = vi.fn();
     const onMemberChange = vi.fn();
+    const navigate = vi.fn();
     const root = mount(
       renderChatSessionSharing({
         session: {
@@ -33,7 +34,12 @@ describe("chat session sharing menu", () => {
           loading: false,
           result: {
             sessionKey: "agent:main:main",
-            owner: { type: "human", id: "owner", label: "Owner" },
+            owner: {
+              type: "human",
+              id: "owner",
+              identity: { type: "profile", id: "owner" },
+              label: "Owner",
+            },
             members: [],
             identities: [
               { type: "human", id: "owner", label: "Owner" },
@@ -43,6 +49,8 @@ describe("chat session sharing menu", () => {
             allowedVisibilities: ["shared", "read-only"],
           },
         },
+        ownerViewing: false,
+        personActivity: { basePath: "", navigate },
         onOpen: vi.fn(),
         onVisibilityChange,
         onMemberChange,
@@ -55,7 +63,21 @@ describe("chat session sharing menu", () => {
     expect(root.textContent).not.toContain("Suggest");
     expect(root.textContent).toContain("Alice");
     expect(root.querySelector('wa-dropdown-item[value="member:owner"]')).toBeNull();
+    expect(root.querySelector(".chat-pane__sharing-owner-title")?.textContent?.trim()).toBe(
+      "Owner",
+    );
+    expect(root.querySelector(".chat-pane__sharing-owner")?.textContent?.trim()).toBe("Owner");
+    expect(
+      root.querySelector(".chat-pane__sharing-owner openclaw-session-owner-chip"),
+    ).not.toBeNull();
+    const ownerLink = root.querySelector<HTMLAnchorElement>(
+      ".chat-pane__sharing-owner a.person-activity-link",
+    );
+    expect(ownerLink?.getAttribute("href")).toBe("/activity?person=owner");
     expect(root.querySelector(".session-menu__separator")).toBeNull();
+
+    ownerLink?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    expect(navigate).toHaveBeenCalledWith("owner");
 
     dropdown?.dispatchEvent(
       new CustomEvent("wa-select", {
@@ -200,7 +222,7 @@ describe("chat session sharing menu", () => {
     expect(root.querySelectorAll(".chat-pane__sharing-member-skeleton .skeleton")).toHaveLength(6);
   });
 
-  it("shows only the draft marker to a non-manager", () => {
+  it("keeps the linked owner beside the draft marker for a non-manager", () => {
     const root = mount(
       renderChatSessionSharing({
         session: {
@@ -209,8 +231,19 @@ describe("chat session sharing menu", () => {
           updatedAt: 1,
           visibility: "draft",
           sharingRole: "member",
+          owner: {
+            actor: {
+              type: "human",
+              id: "owner",
+              identity: { type: "profile", id: "owner" },
+              label: "Owner",
+            },
+          },
         },
         state: undefined,
+        ownerViewing: false,
+        personActivity: { basePath: "", navigate: vi.fn() },
+        showOwner: true,
         onOpen: vi.fn(),
         onVisibilityChange: vi.fn(),
         onMemberChange: vi.fn(),
@@ -220,6 +253,11 @@ describe("chat session sharing menu", () => {
     const indicator = root.querySelector(".chat-pane__draft-indicator");
     expect(indicator?.querySelector("svg")).not.toBeNull();
     expect(indicator?.textContent?.trim()).toBe("");
+    expect(
+      root
+        .querySelector("a.person-activity-avatar-link:has(openclaw-session-owner-chip)")
+        ?.getAttribute("href"),
+    ).toBe("/activity?person=owner");
   });
 
   it("publishes a manageable draft through the shared visibility callback", () => {

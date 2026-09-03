@@ -191,30 +191,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       sharingReadAccess.allowed || sharingVisibilityAccess.allowed
         ? undefined
         : sharingReadAccess.reason;
-    const sharing =
-      sharingMethodsSupported && row
-        ? {
-            session: row,
-            state: this.sessionSharingStates.get(this.sessionSharingCacheKey(row.key)),
-            allowedVisibilities: sharingSnapshot.hello?.policy?.allowedSessionVisibilities,
-            membersAvailable: sharingReadAccess.allowed,
-            openDisabledReason: sharingOpenDisabledReason,
-            visibilityDisabledReason: sharingVisibilityAccess.allowed
-              ? undefined
-              : sharingVisibilityAccess.reason,
-            memberAddDisabledReason: sharingMemberAddAccess.allowed
-              ? undefined
-              : sharingMemberAddAccess.reason,
-            memberRemoveDisabledReason: sharingMemberRemoveAccess.allowed
-              ? undefined
-              : sharingMemberRemoveAccess.reason,
-            onOpen: () => void this.loadSessionSharing(row),
-            onVisibilityChange: (visibility: SessionVisibility) =>
-              void this.setSessionVisibility(row, visibility),
-            onMemberChange: (identityId: string, member: boolean) =>
-              void this.setSessionMember(row, identityId, member),
-          }
-        : null;
     const renameAccess = row
       ? readSessionMethodAccess(this.context.gateway.snapshot, {
           method: "sessions.patch",
@@ -426,6 +402,33 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       (user) =>
         presenceMatchesProfile(user, renderedOwnerIdentity) && user.watchedSessions.includes(key),
     );
+    const sharing =
+      sharingMethodsSupported && row
+        ? {
+            session: row,
+            state: this.sessionSharingStates.get(this.sessionSharingCacheKey(row.key)),
+            allowedVisibilities: sharingSnapshot.hello?.policy?.allowedSessionVisibilities,
+            membersAvailable: sharingReadAccess.allowed,
+            openDisabledReason: sharingOpenDisabledReason,
+            visibilityDisabledReason: sharingVisibilityAccess.allowed
+              ? undefined
+              : sharingVisibilityAccess.reason,
+            memberAddDisabledReason: sharingMemberAddAccess.allowed
+              ? undefined
+              : sharingMemberAddAccess.reason,
+            memberRemoveDisabledReason: sharingMemberRemoveAccess.allowed
+              ? undefined
+              : sharingMemberRemoveAccess.reason,
+            ownerViewing,
+            personActivity,
+            showOwner: showOwnerChip,
+            onOpen: () => void this.loadSessionSharing(row),
+            onVisibilityChange: (visibility: SessionVisibility) =>
+              void this.setSessionVisibility(row, visibility),
+            onMemberChange: (identityId: string, member: boolean) =>
+              void this.setSessionMember(row, identityId, member),
+          }
+        : null;
     const header = renderChatPaneHeader({
       paneId: this.paneId,
       narrow: this.narrow,
@@ -502,7 +505,9 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         onDockSideChange: (dock) => this.handleBoardDockChange(dock),
       }),
       sharingControl:
-        sharing && (!this.narrow || !canManageChatSessionSharing(sharing.session))
+        sharing &&
+        (!canManageChatSessionSharing(sharing.session) || !sharing.openDisabledReason) &&
+        (!this.narrow || !canManageChatSessionSharing(sharing.session))
           ? renderChatSessionSharing(sharing)
           : nothing,
       placementControl: renderChatPanePlacement({

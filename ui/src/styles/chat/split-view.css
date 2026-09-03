@@ -767,6 +767,20 @@ openclaw-chat-pane {
   margin-top: 8px;
 }
 
+.chat-pane__sharing-owner-title {
+  margin-top: 8px;
+}
+
+.chat-pane__sharing-owner {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  min-height: 36px;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
 .chat-pane__sharing-member-skeleton {
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr);
