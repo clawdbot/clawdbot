@@ -186,6 +186,7 @@ export async function executePreparedReplyAgentRun(
   };
 
   await typingSignals.signalRunStart();
+  turnAdoptionLifecycle?.onProcessingStarted?.();
 
   // Preserve the one-flush-per-compaction-cycle gate: an earlier same-cycle
   // flush is the checkpoint for this upcoming compaction, not a reason to rerun maintenance.

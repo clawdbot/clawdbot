@@ -139,6 +139,7 @@ export function createTwitchIngress(options: {
             lifecycle.onDeferred();
           },
           onDeferredHeartbeat: () => lifecycle.onDeferredHeartbeat?.(),
+          onProcessingStarted: () => lifecycle.onProcessingStarted?.(),
           onAbandoned: async () => {
             handedOff = true;
             await lifecycle.onAbandoned();

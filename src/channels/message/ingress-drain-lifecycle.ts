@@ -14,6 +14,8 @@ export type ChannelIngressDispatchLifecycle = {
   onDeferred: () => void;
   /** Deferred reply-lane admission is still waiting behind an active turn. */
   onDeferredHeartbeat?: () => void;
+  /** Bounded reply processing now owns pre-adoption stall detection. */
+  onProcessingStarted?: () => void;
   /**
    * Durable adoption finalization is in progress (e.g. settlement hold while
    * committing dedupe). Clears the pre-adoption stall watchdog so a timeout
@@ -39,6 +41,7 @@ export function bindIngressLifecycleToReplyOptions(lifecycle: ChannelIngressDisp
     onAdopted: () => void | Promise<void>;
     onDeferred: () => void;
     onDeferredHeartbeat?: () => void;
+    onProcessingStarted?: () => void;
     onAbandoned: () => void | Promise<void>;
     abortSignal: AbortSignal;
   };
@@ -49,6 +52,7 @@ export function bindIngressLifecycleToReplyOptions(lifecycle: ChannelIngressDisp
       onAdopted: lifecycle.onAdopted,
       onDeferred: lifecycle.onDeferred,
       onDeferredHeartbeat: lifecycle.onDeferredHeartbeat,
+      onProcessingStarted: lifecycle.onProcessingStarted,
       onAbandoned: lifecycle.onAbandoned,
       abortSignal: lifecycle.abortSignal,
     },

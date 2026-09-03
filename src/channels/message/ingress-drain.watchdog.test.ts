@@ -135,6 +135,52 @@ describe("channel ingress drain watchdog", () => {
     });
   });
 
+  it("keeps a processing-owned claim past the ingress watchdog until adoption", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createTestIngressQueue(stateDir);
+      await queue.enqueue("evt-processing", { text: "processing" }, { laneKey: "lane" });
+      let releaseDispatch!: () => void;
+      const dispatchReleased = new Promise<void>((resolve) => {
+        releaseDispatch = resolve;
+      });
+      let processingStarted: (() => void) | undefined;
+      let deferredHeartbeat: (() => void) | undefined;
+      let adopted: (() => void | Promise<void>) | undefined;
+
+      const drain = createChannelIngressDrain<Payload>({
+        queue,
+        adoptionStallTimeoutMs: 5_000,
+        dispatchClaimedEvent: async (_event, lifecycle) => {
+          lifecycle.onDeferred();
+          processingStarted = (
+            lifecycle as ChannelIngressDispatchLifecycle & {
+              onProcessingStarted?: () => void;
+            }
+          ).onProcessingStarted;
+          deferredHeartbeat = lifecycle.onDeferredHeartbeat;
+          adopted = lifecycle.onAdopted;
+          await dispatchReleased;
+          return { kind: "deferred" };
+        },
+      });
+
+      await drain.drainOnce();
+      expect(processingStarted).toBeTypeOf("function");
+      processingStarted?.();
+      deferredHeartbeat?.();
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(await queue.listClaims()).toHaveLength(1);
+      expect(await queue.listPending({ limit: "all" })).toEqual([]);
+
+      await adopted?.();
+      releaseDispatch();
+      await drain.waitForIdle();
+      expect(await queue.listClaims()).toEqual([]);
+      expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
+      drain.dispose();
+    });
+  });
+
   it.each([
     { stop: "dispose", heartbeat: "none" },
     { stop: "dispose", heartbeat: "late" },

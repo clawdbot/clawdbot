@@ -376,6 +376,7 @@ export async function admitFollowupTurn(params: {
         : undefined;
     const preflightEntry = session.current();
     try {
+      turn.queued.turnAdoptionLifecycle?.onProcessingStarted?.();
       activeEntry = await runSessionCompactionIfNeeded({
         cfg: config,
         followupRun: turn.queued,

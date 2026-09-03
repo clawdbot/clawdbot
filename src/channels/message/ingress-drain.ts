@@ -359,9 +359,25 @@ export function createChannelIngressDrain<
       },
       onDeferredHeartbeat: () => {
         // Abort also covers disposal; retired callbacks cannot restart the watchdog.
-        if (state.phase === "deferred" && !state.abortController.signal.aborted) {
+        if (
+          state.phase === "deferred" &&
+          !state.processingStarted &&
+          !state.abortController.signal.aborted
+        ) {
           armStallWatchdog(state);
         }
+      },
+      onProcessingStarted: () => {
+        if (
+          (state.phase !== "dispatching" && state.phase !== "deferred") ||
+          state.guillotined ||
+          state.superseded
+        ) {
+          return;
+        }
+        // The bounded reply runtime now owns timeout and failure settlement.
+        state.processingStarted = true;
+        clearStallTimer(state);
       },
       onAdoptionFinalizing: () => {
         if (state.phase !== "dispatching" && state.phase !== "deferred") {
@@ -428,6 +444,7 @@ export function createChannelIngressDrain<
       occupiesLane: true,
       guillotined: false,
       superseded: false,
+      processingStarted: false,
       task: Promise.resolve(),
       settleOnce: async () => {},
     } as ActiveHandlerState<TPayload, TMetadata>;

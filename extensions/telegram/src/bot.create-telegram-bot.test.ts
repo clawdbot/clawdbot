@@ -1361,6 +1361,13 @@ describe("createTelegramBot", () => {
       await vi.waitFor(() => {
         expect(queuedLifecycle?.onAdopted).toEqual(expect.any(Function));
       });
+      expect(
+        (
+          queuedLifecycle as
+            | (NonNullable<typeof queuedLifecycle> & { onProcessingStarted?: () => void })
+            | undefined
+        )?.onProcessingStarted,
+      ).toEqual(expect.any(Function));
 
       await expect(queuedLifecycle?.onAdopted?.()).rejects.toBe(commitError);
       await flushTelegramTestMicrotasks();
