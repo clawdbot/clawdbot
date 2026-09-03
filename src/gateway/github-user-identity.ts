@@ -1,7 +1,11 @@
 import type { IncomingHttpHeaders } from "node:http";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  readNonBlankString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
+import { createLazyPromise } from "../shared/lazy-promise.js";
 import { resolveCachedGitHubIdentity } from "../state/user-profile-github-identity.js";
 import { classifyTailscaleLogin } from "../state/user-profiles-tailscale-login.js";
 import { syncGitHubIdentity } from "../state/user-profiles.js";
@@ -16,7 +20,6 @@ import {
   githubApiToken,
   readBoundedResponse,
   readGitHubJsonResponse,
-  readOptionalGitHubString,
   withOptionalGitHubAuth,
 } from "./control-ui-github-api.js";
 
@@ -153,36 +156,7 @@ function parseGitHubUserIdentity(accountId: number, payload: unknown): ResolvedG
   if (!login) {
     throw new ControlUiGitHubError(502, "GitHub response omitted a valid login");
   }
-  return { accountId, login, name: readOptionalGitHubString(payload, "name") };
-}
-
-function retryableConnectionSync(
-  sync: () => Promise<AuthenticatedGitHubIdentitySyncResult>,
-): AuthenticatedGitHubIdentitySync {
-  let inFlight: Promise<AuthenticatedGitHubIdentitySyncResult> | undefined;
-  let completed: AuthenticatedGitHubIdentitySyncResult | undefined;
-  return () => {
-    if (completed) {
-      return Promise.resolve(completed);
-    }
-    if (inFlight) {
-      return inFlight;
-    }
-    const current = sync().then((result) => {
-      completed = result;
-      return result;
-    });
-    inFlight = current;
-    void current.then(
-      () => {
-        inFlight = undefined;
-      },
-      () => {
-        inFlight = undefined;
-      },
-    );
-    return current;
-  };
+  return { accountId, login, name: readNonBlankString(payload.name) };
 }
 
 function cloudflareAccessAssertion(params: {
@@ -220,7 +194,7 @@ export function createAuthenticatedGitHubIdentitySync(params: {
     ? classifyTailscaleLogin(params.authResult.tailscaleIdentity.login)
     : undefined;
   if (tailscaleLogin?.kind === "provider" && tailscaleLogin.provider === "github") {
-    return retryableConnectionSync(async () => {
+    return createLazyPromise(async () => {
       const identity = await resolveGitHubUserIdentityByLogin(tailscaleLogin.subject);
       const profile = syncGitHubIdentity({
         identity,
@@ -235,7 +209,7 @@ export function createAuthenticatedGitHubIdentitySync(params: {
   if (!access) {
     return undefined;
   }
-  return retryableConnectionSync(async () => {
+  return createLazyPromise(async () => {
     const accessIdentity = await resolveCloudflareAccessIdentity(
       access.assertion,
       access.principal,

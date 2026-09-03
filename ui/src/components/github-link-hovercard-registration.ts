@@ -1,4 +1,3 @@
-import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GitHubLinkHovercardProvider } from "./github-link-hovercard.runtime.ts";
 import {
   GITHUB_HOVERCARD_OPEN_DELAY_MS,
@@ -14,20 +13,10 @@ import {
 
 const HOVERCARD_TAG = "openclaw-github-link-hovercard-provider";
 
-type HovercardProviderElement = GitHubLinkHovercardProvider;
-
-const bootstrap = new LazyHovercardBootstrap<
-  HovercardProviderElement,
-  { client: GatewayBrowserClient | null; agentId: string | undefined }
->({
+const bootstrap = new LazyHovercardBootstrap<GitHubLinkHovercardProvider>({
   tag: HOVERCARD_TAG,
   load: async () =>
     (await import("./github-link-hovercard.runtime.ts")).GitHubLinkHovercardProvider,
-  snapshot: (provider) => ({ client: provider.client, agentId: provider.agentId }),
-  restore: (provider, properties) => {
-    provider.client = properties.client;
-    provider.agentId = properties.agentId;
-  },
 });
 
 async function activateHovercard(event: Event, trigger: HovercardBootstrapTrigger): Promise<void> {

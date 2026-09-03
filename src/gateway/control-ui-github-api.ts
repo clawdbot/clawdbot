@@ -1,12 +1,5 @@
-// Shared api.github.com plumbing for Control UI GitHub surfaces (link
-// previews, session pull request chips): pinned origin, manual redirects,
-// bounded bodies, and normalized upstream error statuses.
 import { createHash } from "node:crypto";
-import {
-  asFiniteNumber,
-  parseStrictNonNegativeInteger,
-} from "@openclaw/normalization-core/number-coercion";
-import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readResponseWithLimit } from "../infra/http-body.js";
@@ -16,7 +9,6 @@ import {
   isTrustedSecretSurfaceUnavailableError,
   SecretSurfaceUnavailableError,
 } from "../secrets/runtime-degraded-state.js";
-export { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 export const GITHUB_API_ORIGIN = "https://api.github.com";
 export const CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE =
@@ -110,25 +102,6 @@ export function formatControlUiGitHubPreviewError(error: unknown): {
   };
 }
 
-export function requiredString(record: Record<string, unknown>, key: string): string {
-  const value = readNonBlankString(record[key]);
-  if (value === undefined) {
-    throw new ControlUiGitHubError(502, `GitHub response omitted ${key}`);
-  }
-  return value;
-}
-
-export function readOptionalGitHubString(
-  record: Record<string, unknown>,
-  key: string,
-): string | undefined {
-  return readNonBlankString(record[key]);
-}
-
-export function optionalNumber(record: Record<string, unknown>, key: string): number | undefined {
-  return asFiniteNumber(record[key]);
-}
-
 export function githubApiToken(
   env: NodeJS.ProcessEnv = process.env,
   config: OpenClawConfig | null = getRuntimeConfigSnapshot(),
@@ -220,8 +193,10 @@ export async function fetchGitHubApi(
   for (let redirects = 0; ; redirects += 1) {
     // Recheck every dispatch, including redirects and auxiliary metadata reads.
     // Selection must still be current after the asynchronous credential read.
-    await identity?.revalidate();
-    identity?.assertSelected();
+    if (identity) {
+      await identity.revalidate();
+      identity.assertSelected();
+    }
     let response: Response;
     try {
       response = await fetchImpl(url.href, {

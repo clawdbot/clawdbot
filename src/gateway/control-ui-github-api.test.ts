@@ -106,6 +106,23 @@ describe("Control UI GitHub failures", () => {
     expect(display.retryable).toBe(true);
   });
 
+  it("dispatches an admitted request before its caller can retire", async () => {
+    let active = true;
+    let activeAtDispatch: boolean | undefined;
+    const pending = fetchGitHubApi(
+      "https://api.github.com/repos/owner/repo/actions/runs",
+      async () => {
+        activeAtDispatch = active;
+        return new Response("{}");
+      },
+      "synthetic-token",
+    );
+    active = false;
+    await pending;
+
+    expect(activeAtDispatch).toBe(true);
+  });
+
   it("shows configured credential recovery instructions but hides unknown errors", () => {
     const unavailable = new SecretSurfaceUnavailableError({
       ownerKind: "capability",
