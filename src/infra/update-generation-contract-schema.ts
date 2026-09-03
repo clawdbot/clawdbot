@@ -1,11 +1,9 @@
 /** Runtime decoding for durable update-generation transaction records. */
 import { z } from "zod";
 import {
-  appendUpdateGenerationReceipt,
-  type UpdateGenerationTransactionReceipt,
-  type UpdateGenerationTransactionRecord,
-} from "./update-generation-contract.js";
-
+  assertUpdateGenerationBrokerReceiptIsValid,
+  type UpdateGenerationBrokerReceipt,
+} from "./update-generation-confined-filesystem.js";
 const generationIdSchema = z.string().regex(/^[a-f0-9]{32}$/u);
 const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u);
 const nonEmptyStringSchema = z.string().min(1);
@@ -59,6 +57,53 @@ const deferredCleanupSchema = z
   .object({ generationId: generationIdSchema, reason: nonEmptyStringSchema })
   .strict();
 
+const brokerReceiptSchema = z.custom<UpdateGenerationBrokerReceipt>((value) => {
+  try {
+    assertUpdateGenerationBrokerReceiptIsValid(value);
+    return true;
+  } catch {
+    return false;
+  }
+}, "Invalid authenticated update broker receipt envelope");
+
+function brokerReceiptOf<Kind extends UpdateGenerationBrokerReceipt["kind"]>(kind: Kind) {
+  return brokerReceiptSchema.refine(
+    (receipt): receipt is Extract<UpdateGenerationBrokerReceipt, { kind: Kind }> =>
+      receipt.kind === kind,
+    `Expected ${kind} broker receipt`,
+  );
+}
+
+const materializationEvidenceSchema = z
+  .object({
+    materialization: brokerReceiptOf("materialize-generation"),
+    parentDirectorySync: brokerReceiptOf("sync-parent-directory"),
+  })
+  .strict();
+const selectionEvidenceSchema = z
+  .object({
+    selectorSwitch: brokerReceiptOf("switch-selector"),
+    parentDirectorySync: brokerReceiptOf("sync-parent-directory"),
+  })
+  .strict();
+const retainedPairEvidenceSchema = z
+  .object({
+    retainedPair: brokerReceiptOf("verify-retained-pair"),
+    recoveryObservation: brokerReceiptOf("observe-recovery"),
+  })
+  .strict();
+const selectedEvidenceSchema = selectionEvidenceSchema
+  .extend(retainedPairEvidenceSchema.shape)
+  .strict();
+const cleanupEvidenceSchema = z
+  .object({
+    cleanup: brokerReceiptOf("cleanup-generations"),
+    parentDirectorySync: brokerReceiptOf("sync-parent-directory"),
+    retainedPair: brokerReceiptOf("verify-retained-pair"),
+    recoveryObservation: brokerReceiptOf("observe-recovery"),
+  })
+  .strict();
+
 const receiptBase = {
   formatVersion: z.literal(1),
   transactionId: nonEmptyStringSchema.regex(/^[A-Za-z0-9._:@/-]+$/u),
@@ -72,15 +117,13 @@ const updateGenerationTransactionReceiptUnion = z.discriminatedUnion("kind", [
     .object({
       ...receiptBase,
       kind: z.literal("intent"),
-      manager: z.enum(["npm", "pnpm", "bun"]),
       namespaceKey: nonEmptyStringSchema,
-      namespaceRoot: nonEmptyStringSchema,
-      selectorPath: nonEmptyStringSchema,
-      stagingRoot: nonEmptyStringSchema,
       serviceBefore: serviceIntentSchema,
       previousSelection: updateGenerationSelectionSchema.nullable(),
       previousPackageVersion: nonEmptyStringSchema.nullable(),
       stableBindingAlreadyVerified: z.boolean(),
+      brokerId: nonEmptyStringSchema,
+      brokerRevision: nonEmptyStringSchema.nullable(),
     })
     .strict(),
   z
@@ -88,7 +131,7 @@ const updateGenerationTransactionReceiptUnion = z.discriminatedUnion("kind", [
       ...receiptBase,
       kind: z.literal("generation-materialization-intent"),
       role: z.enum(["previous", "candidate"]),
-      sourceRoot: nonEmptyStringSchema,
+      sourceArtifactId: nonEmptyStringSchema,
       generationId: generationIdSchema,
       manifest: manifestSchema,
       packageVersion: nonEmptyStringSchema,
@@ -101,6 +144,7 @@ const updateGenerationTransactionReceiptUnion = z.discriminatedUnion("kind", [
       kind: z.literal("generation-materialized"),
       role: z.enum(["previous", "candidate"]),
       generation: descriptorSchema,
+      evidence: materializationEvidenceSchema,
     })
     .strict(),
   z
@@ -115,6 +159,7 @@ const updateGenerationTransactionReceiptUnion = z.discriminatedUnion("kind", [
       ...receiptBase,
       kind: z.literal("baseline-selected"),
       selection: updateGenerationSelectionSchema,
+      evidence: selectionEvidenceSchema,
     })
     .strict(),
   z
@@ -144,6 +189,7 @@ const updateGenerationTransactionReceiptUnion = z.discriminatedUnion("kind", [
       ...receiptBase,
       kind: z.literal("candidate-selected"),
       selection: updateGenerationSelectionSchema,
+      evidence: selectedEvidenceSchema,
     })
     .strict(),
   z
@@ -154,6 +200,7 @@ const updateGenerationTransactionReceiptUnion = z.discriminatedUnion("kind", [
       launcherVersion: nonEmptyStringSchema,
       serviceRunning: z.boolean(),
       serviceEnabled: z.boolean().optional(),
+      evidence: retainedPairEvidenceSchema,
     })
     .strict(),
   z
@@ -173,6 +220,7 @@ const updateGenerationTransactionReceiptUnion = z.discriminatedUnion("kind", [
       launcherVersion: nonEmptyStringSchema,
       serviceRunning: z.boolean(),
       serviceEnabled: z.boolean().optional(),
+      evidence: selectedEvidenceSchema,
     })
     .strict(),
   z
@@ -189,6 +237,7 @@ const updateGenerationTransactionReceiptUnion = z.discriminatedUnion("kind", [
       kind: z.literal("cleanup-completed"),
       removedGenerationIds: z.array(generationIdSchema),
       deferred: z.array(deferredCleanupSchema),
+      evidence: cleanupEvidenceSchema,
     })
     .strict(),
   z
@@ -221,6 +270,13 @@ export const updateGenerationTransactionReceiptSchema =
         message: "A verified stable binding requires a previous generation selection",
       });
     }
+    if (receipt.previousSelection && !receipt.stableBindingAlreadyVerified) {
+      context.addIssue({
+        code: "custom",
+        path: ["stableBindingAlreadyVerified"],
+        message: "An existing generation selection requires a verified stable binding",
+      });
+    }
   });
 
 export const updateGenerationTransactionRecordSchema = z
@@ -231,22 +287,3 @@ export const updateGenerationTransactionRecordSchema = z
     receipts: z.array(updateGenerationTransactionReceiptSchema).min(1),
   })
   .strict();
-
-export function parseUpdateGenerationTransactionRecord(
-  value: unknown,
-): UpdateGenerationTransactionRecord {
-  const decoded = updateGenerationTransactionRecordSchema.parse(value);
-  let rebuilt: UpdateGenerationTransactionRecord | null = null;
-  for (const decodedReceipt of decoded.receipts) {
-    const receipt: UpdateGenerationTransactionReceipt = decodedReceipt;
-    rebuilt = appendUpdateGenerationReceipt(rebuilt, receipt);
-  }
-  if (
-    !rebuilt ||
-    rebuilt.transactionId !== decoded.transactionId ||
-    rebuilt.namespaceKey !== decoded.namespaceKey
-  ) {
-    throw new TypeError("Update generation transaction envelope disagrees with its receipts");
-  }
-  return rebuilt;
-}

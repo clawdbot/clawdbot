@@ -3,8 +3,8 @@ import { createHash } from "node:crypto";
 import { constants, type BigIntStats } from "node:fs";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
-import { hasErrnoCode } from "./errors.js";
-import type { UpdateGenerationManifest } from "./update-generation-contract.js";
+import { hasErrnoCode } from "../../src/infra/errors.js";
+import type { UpdateGenerationManifest } from "../../src/infra/update-generation-contract.js";
 
 type GenerationManifestEntry =
   | { path: string; type: "directory"; mode: number }

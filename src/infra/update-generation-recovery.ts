@@ -1,3 +1,7 @@
+import type {
+  UpdateGenerationAuthenticatedBrokerReceiptOf,
+  UpdateGenerationConfinedFilesystem,
+} from "./update-generation-confined-filesystem.js";
 /** Crash recovery decisions for durable generation-addressed updates. */
 import {
   projectUpdateGenerationTransaction,
@@ -6,15 +10,26 @@ import {
   type UpdateGenerationSelection,
   type UpdateGenerationTransactionRecord,
 } from "./update-generation-contract.js";
+import { authenticateUpdateGenerationTransactionRecord } from "./update-generation-ledger-hook.js";
 
-export type UpdateGenerationPhysicalState = {
+type UpdateGenerationPhysicalState = {
   selector: UpdateGenerationSelection | null;
   selectorDurable: boolean;
-  generations: Array<{ generationId: string; manifestSha256: string }>;
+  generations: Array<{
+    generationId: string;
+    manifestSha256: string;
+    /** Required before acknowledging a materialization intent. */
+    parentDirectoryDurable?: boolean;
+  }>;
   bindingConverged: boolean;
   /** Required to accept a terminal success or rollback receipt. */
   serviceState?: { running: boolean; enabled?: boolean } | null;
 };
+
+export type UpdateGenerationRuntimeObservation = Pick<
+  UpdateGenerationPhysicalState,
+  "bindingConverged" | "serviceState"
+>;
 
 export type UpdateGenerationRecoveryAction =
   | "resume-materialization"
@@ -60,10 +75,13 @@ function observedGenerationMatches(
   state: UpdateGenerationPhysicalState,
   generationId: string,
   manifestSha256: string,
+  requireParentDirectoryDurable = false,
 ): boolean {
   return state.generations.some(
     (generation) =>
-      generation.generationId === generationId && generation.manifestSha256 === manifestSha256,
+      generation.generationId === generationId &&
+      generation.manifestSha256 === manifestSha256 &&
+      (!requireParentDirectoryDurable || generation.parentDirectoryDurable),
   );
 }
 
@@ -119,12 +137,45 @@ function terminalGenerationStateMatches(params: {
   );
 }
 
-export function adjudicateUpdateGenerationTransaction(
+export async function adjudicateUpdateGenerationTransaction(
   record: UpdateGenerationTransactionRecord,
-  physical: UpdateGenerationPhysicalState,
-): UpdateGenerationRecoveryDecision {
+  filesystem: UpdateGenerationConfinedFilesystem | null,
+  observation: UpdateGenerationAuthenticatedBrokerReceiptOf<"observe-recovery">,
+  runtime: UpdateGenerationRuntimeObservation,
+): Promise<UpdateGenerationRecoveryDecision> {
+  if (!filesystem) {
+    throw new Error("Generation state machine requires a confined filesystem provider");
+  }
   const state = projectUpdateGenerationTransaction(record);
-  const latest = state.latest;
+  if (observation.brokerId !== state.intent.brokerId) {
+    throw new Error("Recovery observation belongs to a different update broker");
+  }
+  if (observation.namespaceKey !== state.intent.namespaceKey) {
+    throw new Error("Recovery observation belongs to a different generation namespace");
+  }
+  if (observation.transactionId !== state.intent.transactionId) {
+    throw new Error("Recovery observation belongs to a different generation transaction");
+  }
+  if (observation.previousRevision !== state.brokerRevision) {
+    throw new Error("Recovery observation does not continue the projected broker revision");
+  }
+  if (state.brokerOperationIds.has(observation.operationId)) {
+    throw new Error("Recovery observation replays a completed broker operation id");
+  }
+  await authenticateUpdateGenerationTransactionRecord(filesystem, record);
+  await filesystem.authenticate(observation);
+  const physical: UpdateGenerationPhysicalState = {
+    selector: observation.selector,
+    selectorDurable: observation.selectorDurable,
+    generations: observation.generations,
+    bindingConverged: runtime.bindingConverged,
+    serviceState: runtime.serviceState,
+  };
+  const pendingFailure = state.latest.kind === "failure" ? state.latest : null;
+  const latest = pendingFailure ? state.latestTransition : state.latest;
+  if (pendingFailure && latest.kind === "candidate-selected") {
+    return { action: "adjudicate-failure", reason: pendingFailure.reason };
+  }
   if (latest.kind === "cleanup-completed") {
     const terminalSelection = state.rolledBack
       ? (state.baselineSelection ?? state.intent.previousSelection)
@@ -173,13 +224,24 @@ export function adjudicateUpdateGenerationTransaction(
           reason: "rollback selector converged without stable launcher and service bindings",
         };
       }
+      if (!durableGenerationPairMatchesPhysical(state, physical)) {
+        return {
+          action: "inconsistent",
+          reason: "rollback selector converged without both retained generations",
+        };
+      }
       return {
         action: "record-rolled-back",
         reason: "selector already names the prior generation",
       };
     }
     if (selectionsEqual(physical.selector, latest.from)) {
-      return { action: "select-previous", reason: "rollback intent precedes selector replacement" };
+      return durableGenerationPairMatchesPhysical(state, physical) && physical.bindingConverged
+        ? { action: "select-previous", reason: "rollback intent precedes selector replacement" }
+        : {
+            action: "inconsistent",
+            reason: "rollback intent lacks a runnable retained generation pair",
+          };
     }
     return { action: "inconsistent", reason: "selector matches neither rollback generation" };
   }
@@ -191,9 +253,6 @@ export function adjudicateUpdateGenerationTransaction(
           reason: "rolled-back receipt disagrees with selector, bindings, or retained generations",
         };
   }
-  if (latest.kind === "failure") {
-    return { action: "adjudicate-failure", reason: latest.reason };
-  }
   if (latest.kind === "generation-materialization-intent") {
     if (
       latest.role === "candidate" &&
@@ -204,7 +263,7 @@ export function adjudicateUpdateGenerationTransaction(
         reason: "candidate materialization has no physically runnable baseline",
       };
     }
-    return observedGenerationMatches(physical, latest.generationId, latest.manifest.digest)
+    return observedGenerationMatches(physical, latest.generationId, latest.manifest.digest, true)
       ? {
           action: "record-materialized",
           role: latest.role,
@@ -279,6 +338,12 @@ export function adjudicateUpdateGenerationTransaction(
           reason: "candidate selector converged without stable launcher and service bindings",
         };
       }
+      if (!durableGenerationPairMatchesPhysical(state, physical)) {
+        return {
+          action: "inconsistent",
+          reason: "candidate selector converged without both retained generations",
+        };
+      }
       return {
         action: "record-candidate-selected",
         reason: "candidate selector replacement completed",
@@ -297,7 +362,9 @@ export function adjudicateUpdateGenerationTransaction(
     return { action: "inconsistent", reason: "selector matches neither activation generation" };
   }
   if (latest.kind === "candidate-selected") {
-    return selectionIsPhysicallyRunnable(physical, latest.selection) && physical.bindingConverged
+    return selectionIsPhysicallyRunnable(physical, latest.selection) &&
+      physical.bindingConverged &&
+      durableGenerationPairMatchesPhysical(state, physical)
       ? {
           action: "verify-completion",
           reason: "candidate is selected but completion is not proven",

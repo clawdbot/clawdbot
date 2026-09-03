@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  attachTestBrokerEvidence,
+  authenticateTestRecoveryObservation,
+  type TestUpdateGenerationRecoveryState,
+} from "../../test/helpers/update-generation-broker-fixture.js";
+import {
   appendUpdateGenerationReceipt,
   buildUpdateGenerationReceiptId,
   type UpdateGenerationManifest,
@@ -8,8 +13,7 @@ import {
   type UpdateGenerationTransactionRecord,
 } from "./update-generation-contract.js";
 import {
-  adjudicateUpdateGenerationTransaction,
-  type UpdateGenerationPhysicalState,
+  adjudicateUpdateGenerationTransaction as adjudicateAuthenticatedUpdateGenerationTransaction,
   type UpdateGenerationRecoveryAction,
 } from "./update-generation-recovery.js";
 
@@ -22,7 +26,13 @@ type ReceiptOf<Kind extends ReceiptKind> = Extract<
 >;
 type ReceiptFields<Kind extends ReceiptKind> = Omit<
   ReceiptOf<Kind>,
-  "formatVersion" | "transactionId" | "sequence" | "receiptId" | "recordedAtMs" | "kind"
+  | "formatVersion"
+  | "transactionId"
+  | "sequence"
+  | "receiptId"
+  | "recordedAtMs"
+  | "kind"
+  | "evidence"
 >;
 
 function receipt<Kind extends ReceiptKind>(
@@ -67,60 +77,78 @@ function append(
   record: UpdateGenerationTransactionRecord | null,
   next: UpdateGenerationTransactionReceipt,
 ): UpdateGenerationTransactionRecord {
-  return appendUpdateGenerationReceipt(record, next);
+  return appendUpdateGenerationReceipt(record, attachTestBrokerEvidence(record, next));
 }
 
 function physical(params: {
   selector: UpdateGenerationSelection | null;
   selectorDurable?: boolean;
   generations: UpdateGenerationSelection[];
+  parentDirectoryDurable?: boolean;
   bindingConverged?: boolean;
   serviceState?: { running: boolean; enabled?: boolean } | null;
-}): UpdateGenerationPhysicalState {
+}): TestUpdateGenerationRecoveryState {
   return {
     selector: params.selector,
     selectorDurable: params.selectorDurable ?? true,
     generations: params.generations.map(({ generationId, manifestSha256 }) => ({
       generationId,
       manifestSha256,
+      parentDirectoryDurable: params.parentDirectoryDurable ?? true,
     })),
     bindingConverged: params.bindingConverged ?? false,
     serviceState: params.serviceState ?? null,
   };
 }
 
-function expectRecovery(params: {
+async function adjudicateUpdateGenerationTransaction(
+  record: UpdateGenerationTransactionRecord,
+  state: TestUpdateGenerationRecoveryState,
+) {
+  const { filesystem, observation, runtime } = await authenticateTestRecoveryObservation({
+    record,
+    physical: state,
+  });
+  return await adjudicateAuthenticatedUpdateGenerationTransaction(
+    record,
+    filesystem,
+    observation,
+    runtime,
+  );
+}
+
+async function expectRecovery(params: {
   record: UpdateGenerationTransactionRecord;
-  physical: UpdateGenerationPhysicalState;
+  physical: TestUpdateGenerationRecoveryState;
   action: UpdateGenerationRecoveryAction;
   nextReceipt?: UpdateGenerationTransactionReceipt;
-}): void {
-  expect(adjudicateUpdateGenerationTransaction(params.record, params.physical)).toMatchObject({
-    action: params.action,
-  });
+}): Promise<void> {
+  expect(await adjudicateUpdateGenerationTransaction(params.record, params.physical)).toMatchObject(
+    {
+      action: params.action,
+    },
+  );
   if (params.nextReceipt) {
     expect(() => append(params.record, params.nextReceipt!)).not.toThrow();
   }
 }
 
 describe("update generation recovery transition matrix", () => {
-  it("keeps every receipt-producing recovery decision appendable", () => {
+  it("keeps every receipt-producing recovery decision appendable", async () => {
     const previous = selection("a");
     const candidate = selection("b");
     const intent = receipt("intent", 0, {
-      manager: "pnpm",
       namespaceKey: "openclaw-global-owner",
-      namespaceRoot: "/manager/.openclaw-generations",
-      selectorPath: "/manager/.openclaw-generations/selector.json",
-      stagingRoot: "/manager/.openclaw-stage",
       serviceBefore: { managed: true, running: true },
       previousSelection: null,
       previousPackageVersion: null,
       stableBindingAlreadyVerified: false,
+      brokerId: "test-broker",
+      brokerRevision: null,
     });
     const previousIntent = receipt("generation-materialization-intent", 1, {
       role: "previous",
-      sourceRoot: "/manager/live",
+      sourceArtifactId: "manager:live",
       generationId: previous.generationId,
       manifest: manifest("a"),
       packageVersion: "1.0.0",
@@ -147,7 +175,7 @@ describe("update generation recovery transition matrix", () => {
     });
     const candidateIntent = receipt("generation-materialization-intent", 7, {
       role: "candidate",
-      sourceRoot: "/manager/stage",
+      sourceArtifactId: "manager:stage",
       generationId: candidate.generationId,
       manifest: manifest("b"),
       packageVersion: "2.0.0",
@@ -187,28 +215,37 @@ describe("update generation recovery transition matrix", () => {
     });
 
     let record = append(null, intent);
-    expectRecovery({
+    await expectRecovery({
       record,
       physical: physical({ selector: null, generations: [] }),
       action: "resume-materialization",
       nextReceipt: previousIntent,
     });
     record = append(record, previousIntent);
-    expectRecovery({
+    await expectRecovery({
+      record,
+      physical: physical({
+        selector: null,
+        generations: [previous],
+        parentDirectoryDurable: false,
+      }),
+      action: "resume-materialization",
+    });
+    await expectRecovery({
       record,
       physical: physical({ selector: null, generations: [previous] }),
       action: "record-materialized",
       nextReceipt: previousMaterialized,
     });
     record = append(record, previousMaterialized);
-    expectRecovery({
+    await expectRecovery({
       record,
       physical: physical({ selector: null, generations: [previous] }),
       action: "persist-baseline-selection-intent",
       nextReceipt: baselineIntent,
     });
     record = append(record, baselineIntent);
-    expectRecovery({
+    await expectRecovery({
       record,
       physical: physical({
         selector: previous,
@@ -217,21 +254,21 @@ describe("update generation recovery transition matrix", () => {
       }),
       action: "stabilize-selector",
     });
-    expectRecovery({
+    await expectRecovery({
       record,
       physical: physical({ selector: previous, generations: [previous] }),
       action: "record-baseline-selected",
       nextReceipt: baselineSelected,
     });
     record = append(record, baselineSelected);
-    expectRecovery({
+    await expectRecovery({
       record,
       physical: physical({ selector: previous, generations: [previous] }),
       action: "persist-binding-intent",
       nextReceipt: bindingIntent,
     });
     record = append(record, bindingIntent);
-    expectRecovery({
+    await expectRecovery({
       record,
       physical: physical({
         selector: previous,
@@ -242,7 +279,7 @@ describe("update generation recovery transition matrix", () => {
       nextReceipt: bindingCompleted,
     });
     record = append(record, bindingCompleted);
-    expectRecovery({
+    await expectRecovery({
       record,
       physical: physical({
         selector: previous,
@@ -253,7 +290,7 @@ describe("update generation recovery transition matrix", () => {
       nextReceipt: candidateIntent,
     });
     record = append(record, candidateIntent);
-    expectRecovery({
+    await expectRecovery({
       record,
       physical: physical({
         selector: previous,
@@ -264,7 +301,7 @@ describe("update generation recovery transition matrix", () => {
       nextReceipt: candidateMaterialized,
     });
     record = append(record, candidateMaterialized);
-    expectRecovery({
+    await expectRecovery({
       record,
       physical: physical({
         selector: previous,
@@ -275,7 +312,7 @@ describe("update generation recovery transition matrix", () => {
       nextReceipt: candidateIntentSelection,
     });
     record = append(record, candidateIntentSelection);
-    expectRecovery({
+    await expectRecovery({
       record,
       physical: physical({
         selector: candidate,
@@ -285,7 +322,16 @@ describe("update generation recovery transition matrix", () => {
       }),
       action: "stabilize-selector",
     });
-    expectRecovery({
+    await expectRecovery({
+      record,
+      physical: physical({
+        selector: candidate,
+        generations: [candidate],
+        bindingConverged: true,
+      }),
+      action: "inconsistent",
+    });
+    await expectRecovery({
       record,
       physical: physical({
         selector: candidate,
@@ -296,7 +342,16 @@ describe("update generation recovery transition matrix", () => {
       nextReceipt: candidateSelected,
     });
     record = append(record, candidateSelected);
-    expectRecovery({
+    await expectRecovery({
+      record,
+      physical: physical({
+        selector: candidate,
+        generations: [candidate],
+        bindingConverged: true,
+      }),
+      action: "inconsistent",
+    });
+    await expectRecovery({
       record,
       physical: physical({
         selector: candidate,
@@ -307,7 +362,7 @@ describe("update generation recovery transition matrix", () => {
       nextReceipt: failure,
     });
     record = append(record, failure);
-    expectRecovery({
+    await expectRecovery({
       record,
       physical: physical({
         selector: candidate,
@@ -318,7 +373,25 @@ describe("update generation recovery transition matrix", () => {
       nextReceipt: rollbackIntent,
     });
     record = append(record, rollbackIntent);
-    expectRecovery({
+    await expectRecovery({
+      record,
+      physical: physical({
+        selector: previous,
+        generations: [previous],
+        bindingConverged: true,
+      }),
+      action: "inconsistent",
+    });
+    await expectRecovery({
+      record,
+      physical: physical({
+        selector: candidate,
+        generations: [previous, candidate],
+        bindingConverged: true,
+      }),
+      action: "select-previous",
+    });
+    await expectRecovery({
       record,
       physical: physical({
         selector: previous,
@@ -328,7 +401,7 @@ describe("update generation recovery transition matrix", () => {
       }),
       action: "stabilize-selector",
     });
-    expectRecovery({
+    await expectRecovery({
       record,
       physical: physical({
         selector: previous,
@@ -339,7 +412,7 @@ describe("update generation recovery transition matrix", () => {
       nextReceipt: rolledBack,
     });
     record = append(record, rolledBack);
-    expectRecovery({
+    await expectRecovery({
       record,
       physical: physical({
         selector: previous,
@@ -351,7 +424,7 @@ describe("update generation recovery transition matrix", () => {
       nextReceipt: cleanupIntent,
     });
     record = append(record, cleanupIntent);
-    expectRecovery({
+    await expectRecovery({
       record,
       physical: physical({
         selector: previous,
@@ -363,7 +436,7 @@ describe("update generation recovery transition matrix", () => {
       nextReceipt: cleanupCompleted,
     });
     record = append(record, cleanupCompleted);
-    expectRecovery({
+    await expectRecovery({
       record,
       physical: physical({
         selector: previous,
@@ -375,35 +448,33 @@ describe("update generation recovery transition matrix", () => {
     });
   });
 
-  it("requires selector durability and baseline presence before dependent transitions", () => {
+  it("requires selector durability and baseline presence before dependent transitions", async () => {
     const previous = selection("a");
     const candidate = selection("b");
     let record = append(
       null,
       receipt("intent", 0, {
-        manager: "bun",
         namespaceKey: "bun-global-owner",
-        namespaceRoot: "/manager/.openclaw-generations",
-        selectorPath: "/manager/.openclaw-generations/selector.json",
-        stagingRoot: "/manager/.openclaw-stage",
         serviceBefore: { managed: true, running: false },
         previousSelection: previous,
         previousPackageVersion: "1.0.0",
         stableBindingAlreadyVerified: true,
+        brokerId: "test-broker",
+        brokerRevision: null,
       }),
     );
     record = append(
       record,
       receipt("generation-materialization-intent", 1, {
         role: "candidate",
-        sourceRoot: "/manager/stage",
+        sourceArtifactId: "manager:stage",
         generationId: candidate.generationId,
         manifest: manifest("b"),
         packageVersion: "2.0.0",
         entrypointRelativePath: candidate.entrypointRelativePath,
       }),
     );
-    expectRecovery({
+    await expectRecovery({
       record,
       physical: physical({
         selector: previous,
@@ -416,22 +487,20 @@ describe("update generation recovery transition matrix", () => {
     let bootstrap = append(
       null,
       receipt("intent", 0, {
-        manager: "pnpm",
         namespaceKey: "pnpm-global-owner",
-        namespaceRoot: "/manager/.openclaw-generations",
-        selectorPath: "/manager/.openclaw-generations/selector.json",
-        stagingRoot: "/manager/.openclaw-stage",
         serviceBefore: { managed: true, running: true },
         previousSelection: null,
         previousPackageVersion: null,
         stableBindingAlreadyVerified: false,
+        brokerId: "test-broker",
+        brokerRevision: null,
       }),
     );
     bootstrap = append(
       bootstrap,
       receipt("generation-materialization-intent", 1, {
         role: "previous",
-        sourceRoot: "/manager/live",
+        sourceArtifactId: "manager:live",
         generationId: previous.generationId,
         manifest: manifest("a"),
         packageVersion: "1.0.0",
@@ -446,7 +515,7 @@ describe("update generation recovery transition matrix", () => {
       }),
     );
     bootstrap = append(bootstrap, receipt("baseline-selection-intent", 3, { selection: previous }));
-    expectRecovery({
+    await expectRecovery({
       record: bootstrap,
       physical: physical({
         selector: previous,
@@ -464,10 +533,123 @@ describe("update generation recovery transition matrix", () => {
         ],
       }),
     );
-    expectRecovery({
+    await expectRecovery({
       record: bootstrap,
       physical: physical({ selector: previous, generations: [], bindingConverged: true }),
       action: "inconsistent",
     });
+  });
+
+  it("requires a verified stable binding for an existing selection", async () => {
+    const previous = selection("a");
+    const existing = append(
+      null,
+      receipt("intent", 0, {
+        namespaceKey: "openclaw-global-owner",
+        serviceBefore: { managed: true, running: true, enabled: true },
+        previousSelection: previous,
+        previousPackageVersion: "1.0.0",
+        stableBindingAlreadyVerified: true,
+        brokerId: "test-broker",
+        brokerRevision: null,
+      }),
+    );
+    await expectRecovery({
+      record: existing,
+      physical: physical({
+        selector: previous,
+        generations: [previous],
+        bindingConverged: true,
+      }),
+      action: "resume-materialization",
+    });
+
+    expect(() =>
+      append(
+        null,
+        receipt("intent", 0, {
+          namespaceKey: "openclaw-global-owner",
+          serviceBefore: { managed: true, running: true, enabled: true },
+          previousSelection: previous,
+          previousPackageVersion: "1.0.0",
+          stableBindingAlreadyVerified: false,
+          brokerId: "test-broker",
+          brokerRevision: null,
+        }),
+      ),
+    ).toThrow("existing generation selection requires a verified stable binding");
+  });
+
+  it("binds authenticated recovery observations to the exact projected broker revision", async () => {
+    const previous = selection("a");
+    const record = append(
+      null,
+      receipt("intent", 0, {
+        namespaceKey: "openclaw-global-owner",
+        serviceBefore: { managed: true, running: true, enabled: true },
+        previousSelection: previous,
+        previousPackageVersion: "1.0.0",
+        stableBindingAlreadyVerified: true,
+        brokerId: "test-broker",
+        brokerRevision: null,
+      }),
+    );
+    const recoveryState = physical({
+      selector: previous,
+      generations: [previous],
+      bindingConverged: true,
+      serviceState: { running: true, enabled: true },
+    });
+    const valid = await authenticateTestRecoveryObservation({
+      record,
+      physical: recoveryState,
+    });
+    await expect(
+      adjudicateAuthenticatedUpdateGenerationTransaction(
+        record,
+        null,
+        valid.observation,
+        valid.runtime,
+      ),
+    ).rejects.toThrow("requires a confined filesystem provider");
+
+    const mismatches = [
+      {
+        label: "broker",
+        identityOverrides: { brokerId: "other-broker" },
+        message: "different update broker",
+      },
+      {
+        label: "namespace",
+        identityOverrides: { namespaceKey: "other-namespace" },
+        message: "different generation namespace",
+      },
+      {
+        label: "transaction",
+        identityOverrides: { transactionId: "other-transaction" },
+        message: "different generation transaction",
+      },
+      {
+        label: "revision",
+        identityOverrides: { expectedRevision: "stale-revision" },
+        message: "projected broker revision",
+      },
+    ] as const;
+    for (const mismatch of mismatches) {
+      const signed = await authenticateTestRecoveryObservation({
+        record,
+        physical: recoveryState,
+        identityOverrides: mismatch.identityOverrides,
+      });
+      await expect(
+        adjudicateAuthenticatedUpdateGenerationTransaction(
+          record,
+          signed.filesystem,
+          signed.observation,
+          signed.runtime,
+        ),
+        mismatch.label,
+      ).rejects.toThrow(mismatch.message);
+    }
   });
 });

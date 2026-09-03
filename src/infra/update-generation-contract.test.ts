@@ -1,23 +1,32 @@
 import { describe, expect, it } from "vitest";
-import { parseUpdateGenerationTransactionRecord } from "./update-generation-contract-schema.js";
+import {
+  attachTestBrokerEvidence,
+  authenticateTestRecoveryObservation,
+  createTestConfinedFilesystemForAuthentication,
+  type TestUpdateGenerationRecoveryState,
+} from "../../test/helpers/update-generation-broker-fixture.js";
+import { TestUpdateGenerationMemoryLedger as MemoryLedger } from "../../test/helpers/update-generation-memory-ledger.js";
+import {
+  digestUpdateGenerationBrokerReceiptPayload,
+  digestUpdateGenerationBrokerRequest,
+} from "./update-generation-confined-filesystem.js";
+import { parseUpdateGenerationTransactionRecord } from "./update-generation-contract-parser.js";
 import {
   appendUpdateGenerationReceipt,
   buildUpdateGenerationReceiptId,
-  persistUpdateGenerationReceipt,
   projectUpdateGenerationTransaction,
-  type UpdateGenerationLedgerCompareAndSwapResult,
-  type UpdateGenerationLedgerHook,
   type UpdateGenerationManifest,
   type UpdateGenerationSelection,
   type UpdateGenerationServiceIntent,
   type UpdateGenerationTransactionReceipt,
   type UpdateGenerationTransactionRecord,
-  type UpdateGenerationTransactionSnapshot,
 } from "./update-generation-contract.js";
-import { adjudicateUpdateGenerationTransaction } from "./update-generation-recovery.js";
+import { persistUpdateGenerationReceipt } from "./update-generation-ledger-hook.js";
+import { adjudicateUpdateGenerationTransaction as adjudicateAuthenticatedUpdateGenerationTransaction } from "./update-generation-recovery.js";
 
 const TRANSACTION_ID = "update-transaction-1";
 const NAMESPACE_KEY = "openclaw-global-owner";
+const AUTHENTICATION_FILESYSTEM = createTestConfinedFilesystemForAuthentication();
 
 type ReceiptKind = UpdateGenerationTransactionReceipt["kind"];
 type ReceiptOf<Kind extends ReceiptKind> = Extract<
@@ -26,7 +35,13 @@ type ReceiptOf<Kind extends ReceiptKind> = Extract<
 >;
 type ReceiptFields<Kind extends ReceiptKind> = Omit<
   ReceiptOf<Kind>,
-  "formatVersion" | "transactionId" | "sequence" | "receiptId" | "recordedAtMs" | "kind"
+  | "formatVersion"
+  | "transactionId"
+  | "sequence"
+  | "receiptId"
+  | "recordedAtMs"
+  | "kind"
+  | "evidence"
 >;
 
 function receipt<Kind extends ReceiptKind>(
@@ -77,15 +92,13 @@ function intent(
   },
 ) {
   return receipt("intent", 0, {
-    manager: "pnpm",
     namespaceKey: NAMESPACE_KEY,
-    namespaceRoot: "/manager/.openclaw-generations",
-    selectorPath: "/manager/.openclaw-generations/selector.json",
-    stagingRoot: "/manager/.openclaw-stage",
     serviceBefore,
     previousSelection,
     previousPackageVersion: previousSelection ? "1.0.0" : null,
     stableBindingAlreadyVerified: stable,
+    brokerId: "test-broker",
+    brokerRevision: null,
   });
 }
 
@@ -101,7 +114,7 @@ function candidateSelectedRecord(serviceBefore: UpdateGenerationServiceIntent): 
     record,
     receipt("generation-materialization-intent", 1, {
       role: "candidate",
-      sourceRoot: "/stage/candidate",
+      sourceArtifactId: "stage:candidate",
       generationId: candidate.generationId,
       manifest: manifest("b"),
       packageVersion: "2.0.0",
@@ -127,49 +140,23 @@ function append(
   record: UpdateGenerationTransactionRecord | null,
   next: UpdateGenerationTransactionReceipt,
 ): UpdateGenerationTransactionRecord {
-  return appendUpdateGenerationReceipt(record, next);
+  return appendUpdateGenerationReceipt(record, attachTestBrokerEvidence(record, next));
 }
 
-class MemoryLedger implements UpdateGenerationLedgerHook {
-  #revision = 0;
-  #snapshot: UpdateGenerationTransactionSnapshot | null = null;
-  #receipts = new Map<string, UpdateGenerationTransactionSnapshot>();
-
-  constructor(snapshot: UpdateGenerationTransactionSnapshot | null = null) {
-    this.#snapshot = snapshot ? structuredClone(snapshot) : null;
-    this.#revision = Number(snapshot?.revision ?? 0);
-  }
-
-  async read(namespaceKey: string): Promise<UpdateGenerationTransactionSnapshot | null> {
-    return this.#snapshot?.record.namespaceKey === namespaceKey
-      ? structuredClone(this.#snapshot)
-      : null;
-  }
-
-  async compareAndSwap(params: {
-    namespaceKey: string;
-    expectedRevision: string | null;
-    receipt: UpdateGenerationTransactionReceipt;
-    nextRecord: UpdateGenerationTransactionRecord;
-  }): Promise<UpdateGenerationLedgerCompareAndSwapResult> {
-    const replay = this.#receipts.get(params.receipt.receiptId);
-    if (replay) {
-      return { status: "replayed", snapshot: structuredClone(replay) };
-    }
-    if ((this.#snapshot?.revision ?? null) !== params.expectedRevision) {
-      return {
-        status: "conflict",
-        snapshot: this.#snapshot ? structuredClone(this.#snapshot) : null,
-      };
-    }
-    this.#revision += 1;
-    this.#snapshot = {
-      revision: String(this.#revision),
-      record: structuredClone(params.nextRecord),
-    };
-    this.#receipts.set(params.receipt.receiptId, this.#snapshot);
-    return { status: "stored", snapshot: structuredClone(this.#snapshot) };
-  }
+async function adjudicateUpdateGenerationTransaction(
+  record: UpdateGenerationTransactionRecord,
+  state: TestUpdateGenerationRecoveryState,
+) {
+  const { filesystem, observation, runtime } = await authenticateTestRecoveryObservation({
+    record,
+    physical: state,
+  });
+  return await adjudicateAuthenticatedUpdateGenerationTransaction(
+    record,
+    filesystem,
+    observation,
+    runtime,
+  );
 }
 
 describe("durable update generation transaction contract", () => {
@@ -200,8 +187,16 @@ describe("durable update generation transaction contract", () => {
         serviceRunning: serviceBefore.running,
         serviceEnabled: serviceBefore.enabled,
       });
-      const missingEnablement = { ...completion, serviceEnabled: undefined };
-      const flippedEnablement = { ...completion, serviceEnabled: !serviceBefore.enabled };
+      const completed = append(selectedRecord, completion);
+      const storedCompletion = completed.receipts.at(-1);
+      if (!storedCompletion || storedCompletion.kind !== "completion") {
+        throw new Error("expected completion receipt");
+      }
+      const missingEnablement = { ...storedCompletion, serviceEnabled: undefined };
+      const flippedEnablement = {
+        ...storedCompletion,
+        serviceEnabled: !serviceBefore.enabled,
+      };
       expect(() => append(selectedRecord, missingEnablement)).toThrow(
         "does not prove candidate and service convergence",
       );
@@ -209,7 +204,6 @@ describe("durable update generation transaction contract", () => {
         "does not prove candidate and service convergence",
       );
 
-      const completed = append(selectedRecord, completion);
       for (const invalidCompletion of [missingEnablement, flippedEnablement]) {
         const invalidRecord = {
           ...completed,
@@ -223,6 +217,7 @@ describe("durable update generation transaction contract", () => {
         ).toThrow("service convergence");
         await expect(
           persistUpdateGenerationReceipt({
+            filesystem: AUTHENTICATION_FILESYSTEM,
             ledger: new MemoryLedger({ revision: "6", record: invalidRecord }),
             snapshot: { revision: "6", record: invalidRecord },
             receipt: invalidCompletion,
@@ -237,23 +232,27 @@ describe("durable update generation transaction contract", () => {
         selector: candidate,
         selectorDurable: true,
         generations: [
-          { generationId: previous.generationId, manifestSha256: previous.manifestSha256 },
+          {
+            generationId: previous.generationId,
+            manifestSha256: previous.manifestSha256,
+            parentDirectoryDurable: true,
+          },
           { generationId: candidate.generationId, manifestSha256: candidate.manifestSha256 },
         ],
         bindingConverged: true,
         serviceState: { running: serviceBefore.running, enabled: serviceBefore.enabled },
       };
-      expect(adjudicateUpdateGenerationTransaction(restarted, physical)).toMatchObject({
+      expect(await adjudicateUpdateGenerationTransaction(restarted, physical)).toMatchObject({
         action: "complete",
       });
       expect(
-        adjudicateUpdateGenerationTransaction(restarted, {
+        await adjudicateUpdateGenerationTransaction(restarted, {
           ...physical,
           serviceState: { running: serviceBefore.running },
         }),
       ).toMatchObject({ action: "inconsistent" });
       expect(
-        adjudicateUpdateGenerationTransaction(restarted, {
+        await adjudicateUpdateGenerationTransaction(restarted, {
           ...physical,
           serviceState: { running: serviceBefore.running, enabled: !serviceBefore.enabled },
         }),
@@ -261,9 +260,10 @@ describe("durable update generation transaction contract", () => {
       const snapshot = { revision: "6", record: restarted };
       await expect(
         persistUpdateGenerationReceipt({
+          filesystem: AUTHENTICATION_FILESYSTEM,
           ledger: new MemoryLedger(snapshot),
           snapshot,
-          receipt: completion,
+          receipt: storedCompletion,
         }),
       ).resolves.toEqual(snapshot);
 
@@ -281,9 +281,16 @@ describe("durable update generation transaction contract", () => {
         serviceRunning: serviceBefore.running,
         serviceEnabled: serviceBefore.enabled,
       });
-      const rollbackMissingEnablement = { ...rolledBack, serviceEnabled: undefined };
+      const evidencedRollback = attachTestBrokerEvidence(rollbackRecord, rolledBack);
+      if (evidencedRollback.kind !== "rolled-back") {
+        throw new Error("expected rolled-back receipt");
+      }
+      const rollbackMissingEnablement = {
+        ...evidencedRollback,
+        serviceEnabled: undefined,
+      };
       const rollbackFlippedEnablement = {
-        ...rolledBack,
+        ...evidencedRollback,
         serviceEnabled: !serviceBefore.enabled,
       };
       expect(() => append(rollbackRecord, rollbackMissingEnablement)).toThrow(
@@ -306,6 +313,7 @@ describe("durable update generation transaction contract", () => {
         ).toThrow("service convergence");
         await expect(
           persistUpdateGenerationReceipt({
+            filesystem: AUTHENTICATION_FILESYSTEM,
             ledger: new MemoryLedger({ revision: "7", record: invalidRecord }),
             snapshot: { revision: "7", record: invalidRecord },
             receipt: invalidRollback,
@@ -317,7 +325,7 @@ describe("durable update generation transaction contract", () => {
         JSON.parse(JSON.stringify(rollbackRecord)),
       );
       expect(
-        adjudicateUpdateGenerationTransaction(restartedRollback, {
+        await adjudicateUpdateGenerationTransaction(restartedRollback, {
           ...physical,
           selector: previous,
         }),
@@ -325,16 +333,17 @@ describe("durable update generation transaction contract", () => {
     },
   );
 
-  it("serializes a complete existing-binding activation without methods", () => {
+  it("serializes a complete existing-binding activation without methods", async () => {
     const previous = selection("a");
     const candidate = selection("b");
     let record = append(null, intent(previous, true));
     expect(
-      adjudicateUpdateGenerationTransaction(record, {
+      await adjudicateUpdateGenerationTransaction(record, {
         selector: previous,
         selectorDurable: true,
         generations: [
           { generationId: previous.generationId, manifestSha256: previous.manifestSha256 },
+          { generationId: candidate.generationId, manifestSha256: candidate.manifestSha256 },
         ],
         bindingConverged: true,
         serviceState: { running: true, enabled: true },
@@ -344,7 +353,7 @@ describe("durable update generation transaction contract", () => {
       record,
       receipt("generation-materialization-intent", 1, {
         role: "candidate",
-        sourceRoot: "/stage/candidate",
+        sourceArtifactId: "stage:candidate",
         generationId: candidate.generationId,
         manifest: manifest("b"),
         packageVersion: "2.0.0",
@@ -359,7 +368,7 @@ describe("durable update generation transaction contract", () => {
       }),
     );
     expect(
-      adjudicateUpdateGenerationTransaction(record, {
+      await adjudicateUpdateGenerationTransaction(record, {
         selector: previous,
         selectorDurable: true,
         generations: [
@@ -394,7 +403,7 @@ describe("durable update generation transaction contract", () => {
       bindingCompleted: true,
     });
     expect(
-      adjudicateUpdateGenerationTransaction(roundTrip, {
+      await adjudicateUpdateGenerationTransaction(roundTrip, {
         selector: candidate,
         selectorDurable: true,
         generations: [
@@ -406,7 +415,7 @@ describe("durable update generation transaction contract", () => {
       }),
     ).toEqual({ action: "complete", reason: "completion receipt and selector agree" });
     expect(
-      adjudicateUpdateGenerationTransaction(roundTrip, {
+      await adjudicateUpdateGenerationTransaction(roundTrip, {
         selector: candidate,
         selectorDurable: true,
         generations: [
@@ -416,7 +425,7 @@ describe("durable update generation transaction contract", () => {
       }),
     ).toMatchObject({ action: "inconsistent" });
     expect(
-      adjudicateUpdateGenerationTransaction(roundTrip, {
+      await adjudicateUpdateGenerationTransaction(roundTrip, {
         selector: candidate,
         selectorDurable: true,
         generations: [
@@ -428,7 +437,7 @@ describe("durable update generation transaction contract", () => {
     ).toMatchObject({ action: "inconsistent" });
   });
 
-  it("adjudicates every mutation boundary from durable intent and physical state", () => {
+  it("adjudicates every mutation boundary from durable intent and physical state", async () => {
     const previous = selection("a");
     const candidate = selection("b");
     let record = append(null, intent(null, false));
@@ -436,7 +445,7 @@ describe("durable update generation transaction contract", () => {
       record,
       receipt("generation-materialization-intent", 1, {
         role: "previous",
-        sourceRoot: "/live/owner",
+        sourceArtifactId: "live:owner",
         generationId: previous.generationId,
         manifest: manifest("a"),
         packageVersion: "1.0.0",
@@ -444,11 +453,15 @@ describe("durable update generation transaction contract", () => {
       }),
     );
     expect(
-      adjudicateUpdateGenerationTransaction(record, {
+      await adjudicateUpdateGenerationTransaction(record, {
         selector: null,
         selectorDurable: true,
         generations: [
-          { generationId: previous.generationId, manifestSha256: previous.manifestSha256 },
+          {
+            generationId: previous.generationId,
+            manifestSha256: previous.manifestSha256,
+            parentDirectoryDurable: true,
+          },
         ],
         bindingConverged: false,
       }),
@@ -461,7 +474,7 @@ describe("durable update generation transaction contract", () => {
       }),
     );
     expect(
-      adjudicateUpdateGenerationTransaction(record, {
+      await adjudicateUpdateGenerationTransaction(record, {
         selector: null,
         selectorDurable: true,
         generations: [
@@ -472,7 +485,7 @@ describe("durable update generation transaction contract", () => {
     ).toMatchObject({ action: "persist-baseline-selection-intent", role: "previous" });
     record = append(record, receipt("baseline-selection-intent", 3, { selection: previous }));
     expect(
-      adjudicateUpdateGenerationTransaction(record, {
+      await adjudicateUpdateGenerationTransaction(record, {
         selector: previous,
         selectorDurable: true,
         generations: [
@@ -483,7 +496,7 @@ describe("durable update generation transaction contract", () => {
     ).toMatchObject({ action: "record-baseline-selected" });
     record = append(record, receipt("baseline-selected", 4, { selection: previous }));
     expect(
-      adjudicateUpdateGenerationTransaction(record, {
+      await adjudicateUpdateGenerationTransaction(record, {
         selector: null,
         selectorDurable: true,
         generations: [
@@ -493,7 +506,7 @@ describe("durable update generation transaction contract", () => {
       }),
     ).toMatchObject({ action: "inconsistent" });
     expect(
-      adjudicateUpdateGenerationTransaction(record, {
+      await adjudicateUpdateGenerationTransaction(record, {
         selector: previous,
         selectorDurable: true,
         generations: [],
@@ -501,7 +514,7 @@ describe("durable update generation transaction contract", () => {
       }),
     ).toMatchObject({ action: "inconsistent" });
     expect(
-      adjudicateUpdateGenerationTransaction(record, {
+      await adjudicateUpdateGenerationTransaction(record, {
         selector: previous,
         selectorDurable: true,
         generations: [
@@ -511,11 +524,12 @@ describe("durable update generation transaction contract", () => {
       }),
     ).toMatchObject({ action: "persist-binding-intent" });
     expect(
-      adjudicateUpdateGenerationTransaction(record, {
+      await adjudicateUpdateGenerationTransaction(record, {
         selector: previous,
         selectorDurable: true,
         generations: [
           { generationId: previous.generationId, manifestSha256: previous.manifestSha256 },
+          { generationId: candidate.generationId, manifestSha256: candidate.manifestSha256 },
         ],
         bindingConverged: true,
       }),
@@ -530,7 +544,7 @@ describe("durable update generation transaction contract", () => {
       }),
     );
     expect(
-      adjudicateUpdateGenerationTransaction(record, {
+      await adjudicateUpdateGenerationTransaction(record, {
         selector: previous,
         selectorDurable: true,
         generations: [
@@ -562,7 +576,7 @@ describe("durable update generation transaction contract", () => {
       record,
       receipt("generation-materialization-intent", 7, {
         role: "candidate",
-        sourceRoot: "/stage/candidate",
+        sourceArtifactId: "stage:candidate",
         generationId: candidate.generationId,
         manifest: manifest("b"),
         packageVersion: "2.0.0",
@@ -581,7 +595,7 @@ describe("durable update generation transaction contract", () => {
       receipt("candidate-selection-intent", 9, { from: previous, to: candidate }),
     );
     expect(
-      adjudicateUpdateGenerationTransaction(record, {
+      await adjudicateUpdateGenerationTransaction(record, {
         selector: candidate,
         selectorDurable: true,
         generations: [
@@ -593,7 +607,7 @@ describe("durable update generation transaction contract", () => {
     ).toMatchObject({ action: "record-candidate-selected" });
   });
 
-  it("makes rollback selector-only and protects both retained generations from cleanup", () => {
+  it("makes rollback selector-only and protects both retained generations from cleanup", async () => {
     const previous = selection("a");
     const candidate = selection("b");
     let record = append(null, intent(previous, true));
@@ -601,7 +615,7 @@ describe("durable update generation transaction contract", () => {
       record,
       receipt("generation-materialization-intent", 1, {
         role: "candidate",
-        sourceRoot: "/stage/candidate",
+        sourceArtifactId: "stage:candidate",
         generationId: candidate.generationId,
         manifest: manifest("b"),
         packageVersion: "2.0.0",
@@ -629,7 +643,7 @@ describe("durable update generation transaction contract", () => {
       }),
     );
     expect(
-      adjudicateUpdateGenerationTransaction(record, {
+      await adjudicateUpdateGenerationTransaction(record, {
         selector: candidate,
         selectorDurable: true,
         generations: [],
@@ -645,11 +659,12 @@ describe("durable update generation transaction contract", () => {
       }),
     );
     expect(
-      adjudicateUpdateGenerationTransaction(record, {
+      await adjudicateUpdateGenerationTransaction(record, {
         selector: previous,
         selectorDurable: true,
         generations: [
           { generationId: previous.generationId, manifestSha256: previous.manifestSha256 },
+          { generationId: candidate.generationId, manifestSha256: candidate.manifestSha256 },
         ],
         bindingConverged: true,
       }),
@@ -676,7 +691,7 @@ describe("durable update generation transaction contract", () => {
     );
 
     expect(
-      adjudicateUpdateGenerationTransaction(record, {
+      await adjudicateUpdateGenerationTransaction(record, {
         selector: previous,
         selectorDurable: true,
         generations: [
@@ -688,7 +703,7 @@ describe("durable update generation transaction contract", () => {
       }),
     ).toMatchObject({ action: "complete" });
     expect(
-      adjudicateUpdateGenerationTransaction(record, {
+      await adjudicateUpdateGenerationTransaction(record, {
         selector: previous,
         selectorDurable: true,
         generations: [
@@ -725,93 +740,30 @@ describe("durable update generation transaction contract", () => {
         protectedGenerationIds: [previous.generationId, candidate.generationId],
       }),
     );
-    expect(() =>
-      append(
-        record,
-        receipt("cleanup-completed", 9, {
-          removedGenerationIds: [],
-          deferred: [],
-        }),
-      ),
-    ).toThrow("Cleanup completion differs from its durable intent");
+    const cleanupWithEvidence = attachTestBrokerEvidence(
+      record,
+      receipt("cleanup-completed", 9, {
+        removedGenerationIds: [],
+        deferred: [{ generationId: obsolete, reason: "busy" }],
+      }),
+    );
+    if (cleanupWithEvidence.kind !== "cleanup-completed") {
+      throw new Error("expected cleanup receipt");
+    }
+    expect(() => append(record, { ...cleanupWithEvidence, deferred: [] })).toThrow(
+      "Cleanup completion differs from its durable intent",
+    );
   });
 
-  it("requires CAS and makes receipt replay idempotent", async () => {
-    const ledger = new MemoryLedger();
-    const firstReceipt = intent(selection("a"), true);
-    const first = await persistUpdateGenerationReceipt({
-      ledger,
-      snapshot: null,
-      receipt: firstReceipt,
-    });
-    const replayed = await persistUpdateGenerationReceipt({
-      ledger,
-      snapshot: null,
-      receipt: firstReceipt,
-    });
-    expect(replayed).toEqual(first);
-    const replayedAfterRead = await persistUpdateGenerationReceipt({
-      ledger,
-      snapshot: first,
-      receipt: firstReceipt,
-    });
-    expect(replayedAfterRead).toEqual(first);
-    const conflictingReplay = { ...firstReceipt, manager: "bun" as const };
-    await expect(
-      persistUpdateGenerationReceipt({
-        ledger,
-        snapshot: null,
-        receipt: conflictingReplay,
-      }),
-    ).rejects.toThrow("replayed different receipt content");
-
-    const candidateIntent = receipt("generation-materialization-intent", 1, {
-      role: "candidate",
-      sourceRoot: "/stage/candidate",
-      generationId: "b".repeat(32),
-      manifest: manifest("b"),
-      packageVersion: "2.0.0",
-      entrypointRelativePath: "openclaw.mjs",
-    });
-    await expect(
-      persistUpdateGenerationReceipt({
-        ledger,
-        snapshot: { ...first, revision: "stale" },
-        receipt: candidateIntent,
-      }),
-    ).rejects.toThrow("ledger revision changed");
-    await expect(ledger.read(NAMESPACE_KEY)).resolves.toEqual(first);
-  });
-
-  it("atomically rolls a cleaned namespace into a new transaction", async () => {
-    const previous = selection("a");
-    const candidate = selection("b");
-    let priorRecord = append(null, intent(previous, true));
-    priorRecord = append(
-      priorRecord,
-      receipt("generation-materialization-intent", 1, {
-        role: "candidate",
-        sourceRoot: "/stage/candidate",
-        generationId: candidate.generationId,
-        manifest: manifest("b"),
-        packageVersion: "2.0.0",
-        entrypointRelativePath: candidate.entrypointRelativePath,
-      }),
-    );
-    priorRecord = append(
-      priorRecord,
-      receipt("generation-materialized", 2, {
-        role: "candidate",
-        generation: { ...candidate, packageVersion: "2.0.0" },
-      }),
-    );
-    priorRecord = append(
-      priorRecord,
-      receipt("candidate-selection-intent", 3, { from: previous, to: candidate }),
-    );
-    priorRecord = append(priorRecord, receipt("candidate-selected", 4, { selection: candidate }));
-    priorRecord = append(
-      priorRecord,
+  it("rejects a completion claim before candidate selection", () => {
+    const record = append(null, intent(selection("a"), true));
+    const candidateRecord = candidateSelectedRecord({
+      managed: true,
+      running: true,
+      enabled: true,
+    }).record;
+    const evidencedCompletion = attachTestBrokerEvidence(
+      candidateRecord,
       receipt("completion", 5, {
         packageVersion: "2.0.0",
         launcherVersion: "2.0.0",
@@ -819,85 +771,16 @@ describe("durable update generation transaction contract", () => {
         serviceEnabled: true,
       }),
     );
-    priorRecord = append(
-      priorRecord,
-      receipt("cleanup-intent", 6, {
-        generationIds: [],
-        protectedGenerationIds: [previous.generationId, candidate.generationId],
-      }),
-    );
-    priorRecord = append(
-      priorRecord,
-      receipt("cleanup-completed", 7, { removedGenerationIds: [], deferred: [] }),
-    );
-    const priorSnapshot = { revision: "8", record: priorRecord };
-    const ledger = new MemoryLedger(priorSnapshot);
-    const nextTransactionId = "update-transaction-2";
-    const nextIntent = {
-      ...intent(candidate, true),
-      transactionId: nextTransactionId,
-      receiptId: buildUpdateGenerationReceiptId({
-        transactionId: nextTransactionId,
-        sequence: 0,
-        kind: "intent",
-      }),
-      previousPackageVersion: "2.0.0",
-    };
-
-    const next = await persistUpdateGenerationReceipt({
-      ledger,
-      snapshot: priorSnapshot,
-      receipt: nextIntent,
-    });
-    expect(next.record).toEqual({
-      formatVersion: 1,
-      transactionId: nextTransactionId,
-      namespaceKey: NAMESPACE_KEY,
-      receipts: [nextIntent],
-    });
-    await expect(
-      persistUpdateGenerationReceipt({ ledger, snapshot: priorSnapshot, receipt: nextIntent }),
-    ).resolves.toEqual(next);
-    await expect(
-      persistUpdateGenerationReceipt({
-        ledger,
-        snapshot: next,
-        receipt: {
-          ...nextIntent,
-          transactionId: "foreign-transaction",
-          receiptId: buildUpdateGenerationReceiptId({
-            transactionId: "foreign-transaction",
-            sequence: 0,
-            kind: "intent",
-          }),
-          namespaceKey: "foreign-namespace",
-        },
-      }),
-    ).rejects.toThrow("snapshot belongs to a different namespace");
-    await expect(
-      persistUpdateGenerationReceipt({
-        ledger: new MemoryLedger({ revision: "5", record: priorRecord }),
-        snapshot: {
-          revision: "5",
-          record: { ...priorRecord, receipts: priorRecord.receipts.slice(0, -2) },
-        },
-        receipt: nextIntent,
-      }),
-    ).rejects.toThrow("requires completed prior cleanup");
-  });
-
-  it("rejects a completion claim before candidate selection", () => {
-    const record = append(null, intent(selection("a"), true));
     expect(() =>
-      append(
-        record,
-        receipt("completion", 1, {
-          packageVersion: "2.0.0",
-          launcherVersion: "2.0.0",
-          serviceRunning: true,
-          serviceEnabled: true,
+      append(record, {
+        ...evidencedCompletion,
+        sequence: 1,
+        receiptId: buildUpdateGenerationReceiptId({
+          transactionId: TRANSACTION_ID,
+          sequence: 1,
+          kind: "completion",
         }),
-      ),
+      }),
     ).toThrow("completion cannot follow intent");
   });
 
@@ -926,7 +809,7 @@ describe("durable update generation transaction contract", () => {
       record,
       receipt("generation-materialization-intent", 1, {
         role: "candidate",
-        sourceRoot: "/stage/candidate",
+        sourceArtifactId: "stage:candidate",
         generationId: candidate.generationId,
         manifest: manifest("b"),
         packageVersion: "2.0.0",
@@ -948,7 +831,7 @@ describe("durable update generation transaction contract", () => {
       bindingRecord,
       receipt("generation-materialization-intent", 1, {
         role: "previous",
-        sourceRoot: "/live/previous",
+        sourceArtifactId: "live:previous",
         generationId: previous.generationId,
         manifest: manifest("a"),
         packageVersion: "1.0.0",
@@ -991,6 +874,99 @@ describe("durable update generation transaction contract", () => {
         }),
       ),
     ).toThrow("Binding completion differs from its durable intent");
+  });
+
+  it("rejects missing directory durability and retained-pair evidence", () => {
+    const previous = selection("a");
+    const candidate = selection("b");
+    let materializing = append(null, intent(previous, true));
+    materializing = append(
+      materializing,
+      receipt("generation-materialization-intent", 1, {
+        role: "candidate",
+        sourceArtifactId: "stage:candidate",
+        generationId: candidate.generationId,
+        manifest: manifest("b"),
+        packageVersion: "2.0.0",
+        entrypointRelativePath: candidate.entrypointRelativePath,
+      }),
+    );
+    const materialized = attachTestBrokerEvidence(
+      materializing,
+      receipt("generation-materialized", 2, {
+        role: "candidate",
+        generation: { ...candidate, packageVersion: "2.0.0" },
+      }),
+    );
+    if (materialized.kind !== "generation-materialized") {
+      throw new Error("expected materialized receipt");
+    }
+    const missingDirectorySync = structuredClone(materialized);
+    delete (missingDirectorySync.evidence as Partial<typeof missingDirectorySync.evidence>)
+      .parentDirectorySync;
+    expect(() => append(materializing, missingDirectorySync)).toThrow();
+
+    const selected = candidateSelectedRecord({ managed: true, running: true, enabled: true });
+    const completion = attachTestBrokerEvidence(
+      selected.record,
+      receipt("completion", 5, {
+        packageVersion: "2.0.0",
+        launcherVersion: "2.0.0",
+        serviceRunning: true,
+        serviceEnabled: true,
+      }),
+    );
+    if (completion.kind !== "completion") {
+      throw new Error("expected completion receipt");
+    }
+    const missingRetainedGeneration = structuredClone(completion);
+    missingRetainedGeneration.evidence.recoveryObservation.retainedPair = null;
+    missingRetainedGeneration.evidence.recoveryObservation.signature.signedPayloadSha256 =
+      digestUpdateGenerationBrokerReceiptPayload(
+        missingRetainedGeneration.evidence.recoveryObservation,
+      );
+    expect(() => append(selected.record, missingRetainedGeneration)).toThrow(
+      "does not prove the selected retained pair",
+    );
+  });
+
+  it("rejects broker operation replay across durable transaction receipts", () => {
+    const selected = candidateSelectedRecord({ managed: true, running: true, enabled: true });
+    const selectedReceipt = selected.record.receipts.find(
+      (entry) => entry.kind === "candidate-selected",
+    );
+    if (!selectedReceipt || selectedReceipt.kind !== "candidate-selected") {
+      throw new Error("expected candidate selection receipt");
+    }
+    const completion = attachTestBrokerEvidence(
+      selected.record,
+      receipt("completion", 5, {
+        packageVersion: "2.0.0",
+        launcherVersion: "2.0.0",
+        serviceRunning: true,
+        serviceEnabled: true,
+      }),
+    );
+    if (completion.kind !== "completion") {
+      throw new Error("expected completion receipt");
+    }
+    const replayed = structuredClone(completion);
+    const retained = replayed.evidence.retainedPair;
+    retained.operationId = selectedReceipt.evidence.retainedPair.operationId;
+    retained.requestSha256 = digestUpdateGenerationBrokerRequest({
+      formatVersion: 1,
+      kind: "verify-retained-pair",
+      brokerId: retained.brokerId,
+      namespaceKey: retained.namespaceKey,
+      transactionId: retained.transactionId,
+      operationId: retained.operationId,
+      expectedRevision: retained.previousRevision,
+      selected: retained.retainedPair.selected,
+      rollback: retained.retainedPair.rollback,
+    });
+    retained.signature.signedPayloadSha256 = digestUpdateGenerationBrokerReceiptPayload(retained);
+
+    expect(() => append(selected.record, replayed)).toThrow("Broker operation id was replayed");
   });
 
   it("rejects corrupt durable records before adjudication", () => {

@@ -1,8 +1,8 @@
 /** Stable directory capabilities for an update-generation namespace. */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { hasErrnoCode } from "./errors.js";
-import { syncUpdateGenerationPath } from "./update-generation-manifest.js";
+import { hasErrnoCode } from "../../src/infra/errors.js";
+import { syncUpdateGenerationPath } from "./update-generation-path-manifest.js";
 
 const GENERATIONS_DIRECTORY_NAME = "generations";
 

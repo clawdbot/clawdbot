@@ -2,13 +2,13 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { hasErrnoCode } from "./errors.js";
-import { updateGenerationSelectionSchema } from "./update-generation-contract-schema.js";
+import { hasErrnoCode } from "../../src/infra/errors.js";
+import { updateGenerationSelectionSchema } from "../../src/infra/update-generation-contract-schema.js";
 import type {
   UpdateGenerationDescriptor,
   UpdateGenerationManifest,
   UpdateGenerationSelection,
-} from "./update-generation-contract.js";
+} from "../../src/infra/update-generation-contract.js";
 import {
   captureUpdateGenerationManifest,
   copyUpdateGenerationTree,
@@ -17,13 +17,13 @@ import {
   syncUpdateGenerationPath,
   syncUpdateGenerationTree,
   updateGenerationPathIsEqualOrNested,
-} from "./update-generation-manifest.js";
+} from "./update-generation-path-manifest.js";
 import {
   assertUpdateGenerationNamespaceIdentity,
   resolveUpdateGenerationNamespace,
   type UpdateGenerationNamespace,
   updateGenerationNamespaceIdentityIsCurrent,
-} from "./update-generation-namespace.js";
+} from "./update-generation-path-namespace.js";
 
 export { captureUpdateGenerationManifest };
 

@@ -1,10 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { runCommandWithTimeout } from "../process/exec.js";
-import { withTestDir } from "../test-helpers/temp-dir.js";
-import type { UpdateGenerationSelection } from "./update-generation-contract.js";
-import { updateGenerationPathIsEqualOrNested } from "./update-generation-manifest.js";
+import { updateGenerationPathIsEqualOrNested } from "../../test/helpers/update-generation-path-manifest.js";
 import {
   captureUpdateGenerationManifest,
   createUpdateGenerationId,
@@ -18,7 +15,10 @@ import {
   stabilizeUpdateGenerationSelector,
   UPDATE_GENERATION_LAUNCHER_FILE_NAME,
   UPDATE_GENERATION_LAUNCHER_SOURCE,
-} from "./update-generation-store.js";
+} from "../../test/helpers/update-generation-path-store.js";
+import { runCommandWithTimeout } from "../process/exec.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
+import type { UpdateGenerationSelection } from "./update-generation-contract.js";
 
 async function writeRuntime(root: string, version: string): Promise<void> {
   await fs.mkdir(root, { recursive: true });

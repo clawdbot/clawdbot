@@ -1,8 +1,15 @@
 /** Durable transaction vocabulary for generation-addressed package updates. */
 import { isDeepStrictEqual } from "node:util";
+import type { UpdateGenerationBrokerReceiptOf } from "./update-generation-confined-filesystem.js";
 import { updateGenerationTransactionReceiptSchema } from "./update-generation-contract-schema.js";
+import {
+  assertBrokerEvidenceChain,
+  assertBrokerEvidenceOperationIds,
+  assertParentSyncFollows,
+  assertRetainedPairEvidence,
+  brokerReceiptsInEvidence,
+} from "./update-generation-evidence.js";
 
-export type UpdateGenerationManager = "npm" | "pnpm" | "bun";
 export type UpdateGenerationRole = "previous" | "candidate";
 
 export type UpdateGenerationManifest = {
@@ -29,10 +36,32 @@ export type UpdateGenerationServiceIntent = {
   enabled?: boolean;
 };
 
-export type UpdateGenerationBinding = {
+type UpdateGenerationBinding = {
   kind: "launcher" | "service";
   identity: string;
   priorFingerprint: string | null;
+};
+
+export type UpdateGenerationMaterializationEvidence = {
+  materialization: UpdateGenerationBrokerReceiptOf<"materialize-generation">;
+  parentDirectorySync: UpdateGenerationBrokerReceiptOf<"sync-parent-directory">;
+};
+
+export type UpdateGenerationSelectionEvidence = {
+  selectorSwitch: UpdateGenerationBrokerReceiptOf<"switch-selector">;
+  parentDirectorySync: UpdateGenerationBrokerReceiptOf<"sync-parent-directory">;
+};
+
+export type UpdateGenerationRetainedPairEvidence = {
+  retainedPair: UpdateGenerationBrokerReceiptOf<"verify-retained-pair">;
+  recoveryObservation: UpdateGenerationBrokerReceiptOf<"observe-recovery">;
+};
+
+export type UpdateGenerationCleanupEvidence = {
+  cleanup: UpdateGenerationBrokerReceiptOf<"cleanup-generations">;
+  parentDirectorySync: UpdateGenerationBrokerReceiptOf<"sync-parent-directory">;
+  retainedPair: UpdateGenerationBrokerReceiptOf<"verify-retained-pair">;
+  recoveryObservation: UpdateGenerationBrokerReceiptOf<"observe-recovery">;
 };
 
 type UpdateGenerationReceiptBase = {
@@ -46,20 +75,18 @@ type UpdateGenerationReceiptBase = {
 export type UpdateGenerationTransactionReceipt =
   | (UpdateGenerationReceiptBase & {
       kind: "intent";
-      manager: UpdateGenerationManager;
       namespaceKey: string;
-      namespaceRoot: string;
-      selectorPath: string;
-      stagingRoot: string;
       serviceBefore: UpdateGenerationServiceIntent;
       previousSelection: UpdateGenerationSelection | null;
       previousPackageVersion: string | null;
       stableBindingAlreadyVerified: boolean;
+      brokerId: string;
+      brokerRevision: string | null;
     })
   | (UpdateGenerationReceiptBase & {
       kind: "generation-materialization-intent";
       role: UpdateGenerationRole;
-      sourceRoot: string;
+      sourceArtifactId: string;
       generationId: string;
       manifest: UpdateGenerationManifest;
       packageVersion: string;
@@ -69,6 +96,7 @@ export type UpdateGenerationTransactionReceipt =
       kind: "generation-materialized";
       role: UpdateGenerationRole;
       generation: UpdateGenerationDescriptor;
+      evidence: UpdateGenerationMaterializationEvidence;
     })
   | (UpdateGenerationReceiptBase & {
       kind: "baseline-selection-intent";
@@ -77,6 +105,7 @@ export type UpdateGenerationTransactionReceipt =
   | (UpdateGenerationReceiptBase & {
       kind: "baseline-selected";
       selection: UpdateGenerationSelection;
+      evidence: UpdateGenerationSelectionEvidence;
     })
   | (UpdateGenerationReceiptBase & {
       kind: "binding-intent";
@@ -94,6 +123,7 @@ export type UpdateGenerationTransactionReceipt =
   | (UpdateGenerationReceiptBase & {
       kind: "candidate-selected";
       selection: UpdateGenerationSelection;
+      evidence: UpdateGenerationSelectionEvidence & UpdateGenerationRetainedPairEvidence;
     })
   | (UpdateGenerationReceiptBase & {
       kind: "completion";
@@ -101,6 +131,7 @@ export type UpdateGenerationTransactionReceipt =
       launcherVersion: string;
       serviceRunning: boolean;
       serviceEnabled?: boolean;
+      evidence: UpdateGenerationRetainedPairEvidence;
     })
   | (UpdateGenerationReceiptBase & {
       kind: "rollback-intent";
@@ -114,6 +145,7 @@ export type UpdateGenerationTransactionReceipt =
       launcherVersion: string;
       serviceRunning: boolean;
       serviceEnabled?: boolean;
+      evidence: UpdateGenerationSelectionEvidence & UpdateGenerationRetainedPairEvidence;
     })
   | (UpdateGenerationReceiptBase & {
       kind: "cleanup-intent";
@@ -124,6 +156,7 @@ export type UpdateGenerationTransactionReceipt =
       kind: "cleanup-completed";
       removedGenerationIds: string[];
       deferred: Array<{ generationId: string; reason: string }>;
+      evidence: UpdateGenerationCleanupEvidence;
     })
   | (UpdateGenerationReceiptBase & {
       kind: "failure";
@@ -137,41 +170,6 @@ export type UpdateGenerationTransactionRecord = {
   transactionId: string;
   namespaceKey: string;
   receipts: UpdateGenerationTransactionReceipt[];
-};
-
-export type UpdateGenerationTransactionSnapshot = {
-  /** Opaque revision owned by the authoritative update ledger. */
-  revision: string;
-  record: UpdateGenerationTransactionRecord;
-};
-
-export type UpdateGenerationLedgerCompareAndSwapResult =
-  | {
-      status: "stored" | "replayed";
-      snapshot: UpdateGenerationTransactionSnapshot;
-    }
-  | {
-      status: "conflict";
-      snapshot: UpdateGenerationTransactionSnapshot | null;
-    };
-
-/**
- * Persistence boundary implemented by the authoritative update ledger.
- *
- * `compareAndSwap` must atomically validate the namespace revision, persist the
- * receipt and resulting record, and return the same snapshot when receiptId is
- * replayed. It must retain receipt replay identity across transaction rollover
- * and serialize all selector and cleanup work for namespaceKey. A new intent
- * replaces the current record only after its cleanup-completed receipt.
- */
-export type UpdateGenerationLedgerHook = {
-  read(namespaceKey: string): Promise<UpdateGenerationTransactionSnapshot | null>;
-  compareAndSwap(params: {
-    namespaceKey: string;
-    expectedRevision: string | null;
-    receipt: UpdateGenerationTransactionReceipt;
-    nextRecord: UpdateGenerationTransactionRecord;
-  }): Promise<UpdateGenerationLedgerCompareAndSwapResult>;
 };
 
 export type UpdateGenerationProjection = {
@@ -192,6 +190,8 @@ export type UpdateGenerationProjection = {
   rolledBack: boolean;
   cleanupCompleted: boolean;
   terminalServiceState: { running: boolean; enabled?: boolean } | null;
+  brokerOperationIds: Set<string>;
+  brokerRevision: string | null;
 };
 
 const RECEIPT_ID_SAFE = /^[A-Za-z0-9._:@/-]+$/u;
@@ -251,10 +251,20 @@ function assertReceiptFollowsLatest(
   receipt: UpdateGenerationTransactionReceipt,
 ): void {
   if (receipt.kind === "failure") {
+    if (projection.latest.kind === "failure") {
+      throw new Error("Update generation failure cannot be appended twice");
+    }
     if (["completion", "rolled-back", "cleanup-completed"].includes(projection.latest.kind)) {
       throw new Error(`Failure cannot follow terminal ${projection.latest.kind} receipt`);
     }
     return;
+  }
+  if (
+    projection.latest.kind === "failure" &&
+    projection.latestTransition.kind === "candidate-selected" &&
+    receipt.kind !== "rollback-intent"
+  ) {
+    throw new Error("Candidate failure must proceed through rollback intent");
   }
   const latest = projection.latestTransition;
   const follows =
@@ -303,6 +313,12 @@ function assertReceiptTransition(
     if (receipt.stableBindingAlreadyVerified && !receipt.previousSelection) {
       throw new Error("A verified stable binding requires a previous generation selection");
     }
+    if (receipt.previousSelection && !receipt.stableBindingAlreadyVerified) {
+      throw new Error("An existing generation selection requires a verified stable binding");
+    }
+    if (!receipt.brokerId || receipt.brokerRevision === "") {
+      throw new Error("A generation transaction requires broker identity and revision state");
+    }
     if (receipt.previousSelection) {
       assertSelection(receipt.previousSelection);
     }
@@ -338,6 +354,23 @@ function assertReceiptTransition(
     ) {
       throw new Error(`${receipt.role} generation descriptor does not match its intent`);
     }
+    assertBrokerEvidenceChain(projection, receipt.evidence);
+    assertBrokerEvidenceOperationIds(receipt.evidence, planned.receiptId);
+    if (
+      receipt.evidence.materialization.role !== receipt.role ||
+      receipt.evidence.materialization.sourceArtifactId !== planned.sourceArtifactId ||
+      !isDeepStrictEqual(receipt.evidence.materialization.manifest, planned.manifest) ||
+      !selectionsEqual(receipt.evidence.materialization.generation, receipt.generation) ||
+      receipt.evidence.materialization.generation.packageVersion !==
+        receipt.generation.packageVersion
+    ) {
+      throw new Error("Materialization broker evidence differs from its durable intent");
+    }
+    assertParentSyncFollows(
+      receipt.evidence.parentDirectorySync,
+      receipt.evidence.materialization,
+      "generations",
+    );
   }
   if (receipt.kind === "baseline-selection-intent") {
     const previous = projection.generations.previous;
@@ -355,6 +388,22 @@ function assertReceiptTransition(
     if (!selectionsEqual(pending.selection, receipt.selection)) {
       throw new Error("Baseline selection receipt differs from its intent");
     }
+    assertBrokerEvidenceChain(projection, receipt.evidence);
+    assertBrokerEvidenceOperationIds(receipt.evidence, pending.receiptId);
+    if (
+      !selectionsEqual(
+        receipt.evidence.selectorSwitch.previous,
+        projection.intent.previousSelection,
+      ) ||
+      !selectionsEqual(receipt.evidence.selectorSwitch.selected, receipt.selection)
+    ) {
+      throw new Error("Baseline selector broker evidence differs from its intent");
+    }
+    assertParentSyncFollows(
+      receipt.evidence.parentDirectorySync,
+      receipt.evidence.selectorSwitch,
+      "selector",
+    );
   }
   if (receipt.kind === "binding-completed") {
     const pending = [...record.receipts]
@@ -386,6 +435,9 @@ function assertReceiptTransition(
     if (!selectionsEqual(baseline, receipt.from) || !projection.bindingCompleted) {
       throw new Error("Candidate selection requires a verified stable binding");
     }
+    if (baseline.generationId === candidate.generationId) {
+      throw new Error("Candidate selection requires distinct retained generations");
+    }
   }
   if (receipt.kind === "candidate-selected") {
     const pending = [...record.receipts]
@@ -398,6 +450,24 @@ function assertReceiptTransition(
     ) {
       throw new Error("Candidate selection receipt differs from its intent");
     }
+    assertBrokerEvidenceChain(projection, receipt.evidence);
+    assertBrokerEvidenceOperationIds(receipt.evidence, pending.receiptId);
+    if (
+      !selectionsEqual(receipt.evidence.selectorSwitch.previous, pending.from) ||
+      !selectionsEqual(receipt.evidence.selectorSwitch.selected, pending.to)
+    ) {
+      throw new Error("Candidate selector broker evidence differs from its intent");
+    }
+    assertParentSyncFollows(
+      receipt.evidence.parentDirectorySync,
+      receipt.evidence.selectorSwitch,
+      "selector",
+    );
+    assertRetainedPairEvidence({
+      evidence: receipt.evidence,
+      selected: pending.to,
+      rollback: pending.from,
+    });
   }
   if (receipt.kind === "completion") {
     const candidate = projection.generations.candidate;
@@ -412,6 +482,17 @@ function assertReceiptTransition(
     ) {
       throw new Error("Completion does not prove candidate and service convergence");
     }
+    const previous = projection.baselineSelection ?? projection.intent.previousSelection;
+    if (!previous) {
+      throw new Error("Completion requires a retained rollback generation");
+    }
+    assertBrokerEvidenceChain(projection, receipt.evidence);
+    assertBrokerEvidenceOperationIds(receipt.evidence, receipt.receiptId);
+    assertRetainedPairEvidence({
+      evidence: receipt.evidence,
+      selected: projection.candidateSelection,
+      rollback: previous,
+    });
   }
   if (receipt.kind === "rollback-intent") {
     const previous = projection.baselineSelection ?? projection.intent.previousSelection;
@@ -445,6 +526,24 @@ function assertReceiptTransition(
         "Rollback completion does not prove previous runtime and service convergence",
       );
     }
+    assertBrokerEvidenceChain(projection, receipt.evidence);
+    assertBrokerEvidenceOperationIds(receipt.evidence, pending.receiptId);
+    if (
+      !selectionsEqual(receipt.evidence.selectorSwitch.previous, pending.from) ||
+      !selectionsEqual(receipt.evidence.selectorSwitch.selected, pending.to)
+    ) {
+      throw new Error("Rollback selector broker evidence differs from its intent");
+    }
+    assertParentSyncFollows(
+      receipt.evidence.parentDirectorySync,
+      receipt.evidence.selectorSwitch,
+      "selector",
+    );
+    assertRetainedPairEvidence({
+      evidence: receipt.evidence,
+      selected: pending.to,
+      rollback: pending.from,
+    });
   }
   if (receipt.kind === "cleanup-intent") {
     const protectedIds = new Set(receipt.protectedGenerationIds);
@@ -480,6 +579,37 @@ function assertReceiptTransition(
     ) {
       throw new Error("Cleanup completion differs from its durable intent");
     }
+    assertBrokerEvidenceChain(projection, receipt.evidence);
+    assertBrokerEvidenceOperationIds(receipt.evidence, pending.receiptId);
+    if (
+      !isDeepStrictEqual(receipt.evidence.cleanup.generationIds, pending.generationIds) ||
+      !isDeepStrictEqual(
+        receipt.evidence.cleanup.removedGenerationIds,
+        receipt.removedGenerationIds,
+      ) ||
+      !isDeepStrictEqual(receipt.evidence.cleanup.deferred, receipt.deferred) ||
+      !isDeepStrictEqual(
+        receipt.evidence.cleanup.protectedGenerationIds.toSorted(),
+        pending.protectedGenerationIds.toSorted(),
+      )
+    ) {
+      throw new Error("Cleanup broker evidence differs from its durable intent");
+    }
+    assertParentSyncFollows(
+      receipt.evidence.parentDirectorySync,
+      receipt.evidence.cleanup,
+      "generations",
+    );
+    const selected = projection.rolledBack
+      ? (projection.baselineSelection ?? projection.intent.previousSelection)
+      : projection.candidateSelection;
+    const rollback = projection.rolledBack
+      ? projection.candidateSelection
+      : (projection.baselineSelection ?? projection.intent.previousSelection);
+    if (!selected || !rollback) {
+      throw new Error("Cleanup completion requires a retained generation pair");
+    }
+    assertRetainedPairEvidence({ evidence: receipt.evidence, selected, rollback });
   }
 }
 
@@ -505,89 +635,6 @@ export function appendUpdateGenerationReceipt(
   };
 }
 
-function assertUpdateGenerationTransactionRecordIsValid(
-  record: UpdateGenerationTransactionRecord,
-): void {
-  let rebuilt: UpdateGenerationTransactionRecord | null = null;
-  for (const receipt of record.receipts) {
-    rebuilt = appendUpdateGenerationReceipt(rebuilt, receipt);
-  }
-  if (
-    !rebuilt ||
-    rebuilt.formatVersion !== record.formatVersion ||
-    rebuilt.transactionId !== record.transactionId ||
-    rebuilt.namespaceKey !== record.namespaceKey
-  ) {
-    throw new TypeError("Update generation transaction snapshot is invalid");
-  }
-}
-
-export async function persistUpdateGenerationReceipt(params: {
-  ledger: UpdateGenerationLedgerHook;
-  snapshot: UpdateGenerationTransactionSnapshot | null;
-  receipt: UpdateGenerationTransactionReceipt;
-}): Promise<UpdateGenerationTransactionSnapshot> {
-  if (params.snapshot) {
-    assertUpdateGenerationTransactionRecordIsValid(params.snapshot.record);
-  }
-  if (
-    params.snapshot &&
-    params.receipt.kind === "intent" &&
-    params.snapshot.record.namespaceKey !== params.receipt.namespaceKey
-  ) {
-    throw new Error("Update generation ledger snapshot belongs to a different namespace");
-  }
-  const replay = params.snapshot?.record.receipts.find(
-    (receipt) => receipt.receiptId === params.receipt.receiptId,
-  );
-  if (replay) {
-    if (!isDeepStrictEqual(replay, params.receipt)) {
-      throw new Error("Update generation receipt id was replayed with different content");
-    }
-    if (!params.snapshot) {
-      throw new Error("Update generation receipt replay is missing its ledger snapshot");
-    }
-    return params.snapshot;
-  }
-  let priorRecord: UpdateGenerationTransactionRecord | null = params.snapshot?.record ?? null;
-  if (params.receipt.kind === "intent" && priorRecord) {
-    const priorProjection = projectUpdateGenerationTransaction(priorRecord);
-    if (priorProjection.latest.kind !== "cleanup-completed") {
-      throw new Error("A new update generation transaction requires completed prior cleanup");
-    }
-    if (params.receipt.transactionId === priorRecord.transactionId) {
-      throw new Error("A new update generation transaction requires a unique transaction id");
-    }
-    priorRecord = null;
-  }
-  const nextRecord = appendUpdateGenerationReceipt(priorRecord, params.receipt);
-  const result = await params.ledger.compareAndSwap({
-    namespaceKey: nextRecord.namespaceKey,
-    expectedRevision: params.snapshot?.revision ?? null,
-    receipt: params.receipt,
-    nextRecord,
-  });
-  if (result.status === "conflict") {
-    throw new Error("Authoritative update ledger revision changed during generation transaction");
-  }
-  if (
-    result.snapshot.record.namespaceKey !== nextRecord.namespaceKey ||
-    result.snapshot.record.transactionId !== nextRecord.transactionId
-  ) {
-    throw new Error("Authoritative update ledger returned a different transaction namespace");
-  }
-  const persistedReceipt = result.snapshot.record.receipts.find(
-    (receipt) => receipt.receiptId === params.receipt.receiptId,
-  );
-  if (!persistedReceipt || !isDeepStrictEqual(persistedReceipt, params.receipt)) {
-    throw new Error("Authoritative update ledger replayed different receipt content");
-  }
-  if (result.status === "stored" && !isDeepStrictEqual(result.snapshot.record, nextRecord)) {
-    throw new Error("Authoritative update ledger stored an unexpected transaction record");
-  }
-  return result.snapshot;
-}
-
 export function projectUpdateGenerationTransaction(
   record: UpdateGenerationTransactionRecord,
 ): UpdateGenerationProjection {
@@ -608,6 +655,8 @@ export function projectUpdateGenerationTransaction(
     rolledBack: false,
     cleanupCompleted: false,
     terminalServiceState: null,
+    brokerOperationIds: new Set(),
+    brokerRevision: intent.brokerRevision,
   };
   for (const receipt of record.receipts.slice(1)) {
     projection.latest = receipt;
@@ -638,6 +687,12 @@ export function projectUpdateGenerationTransaction(
       };
     } else if (receipt.kind === "cleanup-completed") {
       projection.cleanupCompleted = true;
+    }
+    if ("evidence" in receipt) {
+      for (const brokerReceipt of brokerReceiptsInEvidence(receipt.evidence)) {
+        projection.brokerOperationIds.add(brokerReceipt.operationId);
+        projection.brokerRevision = brokerReceipt.revision;
+      }
     }
   }
   return projection;

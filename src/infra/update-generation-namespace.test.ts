@@ -1,14 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   captureUpdateGenerationManifest,
   createUpdateGenerationId,
   materializeUpdateGeneration,
   removeObsoleteUpdateGeneration,
   replaceUpdateGenerationSelector,
-} from "./update-generation-store.js";
+} from "../../test/helpers/update-generation-path-store.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 
 async function writeRuntime(root: string): Promise<void> {
   await fs.mkdir(root, { recursive: true });
