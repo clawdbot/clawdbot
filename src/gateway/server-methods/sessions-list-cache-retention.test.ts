@@ -1,6 +1,11 @@
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 import { runNodeScript } from "../../../test/helpers/run-node-script.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
+import { sessionListCacheRetentionEntrypoint } from "./sessions-list-cache-retention-entrypoint.test-support.js";
 
 it("releases retired pages while their generation still has a pending caller", async ({
   signal,
@@ -8,9 +13,7 @@ it("releases retired pages while their generation still has a pending caller", a
   const result = await runNodeScript(
     [
       "--expose-gc",
-      "--import",
-      "tsx",
-      fileURLToPath(new URL("./sessions-list-cache-retention.test-support.ts", import.meta.url)),
+      ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(sessionListCacheRetentionEntrypoint)),
     ],
     { ...process.env, NODE_OPTIONS: "", TSX_DISABLE_CACHE: "1" },
     15_000,
