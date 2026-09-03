@@ -7,6 +7,7 @@ import { registerActivityEnglish } from "../../ui/src/i18n/locales/en-activity.t
 import { registerDebugEnglish } from "../../ui/src/i18n/locales/en-debug.ts";
 import { registerDevicesEnglish } from "../../ui/src/i18n/locales/en-devices.ts";
 import { registerMeetingsEnglish } from "../../ui/src/i18n/locales/en-meetings.ts";
+import { registerMemoryImportEnglish } from "../../ui/src/i18n/locales/en-memory-import.ts";
 import { registerNewSessionSetupEnglish } from "../../ui/src/i18n/locales/en-new-session-setup.ts";
 import { registerPluginConsentEnglish } from "../../ui/src/i18n/locales/en-plugin-consent.ts";
 import { registerSessionPlacementEnglish } from "../../ui/src/i18n/locales/en-session-placement.ts";
@@ -29,6 +30,7 @@ const sourceFiles = [
   "en-debug.ts",
   "en-devices.ts",
   "en-meetings.ts",
+  "en-memory-import.ts",
   "en-session-placement.ts",
   "en-new-session-setup.ts",
   "en-plugin-consent.ts",
@@ -47,6 +49,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerDebugEnglish.catalog,
     registerDevicesEnglish.catalog,
     registerMeetingsEnglish.catalog,
+    registerMemoryImportEnglish.catalog,
     registerSessionPlacementEnglish.catalog,
     registerNewSessionSetupEnglish.catalog,
     registerPluginConsentEnglish.catalog,

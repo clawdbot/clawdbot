@@ -570,8 +570,8 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
   const recencyHalfLifeDays =
     params.config.recencyHalfLifeDays ?? DEFAULT_MEMORY_DREAMING_RECENCY_HALF_LIFE_DAYS;
   const fallbackWorkspaceDir = normalizeOptionalString(params.workspaceDir);
-  // Narrative subagent sessions live in per-agent SQLite stores, so every swept workspace
-  // carries its owning agent. The triggering agent owns whatever the roster cannot attribute.
+  // Each completion uses its workspace owner's model and credentials. The triggering
+  // agent owns whatever the roster cannot attribute.
   const triggerAgentId = normalizeLowercaseStringOrEmpty(params.agentId);
   const seenWorkspaces = new Set<string>();
   const workspaces: Array<{ agentId?: string; agentIds: readonly string[]; workspaceDir: string }> =
@@ -1036,6 +1036,8 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     generation: number,
     startupStartedAtMs: number,
   ): Promise<void> => {
+    // Previous releases persisted narrative sessions. Reclaim those historical artifacts
+    // at startup; new prompt-only completions create no sessions to scrub.
     const { DREAMING_ORPHAN_MIN_AGE_MS, scrubDreamingNarrativeArtifacts } =
       await import("./dreaming-session-cleanup.js");
     if (disposed || generation !== gatewayLifecycleGeneration) {

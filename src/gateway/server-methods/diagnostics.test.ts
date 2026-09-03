@@ -4,6 +4,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   emitDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -13,6 +14,7 @@ import {
   startDiagnosticStabilityRecorder,
   stopDiagnosticStabilityRecorder,
 } from "../../logging/diagnostic-stability.js";
+import { createBackgroundWorkOwner } from "../../process/background-work.js";
 import { getCommandLaneDiagnostics } from "../../process/command-lane-diagnostics.js";
 import {
   enqueueCommandInLane,
@@ -191,12 +193,12 @@ describe("diagnostics gateway methods", () => {
       const payload = await requestLaneDiagnostics();
       expect(payload.ts).toBeGreaterThan(0);
       expect(payload.lanes.map((snapshot) => snapshot.lane)).toEqual([
+        CommandLane.Background,
         CommandLane.Cron,
         CommandLane.CronNested,
         CommandLane.HookDispatch,
         CommandLane.Main,
         CommandLane.Nested,
-        CommandLane.SkillWorkshopReview,
         CommandLane.Subagent,
         CommandLane.SystemAgent,
       ]);
@@ -238,6 +240,28 @@ describe("diagnostics gateway methods", () => {
       setCommandLaneConcurrency(lane, 1);
       await Promise.all([active, queued]);
       setCommandLaneConcurrency(lane, originalConcurrency);
+    }
+  });
+
+  it("reports background owners once in the aggregate without duplicating dynamic lanes", async () => {
+    const before = await requestLaneDiagnostics();
+    const owner = createBackgroundWorkOwner({ owner: "core:diagnostics-test", maxConcurrent: 1 });
+    const gate = createDeferred();
+    const active = owner.enqueue(async () => await gate.promise);
+    const queued = owner.enqueue(async () => undefined);
+    try {
+      const payload = await requestLaneDiagnostics();
+      expect(payload.lanes.find((snapshot) => snapshot.lane === "background")).toMatchObject({
+        activeCount: 1,
+        queuedCount: 1,
+        maxConcurrent: 3,
+        blockedBy: "lane",
+      });
+      expect(payload.lanes.some((snapshot) => snapshot.lane === owner.lane)).toBe(false);
+      expect(payload.dynamic).toEqual(before.dynamic);
+    } finally {
+      gate.resolve();
+      await Promise.all([active, queued]);
     }
   });
 

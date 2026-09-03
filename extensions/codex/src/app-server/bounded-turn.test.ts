@@ -8,6 +8,7 @@ import {
 } from "./codex-app-server.test-fixtures.js";
 import type { JsonValue } from "./protocol.js";
 import type { CodexAppServerClientFactory } from "./shared-client.js";
+import { createClientHarness } from "./test-support.js";
 
 function codexModel(model = "gpt-5.4", id = model) {
   return {
@@ -203,6 +204,62 @@ function createClientFactory(
 }
 
 describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
+  it.each(["thread/start", "turn/start"] as const)(
+    "rejects expired authority before the physical %s write after setup",
+    async (blockedMethod) => {
+      let current = true;
+      const expired = new Error("completion owner expired during setup");
+      const harness = createClientHarness({
+        onWrite: (line, send) => {
+          const request = JSON.parse(line) as { id: number; method: string };
+          const results: Record<string, unknown> = {
+            "model/list": { data: [codexModel()], nextCursor: null },
+            "config/read": { config: {}, layers: [] },
+            "configRequirements/read": { requirements: null },
+            "thread/start": threadStartResult("gpt-5.4"),
+            "mcpServerStatus/list": { data: [], nextCursor: null },
+            "turn/start": completedTurnResult(),
+          };
+          if (request.method === "mcpServerStatus/list" && blockedMethod === "turn/start") {
+            current = false;
+          }
+          send({ id: request.id, result: results[request.method] });
+        },
+      });
+      const releaseFence = vi.fn();
+      harness.client.setThreadSessionRequestGuard(async () => {
+        if (blockedMethod === "thread/start") {
+          current = false;
+        }
+        return releaseFence;
+      });
+      try {
+        await expect(
+          runBoundedCodexAppServerTurn({
+            model: { mode: "required", id: "gpt-5.4" },
+            timeoutMs: 5_000,
+            assertCurrent: () => {
+              if (!current) {
+                throw expired;
+              }
+            },
+            options: { clientFactory: async () => harness.client },
+            taskLabel: "isolated completion",
+            developerInstructions: "Answer only.",
+            input: [{ type: "text", text: "Name this conversation.", text_elements: [] }],
+            requiredModalities: ["text"],
+            isolation: "configured-transport",
+            requireNoExternalCapabilities: true,
+          }),
+        ).rejects.toBe(expired);
+        expect(harness.writes.map((line) => JSON.parse(line).method)).not.toContain(blockedMethod);
+        expect(releaseFence).toHaveBeenCalledOnce();
+      } finally {
+        harness.client.close();
+      }
+    },
+  );
+
   it("returns an explicit unsupported decline for interactive MCP input", async () => {
     const fake = createClientFactory({ completeTurn: false });
     const run = runBoundedCodexAppServerTurn({

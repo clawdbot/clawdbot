@@ -184,7 +184,7 @@ Local agent avatars use [authenticated avatar URLs](#avatar-route-auth) in this 
 
 ## Gateway host status
 
-Open **Settings → Connection** to see the **Gateway Host** card with the Gateway machine, LAN address, operating system, runtime, uptime, CPU load, memory, and state-volume disk space. The card refreshes every 10 seconds while visible through the `system.info` Gateway RPC, which requires the `operator.read` scope. Older Gateways and connections without that scope omit the card.
+Open **Settings → Connection** to see the **Gateway Host** card with the Gateway machine, LAN address, operating system, runtime, uptime, CPU load, memory, and space for each mounted local disk. The card refreshes every 10 seconds while visible through the `system.info` Gateway RPC, which requires the `operator.read` scope. If mounted-disk discovery is unavailable, the card retains the state-directory disk reading when available. Connections without the required scope omit the card.
 
 ## Language support
 
@@ -510,7 +510,7 @@ This label does not change which request the approval buttons resolve.
 
   </Accordion>
   <Accordion title="Debug, logs, update">
-    - Debug: status/health/models snapshots, event log, manual RPC calls, and a System busyness overlay with live CPU, memory, and event-loop delay graphs (`status`, `health`, `models.list`).
+    - Debug: status/health/models snapshots, event log, manual RPC calls, and a System busyness overlay with live CPU, memory, event-loop delay, and per-disk free-space graphs (`status`, `health`, `models.list`, `system.info`). Connection also shows each mounted local storage volume separately, labeled by its mount path. Disk snapshots refresh every ten seconds; memory-backed filesystems and hidden macOS system volumes are excluded.
     - Lane tables omit disabled, empty lanes, including `hook-dispatch` when HTTP hooks are off. Disabled lanes remain visible while work is running or queued.
     - The event log includes Control UI refresh/RPC timings, slow chat/config render timings, and browser responsiveness entries for long animation frames or long tasks when the browser exposes those PerformanceObserver entry types.
     - Logs: live tail of gateway file logs with filter/export (`logs.tail`).

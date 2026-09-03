@@ -169,6 +169,8 @@ type AgentHarnessIsolatedCompletionParams = {
   prompt: string;
   timeoutMs: number;
   abortSignal?: AbortSignal;
+  /** Revalidate the captured caller immediately before inference I/O, including retries. */
+  assertCurrent?: () => void;
   thinkLevel?: import("../../auto-reply/thinking.js").ThinkLevel;
   /** Do not recover ambiguous reasoning as visible text; an empty visible result is valid. */
   outputTextPolicy?: "strict-visible";

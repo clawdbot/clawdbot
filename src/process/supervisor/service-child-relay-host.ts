@@ -123,6 +123,7 @@ function createOutputRelay(stream?: Readable) {
 }
 
 export async function createServiceChildRelayAdapter(params: {
+  assertCurrent?: () => void;
   command: string;
   args: string[];
   argv0?: string;
@@ -152,6 +153,7 @@ export async function createServiceChildRelayAdapter(params: {
   const controlFd = useWindowsJobAnchor ? undefined : reserveStdioEntry(stdio, "pipe");
   reserveStdioEntry(stdio, "ipc");
 
+  params.assertCurrent?.();
   const child = spawn(process.execPath, resolveRuntimeWorkerArgv(workerUrl), {
     stdio,
     // A detached Windows Job owner survives host loss long enough to clean up.
