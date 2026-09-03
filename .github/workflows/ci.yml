@@ -4190,6 +4190,17 @@ jobs:
           source .ci-harness/.github/actions/setup-pnpm-store-cache/ensure-node.sh
           openclaw_ensure_node "$REQUESTED_NODE_VERSION"
 
+      - name: Setup pnpm for native Gateway proof
+        if: matrix.phase == 'tests'
+        uses: ./.ci-harness/.github/actions/setup-pnpm-store-cache
+        with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install dependencies for native Gateway proof
+        if: matrix.phase == 'tests'
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+
       - name: Install XcodeGen / SwiftLint / SwiftFormat
         if: matrix.phase == 'release'
         run: |
@@ -4397,6 +4408,9 @@ jobs:
             swift_test_args+=(--experimental-maximum-parallelization-width "$swift_test_width")
             node scripts/test-macos-native.mts default "${swift_test_args[@]}" --skip AppStateIsolationTests
             node scripts/test-macos-native.mts named "${swift_test_args[@]}" --filter AppStateIsolationTests
+            OPENCLAW_MACOS_GATEWAY_PAIRING_PROOF=1 \
+              node scripts/test-macos-native.mts default "${swift_test_args[@]}" \
+                --filter GatewayDiscoveryPairingNativeProofTests
           elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
             # Frozen release targets predate the resource-owner script and its tests.
             # Their original suite still runs only on this disposable macOS worker.

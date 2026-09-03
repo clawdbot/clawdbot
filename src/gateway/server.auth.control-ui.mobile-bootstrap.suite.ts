@@ -339,6 +339,43 @@ export function registerControlUiMobileBootstrapSuite(): void {
     }
   });
 
+  test("macOS setup code returns node token plus full operator handoff", async () => {
+    const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
+    const { identity, initial } = await connectSetupCodeBootstrapNode({
+      identityPrefix: "openclaw-bootstrap-macos-node-",
+      client: {
+        id: "openclaw-macos",
+        version: "2026.9.3",
+        platform: "macOS 26.6.0",
+        mode: "node",
+        deviceFamily: "Mac",
+      },
+    });
+    expect(initial.ok).toBe(true);
+    const payload = initial.payload as
+      | {
+          auth?: {
+            deviceToken?: string;
+            role?: string;
+            deviceTokens?: Array<{ deviceToken?: string; role?: string; scopes?: string[] }>;
+          };
+        }
+      | undefined;
+    expect(payload?.auth?.deviceToken).toBeTruthy();
+    expect(payload?.auth?.role).toBe("node");
+    expect(payload?.auth?.deviceTokens?.find((entry) => entry.role === "operator")).toMatchObject({
+      deviceToken: expect.any(String),
+      scopes: FULL_OPERATOR_SCOPES,
+    });
+    expect(
+      (await listDevicePairing()).pending.filter((entry) => entry.deviceId === identity.deviceId),
+    ).toEqual([]);
+    expect(await getPairedDevice(identity.deviceId)).toMatchObject({
+      roles: ["node", "operator"],
+      approvedScopes: FULL_OPERATOR_SCOPES,
+    });
+  });
+
   test.each([
     {
       name: "Android",
@@ -521,6 +558,28 @@ export function registerControlUiMobileBootstrapSuite(): void {
         platform: "Android 16",
         mode: "node" as const,
         deviceFamily: "Android",
+      },
+    },
+    {
+      name: "macOS client id with mobile metadata",
+      identityPrefix: "openclaw-bootstrap-macos-platform-spoof-",
+      client: {
+        id: "openclaw-macos",
+        version: "2026.9.3",
+        platform: "iOS 26.3.1",
+        mode: "node" as const,
+        deviceFamily: "iPhone",
+      },
+    },
+    {
+      name: "macOS client id with non-Mac family",
+      identityPrefix: "openclaw-bootstrap-macos-family-spoof-",
+      client: {
+        id: "openclaw-macos",
+        version: "2026.9.3",
+        platform: "macOS 26.6.0",
+        mode: "node" as const,
+        deviceFamily: "iPad",
       },
     },
   ])(

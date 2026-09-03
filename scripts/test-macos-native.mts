@@ -57,6 +57,7 @@ await runWithFailedTrailer("macos-native", async () => {
       "CLANG_MODULE_CACHE_PATH",
       // Preserve Actions' orphan-cleanup correlation through the isolated child env.
       "RUNNER_TRACKING_ID",
+      "OPENCLAW_MACOS_GATEWAY_PAIRING_PROOF",
     ]) {
       if (env[key] !== undefined) {
         childEnv[key] = env[key];

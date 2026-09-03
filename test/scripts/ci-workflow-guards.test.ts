@@ -7737,6 +7737,17 @@ exit 1
     );
     expect(currentTargetBranch).not.toContain("swift_test_args+=(--parallel)");
     expect(currentTargetBranch).not.toContain("--no-parallel");
+    expect(currentTargetBranch).toContain("OPENCLAW_MACOS_GATEWAY_PAIRING_PROOF=1");
+    expect(currentTargetBranch).toContain("--filter GatewayDiscoveryPairingNativeProofTests");
+    const nativeProofSetup = macosSwift.steps.find(
+      (step: WorkflowStep) => step.name === "Setup pnpm for native Gateway proof",
+    );
+    const nativeProofInstall = macosSwift.steps.find(
+      (step: WorkflowStep) => step.name === "Install dependencies for native Gateway proof",
+    );
+    expect(nativeProofSetup?.if).toBe("matrix.phase == 'tests'");
+    expect(nativeProofInstall?.if).toBe("matrix.phase == 'tests'");
+    expect(nativeProofInstall?.run).toContain("pnpm install --frozen-lockfile --prefer-offline");
     expect(testStep.run).toContain("swift_test_args+=(--no-parallel)");
 
     for (const buildExitCode of [0, 23]) {

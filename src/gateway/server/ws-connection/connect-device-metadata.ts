@@ -41,6 +41,9 @@ function isSetupCodeMobileBootstrapClient(client: {
   if (client.id === GATEWAY_CLIENT_IDS.IOS_APP) {
     return /^(?:ios|ipados)(?:\s|$)/u.test(platform) && /^(?:iphone|ipad|ios)$/u.test(deviceFamily);
   }
+  if (client.id === GATEWAY_CLIENT_IDS.MACOS_APP) {
+    return /^macos(?:\s|$)/u.test(platform) && deviceFamily === "mac";
+  }
   return false;
 }
 
