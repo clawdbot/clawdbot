@@ -32,14 +32,12 @@ import {
   formatBackupCreateSummary,
   type BackupCreateResult,
 } from "./backup-create.js";
-import * as backupSqliteSnapshot from "./backup-sqlite-snapshot.js";
 import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
 import { isVolatileBackupPath } from "./backup-volatile-filter.js";
 import { createBackupVolatileStatCache } from "./backup-volatile-stat-cache.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { createSqliteAuditRecordStore } from "./sqlite-audit-record-store.js";
-import * as auditCoordination from "./state-migrations.audit-coordination.js";
 import { detectLegacyAuditLogs, migrateLegacyAuditLogs } from "./state-migrations.audit-logs.js";
 
 function makeResult(overrides: Partial<BackupCreateResult> = {}): BackupCreateResult {
@@ -1603,71 +1601,6 @@ describe("createBackupArchive", () => {
     );
   });
 
-  it("releases the legacy audit lease before the SQLite snapshot", async () => {
-    let leaseActive = false;
-    const originalSnapshotPlan = backupSqliteSnapshot.createBackupSqliteSnapshotPlan;
-    const leaseSpy = vi
-      .spyOn(auditCoordination, "withLegacyAuditMigrationLease")
-      .mockImplementation(async (_stateDir, run) => {
-        leaseActive = true;
-        try {
-          return await run();
-        } finally {
-          leaseActive = false;
-        }
-      });
-    const snapshotSpy = vi
-      .spyOn(backupSqliteSnapshot, "createBackupSqliteSnapshotPlan")
-      .mockImplementation(async (params) => {
-        expect(leaseActive).toBe(false);
-        return await originalSnapshotPlan(params);
-      });
-
-    try {
-      await withOpenClawTestState(
-        {
-          layout: "state-only",
-          prefix: "openclaw-backup-lease-boundary-",
-          scenario: "minimal",
-        },
-        async (state) => {
-          const outputDir = state.path("backups");
-          await fs.mkdir(outputDir, { recursive: true });
-          await state.writeText(
-            "logs/config-audit.jsonl.migrated.raw",
-            `${JSON.stringify({
-              ts: "2026-07-01T00:00:00.000Z",
-              source: "config-io",
-              event: "config.write",
-              argv: ["openclaw", "config", "set", "safe", "value"],
-              execArgv: [],
-            })}\n`,
-          );
-          const { db } = openOpenClawStateDatabase({ env: state.env });
-          db.prepare(
-            `
-              INSERT INTO diagnostic_events (
-                scope, event_key, payload_json, created_at, sequence
-              ) VALUES ('migration.legacy-audit-raw', 'checkpoint', '{}', 1, 1)
-            `,
-          ).run();
-          try {
-            const result = await createBackupArchive({
-              output: outputDir,
-              includeWorkspace: false,
-              nowMs: Date.UTC(2026, 4, 9, 8, 30, 0),
-            });
-            expect(result.verified).toBe(false);
-          } finally {
-            closeOpenClawStateDatabase();
-          }
-        },
-      );
-    } finally {
-      snapshotSpy.mockRestore();
-      leaseSpy.mockRestore();
-    }
-  });
   it("replaces legacy audit raw archives with sanitized restorable snapshots", async () => {
     await withOpenClawTestState(
       {

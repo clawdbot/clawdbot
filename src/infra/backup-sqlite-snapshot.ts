@@ -15,7 +15,7 @@ import {
 } from "../state/openclaw-state-snapshot-sanitizer.js";
 import { isTransientSqliteBackupPath } from "./backup-volatile-filter.js";
 import { hasErrnoCode } from "./errno.js";
-import { formatErrorMessage } from "./errors.js";
+import { collectErrorGraphCandidates, formatErrorMessage } from "./errors.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 import { resolveSqliteDatabaseFilePaths, SQLITE_SIDECAR_SUFFIXES } from "./sqlite-files.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
@@ -35,16 +35,12 @@ type SqliteBackupAsset = {
 function findLegacyAuditBackupStateChange(
   error: unknown,
 ): LegacyAuditBackupStateChangedError | undefined {
-  const seen = new Set<unknown>();
-  let current = error;
-  while (current instanceof Error && !seen.has(current)) {
-    if (current instanceof LegacyAuditBackupStateChangedError) {
-      return current;
-    }
-    seen.add(current);
-    current = current.cause;
-  }
-  return undefined;
+  return collectErrorGraphCandidates(error, (candidate) =>
+    candidate instanceof Error ? [candidate.cause] : [],
+  ).find(
+    (candidate): candidate is LegacyAuditBackupStateChangedError =>
+      candidate instanceof LegacyAuditBackupStateChangedError,
+  );
 }
 
 type CanonicalSqliteSource = {

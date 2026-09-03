@@ -379,7 +379,7 @@ async function createConsistentStateSnapshotPlan(params: {
     await fs.rm(fastAttemptDir, { recursive: true, force: true });
   }
 
-  let lastStateChange: LegacyAuditBackupStateChangedError | undefined;
+  let lastStateChangeMessage: string | undefined;
   for (let attempt = 0; attempt < MAX_LEGACY_AUDIT_CAPTURE_ATTEMPTS; attempt += 1) {
     const attemptDir = path.join(params.tempDir, `state-snapshot-attempt-${attempt + 1}`);
     const verificationDir = path.join(attemptDir, "legacy-verification");
@@ -404,15 +404,15 @@ async function createConsistentStateSnapshotPlan(params: {
       await fs.rm(verificationDir, { recursive: true, force: true });
       return { legacyAuditSnapshots: firstCapture.snapshots, stateSqliteBackup };
     } catch (error) {
-      await fs.rm(attemptDir, { recursive: true, force: true }).catch(() => undefined);
+      await fs.rm(attemptDir, { recursive: true, force: true });
       if (!(error instanceof LegacyAuditBackupStateChangedError)) {
         throw error;
       }
-      lastStateChange = error;
+      lastStateChangeMessage = error.message;
     }
   }
   throw new LegacyAuditBackupStateChangedError(
-    `${lastStateChange?.message ?? "Legacy audit state changed while backup was capturing it"}; retry backup after legacy audit migration settles`,
+    `${lastStateChangeMessage ?? "Legacy audit state changed while backup was capturing it"}; retry backup after legacy audit migration settles`,
   );
 }
 

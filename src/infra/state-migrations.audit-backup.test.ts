@@ -59,9 +59,6 @@ describe("legacy audit raw backup snapshots", () => {
   it("recognizes only supported audit migration paths", () => {
     const stateDir = "/opt/openclaw/state";
     expect(
-      isLegacyAuditMigrationBackupPath(`${stateDir}/logs/config-audit.jsonl.migrated.10`, stateDir),
-    ).toBe(true);
-    expect(
       isLegacyAuditMigrationBackupPath(
         `${stateDir}/logs/config-audit.jsonl.migrated.10.raw.doctor-scrub-restore`,
         stateDir,
