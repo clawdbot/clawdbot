@@ -162,7 +162,6 @@ suite.define(() => {
               ];
               const containsFallback = (text: string | null) =>
                 fallbackMarkers.some((marker) => text?.includes(marker));
-              let settledResultObserved = false;
               new MutationObserver((mutations) => {
                 for (const record of mutations) {
                   const changedText =
@@ -171,13 +170,6 @@ suite.define(() => {
                       : [...record.addedNodes].map((node) => node.textContent);
                   if (changedText.some(containsFallback)) {
                     proofWindow["__OPENCLAW_APPROVAL_FALLBACK_OBSERVED__"] = true;
-                  }
-                  if (
-                    !settledResultObserved &&
-                    changedText.some((text) => text?.includes("Updated logging.level"))
-                  ) {
-                    settledResultObserved = true;
-                    proofWindow["__OPENCLAW_APPROVAL_UI_SEQUENCE__"]?.push("openclaw.tool.result");
                   }
                 }
               }).observe(document, { childList: true, characterData: true, subtree: true });
@@ -293,19 +285,17 @@ suite.define(() => {
             "openclaw.approval.resolved:applied",
             "chat.final",
           ]);
-          const readUiSequence = () =>
-            page.evaluate(
+          expect(
+            await page.evaluate(
               () =>
                 (window as unknown as { __OPENCLAW_APPROVAL_UI_SEQUENCE__: string[] })[
                   "__OPENCLAW_APPROVAL_UI_SEQUENCE__"
                 ],
-            );
-          await expect.poll(readUiSequence, { timeout: 60_000 }).toContain("openclaw.tool.result");
-          expect(await readUiSequence()).toEqual([
+            ),
+          ).toEqual([
             "openclaw.approval.resolved",
             "approval.card.removed",
             "openclaw.approval.resolved:applied",
-            "openclaw.tool.result",
           ]);
 
           const history = await gateway.call("chat.history", { sessionKey, limit: 30 });
@@ -316,6 +306,14 @@ suite.define(() => {
           expect(results[0]?.reply).toContain("Updated logging.level");
           expect(JSON.stringify(history)).not.toContain("/approve");
           expect(loggingLevel(JSON.parse(await readFile(gateway.configPath, "utf8")))).toBe("info");
+          const settledToolSummaries = page.locator(".chat-tool-msg-summary");
+          await settledToolSummaries.first().waitFor();
+          for (const summary of await settledToolSummaries.all()) {
+            await summary.click();
+          }
+          await page
+            .locator(".chat-tool-msg-body", { hasText: /Updated logging\.level/u })
+            .waitFor();
           await page.screenshot({ path: path.join(proofDir, "02-approved.png") });
 
           expect(await approvalFallbackWasObserved()).toBe(false);
