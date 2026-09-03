@@ -75,7 +75,10 @@ The following lifecycle applies to workspace proposals:
 - **Directory-owned updates:** creates and updates stay inside
   `<state-dir>/agents/<agentId>/agent/workshop-skills`. A skill is Workshop-owned
   exactly when it is contained in that agent's directory.
-- **No clobber:** create fails if the target skill already exists.
+- **No clobber:** create fails if the target already exists in that agent's
+  Workshop directory. A same-named skill from another source (bundled, plugin,
+  workspace, personal) is never touched; it keeps its precedence over the new
+  Workshop skill.
 - **Hash bound:** update proposals bind to the current target hash and go
   `stale` if the live skill changes before apply.
 - **Scanner gated:** apply reruns the security scanner before writing. Only
@@ -105,7 +108,9 @@ Only a `pending` proposal can be revised, applied, rejected, or quarantined.
 
 ## Collection review
 
-In `auto` mode, the Gateway runs one system-owned cron job per agent each week.
+In `auto` mode, the Gateway runs one system-owned cron job per agent each week
+(a multi-agent roster needs `agents.ownership: "explicit"`, see
+[Multi-agent](/concepts/multi-agent)).
 Each job appears in `openclaw cron list` and runs every 7 days. Cron owns the
 cadence; the job is enabled only when
 `skills.workshop.autonomous.mode` is `auto`. The review can only read skills
