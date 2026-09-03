@@ -148,6 +148,8 @@ export async function executeCliProcess(params: {
   // Stdout bytes are this backend's liveness proof: the same signal its own
   // no-output watchdog trusts. Publishing them as run progress keeps the
   // stuck-session watchdog from reclaiming a turn that is still streaming.
+  // Skipped while a parsed tool owns the turn: that window belongs to
+  // blocked-tool recovery, which reads the same clock and must still expire.
   const reportStreamProgress = createModelCallStreamProgressReporter();
   const streamProgressTarget = {
     runId: runParams.runId,
@@ -157,7 +159,9 @@ export async function executeCliProcess(params: {
   const consumeStdout = (chunk: string) => {
     const chunkBytes = Buffer.byteLength(chunk);
     params.diagnostics?.observeCliOutput(chunk, "stdout", chunkBytes);
-    reportStreamProgress(streamProgressTarget);
+    if (params.events.activeParsedToolCount() === 0) {
+      reportStreamProgress(streamProgressTarget);
+    }
     stdoutBytes += chunkBytes;
     stdoutHash.update(chunk);
     stdoutTail = appendCliOutputTail(stdoutTail, chunk);

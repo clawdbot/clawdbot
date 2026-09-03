@@ -16,6 +16,7 @@ import {
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
   type TrustedToolExecutionEvent,
+  waitForDiagnosticEventsDrained,
 } from "../../infra/diagnostic-events.js";
 import {
   getDiagnosticSessionActivitySnapshot,
@@ -264,6 +265,60 @@ describe("executePreparedCliRun supervisor output capture", () => {
           sessionKey: context.params.sessionKey,
         }),
       ).toMatchObject({ lastProgressReason: "model_call:stream_progress" });
+    } finally {
+      resetDiagnosticRunActivityForTest();
+      setDiagnosticsEnabledForProcess(false);
+    }
+  });
+
+  it("does not refresh the progress clock from stdout while a parsed tool owns the turn", async () => {
+    setDiagnosticsEnabledForProcess(true);
+    startDiagnosticRunActivityTracking();
+    try {
+      const toolUse = `${JSON.stringify({
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "tool-1", name: "Bash", input: { command: "sleep" } }],
+        },
+      })}\n`;
+      const resultEvent = `${JSON.stringify({
+        type: "result",
+        session_id: "session-blocked-tool",
+        result: "final answer",
+      })}\n`;
+      const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
+      const sessionRef = {
+        sessionId: context.params.sessionId,
+        sessionKey: context.params.sessionKey,
+      };
+      let progressReasonWhileToolOpen: string | undefined;
+      supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const input = args[0] as SupervisorSpawnInput;
+        input.onStdout?.(toolUse);
+        // Let the tool-start event land so the clock reads tool:Bash:started.
+        await waitForDiagnosticEventsDrained();
+        // Chatter emitted while the tool is still open must not look like progress,
+        // or a wedged tool never ages into blocked-tool recovery.
+        input.onStdout?.("noise");
+        progressReasonWhileToolOpen =
+          getDiagnosticSessionActivitySnapshot(sessionRef).lastProgressReason;
+        input.onStdout?.(resultEvent);
+        return createManagedRun({
+          reason: "exit",
+          exitCode: 0,
+          exitSignal: null,
+          durationMs: 50,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+          noOutputTimedOut: false,
+        });
+      });
+
+      await executePreparedCliRun(context);
+
+      expect(progressReasonWhileToolOpen).toBe("tool:Bash:started");
     } finally {
       resetDiagnosticRunActivityForTest();
       setDiagnosticsEnabledForProcess(false);
