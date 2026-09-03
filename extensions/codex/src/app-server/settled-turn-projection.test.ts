@@ -159,6 +159,26 @@ describe("projectSettledCodexMessages", () => {
     expect(ids[0]).not.toBe(ids[2]);
   });
 
+  it("rejects at the item limit without draining the rest of the history", () => {
+    // settled-turn-context passes a generator that pulls message payloads
+    // lazily, so the projection has to fail before the tail is read. Learning
+    // every call id up front (to keep rewrites off replayed ids) must not cost
+    // that laziness.
+    let pulled = 0;
+    function* history(): Generator<AgentMessage> {
+      for (let index = 0; index < 400; index += 1) {
+        pulled += 1;
+        yield toolCall(`call-${index}`);
+        pulled += 1;
+        yield toolResult(`call-${index}`);
+      }
+      throw new Error("history was drained past the projection limit");
+    }
+
+    expect(() => projectSettledCodexMessages(history())).toThrow("exceeds the item limit");
+    expect(pulled).toBeLessThan(400);
+  });
+
   it("keeps a complete transcript when a raw id equals an overlength id's rewrite", () => {
     // The rewrite lands in the same call_ space that raw ids occupy, so a
     // transcript can legitimately carry both. Reserving passthrough ids keeps

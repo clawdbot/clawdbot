@@ -58,35 +58,6 @@ function requireCallId(value: unknown): string {
   return callId;
 }
 
-/** Every id the transcript replays verbatim, so a rewrite can never land on one. */
-function collectPassthroughCallIds(messages: readonly AgentMessage[]): Set<string> {
-  const reserved = new Set<string>();
-  const reserve = (value: unknown) => {
-    const id = normalizeOptionalString(value);
-    if (id && id.length <= OPENAI_RESPONSES_CALL_ID_MAX_LENGTH) {
-      reserved.add(id);
-    }
-  };
-  for (const message of messages) {
-    if (!isRecord(message)) {
-      continue;
-    }
-    if (message.role === "toolResult") {
-      reserve(message.toolCallId);
-      continue;
-    }
-    if (message.role !== "assistant" || !Array.isArray(message.content)) {
-      continue;
-    }
-    for (const value of message.content) {
-      if (isRecord(value) && value.type === "toolCall") {
-        reserve(value.id ?? value.toolCallId);
-      }
-    }
-  }
-  return reserved;
-}
-
 function buildProjectedCallId(id: string, salt: number): string {
   const salted = salt === 0 ? id : `${id}\u0000${salt}`;
   const hashSuffix = `_${createHash("sha256").update(salted).digest("hex").slice(0, 10)}`;
@@ -209,7 +180,6 @@ function projectUserMessage(message: Extract<AgentMessage, { role: "user" }>): J
 
 function* projectAssistantMessage(
   message: Extract<AgentMessage, { role: "assistant" }>,
-  resolveCallId: (id: string) => string,
 ): Generator<ProjectedResponseItem> {
   const values: unknown =
     typeof message.content === "string"
@@ -232,7 +202,7 @@ function* projectAssistantMessage(
       continue;
     }
     if (value.type === "toolCall") {
-      const id = resolveCallId(requireCallId(value.id ?? value.toolCallId));
+      const id = requireCallId(value.id ?? value.toolCallId);
       const name = requireToolName(value.name ?? value.toolName);
       yield {
         call: { id, name },
@@ -255,14 +225,11 @@ function* projectAssistantMessage(
   }
 }
 
-function projectToolResult(
-  message: Extract<AgentMessage, { role: "toolResult" }>,
-  resolveCallId: (id: string) => string,
-): {
+function projectToolResult(message: Extract<AgentMessage, { role: "toolResult" }>): {
   item: JsonValue;
   result: ProjectedToolReference;
 } {
-  const id = resolveCallId(requireCallId(message.toolCallId));
+  const id = requireCallId(message.toolCallId);
   const name = requireToolName(message.toolName);
   if (!Array.isArray(message.content)) {
     throw new Error("Codex settled-turn projection found unsupported tool result content");
@@ -319,19 +286,56 @@ function projectToolResult(
   };
 }
 
-function* projectMessage(
-  message: AgentMessage,
-  resolveCallId: (id: string) => string,
-): Generator<ProjectedResponseItem> {
+function* projectMessage(message: AgentMessage): Generator<ProjectedResponseItem> {
   if (message.role === "user") {
     yield { item: projectUserMessage(message) };
   } else if (message.role === "assistant") {
-    yield* projectAssistantMessage(message, resolveCallId);
+    yield* projectAssistantMessage(message);
   } else if (message.role === "toolResult") {
-    yield projectToolResult(message, resolveCallId);
+    yield projectToolResult(message);
   } else {
     throw new Error(`Codex settled-turn projection does not support role ${message.role}`);
   }
+}
+
+/**
+ * Rewrites overlength `call_id`s once the transcript is known to be complete.
+ *
+ * This runs after streaming rather than during it on purpose. The caller passes
+ * a generator that pulls message payloads lazily, so the projection must stay
+ * able to reject at its item and byte limits before the rest of the history is
+ * read; materializing the input to learn every id up front would defeat that.
+ * Deferring instead keeps the stream lazy and still gives the resolver the full
+ * set of replayed ids, which it needs so a rewrite never lands on one.
+ *
+ * Bookkeeping upstream keys on the original ids, so a rewrite cannot invent a
+ * duplicate: the pairs are already proven unique and complete by this point.
+ */
+function rewriteOverlengthCallIds(items: JsonValue[], callIds: Iterable<string>): JsonValue[] {
+  const reserved = new Set<string>();
+  let hasOverlength = false;
+  for (const id of callIds) {
+    if (id.length <= OPENAI_RESPONSES_CALL_ID_MAX_LENGTH) {
+      reserved.add(id);
+    } else {
+      hasOverlength = true;
+    }
+  }
+  if (!hasOverlength) {
+    return items;
+  }
+  const resolveCallId = createProjectedCallIdResolver(reserved);
+  return items.map((item) => {
+    if (!isRecord(item)) {
+      return item;
+    }
+    const callId = item.call_id;
+    if (typeof callId !== "string") {
+      return item;
+    }
+    const resolved = resolveCallId(callId);
+    return resolved === callId ? item : { ...item, call_id: resolved };
+  });
 }
 
 /** Consumes complete evidence or rejects at the existing limits, never truncating its history. */
@@ -339,11 +343,9 @@ export function projectSettledCodexMessages(messages: Iterable<AgentMessage>): J
   const items: JsonValue[] = [];
   const calls = new Map<string, string>();
   const results = new Set<string>();
-  const orderedMessages = [...messages];
-  const resolveCallId = createProjectedCallIdResolver(collectPassthroughCallIds(orderedMessages));
   let bytes = 0;
-  for (const message of orderedMessages) {
-    for (const { item, call, result } of projectMessage(message, resolveCallId)) {
+  for (const message of messages) {
+    for (const { item, call, result } of projectMessage(message)) {
       if (call) {
         if (calls.has(call.id)) {
           throw new Error("Codex settled-turn projection found a duplicate tool call");
@@ -372,5 +374,5 @@ export function projectSettledCodexMessages(messages: Iterable<AgentMessage>): J
   if (results.size === 0) {
     throw new Error("Codex settled-turn projection found no completed tool result");
   }
-  return items;
+  return rewriteOverlengthCallIds(items, calls.keys());
 }
