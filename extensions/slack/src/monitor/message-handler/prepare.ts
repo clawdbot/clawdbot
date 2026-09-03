@@ -56,7 +56,7 @@ import {
 import { resolveSlackChannelConfig } from "../channel-config.js";
 import { stripSlackMentionsForCommandDetection } from "../commands.js";
 import {
-  readSessionUpdatedAt,
+  getSessionEntry,
   resolveChannelContextVisibilityMode,
   resolveStorePath,
 } from "../config.runtime.js";
@@ -1534,10 +1534,11 @@ export async function prepareSlackMessage(params: {
     agentId: route.agentId,
   });
   const envelopeOptions = resolveEnvelopeFormatOptions(ctx.cfg);
-  const previousTimestamp = readSessionUpdatedAt({
+  const sessionEntry = getSessionEntry({
     storePath,
     sessionKey,
   });
+  const previousTimestamp = sessionEntry?.updatedAt;
   if (opts.source === "app_mention" && !ctx.botUserId && message.ts) {
     // The Slack message event can arrive first and queue the same timestamp as dropped history.
     // Remove only this route's copy before the trusted app_mention builds prompt context.
@@ -1857,6 +1858,7 @@ export async function prepareSlackMessage(params: {
     channelConfig,
     replyTarget,
     ctxPayload,
+    sessionDisplayName: sessionEntry?.displayName,
     turn: {
       storePath,
       record: {

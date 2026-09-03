@@ -755,6 +755,29 @@ describe("initSessionState guarded initialization", () => {
 });
 
 describe("initSessionState thread forking", () => {
+  it("keeps an existing display name when the thread label changes", async () => {
+    const storePath = await createStorePath("openclaw-thread-title-");
+    const sessionKey = "agent:main:slack:channel:c1:thread:123";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "named-thread",
+        updatedAt: Date.now(),
+        displayName: "User title",
+      },
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "Thread reply",
+        SessionKey: sessionKey,
+        ThreadLabel: "Slack thread #general: changed starter",
+      },
+      cfg: { session: { store: storePath } },
+    });
+
+    expect(result.sessionEntry.displayName).toBe("User title");
+  });
+
   it("forks a new SQLite session from the parent session", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const root = await makeCaseDir("openclaw-thread-session-");

@@ -454,6 +454,8 @@ Enterprise Grid organization installation, use the dedicated
         "app_home_opened",
         "app_mention",
         "app_context_changed",
+        "agent_session_stopped",
+        "agent_session_title_changed",
         "channel_rename",
         "member_joined_channel",
         "member_left_channel",
@@ -528,6 +530,8 @@ Enterprise Grid organization installation, use the dedicated
         "app_home_opened",
         "app_mention",
         "app_context_changed",
+        "agent_session_stopped",
+        "agent_session_title_changed",
         "message.channels",
         "message.groups",
         "message.im"
@@ -669,6 +673,8 @@ openclaw gateway
         "app_home_opened",
         "app_mention",
         "app_context_changed",
+        "agent_session_stopped",
+        "agent_session_title_changed",
         "channel_rename",
         "member_joined_channel",
         "member_left_channel",
@@ -749,6 +755,8 @@ openclaw gateway
         "app_home_opened",
         "app_mention",
         "app_context_changed",
+        "agent_session_stopped",
+        "agent_session_title_changed",
         "message.channels",
         "message.groups",
         "message.im"
@@ -972,6 +980,8 @@ Base manifest (Socket Mode default):
         "app_home_opened",
         "app_mention",
         "app_context_changed",
+        "agent_session_stopped",
+        "agent_session_title_changed",
         "channel_rename",
         "member_joined_channel",
         "member_left_channel",
@@ -1010,6 +1020,8 @@ For **HTTP Request URLs mode**, replace `settings` with the HTTP variant and add
         "app_home_opened",
         "app_mention",
         "app_context_changed",
+        "agent_session_stopped",
+        "agent_session_title_changed",
         "channel_rename",
         "member_joined_channel",
         "member_left_channel",
@@ -1038,7 +1050,9 @@ Surface different features that extend the above defaults.
 
 The default manifest enables the Slack App Home **Home** tab and subscribes to `app_home_opened`. When a workspace member opens the Home tab, OpenClaw publishes a safe default Home view with `views.publish`; no conversation payload or private configuration is included. When single slash command mode is enabled, the command hint uses `channels.slack.slashCommand.name`; installations using native commands or no slash commands omit that hint. The **Messages** tab remains enabled for Slack DMs. New apps use Slack Agent View through `features.agent_view`, `assistant:write`, and `app_context_changed`. See [Agent View DMs](/channels/slack#agent-view-dms) for how OpenClaw detects the experience and routes each visible root to its own session.
 
-Existing apps that already use `features.assistant_view` can keep their current manifest. OpenClaw continues to handle `assistant_thread_started` and `assistant_thread_context_changed` for those installs. Slack makes migration from Assistant View to Agent View irreversible and requires users to hard refresh afterward, so do not replace `assistant_view` on an existing app until you intend to migrate the whole workspace.
+OpenClaw drives Slack session status: `processing` while a turn runs, `suspended` while a native approval waits, and `active` when done. The native **Stop** button requires the `agent_session_stopped` event subscription and aborts the run like `/stop`, with the same authorization checks. Session titles follow the OpenClaw session display name; the `agent_session_title_changed` subscription lets user renames flow back to OpenClaw.
+
+Existing apps that already use `features.assistant_view` can keep that feature setting. OpenClaw continues to handle `assistant_thread_started` and `assistant_thread_context_changed` for those installs; add the same session event subscriptions for Stop and title synchronization. Slack makes migration from Assistant View to Agent View irreversible and requires users to hard refresh afterward, so do not replace `assistant_view` on an existing app until you intend to migrate the whole workspace.
 
 <AccordionGroup>
   <Accordion title="Optional native slash commands">
@@ -1597,7 +1611,7 @@ Slack still uses normal final delivery when the reply cannot safely replace the 
 
 Both surfaces link the session with **Open in OpenClaw**, but only when that link can work: `gateway.publicOrigin` must be set (the externally reachable Gateway origin) and the Control UI must not be disabled via `gateway.controlUi.enabled: false`. Installations that leave `publicOrigin` unset — where there is no way to reach OpenClaw from Slack — get no link rather than a dead one. If the Control UI is served below a path prefix, also set `gateway.controlUi.basePath`.
 
-- A reply thread must be available for native text streaming and Slack assistant thread status to appear. Thread selection still follows `replyToMode`.
+- A reply thread must be available for native text streaming and Slack session status to appear. Thread selection still follows `replyToMode`.
 - Channel, group-chat, and top-level DM roots can still use the normal draft preview when native streaming is unavailable or no reply thread exists.
 - Top-level Slack DMs stay off-thread by default, so they do not show Slack's thread-style native stream/status preview; OpenClaw posts and edits a draft preview in the DM instead.
 - Custom outbound username/icon settings keep portable previews enabled. OpenClaw keeps the preview or session card app-authored and delivers the customized final separately. Slack does not allow impersonated messages to be deleted.
@@ -1647,7 +1661,7 @@ Legacy keys:
 
 ## Typing reaction fallback
 
-`typingReaction` adds a temporary reaction to the inbound Slack message while OpenClaw is processing a reply, then removes it when the run finishes. This is most useful outside of thread replies, which use a default "is typing..." status indicator.
+`typingReaction` adds a temporary reaction to the inbound Slack message while OpenClaw is processing a reply, then removes it when the run finishes. This is most useful outside of thread replies, which use Slack's `processing` session status.
 
 Resolution order:
 

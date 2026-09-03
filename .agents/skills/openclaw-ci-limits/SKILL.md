@@ -261,6 +261,11 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   comparison; capacity alone is not a measured speedup.
 - The Docker seed job requests `blacksmith-32vcpu-ubuntu-2404`; its weighted
   scheduler and serial declaration compiler policy stay unchanged.
+- Eligible Control UI E2E rows request the 32-vCPU class, retaining the same
+  backend/event/contributor routing, twelve current shards and two/one-worker
+  project limits. The browser-extension row stays on 8 and real-Gateway on 16.
+  The measured two-CPU UI tails require native timing on the larger class;
+  this adds no registrations and does not refresh stale timing weights.
 - `build-artifacts` on `blacksmith-32vcpu-ubuntu-2404`.
 - CPU-heavy test-type, core test-type stripe, runtime-topology, and npm preflight
   jobs request `blacksmith-32vcpu-ubuntu-2404`. The 2026-09-01 x64 probe
