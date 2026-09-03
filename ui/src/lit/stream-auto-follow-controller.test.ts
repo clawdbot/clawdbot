@@ -58,8 +58,9 @@ function createController(
 ) {
   const { container, state } = createScrollContainer();
   const host = createHost(container);
+  const isEnabledOption = options.isEnabled;
   const isEnabled =
-    typeof options.isEnabled === "function" ? options.isEnabled : () => options.isEnabled ?? true;
+    typeof isEnabledOption === "function" ? isEnabledOption : () => isEnabledOption ?? true;
   const controller = new StreamAutoFollowController(host, {
     selector: ".scroll",
     isEnabled,
@@ -174,8 +175,8 @@ describe("StreamAutoFollowController", () => {
   });
 
   it("keeps settling while the captured epoch and enablement stay valid", async () => {
-    let current = true;
-    let enabled = true;
+    const current = true;
+    const enabled = true;
     const { controller, state } = createController({
       isEnabled: () => enabled,
       captureCurrent: () => () => current,

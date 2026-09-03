@@ -30,8 +30,8 @@ type LateRowGrowthOptions = {
 
 declare global {
   interface Window {
-    __settleGrowthStarted?: boolean;
-    __settleGrowthDone?: boolean;
+    settleGrowthStarted?: boolean;
+    settleGrowthDone?: boolean;
   }
 }
 
@@ -43,19 +43,19 @@ declare global {
  */
 async function installLateRowGrowth(page: Page, options: LateRowGrowthOptions): Promise<void> {
   await page.addInitScript((opts: LateRowGrowthOptions) => {
-    window.__settleGrowthStarted = false;
-    window.__settleGrowthDone = false;
+    window.settleGrowthStarted = false;
+    window.settleGrowthDone = false;
     const growPxPerFrame = opts.growPxPerFrame ?? 60;
     const growFrames = opts.growFrames ?? 10;
     const startGrowth = (container: Element) => {
-      if (window.__settleGrowthStarted) {
+      if (window.settleGrowthStarted) {
         return;
       }
-      window.__settleGrowthStarted = true;
+      window.settleGrowthStarted = true;
       const rows = container.querySelectorAll(opts.rowSelector);
       const target = rows[Math.max(0, rows.length - 3)];
       if (!(target instanceof HTMLElement)) {
-        window.__settleGrowthDone = true;
+        window.settleGrowthDone = true;
         return;
       }
       let frame = 0;
@@ -66,7 +66,7 @@ async function installLateRowGrowth(page: Page, options: LateRowGrowthOptions): 
         if (frame < growFrames) {
           requestAnimationFrame(step);
         } else {
-          window.__settleGrowthDone = true;
+          window.settleGrowthDone = true;
         }
       };
       requestAnimationFrame(step);
@@ -92,7 +92,7 @@ function distanceFromBottom(stream: Locator): Promise<number> {
 }
 
 async function expectPinnedAfterSettle(page: Page, stream: Locator): Promise<void> {
-  await page.waitForFunction(() => window.__settleGrowthDone === true);
+  await page.waitForFunction(() => window.settleGrowthDone === true);
   // The settle loop chases late growth back to the bottom within its bounded
   // window; give the poll enough room for the full 12-frame chase.
   await expect.poll(() => distanceFromBottom(stream)).toBeLessThan(2);
