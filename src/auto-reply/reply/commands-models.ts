@@ -47,7 +47,10 @@ import { resolveAgentRuntimeLabel } from "../../status/agent-runtime-label.js";
 import type { ReplyPayload } from "../types.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
-import { resolveRuntimeNormalization } from "./model-runtime-normalization.js";
+import {
+  readRuntimeNormalizationMetadataSnapshot,
+  resolveRuntimeNormalization,
+} from "./model-runtime-normalization.js";
 
 const PAGE_SIZE_DEFAULT = 20;
 const PAGE_SIZE_MAX = 100;
@@ -184,7 +187,11 @@ async function buildPreparedDataForConfig(
   agentId: string | undefined,
   options: { view?: "default" | "all"; workspaceDir?: string },
 ): Promise<PreparedModelsProviderData> {
-  const runtimeNormalization = resolveRuntimeNormalization(cfg);
+  // One browse resolves plugin metadata once: the same snapshot feeds model-ref
+  // normalization and the app-server runtime-owner checks below, so neither the
+  // manifest registry nor the plugin index is reloaded per runtime binding.
+  const pluginMetadataSnapshot = readRuntimeNormalizationMetadataSnapshot(cfg);
+  const runtimeNormalization = resolveRuntimeNormalization(cfg, pluginMetadataSnapshot);
   const resolvedDefault = resolveDefaultModelForAgent({
     cfg,
     agentId,
@@ -402,6 +409,7 @@ async function buildPreparedDataForConfig(
             provider: binding.provider,
             config: cfg,
             workspaceDir,
+            ...(pluginMetadataSnapshot ? { metadataSnapshot: pluginMetadataSnapshot } : {}),
           }).length > 0,
       )
       .map((binding) => ({
