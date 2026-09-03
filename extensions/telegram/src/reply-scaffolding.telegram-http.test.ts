@@ -1,6 +1,6 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
-import { expectDefined } from "@openclaw/normalization-core";
+import { sanitizeForPlainText } from "openclaw/plugin-sdk/channel-outbound";
 import { buildHistoryContext } from "openclaw/plugin-sdk/reply-history";
 import {
   createReplyDispatcher,
@@ -8,7 +8,6 @@ import {
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-runtime";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { telegramOutbound } from "./outbound-adapter.js";
 import { sendMessageTelegram } from "./send.js";
 
 describe("reply scaffolding through final preparation and Telegram HTTP", () => {
@@ -136,15 +135,14 @@ describe("reply scaffolding through final preparation and Telegram HTTP", () => 
     expect(delivered).toEqual(["Visible answer."]);
   });
 
-  it("projects unspaced labeled links through the production Telegram outbound adapter", async () => {
+  it("projects unspaced labeled links through the public Telegram plain-text contract", async () => {
     const cfg = {
       channels: {
         telegram: { botToken: "123456:telegram-plugin-http-fixture", apiRoot },
       },
     };
     const source = "<https://example.com/a.pdf|Manual>";
-    const sanitizeText = expectDefined(telegramOutbound.sanitizeText, "telegram sanitizeText");
-    const text = sanitizeText({ text: source, payload: { text: source }, cfg });
+    const text = sanitizeForPlainText(source, { style: "markdown" });
 
     await sendMessageTelegram("123", text, { cfg });
 
