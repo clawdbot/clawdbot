@@ -7,11 +7,11 @@ function createExtensionCodexAppServerAttemptSupportVitestConfig(
   return createScopedVitestConfig(
     [
       "extensions/codex/src/app-server/attempt-context.test.ts",
+      "extensions/codex/src/app-server/attempt-deadlines.test.ts",
       "extensions/codex/src/app-server/attempt-notifications.test.ts",
       "extensions/codex/src/app-server/attempt-results.test.ts",
-      "extensions/codex/src/app-server/attempt-startup.test.ts",
+      "extensions/codex/src/app-server/attempt-startup*.test.ts",
       "extensions/codex/src/app-server/attempt-timeouts.test.ts",
-      "extensions/codex/src/app-server/attempt-turn-watches.test.ts",
     ],
     {
       dir: "extensions",

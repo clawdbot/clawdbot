@@ -1,11 +1,14 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { createSessionCapability } from "../../lib/sessions/index.ts";
+import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import {
   createContext,
   createGateway,
@@ -22,6 +25,57 @@ afterEach(() => {
 });
 
 describe("sessions page archived deletion", () => {
+  it("removes a confirmed selection while the delete RPC is pending and restores it on rejection", async () => {
+    const target = {
+      key: "agent:main:cloud",
+      kind: "direct" as const,
+      sessionId: "cloud-id",
+      label: "Cloud thread",
+      archived: true,
+      updatedAt: 1,
+    };
+    const response = createDeferred<{ deleted: boolean }>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.delete") {
+        return response.promise;
+      }
+      if (method === "sessions.list") {
+        return sessionsResult([target], 1);
+      }
+      if (method === "sessions.subscribe") {
+        return { subscribed: true };
+      }
+      return {};
+    });
+    const { gateway } = createGateway({ request } as unknown as GatewayBrowserClient);
+    const sessions = createSessionCapability(gateway);
+    const page = await createRenderedPage(
+      createContext(gateway, sessions),
+      sessionsResult([target], 1),
+      "archived",
+    );
+    try {
+      await sessions.refreshList({ agentId: "main", archivedFilter: "archived" });
+      vi.mocked(showConfirmDialog).mockResolvedValue(true);
+      const operation = page.deleteSessionFromMenu(target);
+      await vi.waitFor(() =>
+        expect(request).toHaveBeenCalledWith(
+          "sessions.delete",
+          expect.objectContaining({ key: target.key }),
+          { timeoutMs: 10 * 60_000 },
+        ),
+      );
+      expect(page.result?.sessions).toEqual([]);
+      response.reject(new Error("cloud cleanup failed"));
+      await operation;
+      expect(page.result?.sessions.map(({ key }) => key)).toContain(target.key);
+      expect(page.error).toContain("cloud cleanup failed");
+    } finally {
+      page.remove();
+      sessions.dispose();
+    }
+  });
+
   it("re-enumerates all archived sessions before bulk deletion", async () => {
     // The rendered result holds one archived row; enumeration must find both.
     const archivedKeys = ["agent:main:old-1", "agent:main:old-2"];
@@ -63,7 +117,8 @@ describe("sessions page archived deletion", () => {
       expect.objectContaining({ archivedFilter: "archived", limit: 1000 }),
     );
     expect(showConfirmDialog).toHaveBeenCalledWith({
-      message: "Delete 2 archived sessions and their transcripts?",
+      message:
+        "Delete 2 archived sessions and their transcripts? Any attached workers will be stopped safely first.",
       confirmLabel: "Delete",
       danger: true,
     });
@@ -171,7 +226,8 @@ describe("sessions page archived deletion", () => {
     expect(list).toHaveBeenCalledTimes(2);
     expect(list).toHaveBeenNthCalledWith(2, expect.objectContaining({ offset: 2 }));
     expect(showConfirmDialog).toHaveBeenCalledWith({
-      message: "Delete 3 archived sessions and their transcripts?",
+      message:
+        "Delete 3 archived sessions and their transcripts? Any attached workers will be stopped safely first.",
       confirmLabel: "Delete",
       danger: true,
     });
@@ -236,7 +292,8 @@ describe("sessions page archived deletion", () => {
 
     expect(list).toHaveBeenCalledTimes(3);
     expect(showConfirmDialog).toHaveBeenCalledWith({
-      message: "Delete 3 archived sessions and their transcripts?",
+      message:
+        "Delete 3 archived sessions and their transcripts? Any attached workers will be stopped safely first.",
       confirmLabel: "Delete",
       danger: true,
     });
@@ -350,7 +407,8 @@ describe("sessions page archived deletion", () => {
         expect(options).not.toHaveProperty("agentId");
       }
       expect(showConfirmDialog).toHaveBeenCalledWith({
-        message: "Delete 2 archived sessions and their transcripts?",
+        message:
+          "Delete 2 archived sessions and their transcripts? Any attached workers will be stopped safely first.",
         confirmLabel: "Delete",
         danger: true,
       });

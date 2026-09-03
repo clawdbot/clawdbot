@@ -1,5 +1,8 @@
 import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
-import { sanitizeExecApprovalWarningTextWithStatus } from "../../infra/exec-approval-command-display.js";
+import {
+  exceedsApprovalTextLimit,
+  sanitizeExecApprovalWarningTextWithStatus,
+} from "../../infra/exec-approval-text-sanitize.js";
 import type { ExecAsk, ExecSecurity } from "../../infra/exec-approvals.js";
 import {
   DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS,
@@ -193,7 +196,10 @@ export async function requestCliNativeToolApproval(params: {
         summarySanitization?.truncated === true ||
         summarySanitization?.oversized === true ||
         (summarySanitization &&
-          Array.from(summarySanitization.text).length > PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH))
+          exceedsApprovalTextLimit(
+            summarySanitization.text,
+            PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH,
+          )))
     ) {
       return { kind: "deny", reason: "policy-oversized" };
     }

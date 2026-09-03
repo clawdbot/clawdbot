@@ -49,9 +49,9 @@ describe("secrets path utils", () => {
     const config = createAgentListConfig();
 
     expect(() =>
-      setPathCreateStrict(config, ["agents", "list", "9007199254740993", "id"], "b"),
+      setPathCreateStrict(config, ["agents", "list", Number.MAX_SAFE_INTEGER + 2, "id"], "b"),
     ).toThrow(/Invalid array index segment/);
-    expect(() => setPathCreateStrict(config, ["agents", "list", "4294967294", "id"], "b")).toThrow(
+    expect(() => setPathCreateStrict(config, ["agents", "list", 4294967294, "id"], "b")).toThrow(
       /Invalid array index segment/,
     );
     expect(() => setPathCreateStrict(config, ["agents", "list", "+0", "id"], "b")).toThrow(
@@ -118,6 +118,33 @@ describe("secrets path utils", () => {
     expect(changed).toBe(true);
     expect(getPath(config, ["talk", "provider", "apiKey"])).toBe("x");
   });
+
+  it.each([
+    {
+      name: "array index",
+      segment: 0,
+      expected: { accounts: [{ token: "secret" }] },
+      mismatched: { accounts: { "0": { token: "old" } } },
+    },
+    {
+      name: "numeric record key",
+      segment: "0",
+      expected: { accounts: { "0": { token: "secret" } } },
+      mismatched: { accounts: [{ token: "old" }] },
+    },
+  ])(
+    "setPathCreateStrict preserves the $name container contract",
+    ({ segment, expected, mismatched }) => {
+      const config = asConfig({});
+
+      expect(setPathCreateStrict(config, ["accounts", segment, "token"], "secret")).toBe(true);
+      expect(config).toEqual(expected);
+      expect(() =>
+        setPathCreateStrict(asConfig(mismatched), ["accounts", segment, "token"], "secret"),
+      ).toThrow(/Invalid path shape/);
+      expect(mismatched.accounts[0].token).toBe("old");
+    },
+  );
 
   it("setPathCreateStrict leaves value unchanged when equal", () => {
     const config = asConfig({

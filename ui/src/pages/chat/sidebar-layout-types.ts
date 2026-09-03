@@ -21,7 +21,6 @@ export type SidebarColumn = {
 export type SidebarLayout = {
   columns: SidebarColumn[];
   dock?: SidebarDock;
-  /** The panel may stay open as a type picker after its last tab closes. */
   open?: boolean;
   expanded?: boolean;
 };

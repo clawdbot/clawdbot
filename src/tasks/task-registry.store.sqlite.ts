@@ -295,6 +295,17 @@ export function listTaskRecordsByRuntimeSourceIdInDatabase(
   return selectTaskRowsByRuntimeSourceId(db, runtime, sourceId).map(rowToTaskRecord);
 }
 
+export function readTaskRecord(db: DatabaseSync, taskId: string): TaskRecord | undefined {
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    getTaskRegistryKysely(db)
+      .selectFrom("task_runs")
+      .select(TASK_RUN_SELECT_COLUMNS)
+      .where("task_id", "=", taskId),
+  );
+  return row ? rowToTaskRecord(row) : undefined;
+}
+
 function selectTaskDeliveryStateRows(db: DatabaseSync): TaskDeliveryStateRow[] {
   const query = getTaskRegistryKysely(db)
     .selectFrom("task_delivery_state")

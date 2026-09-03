@@ -1,5 +1,5 @@
 /** Owns side-effect-sensitive retry and silent-reply recovery policy. */
-import { isReplayUnsafeAssistantError } from "../../../llm/utils/retry.js";
+import { isTerminalAssistantError } from "../../../llm/utils/retry.js";
 import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { hasOnlyAssistantReasoningContent } from "../../replay-turn-classification.js";
 import { TOOL_FAILURE_INSTRUCTION } from "../../tool-outcome-instructions.js";
@@ -12,12 +12,12 @@ import {
   hasAsyncActivity,
   hasAttemptTerminalState,
   isCurrentAttemptReplaySafe,
+  resolveCurrentAttemptAssistant,
 } from "./attempt-terminal-evidence.js";
 import {
+  classifyAssistantTurn,
   hasOnlySilentAssistantReply,
   hasPositiveOutputTokenUsage,
-  isEmptyResponseAssistantTurn,
-  isNonVisibleAssistantTurnEligibleForSilentReply,
   isOllamaIncompleteTurnProvider,
   isReasoningOnlyAssistantTurn,
   isUnsignedThinkingOnlyAssistantTurn,
@@ -70,7 +70,7 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
   }
 
   const assistant = params.assistant;
-  if (!assistant || assistant.stopReason !== "error" || isReplayUnsafeAssistantError(assistant)) {
+  if (!assistant || assistant.stopReason !== "error" || isTerminalAssistantError(assistant)) {
     return false;
   }
 
@@ -89,17 +89,19 @@ function shouldSkipNonVisibleTurnRetry(params: {
   aborted: boolean;
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
-  /** Reply-optional silent classification tolerates committed side effects; retries never can. */
+  /** Silent classification can tolerate completed effects, never unfinished work or replay. */
   tolerateSideEffects?: boolean;
 }): boolean {
   return Boolean(
     params.aborted ||
     params.timedOut ||
+    params.attempt.terminal.kind === "failed" ||
     params.attempt.clientToolCalls ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
     params.attempt.lastToolError ||
     hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns) ||
+    hasAsyncActivity(params.attempt.toolMetas) ||
     (params.tolerateSideEffects !== true && params.attempt.replayMetadata.hadPotentialSideEffects),
   );
 }
@@ -114,26 +116,27 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
 }): boolean {
-  // "optional" is the run consumer's declaration that no user-facing reply is
-  // owed (e.g. cron without a delivery route). Silence after side-effecting
-  // tools is intentional there; retry is replay-unsafe, so erroring would mark
-  // successful tool-only runs as failures.
+  // NO_REPLY is an authored outcome, not missing output: a successful reaction
+  // can be the entire reply. Agents: classify it before the side-effect retry
+  // guard, or it becomes a false missing-summary warning (or a repeated tool).
+  // Actual failures, aborts and pending work still pass through the guards below.
   const terminalReplyOptional = params.terminalReplyExpectation === "optional";
+  const assistant = resolveCurrentAttemptAssistant(params.attempt);
+  const explicitSilentReply =
+    params.payloadCount === 0 &&
+    assistant?.stopReason !== "error" &&
+    hasOnlySilentAssistantReply(params.attempt.assistantTexts);
+  const tolerateSideEffects = terminalReplyOptional || explicitSilentReply;
   if (
     !params.allowEmptyAssistantReplyAsSilent ||
-    shouldSkipNonVisibleTurnRetry({ ...params, tolerateSideEffects: terminalReplyOptional })
+    shouldSkipNonVisibleTurnRetry({ ...params, tolerateSideEffects })
   ) {
     return false;
   }
   if (hasCommittedMessagingToolDeliveryEvidence(params.attempt)) {
     return false;
   }
-  const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
-  if (
-    params.payloadCount === 0 &&
-    assistant?.stopReason !== "error" &&
-    hasOnlySilentAssistantReply(params.attempt.assistantTexts)
-  ) {
+  if (explicitSilentReply) {
     return true;
   }
   // A visible turn owes a reply unless the model explicitly chose NO_REPLY.
@@ -142,10 +145,7 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   if (params.onlyExplicitSilentReply || !terminalReplyOptional) {
     return false;
   }
-  return isNonVisibleAssistantTurnEligibleForSilentReply({
-    payloadCount: params.payloadCount,
-    attempt: params.attempt,
-  });
+  return classifyAssistantTurn(params).nonVisibleEligibleForSilentReply;
 }
 
 /**
@@ -176,7 +176,7 @@ export function resolveReasoningOnlyRetryInstruction(params: {
     return null;
   }
 
-  const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
+  const assistant = resolveCurrentAttemptAssistant(params.attempt);
   if (joinAssistantTexts(params.attempt.assistantTexts).length > 0) {
     return null;
   }
@@ -240,19 +240,42 @@ export function resolveSettledToolBatchEvidence(attempt: IncompleteTurnAttempt) 
         : [];
     }),
   );
-  const allToolsProvenSettled =
-    attempt.itemLifecycle.startedCount > 0 &&
-    attempt.itemLifecycle.completedCount === attempt.itemLifecycle.startedCount &&
-    attempt.itemLifecycle.activeCount === 0 &&
+  // Transcript proof: every call in the batch has its result persisted. Nested
+  // code-mode work (exec status "waiting") keeps lifecycle items active while
+  // the outer result is already recorded, so this is the weaker of the two.
+  const allToolCallsRecorded =
     requestedToolCalls.length > 0 &&
     requestedToolCalls.every(
       ({ id, name }) =>
         id !== null && name !== null && settledToolResults.get(id)?.toolName === name,
     );
+  const allToolsProvenSettled =
+    allToolCallsRecorded &&
+    attempt.itemLifecycle.startedCount > 0 &&
+    attempt.itemLifecycle.completedCount === attempt.itemLifecycle.startedCount &&
+    attempt.itemLifecycle.activeCount === 0;
+  // Producer-recorded fact from the tool completion handler: one of this batch's
+  // exec results parked a Code Mode run, which is the only legitimate reason a
+  // fully recorded batch still shows active lifecycle items.
+  const parkedCodeModeRun =
+    allToolCallsRecorded &&
+    requestedToolCalls.some(({ id }) =>
+      attempt.toolMetas.some(
+        (entry) => entry.toolCallId === id && entry.codeModeSuspended === true,
+      ),
+    );
   const failedToolNames = new Set(
     requestedToolCalls.flatMap(({ id, name }) =>
       id !== null && name !== null && settledToolResults.get(id)?.isError === true ? [name] : [],
     ),
+  );
+  // ToolErrorSummary has no call id: its owner must match a failed result in the
+  // proven terminal batch, or a stale/unrelated error could authorize continuation.
+  const hasUnsettledToolError = Boolean(
+    attempt.lastToolError &&
+    (assistant?.stopReason !== "toolUse" ||
+      !allToolsProvenSettled ||
+      !failedToolNames.has(attempt.lastToolError.toolName)),
   );
   const intentionalTermination =
     allToolsProvenSettled &&
@@ -266,7 +289,15 @@ export function resolveSettledToolBatchEvidence(attempt: IncompleteTurnAttempt) 
       );
       return metadata?.terminate === true && metadata.isError !== true;
     });
-  return { assistant, allToolsProvenSettled, failedToolNames, intentionalTermination };
+  return {
+    assistant,
+    allToolCallsRecorded,
+    allToolsProvenSettled,
+    parkedCodeModeRun,
+    failedToolNames,
+    hasUnsettledToolError,
+    intentionalTermination,
+  };
 }
 
 /** Builds one fresh continuation after settled tools ended without a visible final answer. */
@@ -283,8 +314,13 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
   attempt: IncompleteTurnAttempt;
 }): string | null {
   const { attempt } = params;
-  const { assistant, allToolsProvenSettled, failedToolNames, intentionalTermination } =
-    resolveSettledToolBatchEvidence(attempt);
+  const {
+    assistant,
+    allToolsProvenSettled,
+    failedToolNames,
+    hasUnsettledToolError,
+    intentionalTermination,
+  } = resolveSettledToolBatchEvidence(attempt);
   const terminal = attempt.terminal;
   const idlePromptTimeout =
     terminal.kind === "timeout" &&
@@ -300,21 +336,11 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
     attempt.itemLifecycle.completedCount === attempt.itemLifecycle.startedCount &&
     attempt.itemLifecycle.activeCount === 0 &&
     !hasAcceptedSessionSpawn(attempt.acceptedSessionSpawns) &&
-    isEmptyResponseAssistantTurn({
-      payloadCount: params.payloadCount,
-      attempt,
-    }),
-  );
-  // ToolErrorSummary has no call id: its owner must match a failed result in the
-  // proven terminal batch, or a stale/unrelated error could authorize finalization.
-  const hasUnsettledToolError = Boolean(
-    attempt.lastToolError &&
-    (assistant?.stopReason !== "toolUse" ||
-      !allToolsProvenSettled ||
-      !failedToolNames.has(attempt.lastToolError.toolName)),
+    classifyAssistantTurn(params).emptyResponse,
   );
   if (
     params.payloadCount !== 0 ||
+    (!params.allowEmptyStopContinuation && hasOnlySilentAssistantReply(attempt.assistantTexts)) ||
     params.hasTerminalToolPresentation ||
     params.aborted ||
     ((params.timedOut || terminal.kind === "timeout") && !idlePromptTimeout) ||
@@ -330,7 +356,7 @@ export function resolveSettledToolTerminalContinuationInstruction(params: {
   ) {
     return null;
   }
-  if (hasCompletedMessagingToolDeliveryEvidence(attempt)) {
+  if (attempt.hasToolMediaBlockReply || hasCompletedMessagingToolDeliveryEvidence(attempt)) {
     return null;
   }
   if (
@@ -366,16 +392,12 @@ export function resolveEmptyResponseRetryInstruction(params: {
     return null;
   }
 
-  if (
-    !isEmptyResponseAssistantTurn({
-      payloadCount: params.payloadCount,
-      attempt: params.attempt,
-    })
-  ) {
+  const assistantState = classifyAssistantTurn(params);
+  if (!assistantState.emptyResponse) {
     return null;
   }
 
-  const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant ?? null;
+  const assistant = assistantState.assistant ?? null;
   if (
     assistant?.stopReason === "stop" &&
     isOllamaIncompleteTurnProvider(params.provider) &&

@@ -6,6 +6,7 @@ import { isSensitiveEnvName } from "../../../../src/secrets/secret-env-name.js";
 import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
+import { renderSettingsPageHeader } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -273,7 +274,12 @@ class SecretsPage extends OpenClawLightDomElement {
   }
 
   private async removeEntry(entry: (typeof this.store.entries)[number]) {
+    // A confirmation belongs to the client that opened it. Same-client reconnects remain valid,
+    // but a replacement client must never inherit this destructive action.
+    const gateway = this.context.gateway;
+    const client = this.store.client;
     if (
+      !client ||
       !this.canDelete ||
       !(await showConfirmDialog({
         title: t("common.delete"),
@@ -285,6 +291,11 @@ class SecretsPage extends OpenClawLightDomElement {
       return;
     }
     this.notice = null;
+    if (this.context.gateway !== gateway || this.store.client !== client || !this.canDelete) {
+      this.store.error = t("secretsStore.deleteFailed");
+      this.requestUpdate();
+      return;
+    }
     await this.runStoreTask(async (store) => {
       const result = await deleteSecretsStoreEntry(store, entry.name);
       if (result && this.store === store) {
@@ -339,9 +350,10 @@ class SecretsPage extends OpenClawLightDomElement {
       onDelete: (entry) => void this.removeEntry(entry),
     });
     return html`
-      <section class="content-header">
-        <div><div class="page-title">${titleForRoute("secrets")}</div></div>
-      </section>
+      ${renderSettingsPageHeader({
+        title: titleForRoute("secrets"),
+        subtitle: t("secretsStore.hint"),
+      })}
       ${renderSettingsWorkspace(body)}
     `;
   }

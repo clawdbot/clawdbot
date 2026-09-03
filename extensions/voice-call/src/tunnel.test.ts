@@ -39,7 +39,6 @@ const mocks = vi.hoisted(() => ({
   realSpawn: undefined as undefined | typeof import("node:child_process").spawn,
   setupTailscaleExposureRoutes: vi.fn(),
   cleanupTailscaleExposureRoute: vi.fn(),
-  runCommand: vi.fn(),
 }));
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -54,10 +53,6 @@ vi.mock("node:child_process", async (importOriginal) => {
 vi.mock("./webhook/tailscale.js", () => ({
   setupTailscaleExposureRoutes: mocks.setupTailscaleExposureRoutes,
   cleanupTailscaleExposureRoute: mocks.cleanupTailscaleExposureRoute,
-}));
-
-vi.mock("openclaw/plugin-sdk/process-runtime", () => ({
-  runCommandWithTimeout: mocks.runCommand,
 }));
 
 import { startTunnel } from "./tunnel.js";
@@ -148,18 +143,6 @@ function mockSpawnUtf8SplitChild(params: {
   });
 }
 
-function commandResult(overrides: Record<string, unknown> = {}) {
-  return {
-    stdout: "",
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-    ...overrides,
-  };
-}
-
 describe("voice-call tunnels", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -167,7 +150,6 @@ describe("voice-call tunnels", () => {
       "https://host.tailnet.ts.net/voice/webhook",
     );
     mocks.cleanupTailscaleExposureRoute.mockResolvedValue(undefined);
-    mocks.runCommand.mockResolvedValue(commandResult());
   });
 
   it("starts ngrok and appends the webhook path to the public URL", async () => {
@@ -270,7 +252,7 @@ describe("voice-call tunnels", () => {
     expect(tunnel.publicUrl).toBe("https://large.ngrok.io/voice/webhook");
   });
 
-  it("sets ngrok auth token before starting the tunnel", async () => {
+  it("keeps the ngrok auth token out of child argv", async () => {
     const tunnelProc = nextProcess();
     const result = startNgrokTunnel({
       port: 3334,
@@ -284,28 +266,13 @@ describe("voice-call tunnels", () => {
     const tunnel = await result;
     expect(tunnel.publicUrl).toBe("https://auth.ngrok.io/hook");
     expect(tunnel.provider).toBe("ngrok");
-    expect(mocks.runCommand).toHaveBeenCalledWith(
-      ["ngrok", "config", "add-authtoken", "token"],
-      expect.objectContaining({ timeoutMs: 30_000 }),
-    );
-  });
-
-  it("bounds ngrok command failure output", async () => {
-    mocks.runCommand.mockResolvedValueOnce(
-      commandResult({
-        code: 1,
-        stderr: `${"x".repeat(16_000)}-end`,
-        stderrTruncatedBytes: 4_000,
+    expect(mocks.spawn).toHaveBeenCalledWith(
+      "ngrok",
+      ["http", "3334", "--log", "stdout", "--log-format", "json"],
+      expect.objectContaining({
+        env: expect.objectContaining({ NGROK_AUTHTOKEN: "token" }),
       }),
     );
-    const result = startNgrokTunnel({
-      port: 3334,
-      path: "/hook",
-      authToken: "token",
-    });
-
-    await expect(result).rejects.toThrow("[output truncated]");
-    await expect(result).rejects.toThrow("-end");
   });
 
   it("rejects ngrok startup errors from stderr", async () => {
@@ -426,13 +393,6 @@ describe("voice-call tunnels", () => {
     proc.stderr.emit("error", new Error("EIO"));
     await expect(result).rejects.toThrow("ngrok stderr error: EIO");
     expect(proc.killedWith).toBe("SIGKILL");
-  });
-
-  it("preserves ngrok auth wrapper errors", async () => {
-    mocks.runCommand.mockRejectedValueOnce(new Error("ngrok auth failed"));
-    const result = startNgrokTunnel({ port: 3334, path: "/hook", authToken: "token" });
-    await expect(result).rejects.toThrow("ngrok auth failed");
-    expect(mocks.spawn).not.toHaveBeenCalled();
   });
 
   it("stops immediately when the ngrok process already exited", async () => {

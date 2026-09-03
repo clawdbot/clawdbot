@@ -4,6 +4,7 @@ import OpenClawProtocol
 public enum OpenClawChatTransportEvent: Sendable {
     case health(ok: Bool)
     case tick
+    case chatMetadataChanged
     case sessionsChanged(OpenClawChatSessionsChangedEvent)
     case sessionObserver(SessionObserverDigest)
     case chat(OpenClawChatEventPayload)
@@ -72,6 +73,7 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
     public let session: OpenClawChatSessionEntry?
     public let updatedAt: Double?
     public let lastReadAt: Double?
+    public let color: String?
     public let agentStatus: OpenClawChatSessionAgentStatus?
     public let observerDigest: OpenClawChatSessionObserverDigest?
     public let status: String?
@@ -84,6 +86,7 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
     public let kind: String?
     public let text: String?
     public let swarmPhase: String?
+    let colorPresent: Bool
     let agentStatusPresent: Bool
     let observerDigestPresent: Bool
     let statusPresent: Bool
@@ -101,6 +104,7 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
         session: OpenClawChatSessionEntry? = nil,
         updatedAt: Double? = nil,
         lastReadAt: Double? = nil,
+        color: String? = nil,
         agentStatus: OpenClawChatSessionAgentStatus? = nil,
         observerDigest: OpenClawChatSessionObserverDigest? = nil,
         status: String? = nil,
@@ -113,6 +117,7 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
         kind: String? = nil,
         text: String? = nil,
         swarmPhase: String? = nil,
+        colorPresent: Bool? = nil,
         agentStatusPresent: Bool? = nil,
         observerDigestPresent: Bool? = nil,
         statusPresent: Bool? = nil,
@@ -129,6 +134,8 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
         self.session = session
         self.updatedAt = updatedAt
         self.lastReadAt = lastReadAt
+        self.color = colorPresent == true ? color : (color ?? session?.color)
+        self.colorPresent = colorPresent ?? (color != nil || session?.color != nil)
         self.agentStatus = agentStatus
         self.observerDigest = observerDigest
         self.status = status
@@ -177,6 +184,8 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
         self.runId = try decode(String.self, forKey: .runId)
         self.updatedAt = try decode(Double.self, forKey: .updatedAt)
         self.lastReadAt = try decode(Double.self, forKey: .lastReadAt)
+        self.color = try decode(String.self, forKey: .color)
+        self.colorPresent = container.contains(.color) || nested?.contains(.color) == true
         self.agentStatus = try decode(OpenClawChatSessionAgentStatus.self, forKey: .agentStatus)
         self.observerDigest = try decode(OpenClawChatSessionObserverDigest.self, forKey: .observerDigest)
         self.status = try decode(String.self, forKey: .status)
@@ -208,6 +217,9 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
         try container.encodeIfPresent(self.session, forKey: .session)
         try container.encodeIfPresent(self.updatedAt, forKey: .updatedAt)
         try container.encodeIfPresent(self.lastReadAt, forKey: .lastReadAt)
+        if self.colorPresent {
+            try container.encode(self.color, forKey: .color)
+        }
         try container.encodeIfPresent(self.agentStatus, forKey: .agentStatus)
         try container.encodeIfPresent(self.observerDigest, forKey: .observerDigest)
         try container.encodeIfPresent(self.status, forKey: .status)
@@ -240,6 +252,7 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
         case runId
         case updatedAt
         case lastReadAt
+        case color
         case agentStatus
         case observerDigest
         case status
@@ -266,9 +279,10 @@ public struct OpenClawChatTransportRouteLease: Sendable {
         _ idempotencyKey: String,
         _ attachments: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
     public typealias RequestHistory = @Sendable (String) async throws -> OpenClawChatHistoryPayload
-    public typealias SendTargetedMessage = @Sendable (
+    public typealias SendTargetedMessageWithSettings = @Sendable (
         _ sessionKey: String,
         _ agentID: String?,
+        _ expectedSessionSettings: OpenClawChatSessionSettingsExpectation?,
         _ message: String,
         _ thinking: String,
         _ idempotencyKey: String,
@@ -277,17 +291,20 @@ public struct OpenClawChatTransportRouteLease: Sendable {
         _ sessionKey: String,
         _ agentID: String?) async throws -> OpenClawChatHistoryPayload
 
-    private let sendTargetedMessageImpl: SendTargetedMessage
+    private let sendTargetedMessageImpl: SendTargetedMessageWithSettings
     private let requestTargetedHistoryImpl: RequestTargetedHistory
     public let sessionRoutingContract: String?
+    public let supportsSessionSettingsCAS: Bool
 
     public init(
         sendMessage: @escaping SendMessage,
         requestHistory: @escaping RequestHistory,
-        sessionRoutingContract: String? = nil)
+        sessionRoutingContract: String? = nil,
+        supportsSessionSettingsCAS: Bool = false)
     {
         self.sessionRoutingContract = sessionRoutingContract
-        self.sendTargetedMessageImpl = { sessionKey, _, message, thinking, idempotencyKey, attachments in
+        self.supportsSessionSettingsCAS = supportsSessionSettingsCAS
+        self.sendTargetedMessageImpl = { sessionKey, _, _, message, thinking, idempotencyKey, attachments in
             try await sendMessage(sessionKey, message, thinking, idempotencyKey, attachments)
         }
         self.requestTargetedHistoryImpl = { sessionKey, _ in
@@ -296,18 +313,21 @@ public struct OpenClawChatTransportRouteLease: Sendable {
     }
 
     public init(
-        sendTargetedMessage: @escaping SendTargetedMessage,
+        sendTargetedMessageWithSettings: @escaping SendTargetedMessageWithSettings,
         requestTargetedHistory: @escaping RequestTargetedHistory,
-        sessionRoutingContract: String? = nil)
+        sessionRoutingContract: String? = nil,
+        supportsSessionSettingsCAS: Bool = false)
     {
         self.sessionRoutingContract = sessionRoutingContract
-        self.sendTargetedMessageImpl = sendTargetedMessage
+        self.supportsSessionSettingsCAS = supportsSessionSettingsCAS
+        self.sendTargetedMessageImpl = sendTargetedMessageWithSettings
         self.requestTargetedHistoryImpl = requestTargetedHistory
     }
 
     public func sendMessage(
         sessionKey: String,
         agentID: String? = nil,
+        expectedSessionSettings: OpenClawChatSessionSettingsExpectation? = nil,
         message: String,
         thinking: String,
         idempotencyKey: String,
@@ -316,6 +336,7 @@ public struct OpenClawChatTransportRouteLease: Sendable {
         try await self.sendTargetedMessageImpl(
             sessionKey,
             agentID,
+            expectedSessionSettings,
             message,
             thinking,
             idempotencyKey,
@@ -364,8 +385,10 @@ public struct OpenClawChatSessionMutationRouteLease: Sendable {
     public typealias PatchSession = @Sendable (
         _ key: String,
         _ expectedSessionID: String?,
+        _ expectedMarkedUnreadAt: Double??,
         _ label: String??,
         _ category: String??,
+        _ color: String??,
         _ pinned: Bool?,
         _ archived: Bool?,
         _ unread: Bool?) async throws -> Void
@@ -385,8 +408,10 @@ public struct OpenClawChatSessionMutationRouteLease: Sendable {
     public func patchSession(
         key: String,
         expectedSessionID: String? = nil,
+        expectedMarkedUnreadAt: Double?? = nil,
         label: String??,
         category: String??,
+        color: String?? = nil,
         pinned: Bool?,
         archived: Bool?,
         unread: Bool?) async throws
@@ -394,8 +419,10 @@ public struct OpenClawChatSessionMutationRouteLease: Sendable {
         try await self.patchSessionImpl(
             key,
             expectedSessionID,
+            expectedMarkedUnreadAt,
             label,
             category,
+            color,
             pinned,
             archived,
             unread)
@@ -617,13 +644,26 @@ public struct OpenClawChatMetadataCapabilities: Codable, Sendable, Equatable {
     }
 }
 
+public struct OpenClawChatModelCatalogSnapshot: Sendable, Equatable {
+    public let choices: [OpenClawChatModelChoice]
+    public let availabilityIsSessionScoped: Bool
+
+    public init(
+        choices: [OpenClawChatModelChoice],
+        availabilityIsSessionScoped: Bool)
+    {
+        self.choices = choices
+        self.availabilityIsSessionScoped = availabilityIsSessionScoped
+    }
+}
+
 public enum OpenClawChatMediaKind: String, Sendable {
     case image
     case audio
     case video
 
     public var mimeTypePrefix: String {
-        "\(self.rawValue)/"
+        "\(rawValue)/"
     }
 
     public func acceptsManagedArtifactID(_ artifactID: String) -> Bool {
@@ -713,6 +753,13 @@ public protocol OpenClawChatTransport: Sendable {
     func fetchProgressCard(sessionKey: String) async throws -> ProgressCard?
     func requestFullMessage(sessionKey: String, messageID: String) async throws -> OpenClawChatMessage?
     func listModels(agentID: String?) async throws -> [OpenClawChatModelChoice]
+    func loadModelCatalog(
+        sessionKey: String,
+        agentID: String?) async throws -> OpenClawChatModelCatalogSnapshot
+    var supportsComposerCapabilities: Bool { get }
+    func loadComposerCapabilityCatalog(
+        sessionKey: String,
+        agentID: String?) async -> OpenClawChatComposerCapabilityCatalog
     func isSwarmEnabled(sessionKey: String) async throws -> Bool
     var supportsSlashCommandCatalog: Bool { get }
     func listCommands(sessionKey: String) async throws -> [OpenClawChatCommandChoice]
@@ -726,6 +773,13 @@ public protocol OpenClawChatTransport: Sendable {
         sessionKey: String,
         agentID: String?,
         expectedSessionRoutingContract: String?,
+        message: String,
+        thinking: String,
+        idempotencyKey: String,
+        attachments: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
+    func sendMessage(
+        sessionKey: String,
+        target: OpenClawChatSendTarget,
         message: String,
         thinking: String,
         idempotencyKey: String,
@@ -750,11 +804,14 @@ public protocol OpenClawChatTransport: Sendable {
     func renameSessionGroup(name: String, to: String) async throws -> OpenClawChatSessionGroupsMutationResponse
     func deleteSessionGroup(name: String) async throws -> OpenClawChatSessionGroupsMutationResponse
     func acquireSessionGroupsRouteLease() async -> OpenClawChatSessionGroupsRouteLease?
+    // Keep optional patch fields aligned with the writer; protocol requirements cannot declare their defaults.
+    // swiftlint:disable:next function_parameter_count
     func patchSession(
         key: String,
         expectedSessionID: String?,
         label: String??,
         category: String??,
+        color: String??,
         pinned: Bool?,
         archived: Bool?,
         unread: Bool?) async throws
@@ -788,7 +845,10 @@ public protocol OpenClawChatTransport: Sendable {
     func listQuestions() async throws -> [QuestionRecord]
     func listTasks(sessionKey: String, agentID: String?) async throws -> [TaskSummary]
     func getQuestion(id: String) async throws -> QuestionRecord
-    func resolveQuestion(id: String, answers: [String: [String]]) async throws
+    func resolveQuestion(
+        id: String,
+        answers: [String: [String]],
+        secretStoreAllowedHosts: [String]?) async throws -> QuestionAnswers
     func cancelQuestion(id: String) async throws
     func waitForRunCompletion(runId: String, timeoutMs: Int) async -> OpenClawChatRunObservation
     func events() -> AsyncStream<OpenClawChatTransportEvent>
@@ -808,6 +868,17 @@ public protocol OpenClawChatTransport: Sendable {
 }
 
 extension OpenClawChatTransport {
+    public var supportsComposerCapabilities: Bool {
+        false
+    }
+
+    public func loadComposerCapabilityCatalog(
+        sessionKey _: String,
+        agentID _: String?) async -> OpenClawChatComposerCapabilityCatalog
+    {
+        OpenClawChatComposerCapabilityCatalog()
+    }
+
     public func gatewayAdvertisesMethod(_: String) async -> Bool? {
         nil
     }
@@ -851,7 +922,11 @@ extension OpenClawChatTransport {
             userInfo: [NSLocalizedDescriptionKey: "question.get not supported by this transport"])
     }
 
-    public func resolveQuestion(id _: String, answers _: [String: [String]]) async throws {
+    public func resolveQuestion(
+        id _: String,
+        answers _: [String: [String]],
+        secretStoreAllowedHosts _: [String]?) async throws -> QuestionAnswers
+    {
         throw NSError(
             domain: "OpenClawChatTransport",
             code: 0,
@@ -914,12 +989,13 @@ extension OpenClawChatTransport {
     public func acquireSessionMutationRouteLease() async -> OpenClawChatSessionMutationRouteLease? {
         let transport = self
         return OpenClawChatSessionMutationRouteLease(
-            patchSession: { key, expectedSessionID, label, category, pinned, archived, unread in
+            patchSession: { key, expectedSessionID, _, label, category, color, pinned, archived, unread in
                 try await transport.patchSession(
                     key: key,
                     expectedSessionID: expectedSessionID,
                     label: label,
                     category: category,
+                    color: color,
                     pinned: pinned,
                     archived: archived,
                     unread: unread)
@@ -964,6 +1040,24 @@ extension OpenClawChatTransport {
     {
         try await self.sendMessage(
             sessionKey: sessionKey,
+            message: message,
+            thinking: thinking,
+            idempotencyKey: idempotencyKey,
+            attachments: attachments)
+    }
+
+    public func sendMessage(
+        sessionKey: String,
+        target: OpenClawChatSendTarget,
+        message: String,
+        thinking: String,
+        idempotencyKey: String,
+        attachments: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
+    {
+        try await self.sendMessage(
+            sessionKey: sessionKey,
+            agentID: target.agentID,
+            expectedSessionRoutingContract: target.expectedSessionRoutingContract,
             message: message,
             thinking: thinking,
             idempotencyKey: idempotencyKey,
@@ -1050,14 +1144,10 @@ extension OpenClawChatTransport {
         []
     }
 
-    /// Conveniences for callers that only page a list. Transports must
+    /// Convenience for callers that only select archive state. Transports must
     /// implement the canonical `listSessions(limit:search:archived:)`
-    /// requirement; same-name methods on a conformer are shadowed by these
-    /// sugars and never called through the protocol.
-    public func listSessions(limit: Int?) async throws -> OpenClawChatSessionsListResponse {
-        try await self.listSessions(limit: limit, search: nil, archived: false)
-    }
-
+    /// requirement; same-name methods on a conformer are shadowed by this
+    /// sugar and never called through the protocol.
     public func listSessions(limit: Int?, archived: Bool) async throws -> OpenClawChatSessionsListResponse {
         try await self.listSessions(limit: limit, search: nil, archived: archived)
     }
@@ -1094,14 +1184,18 @@ extension OpenClawChatTransport {
             userInfo: [NSLocalizedDescriptionKey: "sessions.groups.delete not supported by this transport"])
     }
 
+    // No parameter defaults: a call that omits a patch field must fail to compile instead of
+    // silently binding here (past the conforming witness) when the requirement gains a field.
+    // swiftlint:disable:next function_parameter_count
     public func patchSession(
         key _: String,
         expectedSessionID _: String?,
-        label _: String?? = nil,
-        category _: String?? = nil,
-        pinned _: Bool? = nil,
-        archived _: Bool? = nil,
-        unread _: Bool? = nil) async throws
+        label _: String??,
+        category _: String??,
+        color _: String??,
+        pinned _: Bool?,
+        archived _: Bool?,
+        unread _: Bool?) async throws
     {
         throw NSError(
             domain: "OpenClawChatTransport",
@@ -1169,6 +1263,16 @@ extension OpenClawChatTransport {
             domain: "OpenClawChatTransport",
             code: 0,
             userInfo: [NSLocalizedDescriptionKey: "models.list not supported by this transport"])
+    }
+
+    public func loadModelCatalog(
+        sessionKey _: String,
+        agentID: String?) async throws -> OpenClawChatModelCatalogSnapshot
+    {
+        let choices = try await self.listModels(agentID: agentID)
+        return OpenClawChatModelCatalogSnapshot(
+            choices: choices,
+            availabilityIsSessionScoped: false)
     }
 
     public var supportsSlashCommandCatalog: Bool {
@@ -1287,4 +1391,8 @@ public enum OpenClawChatSessionRoutingContract {
         let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return normalized?.isEmpty == false ? normalized : nil
     }
+}
+
+enum OpenClawChatSessionSettingsContract {
+    static let changedErrorReason = "session-settings-changed"
 }

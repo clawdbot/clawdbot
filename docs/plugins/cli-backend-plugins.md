@@ -108,14 +108,9 @@ runtime behavior. Runtime behavior starts when the plugin entry calls
 
   <Step title="Register the backend">
     ```typescript index.ts
-    import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-    import {
-      CLI_FRESH_WATCHDOG_DEFAULTS,
-      CLI_RESUME_WATCHDOG_DEFAULTS,
-      type CliBackendPlugin,
-    } from "openclaw/plugin-sdk/cli-backend";
+    import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 
-    function buildAcmeCliBackend(): CliBackendPlugin {
+    function buildAcmeCliBackend(): Parameters<OpenClawPluginApi["registerCliBackend"]>[0] {
       return {
         id: "acme-cli",
         liveTest: {
@@ -156,12 +151,6 @@ runtime behavior. Runtime behavior starts when the plugin entry calls
           imageArg: "--image",
           imageMode: "repeat",
           imagePathScope: "workspace",
-          reliability: {
-            watchdog: {
-              fresh: { ...CLI_FRESH_WATCHDOG_DEFAULTS },
-              resume: { ...CLI_RESUME_WATCHDOG_DEFAULTS },
-            },
-          },
           serialize: true,
         },
       };
@@ -188,7 +177,7 @@ runtime behavior. Runtime behavior starts when the plugin entry calls
 
 `CliBackendConfig` describes how OpenClaw should launch and parse the CLI. The
 worked example above intentionally exercises the same command, resume, JSONL,
-model-alias, session, image, and watchdog fields as the bundled
+model-alias, session, and image fields as the bundled
 `google-gemini-cli` adapter:
 
 | Field                                                     | Use                                                                               |
@@ -217,6 +206,10 @@ model-alias, session, image, and watchdog fields as the bundled
 | `reseedFromRawTranscriptWhenUncompacted`                  | Opt in to bounded raw-transcript reseed before compaction for safe session resets |
 | `freshSessionRecovery`                                    | Fresh recovery policy after a recoverable resumed-session failure                 |
 | `reliability.watchdog`                                    | No-output timeout tuning, separate for fresh vs resumed runs                      |
+
+Omit `reliability.watchdog` to inherit the standard profiles, including the
+longer resumed-run budget for cron and explicit timeouts. Set it only when a
+backend intentionally needs its own watchdog policy.
 
 `freshSessionRecovery` is a backend-owned compatibility contract:
 
@@ -272,7 +265,11 @@ available to `resolveExecutionArgs(ctx)` for native CLI flags.
 backend owns a vendor-supported SDK for the installed CLI. The transport
 receives the exact prepared command, arguments, environment, prompt, session,
 and tool availability; it yields the backend's existing structured stream
-records. Native tool actions must use the provided, run-bound
+records. Optional `promptContext.prependContext` and `promptContext.appendContext`
+are private prompt-build additions, separate from the ordinary `prompt`. Transport
+them through the native SDK's private context mechanism; never record them as
+operator-authored input. OpenClaw's policy and observation hooks still receive the
+complete logical prompt. Native tool actions must use the provided, run-bound
 `requestToolPermission` callback rather than creating independent approval
 authority. OpenClaw retains cancellation, watchdogs, session policy, and MCP
 grant ownership. Explicit credential forwarding, paired-node execution, and
@@ -337,9 +334,25 @@ may include final text, usage, an error, and a successor session id. Session ids
 reported by either event shape participate in resumed-session and fork
 persistence.
 
+Lifecycle events are intentionally separate from this return union so existing
+plugins can continue to match it exhaustively. Use `parseJsonlLifecycleEvent`
+for backend-owned lifecycle records instead.
+
 Tool events describe work the backend already performed. OpenClaw renders and
 summarizes them, but does not treat them as host tool execution, trusted
 diagnostics, loopback correlation, or message-delivery evidence.
+
+### `parseJsonlLifecycleEvent`: provider-native lifecycle records
+
+Set `parseJsonlLifecycleEvent` when a backend emits JSONL records for lifecycle
+state that is independent of assistant text, tools, sessions, and terminal
+results. The hook receives the same line and context as `parseJsonlEvent` and is
+tried first. Returning a lifecycle event consumes that line; returning `null`
+lets the source-compatible `parseJsonlEvent` hook or built-in parser handle it.
+
+The current lifecycle contract supports native compaction start and end records.
+An end record includes `completed` so channels can distinguish successful and
+incomplete compaction without inferring an outcome from later messages.
 
 ### `ownsNativeCompaction`: opting out of OpenClaw compaction
 

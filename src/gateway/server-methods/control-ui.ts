@@ -117,7 +117,7 @@ function loadControlUiSessionPreview(
     entry,
     includeDerivedTitles: true,
     includeLastMessage: true,
-    transcriptUsageMaxBytes: 64 * 1024,
+    skipTranscriptUsageFallback: true,
   });
   return {
     sessionKey: row.key,
@@ -188,7 +188,7 @@ export function createControlUiHandlers(
         );
       }
     },
-    "controlUi.sessionPullRequests.subscribe": async ({ params, client, context, respond }) => {
+    "controlUi.sessionPullRequests.subscribe": ({ params, client, context, respond }) => {
       const parsed = parseControlUiSessionPullRequestsSubscribeParams(params);
       if (!parsed) {
         respond(
@@ -212,9 +212,9 @@ export function createControlUiHandlers(
         return;
       }
       if (parsed.refreshSessionKeys.length > 0) {
-        await subscriptions.replace(connId, parsed.sessionKeys, new Set(parsed.refreshSessionKeys));
+        void subscriptions.replace(connId, parsed.sessionKeys, new Set(parsed.refreshSessionKeys));
       } else {
-        await subscriptions.replace(connId, parsed.sessionKeys);
+        void subscriptions.replace(connId, parsed.sessionKeys);
       }
       respond(true, { subscribed: parsed.sessionKeys.length > 0 }, undefined);
     },

@@ -6,6 +6,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   authorizeGatewaySessionCreation,
   invalidateOperatorRolePolicy,
+  resolveCreatorSandbox,
   resolveOperatorRolePolicy,
   resolveOperatorRolePolicyForProfile,
 } from "./operator-role-policy.js";
@@ -92,6 +93,43 @@ describe("operator role policy", () => {
       expect(resolveOperatorRolePolicyForProfile(profile.id, cfg)).toEqual(
         cfg.gateway?.roles?.definitions.maintainer,
       );
+    });
+  });
+
+  it("keeps human-derived sandbox restrictions separate from profile provenance", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const profile = ensureProfileForEmail("role-sandbox-creator@example.com");
+      const cfg = roleConfig();
+      const guest = cfg.gateway?.roles?.definitions.guest;
+      if (!guest) {
+        throw new Error("missing guest role");
+      }
+      guest.sandbox = "required";
+
+      for (const source of ["profile", "channel", "unknown"] as const) {
+        expect(
+          resolveCreatorSandbox(cfg, { actor: { type: "human", source, id: profile.id } }),
+        ).toBe("required");
+      }
+      expect(
+        resolveCreatorSandbox(cfg, { actor: { type: "agent", id: profile.id } }),
+      ).toBeUndefined();
+      expect(
+        resolveCreatorSandbox(cfg, { actor: { type: "system", id: profile.id } }),
+      ).toBeUndefined();
+      expect(
+        resolveCreatorSandbox(cfg, { actor: { type: "human", source: "unknown" } }),
+      ).toBeUndefined();
+      expect(
+        resolveCreatorSandbox({}, { actor: { type: "human", source: "profile", id: profile.id } }),
+      ).toBeUndefined();
+
+      setUserProfileRole(profile.id, "maintainer");
+      invalidateOperatorRolePolicy(profile.id);
+
+      expect(
+        resolveCreatorSandbox(cfg, { actor: { type: "human", source: "profile", id: profile.id } }),
+      ).toBeUndefined();
     });
   });
 

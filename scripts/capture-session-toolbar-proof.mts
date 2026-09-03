@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Page } from "playwright";
+import { createControlUiE2eArtifactDir } from "../ui/src/test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -112,7 +112,8 @@ const ungroupedSessions = [
 ];
 
 const mode = readMode();
-const outputDir = path.resolve(
+const outputDir = createControlUiE2eArtifactDir(
+  "session-toolbar-proof",
   readOption("output-dir") ?? ".artifacts/control-ui-e2e/session-toolbar-proof",
 );
 const executablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
@@ -120,7 +121,6 @@ if (!canRunPlaywrightChromium(executablePath)) {
   throw new Error(`Playwright Chromium is unavailable at ${executablePath}`);
 }
 
-await mkdir(outputDir, { recursive: true });
 const server = await startControlUiE2eServer(undefined, { source: true });
 const browser = await chromium.launch({ executablePath });
 const captured: string[] = [];

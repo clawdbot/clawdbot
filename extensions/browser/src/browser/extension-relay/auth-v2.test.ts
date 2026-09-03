@@ -16,6 +16,7 @@ import {
 } from "./auth-v2.js";
 
 const KEY = Array.from({ length: 32 }, (_, index) => index.toString(16).padStart(2, "0")).join("");
+const SOURCE = "127.0.0.1";
 const VECTOR_FIELDS: BrowserRelayProofFields = {
   keyId: "Yw3NKWbEM2aRElRIu7JbT_",
   instanceId: "EREREREREREREREREREREQ",
@@ -92,8 +93,8 @@ describe("BrowserRelayAuthV2Authority", () => {
     const authority = new BrowserRelayAuthV2Authority(KEY);
     const socket = {};
     const otherSocket = {};
-    expect(authority.registerPendingConnection(socket, vi.fn())).toBe(true);
-    expect(authority.registerPendingConnection(otherSocket, vi.fn())).toBe(true);
+    expect(authority.registerPendingConnection(socket, vi.fn(), SOURCE)).toBe(true);
+    expect(authority.registerPendingConnection(otherSocket, vi.fn(), SOURCE)).toBe(true);
     const challenge = authority.issueChallenge(socket, hello(), BINDING, 1_000);
     expect(challenge).not.toBeNull();
     const fields = challenge as BrowserRelayProofFields;
@@ -113,8 +114,8 @@ describe("BrowserRelayAuthV2Authority", () => {
     const authority = new BrowserRelayAuthV2Authority(KEY);
     const first = {};
     const second = {};
-    authority.registerPendingConnection(first, vi.fn());
-    authority.registerPendingConnection(second, vi.fn());
+    authority.registerPendingConnection(first, vi.fn(), SOURCE);
+    authority.registerPendingConnection(second, vi.fn(), SOURCE);
     expect(authority.issueChallenge(first, hello(), BINDING, 1_000)).not.toBeNull();
     expect(authority.issueChallenge(first, hello(), BINDING, 1_001)).toBeNull();
     expect(authority.issueChallenge(second, hello(), BINDING, 1_001)).toBeNull();
@@ -124,7 +125,7 @@ describe("BrowserRelayAuthV2Authority", () => {
   it("rejects expired challenges and wrong client proofs", () => {
     const authority = new BrowserRelayAuthV2Authority(KEY);
     const first = {};
-    authority.registerPendingConnection(first, vi.fn());
+    authority.registerPendingConnection(first, vi.fn(), SOURCE);
     const expired = authority.issueChallenge(first, hello(), BINDING, 1_000);
     expect(expired).not.toBeNull();
     expect(
@@ -141,7 +142,7 @@ describe("BrowserRelayAuthV2Authority", () => {
     ).toBeNull();
 
     const second = {};
-    authority.registerPendingConnection(second, vi.fn());
+    authority.registerPendingConnection(second, vi.fn(), SOURCE);
     const challenge = authority.issueChallenge(
       second,
       hello("REREREREREREREREREREREREREREREREREREREREREQ"),
@@ -170,7 +171,7 @@ describe("BrowserRelayAuthV2Authority", () => {
     const pending = {};
     const authenticated = {};
     const first = getBrowserRelayAuthV2Authority(KEY);
-    first.registerPendingConnection(pending, pendingInvalidated);
+    first.registerPendingConnection(pending, pendingInvalidated, SOURCE);
     first.registerAuthenticatedConnection(authenticated, authenticatedInvalidated);
     expect(first.issueChallenge(pending, hello(), BINDING, 1_000)).not.toBeNull();
     const rotated = getBrowserRelayAuthV2Authority("f".repeat(64));
@@ -184,26 +185,87 @@ describe("BrowserRelayAuthV2Authority", () => {
     invalidateBrowserRelayAuthV2Authority();
   });
 
-  it("keeps pending admission independent from authenticated capacity", () => {
+  it("reserves pending admission for independent sources within the global bound", () => {
     const authority = new BrowserRelayAuthV2Authority(KEY);
-    const pendingInvalidators = Array.from({ length: 128 }, () => vi.fn());
-    for (const invalidate of pendingInvalidators) {
-      expect(authority.registerPendingConnection({}, invalidate)).toBe(true);
+    const attackerInvalidators = Array.from({ length: 128 }, () => vi.fn());
+    const attackerBindings = attackerInvalidators.map(() => ({}));
+    const attackerAdmissions = attackerBindings.map((binding, index) =>
+      authority.registerPendingConnection(binding, attackerInvalidators[index]!, "198.51.100.10"),
+    );
+    expect(attackerAdmissions.filter(Boolean)).toHaveLength(32);
+
+    const independent = {};
+    expect(authority.registerPendingConnection(independent, vi.fn(), "203.0.113.20")).toBe(true);
+    const challenge = authority.issueChallenge(independent, hello(), BINDING, 1_000)!;
+    expect(
+      authority.completeChallenge(
+        independent,
+        {
+          type: "auth.response",
+          v: 2,
+          sessionId: challenge.sessionId,
+          clientProof: createRelayProof(KEY, "client", challenge),
+        },
+        1_001,
+      )?.ok.type,
+    ).toBe("auth.ok");
+
+    for (let index = 0; index < 96; index += 1) {
+      expect(authority.registerPendingConnection({}, vi.fn(), `192.0.2.${index}`)).toBe(true);
     }
-    expect(authority.registerPendingConnection({}, vi.fn())).toBe(false);
+    expect(authority.registerPendingConnection({}, vi.fn(), "203.0.113.21")).toBe(false);
 
     const active = {};
     const activeInvalidated = vi.fn();
     expect(authority.registerAuthenticatedConnection(active, activeInvalidated)).toBe(true);
     expect(activeInvalidated).not.toHaveBeenCalled();
-    expect(pendingInvalidators.every((invalidate) => !invalidate.mock.calls.length)).toBe(true);
+    expect(attackerInvalidators.every((invalidate) => !invalidate.mock.calls.length)).toBe(true);
+
+    authority.releaseConnection(attackerBindings[0]!);
+    expect(authority.registerPendingConnection({}, vi.fn(), "198.51.100.10")).toBe(true);
+  });
+
+  it("counts loopback aliases as one pending source", () => {
+    const authority = new BrowserRelayAuthV2Authority(KEY);
+    for (let index = 0; index < 32; index += 1) {
+      expect(authority.registerPendingConnection({}, vi.fn(), "127.0.0.2")).toBe(true);
+    }
+    expect(authority.registerPendingConnection({}, vi.fn(), "127.0.0.3")).toBe(false);
+    expect(authority.registerPendingConnection({}, vi.fn(), "::ffff:127.0.0.4")).toBe(false);
+    expect(authority.registerPendingConnection({}, vi.fn(), "::1")).toBe(false);
+  });
+
+  it("counts loopback aliases as one replay source", () => {
+    const authority = new BrowserRelayAuthV2Authority(KEY);
+    for (let index = 0; index < 256; index += 1) {
+      const connection = {};
+      expect(
+        authority.registerPendingConnection(connection, vi.fn(), `127.0.0.${2 + (index % 2)}`),
+      ).toBe(true);
+      const nonce = Buffer.alloc(32);
+      nonce.writeUInt32BE(index, 28);
+      expect(
+        authority.issueChallenge(connection, hello(nonce.toString("base64url")), BINDING, 1_000),
+      ).not.toBeNull();
+      authority.releaseConnection(connection);
+    }
+    const overflow = {};
+    expect(authority.registerPendingConnection(overflow, vi.fn(), "::1")).toBe(true);
+    expect(
+      authority.issueChallenge(
+        overflow,
+        hello(Buffer.alloc(32, 0xff).toString("base64url")),
+        BINDING,
+        1_000,
+      ),
+    ).toBeNull();
   });
 
   it("rejects promotion at active capacity without disturbing active connections", () => {
     const authority = new BrowserRelayAuthV2Authority(KEY);
     const pending = {};
     const pendingInvalidated = vi.fn();
-    expect(authority.registerPendingConnection(pending, pendingInvalidated)).toBe(true);
+    expect(authority.registerPendingConnection(pending, pendingInvalidated, SOURCE)).toBe(true);
     const challenge = authority.issueChallenge(pending, hello(), BINDING, 1_000);
     expect(challenge).not.toBeNull();
 
@@ -242,7 +304,7 @@ describe("BrowserRelayAuthV2Authority", () => {
     authority.registerAuthenticatedConnection(active, activeInvalidated);
 
     const failed = {};
-    authority.registerPendingConnection(failed, vi.fn());
+    authority.registerPendingConnection(failed, vi.fn(), SOURCE);
     const failedChallenge = authority.issueChallenge(failed, hello(), BINDING, 1_000)!;
     expect(
       authority.completeChallenge(
@@ -259,7 +321,7 @@ describe("BrowserRelayAuthV2Authority", () => {
     authority.releaseConnection(failed);
 
     const expired = {};
-    authority.registerPendingConnection(expired, vi.fn());
+    authority.registerPendingConnection(expired, vi.fn(), SOURCE);
     const expiredChallenge = authority.issueChallenge(
       expired,
       hello("REREREREREREREREREREREREREREREREREREREREREQ"),
@@ -280,14 +342,14 @@ describe("BrowserRelayAuthV2Authority", () => {
     ).toBeNull();
     authority.releaseConnection(expired);
     expect(activeInvalidated).not.toHaveBeenCalled();
-    expect(authority.registerPendingConnection({}, vi.fn())).toBe(true);
+    expect(authority.registerPendingConnection({}, vi.fn(), SOURCE)).toBe(true);
   });
 
   it("fails closed at the bounded replay-cache limit", () => {
     const authority = new BrowserRelayAuthV2Authority(KEY);
     for (let index = 0; index < 1_024; index += 1) {
       const connection = {};
-      authority.registerPendingConnection(connection, vi.fn());
+      authority.registerPendingConnection(connection, vi.fn(), `192.0.2.${index}`);
       const nonce = Buffer.alloc(32);
       nonce.writeUInt32BE(index, 28);
       expect(
@@ -296,7 +358,7 @@ describe("BrowserRelayAuthV2Authority", () => {
       authority.releaseConnection(connection);
     }
     const overflow = {};
-    authority.registerPendingConnection(overflow, vi.fn());
+    authority.registerPendingConnection(overflow, vi.fn(), SOURCE);
     expect(
       authority.issueChallenge(
         overflow,
@@ -305,6 +367,42 @@ describe("BrowserRelayAuthV2Authority", () => {
         1_000,
       ),
     ).toBeNull();
+  });
+
+  it("reserves replay capacity for independent sources during reconnect churn", () => {
+    const authority = new BrowserRelayAuthV2Authority(KEY);
+    for (let index = 0; index < 256; index += 1) {
+      const connection = {};
+      authority.registerPendingConnection(connection, vi.fn(), "198.51.100.10");
+      const nonce = Buffer.alloc(32);
+      nonce.writeUInt32BE(index, 28);
+      expect(
+        authority.issueChallenge(connection, hello(nonce.toString("base64url")), BINDING, 1_000),
+      ).not.toBeNull();
+      authority.releaseConnection(connection);
+    }
+
+    const sameSource = {};
+    authority.registerPendingConnection(sameSource, vi.fn(), "198.51.100.10");
+    expect(
+      authority.issueChallenge(
+        sameSource,
+        hello(Buffer.alloc(32, 0xfe).toString("base64url")),
+        BINDING,
+        1_000,
+      ),
+    ).toBeNull();
+
+    const independent = {};
+    authority.registerPendingConnection(independent, vi.fn(), "203.0.113.20");
+    expect(
+      authority.issueChallenge(
+        independent,
+        hello(Buffer.alloc(32, 0xff).toString("base64url")),
+        BINDING,
+        1_000,
+      ),
+    ).not.toBeNull();
   });
 });
 

@@ -17,7 +17,9 @@ import {
   composeProviderStreamWrappers,
   createAnthropicThinkingPrefillPayloadWrapper,
   createPayloadPatchStreamWrapper,
+  isAnthropicOAuthApiKey,
   resolveAnthropicPayloadPolicy,
+  resolveAnthropicServerCompactionPlan,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -74,14 +76,7 @@ function mergeAnthropicBetaHeader(
   return merged;
 }
 
-/**
- * Claude subscription credentials are OAuth access tokens rather than API keys.
- * Anthropic authenticates them through `Authorization: Bearer`, so every caller
- * that builds request auth must branch on this instead of assuming `x-api-key`.
- */
-export function isAnthropicOAuthApiKey(apiKey: unknown): boolean {
-  return typeof apiKey === "string" && apiKey.includes("sk-ant-oat");
-}
+export { isAnthropicOAuthApiKey } from "openclaw/plugin-sdk/provider-stream-shared";
 
 function resolveAnthropicFastServiceTier(enabled: boolean): AnthropicServiceTier {
   return enabled ? "auto" : "standard_only";
@@ -235,11 +230,7 @@ function createAnthropicCompactionWrapper(
     applyAnthropicPayloadPolicyToParams(payload, payloadPolicy, new Set());
   });
   return (model, context, options) => {
-    if (
-      extraParams?.anthropicServerCompaction !== true ||
-      isAnthropicOAuthApiKey(options?.apiKey) ||
-      !isDirectAnthropicApiModel(model)
-    ) {
+    if (!resolveAnthropicServerCompactionPlan(model, extraParams, options?.apiKey).enabled) {
       return underlying(model, context, options);
     }
     return payloadWrapper(model, context, {

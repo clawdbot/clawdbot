@@ -592,6 +592,30 @@ describe("subagent announce formatting", () => {
     expect(call.params?.internalEvents?.[0]?.result).toBe(fullResult);
   });
 
+  it("carries a producer route fact to a local parent without changing child result text", async () => {
+    const modelRouteChange = "Model route changed: requested/model → actual/model.";
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-local-route-change",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      terminalReply: {
+        disposition: "visible",
+        text: "child result",
+        modelRouteChange,
+      },
+      ...defaultOutcomeAnnounce,
+    });
+
+    const call = getAgentCall();
+    const message = typeof call.params?.message === "string" ? call.params.message : "";
+    expect(message).toContain(modelRouteChange);
+    expect(message).toContain(
+      "Preserve any runtime-authored model-route change notice in your update.",
+    );
+    expect(call.params?.internalEvents?.[0]?.result).toBe("child result");
+  });
+
   it("includes success status when outcome is ok", async () => {
     // Use waitForCompletion: false so it uses the provided outcome instead of calling agent.wait
     await runSubagentAnnounceFlow({
@@ -900,12 +924,18 @@ describe("subagent announce formatting", () => {
   });
 
   it("keeps completion delivery enabled for extension channels captured from requester origin", async () => {
+    const modelRouteChange = "Model route changed: requested/model → actual/model.";
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",
       childRunId: "run-direct-completion-imessage",
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
       requesterOrigin: { channel: "imessage", to: "+1234567890", accountId: "acct-bb" },
+      terminalReply: {
+        disposition: "visible",
+        text: "child result",
+        modelRouteChange,
+      },
       ...defaultOutcomeAnnounce,
       expectsCompletionMessage: true,
     });
@@ -913,11 +943,16 @@ describe("subagent announce formatting", () => {
     expect(didAnnounce).toBe("delivered");
     expect(sendSpy).not.toHaveBeenCalled();
     expect(agentSpy).toHaveBeenCalledTimes(1);
-    const call = getAgentCall() as { params?: Record<string, unknown> };
+    const call = getAgentCall();
     expect(call?.params?.deliver).toBe(true);
     expect(call?.params?.channel).toBe("imessage");
     expect(call?.params?.to).toBe("+1234567890");
     expect(call?.params?.accountId).toBe("acct-bb");
+    expect(call?.params?.message).toContain(modelRouteChange);
+    expect(call?.params?.message).toContain(
+      "Keep runtime-authored model-route change notices internal on this shared surface.",
+    );
+    expect(call?.params?.internalEvents?.[0]?.result).toBe("child result");
   });
 
   it("keeps direct completion announce delivery immediate even when sibling counters are non-zero", async () => {
@@ -1043,12 +1078,6 @@ describe("subagent announce formatting", () => {
     {
       name: "silent",
       terminalReply: { disposition: "silent" } as const,
-      expectedAgentCalls: 1,
-      expectedMessage: "(no output)",
-    },
-    {
-      name: "empty",
-      terminalReply: { disposition: "empty" } as const,
       expectedAgentCalls: 1,
       expectedMessage: "(no output)",
     },
@@ -2007,8 +2036,16 @@ describe("subagent announce formatting", () => {
     });
 
     expect(delivery.delivered).toBe(false);
+    expect(delivery.reason).toBe("steer_dropped");
+    expect(delivery.terminal).toBeUndefined();
     expect(delivery.phases).toEqual([
-      { phase: "steer-primary", delivered: false, path: "none", error: undefined },
+      {
+        phase: "steer-primary",
+        delivered: false,
+        path: "none",
+        reason: "steer_dropped",
+        error: undefined,
+      },
     ]);
     expect(direct).not.toHaveBeenCalled();
   });
@@ -2475,6 +2512,7 @@ describe("subagent announce formatting", () => {
   it("keeps completion-mode announce internal for nested requester subagent sessions", async () => {
     embeddedRunMock.isEmbeddedAgentRunActive.mockReturnValue(false);
     embeddedRunMock.isEmbeddedAgentRunStreaming.mockReturnValue(false);
+    const modelRouteChange = "Model route changed: requested/model → actual/model.";
 
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:orchestrator:subagent:worker",
@@ -2483,6 +2521,11 @@ describe("subagent announce formatting", () => {
       requesterOrigin: { channel: "whatsapp", accountId: "acct-123", to: "+1555" },
       requesterDisplayKey: "agent:main:subagent:orchestrator",
       expectsCompletionMessage: true,
+      terminalReply: {
+        disposition: "visible",
+        text: "child result",
+        modelRouteChange,
+      },
       ...defaultOutcomeAnnounce,
     });
 
@@ -2497,6 +2540,10 @@ describe("subagent announce formatting", () => {
     const message = typeof call?.params?.message === "string" ? call.params.message : "";
     expect(message).toContain(
       "Convert this completion into a concise internal orchestration update for your parent agent",
+    );
+    expect(message).toContain(modelRouteChange);
+    expect(message).toContain(
+      "Preserve any runtime-authored model-route change notice in your update.",
     );
   });
 
@@ -2951,6 +2998,71 @@ describe("subagent announce formatting", () => {
       preserveFrozenResultFallback: true,
       task: expect.stringContaining("All pending descendants for that run have now settled"),
     });
+  });
+
+  it("terminates an accepted descendant wake after completion delivery closes", async () => {
+    sessionStore = {
+      "agent:main:subagent:parent": {
+        sessionId: "session-parent",
+      },
+    };
+    subagentRegistryMock.listSubagentRunsForRequester.mockReturnValue([
+      {
+        runId: "run-child",
+        childSessionKey: "agent:main:subagent:parent:subagent:child",
+        requesterSessionKey: "agent:main:subagent:parent",
+        requesterDisplayKey: "parent",
+        task: "child task",
+        cleanup: "keep",
+        createdAt: 10,
+        execution: { endedAt: 20, outcome: { status: "ok" } },
+        cleanupCompletedAt: 21,
+        completion: { required: true, resultText: "child result" },
+      },
+    ]);
+    let releaseWake: (() => void) | undefined;
+    agentSpy.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseWake = () => resolve(visibleAgentResponse("run-parent-phase-2"));
+        }),
+    );
+    callGatewaySpy.mockImplementation(async (req: unknown) => {
+      const typed = req as { method?: string; params?: { runId?: string } };
+      if (typed.method === "agent") {
+        return await agentSpy(typed);
+      }
+      if (typed.method === "chat.abort") {
+        return { aborted: true, runIds: [typed.params?.runId] };
+      }
+      return {};
+    });
+    let completionDeliveryAllowed = true;
+
+    const announce = runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:parent",
+      childRunId: "run-parent-phase-1",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      wakeOnDescendantSettle: true,
+      roundOneReply: "waiting for child",
+      isCompletionDeliveryAllowed: () => completionDeliveryAllowed,
+    });
+    await vi.waitFor(() => expect(agentSpy).toHaveBeenCalledOnce());
+
+    completionDeliveryAllowed = false;
+    releaseWake?.();
+
+    await expect(announce).resolves.toBe("intentional_non_delivery");
+    expect(subagentRegistryMock.replaceSubagentRunAfterSteer).not.toHaveBeenCalled();
+    expect(callGatewaySpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "chat.abort",
+        params: expect.objectContaining({ runId: "run-parent-phase-2" }),
+      }),
+    );
   });
 
   it("does not re-wake an already woken run id", async () => {

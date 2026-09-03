@@ -19,6 +19,12 @@ function makeTempRoot(): string {
   return root;
 }
 
+function writeFixture(root: string, relativePath: string, body = "export {};\n") {
+  const file = path.join(root, relativePath);
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, body, "utf8");
+}
+
 afterEach(() => {
   for (const root of tempRoots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
@@ -26,55 +32,63 @@ afterEach(() => {
 });
 
 describe("ensure-extension-memory-build", () => {
-  it("detects existing built extension entrypoints", () => {
+  it.each([
+    "dist/extensions/external/index.js",
+    "dist/extensions/external/dist/index.js",
+    "extensions/external/dist/index.js",
+  ])("reuses selected built entry %s without building unrelated plugins", (entry) => {
     const root = makeTempRoot();
-    mkdirSync(path.join(root, "dist", "extensions", "telegram"), { recursive: true });
-    writeFileSync(
-      path.join(root, "dist", "extensions", "telegram", "index.js"),
-      "export {};\n",
-      "utf8",
-    );
+    writeFixture(root, entry);
+    writeFixture(root, "extensions/internal/openclaw.plugin.json", '{"id":"internal"}');
+    writeFixture(root, "extensions/internal/index.ts");
+    writeFixture(root, "extensions/external/index.ts", 'throw new Error("source imported");');
 
     expect(
-      hasBuiltExtensionMemoryEntries({ rootDir: root, requiredExtensionIds: ["telegram"] }),
+      hasBuiltExtensionMemoryEntries({ rootDir: root, requiredExtensionIds: ["external"] }),
     ).toBe(true);
-  });
-
-  it("rejects partial built extension entrypoint sets", () => {
-    const root = makeTempRoot();
-    mkdirSync(path.join(root, "dist", "extensions", "discord"), { recursive: true });
-    writeFileSync(
-      path.join(root, "dist", "extensions", "discord", "index.js"),
-      "export {};\n",
-      "utf8",
-    );
-
-    expect(
-      hasBuiltExtensionMemoryEntries({
-        rootDir: root,
-        requiredExtensionIds: ["discord", "telegram"],
-      }),
-    ).toBe(false);
-  });
-
-  it("skips the build profile when extension entrypoints already exist", () => {
-    const root = makeTempRoot();
-    mkdirSync(path.join(root, "dist", "extensions", "discord"), { recursive: true });
-    writeFileSync(
-      path.join(root, "dist", "extensions", "discord", "index.js"),
-      "export {};\n",
-      "utf8",
-    );
 
     const result = ensureExtensionMemoryBuild({
       rootDir: root,
-      requiredExtensionIds: ["discord"],
+      requiredExtensionIds: ["external"],
       spawnSync: () => {
         throw new Error("unexpected build");
       },
     });
 
     expect(result).toEqual({ built: false });
+  });
+
+  it.each([
+    ["dist/extensions/external/index.js", ["external", "internal"]],
+    ["extensions/external/dist/index.js", ["external", "internal"]],
+    ["extensions/external/index.ts", ["external"]],
+    ["extensions/external/dist/api.js", ["external"]],
+  ])("builds when %s does not satisfy required ids %j", (entry, requiredExtensionIds) => {
+    const root = makeTempRoot();
+    writeFixture(root, entry);
+    const params = { rootDir: root, requiredExtensionIds };
+    expect(hasBuiltExtensionMemoryEntries(params)).toBe(false);
+    expect(ensureExtensionMemoryBuild({ ...params, spawnSync: () => ({ status: 0 }) })).toEqual({
+      built: true,
+    });
+  });
+
+  it("requires all expected bundled entries by default even when local output exists", () => {
+    const root = makeTempRoot();
+    for (const id of ["internal-a", "internal-b", "external"]) {
+      writeFixture(root, `extensions/${id}/openclaw.plugin.json`, JSON.stringify({ id }));
+      writeFixture(root, `extensions/${id}/index.ts`);
+    }
+    writeFixture(
+      root,
+      "extensions/external/package.json",
+      JSON.stringify({ openclaw: { build: { bundledDist: false } } }),
+    );
+    writeFixture(root, "extensions/external/dist/index.js");
+    writeFixture(root, "dist/extensions/internal-a/index.js");
+    expect(hasBuiltExtensionMemoryEntries({ rootDir: root, env: {} })).toBe(false);
+    writeFixture(root, "dist/extensions/internal-b/index.js");
+    expect(hasBuiltExtensionMemoryEntries({ rootDir: root, env: {} })).toBe(true);
   });
 
   it("runs the cliStartup build profile when extension entrypoints are missing", () => {

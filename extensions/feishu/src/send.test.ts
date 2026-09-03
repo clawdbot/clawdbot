@@ -73,9 +73,51 @@ let editMessageFeishu: typeof import("./send.js").editMessageFeishu;
 let getMessageFeishu: typeof import("./send.js").getMessageFeishu;
 let listFeishuThreadMessages: typeof import("./send.js").listFeishuThreadMessages;
 let resolveFeishuCardTemplate: typeof import("./send.js").resolveFeishuCardTemplate;
-let sendMarkdownCardFeishu: typeof import("./send.js").sendMarkdownCardFeishu;
 let sendMessageFeishu: typeof import("./send.js").sendMessageFeishu;
 let sendStructuredCardFeishu: typeof import("./send.js").sendStructuredCardFeishu;
+
+beforeAll(async () => {
+  ({
+    editMessageFeishu,
+    getMessageFeishu,
+    listFeishuThreadMessages,
+    resolveFeishuCardTemplate,
+    sendMessageFeishu,
+    sendStructuredCardFeishu,
+  } = await import("./send.js"));
+});
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/markdown-table-runtime");
+  vi.doUnmock("openclaw/plugin-sdk/runtime-env");
+  vi.doUnmock("openclaw/plugin-sdk/text-chunking");
+  vi.doUnmock("./client.js");
+  vi.doUnmock("./accounts.js");
+  vi.doUnmock("./runtime.js");
+  vi.resetModules();
+});
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mockResolveMarkdownTableMode.mockReturnValue("preserve");
+  mockConvertMarkdownTables.mockImplementation((text: string) => text);
+  mockRuntimeResolveMarkdownTableMode.mockReturnValue("preserve");
+  mockRuntimeConvertMarkdownTables.mockImplementation((text: string) => text);
+  mockResolveFeishuAccount.mockReturnValue({
+    accountId: "default",
+    configured: true,
+  });
+  mockCreateFeishuClient.mockReturnValue({
+    im: {
+      message: {
+        create: vi.fn(),
+        get: mockClientGet,
+        list: mockClientList,
+        patch: mockClientPatch,
+      },
+    },
+  });
+});
 
 describe("getMessageFeishu", () => {
   function expectTextReceipt(
@@ -91,8 +133,7 @@ describe("getMessageFeishu", () => {
       receipt: {
         primaryPlatformMessageId: messageId,
         platformMessageIds: [messageId],
-        parts: [{ platformMessageId: messageId, kind: "text", index: 0, raw, threadId: chatId }],
-        threadId: chatId,
+        parts: [{ platformMessageId: messageId, kind: "text", index: 0, raw }],
         sentAt: result.receipt.sentAt,
         raw: [raw],
       },
@@ -110,50 +151,6 @@ describe("getMessageFeishu", () => {
       ...expected,
     });
   }
-
-  beforeAll(async () => {
-    ({
-      editMessageFeishu,
-      getMessageFeishu,
-      listFeishuThreadMessages,
-      resolveFeishuCardTemplate,
-      sendMarkdownCardFeishu,
-      sendMessageFeishu,
-      sendStructuredCardFeishu,
-    } = await import("./send.js"));
-  });
-
-  afterAll(() => {
-    vi.doUnmock("openclaw/plugin-sdk/markdown-table-runtime");
-    vi.doUnmock("openclaw/plugin-sdk/runtime-env");
-    vi.doUnmock("openclaw/plugin-sdk/text-chunking");
-    vi.doUnmock("./client.js");
-    vi.doUnmock("./accounts.js");
-    vi.doUnmock("./runtime.js");
-    vi.resetModules();
-  });
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockResolveMarkdownTableMode.mockReturnValue("preserve");
-    mockConvertMarkdownTables.mockImplementation((text: string) => text);
-    mockRuntimeResolveMarkdownTableMode.mockReturnValue("preserve");
-    mockRuntimeConvertMarkdownTables.mockImplementation((text: string) => text);
-    mockResolveFeishuAccount.mockReturnValue({
-      accountId: "default",
-      configured: true,
-    });
-    mockCreateFeishuClient.mockReturnValue({
-      im: {
-        message: {
-          create: vi.fn(),
-          get: mockClientGet,
-          list: mockClientList,
-          patch: mockClientPatch,
-        },
-      },
-    });
-  });
 
   it("sends text without requiring Feishu runtime text helpers", async () => {
     mockRuntimeResolveMarkdownTableMode.mockImplementation(() => {
@@ -295,9 +292,9 @@ describe("getMessageFeishu", () => {
       },
     },
     {
-      name: "markdown",
+      name: "without header",
       send: () =>
-        sendMarkdownCardFeishu({ cfg: {} as ClawdbotConfig, to: "oc_card", text: "hello" }),
+        sendStructuredCardFeishu({ cfg: {} as ClawdbotConfig, to: "oc_card", text: "hello" }),
       expectedHeader: undefined,
     },
   ])("sends $name cards with schema-2.0 width config", async ({ send, expectedHeader }) => {
@@ -849,13 +846,8 @@ describe("getMessageFeishu", () => {
 
 describe("editMessageFeishu", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
     mockClientPatch.mockReset();
     mockClientUpdate.mockReset();
-    mockResolveFeishuAccount.mockReturnValue({
-      accountId: "default",
-      configured: true,
-    });
     mockCreateFeishuClient.mockReturnValue({
       im: {
         message: {
@@ -1070,14 +1062,11 @@ describe("Feishu card-mode newline preservation", () => {
   }
 
   it.each([
-    ["single", "markdown", "line one\nline two\nline three"],
-    ["single", "structured", "first\nsecond\nthird"],
-    ["double", "markdown", "para a\n\npara b"],
-    ["double", "structured", "section 1\n\nsection 2"],
-  ] as const)("preserves %s newlines in %s cards", async (_newline, format, text) => {
+    ["single", "line one\nline two\nline three"],
+    ["double", "para a\n\npara b"],
+  ] as const)("preserves %s newlines in cards", async (_newline, text) => {
     const create = createCardClient();
-    const send = format === "markdown" ? sendMarkdownCardFeishu : sendStructuredCardFeishu;
-    await send({
+    await sendStructuredCardFeishu({
       cfg: {} as ClawdbotConfig,
       to: "oc_card",
       text,

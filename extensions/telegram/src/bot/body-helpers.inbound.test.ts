@@ -152,6 +152,43 @@ describe("joinTelegramTextParts", () => {
     expect(parsed.text).toBe(result.text);
     expect(parsed.links.map((link) => link.href)).toEqual([messageUrl, captionUrl]);
   });
+
+  it.each([
+    "npm test",
+    "a`b",
+    "`npm",
+    "npm`",
+    "`npm`",
+    "``npm```",
+    "`",
+    " npm",
+    "npm ",
+    " npm ",
+    " ",
+    "   ",
+  ])("preserves literal inline code %j from joined text and captions", (code) => {
+    const prefix = "😀 Code: ";
+    const text = `${prefix}${code} end`;
+    const entities: MessageEntity[] = [
+      { type: "code", offset: prefix.length, length: code.length },
+    ];
+    const result = joinTelegramTextParts(
+      [
+        asTelegramMessage({ text, entities }),
+        asTelegramMessage({ caption: text, caption_entities: entities }),
+      ],
+      "\n",
+    );
+
+    const parsed = markdownToIR(renderTelegramTextEntities(result.text, result.entities));
+
+    expect(parsed.text).toBe(result.text);
+    expect(
+      parsed.styles
+        .filter((span) => span.style === "code")
+        .map((span) => parsed.text.slice(span.start, span.end)),
+    ).toEqual([code, code]);
+  });
 });
 
 describe("renderTelegramTextEntities quoted blocks", () => {

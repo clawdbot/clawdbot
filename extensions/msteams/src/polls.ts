@@ -264,16 +264,12 @@ function createPollVoteBucketStateStore(params?: MSTeamsPollStoreStateOptions) {
   });
 }
 
-function parseTimestamp(value?: string): number | null {
-  return parseDateStringTimestampMs(value) ?? null;
-}
-
 function pruneExpired<T extends { createdAt: string; updatedAt?: string }>(
   polls: Record<string, T>,
 ) {
   const cutoff = Date.now() - MSTEAMS_POLL_TTL_MS;
   const entries = Object.entries(polls).filter(([, poll]) => {
-    const ts = parseTimestamp(poll.updatedAt ?? poll.createdAt) ?? 0;
+    const ts = parseDateStringTimestampMs(poll.updatedAt ?? poll.createdAt) ?? 0;
     return ts >= cutoff;
   });
   return Object.fromEntries(entries);
@@ -287,8 +283,8 @@ export function selectRetainedMSTeamsPolls(
     return retained;
   }
   retained.sort((a, b) => {
-    const aTs = parseTimestamp(a[1].updatedAt ?? a[1].createdAt) ?? 0;
-    const bTs = parseTimestamp(b[1].updatedAt ?? b[1].createdAt) ?? 0;
+    const aTs = parseDateStringTimestampMs(a[1].updatedAt ?? a[1].createdAt) ?? 0;
+    const bTs = parseDateStringTimestampMs(b[1].updatedAt ?? b[1].createdAt) ?? 0;
     return aTs - bTs || a[0].localeCompare(b[0]);
   });
   return retained.slice(retained.length - MSTEAMS_MAX_POLLS);
@@ -420,8 +416,8 @@ export function createMSTeamsPollStoreState(
       return;
     }
     const sorted = rows.toSorted((a, b) => {
-      const aTs = parseTimestamp(a.value.updatedAt ?? a.value.createdAt) ?? 0;
-      const bTs = parseTimestamp(b.value.updatedAt ?? b.value.createdAt) ?? 0;
+      const aTs = parseDateStringTimestampMs(a.value.updatedAt ?? a.value.createdAt) ?? 0;
+      const bTs = parseDateStringTimestampMs(b.value.updatedAt ?? b.value.createdAt) ?? 0;
       return aTs - bTs || a.key.localeCompare(b.key);
     });
     for (const row of sorted.slice(0, rows.length - MSTEAMS_MAX_POLLS)) {

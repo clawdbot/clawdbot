@@ -25,13 +25,13 @@ const GUARDED_SOURCES: GuardedSource[] = [
     forbiddenPatterns: [/\bgetThreadBindingManager\b/],
   },
   {
-    path: "auto-reply/reply/commands-subagents/action-focus.ts",
+    path: "auto-reply/reply/commands-session.ts",
     forbiddenPatterns: [/\bgetThreadBindingManager\b/],
   },
 ];
 
 describe("ACP/session binding architecture guardrails", () => {
-  it("keeps ACP/focus flows off Discord thread-binding manager APIs", () => {
+  it("keeps ACP/session controls off Discord thread-binding manager APIs", () => {
     for (const source of GUARDED_SOURCES) {
       const absolutePath = resolve(ROOT_DIR, source.path);
       const text = readFileSync(absolutePath, "utf8");

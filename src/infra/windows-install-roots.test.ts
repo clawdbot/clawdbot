@@ -18,6 +18,7 @@ import {
 } from "./windows-install-roots.js";
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
   execFileSyncMock.mockReset();
 });
@@ -36,20 +37,11 @@ describe("getWindowsInstallRoots", () => {
       const value = valueName ? values[valueName] : undefined;
       return value ? `${valueName}    REG_SZ    ${value}\r\n` : "";
     });
-    const originalEnv = process.env;
-    let roots;
-    try {
-      process.env = {
-        ...originalEnv,
-        SystemRoot: "C:\\PoisonedWindows",
-        ProgramFiles: "C:\\Poisoned Programs",
-        "ProgramFiles(x86)": "C:\\Poisoned Programs (x86)",
-        ProgramW6432: "C:\\Poisoned Programs",
-      };
-      roots = getWindowsInstallRoots();
-    } finally {
-      process.env = originalEnv;
-    }
+    vi.stubEnv("SystemRoot", "C:\\PoisonedWindows");
+    vi.stubEnv("ProgramFiles", "C:\\Poisoned Programs");
+    vi.stubEnv("ProgramFiles(x86)", "C:\\Poisoned Programs (x86)");
+    vi.stubEnv("ProgramW6432", "C:\\Poisoned Programs");
+    const roots = getWindowsInstallRoots();
 
     expect(roots).toEqual({
       systemRoot: "D:\\Windows",

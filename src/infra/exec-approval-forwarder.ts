@@ -26,11 +26,9 @@ import { createPendingApprovalRegistry } from "../shared/pending-approval-regist
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import { matchesApprovalRequestFilters } from "./approval-request-filters.js";
 import type { ChannelApprovalKind } from "./approval-types.js";
-import {
-  resolveExecApprovalCommandDisplay,
-  sanitizeExecApprovalWarningText,
-} from "./exec-approval-command-display.js";
+import { resolveExecApprovalCommandDisplay } from "./exec-approval-command-display.js";
 import { formatExecApprovalExpiresIn } from "./exec-approval-reply.js";
+import { sanitizeExecApprovalWarningText } from "./exec-approval-text-sanitize.js";
 import {
   resolveExecApprovalRequestAllowedDecisions,
   type ExecApprovalRequest,

@@ -18,15 +18,12 @@ import type { SessionOrganizerControllerHost } from "./session-organizer-control
 
 export type SessionActionRow = Pick<
   SidebarRecentSession,
-  "key" | "sessionId" | "label" | "pinned" | "archived" | "active"
+  "key" | "sessionId" | "label" | "pinned" | "archived" | "active" | "category"
 > & { gatewayHasActiveRun?: boolean; hasActiveRun?: boolean };
 
 export type SessionActionHost = Pick<
   SessionOrganizerControllerHost,
-  | "pruneSidebarSessionEntry"
-  | "replaceCurrentSession"
-  | "selectSession"
-  | "sidebarSessionStatusFilter"
+  "pruneSidebarSessionEntry" | "selectSession" | "sidebarSessionStatusFilter"
 > & {
   readonly sessionData: Pick<
     SessionOrganizerControllerHost["sessionData"],
@@ -128,9 +125,7 @@ export async function patchSessionRows(
       targets: chunkRows.map((row) => ({
         key: row.key,
         agentId: sessionRowAgentId(row, scope),
-        ...(typeof patch.archived === "boolean" && row.sessionId
-          ? { expectedSessionId: row.sessionId }
-          : {}),
+        ...(row.sessionId ? { expectedSessionId: row.sessionId } : {}),
       })),
       patch,
     };

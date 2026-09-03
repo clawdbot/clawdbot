@@ -17,10 +17,17 @@ export function renderModelSetupSuccessDialog(
 ) {
   const providerId = providerIdFromModelRef(activation.modelRef);
   const providerIconId = providerId && hasProviderBrandIcon(providerId) ? providerId : null;
+  const description =
+    activation.warning ?? t("modelSetup.success.body", { modelRef: activation.modelRef });
+  const actionLabel = firstRun
+    ? t("modelSetup.success.continueSetup")
+    : activation.warning
+      ? t("tabs.chat")
+      : t("modelSetup.success.openChat");
   return html`
     <openclaw-modal-dialog
       label=${t("modelSetup.success.title")}
-      description=${t("modelSetup.success.body", { modelRef: activation.modelRef })}
+      description=${description}
       @modal-cancel=${onClose}
     >
       <section class="model-setup-success" role="status">
@@ -39,7 +46,7 @@ export function renderModelSetupSuccessDialog(
         </div>
         <div class="model-setup-success__copy">
           <h2>${t("modelSetup.success.title")}</h2>
-          <p>${t("modelSetup.success.body", { modelRef: activation.modelRef })}</p>
+          ${activation.warning ? nothing : html`<p>${description}</p>`}
         </div>
         ${activation.warning
           ? html`<div class="model-setup-success__warning">${activation.warning}</div>`
@@ -60,8 +67,7 @@ export function renderModelSetupSuccessDialog(
             ${t("modelSetup.success.stayHere")}
           </button>
           <button type="button" class="btn primary" autofocus @click=${onOpenChat}>
-            ${icons.messageSquare}
-            ${t(firstRun ? "modelSetup.success.continueSetup" : "modelSetup.success.openChat")}
+            ${icons.messageSquare} ${actionLabel}
           </button>
         </footer>
       </section>

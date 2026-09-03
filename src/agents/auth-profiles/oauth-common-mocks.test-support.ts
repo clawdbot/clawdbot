@@ -22,7 +22,6 @@ export function getOAuthProviderRuntimeMocks() {
 }
 
 vi.mock("../cli-credentials.js", () => ({
-  readClaudeCliCredentialsCached: () => null,
   readCodexCliCredentialsCached: () => null,
   readMiniMaxCliCredentialsCached: () => null,
   resetCliCredentialCachesForTest: () => undefined,
@@ -53,7 +52,6 @@ vi.mock("./external-cli-sync.js", () => ({
     credential.access.trim().length > 0 &&
     Number.isFinite(credential.expires) &&
     credential.expires - now > 5 * 60 * 1000,
-  isSafeToUseExternalCliCredential: () => true,
   readExternalCliBootstrapCredential: () => null,
   resolveExternalCliAuthProfiles: () => [],
   shouldBootstrapFromExternalCliCredential: () => false,

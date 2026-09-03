@@ -19,6 +19,7 @@ import {
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { readAssistantDisplayContent } from "../../shared/assistant-display-content.js";
 import {
   parseManagedOutgoingArtifactId,
   resolveManagedOutgoingMediaArtifactDownload,
@@ -94,6 +95,9 @@ function normalizeArtifactType(value: string): string {
     return "video";
   }
   if (normalized === "file" || normalized === "input_file") {
+    return "file";
+  }
+  if (normalized === "attachment") {
     return "file";
   }
   return "file";
@@ -216,6 +220,7 @@ function isArtifactBlock(block: Record<string, unknown>): boolean {
     type === "audio" ||
     type === "video" ||
     type === "file" ||
+    type === "attachment" ||
     type === "input_image" ||
     type === "input_audio" ||
     type === "input_video" ||
@@ -253,20 +258,23 @@ function collectArtifactsFromMessage(params: {
   if (params.taskId && messageTaskId !== params.taskId) {
     return;
   }
-  const content = Array.isArray(msg.content) ? msg.content : [];
+  const content = readAssistantDisplayContent(msg);
   for (let contentIndex = 0; contentIndex < content.length; contentIndex += 1) {
     const block = asOptionalRecord(content[contentIndex]);
     if (!block || !isArtifactBlock(block)) {
       continue;
     }
     const type = normalizeArtifactType(asNonEmptyString(block.type) ?? "file");
+    const attachment = asOptionalRecord(block.attachment);
     const title =
       asNonEmptyString(block.title) ??
       asNonEmptyString(block.fileName) ??
       asNonEmptyString(block.filename) ??
       asNonEmptyString(block.alt) ??
+      asNonEmptyString(attachment?.label) ??
       `${type} ${params.artifacts.length + 1}`;
-    const declaredArtifactId = asNonEmptyString(block.artifactId);
+    const declaredArtifactId =
+      asNonEmptyString(block.artifactId) ?? asNonEmptyString(attachment?.artifactId);
     const id =
       declaredArtifactId && parseManagedOutgoingArtifactId(declaredArtifactId)
         ? declaredArtifactId
@@ -280,7 +288,7 @@ function collectArtifactsFromMessage(params: {
     const includeData = params.downloadArtifactId
       ? params.downloadArtifactId === id
       : params.includeDownloadData !== false;
-    const download = resolveBlockDownload(block, { includeData });
+    const download = resolveBlockDownload(attachment ?? block, { includeData });
     const summary: ArtifactRecord = {
       id,
       type,
@@ -340,11 +348,6 @@ async function loadArtifacts(
         includeDownloadData: opts.includeDownloadData,
         downloadArtifactId: opts.downloadArtifactId,
       });
-    },
-    {
-      mode: "full",
-      reason: "artifact query transcript scan",
-      cache: "skip",
     },
   );
   return {

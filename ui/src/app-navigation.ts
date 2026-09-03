@@ -24,6 +24,7 @@ export const SIDEBAR_NAV_ROUTES = [
   "tasks",
   "sessions",
   "activity",
+  "meetings",
   "plugins",
   "apps",
   "portals",
@@ -264,6 +265,7 @@ const SETTINGS_NAVIGATION_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
 const NAVIGATION_ICONS: NavigationItem = {
   agents: "bot",
   activity: "activity",
+  meetings: "book",
   apps: "layoutGrid",
   portals: "monitor",
   approvals: "badgeCheck",
@@ -299,7 +301,7 @@ const NAVIGATION_ICONS: NavigationItem = {
   about: "fileText",
   "ai-agents": "brain",
   "model-setup": "spark",
-  "model-providers": "plug",
+  "model-providers": "box",
   "memory-import": "download",
   notifications: "bell",
   security: "shieldCheck",
@@ -374,6 +376,7 @@ export function cancelRoutePreload(
 const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey: string }> = {
   agents: { titleKey: "tabs.agents", subtitleKey: "subtitles.agents" },
   activity: { titleKey: "tabs.activity", subtitleKey: "subtitles.activity" },
+  meetings: { titleKey: "tabs.meetings", subtitleKey: "subtitles.meetings" },
   apps: { titleKey: "tabs.apps", subtitleKey: "subtitles.apps" },
   portals: { titleKey: "tabs.portals", subtitleKey: "subtitles.portals" },
   approvals: { titleKey: "tabs.approvals", subtitleKey: "subtitles.approvals" },
@@ -441,24 +444,24 @@ export function titleForRoute(routeId: NavigationRouteId): string {
 }
 
 /** Window/tab title, markers leftmost because tabs truncate from the right.
- * Offline replaces the approval count (a stale queue is not actionable) and
- * carries the pending-outbox total; titles already ending in the brand
+ * A disconnected Gateway replaces the approval count (a stale queue is not
+ * actionable) and carries the pending-outbox total; titles already ending in the brand
  * ("Ask OpenClaw") skip the suffix so it never reads "… OpenClaw — OpenClaw". */
 export function formatDocumentTitle(options: {
   context: string;
   attentionCount?: number;
-  offline?: boolean;
+  gatewayDisconnected?: boolean;
   queuedCount?: number;
 }): string {
   const base = options.context.endsWith("OpenClaw")
     ? options.context
     : `${options.context} — OpenClaw`;
-  if (options.offline) {
+  if (options.gatewayDisconnected) {
     const queued =
       options.queuedCount && options.queuedCount > 0
         ? ` · ${t("connection.queuedCount", { count: String(options.queuedCount) })}`
         : "";
-    return `(${t("common.offline")}${queued}) ${base}`;
+    return `(${t("connection.disconnectedTitle")}${queued}) ${base}`;
   }
   if (options.attentionCount && options.attentionCount > 0) {
     return `(${options.attentionCount}) ${base}`;

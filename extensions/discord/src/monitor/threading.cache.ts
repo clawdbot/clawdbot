@@ -3,21 +3,33 @@ import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { DiscordThreadStarter } from "./threading.types.js";
 
 type DiscordThreadStarterCacheEntry = {
-  value: DiscordThreadStarter;
+  value: DiscordThreadStarterCacheValue;
   updatedAt: number;
 };
 
+type DiscordThreadStarterCacheValue =
+  | { kind: "hit"; starter: DiscordThreadStarter }
+  | { kind: "miss" };
+
 const DISCORD_THREAD_STARTER_CACHE_TTL_MS = 5 * 60 * 1000;
+const DISCORD_THREAD_STARTER_NEGATIVE_CACHE_TTL_MS = 30 * 1000;
 const DISCORD_THREAD_STARTER_CACHE_MAX = 500;
 
 const DISCORD_THREAD_STARTER_CACHE = new Map<string, DiscordThreadStarterCacheEntry>();
 
-export function getCachedThreadStarter(key: string, now: number): DiscordThreadStarter | undefined {
+export function getCachedThreadStarter(
+  key: string,
+  now: number,
+): DiscordThreadStarterCacheValue | undefined {
   const entry = DISCORD_THREAD_STARTER_CACHE.get(key);
   if (!entry) {
     return undefined;
   }
-  if (now < entry.updatedAt || now - entry.updatedAt >= DISCORD_THREAD_STARTER_CACHE_TTL_MS) {
+  const ttlMs =
+    entry.value.kind === "miss"
+      ? DISCORD_THREAD_STARTER_NEGATIVE_CACHE_TTL_MS
+      : DISCORD_THREAD_STARTER_CACHE_TTL_MS;
+  if (now < entry.updatedAt || now - entry.updatedAt >= ttlMs) {
     DISCORD_THREAD_STARTER_CACHE.delete(key);
     return undefined;
   }
@@ -28,7 +40,7 @@ export function getCachedThreadStarter(key: string, now: number): DiscordThreadS
 
 export function setCachedThreadStarter(
   key: string,
-  value: DiscordThreadStarter,
+  value: DiscordThreadStarterCacheValue,
   now: number,
 ): void {
   DISCORD_THREAD_STARTER_CACHE.delete(key);

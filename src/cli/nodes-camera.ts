@@ -82,8 +82,11 @@ type CameraClipPayload = {
   hasAudio: boolean;
 };
 
-/** Validate and normalize an unknown camera still-image payload. */
-export function parseCameraSnapPayload(value: unknown): CameraSnapPayload {
+/** Validate a complete still-image payload before any capture can be published. */
+export function parseCameraSnapPayload(
+  value: unknown,
+  opts: { expectedHost?: string } = {},
+): CameraSnapPayload {
   const obj = asRecord(value);
   const format = readStringValue(obj.format);
   const base64 = readStringValue(obj.base64);
@@ -92,6 +95,12 @@ export function parseCameraSnapPayload(value: unknown): CameraSnapPayload {
   const height = asNumber(obj.height);
   if (!format || (!base64 && !url) || width === undefined || height === undefined) {
     throw new Error("invalid camera.snap payload");
+  }
+  if (url) {
+    validateCameraPayloadUrl(url, requireNodeRemoteIp(opts.expectedHost));
+  }
+  if (base64) {
+    validateCameraPayloadBase64(base64, MAX_CAMERA_BASE64_BYTES);
   }
   return { format, ...(base64 ? { base64 } : {}), ...(url ? { url } : {}), width, height };
 }
@@ -128,21 +137,26 @@ export function cameraTempPath(opts: {
   return path.join(tmpDir, `${cliName}-camera-${opts.kind}${facingPart}-${id}${ext}`);
 }
 
-/** Download a node-hosted media URL to disk after HTTPS, host, redirect, and size checks. */
-async function writeUrlToFile(filePath: string, url: string, opts: { expectedHost: string }) {
+function validateCameraPayloadUrl(url: string, expectedNodeHost: string): string {
   const parsed = new URL(url);
   if (parsed.protocol !== "https:") {
     throw new Error(`writeUrlToFile: only https URLs are allowed, got ${parsed.protocol}`);
   }
-  const expectedHost = normalizeHostname(opts.expectedHost);
+  const expectedHost = normalizeHostname(expectedNodeHost);
   if (!expectedHost) {
     throw new Error("writeUrlToFile: expectedHost is required");
   }
   if (normalizeHostname(parsed.hostname) !== expectedHost) {
     throw new Error(
-      `writeUrlToFile: url host ${parsed.hostname} must match node host ${opts.expectedHost}`,
+      `writeUrlToFile: url host ${parsed.hostname} must match node host ${expectedNodeHost}`,
     );
   }
+  return expectedHost;
+}
+
+/** Download a node-hosted media URL to disk after HTTPS, host, redirect, and size checks. */
+async function writeUrlToFile(filePath: string, url: string, opts: { expectedHost: string }) {
+  const expectedHost = validateCameraPayloadUrl(url, opts.expectedHost);
 
   // The node host is allowed even when private because the RPC response supplied its remote IP.
   const policy = {
@@ -234,13 +248,7 @@ async function writeUrlToFile(filePath: string, url: string, opts: { expectedHos
   return { path: filePath, bytes };
 }
 
-/** Decode a base64 media payload to disk with preflight and post-decode size checks. */
-export async function writeBase64ToFile(
-  filePath: string,
-  base64: string,
-  opts: { maxBytes?: number } = {},
-) {
-  const maxBytes = opts.maxBytes ?? MAX_CAMERA_BASE64_BYTES;
+function validateCameraPayloadBase64(base64: string, maxBytes: number): string {
   if (estimateBase64DecodedBytes(base64) > maxBytes) {
     throw new Error(`writeBase64ToFile: decoded payload exceeds max ${maxBytes}`);
   }
@@ -248,6 +256,17 @@ export async function writeBase64ToFile(
   if (!canonicalBase64) {
     throw new Error("writeBase64ToFile: invalid base64 payload");
   }
+  return canonicalBase64;
+}
+
+/** Decode a base64 media payload to disk with preflight and post-decode size checks. */
+export async function writeBase64ToFile(
+  filePath: string,
+  base64: string,
+  opts: { maxBytes?: number } = {},
+) {
+  const maxBytes = opts.maxBytes ?? MAX_CAMERA_BASE64_BYTES;
+  const canonicalBase64 = validateCameraPayloadBase64(base64, maxBytes);
   const buf = Buffer.from(canonicalBase64, "base64");
   if (buf.length > maxBytes) {
     throw new Error(`writeBase64ToFile: decoded ${buf.length} bytes, exceeds max ${maxBytes}`);

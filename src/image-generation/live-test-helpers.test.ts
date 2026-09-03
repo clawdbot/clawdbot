@@ -4,8 +4,6 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   parseCaseFilter,
   parseImageProviderFilter,
-  parseProviderModelMap,
-  redactLiveApiKey,
   resolveConfiguredLiveImageModels,
   resolveLiveImageAuthStore,
 } from "./live-test-helpers.js";
@@ -22,17 +20,6 @@ describe("image-generation live-test helpers", () => {
     expect(parseCaseFilter("all")).toBeNull();
     expect(parseCaseFilter(" google:flash , openai:default ")).toEqual(
       new Set(["google:flash", "openai:default"]),
-    );
-  });
-
-  it("parses provider model overrides by provider id", () => {
-    expect(
-      parseProviderModelMap("openai/gpt-image-2, google/gemini-3.1-flash-image-preview, invalid"),
-    ).toEqual(
-      new Map([
-        ["openai", "openai/gpt-image-2"],
-        ["google", "google/gemini-3.1-flash-image-preview"],
-      ]),
     );
   });
 
@@ -83,12 +70,5 @@ describe("image-generation live-test helpers", () => {
         hasLiveKeys: false,
       }),
     ).toBeUndefined();
-  });
-
-  it("redacts live API keys for diagnostics", () => {
-    expect(redactLiveApiKey(undefined)).toBe("none");
-    expect(redactLiveApiKey("   ")).toBe("none");
-    expect(redactLiveApiKey("synthetic-12")).toBe("<redacted>");
-    expect(redactLiveApiKey("synthetic-credential-value")).toBe("<redacted>");
   });
 });

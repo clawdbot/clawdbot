@@ -6,7 +6,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -14,6 +14,7 @@ import {
 } from "../../../infra/diagnostic-events.js";
 import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { registerDiagnosticTracePropagationBridge } from "../../../infra/diagnostic-trace-propagation.js";
+import { flushDiagnosticsTimeline } from "../../../infra/diagnostics-timeline.js";
 import {
   resetDiagnosticRunActivityForTest,
   startDiagnosticRunActivityTracking,
@@ -26,7 +27,7 @@ import { createHookRunnerWithRegistry } from "../../../plugins/hooks.test-fixtur
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = createTempDirTracker();
 
 async function collectModelCallEvents(run: () => Promise<void>): Promise<DiagnosticEventPayload[]> {
   // Diagnostics are emitted asynchronously; collect only public model-call
@@ -93,6 +94,7 @@ async function collectProviderTimelineEvents(run: () => Promise<void>) {
     },
     run,
   );
+  flushDiagnosticsTimeline();
   return readFileSync(timelinePath, "utf8")
     .trim()
     .split("\n")
@@ -110,6 +112,8 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents lifecycle", () => {
   });
 
   afterEach(() => {
+    flushDiagnosticsTimeline();
+    tempDirs.cleanup();
     resetDiagnosticEventsForTest();
     resetGlobalHookRunner();
     resetDiagnosticRunActivityForTest();

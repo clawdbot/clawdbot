@@ -37,6 +37,7 @@ function widget(overrides: Partial<BoardWidget> = {}): BoardWidget {
 function callbacks(overrides: Partial<BoardWidgetCellCallbacks> = {}): BoardWidgetCellCallbacks {
   const noAction = vi.fn(async () => undefined);
   return {
+    appViewGeneration: () => 0,
     grant: noAction,
     movePointerDown: vi.fn(),
     resizePointerDown: vi.fn(),

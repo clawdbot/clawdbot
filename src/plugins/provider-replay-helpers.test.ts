@@ -100,6 +100,7 @@ describe("provider replay helpers", () => {
 
   it("builds strict anthropic replay policy", () => {
     expectFields(buildStrictAnthropicReplayPolicy({ dropThinkingBlocks: true }), {
+      appendOnlyRuntimeContext: true,
       sanitizeMode: "full",
       preserveSignatures: true,
       repairToolUseResultPairing: true,
@@ -176,6 +177,7 @@ describe("provider replay helpers", () => {
     // Sonnet 4.6 preserves thinking blocks
     const policy46 = buildNativeAnthropicReplayPolicyForModel("claude-sonnet-4-6");
     expectFields(policy46, {
+      appendOnlyRuntimeContext: true,
       sanitizeMode: "full",
       sanitizeToolCallIds: true,
       toolCallIdMode: "strict",
@@ -203,6 +205,7 @@ describe("provider replay helpers", () => {
       { anthropicModelDropThinkingBlocks: true },
     );
     expectFields(sonnet46Policy, {
+      appendOnlyRuntimeContext: true,
       validateAnthropicTurns: true,
     });
     expect(sonnet46Policy).not.toHaveProperty("dropThinkingBlocks");

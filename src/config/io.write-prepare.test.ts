@@ -55,6 +55,38 @@ const writeCases: WriteCase[] = [
     expected: { gateway: { port: 18789, auth: { mode: "token" } } },
   },
   {
+    name: "omits the unauthored parent after removing an injected roster",
+    current: { gateway: { port: 18789 }, ...roster({ main: {} }) },
+    authored: { gateway: { port: 18789 } },
+    next: { gateway: { port: 19001 }, ...roster({ main: {} }) },
+    expected: { gateway: { port: 19001 } },
+  },
+  {
+    name: "retains an explicitly authored empty agents section",
+    current: { gateway: { port: 18789 }, ...roster({ main: {} }) },
+    authored: { gateway: { port: 18789 }, agents: {} },
+    next: { gateway: { port: 19001 }, ...roster({ main: {} }) },
+    expected: { gateway: { port: 19001 }, agents: {} },
+  },
+  {
+    name: "retains newly authored defaults after removing an injected roster",
+    current: { gateway: { port: 18789 }, ...roster({ main: {} }) },
+    authored: { gateway: { port: 18789 } },
+    next: { agents: { entries: { main: {} }, defaults: {} }, gateway: { port: 18789 } },
+    options: { explicitSetPaths: [["agents", "defaults"]] },
+    expected: { agents: { defaults: {} }, gateway: { port: 18789 } },
+  },
+  {
+    name: "restores an untouched authored roster without aliasing its nested values",
+    current: roster({ main: runtimeSecretEntry }),
+    authored: roster({ main: authoredSecretEntry }),
+    next: { ...roster({ main: runtimeSecretEntry }), gateway: { port: 19001 } },
+    expected: { ...roster({ main: authoredSecretEntry }), gateway: { port: 19001 } },
+    verify: (persisted) => {
+      expect(persisted.agents?.entries?.main?.sandbox?.ssh?.identityData).not.toBe(identityRef);
+    },
+  },
+  {
     name: "persists the complete injected roster when a pre-roster config adds an agent",
     current: { gateway: { mode: "local" }, ...roster({ main }) },
     authored: { gateway: { mode: "local" } },
@@ -414,6 +446,25 @@ const writeCases: WriteCase[] = [
     authored: roster({ main: authoredSecretEntry }),
     next: roster({ worker: { ...main, ...worker } }),
     error: "cannot safely match renamed agent entries",
+  },
+  {
+    name: "preserves each duplicate legacy occurrence through compound migrations",
+    current: listRoster([
+      { id: "Research", workspace: "/srv/shared", memorySearch: { enabled: false } },
+      { id: "Research", workspace: "/srv/shared", memorySearch: { enabled: false } },
+    ]),
+    authored: listRoster([
+      { id: "Research", workspace: "${FIRST_WORKSPACE}", memorySearch: { enabled: false } },
+      { id: "Research", workspace: "${SECOND_WORKSPACE}", memorySearch: { enabled: false } },
+    ]),
+    next: roster({
+      research: { workspace: "/srv/shared", memory: { search: { enabled: false } } },
+      "research-2": { workspace: "/srv/shared", memory: { search: { enabled: false } } },
+    }),
+    expected: roster({
+      research: { workspace: "${FIRST_WORKSPACE}", memory: { search: { enabled: false } } },
+      "research-2": { workspace: "${SECOND_WORKSPACE}", memory: { search: { enabled: false } } },
+    }),
   },
   {
     name: "keeps the normalized default when authored legacy input marked it false",

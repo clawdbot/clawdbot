@@ -146,6 +146,12 @@ const WorkerEnvironmentProfileSummarySchema = closedObject({
   providerId: NonEmptyString,
   trust: Type.Optional(EnvironmentTrustSchema),
   executionMode: Type.Optional(WorkerExecutionModeSchema),
+  executionModes: Type.Optional(
+    Type.Union([
+      Type.Tuple([WorkerExecutionModeSchema]),
+      Type.Tuple([Type.Literal("worker-turn"), Type.Literal("remote-exec")]),
+    ]),
+  ),
   machines: Type.Optional(WorkerMachineOptionsSchema),
 });
 

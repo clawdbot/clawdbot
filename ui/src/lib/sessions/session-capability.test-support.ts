@@ -1,5 +1,6 @@
 import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
+import { createSessionCapability } from "./index.ts";
 
 export function sessionsResult(
   sessions: SessionsListResult["sessions"],
@@ -14,13 +15,18 @@ export function sessionsResult(
   };
 }
 
-export function createGatewayHarness(client: GatewayBrowserClient, featureMethods?: string[]) {
+export function createGatewayHarness(
+  client: GatewayBrowserClient,
+  featureMethods?: string[],
+  options?: { selfUser?: { readonly id: string } | null },
+) {
   let snapshot: {
     client: GatewayBrowserClient | null;
     phase: "connected" | "reconnecting";
     sessionKey: string;
     assistantAgentId: string | null;
     hello: GatewayHelloOk | null;
+    selfUser: { readonly id: string } | null;
   } = {
     client,
     phase: "connected" as const,
@@ -30,6 +36,7 @@ export function createGatewayHarness(client: GatewayBrowserClient, featureMethod
       featureMethods === undefined
         ? null
         : ({ features: { methods: featureMethods } } as GatewayHelloOk),
+    selfUser: options?.selfUser ?? null,
   };
   const listeners = new Set<(next: typeof snapshot) => void>();
   const eventListeners = new Set<(event: GatewayEventFrame) => void>();
@@ -63,4 +70,26 @@ export function createGatewayHarness(client: GatewayBrowserClient, featureMethod
       }
     },
   };
+}
+
+export function sessionChangedEvent(key: string): GatewayEventFrame {
+  return {
+    type: "event",
+    event: "sessions.changed",
+    payload: { sessionKey: key, reason: "create", key, kind: "direct", updatedAt: 1 },
+  };
+}
+
+export function createSessionCapabilityHarness(
+  request: GatewayBrowserClient["request"],
+  options?: { ownerId?: string },
+) {
+  const { gateway, emitEvent } = createGatewayHarness(
+    { request } as GatewayBrowserClient,
+    undefined,
+    {
+      selfUser: options?.ownerId ? { id: options.ownerId } : null,
+    },
+  );
+  return { sessions: createSessionCapability(gateway), emitEvent };
 }

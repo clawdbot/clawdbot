@@ -57,6 +57,9 @@ export function closeSessionMenus(root: ParentNode) {
 }
 
 export function handleSessionPickerEvent(root: ParentNode, event: Event) {
+  if (document.querySelector(".shell-nav[aria-modal='true']")) {
+    return;
+  }
   const pickers = root.querySelectorAll<HTMLDetailsElement>(".chat-controls__inline-select[open]");
   if (pickers.length === 0) {
     return;

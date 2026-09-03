@@ -99,7 +99,7 @@ struct SkillsSettings: View {
             Spacer(minLength: 18)
 
             if total > 0 {
-                Text("\(total)")
+                Text(verbatim: "\(total)")
                     .font(.title3.monospacedDigit().weight(.semibold))
                     .foregroundStyle(.secondary)
             }
@@ -508,27 +508,32 @@ private struct SkillRow: View {
     private var missingSummary: some View {
         VStack(alignment: .leading, spacing: 4) {
             if self.shouldShowMissingBins {
-                Text("Missing binaries: \(self.missingBins.joined(separator: ", "))")
+                Text(String(
+                    format: String(localized: "Missing binaries: %@"), self.missingBins.joined(separator: ", ")))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             if !self.missingAnyBins.isEmpty {
-                Text("Needs any binary: \(self.missingAnyBins.joined(separator: ", "))")
+                Text(String(
+                    format: String(localized: "Needs any binary: %@"), self.missingAnyBins.joined(separator: ", ")))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             if !self.missingEnv.isEmpty {
-                Text("Missing env: \(self.missingEnv.joined(separator: ", "))")
+                Text(String(
+                    format: String(localized: "Missing env: %@"), self.missingEnv.joined(separator: ", ")))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             if !self.missingConfig.isEmpty {
-                Text("Requires config: \(self.missingConfig.joined(separator: ", "))")
+                Text(String(
+                    format: String(localized: "Requires config: %@"), self.missingConfig.joined(separator: ", ")))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             if !self.missingOS.isEmpty {
-                Text("Requires OS: \(self.missingOS.joined(separator: ", "))")
+                Text(String(
+                    format: String(localized: "Requires OS: %@"), self.missingOS.joined(separator: ", ")))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -699,7 +704,8 @@ private struct EnvEditorView: View {
             }
             SecureField(self.editor.envKey, text: self.$value)
                 .textFieldStyle(.roundedBorder)
-            Text("Saved to openclaw.json under skills.entries.\(self.editor.skillKey)")
+            Text(String(
+                format: String(localized: "Saved to openclaw.json under skills.entries.%@"), self.editor.skillKey))
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
             HStack {

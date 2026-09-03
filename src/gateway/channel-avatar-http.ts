@@ -20,13 +20,12 @@ import { authorizeControlUiSessionOwnerReadRequestOrReply } from "./http-utils.j
 
 const CHANNEL_AVATAR_CACHE_MAX_ENTRIES = 128;
 
-type ChannelAvatarCacheIndex = {
+type ChannelAvatarCacheEntry = {
   reference: string;
-  imageKey: string;
+  image: HttpImageRepresentation;
 };
 
-const channelAvatarIndex = new Map<string, ChannelAvatarCacheIndex>();
-const channelAvatarBytes = new Map<string, HttpImageRepresentation>();
+const channelAvatarCache = new Map<string, ChannelAvatarCacheEntry>();
 
 const getSessionStoreModule = createLazyRuntimeModule(() => import("./session-utils-store.js"));
 
@@ -34,20 +33,13 @@ function touchChannelAvatarCache(
   sessionKey: string,
   reference: string,
 ): HttpImageRepresentation | undefined {
-  const indexed = channelAvatarIndex.get(sessionKey);
-  if (!indexed || indexed.reference !== reference) {
+  const cached = channelAvatarCache.get(sessionKey);
+  if (!cached || cached.reference !== reference) {
     return undefined;
   }
-  const image = channelAvatarBytes.get(indexed.imageKey);
-  if (!image) {
-    channelAvatarIndex.delete(sessionKey);
-    return undefined;
-  }
-  channelAvatarIndex.delete(sessionKey);
-  channelAvatarIndex.set(sessionKey, indexed);
-  channelAvatarBytes.delete(indexed.imageKey);
-  channelAvatarBytes.set(indexed.imageKey, image);
-  return image;
+  channelAvatarCache.delete(sessionKey);
+  channelAvatarCache.set(sessionKey, cached);
+  return cached.image;
 }
 
 async function loadChannelAvatar(
@@ -67,13 +59,10 @@ async function loadChannelAvatar(
   if (!image) {
     return undefined;
   }
-  // The ETag is the content hash, so the cache key cannot alias changed bytes
-  // even when a session is rerouted to a new media-store reference.
-  const imageKey = `${sessionKey}\0${image.etag}`;
-  channelAvatarBytes.set(imageKey, image);
-  channelAvatarIndex.set(sessionKey, { reference, imageKey });
-  pruneMapToMaxSize(channelAvatarBytes, CHANNEL_AVATAR_CACHE_MAX_ENTRIES);
-  pruneMapToMaxSize(channelAvatarIndex, CHANNEL_AVATAR_CACHE_MAX_ENTRIES);
+  // Superseded images must not retain bytes or evict other sessions' current avatars.
+  channelAvatarCache.delete(sessionKey);
+  channelAvatarCache.set(sessionKey, { reference, image });
+  pruneMapToMaxSize(channelAvatarCache, CHANNEL_AVATAR_CACHE_MAX_ENTRIES);
   return image;
 }
 

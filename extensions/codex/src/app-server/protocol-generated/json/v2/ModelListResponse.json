@@ -1,23 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "properties": {
-    "data": {
-      "items": {
-        "$ref": "./CodexAppServerProtocolDefinitions.json#/definitions/Model"
-      },
-      "type": "array"
-    },
-    "nextCursor": {
-      "description": "Opaque cursor to pass to the next call to continue after the last item. If None, there are no more items to return.",
-      "type": [
-        "string",
-        "null"
-      ]
-    }
-  },
-  "required": [
-    "data"
-  ],
+  "properties": {"data":{"items":{"$ref":"./CodexAppServerProtocolDefinitions.json#/definitions/Model"},"type":"array"},"nextCursor":{"description":"Opaque cursor to pass to the next call to continue after the last item. If None, there are no more items to return.","type":["string","null"]}},
+  "required": ["data"],
   "title": "ModelListResponse",
   "type": "object"
 }

@@ -1,5 +1,5 @@
 // Memory Core plugin module implements manager status state behavior.
-import type { SQLInputValue } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
 type StatusProvider = {
@@ -11,30 +11,8 @@ type StatusAggregateRow = {
   kind: "files" | "chunks";
   source: MemorySource;
   c: number;
+  bytes: number | null;
 };
-
-type StatusAggregateDb = {
-  prepare: (sql: string) => {
-    all: (...args: SQLInputValue[]) => StatusAggregateRow[];
-  };
-};
-
-const MEMORY_STATUS_AGGREGATE_SQL =
-  `SELECT 'files' AS kind, source, COUNT(*) as c FROM memory_index_sources WHERE 1=1__FILTER__ GROUP BY source\n` +
-  `UNION ALL\n` +
-  `SELECT 'chunks' AS kind, source, COUNT(*) as c FROM memory_index_chunks WHERE 1=1__FILTER__ GROUP BY source`;
-
-export function resolveInitialMemoryDirty(params: {
-  hasMemorySource: boolean;
-  statusOnly: boolean;
-  hasIndexedMeta: boolean;
-  indexIdentityMismatched?: boolean;
-}): boolean {
-  return (
-    Boolean(params.indexIdentityMismatched) ||
-    (params.hasMemorySource && (params.statusOnly ? !params.hasIndexedMeta : true))
-  );
-}
 
 export function resolveStatusProviderInfo(params: {
   provider: StatusProvider | null;
@@ -68,42 +46,46 @@ export function resolveStatusProviderInfo(params: {
 }
 
 export function collectMemoryStatusAggregate(params: {
-  db: StatusAggregateDb;
+  db: Pick<DatabaseSync, "prepare">;
   sources: Iterable<MemorySource>;
   sourceFilterSql?: string;
   sourceFilterParams?: MemorySource[];
+  includeChunkBytes?: boolean;
 }): {
   files: number;
   chunks: number;
-  sourceCounts: Array<{ source: MemorySource; files: number; chunks: number }>;
+  sourceCounts: Array<{ source: MemorySource; files: number; chunks: number; chunkBytes?: number }>;
 } {
-  const sources = Array.from(params.sources);
-  const bySource = new Map<MemorySource, { files: number; chunks: number }>();
-  for (const source of sources) {
-    bySource.set(source, { files: 0, chunks: 0 });
-  }
+  const totals = { files: 0, chunks: 0 };
+  const emptyCounts = { ...totals, ...(params.includeChunkBytes ? { chunkBytes: 0 } : {}) };
+  const bySource = new Map<MemorySource, typeof emptyCounts>();
+  // Ordinary status uses covering indexes; payload-byte inspection is diagnostic.
+  const chunkBytes = params.includeChunkBytes
+    ? "COALESCE(SUM(octet_length(text) + octet_length(embedding)), 0)"
+    : "NULL";
   const sourceFilterSql = params.sourceFilterSql ?? "";
-  const sourceFilterParams = params.sourceFilterParams ?? [];
-  const aggregateRows = params.db
-    .prepare(MEMORY_STATUS_AGGREGATE_SQL.replaceAll("__FILTER__", sourceFilterSql))
-    .all(...sourceFilterParams, ...sourceFilterParams);
-  let files = 0;
-  let chunks = 0;
-  for (const row of aggregateRows) {
-    const count = row.c ?? 0;
-    const entry = bySource.get(row.source) ?? { files: 0, chunks: 0 };
-    if (row.kind === "files") {
-      entry.files = count;
-      files += count;
-    } else {
-      entry.chunks = count;
-      chunks += count;
+  const query =
+    `SELECT 'files' AS kind, source, COUNT(*) as c, 0 AS bytes FROM memory_index_sources WHERE 1=1${sourceFilterSql} GROUP BY source\n` +
+    `UNION ALL\n` +
+    `SELECT 'chunks' AS kind, source, COUNT(*) as c, ${chunkBytes} AS bytes FROM memory_index_chunks WHERE 1=1${sourceFilterSql} GROUP BY source`;
+  const filterParams = params.sourceFilterParams ?? [];
+  const rows = params.db
+    .prepare(query)
+    // SAFETY: Both UNION branches return the declared kind/source, count, and nullable byte total.
+    .all(...filterParams, ...filterParams) as StatusAggregateRow[];
+  for (const row of rows) {
+    const entry = bySource.get(row.source) ?? { ...emptyCounts };
+    entry[row.kind] = row.c;
+    totals[row.kind] += row.c;
+    if (row.kind === "chunks" && row.bytes !== null) {
+      entry.chunkBytes = row.bytes;
     }
     bySource.set(row.source, entry);
   }
   return {
-    files,
-    chunks,
-    sourceCounts: sources.map((source) => Object.assign({ source }, bySource.get(source)!)),
+    ...totals,
+    sourceCounts: Array.from(params.sources, (source) =>
+      Object.assign({ source, ...emptyCounts }, bySource.get(source)),
+    ),
   };
 }

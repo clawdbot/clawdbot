@@ -242,7 +242,7 @@ describe("scanOpenRouterModels", () => {
     );
 
     await expect(scanOpenRouterModels({ fetchImpl, probe: false })).rejects.toThrow(
-      /OpenRouter \/models response too large/,
+      /OpenRouter \/models: JSON response exceeds 16777216 bytes/,
     );
 
     // The reader stopped early instead of draining an unbounded stream, and
@@ -262,9 +262,21 @@ describe("scanOpenRouterModels", () => {
     );
 
     await expect(scanOpenRouterModels({ fetchImpl, probe: false })).rejects.toThrow(
-      /OpenRouter \/models response is malformed JSON/,
+      /OpenRouter \/models: malformed JSON response/,
     );
   });
+
+  it.each([{}, { data: {} }, { data: null }])(
+    "rejects a malformed catalog envelope",
+    async (payload) => {
+      await expect(
+        scanOpenRouterModels({
+          fetchImpl: createFetchFixture(payload),
+          probe: false,
+        }),
+      ).rejects.toThrow(/OpenRouter \/models.*malformed JSON response/);
+    },
+  );
 
   it("requires an API key when probing", async () => {
     const fetchImpl = createFetchFixture({ data: [] });

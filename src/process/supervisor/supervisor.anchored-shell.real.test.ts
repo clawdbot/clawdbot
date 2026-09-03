@@ -3,11 +3,13 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { isProcessAlive, waitForDead, waitForPidFile } from "../../../test/helpers/process-wait.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createWindowsOutputDecoder } from "../../infra/windows-encoding.js";
 import { getWindowsCmdExePath } from "../../infra/windows-install-roots.js";
 import { killPidIfAlive } from "../../test-utils/process-tree.js";
 import { createProcessSupervisor } from "./supervisor.js";
+import type { ManagedRun } from "./types.js";
 
 const activePids = new Set<number>();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -149,6 +151,130 @@ async function expectPending(promise: Promise<void>) {
 }
 
 describe("supervisor anchored shell real process ownership", () => {
+  it.each(["exit", "cancel"] as const)(
+    "keeps a replacement's status independent of an older live child's %s",
+    async (completion) => {
+      const supervisor = createProcessSupervisor();
+      const runs: ManagedRun[] = [];
+      const oldOutput = createDeferred();
+      const spawn = async (backendId: string) => {
+        const ready = createDeferred();
+        const run = await supervisor.spawn({
+          mode: "child",
+          runId: "shared-correlation",
+          sessionId: "overlapping-children",
+          backendId,
+          scopeKey: backendId,
+          argv: [
+            process.execPath,
+            "-e",
+            `
+              process.stdout.write("ready\\n");
+              process.stdin.on("data", (data) => {
+                if (data.toString() === "emit") process.stdout.write("older-output\\n");
+                else process.exit(Number(data.toString()));
+              });
+            `,
+          ],
+          stdinMode: "pipe-open",
+          onStdout: (chunk) => {
+            if (chunk.includes("ready")) {
+              ready.resolve();
+            }
+            if (chunk.includes("older-output")) {
+              oldOutput.resolve();
+            }
+          },
+        });
+        runs.push(run);
+        activePids.add(run.pid!);
+        await Promise.race([
+          ready.promise,
+          run.wait().then(() => {
+            throw new Error("child exited before readiness");
+          }),
+        ]);
+        return run;
+      };
+      try {
+        const older = await spawn("older-backend");
+        const replacement = await spawn("replacement-backend");
+        const snapshot = supervisor.getRecord(replacement.runId);
+        older.stdin!.write("emit");
+        await oldOutput.promise;
+        expect(supervisor.getRecord(replacement.runId)).toEqual(snapshot);
+
+        if (completion === "exit") {
+          older.stdin!.write("23");
+        } else {
+          older.cancel();
+        }
+        expect(supervisor.getRecord(replacement.runId)).toEqual(snapshot);
+        await older.wait();
+        expect(isProcessAlive(replacement.pid!)).toBe(true);
+        expect(supervisor.getRecord(replacement.runId)).toEqual(snapshot);
+
+        replacement.stdin!.write("0");
+        await expect(replacement.wait()).resolves.toMatchObject({ reason: "exit", exitCode: 0 });
+        expect(supervisor.getRecord(replacement.runId)).toMatchObject({
+          backendId: "replacement-backend",
+          state: "exited",
+          terminationReason: "exit",
+          exitCode: 0,
+          exitSignal: null,
+        });
+      } finally {
+        for (const run of runs) {
+          run.cancel();
+        }
+        await Promise.all(runs.map((run) => run.wait()));
+        await supervisor.shutdown();
+      }
+    },
+  );
+
+  it("keeps a replacement supervised after an older tree with the same run ID becomes extinct", async () => {
+    const first = await createDescendantScope();
+    const descendantPid = await first.readPid();
+    activePids.add(descendantPid);
+    let replacement: Awaited<ReturnType<typeof first.supervisor.spawn>> | undefined;
+    try {
+      await first.run.wait();
+      expect(isProcessAlive(descendantPid)).toBe(true);
+      const ready = createDeferred();
+      replacement = await first.supervisor.spawn({
+        mode: "child",
+        runId: first.run.runId,
+        sessionId: "fallback-real",
+        backendId: "fallback-real",
+        scopeKey: "fallback-real",
+        argv: [process.execPath, "-e", "process.stdout.write('ready');setInterval(() => {}, 1000)"],
+        stdinMode: "pipe-closed",
+        onStdout: () => ready.resolve(),
+      });
+      const replacementPid = replacement.pid!;
+      activePids.add(replacementPid);
+      await ready.promise;
+      await first.release();
+      await first.run.waitForExtinction!();
+      expect(first.supervisor.getRecord(replacement.runId)).toMatchObject({
+        pid: replacementPid,
+        backendId: "fallback-real",
+        state: "running",
+      });
+      await first.supervisor.shutdown();
+
+      expect(isProcessAlive(replacementPid)).toBe(false);
+      await expect(replacement.wait()).resolves.toMatchObject({ reason: "manual-cancel" });
+    } finally {
+      await first.release();
+      first.run.cancel();
+      replacement?.cancel();
+      await Promise.all([first.run.waitForExtinction!(), replacement?.wait()]);
+      await first.supervisor.shutdown();
+    }
+  });
+
   it.each([
     { name: "cancels retained descendants idempotently", cancel: true },
     { name: "releases ownership after descendants exit naturally", cancel: false },

@@ -22,7 +22,7 @@ export const DEFAULT_GATEWAY_HTTP_TOOL_DENY = [
   "fs_move",
   // Patch application can rewrite arbitrary files
   "apply_patch",
-  // Agent-owned host terminal — interactive RCE surface
+  // Shared terminal input can execute commands and scrollback can expose host secrets.
   "terminal",
   // Local HTTP exposure can publish arbitrary workspace applications.
   "portal",

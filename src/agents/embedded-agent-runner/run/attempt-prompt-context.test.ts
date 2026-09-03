@@ -128,6 +128,33 @@ beforeEach(() => {
 });
 
 describe("prepareEmbeddedAttemptPromptContext", () => {
+  it.each(["Please recall my preference.", "Current time: noon. Please recall my preference."])(
+    "preserves active-memory hook context at the model boundary: %s",
+    (prompt) => {
+      const memory = "Context:\n<active_memory_plugin>\nsaved preference\n</active_memory_plugin>";
+      const modelPrompt = `${memory}\n\n${prompt}`;
+      const fixture = createInput({
+        prompt: createPrompt({
+          effectivePrompt: modelPrompt,
+          promptBeforePromptBuildHooks: prompt,
+          promptBuildPrependContext: memory,
+          hasPromptBuildContext: true,
+          effectiveTranscriptPrompt: prompt,
+          transcriptPromptForRuntimeSplit: prompt,
+          promptForRuntimeContextSplit: prompt,
+          promptForModelBeforeRuntimeContextSplit: modelPrompt,
+          promptForRuntimeContextBeforeAnnotation: prompt,
+        }),
+      });
+
+      const result = prepareEmbeddedAttemptPromptContext(fixture.input);
+
+      expect(result.promptForSession).toBe(prompt);
+      expect(result.llmBoundaryPromptForPrecheck).toBe(modelPrompt);
+      expect(result.runtimeContextMessageForCurrentTurn?.content).not.toContain("saved preference");
+    },
+  );
+
   it("keeps the transcript prompt bare while carrying inbound context to hooks", () => {
     const fixture = createInput();
 

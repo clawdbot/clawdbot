@@ -151,12 +151,16 @@ describe("resolveCliBackendConfig", () => {
 
   it("preserves the plugin-owned JSONL parser through runtime resolution", () => {
     const parseJsonlEvent = vi.fn();
+    const parseJsonlLifecycleEvent = vi.fn();
     cliBackendsTesting.setDepsForTest({
-      resolveRuntimeCliBackends: () => [runtimeEntry({ parseJsonlEvent })],
+      resolveRuntimeCliBackends: () => [
+        runtimeEntry({ parseJsonlEvent, parseJsonlLifecycleEvent }),
+      ],
       resolvePluginSetupCliBackend: () => undefined,
     });
 
     expect(requireBackend().parseJsonlEvent).toBe(parseJsonlEvent);
+    expect(requireBackend().parseJsonlLifecycleEvent).toBe(parseJsonlLifecycleEvent);
   });
 
   it("normalizes the registered adapter with agent and runtime config context", () => {
@@ -205,9 +209,14 @@ describe("resolveCliBackendConfig", () => {
 
   it("falls back to setup registration before runtime activation", () => {
     const parseJsonlEvent = vi.fn();
+    const resolveModelId = vi.fn(
+      ({ modelId, contextWindow }: { modelId: string; contextWindow?: string }) =>
+        contextWindow === "1m" ? `${modelId}[1m]` : modelId,
+    );
     const entry = setupEntry({
       config: { command: "setup-acme", args: ["run"] },
       parseJsonlEvent,
+      resolveModelId,
     });
     cliBackendsTesting.setDepsForTest({
       resolveRuntimeCliBackends: () => [],
@@ -220,6 +229,9 @@ describe("resolveCliBackendConfig", () => {
     expect(resolved.config).toEqual({ command: "setup-acme", args: ["run"] });
     expect(resolved.runtimeArtifact).toEqual(runtimeArtifact);
     expect(resolved.parseJsonlEvent).toBe(parseJsonlEvent);
+    expect(resolved.resolveModelId?.({ modelId: "acme-large", contextWindow: "1m" })).toBe(
+      "acme-large[1m]",
+    );
   });
 
   it("returns null when no plugin owns the backend", () => {

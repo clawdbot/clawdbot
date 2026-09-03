@@ -1,3 +1,4 @@
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { resolveExpiresAtMsFromDurationMs } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -12,7 +13,6 @@ import {
   type ArmedDialogResponse,
   type BrowserObservedDialogRecord,
   type BrowserObservedState,
-  type BrowserNetworkRequest,
   type BrowserConsoleMessage,
   type DownloadPayload,
   type PageState,
@@ -43,16 +43,6 @@ function truncateObservedPageText(value: string): string {
 
 export function normalizeCdpUrl(raw: string) {
   return raw.replace(/\/$/, "");
-}
-
-function findNetworkRequestById(state: PageState, id: string): BrowserNetworkRequest | undefined {
-  for (let i = state.requests.length - 1; i >= 0; i -= 1) {
-    const candidate = state.requests[i];
-    if (candidate && candidate.id === id) {
-      return candidate;
-    }
-  }
-  return undefined;
 }
 
 export function targetKey(cdpUrl: string, targetId: string) {
@@ -115,13 +105,7 @@ function rememberRoleRefsForTarget(opts: {
     ...(opts.mode ? { mode: opts.mode } : {}),
     generation,
   });
-  while (roleRefsByTarget.size > MAX_ROLE_REFS_CACHE) {
-    const first = roleRefsByTarget.keys().next();
-    if (first.done) {
-      break;
-    }
-    roleRefsByTarget.delete(first.value);
-  }
+  pruneMapToMaxSize(roleRefsByTarget, MAX_ROLE_REFS_CACHE);
   return generation;
 }
 
@@ -222,7 +206,7 @@ export function ensurePageState(page: Page): PageState {
   const state: PageState = {
     console: [],
     errors: [],
-    requests: [],
+    requests: new Map(),
     requestIds: new WeakMap(),
     nextRequestId: 0,
     armIdUpload: 0,
@@ -265,16 +249,14 @@ export function ensurePageState(page: Page): PageState {
       state.nextRequestId += 1;
       const id = `r${state.nextRequestId}`;
       state.requestIds.set(req, id);
-      state.requests.push({
+      state.requests.set(id, {
         id,
         timestamp: new Date().toISOString(),
         method: req.method(),
         url: truncateObservedPageText(req.url()),
         resourceType: req.resourceType(),
       });
-      if (state.requests.length > MAX_NETWORK_REQUESTS) {
-        state.requests.shift();
-      }
+      pruneMapToMaxSize(state.requests, MAX_NETWORK_REQUESTS);
     });
     page.on("response", (resp: Response) => {
       const req = resp.request();
@@ -282,7 +264,7 @@ export function ensurePageState(page: Page): PageState {
       if (!id) {
         return;
       }
-      const rec = findNetworkRequestById(state, id);
+      const rec = state.requests.get(id);
       if (!rec) {
         return;
       }
@@ -294,7 +276,7 @@ export function ensurePageState(page: Page): PageState {
       if (!id) {
         return;
       }
-      const rec = findNetworkRequestById(state, id);
+      const rec = state.requests.get(id);
       if (!rec) {
         return;
       }

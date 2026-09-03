@@ -68,6 +68,7 @@ const qaScenarioChannelSchema = z
   });
 
 const qaScenarioTransportPolicySchema = z.object({
+  directMessageOnly: z.literal(true).optional(),
   requireGroupMention: z.literal(true).optional(),
   senderAllowlist: z.array(z.string().trim().min(1)).min(1).optional(),
   topLevelReplies: z.literal(true).optional(),
@@ -120,6 +121,7 @@ const qaTestFileScenarioExecutionSchema = z.discriminatedUnion("kind", [
     kind: z.literal("script"),
     allowBlockedEvidence: z.boolean().optional(),
     args: z.array(z.string()).optional(),
+    dockerLane: z.string().trim().min(1).optional(),
     parallelSafe: z.boolean().optional(),
     timeoutMs: z.number().int().positive().optional(),
   }),

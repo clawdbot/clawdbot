@@ -48,7 +48,7 @@ function catalogReader(items: TranscriptItem[], maxPageSize = Number.POSITIVE_IN
     const pageLimit = Math.min(limit, maxPageSize);
     const end = Math.max(0, items.length - offset);
     const start = Math.max(0, end - pageLimit);
-    const page = items.slice(start, end);
+    const page = items.slice(start, end).toReversed();
     const consumed = offset + page.length;
     return {
       hostId: "gateway",
@@ -135,7 +135,7 @@ describe("importSessionCatalogHistory", () => {
     transcript.lockCalls = 0;
   });
 
-  it("imports backward pages in chronological order with native provenance", async () => {
+  it("imports newest-first pages in source order regardless of timestamps with native provenance", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-25T12:00:00.000Z"));
     try {

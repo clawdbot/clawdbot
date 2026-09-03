@@ -5,7 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.entry.js";
 import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { migrateLegacyMediaPersistence } from "../infra/state-migrations.js";
+import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -53,7 +53,7 @@ it("does not select the HTML BLOB when preparing board view metadata", () => {
   });
   const prepare = vi.spyOn(database.db, "prepare");
 
-  const prepared = store.getSnapshotWithHtmlViewMetadata(sessionKey);
+  const prepared = store.getSnapshotWithHtmlViewMetadata({ sessionKey });
 
   const widgetSelects = prepare.mock.calls
     .map(([sql]) => sql)
@@ -67,10 +67,11 @@ it("does not select the HTML BLOB when preparing board view metadata", () => {
 
 describe("SqliteBoardStore behavior", () => {
   const createStore = createSqliteStore;
+  const boardSession = { sessionKey: "agent:main:board" };
   it("persists revisions, layout, bytes, and declared summaries", () => {
     const store = createStore();
     const first = store.putWidget({
-      sessionKey: "agent:main:board",
+      ...boardSession,
       name: "weather",
       content: { kind: "html", html: "<p>one</p>" },
       presentation: "frameless",
@@ -101,12 +102,12 @@ describe("SqliteBoardStore behavior", () => {
         },
       ],
     });
-    expect(store.readWidgetHtml("agent:main:board", "weather")).toMatchObject({
+    expect(store.readWidgetHtml(boardSession, "weather")).toMatchObject({
       html: "<p>one</p>",
       revision: 1,
       sha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
     });
-    const preparedView = store.getSnapshotWithHtmlViewMetadata("agent:main:board");
+    const preparedView = store.getSnapshotWithHtmlViewMetadata(boardSession);
     expect(preparedView).toMatchObject({
       snapshot: { revision: 1 },
       htmlViewMetadata: new Map([
@@ -122,7 +123,7 @@ describe("SqliteBoardStore behavior", () => {
     expect(preparedView.htmlViewMetadata.get("weather")).not.toHaveProperty("html");
 
     // Legacy clients omit heightMode on resize; explicit user sizing must pin.
-    const resized = store.applyOps("agent:main:board", [
+    const resized = store.applyOps(boardSession, [
       { kind: "widget_resize", name: "weather", sizeW: 8, sizeH: 6 },
     ]);
     expect(resized).toMatchObject({
@@ -138,14 +139,14 @@ describe("SqliteBoardStore behavior", () => {
       ],
     });
     expect(
-      store.grant("agent:main:board", "weather", "granted", 1, first.widgets[0]?.instanceId),
+      store.grant(boardSession, "weather", "granted", 1, first.widgets[0]?.instanceId),
     ).toMatchObject({
       revision: 3,
       widgets: [{ grantState: "granted" }],
     });
 
     const updated = store.putWidget({
-      sessionKey: "agent:main:board",
+      ...boardSession,
       name: "weather",
       content: { kind: "html", html: "<p>two</p>" },
     });
@@ -163,23 +164,23 @@ describe("SqliteBoardStore behavior", () => {
       ],
     });
     expect(updated.widgets[0]).not.toHaveProperty("declaredSummary");
-    expect(store.getSnapshot("agent:main:board").widgets[0]).not.toHaveProperty("declaredSummary");
+    expect(store.getSnapshot(boardSession).widgets[0]).not.toHaveProperty("declaredSummary");
     expect(updated.widgets[0]).not.toHaveProperty("declared");
   });
 
   it("keeps content-kind semantics and normalized ordering", () => {
     const store = createStore();
-    store.applyOps("agent:main:board", [
+    store.applyOps(boardSession, [
       { kind: "tab_create", tabId: "main", title: "Main" },
       { kind: "tab_create", tabId: "notes", title: "Notes" },
     ]);
     store.putWidget({
-      sessionKey: "agent:main:board",
+      ...boardSession,
       name: "first",
       content: { kind: "html", html: "first" },
     });
     store.putWidget({
-      sessionKey: "agent:main:board",
+      ...boardSession,
       name: "app",
       content: {
         kind: "mcp-app",
@@ -193,12 +194,12 @@ describe("SqliteBoardStore behavior", () => {
       },
       placement: { tabId: "notes" },
     });
-    expect(store.getSnapshot("agent:main:board").widgets).toEqual([
+    expect(store.getSnapshot(boardSession).widgets).toEqual([
       expect.objectContaining({ name: "first", tabId: "main", position: 0 }),
       expect.objectContaining({ name: "app", tabId: "notes", position: 0 }),
     ]);
-    expect(store.readWidgetHtml("agent:main:board", "app")).toBeUndefined();
-    expect(store.readWidgetMcpApp("agent:main:board", "app")).toMatchObject({
+    expect(store.readWidgetHtml(boardSession, "app")).toBeUndefined();
+    expect(store.readWidgetMcpApp(boardSession, "app")).toMatchObject({
       descriptor: {
         serverName: "server",
         toolName: "tool",
@@ -209,13 +210,13 @@ describe("SqliteBoardStore behavior", () => {
       instanceId: expect.stringMatching(/^[a-f0-9]{32}$/u),
       interactive: true,
     });
-    expect(store.getSnapshot("agent:main:board").widgets[1]?.instanceId).toMatch(/^[a-f0-9]{32}$/u);
+    expect(store.getSnapshot(boardSession).widgets[1]?.instanceId).toMatch(/^[a-f0-9]{32}$/u);
   });
 
-  it("round-trips plugin kinds and props without serving document bytes", () => {
+  it("replaces omitted plugin props without changing unrelated layout state", () => {
     const store = createStore();
-    const put = store.putWidget({
-      sessionKey: "agent:main:board",
+    const initial = store.putWidget({
+      ...boardSession,
       name: "work-item",
       content: {
         kind: "plugin",
@@ -223,25 +224,69 @@ describe("SqliteBoardStore behavior", () => {
         props: { cardId: "card-123", compact: true },
       },
     });
+    store.putWidget({
+      ...boardSession,
+      name: "left",
+      content: { kind: "plugin", pluginKind: "workboard:card", props: { side: "left" } },
+    });
+    store.putWidget({
+      ...boardSession,
+      name: "right",
+      content: { kind: "plugin", pluginKind: "workboard:card", props: { side: "right" } },
+    });
 
-    expect(put.widgets[0]).toMatchObject({
+    expect(initial.widgets[0]).toMatchObject({
       name: "work-item",
       contentKind: "plugin",
       pluginKind: "workboard:card",
       props: { cardId: "card-123", compact: true },
       grantState: "none",
     });
-    expect(put.widgets[0]).not.toHaveProperty("instanceId");
-    expect(store.getSnapshot("agent:main:board").widgets[0]).toEqual(put.widgets[0]);
-    expect(store.readWidgetHtml("agent:main:board", "work-item")).toBeUndefined();
-    expect(store.readWidgetMcpApp("agent:main:board", "work-item")).toBeUndefined();
+    expect(initial.widgets[0]).not.toHaveProperty("instanceId");
+    expect(store.readWidgetHtml(boardSession, "work-item")).toBeUndefined();
+    expect(store.readWidgetMcpApp(boardSession, "work-item")).toBeUndefined();
+
+    const moved = store.applyOps(boardSession, [
+      { kind: "widget_move", name: "work-item", after: "right" },
+    ]);
+    expect(moved.widgets.map((widget) => widget.name)).toEqual(["left", "right", "work-item"]);
+    expect(moved.widgets[2]?.props).toEqual({ cardId: "card-123", compact: true });
+    const [left, right] = moved.widgets;
+
+    const put = store.putWidget({
+      ...boardSession,
+      name: "work-item",
+      content: { kind: "plugin", pluginKind: "workboard:card" },
+    });
+
+    expect(put.widgets.map((widget) => widget.name)).toEqual(["left", "right", "work-item"]);
+    expect(put.widgets[0]).toEqual(left);
+    expect(put.widgets[1]).toEqual(right);
+    expect(put.widgets[2]).not.toHaveProperty("props");
+    const { resolvedWidgetName: putName, ...putSnapshot } = put;
+    expect(putName).toBe("work-item");
+    expect(store.getSnapshot(boardSession)).toEqual(putSnapshot);
+
+    const placed = store.putWidget({
+      ...boardSession,
+      name: "work-item",
+      content: { kind: "plugin", pluginKind: "workboard:card" },
+      placement: { after: "left" },
+    });
+    expect(placed.widgets.map((widget) => widget.name)).toEqual(["left", "work-item", "right"]);
+    expect(placed.widgets[0]).toEqual(left);
+    expect(placed.widgets[1]).not.toHaveProperty("props");
+    expect(placed.widgets[2]).toEqual({ ...right, position: 2 });
+    const { resolvedWidgetName: placedName, ...placedSnapshot } = placed;
+    expect(placedName).toBe("work-item");
+    expect(store.getSnapshot(boardSession)).toEqual(placedSnapshot);
   });
 
   it("rejects oversized plugin props and capability declarations", () => {
     const store = createStore();
     expect(() =>
       store.putWidget({
-        sessionKey: "agent:main:board",
+        ...boardSession,
         name: "too-large",
         content: {
           kind: "plugin",
@@ -252,7 +297,7 @@ describe("SqliteBoardStore behavior", () => {
     ).toThrow("props exceed 8192 UTF-8 bytes");
     expect(() =>
       store.putWidget({
-        sessionKey: "agent:main:board",
+        ...boardSession,
         name: "declared",
         content: { kind: "plugin", pluginKind: "workboard:card" },
         declared: { tools: ["workboard.cards.move"] },
@@ -263,7 +308,7 @@ describe("SqliteBoardStore behavior", () => {
   it("preserves grants only for unchanged bytes with equal or narrower declarations", () => {
     const store = createStore();
     const first = store.putWidget({
-      sessionKey: "agent:main:board",
+      ...boardSession,
       name: "scoped",
       content: { kind: "html", html: "one" },
       declared: {
@@ -271,10 +316,10 @@ describe("SqliteBoardStore behavior", () => {
         tools: ["weather.read", "weather.refresh"],
       },
     });
-    store.grant("agent:main:board", "scoped", "granted", 1, first.widgets[0]?.instanceId);
+    store.grant(boardSession, "scoped", "granted", 1, first.widgets[0]?.instanceId);
 
     const equal = store.putWidget({
-      sessionKey: "agent:main:board",
+      ...boardSession,
       name: "scoped",
       content: { kind: "html", html: "one" },
       declared: {
@@ -283,13 +328,13 @@ describe("SqliteBoardStore behavior", () => {
       },
     });
     expect(equal.widgets[0]).toMatchObject({ revision: 2, grantState: "granted" });
-    expect(store.readWidgetHtml("agent:main:board", "scoped")).toMatchObject({
+    expect(store.readWidgetHtml(boardSession, "scoped")).toMatchObject({
       html: "one",
       grantState: "granted",
     });
 
     const narrower = store.putWidget({
-      sessionKey: "agent:main:board",
+      ...boardSession,
       name: "scoped",
       content: { kind: "html", html: "one" },
       declared: {
@@ -300,7 +345,7 @@ describe("SqliteBoardStore behavior", () => {
     expect(narrower.widgets[0]).toMatchObject({ revision: 3, grantState: "granted" });
 
     const changed = store.putWidget({
-      sessionKey: "agent:main:board",
+      ...boardSession,
       name: "scoped",
       content: { kind: "html", html: "two" },
       declared: {
@@ -309,14 +354,14 @@ describe("SqliteBoardStore behavior", () => {
       },
     });
     expect(changed.widgets[0]).toMatchObject({ revision: 4, grantState: "pending" });
-    expect(store.readWidgetHtml("agent:main:board", "scoped")).toMatchObject({
+    expect(store.readWidgetHtml(boardSession, "scoped")).toMatchObject({
       html: "two",
       grantState: "pending",
     });
-    store.grant("agent:main:board", "scoped", "granted", 4, changed.widgets[0]?.instanceId);
+    store.grant(boardSession, "scoped", "granted", 4, changed.widgets[0]?.instanceId);
 
     const wider = store.putWidget({
-      sessionKey: "agent:main:board",
+      ...boardSession,
       name: "scoped",
       content: { kind: "html", html: "two" },
       declared: {
@@ -336,15 +381,15 @@ describe("SqliteBoardStore behavior", () => {
       toolCallId: "call-a",
     };
     const first = store.putWidget({
-      sessionKey: "agent:main:board",
+      ...boardSession,
       name: "weather",
       content: { kind: "mcp-app", descriptor, interactive: true },
       declared: { tools: ["refresh"] },
     });
-    store.grant("agent:main:board", "weather", "granted", 1, first.widgets[0]?.instanceId);
+    store.grant(boardSession, "weather", "granted", 1, first.widgets[0]?.instanceId);
 
     const differentServer = store.putWidget({
-      sessionKey: "agent:main:board",
+      ...boardSession,
       name: "weather",
       content: {
         kind: "mcp-app",
@@ -355,15 +400,9 @@ describe("SqliteBoardStore behavior", () => {
     });
     expect(differentServer.widgets[0]).toMatchObject({ revision: 2, grantState: "pending" });
 
-    store.grant(
-      "agent:main:board",
-      "weather",
-      "granted",
-      2,
-      differentServer.widgets[0]?.instanceId,
-    );
+    store.grant(boardSession, "weather", "granted", 2, differentServer.widgets[0]?.instanceId);
     const sameServer = store.putWidget({
-      sessionKey: "agent:main:board",
+      ...boardSession,
       name: "weather",
       content: {
         kind: "mcp-app",
@@ -379,7 +418,7 @@ describe("SqliteBoardStore behavior", () => {
     const store = createStore();
     const putApp = (serverName: string) =>
       store.putWidget({
-        sessionKey: "agent:main:board",
+        ...boardSession,
         name: "app",
         content: {
           kind: "mcp-app",
@@ -394,17 +433,16 @@ describe("SqliteBoardStore behavior", () => {
         declared: { tools: ["refresh"] },
       });
     const original = putApp("server-a");
-    store.applyOps("agent:main:board", [{ kind: "widget_remove", name: "app" }]);
+    store.applyOps(boardSession, [{ kind: "widget_remove", name: "app" }]);
     const replacement = putApp("server-b");
 
     expect(replacement.widgets[0]).toMatchObject({ revision: 1, grantState: "pending" });
     expect(replacement.widgets[0]?.instanceId).not.toBe(original.widgets[0]?.instanceId);
     expect(() =>
-      store.grant("agent:main:board", "app", "granted", 1, original.widgets[0]?.instanceId),
+      store.grant(boardSession, "app", "granted", 1, original.widgets[0]?.instanceId),
     ).toThrow("instance changed");
     expect(
-      store.grant("agent:main:board", "app", "granted", 1, replacement.widgets[0]?.instanceId)
-        .widgets[0],
+      store.grant(boardSession, "app", "granted", 1, replacement.widgets[0]?.instanceId).widgets[0],
     ).toMatchObject({ grantState: "granted" });
   });
 
@@ -412,36 +450,33 @@ describe("SqliteBoardStore behavior", () => {
     const store = createStore();
     const putHtml = (html: string) =>
       store.putWidget({
-        sessionKey: "agent:main:board",
+        ...boardSession,
         name: "app",
         content: { kind: "html", html },
         declared: { tools: ["refresh"] },
       });
     const original = putHtml("original");
-    store.applyOps("agent:main:board", [{ kind: "widget_remove", name: "app" }]);
+    store.applyOps(boardSession, [{ kind: "widget_remove", name: "app" }]);
     const replacement = putHtml("replacement");
 
     expect(replacement.widgets[0]).toMatchObject({ revision: 1, grantState: "pending" });
     expect(replacement.widgets[0]?.instanceId).not.toBe(original.widgets[0]?.instanceId);
     expect(() =>
-      store.grant("agent:main:board", "app", "granted", 1, original.widgets[0]?.instanceId),
+      store.grant(boardSession, "app", "granted", 1, original.widgets[0]?.instanceId),
     ).toThrow("instance changed");
   });
 
   it("rejects stale grant revisions before accepting the current one", () => {
     const store = createStore();
     const first = store.putWidget({
-      sessionKey: "agent:main:board",
+      ...boardSession,
       name: "scoped",
       content: { kind: "html", html: "one" },
       declared: { tools: ["weather.read"] },
     });
-    expect(() => store.grant("agent:main:board", "scoped", "granted", 2)).toThrow(
-      "revision changed",
-    );
+    expect(() => store.grant(boardSession, "scoped", "granted", 2)).toThrow("revision changed");
     expect(
-      store.grant("agent:main:board", "scoped", "granted", 1, first.widgets[0]?.instanceId)
-        .widgets[0],
+      store.grant(boardSession, "scoped", "granted", 1, first.widgets[0]?.instanceId).widgets[0],
     ).toMatchObject({
       revision: 1,
       grantState: "granted",
@@ -450,12 +485,17 @@ describe("SqliteBoardStore behavior", () => {
 
   it("drops an empty board after its last tab is deleted", () => {
     const store = createStore();
-    store.applyOps("agent:main:board", [{ kind: "tab_create", tabId: "main", title: "Main" }]);
-    expect(
-      store.applyOps("agent:main:board", [{ kind: "tab_delete", tabId: "main" }]),
-    ).toMatchObject({ revision: 2, tabs: [], widgets: [] });
-    expect(store.getSnapshot("agent:main:board").revision).toBe(0);
-    expect(store.listSessionsWithBoards()).toEqual([]);
+    store.applyOps(boardSession, [{ kind: "tab_create", tabId: "main", title: "Main" }]);
+    expect(store.applyOps(boardSession, [{ kind: "tab_delete", tabId: "main" }])).toMatchObject({
+      revision: 2,
+      tabs: [],
+      widgets: [],
+    });
+    expect(store.getSnapshot(boardSession)).toMatchObject({
+      revision: 0,
+      tabs: [],
+      widgets: [],
+    });
   });
 });
 
@@ -476,11 +516,11 @@ describe("SqliteBoardStore persistence", () => {
       presentation: "card",
       heightMode: "auto",
     });
-    store.applyOps(sessionKey, [
+    store.applyOps({ sessionKey }, [
       { kind: "widget_resize", name: "status", sizeW: 8, sizeH: 7, heightMode: "fixed" },
     ]);
 
-    expect(store.getSnapshot(sessionKey).widgets[0]).toMatchObject({
+    expect(store.getSnapshot({ sessionKey }).widgets[0]).toMatchObject({
       presentation: "card",
       heightMode: "fixed",
       sizeW: 8,
@@ -502,11 +542,11 @@ describe("SqliteBoardStore persistence", () => {
     expect(readManifest()).toMatchObject({ presentation: "card", heightMode: "fixed" });
 
     // Legacy resize ops without heightMode still pin persisted height.
-    store.applyOps(sessionKey, [
+    store.applyOps({ sessionKey }, [
       { kind: "widget_resize", name: "status", sizeW: 8, sizeH: 7, heightMode: "auto" },
     ]);
     expect(readManifest()).toMatchObject({ heightMode: "auto" });
-    store.applyOps(sessionKey, [{ kind: "widget_resize", name: "status", sizeW: 6, sizeH: 4 }]);
+    store.applyOps({ sessionKey }, [{ kind: "widget_resize", name: "status", sizeW: 6, sizeH: 4 }]);
     expect(readManifest()).toMatchObject({ presentation: "card", heightMode: "fixed" });
   });
 
@@ -540,11 +580,11 @@ describe("SqliteBoardStore persistence", () => {
       .prepare("UPDATE board_widgets SET manifest = '{}' WHERE session_key = ? AND name = ?")
       .run(sessionKey, "legacy-app");
 
-    expect(store.getSnapshot(sessionKey).widgets).toEqual([]);
-    expect(store.readWidgetMcpApp(sessionKey, "legacy-app")).toBeUndefined();
+    expect(store.getSnapshot({ sessionKey }).widgets).toEqual([]);
+    expect(store.readWidgetMcpApp({ sessionKey }, "legacy-app")).toBeUndefined();
   });
 
-  it("migrates board tables into an existing v14 database", () => {
+  it("migrates board tables into an existing v14 database", async () => {
     const stateDir = tempDirs.make("openclaw-board-lazy-schema-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const sessionKey = "agent:main:board";
@@ -559,12 +599,13 @@ describe("SqliteBoardStore persistence", () => {
     existingV14.exec(`
       DROP TABLE board_widgets;
       DROP TABLE board_tabs;
+      DROP TABLE session_participants;
       PRAGMA user_version = 14;
       UPDATE schema_meta SET schema_version = 14 WHERE meta_key = 'primary';
     `);
     existingV14.close();
 
-    expect(migrateLegacyMediaPersistence({ env }).warnings).toEqual([]);
+    expect((await migrateLegacyMediaPersistence({ env })).warnings).toEqual([]);
 
     const reopened = openOpenClawAgentDatabase({ agentId: "main", env });
     expect(
@@ -577,9 +618,8 @@ describe("SqliteBoardStore persistence", () => {
       resolveSession: () => ({ agentId: "main", sessionKey }),
       env,
     });
-    expect(store.getSnapshot(sessionKey)).toMatchObject({ revision: 0, tabs: [], widgets: [] });
-    expect(store.readWidgetHtml(sessionKey, "status")).toBeUndefined();
-    expect(store.listSessionsWithBoards()).toEqual([]);
+    expect(store.getSnapshot({ sessionKey })).toMatchObject({ revision: 0, tabs: [], widgets: [] });
+    expect(store.readWidgetHtml({ sessionKey }, "status")).toBeUndefined();
     expect(() =>
       store.putWidget({
         sessionKey,
@@ -614,7 +654,7 @@ describe("SqliteBoardStore persistence", () => {
     ).toEqual({ name: "idx_agent_board_widgets_tab_position" });
   });
 
-  it("upgrades the v14 board constraint before storing plugin widgets", () => {
+  it("upgrades the v14 board constraint before storing plugin widgets", async () => {
     const stateDir = tempDirs.make("openclaw-board-plugin-kind-schema-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const sessionKey = "agent:main:board";
@@ -657,18 +697,19 @@ describe("SqliteBoardStore persistence", () => {
         ON board_widgets(session_key, tab_id, position);
       COMMIT;
       PRAGMA foreign_keys = ON;
+      DROP TABLE session_participants;
       PRAGMA user_version = 14;
       UPDATE schema_meta SET schema_version = 14 WHERE meta_key = 'primary';
     `);
     closeOpenClawAgentDatabasesForTest();
 
-    expect(migrateLegacyMediaPersistence({ env }).warnings).toEqual([]);
+    expect((await migrateLegacyMediaPersistence({ env })).warnings).toEqual([]);
 
     const upgradedStore = new SqliteBoardStore({
       resolveSession: () => ({ agentId: "main", sessionKey }),
       env,
     });
-    expect(upgradedStore.getSnapshot(sessionKey).widgets).toEqual([
+    expect(upgradedStore.getSnapshot({ sessionKey }).widgets).toEqual([
       expect.objectContaining({ name: "existing", contentKind: "html" }),
     ]);
     upgradedStore.putWidget({
@@ -677,8 +718,8 @@ describe("SqliteBoardStore persistence", () => {
       content: { kind: "plugin", pluginKind: "workboard:card", props: { cardId: "123" } },
     });
 
-    expect(upgradedStore.readWidgetHtml(sessionKey, "existing")?.html).toBe("preserved");
-    expect(upgradedStore.getSnapshot(sessionKey).widgets).toEqual(
+    expect(upgradedStore.readWidgetHtml({ sessionKey }, "existing")?.html).toBe("preserved");
+    expect(upgradedStore.getSnapshot({ sessionKey }).widgets).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ name: "existing", contentKind: "html" }),
         expect.objectContaining({
@@ -701,13 +742,15 @@ describe("SqliteBoardStore persistence", () => {
       env: { OPENCLAW_STATE_DIR: stateDir },
     });
 
-    expect(store.getSnapshot("agent:attacker-selected:main")).toEqual({
+    expect(store.getSnapshot({ sessionKey: "agent:attacker-selected:main" })).toEqual({
       sessionKey: "agent:attacker-selected:main",
       revision: 0,
       tabs: [],
       widgets: [],
     });
-    expect(store.readWidgetHtml("agent:attacker-selected:main", "missing")).toBeUndefined();
+    expect(
+      store.readWidgetHtml({ sessionKey: "agent:attacker-selected:main" }, "missing"),
+    ).toBeUndefined();
     expect(() =>
       store.putWidget({
         sessionKey: "agent:attacker-selected:main",
@@ -762,7 +805,7 @@ describe("SqliteBoardStore persistence", () => {
     const canonicalSessionKey = "agent:main:main";
     seedSession(env, "main", canonicalSessionKey);
     const store = new SqliteBoardStore({
-      resolveSession: (sessionKey) => ({
+      resolveSession: ({ sessionKey }) => ({
         agentId: "main",
         sessionKey: sessionKey === "main" ? canonicalSessionKey : sessionKey,
       }),
@@ -774,7 +817,7 @@ describe("SqliteBoardStore persistence", () => {
       name: "status",
       content: { kind: "html", html: "one" },
     });
-    expect(store.getSnapshot(canonicalSessionKey)).toMatchObject({
+    expect(store.getSnapshot({ sessionKey: canonicalSessionKey })).toMatchObject({
       sessionKey: canonicalSessionKey,
       widgets: [{ name: "status", revision: 1 }],
     });
@@ -783,11 +826,11 @@ describe("SqliteBoardStore persistence", () => {
       name: "status",
       content: { kind: "html", html: "two" },
     });
-    expect(store.getSnapshot("main")).toMatchObject({
+    expect(store.getSnapshot({ sessionKey: "main" })).toMatchObject({
       sessionKey: canonicalSessionKey,
       widgets: [{ name: "status", revision: 2 }],
     });
-    expect(store.listSessionsWithBoards()).toEqual([canonicalSessionKey]);
+    expect(store.readWidgetHtml({ sessionKey: "main" }, "status")?.html).toBe("two");
   });
 
   it("fails closed when reading a persisted unsafe capability manifest", () => {
@@ -815,27 +858,27 @@ describe("SqliteBoardStore persistence", () => {
         sessionKey,
       );
 
-    expect(store.getSnapshot(sessionKey).widgets[0]).toMatchObject({
+    expect(store.getSnapshot({ sessionKey }).widgets[0]).toMatchObject({
       name: "status",
       grantState: "none",
     });
-    expect(store.getSnapshot(sessionKey).widgets[0]).not.toHaveProperty("declared");
-    expect(store.readWidgetHtml(sessionKey, "status")).toMatchObject({
+    expect(store.getSnapshot({ sessionKey }).widgets[0]).not.toHaveProperty("declared");
+    expect(store.readWidgetHtml({ sessionKey }, "status")).toMatchObject({
       html: "ok",
       grantState: "none",
     });
-    expect(store.readWidgetHtml(sessionKey, "status")).not.toHaveProperty("declared");
+    expect(store.readWidgetHtml({ sessionKey }, "status")).not.toHaveProperty("declared");
 
     database.db
       .prepare(
         "UPDATE board_widgets SET grant_state = 'rejected' WHERE session_key = ? AND name = 'status'",
       )
       .run(sessionKey);
-    expect(store.getSnapshot(sessionKey).widgets[0]).toMatchObject({
+    expect(store.getSnapshot({ sessionKey }).widgets[0]).toMatchObject({
       name: "status",
       grantState: "rejected",
     });
-    expect(store.readWidgetHtml(sessionKey, "status")).toMatchObject({
+    expect(store.readWidgetHtml({ sessionKey }, "status")).toMatchObject({
       html: "ok",
       grantState: "rejected",
     });
@@ -877,7 +920,7 @@ describe("SqliteBoardStore persistence", () => {
       )
       .run(sessionKey, Buffer.from("relocated"), "a".repeat(64), "b".repeat(32));
 
-    expect(store.readWidgetHtml(sessionKey, "status")).toMatchObject({ html: "canonical" });
+    expect(store.readWidgetHtml({ sessionKey }, "status")).toMatchObject({ html: "canonical" });
   });
 
   it("purges board rows through the shared session deletion lifecycle", async () => {
@@ -927,7 +970,7 @@ describe("SqliteBoardStore persistence", () => {
       content: { kind: "html", html: "one" },
       declared: { tools: ["status.read", "status.refresh"] },
     });
-    store.grant(sessionKey, "status", "granted", 1, first.widgets[0]?.instanceId);
+    store.grant({ sessionKey }, "status", "granted", 1, first.widgets[0]?.instanceId);
     store.putWidget({
       sessionKey,
       name: "status",
@@ -964,23 +1007,24 @@ describe("SqliteBoardStore persistence", () => {
       content: { kind: "html", html: "approved" },
       declared: { tools: ["health"] },
     });
-    store.grant(sessionKey, "status", "granted", 1, current.widgets[0]?.instanceId);
+    store.grant({ sessionKey }, "status", "granted", 1, current.widgets[0]?.instanceId);
 
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     database.db
       .prepare("UPDATE board_widgets SET manifest = ? WHERE session_key = ? AND name = 'status'")
       .run(JSON.stringify({ tools: ["health"] }), sessionKey);
 
-    expect(store.getSnapshot(sessionKey).widgets[0]).toMatchObject({
+    expect(store.getSnapshot({ sessionKey }).widgets[0]).toMatchObject({
       grantState: "pending",
       declared: { tools: ["health"] },
     });
-    expect(store.readWidgetHtml(sessionKey, "status")).toMatchObject({
+    expect(store.readWidgetHtml({ sessionKey }, "status")).toMatchObject({
       grantState: "pending",
       declared: { tools: ["health"] },
     });
     expect(
-      store.grant(sessionKey, "status", "granted", 1, current.widgets[0]?.instanceId).widgets[0],
+      store.grant({ sessionKey }, "status", "granted", 1, current.widgets[0]?.instanceId)
+        .widgets[0],
     ).toMatchObject({ grantState: "granted" });
     expect(
       JSON.parse(
@@ -996,7 +1040,7 @@ describe("SqliteBoardStore persistence", () => {
   it("reopens durable boards and isolates owning agent databases", () => {
     const stateDir = tempDirs.make("openclaw-board-durable-");
     const options = {
-      resolveSession: (sessionKey: string) => ({
+      resolveSession: ({ sessionKey }: { sessionKey: string }) => ({
         agentId: sessionKey.split(":")[1] ?? "main",
         sessionKey,
       }),
@@ -1020,12 +1064,11 @@ describe("SqliteBoardStore persistence", () => {
     closeOpenClawStateDatabaseForTest();
 
     const reopened = new SqliteBoardStore(options);
-    expect(reopened.getSnapshot("agent:alpha:board").widgets).toEqual([
+    expect(reopened.getSnapshot({ sessionKey: "agent:alpha:board" }).widgets).toEqual([
       expect.objectContaining({ name: "alpha", revision: 1 }),
     ]);
-    expect(reopened.getSnapshot("agent:beta:board").widgets).toEqual([
+    expect(reopened.getSnapshot({ sessionKey: "agent:beta:board" }).widgets).toEqual([
       expect.objectContaining({ name: "beta", revision: 1 }),
     ]);
-    expect(reopened.listSessionsWithBoards()).toEqual(["agent:alpha:board", "agent:beta:board"]);
   });
 });

@@ -378,7 +378,7 @@ function buildTelegramActionSendPayload(params: {
 
 function getLastDurableTelegramActionResult(
   result: Extract<DurableMessageBatchSendResult, { status: "sent" }>,
-): { messageId?: string; chatId?: string } {
+) {
   const lastResult = result.results.at(-1);
   const receipt = result.receipt;
   return {
@@ -387,6 +387,7 @@ function getLastDurableTelegramActionResult(
       receipt.primaryPlatformMessageId ??
       receipt.platformMessageIds.at(-1),
     chatId: lastResult?.target?.kind === "chat" ? lastResult.target.id : undefined,
+    receipt: { threadId: receipt.threadId, replyToId: receipt.replyToId },
   };
 }
 
@@ -673,7 +674,7 @@ export async function handleTelegramAction(
     // Optional threading parameters for forum topics and reply chains
     const replyToMessageId = readTelegramReplyToMessageId(params);
     const messageThreadId = readTelegramThreadId(params);
-    const quoteText = readStringParam(params, "quoteText");
+    const quoteText = readStringParam(params, "quoteText", { trim: false });
     const token = resolveTelegramToken(cfg, { accountId }).token;
     if (!token) {
       throw new Error(
@@ -748,6 +749,7 @@ export async function handleTelegramAction(
       ok: true,
       messageId: result.messageId,
       chatId: result.chatId,
+      receipt: result.receipt,
       ...buildTelegramControlDegradation(droppedControls, Boolean(content.trim())),
     });
   }

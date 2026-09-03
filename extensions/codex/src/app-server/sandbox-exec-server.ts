@@ -58,7 +58,7 @@ export async function ensureCodexSandboxExecServerEnvironment(params: {
     return undefined;
   }
   if (placementNodeId && !params.runtime) {
-    throw new Error("Codex paired-device execution requires its active plugin runtime.");
+    throw new Error("Codex node execution requires its active plugin runtime.");
   }
   if (!canExposeLocalExecServerToAppServer(params.appServerStartOptions)) {
     throw new Error(
@@ -162,7 +162,7 @@ async function acquireOpenClawExecServer(params: {
       }
       if (!runtime || !signal) {
         await releaseOpenClawExecServer(server);
-        throw new Error("Codex paired-device execution requires an active runtime and attempt.");
+        throw new Error("Codex node execution requires an active runtime and attempt.");
       }
       try {
         const placementIdentity = readCodexPlacementWorkspaceIdentity(sandbox);
@@ -183,7 +183,7 @@ async function acquireOpenClawExecServer(params: {
           sandboxExecServerRegistry.servers.get(key) !== promise
         ) {
           channel.close();
-          throw new Error("Codex paired-device execution retired before its channel was ready.");
+          throw new Error("Codex node execution retired before its channel was ready.");
         }
         const nodeLease = {
           id: randomUUID(),
@@ -381,9 +381,7 @@ function readCodexPlacementWorkspaceIdentity(sandbox: SandboxContext): {
     !sandbox.sessionKey ||
     sandbox.sessionKey.trim() !== sandbox.sessionKey
   ) {
-    throw new Error(
-      "Codex paired-device execution requires its exact placement workspace identity.",
-    );
+    throw new Error("Codex node execution requires its exact placement workspace identity.");
   }
   return {
     environmentId: sandbox.placementEnvironmentId,
@@ -446,7 +444,7 @@ function handleClosedCodexNodeExecServerLease(
   try {
     lease.onDisconnected?.(
       createCodexNodeExecServerDisconnectError(
-        result.failed ? "execution device failed" : "execution device disconnected",
+        result.failed ? "execution node failed" : "execution node disconnected",
         result.error,
       ),
     );

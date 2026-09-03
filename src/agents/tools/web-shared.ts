@@ -46,17 +46,19 @@ export function normalizeCacheKey(value: string): string {
 export function readCache<T>(
   cache: Map<string, CacheEntry<T>>,
   key: string,
+  ttlMs = Infinity,
 ): { value: T; cached: boolean } | null {
   const entry = cache.get(key);
-  if (!entry) {
+  if (!entry || ttlMs <= 0) {
     return null;
   }
   const now = asDateTimestampMs(Date.now());
-  if (now === undefined || now > entry.expiresAt) {
+  if (now === undefined || now >= entry.expiresAt) {
     cache.delete(key);
     return null;
   }
-  return { value: entry.value, cached: true };
+  // A caller can shorten reuse without evicting an entry still valid for others.
+  return now - entry.insertedAt < ttlMs ? { value: entry.value, cached: true } : null;
 }
 
 export function writeCache<T>(

@@ -1,5 +1,6 @@
-// Imported by dispatch-from-config.test.ts to keep its mocked suite in one Vitest module graph.
+// Imported by a dispatch-from-config entrypoint to keep its mocked suite in one Vitest module graph.
 import { AsyncResource } from "node:async_hooks";
+import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
@@ -43,7 +44,6 @@ import {
   firstMockArg,
   firstFinalReplyPayload,
   installThreadingTestPlugin,
-  requireBlockReplyHandler,
   messageAuditEvents,
   globalBeforeAll0,
   describe0BeforeEach0,
@@ -805,7 +805,11 @@ describe("dispatchReplyFromConfig", () => {
     const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
-    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-1");
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith(
+      "binding-1",
+      undefined,
+      expect.objectContaining({ channel: "discord", accountId: "default" }),
+    );
     const inboundClaimCall = hookMocks.runner.runInboundClaimForPluginOutcome.mock
       .calls[0] as unknown as
       | [
@@ -1085,81 +1089,6 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     expect(replyResolver).not.toHaveBeenCalled();
     externalLifecycleRequest.emitDestroy();
-  });
-
-  it("holds an owned lifecycle lease until abort-insensitive resolver work settles", async () => {
-    setNoAbort();
-    const sessionKey = "agent:main:discord:channel:owned-resolver-race";
-    const sessionId = "owned-resolver-session";
-    sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
-    let releaseResolver: () => void = () => {};
-    const resolverGate = new Promise<void>((resolve) => {
-      releaseResolver = resolve;
-    });
-    let signalResolverEntered: () => void = () => {};
-    const resolverEntered = new Promise<void>((resolve) => {
-      signalResolverEntered = resolve;
-    });
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      signalResolverEntered();
-      await resolverGate;
-      await requireBlockReplyHandler(opts?.onBlockReply)({ text: "stale late block" });
-      return { text: "stale late final" } satisfies ReplyPayload;
-    });
-    const dispatch = dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "discord",
-        Surface: "discord",
-        To: "discord:channel:owned-resolver-race",
-        AccountId: "default",
-        SessionKey: sessionKey,
-        Body: "hold this resolver",
-      }),
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver,
-    });
-    await resolverEntered;
-
-    const externalLifecycleRequest = new AsyncResource("external-owned-resolver-lifecycle");
-    let mutationRan = false;
-    const mutation = externalLifecycleRequest.runInAsyncScope(
-      async () =>
-        await runExclusiveSessionLifecycleMutation({
-          scope: "/tmp/mock-sessions.json",
-          identities: [sessionKey, sessionId],
-          prepare: async () => {
-            await interruptSessionWorkAdmissions({
-              scope: "/tmp/mock-sessions.json",
-              identities: [sessionKey, sessionId],
-            });
-          },
-          run: async () => {
-            mutationRan = true;
-          },
-        }),
-    );
-
-    try {
-      const result = await dispatch;
-      expect(result.queuedFinal).toBe(false);
-      expect(mutationRan).toBe(false);
-      expect(isSessionWorkAdmissionActive("/tmp/mock-sessions.json", [sessionKey, sessionId])).toBe(
-        true,
-      );
-
-      releaseResolver();
-      await mutation;
-
-      expect(mutationRan).toBe(true);
-      expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
-      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    } finally {
-      releaseResolver();
-      await mutation;
-      externalLifecycleRequest.emitDestroy();
-    }
   });
 
   it("holds a lifecycle lease for plugin claims behind an active reply operation", async () => {
@@ -1484,7 +1413,7 @@ describe("dispatchReplyFromConfig", () => {
         remoteMediaMode?: string;
       };
       expect(params.sessionKey).toBe("agent:main:imessage:direct:user");
-      expect(params.workspaceDir).toContain(".openclaw/workspace");
+      expect(params.workspaceDir).toContain(path.join(".openclaw", "workspace"));
       expect(params.remoteMediaMode).toBe("cache");
       params.ctx.media = [{ path: stagedPath, url: stagedPath, contentType: "image/jpeg" }];
       params.sessionCtx.media = params.ctx.media;
@@ -1561,7 +1490,11 @@ describe("dispatchReplyFromConfig", () => {
       expect.objectContaining({ path: rawPath, url: rawPath, contentType: "image/jpeg" }),
     ]);
     expect(stageSandboxMediaMocks.stageSandboxMedia).toHaveBeenCalledTimes(1);
-    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-imessage-codex-media");
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith(
+      "binding-imessage-codex-media",
+      undefined,
+      expect.objectContaining({ channel: "imessage", accountId: "default" }),
+    );
     expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
     expect(replyResolver).not.toHaveBeenCalled();
   });
@@ -1984,7 +1917,11 @@ describe("dispatchReplyFromConfig", () => {
     const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(result).toEqual({ queuedFinal: true, counts: { tool: 0, block: 0, final: 0 } });
-    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-command-escape-1");
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith(
+      "binding-command-escape-1",
+      undefined,
+      expect.objectContaining({ channel: "discord", accountId: "default" }),
+    );
     expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
     expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
     expect(replyResolver).toHaveBeenCalledTimes(1);
@@ -2044,7 +1981,11 @@ describe("dispatchReplyFromConfig", () => {
     const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
-    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-command-unknown-slash");
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith(
+      "binding-command-unknown-slash",
+      undefined,
+      expect.objectContaining({ channel: "discord", accountId: "default" }),
+    );
     expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
       "openclaw-codex-app-server",
       expect.objectContaining({ content: "/notes keep this with the bound plugin" }),

@@ -13,7 +13,7 @@ import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { renderSessionsHubHeader } from "../../components/sessions-hub-header.ts";
 import {
-  renderDocsLink,
+  renderLearnMoreLink,
   renderSettingsEmpty,
   renderSettingsPage,
   renderSettingsRow,
@@ -490,8 +490,7 @@ class WorktreesPage extends OpenClawLightDomElement {
       ${renderSessionsHubHeader({
         active: "worktrees",
         title: titleForRoute("sessions"),
-        subtitle: html`${subtitleForRoute("worktrees")}
-        ${renderDocsLink(WORKTREES_DOCS_URL, t("common.learnMore"))}`,
+        subtitle: html`${subtitleForRoute("worktrees")} ${renderLearnMoreLink(WORKTREES_DOCS_URL)}`,
         onSelect: (tab) => {
           if (tab !== "worktrees") {
             this.context?.navigate(tab);

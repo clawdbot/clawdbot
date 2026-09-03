@@ -3,10 +3,9 @@ import type { GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import {
   invalidateChatMetadataStore,
-  rememberChatMetadata,
+  beginChatMetadataPublication,
 } from "../../lib/chat/chat-metadata-store.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import type { DraftCloudProfile } from "./discovery.ts";
 import { contextWith, deferred, renderControl } from "./model-control.test-support.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 
@@ -15,92 +14,31 @@ afterEach(() => {
 });
 
 describe("new-session model runtime", () => {
-  it.each([
-    {
-      name: "rejects a remote-exec runtime on a worker-turn profile",
-      runtime: {
-        id: "codex",
-        cloudPlacementSupported: true,
-        cloudPlacementExecutionMode: "remote-exec" as const,
-        source: "model" as const,
-      },
-      executionMode: "worker-turn" as const,
-      expected:
-        "The codex runtime cannot use this cloud worker. Choose a compatible cloud worker or run locally.",
-    },
-    {
-      name: "accepts a worker-turn runtime on a worker-turn profile",
-      runtime: {
-        id: "openclaw",
-        cloudPlacementSupported: true,
-        cloudPlacementExecutionMode: "worker-turn" as const,
-        source: "model" as const,
-      },
-      executionMode: "worker-turn" as const,
-      expected: undefined,
-    },
-    {
-      name: "preserves an unknown provider mode",
-      runtime: {
-        id: "codex",
-        cloudPlacementSupported: true,
-        cloudPlacementExecutionMode: "remote-exec" as const,
-        source: "model" as const,
-      },
-      executionMode: undefined,
-      expected: undefined,
-    },
-    {
-      name: "retains the existing whole-runtime rejection",
-      runtime: { id: "acpx", cloudPlacementSupported: false, source: "model" as const },
-      executionMode: "worker-turn" as const,
-      expected: "The acpx runtime does not support cloud workers.",
-    },
-  ])("$name", ({ runtime, executionMode, expected }) => {
-    const profile: DraftCloudProfile = {
-      id: "aws",
-      providerId: "crabbox",
-      ...(executionMode ? { executionMode } : {}),
-    };
+  it("discloses session-only selection and keeps a draft model local", async () => {
+    const { context, request } = contextWith([
+      { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },
+      { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
+    ]);
     const control = new NewSessionModelControl(() => undefined);
-    vi.spyOn(control, "resolveAgentRuntime").mockReturnValue(runtime);
+    control.load(context, "main", true);
 
-    expect(control.cloudRuntimeUnsupportedReason(profile)).toBe(expected);
-  });
-
-  it.each([
-    {
-      name: "allows opted-in remote execution",
-      runtimeId: "codex",
-      devicePlacement: {
-        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
-        consumesWorkerSlot: false,
-      },
-    },
-    {
-      name: "allows embedded execution",
-      runtimeId: "openclaw",
-      devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
-    },
-    { name: "rejects a cloud-only runtime", runtimeId: "cloud-only" },
-    {
-      name: "rejects a stale support flag without an owner requirement",
-      runtimeId: "stale",
-      devicePlacementSupported: true,
-    },
-  ])("$name on paired devices", ({ runtimeId, devicePlacement, devicePlacementSupported }) => {
-    const control = new NewSessionModelControl(() => undefined);
-    vi.spyOn(control, "resolveAgentRuntime").mockReturnValue({
-      id: runtimeId,
-      cloudPlacementSupported: true,
-      devicePlacementSupported: devicePlacementSupported ?? Boolean(devicePlacement),
-      ...(devicePlacement ? { devicePlacement } : {}),
-      source: "model",
-    });
-
-    expect(control.devicePlacementUnsupportedReason()).toBe(
-      devicePlacement ? undefined : "This runtime does not support paired devices",
+    await vi.waitFor(() =>
+      expect(
+        renderControl(control, context).querySelector(
+          '[data-chat-model-option="anthropic/claude-sonnet-4-6"]',
+        ),
+      ).not.toBeNull(),
     );
+    const container = renderControl(control, context);
+    expect(container.querySelector("[data-chat-model-selection-target]")?.textContent).toContain(
+      "This session",
+    );
+    container
+      .querySelector<HTMLButtonElement>('[data-chat-model-option="anthropic/claude-sonnet-4-6"]')
+      ?.click();
+
+    expect(control.selected).toBe("anthropic/claude-sonnet-4-6");
+    expect(request.mock.calls.some(([method]) => method === "sessions.patch")).toBe(false);
   });
 
   it("keeps CLI agents hidden and undiscovered while the Labs gate is off", async () => {
@@ -119,7 +57,7 @@ describe("new-session model runtime", () => {
     ).toBeNull();
   });
 
-  it("lists create-capable CLI agents and selects the canonical catalog target", async () => {
+  it("lists terminal-capable CLI agents and selects the canonical catalog target", async () => {
     const { context, request } = contextWith(
       [{ id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" }],
       "openclaw",
@@ -132,7 +70,7 @@ describe("new-session model runtime", () => {
               {
                 id: "anthropic",
                 label: "Claude Code",
-                capabilities: { createSession: { model: "anthropic/claude-sonnet-4-6" } },
+                capabilities: { startTerminal: true },
                 hosts: [],
               },
               {
@@ -270,6 +208,75 @@ describe("new-session model runtime", () => {
     ).toBeNull();
   });
 
+  it.each([
+    { inherited: true, checked: "true", toggleValue: "off", next: false },
+    { inherited: false, checked: "false", toggleValue: "on", next: true },
+    { inherited: "auto", checked: "true", toggleValue: "off", next: false },
+  ] as const)(
+    "renders the current composer toggle for inherited Fast Mode $inherited",
+    async ({ inherited, checked, toggleValue, next }) => {
+      const { context } = contextWith([
+        {
+          id: "gpt-5.6-luna",
+          name: "GPT-5.6 Luna",
+          provider: "openai",
+          reasoning: true,
+          effectiveFastMode: inherited,
+        },
+      ]);
+      const control = new NewSessionModelControl(() => undefined);
+      control.load(context, "main", true);
+
+      await vi.waitFor(() => {
+        const container = renderControl(control, context);
+        const toggle = container.querySelector<HTMLButtonElement>("[data-chat-speed-toggle]");
+        expect(
+          container.querySelector(".chat-controls__fast-mode-title")?.textContent?.trim(),
+        ).toBe("Fast mode");
+        expect(toggle?.classList.contains("chat-controls__speed-toggle")).toBe(true);
+        expect(toggle?.dataset.chatSpeedToggle).toBe(toggleValue);
+        expect(toggle?.getAttribute("aria-checked")).toBe(checked);
+      });
+
+      renderControl(control, context)
+        .querySelector<HTMLButtonElement>("[data-chat-speed-toggle]")
+        ?.click();
+      expect(control.fastMode).toBe(next);
+    },
+  );
+
+  it("clears Fast Mode when switching to a provider without a wire mapping", async () => {
+    const { context } = contextWith([
+      { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai", reasoning: true },
+      { id: "llama-4", name: "Llama 4", provider: "ollama" },
+    ]);
+    const control = new NewSessionModelControl(() => undefined);
+    control.load(context, "main", true);
+
+    await vi.waitFor(() =>
+      expect(
+        renderControl(control, context).querySelector('[data-chat-model-option="ollama/llama-4"]'),
+      ).not.toBeNull(),
+    );
+    renderControl(control, context)
+      .querySelector<HTMLButtonElement>("[data-chat-speed-toggle]")
+      ?.click();
+    expect(control.fastMode).toBe(true);
+
+    renderControl(control, context)
+      .querySelector<HTMLButtonElement>('[data-chat-model-option="ollama/llama-4"]')
+      ?.click();
+
+    expect(control.selected).toBe("ollama/llama-4");
+    expect(control.fastMode).toBeUndefined();
+    const unsupportedToggle = renderControl(control, context).querySelector<HTMLButtonElement>(
+      "[data-chat-speed-toggle]",
+    );
+    expect(unsupportedToggle?.disabled).toBe(true);
+    expect(unsupportedToggle?.getAttribute("aria-checked")).toBe("false");
+    expect(unsupportedToggle?.dataset.chatSpeedToggle).toBe("");
+  });
+
   it("does not mark ordinary catalog loading as preference restoration", async () => {
     const { context, request } = contextWith([
       { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai", reasoning: true },
@@ -292,12 +299,22 @@ describe("new-session model runtime", () => {
 
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     const container = renderControl(control, context);
-    expect(container.querySelector('[data-chat-model-select="true"]')?.textContent).toContain(
-      "Loading models",
+    const loadingModelTrigger = container.querySelector<HTMLElement>(
+      '[data-chat-model-select="true"]',
     );
-    expect(
-      container.querySelector('[data-chat-model-select="true"]')?.getAttribute("aria-disabled"),
-    ).toBe("true");
+    const loadingSkeleton = loadingModelTrigger?.querySelector(
+      ".skeleton.chat-controls__model-trigger-skeleton",
+    );
+    expect(loadingModelTrigger).not.toBeNull();
+    expect(loadingModelTrigger?.getAttribute("aria-busy")).toBe("true");
+    expect(loadingModelTrigger?.classList.contains("chat-controls__model-trigger--loading")).toBe(
+      true,
+    );
+    expect(loadingModelTrigger?.getAttribute("aria-label")).toBe("Chat model: Loading models…");
+    expect(loadingModelTrigger?.getAttribute("aria-disabled")).toBe("false");
+    expect(loadingSkeleton).not.toBeNull();
+    expect(loadingSkeleton?.getAttribute("aria-hidden")).toBe("true");
+    expect(loadingModelTrigger?.textContent).not.toContain("Loading models");
     expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(0);
     pending.resolve({ models: [] });
   });
@@ -317,12 +334,24 @@ describe("new-session model runtime", () => {
     });
 
     let container = renderControl(control, context, "main", null);
-    const loadingModelTrigger = container.querySelector('[data-chat-model-select="true"]');
-    expect(loadingModelTrigger?.textContent).toContain("Loading models");
-    expect(loadingModelTrigger?.textContent).not.toContain("Default model");
-    expect(container.querySelector('[data-chat-thinking-select="true"]')?.textContent).toContain(
-      "Medium",
+    const loadingModelTrigger = container.querySelector<HTMLElement>(
+      '[data-chat-model-select="true"]',
     );
+    const loadingSkeleton = loadingModelTrigger?.querySelector(
+      ".skeleton.chat-controls__model-trigger-skeleton",
+    );
+    expect(loadingModelTrigger).not.toBeNull();
+    expect(loadingModelTrigger?.getAttribute("aria-busy")).toBe("true");
+    expect(loadingModelTrigger?.getAttribute("aria-label")).toBe("Chat model: Loading models…");
+    expect(loadingSkeleton).not.toBeNull();
+    expect(loadingSkeleton?.getAttribute("aria-hidden")).toBe("true");
+    expect(loadingModelTrigger?.textContent).not.toContain("Loading models");
+    expect(loadingModelTrigger?.textContent).not.toContain("Default model");
+    const reservedThinkingControl = container.querySelector<HTMLElement>(
+      '[data-chat-thinking-select="true"]',
+    );
+    expect(reservedThinkingControl).not.toBeNull();
+    expect(reservedThinkingControl?.dataset.chatThinkingDisabled).toBe("true");
     expect(control.selected).toBe("");
     expect(control.thinkingLevel).toBe("");
 
@@ -457,19 +486,21 @@ describe("new-session model runtime", () => {
     );
   });
 
-  it("renders an all-cold catalog as disabled intent with a setup action", async () => {
+  it("renders an all-cold catalog as setup actions", async () => {
     const { context, navigate, request } = contextWith([
       {
         id: "gpt-5.6-luna",
         name: "GPT-5.6 Luna",
         provider: "openai",
         available: false,
+        unavailableReason: "missing-auth",
       },
       {
         id: "gpt-5.6-sol",
         name: "GPT-5.6 Sol",
         provider: "openai",
         available: false,
+        unavailableReason: "missing-auth",
       },
     ]);
     const control = new NewSessionModelControl(() => undefined);
@@ -491,17 +522,16 @@ describe("new-session model runtime", () => {
     const container = renderControl(control, context);
     const options = container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]");
     expect(
-      control.isModelUnavailable({
+      control.modelUnavailableReason({
         id: "main",
         model: { primary: "openai/gpt-5.6-luna" },
       }),
-    ).toBe(true);
+    ).toBe("missing-auth");
     expect(options).toHaveLength(2);
     expect(options[0]?.textContent).toContain("Sign-in needed");
-    expect([...options].every((option) => option.disabled)).toBe(true);
-    expect(container.textContent).toContain(
-      "Authentication failed. Review the provider credential or sign-in, then retry.",
-    );
+    expect([...options].every((option) => !option.disabled)).toBe(true);
+    expect([...options].every((option) => option.dataset.chatModelSetup === "true")).toBe(true);
+    expect(container.textContent).toContain("No models available");
     container.querySelector<HTMLButtonElement>('[data-chat-model-setup="true"]')?.click();
     expect(navigate).toHaveBeenCalledWith("model-setup");
   });
@@ -552,7 +582,7 @@ describe("new-session model runtime", () => {
     );
     expect(renderControl(control, context).textContent).toContain("No models available");
 
-    rememberChatMetadata(context.gateway.snapshot.client!, "main", {
+    beginChatMetadataPublication(context.gateway.snapshot.client!, { agentId: "main" }).publish({
       commands: [],
       models: [{ id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" }],
     });
@@ -575,13 +605,14 @@ describe("new-session model runtime", () => {
         name: "GPT-5.6 Luna",
         provider: "openai",
         available: false,
+        unavailableReason: "missing-auth",
       },
     ];
     const { context, request } = contextWith(coldModels);
     const control = new NewSessionModelControl(() => undefined);
     const agent = { id: "main", model: { primary: "openai/gpt-5.6-luna" } };
     control.load(context, "main", true, { agent });
-    await vi.waitFor(() => expect(control.isModelUnavailable(agent)).toBe(true));
+    await vi.waitFor(() => expect(control.modelUnavailableReason(agent)).toBe("missing-auth"));
 
     const offlineContext = {
       ...context,
@@ -598,17 +629,18 @@ describe("new-session model runtime", () => {
     expect(container.querySelector('[data-chat-model-catalog-state="offline"]')).not.toBeNull();
     expect(container.textContent).toContain("Offline");
     expect(container.textContent).not.toContain("Authentication failed");
-    expect(control.isModelUnavailable(agent)).toBe(false);
+    expect(control.modelUnavailableReason(agent)).toBeUndefined();
     expect(request).toHaveBeenCalledOnce();
   });
 
-  it("drops the stale auth gate on refresh error and restores selection after recovery", async () => {
+  it("retains the accepted auth gate on refresh error and clears it only after recovery", async () => {
     const coldModels: ModelCatalogEntry[] = [
       {
         id: "gpt-5.6-luna",
         name: "GPT-5.6 Luna",
         provider: "openai",
         available: false,
+        unavailableReason: "missing-auth",
       },
     ];
     const availableModels: ModelCatalogEntry[] = [
@@ -618,7 +650,7 @@ describe("new-session model runtime", () => {
     const control = new NewSessionModelControl(() => undefined);
     const agent = { id: "main", model: { primary: "openai/gpt-5.6-luna" } };
     control.load(context, "main", true, { agent });
-    await vi.waitFor(() => expect(control.isModelUnavailable(agent)).toBe(true));
+    await vi.waitFor(() => expect(control.modelUnavailableReason(agent)).toBe("missing-auth"));
 
     request.mockRejectedValueOnce(new Error("refresh failed"));
     control.invalidate(false);
@@ -635,7 +667,7 @@ describe("new-session model runtime", () => {
       "GPT-5.6 Luna",
     );
     expect(container.textContent).not.toContain("Authentication failed");
-    expect(control.isModelUnavailable(agent)).toBe(false);
+    expect(control.modelUnavailableReason(agent)).toBe("missing-auth");
 
     request.mockResolvedValueOnce({ models: availableModels });
     control.load(context, "main", true, { agent });
@@ -647,7 +679,7 @@ describe("new-session model runtime", () => {
         ),
       ).toBeNull(),
     );
-    expect(control.isModelUnavailable(agent)).toBe(false);
+    expect(control.modelUnavailableReason(agent)).toBeUndefined();
     container = renderControl(control, context, "main", agent);
     expect(
       container.querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-5.6-luna"]')
@@ -722,8 +754,12 @@ describe("new-session model runtime", () => {
     });
 
     let container = renderControl(control, context);
-    expect(container.querySelector('[data-chat-model-catalog-state="refreshing"]')).not.toBeNull();
+    expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
     expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(2);
+    expect(
+      container.querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-5.6-sol"]')
+        ?.disabled,
+    ).toBe(false);
 
     container
       .querySelector<HTMLButtonElement>('[data-chat-model-option="openai/gpt-5.6-sol"]')
@@ -956,77 +992,5 @@ describe("new-session model runtime", () => {
       model: "demo/limited",
       thinkingLevel: "",
     });
-  });
-
-  it("uses model catalog runtime metadata for an explicit cloud target", async () => {
-    const { context, request } = contextWith([
-      {
-        id: "gpt-5.6-luna",
-        name: "GPT-5.6 Luna",
-        provider: "openai",
-        agentRuntime: { id: "codex", cloudPlacementSupported: true, source: "model" },
-      },
-    ]);
-    const control = new NewSessionModelControl(() => undefined);
-    control.load(context, "main", true);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    await vi.waitFor(() => {
-      control.selected = "openai/gpt-5.6-luna";
-      expect(control.resolveAgentRuntime({ context })).toEqual({
-        id: "codex",
-        cloudPlacementSupported: true,
-        source: "model",
-      });
-    });
-  });
-
-  it("falls back to the selected agent runtime for its default model", () => {
-    const { context } = contextWith([]);
-    const agent = {
-      id: "main",
-      agentRuntime: { id: "claude-cli", cloudPlacementSupported: false, source: "agent" },
-    } satisfies GatewayAgentRow & {
-      agentRuntime: { id: string; cloudPlacementSupported: boolean; source: "agent" };
-    };
-    const control = new NewSessionModelControl(() => undefined);
-
-    expect(control.resolveAgentRuntime({ agent, context })).toEqual({
-      id: "claude-cli",
-      cloudPlacementSupported: false,
-      source: "agent",
-    });
-  });
-
-  it("falls back to the session defaults runtime capability", () => {
-    const { context } = contextWith([], "codex", [], true);
-    const control = new NewSessionModelControl(() => undefined);
-
-    expect(control.resolveAgentRuntime({ context })).toEqual({
-      id: "codex",
-      cloudPlacementSupported: true,
-      source: "defaults",
-    });
-  });
-
-  it.each(["auto", "default"])(
-    "leaves the %s runtime selector unresolved for server-side policy",
-    (runtime) => {
-      const { context } = contextWith([], runtime);
-      const control = new NewSessionModelControl(() => undefined);
-
-      expect(control.resolveAgentRuntime({ context })).toBeUndefined();
-    },
-  );
-
-  it("does not apply default runtime metadata to an explicit model", async () => {
-    const { context } = contextWith(
-      [{ id: "sonnet-4.6", name: "Sonnet 4.6", provider: "anthropic" }],
-      "codex",
-    );
-    const control = new NewSessionModelControl(() => undefined);
-    control.load(context, "main", true);
-    control.selected = "anthropic/sonnet-4.6";
-
-    await vi.waitFor(() => expect(control.resolveAgentRuntime({ context })).toBeUndefined());
   });
 });

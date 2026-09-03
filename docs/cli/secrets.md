@@ -45,6 +45,8 @@ Related: [Secrets Management](/gateway/secrets) · [1Password plugin](/plugins/o
 
 `openclaw secrets store` writes directly to the local shared state database. The store is Gateway-wide and team-scoped; this release accepts only `--scope team`. `--scope me` is rejected because identity scope is not supported yet.
 
+Entries also arrive from **Settings -> Secrets** in the Control UI, and from the agent's [`secrets` tool](/tools/secrets), which asks you to type a credential into a masked prompt and stores it without the value reaching the model.
+
 ```bash
 openclaw secrets store list
 openclaw secrets store set <NAME>
@@ -192,6 +194,8 @@ openclaw secrets configure --json
 
 Flow: provider setup first (add/edit/remove `secrets.providers` aliases), then credential mapping (select fields, assign `{source, provider, id}` refs), then preflight and optional apply.
 
+For `env` and `store` refs, no provider entry is required when `provider` matches that source's effective default: `secrets.defaults.env` or `secrets.defaults.store`, falling back to `default` when unset. Other aliases and all `file`/`exec` refs require a matching `secrets.providers` entry.
+
 Flags:
 
 - `--providers-only`: configure `secrets.providers` only, skip credential mapping
@@ -215,7 +219,7 @@ Notes:
 
 ### Exec provider safety
 
-Package managers often expose symlinked command paths. Resolve the real binary path (for example with `realpath "$(command -v vault)"`) and configure that absolute, non-symlink path; use `trustedDirs` to restrict executables to approved directories. On Windows, provider paths fail closed when ACL verification is unavailable, with no provider-level bypass.
+Package managers often expose symlinked command paths. Resolve the real binary path (for example with `realpath "$(command -v vault)"`) and configure that absolute, non-symlink path; use `trustedDirs` to restrict executables to approved directories. Run `openclaw config validate` on the Gateway host to check manual exec command paths without executing providers. On Windows, provider paths fail closed when ACL verification is unavailable, with no provider-level bypass.
 
 ## Apply a saved plan
 

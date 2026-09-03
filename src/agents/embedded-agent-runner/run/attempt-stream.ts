@@ -14,6 +14,8 @@ import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import type { StreamFn } from "../../runtime/index.js";
 import type { AgentSession, SessionManager } from "../../sessions/index.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
+import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
+import { wrapStreamFnCodeModeSource } from "../../transcript-code-mode-source.js";
 import type { TranscriptPolicy } from "../../transcript-policy.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import { log } from "../logger.js";
@@ -27,7 +29,6 @@ import {
   dropThinkingBlocks,
   wrapAnthropicStreamWithRecovery,
 } from "../thinking.js";
-import { resolveUnknownToolGuardThreshold } from "./attempt-run-decisions.js";
 import {
   createYieldAbortedResponse,
   isSessionsYieldAbortReason,
@@ -92,10 +93,8 @@ export function installEmbeddedAttemptStreamGuards(input: {
   isOpenAIResponsesApi: boolean;
   replayAllowedToolNames: Set<string>;
   liveAllowedToolNames: Set<string>;
+  codeModeExecToolNames?: ReadonlySet<string>;
   isYieldDetected: () => boolean;
-  clientToolLoopDetection: ReturnType<
-    typeof import("../../agent-tools.js").resolveToolLoopDetectionConfig
-  >;
   anthropicPayloadLogger: AnthropicPayloadLogger;
   onRejectedProviderReplayRepaired: () => void;
   onIdleTimeout: (error: Error) => void;
@@ -244,9 +243,7 @@ export function installEmbeddedAttemptStreamGuards(input: {
   session.agent.streamFn = (model, context, options) => {
     const signal = input.abortSignal as AbortSignal & { reason?: unknown };
     if (input.isYieldDetected() && signal.aborted && isSessionsYieldAbortReason(signal.reason)) {
-      return createYieldAbortedResponse(model) as unknown as Awaited<
-        ReturnType<typeof innerStreamFn>
-      >;
+      return createYieldAbortedResponse(model);
     }
     return innerStreamFn(model, context, options);
   };
@@ -268,7 +265,8 @@ export function installEmbeddedAttemptStreamGuards(input: {
     session.agent.streamFn,
     input.liveAllowedToolNames,
     {
-      unknownToolThreshold: resolveUnknownToolGuardThreshold(input.clientToolLoopDetection),
+      // Unknown-tool recovery stays active even when configurable loop detection is disabled.
+      unknownToolThreshold: UNKNOWN_TOOL_THRESHOLD,
     },
   );
 
@@ -404,6 +402,12 @@ export function installEmbeddedAttemptStreamGuards(input: {
     },
     suppressPluginHooks: attempt.operation === "settled-tool-finalization",
   });
+  if (input.codeModeExecToolNames?.size) {
+    session.agent.streamFn = wrapStreamFnCodeModeSource(
+      session.agent.streamFn,
+      input.codeModeExecToolNames,
+    );
+  }
   return {
     cacheObservabilityEnabled,
     promptCacheTools,

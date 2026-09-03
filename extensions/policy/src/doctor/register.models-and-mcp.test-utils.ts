@@ -82,6 +82,41 @@ describe("registerPolicyDoctorChecks", () => {
     });
   });
 
+  it("repairs required keyed agent workspace deny tool findings", async () => {
+    const cfg = {
+      ...cfgWithPolicy({ workspaceRepairs: true }),
+      agents: {
+        ownership: "explicit",
+        entries: {
+          reviewer: { tools: { deny: ["exec"] } },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const configPath = await writePolicyFixture({
+      scopes: {
+        reviewer: {
+          agentIds: ["reviewer"],
+          agents: { workspace: { denyTools: ["exec", "write", "edit"] } },
+        },
+      },
+    });
+
+    const result = await runPolicyRepairCheck(
+      "policy/agents-tool-not-denied",
+      repairCtx(configPath, cfg),
+    );
+
+    expect(result.status).toBe("repaired");
+    expect(result.changes).toEqual([
+      "Added edit to agents.entries.reviewer.tools.deny for policy conformance.",
+      "Added write to agents.entries.reviewer.tools.deny for policy conformance.",
+    ]);
+    expect(result.remainingFindings).toEqual([]);
+    expect(result.config.agents?.entries?.reviewer).toMatchObject({
+      tools: { deny: ["exec", "edit", "write"] },
+    });
+  });
+
   it("skips scoped required deny repairs that would mutate root tools deny", async () => {
     const cfg = {
       ...cfgWithPolicy({ workspaceRepairs: true }),

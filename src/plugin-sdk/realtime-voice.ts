@@ -157,6 +157,7 @@ export {
 export {
   buildRealtimeVoiceAgentCancelProviderResult,
   buildRealtimeVoiceAgentControlSpeechMessage,
+  buildRealtimeVoiceAgentErrorProviderResult,
   classifyRealtimeVoiceAgentControlText,
   controlRealtimeVoiceAgentRun,
   normalizeRealtimeVoiceAgentControlMode,

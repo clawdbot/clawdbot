@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
@@ -15,7 +14,11 @@ import {
 } from "../gateway/session-store-key.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { applyCanonicalOwnerEvidence } from "./doctor-session-canonical-owner-evidence.js";
-import { resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
+import {
+  projectExistingAgentDatabaseTargets,
+  resolveTargetSqlitePath,
+  type ExistingAgentDatabaseTarget,
+} from "./doctor-session-sqlite-readers.js";
 
 export type CanonicalSessionCandidate = {
   agentId: string;
@@ -45,32 +48,19 @@ type CanonicalSessionRepairGroup = {
   removedRows: number;
 };
 
-type CanonicalSessionStore = {
-  agentId: string;
-  sqlitePath: string;
-  storePath: string;
-};
-
 export function listCanonicalSessionStores(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-}): CanonicalSessionStore[] {
-  const stores: CanonicalSessionStore[] = [];
-  const seenDatabases = new Set<string>();
-  for (const target of resolveAllAgentSessionStoreTargetsSync(params.cfg, { env: params.env })) {
-    const sqlitePath = resolveTargetSqlitePath(target);
-    if (seenDatabases.has(sqlitePath) || !fs.existsSync(sqlitePath)) {
-      continue;
-    }
-    seenDatabases.add(sqlitePath);
-    stores.push({ agentId: target.agentId, sqlitePath, storePath: target.storePath });
-  }
-  return stores;
+}): ExistingAgentDatabaseTarget[] {
+  return projectExistingAgentDatabaseTargets(
+    resolveAllAgentSessionStoreTargetsSync(params.cfg, { env: params.env }),
+    params.env,
+  );
 }
 
 function collectCanonicalSessionCandidateFacts(
   params: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv },
-  stores: readonly CanonicalSessionStore[],
+  stores: readonly ExistingAgentDatabaseTarget[],
 ): CanonicalSessionCandidateFact[] {
   const inventory = stores.flatMap((target) =>
     listCanonicalSessionRepairFacts({
@@ -222,7 +212,7 @@ function groupRepairCandidates(
 
 export function collectCanonicalSessionRepairGroups(
   params: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv },
-  stores: readonly CanonicalSessionStore[],
+  stores: readonly ExistingAgentDatabaseTarget[],
 ): CanonicalSessionRepairGroup[] {
   return groupRepairCandidates(collectCanonicalSessionCandidateFacts(params, stores), params);
 }

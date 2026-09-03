@@ -68,6 +68,7 @@ describe("worker workspace recovery transcript reporting", () => {
         throw new Error("expected active worker placement");
       }
       harness.markEnvironmentOwnerEpoch(active.activeOwnerEpoch);
+      harness.markEnvironmentNodeDeviceId("workspace-recovery-worker-node");
       const claim = placements.claimTurn({
         ...REQUEST,
         claimId: "workspace-recovery-claim",

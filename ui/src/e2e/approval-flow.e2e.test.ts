@@ -1,9 +1,9 @@
 // Control UI E2E tests cover approval queue behavior through the Gateway WebSocket.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import type { Page } from "playwright";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -15,7 +15,12 @@ const suite = createControlUiE2eSuite({
 let page: Page | undefined;
 const activeSessionKey = "agent:main:main";
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "approval-flow");
+let proofDir: string;
+beforeEach(() => {
+  if (captureUiProof) {
+    proofDir = createControlUiE2eArtifactDir("approval-flow");
+  }
+});
 
 function approval(id: string, command: string, createdAtMs: number, sessionKey = activeSessionKey) {
   return {
@@ -95,9 +100,6 @@ suite.define(() => {
   });
 
   it("keeps approvals passive until the Inbox opens the full queue", async () => {
-    if (captureUiProof) {
-      await mkdir(proofDir, { recursive: true });
-    }
     const context = await suite.browser.newContext({
       viewport: { height: 800, width: 1200 },
       ...(captureUiProof
@@ -144,9 +146,6 @@ suite.define(() => {
   });
 
   it("keeps no-auth inline and Inbox approvals readable while blocking decisions", async () => {
-    if (captureUiProof) {
-      await mkdir(proofDir, { recursive: true });
-    }
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;

@@ -38,6 +38,8 @@ async function synthesize(args = ["--voice", "test"]) {
     providerConfig: {
       command: "/fake/tts",
       args,
+      cwd: "/fake/workdir",
+      env: { TTS_VOICE: "test" },
       outputFormat: "wav",
       timeoutMs: 2_500,
     },
@@ -59,6 +61,8 @@ describe("CLI TTS process wrapper", () => {
     expect(runCommandBufferedMock).toHaveBeenCalledWith(
       ["/fake/tts", "--voice", "test"],
       expect.objectContaining({
+        cwd: "/fake/workdir",
+        env: { TTS_VOICE: "test" },
         input: "hello",
         maxOutputBytes: { stdout: 50 * MIB, stderr: MIB },
         timeoutMs: 2_500,

@@ -1,7 +1,6 @@
 // Gateway RPC call helper.
 // Builds a GatewayClient, resolves auth/scopes, and performs one request.
 import { randomUUID } from "node:crypto";
-import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -45,7 +44,6 @@ import {
 } from "../infra/device-identity.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
 import { extractErrorCodeOrErrno } from "../infra/error-graph-internal.js";
-import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import type { DeviceAuthEntry } from "../shared/device-auth.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
@@ -96,7 +94,7 @@ import {
   resolveLeastPrivilegeOperatorScopesForMethod,
   type OperatorScope,
 } from "./method-scopes.js";
-import { resolveGatewayConnectionTlsFingerprint } from "./tls-fingerprint.js";
+import { isLoopbackGatewayUrl } from "./net.js";
 import {
   GatewayTransportError,
   type GatewayTransportErrorKind,
@@ -459,17 +457,6 @@ export function buildGatewayConnectionDetails(
   });
 }
 
-function isLoopbackGatewayUrl(rawUrl: string): boolean {
-  try {
-    const hostname = new URL(rawUrl).hostname.toLowerCase();
-    const unbracketed =
-      hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
-    return unbracketed === "localhost" || isLoopbackIpAddress(unbracketed);
-  } catch {
-    return false;
-  }
-}
-
 function shouldOmitDeviceIdentityForGatewayCall(params: {
   opts: CallGatewayBaseOptions;
   url: string;
@@ -499,7 +486,9 @@ function shouldOmitDeviceIdentityForGatewayCall(params: {
   return isLocalBackendSharedAuth || isLocalCliSharedAuth;
 }
 
-function resolveDeviceIdentityForGatewayCall(sharedStateMode?: "read-only"): DeviceIdentity | null {
+export function resolveDeviceIdentityForGatewayCall(
+  sharedStateMode?: "read-only",
+): DeviceIdentity | null {
   try {
     return sharedStateMode === "read-only"
       ? loadDeviceIdentityIfPresent()
@@ -983,6 +972,10 @@ async function executeGatewayRequestWithScopes<T>(params: {
         try {
           opts.onHelloOk?.(hello);
         } catch {}
+        // An observer may cancel after inspecting hello, before any RPC is sent.
+        if (settled) {
+          return;
+        }
         void (async () => {
           try {
             ensureGatewaySupportsRequiredMethods({
@@ -1144,11 +1137,6 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
             "Fix: pass --token or --password with --url (or gatewayToken in tools).",
         }),
     buildConnectionDetails: buildGatewayConnectionDetails,
-    resolveTlsFingerprint: async (params) =>
-      await resolveGatewayConnectionTlsFingerprint({
-        ...params,
-        loadGatewayTlsRuntime,
-      }),
   });
   ensureRemoteModeUrlConfigured({
     context,
@@ -1293,11 +1281,6 @@ export async function buildGatewayProbeConnectionDetails(
     explicitTlsFingerprint: opts.tlsFingerprint,
     skipImplicitAuth: true,
     buildConnectionDetails: buildGatewayConnectionDetails,
-    resolveTlsFingerprint: async (params) =>
-      await resolveGatewayConnectionTlsFingerprint({
-        ...params,
-        loadGatewayTlsRuntime,
-      }),
   });
   ensureRemoteModeUrlConfigured({
     context,

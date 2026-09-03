@@ -91,6 +91,31 @@ export function buildVideoGenerationCapabilityFailure(params: {
   return undefined;
 }
 
+function mergeVideoGenerationCapabilities<T extends VideoGenerationModeCapabilities>(
+  base: T,
+  overlay: T,
+): T {
+  const overlayOptions = overlay.providerOptions;
+  // Explicit empty providerOptions means "clear inherited options"; undefined
+  // means "inherit base declaration".
+  const mergedProviderOptions =
+    Object.hasOwn(overlay, "providerOptions") &&
+    overlayOptions &&
+    Object.keys(overlayOptions).length === 0
+      ? overlayOptions
+      : base.providerOptions || overlayOptions
+        ? {
+            ...base.providerOptions,
+            ...overlayOptions,
+          }
+        : undefined;
+  return {
+    ...base,
+    ...overlay,
+    ...(mergedProviderOptions ? { providerOptions: mergedProviderOptions } : {}),
+  } as T;
+}
+
 function mergeVideoGenerationModeCapabilities<
   T extends VideoGenerationModeCapabilities | VideoGenerationTransformCapabilities | undefined,
 >(base: T, overlay: T): T {
@@ -100,47 +125,15 @@ function mergeVideoGenerationModeCapabilities<
   if (!base) {
     return overlay;
   }
-  const overlayOptions = overlay.providerOptions;
-  const hasOverlayOptions = Object.hasOwn(overlay, "providerOptions");
-  // Explicit empty providerOptions means "clear inherited options"; undefined
-  // means "inherit base declaration".
-  const mergedProviderOptions =
-    hasOverlayOptions && overlayOptions && Object.keys(overlayOptions).length === 0
-      ? overlayOptions
-      : base.providerOptions || overlayOptions
-        ? {
-            ...base.providerOptions,
-            ...overlayOptions,
-          }
-        : undefined;
-
-  return {
-    ...base,
-    ...overlay,
-    ...(mergedProviderOptions ? { providerOptions: mergedProviderOptions } : {}),
-  } as T;
+  return mergeVideoGenerationCapabilities(base, overlay);
 }
 
 function mergeVideoGenerationProviderCapabilities(
   base: VideoGenerationProviderCapabilities,
   overlay: VideoGenerationProviderCapabilities,
 ): VideoGenerationProviderCapabilities {
-  const overlayOptions = overlay.providerOptions;
-  const hasOverlayOptions = Object.hasOwn(overlay, "providerOptions");
-  const mergedProviderOptions =
-    hasOverlayOptions && overlayOptions && Object.keys(overlayOptions).length === 0
-      ? overlayOptions
-      : base.providerOptions || overlayOptions
-        ? {
-            ...base.providerOptions,
-            ...overlayOptions,
-          }
-        : undefined;
-
   return {
-    ...base,
-    ...overlay,
-    ...(mergedProviderOptions ? { providerOptions: mergedProviderOptions } : {}),
+    ...mergeVideoGenerationCapabilities(base, overlay),
     generate: mergeVideoGenerationModeCapabilities(base.generate, overlay.generate),
     imageToVideo: mergeVideoGenerationModeCapabilities(base.imageToVideo, overlay.imageToVideo),
     videoToVideo: mergeVideoGenerationModeCapabilities(base.videoToVideo, overlay.videoToVideo),

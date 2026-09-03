@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
-  loadAgentRuntimePluginRegistryHandleMock,
+  acquirePreparedModelRuntimeMock,
   loadModelCatalogOwnerMock,
   loadRunCronIsolatedAgentTurn,
 } from "./run.test-harness.js";
@@ -30,22 +30,54 @@ describe("runCronIsolatedAgentTurn runtime plugin owner", () => {
       readOnly: true,
       allowGatewaySubagentBinding: true,
     });
-    expect(loadAgentRuntimePluginRegistryHandleMock).toHaveBeenCalledWith({
-      config: { agents: { defaults: {} } },
-      workspaceDir: "/tmp/workspace",
-      allowGatewaySubagentBinding: true,
-      selections: [
-        {
-          provider: "openai",
-          modelId: "gpt-5.4",
-          agentId: "default",
-        },
-        {
-          provider: "anthropic",
-          modelId: "claude-sonnet-4-6",
-          agentId: "default",
-        },
-      ],
-    });
+    expect(acquirePreparedModelRuntimeMock).toHaveBeenCalledWith(
+      {
+        config: { agents: { defaults: {} } },
+        agentId: "default",
+        agentDir: "/tmp/agent-dir",
+        workspaceDir: "/tmp/workspace",
+        allowGatewaySubagentBinding: true,
+        runtimePluginSelections: [
+          {
+            provider: "openai",
+            modelId: "gpt-5.4",
+            agentId: "default",
+          },
+          {
+            provider: "anthropic",
+            modelId: "claude-sonnet-4-6",
+            agentId: "default",
+          },
+        ],
+      },
+      {
+        catalogMode: "static",
+        pluginMetadataSnapshot: undefined,
+        abortSignal: expect.any(AbortSignal),
+      },
+    );
+  });
+
+  it("reuses the published owner metadata snapshot for the run registry load", async () => {
+    const metadataSnapshot = { plugins: [], index: { plugins: [] } };
+    loadModelCatalogOwnerMock.mockImplementation(
+      async (params: { agentId?: string; config: object }) => ({
+        agentId: params.agentId ?? "default",
+        agentDir: "/tmp/agent-dir",
+        workspaceDir: "/tmp/workspace",
+        config: params.config,
+        metadataSnapshot,
+        modelCatalog: { entries: [], routeVariants: [] },
+      }),
+    );
+
+    await expect(runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture())).resolves.toMatchObject(
+      { status: "ok" },
+    );
+    expect(acquirePreparedModelRuntimeMock).toHaveBeenCalledOnce();
+    // Exact snapshot identity: a rebuilt copy would still re-hash every installed plugin.
+    expect(acquirePreparedModelRuntimeMock.mock.calls[0]?.[1].pluginMetadataSnapshot).toBe(
+      metadataSnapshot,
+    );
   });
 });

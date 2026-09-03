@@ -155,7 +155,7 @@ function dispatchNodeAgentCommand(
       return;
     }
     await dependencies.agentCommandFromIngress(input, dependencies.defaultRuntime, ctx.deps);
-  }).catch((err: unknown) => {
+  }, "node-events:agent-turn").catch((err: unknown) => {
     ctx.logGateway.warn(`agent failed node=${nodeId}: ${dependencies.formatForLog(err)}`);
   });
 }
@@ -344,7 +344,7 @@ function dispatchReservedVoiceAgentCommand(params: {
       return;
     }
     await admission.work;
-  }).catch((err: unknown) => {
+  }, "node-events:voice-turn").catch((err: unknown) => {
     params.reservation.reject();
     params.ctx.logGateway.warn(
       `agent failed node=${params.nodeId}: ${params.dependencies.formatForLog(err)}`,
@@ -483,7 +483,7 @@ function queueSessionStoreTouch(params: {
       now: params.now,
       dependencies: params.dependencies,
     });
-  }).catch((err: unknown) => {
+  }, "node-events:voice-persist").catch((err: unknown) => {
     params.ctx.logGateway.warn(
       "voice session-store update failed: " + params.dependencies.formatForLog(err),
     );
@@ -918,7 +918,7 @@ export const handleNodeEvent = async (
             to: deliveryTo,
             text: receiptText,
           });
-        }).catch((err: unknown) => {
+        }, "node-events:delivery").catch((err: unknown) => {
           ctx.logGateway.warn(`agent receipt failed node=${nodeId}: ${formatForLog(err)}`);
         });
       } else if (wantsReceipt) {

@@ -1,31 +1,23 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import {
-  deleteLegacySessionEntryRows,
   normalizeLifecycleTarget,
   readSessionIdentitySnapshot,
-  rehomeSessionWindows,
   resolveLifecyclePrimaryEntry,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { emitCommittedSessionIdentityDiff } from "./session-accessor.sqlite-identity.js";
-import type { SessionEntryMaintenancePlan } from "./session-accessor.sqlite-lifecycle-types.js";
-import {
-  applySessionEntryMaintenance,
-  finalizeSessionEntryMaintenancePlansBestEffort,
-} from "./session-accessor.sqlite-maintenance.js";
 import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import {
   cloneSessionEntry,
   formatLegacySqliteSessionMarkerForScope,
   normalizeSqliteSessionKey,
   resolveSqliteStoreScope,
-  resolveSqliteTranscriptArchiveDirectory,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
-import type { SessionCreatedActor } from "./session-entry-provenance.js";
+import type { SessionActor } from "./session-entry-provenance.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
@@ -52,7 +44,7 @@ export type RestartTombstoneRecoveryResult =
  */
 export async function recoverSessionEntryFromRestartTombstone(params: {
   agentId: string;
-  archivedBy?: SessionCreatedActor;
+  archivedBy?: SessionActor;
   expected: {
     cycleId: string;
     lifecycleRevision?: string;
@@ -75,7 +67,6 @@ export async function recoverSessionEntryFromRestartTombstone(params: {
     ...params.successorTarget,
     storeKeys: [...params.successorTarget.storeKeys],
   });
-  const maintenancePlans: SessionEntryMaintenancePlan[] = [];
   let previousIdentity = new Map<string, SessionEntry>();
   let currentIdentity = new Map<string, SessionEntry>();
   let result: RestartTombstoneRecoveryResult = {
@@ -184,6 +175,11 @@ export async function recoverSessionEntryFromRestartTombstone(params: {
           },
         },
         archivedAt: source.archivedAt ?? now,
+        ...(source.archiveReason
+          ? { archiveReason: source.archiveReason }
+          : source.archivedAt === undefined
+            ? { archiveReason: "restart-recovery" as const }
+            : {}),
         ...(source.archivedBy === undefined && params.archivedBy
           ? { archivedBy: params.archivedBy }
           : {}),
@@ -193,34 +189,12 @@ export async function recoverSessionEntryFromRestartTombstone(params: {
 
       params.commitGuard?.();
 
-      const identityKeys = [
-        ...sourceTarget.storeKeys,
-        ...successorTarget.storeKeys,
-        sourceTarget.canonicalKey,
-        successorTarget.canonicalKey,
-      ];
+      const identityKeys = [sourceTarget.canonicalKey, successorTarget.canonicalKey];
       previousIdentity = readSessionIdentitySnapshot(database, identityKeys);
       writeSessionEntry(database, successorTarget.canonicalKey, params.successorEntry);
-      writeSessionEntry(database, sourceTarget.canonicalKey, nextSource, { previousEntry: source });
-      rehomeSessionWindows(database, sourceTarget.canonicalKey, sourceTarget.storeKeys);
-      rehomeSessionWindows(database, successorTarget.canonicalKey, successorTarget.storeKeys);
-      deleteLegacySessionEntryRows(database, sourceTarget.storeKeys, sourceTarget.canonicalKey, {
-        rehomeMembers: true,
+      writeSessionEntry(database, sourceTarget.canonicalKey, nextSource, {
+        previousEntry: source,
       });
-      deleteLegacySessionEntryRows(
-        database,
-        successorTarget.storeKeys,
-        successorTarget.canonicalKey,
-        { rehomeMembers: false },
-      );
-      maintenancePlans.push(
-        applySessionEntryMaintenance(database, {
-          activeSessionKey: successorTarget.canonicalKey,
-          archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
-          skipMaintenance: true,
-          storePath: params.storePath,
-        }),
-      );
       currentIdentity = readSessionIdentitySnapshot(database, identityKeys);
       result = {
         status: "created",
@@ -232,6 +206,5 @@ export async function recoverSessionEntryFromRestartTombstone(params: {
   });
 
   emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
-  await finalizeSessionEntryMaintenancePlansBestEffort(resolved, maintenancePlans);
   return result;
 }

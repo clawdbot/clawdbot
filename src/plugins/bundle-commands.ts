@@ -170,6 +170,7 @@ export function loadEnabledClaudeBundleCommands(params: {
     const activationState = resolveEffectivePluginActivationState({
       id: record.id,
       origin: record.origin,
+      channelIds: record.channels,
       config: normalizedPlugins,
       rootConfig: params.cfg,
     });

@@ -3,10 +3,8 @@ import { describe, expect, it } from "vitest";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import {
   filterContainerGenericHints,
-  parsePortFromArgs,
   renderRuntimeHints,
   renderGatewayServiceStartHints,
-  resolveDaemonContainerContext,
   resolveRuntimeStatusColor,
 } from "./shared.js";
 
@@ -23,18 +21,24 @@ describe("resolveRuntimeStatusColor", () => {
   });
 });
 
-describe("parsePortFromArgs", () => {
-  it("rejects inline port values with trailing equals-separated text", () => {
-    expect(parsePortFromArgs(["--port=123=bad"])).toBeNull();
-  });
-
-  it("accepts valid inline and space-separated port values", () => {
-    expect(parsePortFromArgs(["--port=14720"])).toBe(14_720);
-    expect(parsePortFromArgs(["--port", "14721"])).toBe(14_721);
-  });
-});
-
 describe("renderGatewayServiceStartHints", () => {
+  it.each([
+    {
+      name: "the default profile",
+      env: {},
+      installCommand: "openclaw gateway install",
+      startCommand: "openclaw gateway start",
+    },
+    {
+      name: "a named profile",
+      env: { OPENCLAW_PROFILE: "work" },
+      installCommand: "openclaw --profile work gateway install",
+      startCommand: "openclaw --profile work gateway start",
+    },
+  ])("recommends managed service commands for $name", ({ env, installCommand, startCommand }) => {
+    expect(renderGatewayServiceStartHints(env).slice(0, 2)).toEqual([installCommand, startCommand]);
+  });
+
   it("uses GUI session wording for installed LaunchAgents that cannot access gui/$UID", () => {
     expect(
       renderRuntimeHints(
@@ -42,19 +46,6 @@ describe("renderGatewayServiceStartHints", () => {
         {} as NodeJS.ProcessEnv,
       ).join("\n"),
     ).toContain("logged-in macOS GUI session");
-  });
-
-  it("resolves daemon container context from either env key", () => {
-    expect(
-      resolveDaemonContainerContext({
-        OPENCLAW_CONTAINER: "openclaw-demo-container",
-      } as NodeJS.ProcessEnv),
-    ).toBe("openclaw-demo-container");
-    expect(
-      resolveDaemonContainerContext({
-        OPENCLAW_CONTAINER_HINT: "openclaw-demo-container",
-      } as NodeJS.ProcessEnv),
-    ).toBe("openclaw-demo-container");
   });
 
   it("prepends a single container restart hint when OPENCLAW_CONTAINER is set", () => {
@@ -71,10 +62,11 @@ describe("renderGatewayServiceStartHints", () => {
     expect(
       renderGatewayServiceStartHints({
         OPENCLAW_CONTAINER_HINT: "openclaw-demo-container",
+        OPENCLAW_PROFILE: "work",
       } as NodeJS.ProcessEnv),
-    ).toContain(
+    ).toEqual([
       "Restart the container or the service that manages it for openclaw-demo-container.",
-    );
+    ]);
   });
 });
 

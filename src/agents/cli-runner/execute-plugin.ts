@@ -16,7 +16,7 @@ import { resolveAdmittedRunActiveAssertion } from "../admitted-run-context.js";
 import { runBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
 import type { CliTerminalInterruption } from "../cli-output-contracts.js";
 import { resolveExecDefaults } from "../exec-defaults.js";
-import { isSignalTimeoutReason, type FailoverError } from "../failover-error.js";
+import { FailoverError, isSignalTimeoutReason } from "../failover-error.js";
 import { runStructuredInput } from "../harness/structured-input-execution.js";
 import { compileStructuredInputQuestions } from "../harness/structured-input.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
@@ -32,7 +32,8 @@ import {
   resolveCliNativeToolApprovalPlan,
 } from "./cli-native-tool-approval.js";
 import { createCliAbortError } from "./execute-node-claude.js";
-import { resolveCliNoOutputTimeoutDecision } from "./no-output-timeout-policy.js";
+import { createCliFailoverError as failover } from "./exit-error.js";
+import * as noOutputPolicy from "./no-output-timeout-policy.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 const PLUGIN_ITERATOR_CLOSE_TIMEOUT_MS = 5_000;
@@ -397,6 +398,7 @@ export async function executePluginOwnedProcess(params: {
   executionArgs: readonly string[];
   env: Record<string, string>;
   prompt: string;
+  promptContext?: PreparedCliRunContext["promptContext"];
   useResume: boolean;
   forceNewSession?: boolean;
   sessionId?: string;
@@ -431,6 +433,8 @@ export async function executePluginOwnedProcess(params: {
     observed: false,
     replayUnsafe: false,
   };
+  const updatePendingApproval = (delta: number) =>
+    (outstanding.approvals = Math.max(0, outstanding.approvals + delta));
   let noOutputTimer: ReturnType<typeof setTimeout> | undefined;
   const overallTimeoutMs = clampPositiveTimerTimeoutMs(run.timeoutMs);
   const noOutputTimeoutMs = clampPositiveTimerTimeoutMs(params.noOutputTimeoutMs);
@@ -448,7 +452,7 @@ export async function executePluginOwnedProcess(params: {
     }
     noOutputTimer = setTimeout(() => {
       const quietDurationMs = Date.now() - outstanding.lastOutputAt;
-      const decision = resolveCliNoOutputTimeoutDecision({
+      const decision = noOutputPolicy.resolveCliNoOutputTimeoutDecision({
         context: {
           provider: run.provider,
           model: params.context.modelId,
@@ -496,8 +500,8 @@ export async function executePluginOwnedProcess(params: {
   }
 
   let iterator: AsyncIterator<Record<string, unknown>> | undefined;
-  let terminalResultSeen = false;
-  let terminalErrorSeen = false;
+  let liveSession: ReturnType<typeof createCliLiveSessionCapability> | undefined;
+  let terminalResult: "none" | "success" | "error" = "none";
   try {
     resetNoOutputTimer();
     if (
@@ -515,12 +519,23 @@ export async function executePluginOwnedProcess(params: {
       }
       assertActive();
     }
+    if (params.liveSession) {
+      liveSession = createCliLiveSessionCapability({
+        context: params.context,
+        argv: [command, ...params.executionArgs],
+        env: params.env,
+        ...params.liveSession,
+        abortSignal: signal,
+        claimResources: params.context.preparedBackend.claimLiveSessionResources,
+      });
+    }
     const execution = params.execute({
       command,
       args: params.executionArgs,
       cwd,
       env: params.env,
       prompt: params.prompt,
+      ...(params.promptContext ? { promptContext: params.promptContext } : {}),
       modelId: params.context.normalizedModel,
       systemPrompt: stripSystemPromptCacheBoundary(params.context.systemPrompt).trim(),
       ...(params.sessionId ? { sessionId: params.sessionId } : {}),
@@ -529,33 +544,16 @@ export async function executePluginOwnedProcess(params: {
       timeoutMs: run.timeoutMs,
       ...(run.executionMode ? { executionMode: run.executionMode } : {}),
       ...(run.cliToolAvailability ? { toolAvailability: run.cliToolAvailability } : {}),
-      ...(params.liveSession
-        ? {
-            liveSession: createCliLiveSessionCapability({
-              context: params.context,
-              argv: [command, ...params.executionArgs],
-              env: params.env,
-              captureKey: params.liveSession.captureKey,
-              beginCapture: params.liveSession.beginCapture,
-              abortSignal: signal,
-              requiredGeneration: params.liveSession.requiredGeneration,
-              claimResources: params.context.preparedBackend.claimLiveSessionResources,
-            }),
-          }
-        : {}),
+      ...(liveSession ? { liveSession } : {}),
       requestToolPermission: createPluginToolPermissionHandler({
         context: params.context,
         abortSignal: signal,
-        onPendingApproval: (delta) => {
-          outstanding.approvals = Math.max(0, outstanding.approvals + delta);
-        },
+        onPendingApproval: updatePendingApproval,
       }),
       requestUserInput: createPluginUserInputHandler({
         context: params.context,
         abortSignal: signal,
-        onPendingInput: (delta) => {
-          outstanding.approvals = Math.max(0, outstanding.approvals + delta);
-        },
+        onPendingInput: updatePendingApproval,
       }),
     });
     iterator = execution[Symbol.asyncIterator]();
@@ -566,13 +564,16 @@ export async function executePluginOwnedProcess(params: {
         break;
       }
       if (!isRecord(next.value)) {
+        outstanding.replayUnsafe = true;
         throw new Error("CLI plugin runtime emitted an invalid structured stream event.");
       }
       if (next.value.type === "result") {
-        terminalResultSeen = true;
-        terminalErrorSeen ||=
+        terminalResult =
+          terminalResult === "error" ||
           next.value.is_error === true ||
-          (typeof next.value.subtype === "string" && next.value.subtype.startsWith("error_"));
+          (typeof next.value.subtype === "string" && next.value.subtype.startsWith("error_"))
+            ? "error"
+            : "success";
       }
       if (
         next.value.type === "system" &&
@@ -593,7 +594,7 @@ export async function executePluginOwnedProcess(params: {
       resetNoOutputTimer();
     }
 
-    if (!terminalResultSeen) {
+    if (terminalResult === "none") {
       throw new Error("CLI plugin runtime completed without a terminal result.");
     }
   } catch (error) {
@@ -604,9 +605,24 @@ export async function executePluginOwnedProcess(params: {
       }
       termination.reason = "manual-cancel";
     }
-    // SDKs can throw after emitting an authoritative failed terminal record.
-    // Preserve that record so the existing parser owns auth/rate-limit failover.
-    if (termination.reason === "exit" && !terminalErrorSeen) {
+    if (termination.reason === "exit" && terminalResult !== "error") {
+      if (
+        params.liveSession?.requiredGeneration &&
+        noOutputPolicy.isReplaySafeCliResumeControlOnly(
+          params.useResume,
+          outstanding.replayUnsafe,
+          Boolean(outstanding.approvals || outstanding.background || params.activeToolCount?.()),
+        )
+      ) {
+        try {
+          liveSession?.current();
+        } catch (sessionError) {
+          if (sessionError instanceof FailoverError && sessionError.reason === "session_expired") {
+            const { code, message, reason } = sessionError;
+            throw failover(message, reason, sessionError, { cause: error, code });
+          }
+        }
+      }
       throw error;
     }
   } finally {

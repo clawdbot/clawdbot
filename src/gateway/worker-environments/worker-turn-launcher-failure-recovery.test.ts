@@ -4,14 +4,17 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
+import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { recoverStuckDiagnosticSession } from "../../logging/diagnostic-stuck-session-recovery.runtime.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
 import { STALE_WORKER_BUILD_REASON, StaleWorkerBuildError } from "./admission.js";
 import type { WorkerDispatchEnvironmentService } from "./placement-dispatch-failure.js";
 import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { placementTurnOwner } from "./placement-record.js";
-import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import {
   WorkerRunnerCapacityError,
   WorkerRunnerUnavailableError,
@@ -28,6 +31,7 @@ import {
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
   credential,
+  measureLaunchTurn,
   hasLoneSurrogate,
   openSessionManager,
   placements,
@@ -44,6 +48,229 @@ import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation
 describe("worker turn launcher failure recovery", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(cleanupWorkerTurnLauncherTest);
+
+  it("reports execution failure as primary when remote workspace recovery also fails", async () => {
+    seedActivePlacement("remote-exec");
+    const executionError = new Error("Codex node execution requires one-time approval");
+    const environments: WorkerTurnEnvironmentService = {
+      ...unusedEnvironments(),
+      get: vi.fn(() => attachedEnvironment()),
+      startTunnel: vi.fn(async () => ({
+        environmentId: ENVIRONMENT_ID,
+        ownerEpoch: OWNER_EPOCH,
+        runWorkspaceCommand: vi.fn(),
+        syncWorkspace: vi.fn(),
+        quiesceWorkspace: vi.fn(async () => ({
+          assertActive: vi.fn(async () => {}),
+          resume: vi.fn(async () => {}),
+        })),
+        reconcileWorkspace: vi.fn(async () => {
+          throw new Error("gateway returned 400");
+        }),
+        stop: vi.fn(async () => {}),
+      })),
+    };
+    const provider = createWorkerSessionTurnPlacementProvider({
+      environments,
+      placements,
+      reconcileActivePlacement: vi.fn(async () => {}),
+    });
+
+    const failure = await provider
+      .executeTurn(
+        {
+          sessionId: SESSION_ID,
+          sessionKey: SESSION_KEY,
+          agentId: "main",
+          runId: "run-execution-and-workspace-failed",
+        },
+        turn("run-execution-and-workspace-failed"),
+        async () => {
+          throw executionError;
+        },
+      )
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+    expect(formatErrorMessage(failure)).toBe(
+      "Codex node execution requires one-time approval\n\n" +
+        "Workspace recovery also failed: gateway returned 400. " +
+        "Remote changes may not have been applied locally. Resolve the workspace error, then retry.",
+    );
+    expect(placements.listPendingWorkspaceResults()).toHaveLength(0);
+  });
+
+  it("terminalizes a journal-settled dead worker without waiting for blocked teardown", async () => {
+    seedActivePlacement();
+    const launchStarted = createDeferred();
+    const finishLaunch = createDeferred();
+    const teardownStarted = createDeferred();
+    const finishTeardown = createDeferred();
+    const environment = {
+      ...attachedEnvironment(),
+      nodeDeviceId: "node-worker",
+      sshEndpoint: null,
+    };
+    const environments: WorkerTurnEnvironmentService = {
+      ...unusedEnvironments(),
+      get: () => environment,
+      acquireTurnCredential: async () => credential(),
+      acknowledgeCredentialDelivery: () => true,
+      startTunnel: async () => ({
+        environmentId: ENVIRONMENT_ID,
+        ownerEpoch: OWNER_EPOCH,
+        runWorkspaceCommand: vi.fn(),
+        quiesceWorkspace: vi.fn(),
+        syncWorkspace: vi.fn(),
+        reconcileWorkspace: vi.fn(),
+        stop: vi.fn(),
+        measureLaunchTurn,
+        launchTurn: async (request) => {
+          request.onDispatchReady?.();
+          launchStarted.resolve();
+          await finishLaunch.promise;
+          return {
+            stdout: "",
+            stderr: "worker admission deadline exceeded",
+            code: 1,
+            signal: null,
+            killed: false,
+            termination: "exit",
+          };
+        },
+      }),
+      stopTunnel: async () => {
+        teardownStarted.resolve();
+        await finishTeardown.promise;
+      },
+      destroy: vi.fn(async () => environment),
+    };
+    const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
+    const uninstall = installSessionPlacementAdmissionProvider(provider);
+    const operation = createReplyOperation({
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+      resetTriggered: false,
+    });
+    operation.setPhase("waiting_for_deferred_maintenance");
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    const attempt = provider
+      .executeTurn(
+        {
+          sessionId: SESSION_ID,
+          sessionKey: SESSION_KEY,
+          agentId: "main",
+          runId: "run-dead-worker",
+        },
+        turn("run-dead-worker"),
+        async () => ({ meta: { durationMs: 1 } }),
+      )
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    const recover = () =>
+      recoverStuckDiagnosticSession({
+        sessionId: SESSION_ID,
+        sessionKey: SESSION_KEY,
+        ageMs: 180_000,
+      });
+    try {
+      await launchStarted.promise;
+      await expect(recover()).resolves.toMatchObject({ status: "skipped", action: "observe_only" });
+      finishLaunch.resolve();
+      await teardownStarted.promise;
+      expect(placements.get(SESSION_ID)).toMatchObject({ state: "draining", turnClaim: null });
+      await expect(recover()).resolves.toMatchObject({ status: "skipped", action: "observe_only" });
+      clock.mockReturnValue(1_030_000);
+      await expect(recover()).resolves.toMatchObject({
+        status: "failed",
+        action: "fail_worker_turn",
+        reason: "terminal_worker",
+      });
+      expect(await attempt).toMatchObject({
+        message:
+          "Cloud worker process failed before completing the turn: worker admission deadline exceeded",
+      });
+      expect(placements.get(SESSION_ID)).toMatchObject({
+        state: "failed",
+        turnClaim: null,
+        terminalReason: expect.stringContaining("worker admission deadline exceeded"),
+      });
+      expect(environments.destroy).not.toHaveBeenCalled();
+      finishTeardown.reject(new Error("late tunnel cleanup rejection"));
+      await Promise.resolve();
+      expect(environments.destroy).not.toHaveBeenCalled();
+    } finally {
+      finishLaunch.resolve();
+      finishTeardown.resolve();
+      await attempt;
+      clock.mockRestore();
+      operation.complete();
+      uninstall();
+    }
+  });
+
+  it("does not destroy a replacement after failed-turn teardown loses its placement", async () => {
+    seedActivePlacement();
+    const active = placements.get(SESSION_ID);
+    if (active?.state !== "active") {
+      throw new Error("expected active placement");
+    }
+    const turnClaim = placements.claimTurn({
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+      agentId: "main",
+      claimId: "old-turn-claim",
+      runId: "old-turn-run",
+      owner: placementTurnOwner(active),
+    });
+    const teardownStarted = createDeferred();
+    const finishTeardown = createDeferred();
+    const destroy = vi.fn(async () => attachedEnvironment());
+    const cleanup = failHandedOffTurn({
+      environments: {
+        ...unusedEnvironments(),
+        stopTunnel: async () => {
+          teardownStarted.resolve();
+          await finishTeardown.promise;
+        },
+        destroy,
+      },
+      placements,
+      placement: active,
+      turnClaim,
+      error: new Error("original turn failed"),
+    });
+    try {
+      await teardownStarted.promise;
+      const reconciling = placements.startReconcile({
+        sessionId: SESSION_ID,
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+        expectedGeneration: active.generation + 1,
+      });
+      placements.fail({
+        sessionId: SESSION_ID,
+        expectedGeneration: reconciling.generation,
+        recoveryError: "recovered elsewhere",
+      });
+      const replacement = placements.startDispatch({
+        sessionId: SESSION_ID,
+        sessionKey: SESSION_KEY,
+        agentId: "main",
+      });
+      finishTeardown.resolve();
+      await cleanup;
+      expect(destroy).not.toHaveBeenCalled();
+      expect(placements.get(SESSION_ID)).toEqual(replacement);
+    } finally {
+      finishTeardown.resolve();
+      await cleanup;
+    }
+  });
 
   it.each(["worker-turn", "remote-exec"] as const)(
     "releases an exact %s claim after another lifecycle owner starts draining",
@@ -185,6 +412,7 @@ describe("worker turn launcher failure recovery", () => {
     });
     const environments: WorkerTurnEnvironmentService & WorkerDispatchEnvironmentService = {
       ...unusedEnvironments(),
+      supportsProviderExecutionMode: vi.fn(() => true),
       get: vi.fn(() => environment),
       acquireTurnCredential: vi.fn(async () => credential()),
       acknowledgeCredentialDelivery: vi.fn(() => true),
@@ -215,6 +443,7 @@ describe("worker turn launcher failure recovery", () => {
       runActivationBarrier: async ({ activate }) => activate(),
       runMoveBarrier: async ({ begin }) => begin(),
       resolveMoveDestination: async () => undefined,
+      runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
       runReclaimBarrier: async ({ begin, reclaim }) => await reclaim(root, begin()),
       runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
       workspaceOperations,
@@ -335,6 +564,7 @@ describe("worker turn launcher failure recovery", () => {
         ownerEpoch: OWNER_EPOCH,
         quiesceWorkspace: vi.fn(),
         runWorkspaceCommand: vi.fn(),
+        measureLaunchTurn,
         launchTurn,
         syncWorkspace: vi.fn(),
         reconcileWorkspace: vi.fn(),
@@ -473,26 +703,9 @@ describe("worker turn launcher failure recovery", () => {
     },
   ])("keeps the placement active after $name", async ({ error, dispatched, expectedMessage }) => {
     seedActivePlacement();
-    const teardownStates: string[] = [];
-    const observedPlacements: WorkerSessionPlacementStore = {
-      ...placements,
-      startReconcile: (input) => {
-        teardownStates.push(`reconcile-before:${placements.get(SESSION_ID)?.state ?? "missing"}`);
-        const reconciling = placements.startReconcile(input);
-        teardownStates.push(`reconcile-after:${reconciling.state}`);
-        expect(reconciling.turnClaim).toBeNull();
-        return reconciling;
-      },
-    };
-    const stopTunnel = vi.fn(async () => {
-      const placement = placements.get(SESSION_ID);
-      teardownStates.push(`stop:${placement?.state ?? "missing"}`);
-      expect(placement).toMatchObject({ state: "draining", turnClaim: null });
-    });
-    const destroy = vi.fn(async () => {
-      teardownStates.push(`destroy:${placements.get(SESSION_ID)?.state ?? "missing"}`);
-      return attachedEnvironment();
-    });
+    const startReconcile = vi.spyOn(placements, "startReconcile");
+    const stopTunnel = vi.fn(async () => {});
+    const destroy = vi.fn(async () => attachedEnvironment());
     const acknowledgeCredentialDelivery = vi.fn(() => true);
     const environments: WorkerTurnEnvironmentService = {
       get: vi.fn(() => attachedEnvironment()),
@@ -506,6 +719,7 @@ describe("worker turn launcher failure recovery", () => {
           resume: vi.fn(async () => {}),
         })),
         runWorkspaceCommand: vi.fn(),
+        measureLaunchTurn,
         launchTurn: vi.fn(async (request) => {
           if (dispatched) {
             request.onDispatchReady?.();
@@ -531,7 +745,7 @@ describe("worker turn launcher failure recovery", () => {
     };
     const provider = createWorkerSessionTurnPlacementProvider({
       environments,
-      placements: observedPlacements,
+      placements,
     });
     const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
 
@@ -552,17 +766,19 @@ describe("worker turn launcher failure recovery", () => {
     expect(acknowledgeCredentialDelivery).toHaveBeenCalledTimes(dispatched ? 1 : 0);
     expect(stopTunnel).not.toHaveBeenCalled();
     expect(destroy).not.toHaveBeenCalled();
-    expect(teardownStates).toEqual([]);
+    expect(startReconcile).not.toHaveBeenCalled();
   });
 
-  it("keeps redacted process failure details on a valid UTF-16 boundary", async () => {
+  it("preserves the admission diagnosis with bounded redacted process failure details", async () => {
     seedActivePlacement();
     const secret = "$SUPERSECRET123";
-    const redactedPrefix = "DISCORD_BOT_TOKEN=*** ";
+    const diagnosis =
+      "worker admission deadline exceeded after 3 attempts to gateway.example:18789: connect failed: Opening handshake has timed out; ";
+    const redactedPrefix = `${diagnosis}DISCORD_BOT_TOKEN=*** `;
     const padding = "a".repeat(399 - redactedPrefix.length);
     const retained = `${redactedPrefix}${padding}`;
     const emoji = String.fromCodePoint(0x1f600);
-    const stderr = `DISCORD_BOT_TOKEN=${secret} ${padding}${emoji}tail`;
+    const stderr = `${diagnosis}DISCORD_BOT_TOKEN=${secret} ${padding}${emoji}tail`;
     const stopTunnel = vi.fn(async () => {});
     const destroy = vi.fn(async () => attachedEnvironment());
     const environments: WorkerTurnEnvironmentService = {
@@ -573,6 +789,7 @@ describe("worker turn launcher failure recovery", () => {
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
         runWorkspaceCommand: vi.fn(),
+        measureLaunchTurn,
         launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
           request.onDispatchReady?.();
           return {

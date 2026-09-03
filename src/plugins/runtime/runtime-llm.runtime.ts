@@ -8,7 +8,7 @@ import { asFiniteNumber, asFiniteNumberInRange } from "@openclaw/normalization-c
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { normalizeModelRef } from "../../agents/model-ref-shared.js";
-import type { NormalizedUsage, UsageLike } from "../../agents/usage.js";
+import type { UsageLike } from "../../agents/usage.js";
 import { normalizeUsage } from "../../agents/usage.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
@@ -17,9 +17,14 @@ import type { Api, Message } from "../../llm/types.js";
 import { getChildLogger } from "../../logging.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { modelKey } from "../../shared/model-key.js";
-import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
+import {
+  estimateAggregateUsageCost,
+  estimateUsageCost,
+  resolveModelCostConfig,
+} from "../../utils/usage-format.js";
 import { normalizePluginsConfig } from "../config-state.js";
 import { getPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
+import { createLlmCompleteError as completionError } from "./runtime-llm-error.js";
 import {
   assertSupportedExecutionMode,
   isIsolatedAgentRuntimeRequest,
@@ -27,7 +32,6 @@ import {
 } from "./runtime-llm-isolated.js";
 import type {
   LlmCompleteCaller,
-  LlmCompleteErrorCode,
   LlmCompleteParams,
   LlmCompleteResult,
   LlmCompleteUsage,
@@ -96,19 +100,6 @@ function normalizeCaller(
     ...(normalizeOptionalString(source.id) ? { id: source.id!.trim() } : {}),
     ...(normalizeOptionalString(source.name) ? { name: source.name!.trim() } : {}),
   };
-}
-
-function completionError(
-  code: LlmCompleteErrorCode,
-  message: string,
-  cause?: unknown,
-): Error & { code: LlmCompleteErrorCode } {
-  const error = new Error(message, cause === undefined ? undefined : { cause }) as Error & {
-    code: LlmCompleteErrorCode;
-  };
-  error.name = "LlmCompleteError";
-  error.code = code;
-  return error;
 }
 
 function resolveTrustedCaller(authority?: RuntimeLlmAuthority): LlmCompleteCaller {
@@ -232,35 +223,6 @@ function readExplicitCostUsd(raw: unknown): number | undefined {
   );
 }
 
-function buildUsage(params: {
-  rawUsage: unknown;
-  normalized: NormalizedUsage | undefined;
-  cfg: OpenClawConfig;
-  provider: string;
-  model: string;
-}): LlmCompleteUsage {
-  const costConfig = resolveModelCostConfig({
-    provider: params.provider,
-    model: params.model,
-    config: params.cfg,
-  });
-  const costUsd =
-    readExplicitCostUsd(params.rawUsage) ??
-    estimateUsageCost({ usage: params.normalized, cost: costConfig });
-  return {
-    ...(params.normalized?.input !== undefined ? { inputTokens: params.normalized.input } : {}),
-    ...(params.normalized?.output !== undefined ? { outputTokens: params.normalized.output } : {}),
-    ...(params.normalized?.cacheRead !== undefined
-      ? { cacheReadTokens: params.normalized.cacheRead }
-      : {}),
-    ...(params.normalized?.cacheWrite !== undefined
-      ? { cacheWriteTokens: params.normalized.cacheWrite }
-      : {}),
-    ...(params.normalized?.total !== undefined ? { totalTokens: params.normalized.total } : {}),
-    ...(costUsd !== undefined ? { costUsd } : {}),
-  };
-}
-
 function finalizeCompletion(params: {
   cfg: OpenClawConfig;
   hostPluginId?: string;
@@ -270,13 +232,26 @@ function finalizeCompletion(params: {
   result: Omit<LlmCompleteResult, "usage">;
 }): LlmCompleteResult {
   const normalized = normalizeUsage(params.rawUsage as UsageLike | undefined);
-  const usage = buildUsage({
-    rawUsage: params.rawUsage,
-    normalized,
-    cfg: params.cfg,
+  const costConfig = resolveModelCostConfig({
     provider: params.result.provider,
     model: params.result.model,
+    config: params.cfg,
   });
+  // Isolated runtimes may report a whole run; only direct calls retain tier boundaries here.
+  const estimateCost =
+    params.result.execution.mode === "direct-provider"
+      ? estimateUsageCost
+      : estimateAggregateUsageCost;
+  const costUsd =
+    readExplicitCostUsd(params.rawUsage) ?? estimateCost({ usage: normalized, cost: costConfig });
+  const usage: LlmCompleteUsage = {
+    ...(normalized?.input !== undefined ? { inputTokens: normalized.input } : {}),
+    ...(normalized?.output !== undefined ? { outputTokens: normalized.output } : {}),
+    ...(normalized?.cacheRead !== undefined ? { cacheReadTokens: normalized.cacheRead } : {}),
+    ...(normalized?.cacheWrite !== undefined ? { cacheWriteTokens: normalized.cacheWrite } : {}),
+    ...(normalized?.total !== undefined ? { totalTokens: normalized.total } : {}),
+    ...(costUsd !== undefined ? { costUsd } : {}),
+  };
   params.logger.info("plugin llm completion", {
     caller: params.result.audit.caller,
     purpose: params.result.audit.purpose,

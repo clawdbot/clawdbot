@@ -1,4 +1,3 @@
-// Route resolution helpers map user targets to configured channel routes.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   AgentSelectionRequiredError,
@@ -257,6 +256,10 @@ function buildEvaluatedBindingsByChannel(
       continue;
     }
     const match = normalizeBindingMatch(binding.match);
+    // Unmatchable peers cannot establish routing or account-ownership evidence.
+    if (match.peer.state === "invalid") {
+      continue;
+    }
     const evaluated: EvaluatedBinding = {
       binding,
       match,
@@ -487,6 +490,17 @@ function getEvaluatedBindingIndexForChannelAccount(
   return built;
 }
 
+/** @internal Lists matchable candidates from the canonical channel/account binding index. */
+export function listChannelAccountRouteBindings(
+  input: Pick<ResolveAgentRouteInput, "cfg" | "channel" | "accountId">,
+) {
+  return getEvaluatedBindingsForChannelAccount(
+    input.cfg,
+    normalizeLowercaseStringOrEmpty(input.channel),
+    normalizeAccountId(input.accountId),
+  ).map(({ binding }) => binding);
+}
+
 /** @internal Lists exact DM peers from the canonical channel/account binding index. */
 export function listExactDirectMessageBindingPeerIds(
   input: Pick<ResolveAgentRouteInput, "cfg" | "channel" | "accountId">,
@@ -560,7 +574,8 @@ function resolveRouteCacheForConfig(cfg: OpenClawConfig): Map<string, ResolvedAg
 }
 
 function formatRouteCachePeer(peer: RoutePeer | null): string {
-  if (!peer || !peer.id) {
+  // Empty IDs still enable kind-specific wildcard routing, so only a missing peer is peerless.
+  if (!peer) {
     return "-";
   }
   return `${peer.kind}:${peer.id}`;
@@ -593,9 +608,6 @@ function buildResolvedRouteCacheKey(params: {
 }
 
 function matchesBindingScope(match: NormalizedBindingMatch, scope: BindingScope): boolean {
-  if (match.peer.state === "invalid") {
-    return false;
-  }
   if (match.peer.state === "valid") {
     if (
       !scope.peer ||
@@ -887,12 +899,5 @@ export function listEffectiveGroupRouteBindings(cfg: OpenClawConfig) {
         }).agentId === markerForIndex(index),
     );
   });
-}
-
-/** @internal Resolves fallback precedence for an unknown direct peer. */
-export function resolveUnknownDirectMessageRoute(
-  input: Pick<ResolveAgentRouteInput, "cfg" | "channel" | "accountId" | "dmScope" | "groupScope">,
-): ResolvedAgentRoute {
-  return resolveAgentRoute({ ...input, peer: { kind: "direct", id: "" } });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

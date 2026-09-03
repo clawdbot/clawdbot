@@ -138,6 +138,42 @@ describe("loadSessionDiff", () => {
     expect(result.unavailableReason).toBe("not_git");
   });
 
+  // Diff and baseline reads run inside the Gateway process against user
+  // checkouts, so a checkout-configured core.fsmonitor command (or hook) must
+  // never execute — same invariant as the publication git transport.
+  it.skipIf(process.platform === "win32")(
+    "never executes a checkout-configured core.fsmonitor command",
+    async () => {
+      initRepo(repoRoot);
+      fs.writeFileSync(path.join(repoRoot, "a.txt"), "one\n");
+      git(repoRoot, "add", "a.txt");
+      git(repoRoot, "commit", "-qm", "init");
+      fs.writeFileSync(path.join(repoRoot, "a.txt"), "two\n");
+      // Script and sentinel live outside the checkout so they never show up
+      // as untracked entries in the diffs under test.
+      const outside = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-fsmonitor-"));
+      try {
+        const sentinel = path.join(outside, "sentinel");
+        const hook = path.join(outside, "fsmonitor.sh");
+        fs.writeFileSync(hook, `#!/bin/sh\n: > "${sentinel}"\nexit 1\n`, { mode: 0o755 });
+        git(repoRoot, "config", "core.fsmonitor", hook);
+        // Sanity: unpinned git in this checkout does run the command.
+        git(repoRoot, "status", "--porcelain");
+        expect(fs.existsSync(sentinel)).toBe(true);
+        fs.rmSync(sentinel);
+
+        mockSession(repoRoot);
+        const diff = await loadSessionDiff({ sessionKey: "agent:main:s1" });
+        expect(diff.files.map((file) => file.path)).toEqual(["a.txt"]);
+        const baseline = await captureSessionDiffBaseline({ cwd: repoRoot, sessionId: "s1" });
+        expect(baseline?.files.map((file) => file.path)).toEqual(["a.txt"]);
+        expect(fs.existsSync(sentinel)).toBe(false);
+      } finally {
+        fs.rmSync(outside, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("shows the full diff without mutating a pending baseline claim", async () => {
     initRepo(repoRoot);
     fs.writeFileSync(path.join(repoRoot, "pending.txt"), "pending first turn\n");
@@ -458,6 +494,41 @@ describe("loadSessionDiff", () => {
     // The untracked scan still covers files git does not track yet.
     expect(result.files.find((file) => file.path === "loose.txt")?.untracked).toBe(true);
   });
+
+  it.skipIf(process.platform === "win32").each(["unborn", "branch", "detached"])(
+    "preserves checkout path bytes for %s baseline and diff reads",
+    async (revision) => {
+      const checkout = path.join(repoRoot, "checkout \n");
+      const nested = path.join(checkout, "nested");
+      fs.mkdirSync(nested, { recursive: true });
+      initRepo(checkout);
+      fs.writeFileSync(path.join(checkout, "tracked.txt"), "initial\n");
+      git(checkout, "add", "tracked.txt");
+      if (revision !== "unborn") {
+        git(checkout, "commit", "-qm", "initial");
+        if (revision === "detached") {
+          git(checkout, "checkout", "--detach", "-q");
+        }
+      }
+      fs.appendFileSync(path.join(checkout, "tracked.txt"), "changed\n");
+      fs.writeFileSync(path.join(checkout, "loose.txt"), "new\n");
+      mockSession(nested);
+
+      const baseline = await captureSessionDiffBaseline({ cwd: nested, sessionId: "s1" });
+      expect(baseline?.root).toBe(checkout);
+      expect(baseline?.files.map((file) => file.path)).toEqual(["loose.txt", "tracked.txt"]);
+      const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
+      expect(result.root).toBe(checkout);
+      expect(result.branch).toBe(revision === "branch" ? "main" : undefined);
+      expect(result.files.map((file) => file.path)).toEqual(["loose.txt", "tracked.txt"]);
+
+      mockSession(nested, { sessionDiffBaseline: baseline });
+      expect((await loadSessionDiff({ sessionKey: "agent:main:s1" })).files).toEqual([]);
+      fs.appendFileSync(path.join(checkout, "tracked.txt"), "later edit\n");
+      const changed = await loadSessionDiff({ sessionKey: "agent:main:s1" });
+      expect(changed.files.map((file) => file.path)).toEqual(["tracked.txt"]);
+    },
+  );
 
   it("hides unchanged files captured at session start and resurfaces later edits", async () => {
     initRepo(repoRoot);

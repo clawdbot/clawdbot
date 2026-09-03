@@ -47,8 +47,4 @@ export type CreateSessionMcpRuntime = (params: {
   requesterConnect?: RequesterMcpConnect;
   configFingerprint?: string;
   toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
-}) => SessionMcpRuntime;
-
-export function resolveSessionMcpRuntimeIdleTtlMs(): number {
-  return DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS;
-}
+}) => SessionMcpRuntime | Promise<SessionMcpRuntime>;

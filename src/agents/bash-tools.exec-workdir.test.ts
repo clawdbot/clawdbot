@@ -3,7 +3,7 @@
  * Verifies cwd selection and validation before exec launches or remote node
  * forwarding.
  */
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -13,7 +13,7 @@ import type { BashSandboxConfig } from "./bash-tools.shared.js";
 async function withTempDir(run: (dir: string) => Promise<void>) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-exec-workdir-"));
   try {
-    await run(dir);
+    await run(await realpath(dir));
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -94,6 +94,22 @@ describe("resolveExecWorkdir", () => {
           workdir: ` ${workspaceDir} `,
         }),
       ).resolves.toEqual({ kind: "local", hostCwd: workspaceDir });
+    });
+  });
+
+  it("canonicalizes local workdirs before approval and execution", async () => {
+    await withTempDir(async (workspaceDir) => {
+      const target = path.join(workspaceDir, "target");
+      const link = path.join(workspaceDir, "link");
+      await mkdir(target);
+      await symlink(target, link, "dir");
+
+      await expect(
+        resolveExecWorkdir({
+          host: "gateway",
+          workdir: link,
+        }),
+      ).resolves.toEqual({ kind: "local", hostCwd: target });
     });
   });
 

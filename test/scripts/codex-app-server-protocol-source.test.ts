@@ -350,25 +350,25 @@ describe("Codex app-server protocol JSON canonicalizer", () => {
           },
         },
       ],
+      definitions: {
+        Zebra: { type: "string", description: "last" },
+        Alpha: {
+          properties: {
+            z: { type: "number" },
+            a: { type: "string" },
+          },
+          type: "object",
+        },
+      },
     });
 
     expect(formatCodexAppServerProtocolJsonText(source)).toBe(`{
-  "a": [
-    {
-      "a": {
-        "b": 6,
-        "c": 5
-      },
-      "z": 4
-    }
-  ],
-  "z": {
-    "b": {
-      "x": 3,
-      "y": 2
-    },
-    "d": 1
-  }
+  "a": [{"a":{"b":6,"c":5},"z":4}],
+  "definitions": {
+    "Alpha": {"properties":{"a":{"type":"string"},"z":{"type":"number"}},"type":"object"},
+    "Zebra": {"description":"last","type":"string"}
+  },
+  "z": {"b":{"x":3,"y":2},"d":1}
 }
 `);
   });

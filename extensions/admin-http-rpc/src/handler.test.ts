@@ -1,7 +1,8 @@
 // Admin Http Rpc tests cover handler plugin behavior.
 import { createServer, type Server } from "node:http";
-import { connect, type Socket } from "node:net";
+import { connect, Socket } from "node:net";
 import { Readable } from "node:stream";
+import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleAdminHttpRpcRequest } from "./handler.js";
 import { listAdminHttpRpcAllowedMethods } from "./methods.js";
@@ -37,6 +38,7 @@ function createRequest(body: unknown, method = "POST") {
   const req = Readable.from([typeof body === "string" ? body : JSON.stringify(body)]);
   Object.assign(req, {
     method,
+    socket: new Socket(),
     url: "/api/v1/admin/rpc",
     headers: {
       "content-type": "application/json",
@@ -53,6 +55,7 @@ function createHangingRequest() {
   });
   Object.assign(req, {
     method: "POST",
+    socket: new Socket(),
     url: "/api/v1/admin/rpc",
     headers: {
       "content-type": "application/json",
@@ -291,30 +294,6 @@ describe("admin-http-rpc plugin handler", () => {
     expect(dispatchGatewayMethod).not.toHaveBeenCalled();
   });
 
-  it("times out incomplete request bodies before dispatch", async () => {
-    vi.useFakeTimers();
-    try {
-      const req = createHangingRequest();
-      const resultPromise = invokeRequest(req);
-      await vi.advanceTimersByTimeAsync(30_000);
-      const result = await resultPromise;
-
-      expect(result.handled).toBe(true);
-      expect(result.captured.statusCode).toBe(408);
-      expect(result.json).toEqual({
-        ok: false,
-        error: {
-          type: "invalid_request",
-          message: "Request body timeout",
-        },
-      });
-      expectBodyReadListenersCleaned(req);
-      expect(dispatchGatewayMethod).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("settles an early client close and removes request-body listeners", async () => {
     const req = createHangingRequest();
     const resultPromise = invokeRequest(req);
@@ -373,6 +352,41 @@ describe("admin-http-rpc plugin handler", () => {
       expect(dispatchGatewayMethod).not.toHaveBeenCalled();
     } finally {
       socket?.destroy();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it("flushes the 413 when the whole oversized body is already in flight", async () => {
+    // The declared-length case above answers before any body arrives. A sender that
+    // writes the whole over-cap body first leaves the rejection queued behind bytes the
+    // server has stopped reading, which is the case a hard teardown discards.
+    const server = createServer((req, res) => {
+      void handleAdminHttpRpcRequest(req, res);
+    });
+    try {
+      const port = await listen(server);
+      const result = await postRawWebhook({
+        url: `http://127.0.0.1:${port}/api/v1/admin/rpc`,
+        body: "x".repeat(1024 * 1024 + 128 * 1024),
+        headers: { "content-type": "application/json" },
+        // The transport owner half-closes first and destroys on its bounded deadline, so
+        // observing the actual close needs a window wider than that deadline.
+        idleTimeoutMs: 3_000,
+      });
+
+      expect(result.statusLine).toBe("HTTP/1.1 413 Payload Too Large");
+      expect(JSON.parse(result.body) as unknown).toEqual({
+        ok: false,
+        error: {
+          type: "invalid_request",
+          message: "Payload too large",
+        },
+      });
+      expect(result.closedByServer).toBe(true);
+      expect(dispatchGatewayMethod).not.toHaveBeenCalled();
+    } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
       });

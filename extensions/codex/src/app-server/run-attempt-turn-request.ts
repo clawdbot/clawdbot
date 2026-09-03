@@ -32,7 +32,7 @@ export async function prepareCodexAttemptTurnRequest(
   const { runtime, attemptTools, hookContextWindowFields, workspaceBootstrapContext } = context;
   const { connection, runtimeParams, effectiveRuntimeProviderId, effectiveRuntimeModelId } =
     runtime;
-  const { tools } = attemptTools;
+  const { tools, toolBridge } = attemptTools;
   const {
     params,
     usesSupervisionConnection,
@@ -123,6 +123,9 @@ export async function prepareCodexAttemptTurnRequest(
       skillsCollaborationInstructions: context.skillsCollaborationInstructions,
       memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
       preserveNativeTurnSettings: usesSupervisionConnection,
+      sessionStatusAvailable: toolBridge.availableTools.some(
+        (tool) => tool.name === "session_status",
+      ),
     });
     codexModelCallDiagnostics.setRequestPayloadBytes(utf8JsonByteLength(turnStartParams));
     state.latestStartupErrorNotification = undefined;

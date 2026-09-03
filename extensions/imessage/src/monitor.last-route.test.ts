@@ -327,6 +327,7 @@ describe("iMessage monitor last-route updates", () => {
           | "is_from_me"
           | "is_group"
           | "created_at"
+          | "destination_caller_id"
         >
       >,
   ): IMessagePayload {
@@ -341,6 +342,7 @@ describe("iMessage monitor last-route updates", () => {
       text: message.text,
       is_group: message.is_group ?? false,
       created_at: message.created_at ?? new Date().toISOString(),
+      destination_caller_id: message.destination_caller_id,
     };
   }
 
@@ -388,7 +390,7 @@ describe("iMessage monitor last-route updates", () => {
       expectedService: "auto",
     },
   ] as const)(
-    "preserves the inbound direct service through early typing, final delivery, and last-route ($label)",
+    "preserves the inbound direct route through early typing, exact-chat final delivery, and last-route ($label)",
     async ({ label, configuredService, chatGuid, expectedService }) => {
       setAvailablePrivateApiMethods(["watch.subscribe", "send", "typing", "read"]);
       const stateDir = createTestStateDir(
@@ -432,7 +434,7 @@ describe("iMessage monitor last-route updates", () => {
           expect.any(Object),
         );
       });
-      const expectedReadTarget = chatGuid ? { chat_guid: chatGuid } : { to: DEFAULT_SENDER };
+      const expectedReadTarget = chatGuid ? { chat_guid: chatGuid } : { chat_id: 123 };
       expect(auxiliaryClient.request).toHaveBeenCalledWith(
         "read",
         expect.objectContaining(expectedReadTarget),
@@ -441,16 +443,15 @@ describe("iMessage monitor last-route updates", () => {
       expect(auxiliaryClient.request).toHaveBeenCalledWith(
         "send",
         expect.objectContaining({
-          service: expectedService,
+          chat_id: 123,
           text: "reply over the originating service",
-          to: DEFAULT_SENDER,
         }),
         expect.any(Object),
       );
       const dispatchParams = dispatchReplyWithBufferedBlockDispatcherMock.mock.calls.at(0)?.[0];
       expect(dispatchParams?.ctx).toMatchObject({
         From: `${expectedService}:${DEFAULT_SENDER}`,
-        To: `${expectedService}:${DEFAULT_SENDER}`,
+        To: "chat_id:123",
       });
       await vi.waitFor(() => {
         expect(
@@ -682,6 +683,42 @@ describe("iMessage monitor last-route updates", () => {
       ],
     };
   }
+
+  it("delivers eight self-chat turns without counting their paired rows as echo loops", async () => {
+    const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() };
+    const texts = Array.from({ length: 8 }, (_, index) => `self-chat message ${index + 1}`);
+    const createdAt = new Date().toISOString();
+    await runMessageCase({
+      messages: texts.flatMap((text, index) =>
+        [true, false].map((isFromMe) =>
+          createInboundMessage({
+            id: index * 2 + (isFromMe ? 1 : 2),
+            guid: `self-chat-${index}-${isFromMe}`,
+            text,
+            chat_identifier: DEFAULT_SENDER,
+            is_from_me: isFromMe,
+            created_at: createdAt,
+            destination_caller_id: DEFAULT_SENDER,
+          }),
+        ),
+      ),
+      afterNotify: async () => {
+        await vi.waitFor(() => {
+          expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(texts.length);
+        });
+      },
+      monitor: { runtime },
+    });
+    expect(
+      dispatchReplyWithBufferedBlockDispatcherMock.mock.calls.map(
+        ([params]) => params.ctx.BodyForAgent,
+      ),
+    ).toEqual(texts);
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(
+      runtime.log.mock.calls.some(([message]) => String(message).includes("rate limiter tripped")),
+    ).toBe(false);
+  });
 
   it("waits for configured ACP target readiness before dispatching an authorized message", async () => {
     let releaseReadiness: ((value: { ok: true }) => void) | undefined;
@@ -1051,7 +1088,7 @@ describe("iMessage monitor last-route updates", () => {
 
     expect(readClient.request).toHaveBeenCalledWith(
       "read",
-      expect.objectContaining({ to: "+15550001111" }),
+      expect.objectContaining({ chat_id: 123 }),
       expect.any(Object),
     );
     expect(watchClient.request).not.toHaveBeenCalledWith(
@@ -1655,7 +1692,7 @@ describe("iMessage monitor last-route updates", () => {
           expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
         });
         const dispatchParams = dispatchReplyWithBufferedBlockDispatcherMock.mock.calls.at(0)?.[0];
-        expect(dispatchParams?.ctx.To).toBe("imessage:+15550000002");
+        expect(dispatchParams?.ctx.To).toBe("chat_id:42");
         expect(dispatchParams?.ctx.To).not.toBe("imessage:+15550000001");
       }
     });

@@ -21,7 +21,7 @@ const hoisted = vi.hoisted(() => ({
     (): Array<{
       sessionKey: string;
       entry: {
-        createdActor?: { type: "human"; id: string };
+        createdActor?: { type: "human"; source: "profile" | "channel" | "unknown"; id: string };
         incognito?: true;
         updatedAt?: number;
         visibility?: "shared" | "draft";
@@ -113,7 +113,10 @@ function setActors(entries: Array<[sessionKey: string, profileId: string]>) {
   hoisted.listSessionEntriesReadOnly.mockReturnValue(
     entries.map(([sessionKey, profileId], index) => ({
       sessionKey,
-      entry: { createdActor: { type: "human", id: profileId }, updatedAt: entries.length - index },
+      entry: {
+        createdActor: { type: "human", source: "profile", id: profileId },
+        updatedAt: entries.length - index,
+      },
     })),
   );
 }
@@ -235,6 +238,68 @@ describe("session catalog caller visibility", () => {
     expect(archive).not.toHaveBeenCalled();
   });
 
+  it.each(["channel", "unknown"] as const)(
+    "denies colliding %s creators across catalog operations",
+    async (source) => {
+      hoisted.listSessionEntriesReadOnly.mockReturnValue([
+        {
+          sessionKey: "agent:main:collision",
+          entry: {
+            createdActor: { type: "human", source, id: "profile-owner" },
+            visibility: "draft",
+          },
+        },
+      ]);
+      const read = vi.fn(async () => ({
+        hostId: "gateway:local",
+        threadId: "collision",
+        items: [],
+      }));
+      const continueSession = vi.fn(async () => ({ sessionKey: "agent:main:collision" }));
+      const archive = vi.fn(async () => ({ ok: true as const }));
+      hoisted.activeRegistry.sessionCatalogs = [
+        {
+          provider: provider({
+            list: vi.fn(async () => [host([session("collision", "agent:main:collision")])]),
+            read,
+            continueSession,
+            archive,
+          }),
+        },
+      ];
+      const cfg = roleConfig("none");
+      for (let pass = 0; pass < 2; pass++) {
+        const listed = await call("sessions.catalog.list", {}, client("profile-owner"), cfg);
+        expect(listed.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions).toEqual([]);
+      }
+      for (const method of [
+        "sessions.catalog.read",
+        "sessions.catalog.continue",
+        "sessions.catalog.archive",
+      ] as const) {
+        const result = await call(
+          method,
+          {
+            catalogId: "codex",
+            hostId: "gateway:local",
+            threadId: "collision",
+            ...(method === "sessions.catalog.archive" ? { confirmNoOtherRunner: true } : {}),
+          },
+          client("profile-owner"),
+          cfg,
+        );
+        expect(result).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ code: ErrorCodes.FORBIDDEN }),
+        );
+      }
+      expect(read).not.toHaveBeenCalled();
+      expect(continueSession).not.toHaveBeenCalled();
+      expect(archive).not.toHaveBeenCalled();
+    },
+  );
+
   it("hides every row from an unprofiled multi-identity caller", async () => {
     hoisted.hasMultipleSessionSharingIdentities.mockReturnValue(true);
     const listedHost = host([session("unadopted-thread")]);
@@ -352,7 +417,11 @@ describe("session catalog caller visibility", () => {
                 sessions: [
                   expect.objectContaining({
                     threadId: "owned-thread",
-                    createdActor: { type: "human", id: "profile-owner" },
+                    createdActor: {
+                      type: "human",
+                      id: "profile-owner",
+                      identity: { type: "profile", id: "profile-owner" },
+                    },
                   }),
                 ],
               }),
@@ -393,7 +462,7 @@ describe("session catalog caller visibility", () => {
     );
   });
 
-  it("isolates settled list cache entries between identities", async () => {
+  it("isolates settled provider enumeration and output between identities", async () => {
     hoisted.hasMultipleSessionSharingIdentities.mockReturnValue(true);
     setActors([
       ["agent:main:alpha", "profile-alpha"],
@@ -472,15 +541,24 @@ describe("session catalog caller visibility", () => {
       hoisted.listSessionEntriesReadOnly.mockReturnValue([
         {
           sessionKey: "agent:main:other",
-          entry: { createdActor: { type: "human", id: "profile-other" }, visibility: "shared" },
+          entry: {
+            createdActor: { type: "human", source: "profile", id: "profile-other" },
+            visibility: "shared",
+          },
         },
         {
           sessionKey: "agent:main:draft",
-          entry: { createdActor: { type: "human", id: "profile-other" }, visibility: "draft" },
+          entry: {
+            createdActor: { type: "human", source: "profile", id: "profile-other" },
+            visibility: "draft",
+          },
         },
         {
           sessionKey: "agent:main:private",
-          entry: { createdActor: { type: "human", id: "profile-other" }, incognito: true },
+          entry: {
+            createdActor: { type: "human", source: "profile", id: "profile-other" },
+            incognito: true,
+          },
         },
       ]);
       const read = vi.fn(async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }));
@@ -630,7 +708,7 @@ describe("session catalog caller visibility", () => {
     );
   });
 
-  it("partitions a settled catalog cache when one profile's effective role changes", async () => {
+  it("partitions settled provider enumeration when effective roles change", async () => {
     setActors([
       ["agent:main:owned", "profile-owner"],
       ["agent:main:other", "profile-other"],

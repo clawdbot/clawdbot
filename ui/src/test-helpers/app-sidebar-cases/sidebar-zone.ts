@@ -447,7 +447,7 @@ describe("AppSidebar interleaved zone", () => {
       expect(sessions.patch).toHaveBeenCalledWith(
         "agent:main:alpha",
         { pinned: true },
-        { agentId: "main" },
+        { agentId: "main", expectedSessionId: "session:agent:main:alpha" },
       ),
     );
     // The slot write waits for the pin patch to land.

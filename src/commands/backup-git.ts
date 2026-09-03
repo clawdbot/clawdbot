@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
+import { listAgentIds, resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -13,12 +13,13 @@ import {
   restoreGitBackupRef,
   verifyGitBackupRef,
 } from "../snapshot/git-backup.js";
-import { recordBackupRunOutcome } from "../state/backup-run-records.js";
-import { listOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db.js";
-import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { shortenHomePath } from "../utils.js";
-import { resolveRequiredBackupPath } from "./backup-shared.js";
+import {
+  recordBackupOutcomeBestEffort,
+  resolveBackupAgentRoot,
+  resolveRequiredBackupPath,
+} from "./backup-shared.js";
 
 type BackupGitCreateOptions = {
   repository?: string;
@@ -57,10 +58,13 @@ async function resolveCreateDatabases(runtime: RuntimeEnv, options: BackupGitCre
   if (!options.all && !explicit) {
     throw new Error("Choose at least one Git backup scope: --all, --global, or --agent <id>.");
   }
-  let agents: string[] = [];
-  if (normalizedAgents.length > 0) {
+  let agents: Array<{ agentId: string; databasePath: string }> = [];
+  if (options.all || normalizedAgents.length > 0) {
     const config = getRuntimeConfig({ skipPluginValidation: true });
-    agents = normalizedAgents.map((agent) => resolveConfiguredAgentId(config, agent));
+    const agentIds = options.all
+      ? listAgentIds(config).toSorted()
+      : normalizedAgents.map((agent) => resolveConfiguredAgentId(config, agent));
+    agents = await Promise.all(agentIds.map((agentId) => resolveBackupAgentRoot(config, agentId)));
   }
   const databases: Array<{
     path: string;
@@ -72,21 +76,15 @@ async function resolveCreateDatabases(runtime: RuntimeEnv, options: BackupGitCre
       identity: { role: "global" },
     });
   }
-  // Registry rows can carry stale or foreign absolute paths (deleted agents,
-  // retired temp state dirs), so --all resolves each distinct agent id to its
-  // canonical database under the current state dir and skips absent files
-  // instead of aborting the whole scheduled run on one dead registration.
-  const allAgentIds = options.all
-    ? [...new Set(listOpenClawRegisteredAgentDatabases().map((entry) => entry.agentId))].toSorted()
-    : agents;
-  for (const agentId of allAgentIds) {
-    const canonicalPath = resolveOpenClawAgentSqlitePath({ agentId });
+  // Config owns both the current roster and each agent root; durable registry
+  // rows can retain stale paths after an agent moves or is removed.
+  for (const { agentId, databasePath } of agents) {
     let resolvedPath: string;
     try {
-      resolvedPath = await fs.realpath(canonicalPath);
+      resolvedPath = await fs.realpath(databasePath);
     } catch (error) {
       if (options.all && (error as NodeJS.ErrnoException).code === "ENOENT") {
-        runtime.error(`Warning: skipping agent ${agentId}: no database at ${canonicalPath}`);
+        runtime.error(`Warning: skipping agent ${agentId}: no database at ${databasePath}`);
         continue;
       }
       throw error;
@@ -110,32 +108,6 @@ function resolveOneIdentity(options: BackupGitScopeOptions): GitBackupIdentity {
   return options.global === true
     ? { role: "global" }
     : { role: "agent", agentId: normalizeAgentId(agent) };
-}
-
-function recordGitOutcomeBestEffort(
-  runtime: RuntimeEnv,
-  params: {
-    repositoryPath: string;
-    status: "ok" | "failed";
-    target?: string;
-    error?: string;
-    pushFailed?: true;
-  },
-): void {
-  try {
-    recordBackupRunOutcome({
-      kind: "git",
-      archivePath: params.repositoryPath,
-      status: params.status,
-      target: params.target,
-      error: params.error,
-      pushFailed: params.pushFailed,
-    });
-  } catch (error) {
-    runtime.error(
-      `Warning: the Git backup outcome could not be recorded: ${formatErrorMessage(error)}`,
-    );
-  }
 }
 
 export async function backupGitInitCommand(
@@ -171,8 +143,9 @@ export async function backupGitCreateCommand(runtime: RuntimeEnv, options: Backu
     });
     // A completed local backup remains successful even when requested remote replication fails;
     // pushFailed records that durable degradation without discarding the recoverable local commit.
-    recordGitOutcomeBestEffort(runtime, {
-      repositoryPath,
+    recordBackupOutcomeBestEffort(runtime, {
+      kind: "git",
+      archivePath: repositoryPath,
       status: "ok",
       target: result.commit,
       error: result.pushWarning,
@@ -190,8 +163,9 @@ export async function backupGitCreateCommand(runtime: RuntimeEnv, options: Backu
     }
     return result;
   } catch (error) {
-    recordGitOutcomeBestEffort(runtime, {
-      repositoryPath,
+    recordBackupOutcomeBestEffort(runtime, {
+      kind: "git",
+      archivePath: repositoryPath,
       status: "failed",
       error: formatErrorMessage(error),
     });
@@ -263,6 +237,11 @@ export async function backupGitRestoreCommand(
     if (result.excludedTables.length > 0) {
       runtime.error(
         `Warning: this redacted backup omits tables: ${result.excludedTables.join(", ")}`,
+      );
+    }
+    if (result.excludedConfigStateKeyPrefixes.length > 0) {
+      runtime.error(
+        `Warning: this redacted backup omits machine-state values under: ${result.excludedConfigStateKeyPrefixes.join(", ")}`,
       );
     }
   }

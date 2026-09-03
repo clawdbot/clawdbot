@@ -6,29 +6,6 @@ type LocaleModule = Record<string, TranslationMap>;
 
 export const DEFAULT_LOCALE: Locale = "en";
 
-const LAZY_LOCALES: readonly LazyLocale[] = [
-  "zh-CN",
-  "zh-TW",
-  "pt-BR",
-  "de",
-  "es",
-  "ja-JP",
-  "ko",
-  "fr",
-  "hi",
-  "ar",
-  "it",
-  "tr",
-  "uk",
-  "id",
-  "pl",
-  "th",
-  "vi",
-  "nl",
-  "fa",
-  "ru",
-];
-
 const LAZY_LOCALE_REGISTRY: Record<LazyLocale, () => Promise<LocaleModule>> = {
   "zh-CN": () => import("../locales/zh-CN.ts"),
   "zh-TW": () => import("../locales/zh-TW.ts"),
@@ -51,6 +28,8 @@ const LAZY_LOCALE_REGISTRY: Record<LazyLocale, () => Promise<LocaleModule>> = {
   fa: () => import("../locales/fa.ts"),
   ru: () => import("../locales/ru.ts"),
 };
+// SAFETY: The record contract guarantees every own key is a LazyLocale.
+const LAZY_LOCALES = Object.keys(LAZY_LOCALE_REGISTRY) as LazyLocale[];
 
 export const SUPPORTED_LOCALES: ReadonlyArray<Locale> = [DEFAULT_LOCALE, ...LAZY_LOCALES];
 

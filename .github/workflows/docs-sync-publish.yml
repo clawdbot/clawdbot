@@ -10,8 +10,10 @@ on:
       - scripts/docs-sync-publish.mjs
       - scripts/check-docs-mdx.mjs
       - scripts/check-docs-mdx.mts
+      - scripts/lib/arg-utils.runtime.mjs
       - scripts/lib/mintlify-accordion.mjs
       - scripts/lib/tsx-cli-shim.mjs
+      - scripts/lib/local-check-runtime.mts
       - .github/workflows/docs-sync-publish.yml
   workflow_dispatch:
 
@@ -19,8 +21,12 @@ permissions:
   contents: read
 
 concurrency:
+  # cancel-in-progress starved the mirror: every main push cancelled the in-flight
+  # sync and cancelled runs leave no successor, so under sustained merge velocity
+  # openclaw/docs never advanced. Queue instead — GitHub keeps only the newest
+  # pending run per group, and skip_stale_source keeps completed runs idempotent.
   group: docs-sync-publish-${{ github.event_name == 'workflow_dispatch' && format('manual-{0}', github.run_id) || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+  cancel-in-progress: false
 
 jobs:
   sync-publish-repo:
@@ -49,6 +55,10 @@ jobs:
           persist-credentials: false
           token: ${{ env.OPENCLAW_DOCS_SYNC_TOKEN || github.token }}
 
+      - name: Prepare Git owner
+        if: env.OPENCLAW_DOCS_SYNC_TOKEN != ''
+        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+
       - name: Setup Node
         if: env.OPENCLAW_DOCS_SYNC_TOKEN != ''
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -59,24 +69,36 @@ jobs:
         if: env.OPENCLAW_DOCS_SYNC_TOKEN != ''
         run: |
           set -euo pipefail
-          for attempt in 1 2 3 4 5; do
-            rm -rf publish
-            if timeout --signal=TERM --kill-after=10s 120s git clone \
-              "https://x-access-token:${OPENCLAW_DOCS_SYNC_TOKEN}@github.com/openclaw/docs.git" \
-              publish; then
-              exit 0
-            fi
-            echo "Clone attempt ${attempt} failed; retrying."
-            sleep $((attempt * 2))
-          done
+          exec python3 -I -S "$CI_GIT_OWNER" --policy - <<'PYTHON'
+          import os
+          import subprocess
+          import sys
+          from ci_git_owner import run_git, GitFailure, FetchTimeout, backoff, check_cancelled
 
-          echo "Failed to clone publish repo after retries." >&2
-          exit 1
+          workspace = os.environ["GITHUB_WORKSPACE"]
+          publish = os.path.join(workspace, "publish")
+          for attempt in range(1, 6):
+              check_cancelled()
+              # Delete only this fixed entry, including a file or symlink, after
+              # the previous Git tree has been verified extinct.
+              subprocess.run(["rm", "-rf", publish], check=True)
+              try:
+                  run_git(workspace, "clone",
+                          f"https://x-access-token:{os.environ['OPENCLAW_DOCS_SYNC_TOKEN']}@github.com/openclaw/docs.git",
+                          publish, timeout=120)
+                  raise SystemExit(0)
+              except (GitFailure, FetchTimeout):
+                  print(f"Clone attempt {attempt} failed; retrying.", flush=True)
+                  backoff(attempt * 2)
+          print("Failed to clone publish repo after retries.", file=sys.stderr)
+          raise SystemExit(1)
+          PYTHON
 
       - name: Sync docs into publish repo
         if: env.OPENCLAW_DOCS_SYNC_TOKEN != ''
         run: |
-          clawhub_sha="$(git -C "$GITHUB_WORKSPACE/clawhub-source" rev-parse HEAD)"
+          set -euo pipefail
+          clawhub_sha="$(cd "$GITHUB_WORKSPACE/clawhub-source" && python3 -I -S "$CI_GIT_OWNER" --checkout-git 0 rev-parse HEAD)"
           node scripts/docs-sync-publish.mjs \
             --target "$GITHUB_WORKSPACE/publish" \
             --source-repo "$GITHUB_REPOSITORY" \
@@ -99,48 +121,80 @@ jobs:
         working-directory: publish
         run: |
           set -euo pipefail
-          remote_source_sha() {
-            git show refs/remotes/origin/main:.openclaw-sync/source.json 2>/dev/null \
-              | node -e 'const fs = require("node:fs"); try { const data = JSON.parse(fs.readFileSync(0, "utf8")); if (data.sha) process.stdout.write(data.sha); } catch {}' \
-              || true
-          }
+          exec python3 -I -S "$CI_GIT_OWNER" --policy - <<'PYTHON'
+          import json
+          import os
+          import subprocess
+          import tempfile
+          from ci_git_owner import run_git, GitFailure, FetchTimeout, backoff
 
-          skip_stale_source() {
-            current_source_sha="$(remote_source_sha)"
-            if [ -z "$current_source_sha" ] || [ "$current_source_sha" = "$GITHUB_SHA" ]; then
-              return
-            fi
+          publish = os.getcwd()
+          workspace = os.environ["GITHUB_WORKSPACE"]
+          source_sha = os.environ["GITHUB_SHA"]
 
-            if git -C "$GITHUB_WORKSPACE" merge-base --is-ancestor "$GITHUB_SHA" "$current_source_sha"; then
-              echo "Skipping stale publish sync for $GITHUB_SHA; origin/main already mirrors $current_source_sha."
-              exit 0
-            fi
-          }
+          def invalid_json_constant(value):
+              raise json.JSONDecodeError("Invalid JSON constant", value, 0)
 
-          if git diff --quiet -- docs .openclaw-sync; then
-            echo "No publish-repo changes."
-            exit 0
-          fi
+          def remote_source_sha():
+              try:
+                  with tempfile.TemporaryFile() as output:
+                      run_git(publish, "show", "refs/remotes/origin/main:.openclaw-sync/source.json",
+                              stdout=output, stderr=subprocess.DEVNULL)
+                      output.seek(0)
+                      data = json.loads(output.read().decode("utf-8", errors="replace"),
+                                        parse_constant=invalid_json_constant)
+                  sha = data.get("sha") if isinstance(data, dict) else None
+                  return sha.rstrip("\n") if isinstance(sha, str) else ""
+              except (GitFailure, json.JSONDecodeError):
+                  return ""
 
-          if timeout --signal=TERM --kill-after=10s 120s git fetch origin main:refs/remotes/origin/main; then
-            skip_stale_source
-          fi
+          def skip_stale_source():
+              current_source_sha = remote_source_sha()
+              if not current_source_sha or current_source_sha == source_sha:
+                  return
+              try:
+                  run_git(workspace, "merge-base", "--is-ancestor", source_sha, current_source_sha)
+              except GitFailure:
+                  return
+              print(f"Skipping stale publish sync for {source_sha}; origin/main already mirrors {current_source_sha}.")
+              raise SystemExit(0)
 
-          git config user.name "openclaw-docs-sync[bot]"
-          git config user.email "openclaw-docs-sync[bot]@users.noreply.github.com"
-          git add docs .openclaw-sync
-          git commit -m "chore(sync): mirror docs from $GITHUB_REPOSITORY@$GITHUB_SHA"
-          for attempt in 1 2 3 4 5; do
-            if timeout --signal=TERM --kill-after=10s 120s git fetch origin main:refs/remotes/origin/main; then
-              skip_stale_source
-              if git rebase -X theirs origin/main && git push origin HEAD:main; then
-                exit 0
-              fi
-            fi
-            git rebase --abort >/dev/null 2>&1 || true
-            echo "Publish sync attempt ${attempt} failed; retrying."
-            sleep $((attempt * 2))
-          done
+          try:
+              run_git(publish, "diff", "--quiet", "--", "docs", ".openclaw-sync")
+          except GitFailure:
+              pass
+          else:
+              print("No publish-repo changes.")
+              raise SystemExit(0)
 
-          echo "Failed to push publish-repo sync after retries."
-          exit 1
+          try:
+              run_git(publish, "fetch", "origin", "main:refs/remotes/origin/main", timeout=120, reclaim_locks=True)
+          except (GitFailure, FetchTimeout):
+              pass
+          else:
+              skip_stale_source()
+
+          run_git(publish, "config", "user.name", "openclaw-docs-sync[bot]", reclaim_locks=True)
+          run_git(publish, "config", "user.email", "openclaw-docs-sync[bot]@users.noreply.github.com", reclaim_locks=True)
+          run_git(publish, "add", "docs", ".openclaw-sync", reclaim_locks=True)
+          run_git(publish, "commit", "-m", f"chore(sync): mirror docs from {os.environ['GITHUB_REPOSITORY']}@{source_sha}", reclaim_locks=True)
+          for attempt in range(1, 6):
+              try:
+                  run_git(publish, "fetch", "origin", "main:refs/remotes/origin/main", timeout=120, reclaim_locks=True)
+                  skip_stale_source()
+                  run_git(publish, "rebase", "-X", "theirs", "origin/main", reclaim_locks=True)
+                  run_git(publish, "push", "origin", "HEAD:main", reclaim_locks=True)
+                  raise SystemExit(0)
+              except (GitFailure, FetchTimeout):
+                  # Only verified Git failure may reach abort/retry; ownership
+                  # uncertainty and cancellation escape the connected policy.
+                  try:
+                      run_git(publish, "rebase", "--abort", stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL, reclaim_locks=True)
+                  except GitFailure:
+                      pass
+                  print(f"Publish sync attempt {attempt} failed; retrying.", flush=True)
+                  backoff(attempt * 2)
+          print("Failed to push publish-repo sync after retries.")
+          raise SystemExit(1)
+          PYTHON

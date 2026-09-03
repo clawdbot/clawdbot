@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationOverlays } from "../../app/overlays-types.ts";
-import { dismissUpdateAttention } from "../../components/sidebar-attention-dismissals.ts";
+import {
+  dismissSidebarAttention,
+  resolveUpdateAttentionDismissal,
+} from "../../components/sidebar-attention-dismissals.ts";
 import { createGatewayHarness, createSessions, mountSidebar } from "../app-sidebar.ts";
 import "../../components/app-sidebar.ts";
 
@@ -33,10 +36,14 @@ describe("AppSidebar footer identity menu", () => {
       updateSchedule: null,
       updateStatusBanner: null,
     };
-    dismissUpdateAttention("ws://gateway.test", {
-      version: "2026.8.2",
+    const dismissal = resolveUpdateAttentionDismissal({
       gatewayBootId: "boot-a",
+      updateAvailable: context.overlays.snapshot.updateAvailable,
     });
+    if (!dismissal) {
+      throw new Error("expected update dismissal fact");
+    }
+    dismissSidebarAttention("ws://gateway.test", dismissal);
     sidebar.requestUpdate();
     await sidebar.updateComplete;
 

@@ -1123,10 +1123,10 @@ describe("ExecApprovalManager", () => {
     void manager.register(record, 60_000);
 
     delete record.executionIdentityToken;
-    expect(manager.forceDenyIfDelegatedAuthorityClosed(record.id)).toBeNull();
+    expect(manager.forceDenyIfRuntimeAuthorityClosed(record.id)).toBeNull();
     expect(manager.getSnapshot(record.id)?.resolvedAtMs).toBeUndefined();
     active = false;
-    expect(manager.forceDenyIfDelegatedAuthorityClosed(record.id)).toMatchObject({
+    expect(manager.forceDenyIfRuntimeAuthorityClosed(record.id)).toMatchObject({
       outcome: "denied",
     });
   });

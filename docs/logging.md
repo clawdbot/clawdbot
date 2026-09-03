@@ -254,6 +254,11 @@ is always emitted at `info` level regardless of
 `OPENCLAW_DEBUG_MODEL_TRANSPORT`, so basic model transport hygiene is visible
 without debug flags.
 
+`[anthropic] replayed thinking dropped: N block(s)` is a warning when Anthropic
+reports dropping invalidated thinking from replay. It includes the mismatch
+reasons and up to five affected message paths, not the thinking content. No
+debug flag is required.
+
 ### Trace correlation
 
 File logs are JSONL. When a log call carries a valid diagnostic trace context,
@@ -310,10 +315,17 @@ exec output, and patch summaries):
 - Sensitive-value redaction is always enabled.
 - `logging.redactPatterns`: list of regex strings that replaces the default set for log/transcript output. For Control UI tool payloads, custom patterns apply on top of the built-in defaults, so adding a pattern never weakens redaction of values already caught by the defaults.
 
-File logs and session transcripts stay JSONL, but matching secret values are
-masked before the line or message is written to disk. Redaction is best-effort:
+File logs use JSONL; active session transcripts live in the
+[per-agent SQLite database](/reference/database-schemas#database-layout). Matching
+secret values are masked before the line or message is persisted. Redaction is best-effort:
 it applies to text-bearing message content and log strings, not every
 identifier or binary payload field.
+
+Transcript redaction does not replace the live arguments used to execute tools.
+Canonical assistant tool-call IDs and matching tool-result IDs remain unchanged
+so stored history can correlate with live tool events. This exemption applies
+only to protocol metadata; the same values in arguments, results, or nested
+payloads still pass through redaction.
 
 Model-visible tool-result text uses narrower assignment matching so source code
 remains intact. Registered secrets and explicit credential forms, including

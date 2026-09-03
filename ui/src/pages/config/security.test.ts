@@ -169,7 +169,7 @@ describe("renderSecurity", () => {
     expect(page?.querySelector("[data-testid='security-editor']")).not.toBeNull();
   });
 
-  it("shows inherited defaults without reset actions", () => {
+  it("shows inherited default descriptions", () => {
     const container = document.createElement("div");
 
     render(
@@ -194,39 +194,5 @@ describe("renderSecurity", () => {
     expect(expectRowByTitle(container, "Tool profile").textContent).toContain(
       "Using default: Full",
     );
-    expect(container.querySelectorAll("button[aria-label='Reset to default']")).toHaveLength(0);
-  });
-
-  it("resets explicit browser and tool-profile overrides", () => {
-    const onBrowserEnabledReset = vi.fn();
-    const onToolProfileReset = vi.fn();
-    const container = document.createElement("div");
-
-    render(
-      renderSecurity(
-        createProps({
-          security: {
-            gatewayAuth: "token",
-            execPolicy: "allowlist",
-            browserEnabled: true,
-            browserEnabledOverridden: true,
-            toolProfile: "full",
-            toolProfileOverridden: true,
-          },
-          onBrowserEnabledReset,
-          onToolProfileReset,
-        }),
-      ),
-      container,
-    );
-
-    const browserRow = expectRowByTitle(container, "Browser enabled");
-    const profileRow = expectRowByTitle(container, "Tool profile");
-    expect(browserRow.textContent).toContain("Default: Enabled");
-    expect(profileRow.textContent).toContain("Default: Full");
-    browserRow.querySelector<HTMLButtonElement>("button[aria-label='Reset to default']")?.click();
-    profileRow.querySelector<HTMLButtonElement>("button[aria-label='Reset to default']")?.click();
-    expect(onBrowserEnabledReset).toHaveBeenCalledOnce();
-    expect(onToolProfileReset).toHaveBeenCalledOnce();
   });
 });

@@ -4,6 +4,7 @@ export type ResponsesToolCallIdentity = { itemId?: string; callId?: string };
 
 export type ResponsesToolCallState = ResponsesToolCallIdentity & {
   argumentStreamReliable: boolean;
+  outputIndex?: number;
 };
 
 type ResponsesToolCallEvent = {
@@ -58,10 +59,13 @@ export function createResponsesToolCallTracker<TState extends ResponsesToolCallS
   const resolveCompatible = (
     candidates: Iterable<TState>,
     identity: ResponsesToolCallIdentity,
+    allowUnmatchedIdentity: boolean,
   ): TState | undefined => {
     const uniqueCandidates = [...new Set(candidates)];
     if (!identity.itemId && !identity.callId) {
-      return uniqueCandidates.length === 1 ? uniqueCandidates.at(0) : undefined;
+      return allowUnmatchedIdentity && uniqueCandidates.length === 1
+        ? uniqueCandidates.at(0)
+        : undefined;
     }
     const compatible = uniqueCandidates.filter((state) => !identitiesConflict(state, identity));
     const matches = compatible.filter((state) => sharesIdentity(state, identity));
@@ -73,7 +77,10 @@ export function createResponsesToolCallTracker<TState extends ResponsesToolCallS
     // Only a sole active call may adopt an identity it did not already know.
     // Parallel calls require a positive match so missing indices stay fail-closed.
     const soleCompatible =
-      uniqueCandidates.length === 1 && compatible.length === 1 && matches.length === 0
+      allowUnmatchedIdentity &&
+      uniqueCandidates.length === 1 &&
+      compatible.length === 1 &&
+      matches.length === 0
         ? compatible.at(0)
         : undefined;
     return soleCompatible ? adoptIdentity(soleCompatible, identity) : undefined;
@@ -89,12 +96,14 @@ export function createResponsesToolCallTracker<TState extends ResponsesToolCallS
       if (indexedCalls.has(outputIndex)) {
         throw new Error(`Responses stream reused active tool-call output index ${outputIndex}`);
       }
+      state.outputIndex = outputIndex;
       indexedCalls.set(outputIndex, state);
     },
 
     resolve(
       event: ResponsesToolCallEvent,
       identity: ResponsesToolCallIdentity = readEventIdentity(event),
+      allowUnmatchedIdentity = true,
     ): TState | undefined {
       const outputIndex = readOutputIndex(event);
       if (outputIndex !== undefined) {
@@ -110,15 +119,20 @@ export function createResponsesToolCallTracker<TState extends ResponsesToolCallS
 
         // A compatibility stream may add calls without indices, then start
         // including them. Bind only the one identity-matched (or sole) candidate.
-        const unindexed = resolveCompatible(unindexedCalls, identity);
+        const unindexed = resolveCompatible(unindexedCalls, identity, allowUnmatchedIdentity);
         if (unindexed) {
           unindexedCalls.delete(unindexed);
+          unindexed.outputIndex = outputIndex;
           indexedCalls.set(outputIndex, unindexed);
         }
         return unindexed;
       }
 
-      return resolveCompatible([...indexedCalls.values(), ...unindexedCalls], identity);
+      return resolveCompatible(
+        [...indexedCalls.values(), ...unindexedCalls],
+        identity,
+        allowUnmatchedIdentity,
+      );
     },
 
     forget(toolCall: TState): void {
@@ -140,6 +154,11 @@ export function createResponsesToolCallTracker<TState extends ResponsesToolCallS
 
     hasActive(): boolean {
       return indexedCalls.size > 0 || unindexedCalls.size > 0;
+    },
+
+    hasExactlyActive(expected: readonly TState[]): boolean {
+      const active = new Set([...indexedCalls.values(), ...unindexedCalls]);
+      return active.size === expected.length && expected.every((state) => active.has(state));
     },
   };
 }

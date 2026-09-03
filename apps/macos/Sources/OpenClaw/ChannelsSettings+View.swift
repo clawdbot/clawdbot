@@ -142,7 +142,7 @@ extension ChannelsSettings {
             }
 
             HStack(spacing: 10) {
-                Text("Last check \(self.channelLastCheckText(channel))")
+                Text(String(format: String(localized: "Last check %@"), self.channelLastCheckText(channel)))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 if self.channelHasError(channel) {

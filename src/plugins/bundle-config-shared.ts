@@ -2,15 +2,16 @@
 import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { matchRootFileOpenFailure, type RootFileOpenFailure } from "../infra/boundary-file-read.js";
-import { readRootJsonObjectSync } from "../infra/json-files.js";
+import { isRecord } from "../utils.js";
 import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginBundleFormat } from "./manifest-types.js";
+import { parsePluginCacheJson, readPluginCacheFile } from "./plugin-cache-files.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 
 type ReadBundleJsonResult =
   | { ok: true; raw: Record<string, unknown> }
-  | { ok: false; error: string };
+  | { ok: false; error: string; reason?: "open" };
 
 type BundleServerRuntimeSupport = {
   hasSupportedServer: boolean;
@@ -24,19 +25,25 @@ export function readBundleJsonObject(params: {
   relativePath: string;
   onOpenFailure?: (failure: RootFileOpenFailure) => ReadBundleJsonResult;
 }): ReadBundleJsonResult {
-  const result = readRootJsonObjectSync({
+  const file = readPluginCacheFile({
     rootDir: params.rootDir,
     relativePath: params.relativePath,
-    boundaryLabel: "plugin root",
     rejectHardlinks: true,
+    maxBytes: null,
   });
-  if (result.ok) {
-    return { ok: true, raw: result.value };
+  if (!file.ok && file.failurePhase !== "read") {
+    const result = params.onOpenFailure?.(file.failure) ?? { ok: true as const, raw: {} };
+    return result.ok ? result : { ...result, reason: "open" };
   }
-  if (result.reason === "open") {
-    return params.onOpenFailure?.(result.failure) ?? { ok: true, raw: {} };
+  const parsed = file.ok
+    ? parsePluginCacheJson(file)
+    : { ok: false as const, error: file.failure.error };
+  if (!parsed.ok) {
+    return { ok: false, error: `failed to parse ${params.relativePath}: ${String(parsed.error)}` };
   }
-  return { ok: false, error: result.error };
+  return isRecord(parsed.value)
+    ? { ok: true, raw: structuredClone(parsed.value) }
+    : { ok: false, error: `${params.relativePath} must contain a JSON object` };
 }
 
 export function resolveBundleJsonOpenFailure(params: {
@@ -120,6 +127,7 @@ export function loadEnabledBundleConfig<TConfig, TDiagnostic>(params: {
     const activationState = resolveEffectivePluginActivationState({
       id: record.id,
       origin: record.origin,
+      channelIds: record.channels,
       config: normalizedPlugins,
       rootConfig: params.cfg,
       enabledByDefault: record.enabledByDefault,

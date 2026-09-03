@@ -137,6 +137,12 @@ export async function handleNextcloudTalkInbound(params: {
 
   const rawBody = message.text?.trim() ?? "";
   if (!rawBody) {
+    logInboundDrop({
+      log: (messageLocal) => runtime.log?.(messageLocal),
+      channel: CHANNEL_ID,
+      reason: `empty message body (mediaType=${message.mediaType})`,
+      target: message.senderId,
+    });
     return;
   }
 

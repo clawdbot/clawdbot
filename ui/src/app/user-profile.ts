@@ -24,7 +24,7 @@ export function resolveSelfPresenceUser(
   return entry?.user?.id ? entry.user : null;
 }
 
-/** Prefers local profile edits for the current presence identity only. */
+/** Gateway state owns live identity updates and local profile edits; hello may be stale. */
 export function resolveCurrentSelfUser({
   snapshotUser,
   presenceEntries,
@@ -34,10 +34,5 @@ export function resolveCurrentSelfUser({
   presenceEntries?: readonly PresenceEntry[];
   presenceInstanceId?: string;
 }): AuthenticatedUser | null {
-  const presenceUser = resolveSelfPresenceUser(presenceEntries ?? [], presenceInstanceId);
-  // Gateway state folds newer presence into snapshotUser, so a matching profile is
-  // either the latest presence projection or the local profile edit it should retain.
-  return snapshotUser && (!presenceUser || snapshotUser.id === presenceUser.id)
-    ? snapshotUser
-    : presenceUser;
+  return snapshotUser ?? resolveSelfPresenceUser(presenceEntries ?? [], presenceInstanceId);
 }

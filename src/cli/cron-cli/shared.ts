@@ -1,5 +1,6 @@
 // Shared cron CLI formatting, parsing, delivery preview, and warning helpers.
 import {
+  MAX_DATE_TIMESTAMP_MS,
   resolveExpiresAtMsFromDurationMs,
   timestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
@@ -15,18 +16,18 @@ import { resolveCronStaggerMs } from "../../cron/stagger.js";
 import type { CronDeliveryPreview, CronJob, CronSchedule } from "../../cron/types.js";
 import { danger } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { formatExactDuration } from "../../infra/format-time/format-duration-exact.js";
 import { formatDurationHuman } from "../../infra/format-time/format-duration.ts";
-import {
-  isOffsetlessIsoDateTime,
-  parseOffsetlessIsoDateTimeInTimeZone,
-} from "../../infra/format-time/parse-offsetless-zoned-datetime.js";
+import { parseOffsetlessIsoDateTimeInTimeZone } from "../../infra/format-time/parse-offsetless-zoned-datetime.js";
 import { formatTimestamp } from "../../logging/timestamps.js";
-import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import { defaultRuntime, ExitError, type RuntimeEnv } from "../../runtime.js";
+import { isOffsetlessIsoDateTime } from "../../shared/iso-time.js";
 import { formatLookupMiss } from "../error-format.js";
 import { rethrowExpectedCliError } from "../failure-output.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
 import { isJsonOutputModeActive } from "../json-output-mode.js";
+import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { parseDurationMs as parseSharedDurationMs } from "../parse-duration.js";
 
 function parseCronArgv(value: unknown, flag: string): string[] | undefined {
@@ -170,12 +171,12 @@ export function enrichCronJsonWithStatus(value: unknown): unknown {
 }
 
 function computeStatus(job: { enabled?: unknown; state?: unknown }): string {
-  if (!job.enabled) {
-    return "disabled";
-  }
   const state = asOptionalRecord(job.state) ?? {};
   if (state.runningAtMs) {
     return "running";
+  }
+  if (!job.enabled) {
+    return "disabled";
   }
   return typeof state.lastRunStatus === "string"
     ? state.lastRunStatus
@@ -196,17 +197,42 @@ function decorateStatusWithFailures(status: string, consecutiveErrors: number | 
   return failures > 99 ? `${status} (99+x)` : `${status} (${failures}x)`;
 }
 
-function formatCronStatusForDisplay(job: CronJob): string {
+function formatCronStatusForDisplay(job: CronJob) {
   const state = job.state ?? {};
-  if (computeStatus(job) === "disabled" && state.autoDisabled) {
-    return state.autoDisabled.reason === "schedule-errors"
-      ? "disabled (schedule)"
-      : `disabled (${state.autoDisabled.consecutiveErrors}x)`;
+  const status = computeStatus(job);
+  const streamDisabled =
+    job.enabled && job.schedule?.kind === "stream" && state.streamStatus === "disabled";
+  const undelivered = status === "ok" && state.lastDeliveryStatus === "not-delivered";
+  const suppressed =
+    undelivered && !streamDisabled && state.deliverySuppressionReason !== undefined;
+  // The recorded non-outcome, not completion success, distinguishes silence from failed best-effort delivery.
+  const color =
+    status === "error"
+      ? theme.error
+      : status === "running" || (undelivered && !suppressed)
+        ? theme.warn
+        : status === "ok"
+          ? theme.success
+          : theme.muted;
+  let label = decorateStatusWithFailures(status, state.consecutiveErrors);
+  if (streamDisabled) {
+    label = "disabled";
+  } else if (status === "disabled" && state.autoDisabled) {
+    label =
+      state.autoDisabled.reason === "schedule-errors"
+        ? "disabled (schedule)"
+        : `disabled (${state.autoDisabled.consecutiveErrors}x)`;
+  } else if (undelivered) {
+    label = suppressed ? "ok (suppressed)" : "ok (not delivered)";
   }
-  return decorateStatusWithFailures(computeStatus(job), state.consecutiveErrors);
+  return { label, color };
 }
 
 export function handleCronCliError(err: unknown) {
+  // Completed outcomes must reach CLI cleanup, not become new cron errors.
+  if (err instanceof ExitError) {
+    throw err;
+  }
   rethrowExpectedCliError(err);
   const missingJob = readCronJobNotFoundError(err);
   const message = missingJob ? formatCronLookupMiss(missingJob.jobId) : formatErrorMessage(err);
@@ -214,7 +240,7 @@ export function handleCronCliError(err: unknown) {
     throw missingJob ? new Error(message) : err;
   }
   defaultRuntime.error(danger(message));
-  defaultRuntime.exit(1);
+  exitCliAfterOutput(defaultRuntime, 1);
 }
 
 export const formatCronLookupMiss = (jobId: string) =>
@@ -260,10 +286,7 @@ export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
 export function parsePositiveCronDurationMs(input: string): number | null {
   try {
     const result = parseSharedDurationMs(input);
-    if (result <= 0) {
-      return null;
-    }
-    return result;
+    return result > 0 && result <= MAX_DATE_TIMESTAMP_MS ? result : null;
   } catch {
     return null;
   }
@@ -383,13 +406,9 @@ const formatCell = (value: unknown, width: number) => {
 };
 
 const formatIsoMinute = (iso: string) => {
-  const parsed = parseAbsoluteTimeMs(iso);
-  const d = new Date(parsed ?? Number.NaN);
-  if (Number.isNaN(d.getTime())) {
-    return "-";
-  }
-  const isoStr = d.toISOString();
-  return `${isoStr.slice(0, 10)} ${isoStr.slice(11, 16)}Z`;
+  const isoStr = timestampMsToIsoString(parseAbsoluteTimeMs(iso));
+  // Date.toISOString() has a fixed :ss.sssZ suffix but variable-width years.
+  return isoStr ? `${isoStr.slice(0, -8).replace("T", " ")}Z` : "-";
 };
 
 const formatSpan = (ms: number) => (ms < 60_000 ? "<1m" : formatDurationHuman(ms));
@@ -409,7 +428,7 @@ const formatSchedule = (schedule: CronSchedule | undefined, hasTrigger = false) 
     return `at ${formatIsoMinute(schedule.at)}${suffix}`;
   }
   if (schedule?.kind === "every") {
-    return `every ${formatDurationHuman(schedule.everyMs)}${suffix}`;
+    return `every ${formatExactDuration(schedule.everyMs)}${suffix}`;
   }
   if (schedule?.kind === "on-exit") {
     const cwd = schedule.cwd ? ` @ ${schedule.cwd}` : "";
@@ -417,7 +436,7 @@ const formatSchedule = (schedule: CronSchedule | undefined, hasTrigger = false) 
   }
   if (schedule?.kind === "stream") {
     const cwd = schedule.cwd ? ` @ ${schedule.cwd}` : "";
-    return `stream ${schedule.command.join(" ")}${cwd}`;
+    return `stream ${schedule.command.join(" ")}${cwd}${suffix}`;
   }
   if (schedule?.kind !== "cron") {
     return "-";
@@ -429,7 +448,7 @@ const formatSchedule = (schedule: CronSchedule | undefined, hasTrigger = false) 
   if (staggerMs <= 0) {
     return `${base} (exact)`;
   }
-  return `${base} (stagger ${formatDurationHuman(staggerMs)})`;
+  return `${base} (stagger ${formatExactDuration(staggerMs)})`;
 };
 
 export function coerceCronDeliveryPreviews(value: unknown): Map<string, CronDeliveryPreview> {
@@ -497,8 +516,8 @@ export function printCronList(
       CRON_NEXT_PAD,
     );
     const lastLabel = formatCell(formatRelative(state.lastRunAtMs, now), CRON_LAST_PAD);
-    const statusRaw = computeStatus(job);
-    const statusLabel = formatCell(formatCronStatusForDisplay(job), CRON_STATUS_PAD);
+    const status = formatCronStatusForDisplay(job);
+    const statusLabel = formatCell(status.label, CRON_STATUS_PAD);
     const targetLabel = formatCell(job.sessionTarget, CRON_TARGET_PAD);
     const deliveryPreview = opts?.deliveryPreviews?.get(job.id);
     const deliveryText = deliveryPreview
@@ -511,22 +530,6 @@ export function printCronList(
       job.payload?.kind === "agentTurn" ? job.payload.model : undefined,
       CRON_MODEL_PAD,
     );
-
-    const coloredStatus = (() => {
-      if (statusRaw === "ok") {
-        return colorize(rich, theme.success, statusLabel);
-      }
-      if (statusRaw === "error") {
-        return colorize(rich, theme.error, statusLabel);
-      }
-      if (statusRaw === "running") {
-        return colorize(rich, theme.warn, statusLabel);
-      }
-      if (statusRaw === "skipped") {
-        return colorize(rich, theme.muted, statusLabel);
-      }
-      return colorize(rich, theme.muted, statusLabel);
-    })();
 
     const coloredTarget =
       job.sessionTarget === "main"
@@ -543,7 +546,7 @@ export function printCronList(
       colorize(rich, theme.info, scheduleLabel),
       colorize(rich, theme.muted, nextLabel),
       colorize(rich, theme.muted, lastLabel),
-      coloredStatus,
+      colorize(rich, status.color, statusLabel),
       coloredTarget,
       deliveryPreview
         ? colorize(rich, theme.info, deliveryLabel)
@@ -576,6 +579,10 @@ export function printCronShow(
   runtime.log(`owner session: ${showValue(job.owner?.sessionKey)}`);
   runtime.log(`enabled: ${job.enabled ? "yes" : "no"}`);
   runtime.log(`schedule: ${showValue(formatSchedule(job.schedule, job.trigger !== undefined))}`);
+  if (job.schedule?.kind === "stream") {
+    runtime.log(`stream status: ${showValue(job.state.streamStatus)}`);
+    runtime.log(`stream error: ${showValue(job.state.streamError)}`);
+  }
   runtime.log(
     `trigger: ${job.trigger ? `once=${job.trigger.once === true ? "yes" : "no"}; evals=${job.state.triggerEvalCount ?? 0}; last eval=${formatRelative(job.state.lastTriggerEvalAtMs, Date.now())}; last fire=${formatRelative(job.state.lastTriggerFireAtMs, Date.now())}` : "-"}`,
   );
@@ -587,11 +594,12 @@ export function printCronShow(
   runtime.log(`delivery: ${showValue(preview.label)} (${showValue(preview.detail)})`);
   runtime.log(`next: ${formatRelative(job.state.nextRunAtMs, Date.now())}`);
   runtime.log(`last: ${formatRelative(job.state.lastRunAtMs, Date.now())}`);
-  runtime.log(`status: ${showValue(formatCronStatusForDisplay(job))}`);
+  runtime.log(`status: ${showValue(formatCronStatusForDisplay(job).label)}`);
   // lastError is the run/schedule failure message; the diagnostic line below is
   // the run-diagnostics summary and can be empty when only lastError is set.
   runtime.log(`last error: ${showValue(job.state.lastError)}`);
   runtime.log(`last delivery: ${showValue(job.state.lastDeliveryStatus)}`);
+  runtime.log(`last delivery suppression: ${showValue(job.state.deliverySuppressionReason)}`);
   runtime.log(`last delivery error: ${showValue(job.state.lastDeliveryError)}`);
   runtime.log(`diagnostic: ${showValue(job.state.lastDiagnosticSummary)}`);
 }

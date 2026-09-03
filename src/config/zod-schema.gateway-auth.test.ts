@@ -86,6 +86,16 @@ describe("gateway operator role config", () => {
     },
   );
 
+  test.each(["inherit", "required"])("accepts the closed sandbox policy %s", (sandbox) => {
+    const result = OpenClawSchema.safeParse({
+      gateway: {
+        roles: { default: "guest", definitions: { guest: { ...validRole, sandbox } } },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
   test.each([
     { name: "all agents and explicit admin scope", agents: "*", scopes: ["operator.admin"] },
     { name: "an empty agent allowlist", agents: [], scopes: ["operator.read"] },
@@ -101,6 +111,7 @@ describe("gateway operator role config", () => {
 
   test.each([
     { name: "unknown session permission", role: { ...validRole, sessions: { others: "edit" } } },
+    { name: "unknown sandbox policy", role: { ...validRole, sandbox: "optional" } },
     { name: "unknown operator scope", role: { ...validRole, scopes: ["operator.superuser"] } },
     { name: "resource wildcard expression", role: { ...validRole, agents: "agent:*" } },
     { name: "wildcard in an agent allowlist", role: { ...validRole, agents: ["*"] } },

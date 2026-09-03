@@ -1,9 +1,6 @@
 // Local subprocess-backed remote bridge fixtures shared by focused sandbox tests.
 import { spawnSync } from "node:child_process";
-import {
-  SANDBOX_CREATE_EXISTS_EXIT_CODE,
-  SANDBOX_PINNED_MUTATION_PYTHON,
-} from "./fs-bridge-mutation-helper.js";
+import { SANDBOX_CREATE_EXISTS_EXIT_CODE } from "./fs-bridge-mutation-python.js";
 import type { RemoteShellSandboxHandle } from "./remote-fs-bridge.types.js";
 
 export type LocalRemoteShellSpawnResult = {
@@ -20,7 +17,7 @@ export type LocalRemoteShellSpawn = (
   stdin?: string | Buffer,
 ) => LocalRemoteShellSpawnResult;
 
-const PINNED_MUTATION_MARKER = 'python3 /dev/fd/3 "$@" 3<<';
+const PINNED_MUTATION_MARKER = 'python3 -c "$python_script" "$@"';
 
 function spawnLocalRemoteShell(file: string, args: string[], stdin?: string | Buffer) {
   return spawnSync(file, args, {
@@ -39,22 +36,13 @@ export function createLocalRemoteShellScriptRunner(params?: {
     params?.onCommand?.(command);
     const runsPinnedMutation = command.script.includes(PINNED_MUTATION_MARKER);
     const spawn = params?.spawn ?? spawnLocalRemoteShell;
-    const result = runsPinnedMutation
-      ? spawn(
-          "python3",
-          ["-c", SANDBOX_PINNED_MUTATION_PYTHON, ...(command.args ?? [])],
-          command.stdin,
-        )
-      : spawn(
-          "sh",
-          [
-            "-c",
-            command.script,
-            params?.shellArg0 ?? "openclaw-sandbox-fs",
-            ...(command.args ?? []),
-          ],
-          command.stdin,
-        );
+    // Execute the remote command unchanged, with helper source separate from
+    // stdin so mutation payload bytes reach the Python process intact.
+    const result = spawn(
+      "/bin/sh",
+      ["-c", command.script, params?.shellArg0 ?? "openclaw-sandbox-fs", ...(command.args ?? [])],
+      command.stdin,
+    );
     const stdout = Buffer.isBuffer(result.stdout)
       ? result.stdout
       : Buffer.from(result.stdout ?? []);

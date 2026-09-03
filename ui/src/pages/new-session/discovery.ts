@@ -20,6 +20,9 @@ export type DraftBranches = {
 
 export type DraftRepositoryState =
   | { kind: "idle" }
+  // Selected GitHub projects offer isolation before checkout exists. Local first
+  // turns prepare after admission; remote placement materializes before dispatch.
+  | { kind: "pending-clone"; cloneUrl: string }
   | { kind: "checking"; repoRoot: string }
   | ({ kind: "git" } & DraftBranches)
   | { kind: "direct"; repoRoot: string }
@@ -29,7 +32,7 @@ export type DraftCloudProfile = {
   id: string;
   providerId: string;
   trust?: "persistent" | "disposable";
-  executionMode?: WorkerExecutionMode;
+  executionModes?: readonly WorkerExecutionMode[];
   machines?: DraftMachineOption[];
 };
 
@@ -59,8 +62,6 @@ export type DraftEnvironment = {
   issues?: RuntimeTargetIssue[];
 };
 
-export type BrowserTarget = { nodeId: string; label: string };
-
 function normalizeTimestamp(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0
     ? Math.trunc(value)
@@ -88,6 +89,25 @@ function readRuntimeTargetIssues(value: unknown): RuntimeTargetIssue[] | undefin
   return issues.length > 0 ? issues : undefined;
 }
 
+function readDraftCloudProfileExecutionModes(value: unknown): readonly WorkerExecutionMode[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  if (value.length === 1 && (value[0] === "worker-turn" || value[0] === "remote-exec")) {
+    return [value[0]];
+  }
+  return value.length === 2 && value[0] === "worker-turn" && value[1] === "remote-exec"
+    ? ["worker-turn", "remote-exec"]
+    : [];
+}
+
+export function draftCloudProfileSupportsExecutionMode(
+  profile: DraftCloudProfile,
+  executionMode: WorkerExecutionMode,
+): boolean {
+  return profile.executionModes?.includes(executionMode) === true;
+}
+
 export function readDraftCloudProfiles(value: unknown): DraftCloudProfile[] {
   return (Array.isArray(value) ? value : [])
     .flatMap<DraftCloudProfile>((raw) => {
@@ -98,7 +118,7 @@ export function readDraftCloudProfiles(value: unknown): DraftCloudProfile[] {
         id?: unknown;
         providerId?: unknown;
         trust?: unknown;
-        executionMode?: unknown;
+        executionModes?: unknown;
         machines?: unknown;
       };
       const id = normalizeOptionalString(profile.id);
@@ -110,13 +130,17 @@ export function readDraftCloudProfiles(value: unknown): DraftCloudProfile[] {
         profile.trust === "persistent" || profile.trust === "disposable"
           ? profile.trust
           : undefined;
-      const executionMode: WorkerExecutionMode | undefined =
-        profile.executionMode === "worker-turn" || profile.executionMode === "remote-exec"
-          ? profile.executionMode
-          : undefined;
       const machines = readDraftMachineOptions(profile.machines);
       return [
-        { id, providerId, trust, executionMode, ...(machines.length > 0 ? { machines } : {}) },
+        {
+          id,
+          providerId,
+          trust,
+          ...(Object.hasOwn(profile, "executionModes")
+            ? { executionModes: readDraftCloudProfileExecutionModes(profile.executionModes) }
+            : {}),
+          ...(machines.length > 0 ? { machines } : {}),
+        },
       ];
     })
     .toSorted((left, right) => left.id.localeCompare(right.id));

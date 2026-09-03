@@ -509,7 +509,8 @@ export async function activatePreparedManualRun(
       state,
       job: activatedJob,
       startedAt,
-      publicRunId: prepared.runId ?? activation.runReceipt.receiptId,
+      runReceipt: activation.runReceipt,
+      publicRunId: prepared.runId,
     });
     const taskRunId = taskRun?.runId;
     const activeJobMarker = markManualCronJobActive(state, job);

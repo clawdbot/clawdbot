@@ -1,20 +1,19 @@
 // Summarizes heartbeat config for CLI and UI display.
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { listAgentEntries, resolveAgentConfig } from "../agents/agent-scope.js";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   DEFAULT_HEARTBEAT_EVERY,
   resolveHeartbeatPromptCore as resolveHeartbeatPromptText,
 } from "../auto-reply/heartbeat.js";
-import { parseDurationMs } from "../cli/parse-duration.js";
-import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { tryResolveAmbientHeartbeatAgentId } from "./heartbeat-agent-resolution.js";
+import {
+  resolveHeartbeatAgents,
+  resolveHeartbeatConfig,
+  resolveHeartbeatIntervalMs,
+} from "./heartbeat-config.js";
 
-// Heartbeat summaries merge default and per-agent heartbeat config for CLI/UI
-// display without scheduling any work.
-type HeartbeatConfig = AgentDefaultsConfig["heartbeat"];
+export { resolveHeartbeatIntervalMs };
 
 /** Normalized heartbeat configuration for one agent. */
 export type HeartbeatSummary = {
@@ -30,63 +29,13 @@ export type HeartbeatSummary = {
 
 const DEFAULT_HEARTBEAT_TARGET = "owner";
 
-function hasExplicitHeartbeatAgents(cfg: OpenClawConfig) {
-  const list = listAgentEntries(cfg);
-  return list.some((entry) => Boolean(entry?.heartbeat));
-}
-
 /** Return whether heartbeat scheduling applies to an agent. */
 export function isHeartbeatEnabledForAgent(cfg: OpenClawConfig, agentId?: string): boolean {
-  const ambientAgentId = tryResolveAmbientHeartbeatAgentId(cfg);
-  if (agentId === undefined && ambientAgentId === undefined) {
-    return false;
-  }
-  const resolvedAgentId = normalizeAgentId(agentId ?? ambientAgentId);
-  const list = listAgentEntries(cfg);
-  const hasExplicit = hasExplicitHeartbeatAgents(cfg);
-  if (hasExplicit) {
-    return list.some(
-      (entry) => Boolean(entry?.heartbeat) && normalizeAgentId(entry?.id) === resolvedAgentId,
-    );
-  }
-  if (cfg.agents?.defaults?.heartbeat) {
-    const configuredAgentId = normalizeOptionalString(cfg.agents.defaults.heartbeat.agentId);
-    if (configuredAgentId) {
-      return resolvedAgentId === normalizeAgentId(configuredAgentId);
-    }
-    return true;
-  }
-  return ambientAgentId !== undefined && resolvedAgentId === ambientAgentId;
-}
-
-/** Resolve a heartbeat interval string to milliseconds. */
-export function resolveHeartbeatIntervalMs(
-  cfg: OpenClawConfig,
-  overrideEvery?: string,
-  heartbeat?: HeartbeatConfig,
-) {
-  const raw =
-    overrideEvery ??
-    heartbeat?.every ??
-    cfg.agents?.defaults?.heartbeat?.every ??
-    DEFAULT_HEARTBEAT_EVERY;
-  if (!raw) {
-    return null;
-  }
-  const trimmed = normalizeOptionalString(raw) ?? "";
-  if (!trimmed) {
-    return null;
-  }
-  let ms: number;
-  try {
-    ms = parseDurationMs(trimmed, { defaultUnit: "m" });
-  } catch {
-    return null;
-  }
-  if (ms <= 0) {
-    return null;
-  }
-  return ms;
+  const resolvedAgentId = agentId ?? tryResolveAmbientHeartbeatAgentId(cfg);
+  return (
+    resolvedAgentId !== undefined &&
+    resolveHeartbeatAgents(cfg).some((agent) => agent.agentId === normalizeAgentId(resolvedAgentId))
+  );
 }
 
 /** Resolve display-ready heartbeat settings for an agent. */
@@ -94,9 +43,7 @@ export function resolveHeartbeatSummaryForAgent(
   cfg: OpenClawConfig,
   agentId?: string,
 ): HeartbeatSummary {
-  const defaults = cfg.agents?.defaults?.heartbeat;
-  const overrides = agentId ? resolveAgentConfig(cfg, agentId)?.heartbeat : undefined;
-  const merged = defaults || overrides ? { ...defaults, ...overrides } : undefined;
+  const merged = resolveHeartbeatConfig(cfg, agentId);
   const everyMs = resolveHeartbeatIntervalMs(cfg, undefined, merged);
   const enabled = isHeartbeatEnabledForAgent(cfg, agentId) && everyMs !== null;
 

@@ -44,48 +44,48 @@ describe("managed llama-server", () => {
       "arm64",
       "metal",
       "tar.gz",
-      "llama-b10453-bin-macos-arm64.tar.gz",
-      "f1531b1c520f8b473d83352c5eec2f4f43bd0a54f9ca1366a6f202211cfbc098",
+      "llama-b10534-bin-macos-arm64.tar.gz",
+      "51f193eef26b053554e288fb924b24d41d3d7b2bafa338c19e2817fa793d5e86",
     ],
     [
       "darwin",
       "x64",
       "cpu",
       "tar.gz",
-      "llama-b10453-bin-macos-x64.tar.gz",
-      "ac13f6f6c90c193765921bf52dd5ecf2a9d506ee9c3eadd2d6fd49ca7a5de25d",
+      "llama-b10534-bin-macos-x64.tar.gz",
+      "69b13035f4301354922a8cfacd1bcf2bb2de4ff0c2e19fedb44963378ff53dc5",
     ],
     [
       "linux",
       "arm64",
       "cpu",
       "tar.gz",
-      "llama-b10453-bin-ubuntu-arm64.tar.gz",
-      "b164e72dfb69c711275178e0d0fae54748042f039e4fe7386f1c0ea7019c109c",
+      "llama-b10534-bin-ubuntu-arm64.tar.gz",
+      "66535de5cb9293c075a1951c51a3b2ae6f1899623e21177845f6d2a73b78c94e",
     ],
     [
       "linux",
       "x64",
       "cpu",
       "tar.gz",
-      "llama-b10453-bin-ubuntu-x64.tar.gz",
-      "550eb155a09c3051c7add5becf6d0badc3a4c33416807985963036b27b859fb4",
+      "llama-b10534-bin-ubuntu-x64.tar.gz",
+      "cc6a12b026edcf1b211be2bb7366c5dadcad778fd8f13019d0694038053d5e4a",
     ],
     [
       "win32",
       "arm64",
       "cpu",
       "zip",
-      "llama-b10453-bin-win-cpu-arm64.zip",
-      "a8b984d478700777d4671cf33eccfddae42c1fd871e78efd43fee090131eec1f",
+      "llama-b10534-bin-win-cpu-arm64.zip",
+      "d33618b10fda35d34d85da60926c6c470f98f3f66ce6b52c3c1f583461416012",
     ],
     [
       "win32",
       "x64",
       "cpu",
       "zip",
-      "llama-b10453-bin-win-cpu-x64.zip",
-      "70c07211d0027305f0be09cd755d79641ebb0bb646590ff3d498c66b22df29b0",
+      "llama-b10534-bin-win-cpu-x64.zip",
+      "295ae03ad58d9276afa36f5f8d111d67fc1491c7aff3a3e6d13051a772f93c21",
     ],
   ] as const)(
     "selects the pinned %s/%s asset",
@@ -123,10 +123,13 @@ describe("managed llama-server", () => {
 
     try {
       await prepareManagedLlamaServer({
-        chatModelId: "chat-model",
-        chatModelPath: "/models/chat.gguf",
-        contextSize: 8192,
-        maxTokens: 2048,
+        chatModel: {
+          mode: "configure",
+          id: "chat-model",
+          path: "/models/chat.gguf",
+          contextSize: 8192,
+          maxTokens: 2048,
+        },
         embeddingModelIsDefault: true,
         embeddingModelPath: "/models/embedding.gguf",
         port: 19_432,
@@ -157,7 +160,13 @@ describe("managed llama-server", () => {
     });
 
     try {
+      await fs.writeFile(
+        presetPath,
+        "version = 1\n\n[stale-chat]\nmodel = /models/stale-chat.gguf\n\n" +
+          "[embeddinggemma-300m-qat-q8_0]\nmodel = /models/old-embedding.gguf\nembedding = true\n",
+      );
       await prepareManagedLlamaServer({
+        chatModel: { mode: "remove" },
         embeddingModelPath: "/models/custom-embedding.gguf",
         port: 19_432,
       });
@@ -194,6 +203,7 @@ describe("managed llama-server", () => {
       ]);
       await Promise.all([
         prepareManagedLlamaServer({
+          chatModel: { mode: "preserve" },
           embeddingModelPath,
           port: 19_434,
         }),
@@ -302,4 +312,67 @@ describe("managed llama-server", () => {
       },
     });
   });
+
+  it.each(["metrics", "props"] as const)(
+    "bounds %s inspection responses while accepting a legitimate large body",
+    async (endpoint) => {
+      let padding = "x".repeat(1024 * 1024);
+      const server = http.createServer((req, res) => {
+        if (req.url?.startsWith(`/${endpoint}?`)) {
+          res.setHeader("content-type", endpoint === "metrics" ? "text/plain" : "application/json");
+          res.end(endpoint === "metrics" ? padding : JSON.stringify({ padding }));
+          return;
+        }
+        res.setHeader("content-type", "application/json");
+        if (req.url === "/health") {
+          res.end(JSON.stringify({ status: "ok" }));
+          return;
+        }
+        if (req.url === "/models") {
+          res.end(JSON.stringify({ data: [{ id: "embedding-model" }] }));
+          return;
+        }
+        if (req.url?.startsWith("/props?")) {
+          res.end(JSON.stringify({ modalities: { vision: false } }));
+          return;
+        }
+        if (req.url?.startsWith("/metrics?")) {
+          res.setHeader("content-type", "text/plain");
+          res.end("llamacpp:requests_total 1\n");
+          return;
+        }
+        res.statusCode = 404;
+        res.end("{}");
+      });
+      servers.push(server);
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("missing test server address");
+      }
+      const inspect = () =>
+        inspectLlamaServerRuntime({
+          baseUrl: `http://127.0.0.1:${address.port}/v1`,
+          modelId: "embedding-model",
+        });
+
+      await expect(inspect()).resolves.toMatchObject({
+        state: "ready",
+        endpoints: { health: "ready", models: "ready", props: "ready", metrics: "ready" },
+      });
+
+      padding = "x".repeat(32 * 1024 * 1024);
+      await expect(inspect()).resolves.toMatchObject({
+        state: "failed",
+        endpoints: {
+          health: "ready",
+          models: "ready",
+          props: endpoint === "props" ? "unavailable" : "ready",
+          metrics: endpoint === "metrics" ? "unavailable" : "ready",
+        },
+      });
+    },
+  );
 });

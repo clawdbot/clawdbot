@@ -58,6 +58,50 @@ describe("buildGatewayRuntimeHints", () => {
     expect(hints.join("\n")).not.toContain("systemd user services are unavailable");
   });
 
+  it("classifies systemd recovery from structured inspection diagnostics", () => {
+    const hints = buildGatewayRuntimeHints(
+      {
+        status: "unknown",
+        detail: "service runtime inspection failed; retry with openclaw status --deep",
+        inspectionFailure: {
+          code: "service-runtime-inspection-failed",
+          detail: "systemctl --user unavailable: Failed to connect to bus",
+        },
+      },
+      { platform: "linux", env: {} },
+    );
+
+    expect(hints.some((hint) => hint.includes("systemd user services are unavailable"))).toBe(true);
+  });
+
+  it.each([
+    {
+      env: { OPENCLAW_PROFILE: "blue" },
+      command: "openclaw --profile blue gateway",
+    },
+    {
+      env: { OPENCLAW_CONTAINER_HINT: "sandbox" },
+      command: "openclaw --container sandbox gateway",
+    },
+    {
+      env: { OPENCLAW_PROFILE: "blue", OPENCLAW_CONTAINER_HINT: "sandbox" },
+      command: "openclaw --container sandbox gateway",
+    },
+  ])("preserves the active target in systemd recovery commands: $command", ({ env, command }) => {
+    const hints = buildGatewayRuntimeHints(
+      {
+        status: "unknown",
+        detail: "systemctl --user unavailable: Failed to connect to bus",
+      },
+      { platform: "linux", env },
+    );
+
+    expect(hints.some((hint) => hint.includes(command))).toBe(true);
+    expect(hints.some((hint) => hint.includes("headless server"))).toBe(
+      !env.OPENCLAW_CONTAINER_HINT,
+    );
+  });
+
   it("guides recovery when systemd hit its restart start limit (crash loop)", () => {
     // Real give-up shape: process kept failing (Result=exit-code) until NRestarts
     // reached StartLimitBurst and systemd stopped restarting.

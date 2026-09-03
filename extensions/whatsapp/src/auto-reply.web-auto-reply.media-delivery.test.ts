@@ -146,20 +146,16 @@ describe("web auto-reply media delivery", () => {
   }
 
   function fetchResponse(body: Buffer | null, mime: string, status = 200): Response {
-    return {
-      ok: status < 400,
-      body: body ? true : null,
-      arrayBuffer: async () =>
-        body
-          ? body.buffer.slice(body.byteOffset, body.byteOffset + body.length)
-          : new ArrayBuffer(0),
-      headers: new Headers({ "content-type": mime }),
+    return new Response(body ? Uint8Array.from(body) : null, {
+      headers: { "content-type": mime },
       status,
-    } as unknown as Response;
+    });
   }
 
   function mockFetchMediaBuffer(buffer: Buffer, mime: string) {
-    return vi.spyOn(globalThis, "fetch").mockResolvedValue(fetchResponse(buffer, mime));
+    return vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => fetchResponse(buffer, mime));
   }
 
   async function expectCompressedImageWithinCap(params: {

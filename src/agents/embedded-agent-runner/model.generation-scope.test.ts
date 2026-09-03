@@ -1,13 +1,35 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
-import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
+import { AuthStorage, ModelRegistry } from "../sessions/index.js";
+import { guardModelFixtureAuth } from "./model.fixture.test-support.js";
 import {
   createModelGenerationFixture,
   publishCurrentModelGeneration,
   resetModelGenerationFixtureState,
 } from "./model.generation-scope.test-support.js";
-import { resolveModel, resolveModelAsync } from "./model.js";
+import { resolveModelAsync } from "./model.js";
+
+let state: OpenClawTestState;
+let auth: ReturnType<typeof guardModelFixtureAuth>;
+beforeEach(async () => {
+  state = await createOpenClawTestState({ label: "model-generation" });
+  auth = guardModelFixtureAuth(state.root);
+});
+afterEach(async () => {
+  try {
+    auth.verify();
+    expect(auth.spy).toHaveBeenCalled();
+  } finally {
+    auth.spy.mockRestore();
+    await state.cleanup();
+  }
+});
 
 async function resolveGeneration(generation: ReturnType<typeof createModelGenerationFixture>) {
   const { preparedModelRuntime } = generation;
@@ -33,13 +55,70 @@ describe("model runtime generation scope", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     resetModelGenerationFixtureState();
+  });
+
+  it.each([
+    { auth: true, registry: true },
+    { auth: true, registry: false },
+    { auth: false, registry: true },
+    { auth: false, registry: false },
+  ])("fills only missing discovery stores (auth=$auth, registry=$registry)", async (supplied) => {
+    const generation = createModelGenerationFixture({
+      agentDir: state.agentDir(),
+      workspaceDir: state.workspaceDir,
+      config: {},
+      label: "stores",
+    });
+    const { preparedModelRuntime } = generation;
+    const stores = preparedModelRuntime.createStores();
+    stores.authStorage.setRuntimeApiKey(generation.provider, "fixture-runtime-key");
+    const preparedStores = vi.spyOn(preparedModelRuntime, "createStores");
+    const emptyAuth = vi.spyOn(AuthStorage, "inMemory");
+    const emptyRegistry = vi.spyOn(ModelRegistry, "inMemory");
+
+    const result = await resolveModelAsync(
+      generation.provider,
+      generation.modelId,
+      preparedModelRuntime.agentDir,
+      preparedModelRuntime.config,
+      {
+        ...(supplied.auth ? { authStorage: stores.authStorage } : {}),
+        ...(supplied.registry ? { modelRegistry: stores.modelRegistry } : {}),
+        preparedModelRuntime,
+        skipAgentDiscovery: true,
+        workspaceDir: preparedModelRuntime.workspaceDir,
+      },
+    );
+
+    expect(preparedStores).not.toHaveBeenCalled();
+    const allocations = supplied.auth && supplied.registry ? 0 : 1;
+    expect(emptyAuth).toHaveBeenCalledTimes(allocations);
+    expect(emptyRegistry).toHaveBeenCalledTimes(allocations);
+    expect(result.authStorage === stores.authStorage).toBe(supplied.auth);
+    expect(result.modelRegistry === stores.modelRegistry).toBe(supplied.registry);
+    const model = expectDefined(result.model, "resolved fixture model");
+    expect(await result.modelRegistry.getApiKeyAndHeaders(model)).toMatchObject({
+      apiKey: supplied.auth || supplied.registry ? "fixture-runtime-key" : undefined,
+    });
   });
 
   it("keeps alias, suppression, static metadata, and runtime hooks on the prepared generation", async () => {
     const config = {} satisfies OpenClawConfig;
-    const generationA = createModelGenerationFixture({ config, label: "a" });
-    const generationB = createModelGenerationFixture({ config, label: "b", suppress: true });
+    const generationA = createModelGenerationFixture({
+      agentDir: state.agentDir(),
+      workspaceDir: state.workspaceDir,
+      config,
+      label: "a",
+    });
+    const generationB = createModelGenerationFixture({
+      agentDir: state.agentDir(),
+      workspaceDir: state.workspaceDir,
+      config,
+      label: "b",
+      suppress: true,
+    });
     publishCurrentModelGeneration(generationB);
 
     const result = await resolveGeneration(generationA);
@@ -69,42 +148,57 @@ describe("model runtime generation scope", () => {
       await gate;
     };
     const generationA = createModelGenerationFixture({
+      agentDir: state.agentDir(),
+      workspaceDir: state.workspaceDir,
       config,
       label: "a",
       prepareDynamicModel,
     });
     const generationB = createModelGenerationFixture({
+      agentDir: state.agentDir(),
+      workspaceDir: state.workspaceDir,
       config,
       label: "b",
       prepareDynamicModel,
     });
     publishCurrentModelGeneration(generationB);
 
-    const [resultA, resultB] = await Promise.all([
-      resolveGeneration(generationA),
-      resolveGeneration(generationB),
-    ]);
-
-    expect(resultA.model).toMatchObject({
-      provider: generationA.provider,
-      name: "Runtime A",
-      mediaInput: { image: generationA.staticImagePolicy },
-    });
-    expect(resultB.model).toMatchObject({
-      provider: generationB.provider,
-      name: "Runtime B",
-      mediaInput: { image: generationB.staticImagePolicy },
-    });
+    const resolutions = [resolveGeneration(generationA), resolveGeneration(generationB)] as const;
+    try {
+      const [resultA, resultB] = await Promise.all(resolutions);
+      expect(resultA.model).toMatchObject({
+        provider: generationA.provider,
+        name: "Runtime A",
+        mediaInput: { image: generationA.staticImagePolicy },
+      });
+      expect(resultB.model).toMatchObject({
+        provider: generationB.provider,
+        name: "Runtime B",
+        mediaInput: { image: generationB.staticImagePolicy },
+      });
+    } finally {
+      // A resolution can reject before both hooks arrive. Release its sibling
+      // and join both owners before afterEach deletes their fixture state.
+      release();
+      await Promise.allSettled(resolutions);
+    }
   });
 
   it("keeps metadata-only prepared generations from borrowing current runtime hooks", async () => {
     const config = {} satisfies OpenClawConfig;
     const generationA = createModelGenerationFixture({
+      agentDir: state.agentDir(),
+      workspaceDir: state.workspaceDir,
       config,
       label: "a",
       withRegistry: false,
     });
-    const generationB = createModelGenerationFixture({ config, label: "b" });
+    const generationB = createModelGenerationFixture({
+      agentDir: state.agentDir(),
+      workspaceDir: state.workspaceDir,
+      config,
+      label: "b",
+    });
     publishCurrentModelGeneration(generationB);
 
     const result = await resolveGeneration(generationA);
@@ -114,33 +208,6 @@ describe("model runtime generation scope", () => {
       provider: generationA.provider,
       name: "Static A",
       mediaInput: { image: generationA.staticImagePolicy },
-    });
-    expect(generationB.resolveDynamicModel).not.toHaveBeenCalled();
-  });
-
-  it("keeps synchronous resolution on the exact scoped generation", () => {
-    const config = {} satisfies OpenClawConfig;
-    const generationA = createModelGenerationFixture({ config, label: "a" });
-    const generationB = createModelGenerationFixture({ config, label: "b" });
-    publishCurrentModelGeneration(generationB);
-    const stores = generationA.preparedModelRuntime.createStores();
-
-    const result = withPluginRuntimeGenerationScope(generationA.preparedModelRuntime, () =>
-      resolveModel(
-        generationA.requestProvider,
-        generationA.modelId,
-        generationA.preparedModelRuntime.agentDir,
-        config,
-        {
-          ...stores,
-          workspaceDir: generationA.preparedModelRuntime.workspaceDir,
-        },
-      ),
-    );
-
-    expect(result.model).toMatchObject({
-      provider: generationA.provider,
-      name: "Runtime A",
     });
     expect(generationB.resolveDynamicModel).not.toHaveBeenCalled();
   });

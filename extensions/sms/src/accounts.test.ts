@@ -81,9 +81,81 @@ describe("SMS account config", () => {
         },
       }),
     ).toMatchObject({
+      accountId: "default",
+      name: "+15557654321",
       configured: true,
+      tokenStatus: "available",
       signatureValidation: "invalid-public-url",
     });
+  });
+
+  it("inspects unavailable account credentials without using environment fallbacks or hiding healthy siblings", () => {
+    process.env.TWILIO_AUTH_TOKEN = "lower-precedence-token";
+    const unresolvedToken = {
+      source: "env",
+      provider: "default",
+      id: "OPENCLAW_TEST_UNAVAILABLE_SMS_TOKEN",
+    } as const;
+    const cfg = {
+      channels: {
+        sms: {
+          accountSid: "AC-parent",
+          authToken: unresolvedToken,
+          fromNumber: "+15550000000",
+          accounts: {
+            support: {
+              authToken: unresolvedToken,
+              messagingServiceSid: "MG-support",
+              fromNumber: "",
+            },
+            inherited: { enabled: false },
+            healthy: { authToken: "healthy-token", fromNumber: "+15551112222" },
+            missing: { authToken: "" },
+          },
+        },
+      },
+    };
+
+    for (const accountId of ["default", "support", "inherited"]) {
+      expect(() => resolveSmsAccount(cfg, accountId)).toThrow("unresolved SecretRef");
+    }
+    const inspected = ["default", "support", "inherited", "healthy", "missing"].map((accountId) =>
+      inspectSmsAccount(cfg, accountId),
+    );
+    expect(inspected).toMatchObject([
+      {
+        accountId: "default",
+        name: "+15550000000",
+        enabled: true,
+        configured: true,
+        tokenStatus: "configured_unavailable",
+      },
+      {
+        accountId: "support",
+        name: "MG-support",
+        enabled: true,
+        configured: true,
+        tokenStatus: "configured_unavailable",
+      },
+      {
+        accountId: "inherited",
+        enabled: false,
+        configured: true,
+        tokenStatus: "configured_unavailable",
+      },
+      {
+        accountId: "healthy",
+        name: "+15551112222",
+        enabled: true,
+        configured: true,
+        tokenStatus: "available",
+      },
+      { accountId: "missing", enabled: true, configured: false, tokenStatus: "missing" },
+    ]);
+    for (const account of inspected) {
+      expect(account).not.toHaveProperty("authToken");
+      expect(account).not.toHaveProperty("accountSid");
+    }
   });
 
   it("merges named accounts over the top-level defaults", () => {

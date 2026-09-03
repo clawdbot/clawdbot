@@ -31,6 +31,8 @@ const rubyVersionPath = path.join(process.cwd(), "apps", "ios", ".ruby-version")
 const gemfilePath = path.join(process.cwd(), "apps", "ios", "Gemfile");
 const gemfileLockPath = path.join(process.cwd(), "apps", "ios", "Gemfile.lock");
 const iosReadmePath = path.join(process.cwd(), "apps", "ios", "README.md");
+const iosAgentsPath = path.join(process.cwd(), "apps", "ios", "AGENTS.md");
+const iosVersioningPath = path.join(process.cwd(), "apps", "ios", "VERSIONING.md");
 const fastlaneSetupPath = path.join(process.cwd(), "apps", "ios", "fastlane", "SETUP.md");
 const metadataReadmePath = path.join(
   process.cwd(),
@@ -138,9 +140,9 @@ describe("iOS Fastlane release upload gates", () => {
     const lockfile = readFileSync(gemfileLockPath, "utf8");
 
     expect(readFileSync(rubyVersionPath, "utf8")).toBe("3.4.10\n");
-    expect(gemfile).toContain('gem "fastlane", "2.236.1"');
+    expect(gemfile).toContain('gem "fastlane", "2.238.0"');
     expect(gemfile).toContain('ruby "3.4.10"');
-    expect(lockfile).toContain("fastlane (2.236.1)");
+    expect(lockfile).toContain("fastlane (2.238.0)");
     expect(lockfile).toContain("arm64-darwin");
     expect(lockfile).toContain("x86_64-darwin");
     expect(lockfile).toContain("CHECKSUMS");
@@ -176,6 +178,23 @@ describe("iOS Fastlane release upload gates", () => {
     for (const command of documentedCommands) {
       expect(command).toContain('BUNDLE_GEMFILE="$PWD/Gemfile" bundle _2.6.9_ exec fastlane');
     }
+  });
+
+  it("documents the shared mobile cutter as the sole release-note writer", () => {
+    const operatorSurfaces = [
+      iosAgentsPath,
+      iosReadmePath,
+      iosVersioningPath,
+      fastlaneSetupPath,
+      metadataReadmePath,
+    ];
+
+    for (const documentationPath of operatorSurfaces) {
+      const documentation = readFileSync(documentationPath, "utf8");
+      expect(documentation).not.toContain("pnpm ios:release:cut");
+      expect(documentation).toContain("scripts/mobile-release-version.ts");
+    }
+    expect(readFastfile()).not.toContain("pnpm ios:release:cut");
   });
 
   it("documents a direct Fastlane command that rejects an inherited Gemfile", () => {
@@ -345,6 +364,28 @@ describe("iOS Fastlane release upload gates", () => {
     );
   });
 
+  it("gates iOS uploads on committed shared mobile release state", () => {
+    const fastfile = readFastfile();
+    const checker = functionBody(fastfile, "check_mobile_release_versioning!");
+    const prepareContext = laneBody(fastfile, "prepare_app_store_context");
+    const plan = prepareContext.indexOf("resolve_ios_release_plan!");
+    const gate = prepareContext.indexOf("check_mobile_release_versioning!");
+    const sync = prepareContext.indexOf("sync_ios_versioning!");
+
+    expect(checker).toContain('"android-sync-versioning.ts"');
+    expect(checker).toContain('"--check"');
+    expect(checker).toContain('"--require-mobile-release"');
+    expect(checker).toContain('"--revision"');
+    expect(checker).toContain("app_store_revision");
+    expect(checker).toContain('"--root"');
+    expect(prepareContext).toContain(
+      "check_mobile_release_versioning!(app_store_revision: app_store_revision)",
+    );
+    expect(plan).toBeGreaterThanOrEqual(0);
+    expect(gate).toBeGreaterThan(plan);
+    expect(sync).toBeGreaterThan(gate);
+  });
+
   it("preflights the exact App Store version before screenshots and archive work", () => {
     const fastfile = readFastfile();
     const releaseUpload = laneBody(fastfile, "release_upload");
@@ -391,7 +432,7 @@ describe("iOS Fastlane release upload gates", () => {
     expect(planner).toContain("app_store_build_upload_state(upload)");
     expect(uploadState).toContain('detail["state"]');
     expect(uploadState).toContain("expected a StateDetail object");
-    expect(planner).toContain("does not match canonical root version");
+    expect(planner).toContain("does not match canonical mobile version");
     expect(planner).toContain('File.join(repo_root, "scripts", "ios-release-plan.ts")');
     expect(planLane).toContain("resolve_ios_release_plan!");
     expect(planLane).toContain("JSON.pretty_generate(plan)");
@@ -560,7 +601,7 @@ describe("iOS Fastlane release upload gates", () => {
     expect(screenshots).toContain('ENV["OPENCLAW_SNAPSHOT_SKIP_WATCH"] == "1"');
   });
 
-  it("shards exact screenshot evidence without changing runner authorization", () => {
+  it("runs screenshot shards alongside builds without changing runner authorization", () => {
     const workflow = readFileSync(ciWorkflowPath, "utf8");
     const iosJobStart = workflow.indexOf("\n  ios-build:\n");
     const iosJobEnd = workflow.indexOf("\n  ios-screenshot-shard:\n", iosJobStart);
@@ -576,11 +617,11 @@ describe("iOS Fastlane release upload gates", () => {
     expect(workflow).toContain('IOS_SCREENSHOT_XCODE_VERSION: "Xcode 26.6 Build version 17F113"');
     expect(iosJob).toContain("timeout-minutes: 150");
     expect(iosJob).not.toContain("Capture iOS release screenshots");
-    expect(shardJob).toContain("needs: [preflight, ios-build]");
+    expect(shardJob).toContain("needs: [preflight]");
     expect(shardJob).toContain("max-parallel: 2");
     expect(shardJob).toContain("device_family: [iphone, ipad-13]");
     expect(shardJob).toContain('OPENCLAW_SNAPSHOT_SKIP_WATCH: "1"');
-    expect(shardJob).toContain("if: matrix.device_family == 'iphone'");
+    expect(shardJob).toContain("if: matrix.device_family == 'ipad-13'");
     expect(shardJob).toContain("run_ios_fastlane ios watch_screenshot");
     expect(shardJob).toContain("run: pnpm ios:screenshots");
     expect(shardJob).toContain("id: package_screenshot_evidence");

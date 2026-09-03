@@ -29,6 +29,12 @@ export function retainRejectedInitialTurn(options: {
     sessionKey: options.sessionKey,
     agentId: normalizeAgentId(options.agentId),
   };
+  // The rejected turn already has a server-created destination; never resolve
+  // it against the defaults of a later selected route.
+  const admission = {
+    scope: { sessionKey: rejectedItem.sessionKey, agentId: rejectedItem.agentId },
+    awaitingDefaults: false,
+  };
   const persisted = admitStoredChatComposerQueueItem(
     {
       settings: loadSettings(),
@@ -36,7 +42,7 @@ export function retainRejectedInitialTurn(options: {
       agentsList: options.context.agents.state.agentsList,
       hello: gateway.hello,
     },
-    options.sessionKey,
+    admission,
     rejectedItem,
   );
   if (persisted) {

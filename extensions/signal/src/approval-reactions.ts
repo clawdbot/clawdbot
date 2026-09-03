@@ -25,7 +25,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
-import { resolveSignalTarget } from "./aliases.js";
+import { resolveSignalDeliveredConversationKey } from "./aliases.js";
 import { getSignalApprovalApprovers, signalApprovalAuth } from "./approval-auth.js";
 import {
   buildTargetRoute,
@@ -90,24 +90,6 @@ const signalApprovalReactionTargets =
 
 export function resolveSignalApprovalConversationKey(to: string): string | null {
   return normalizeSignalMessagingTarget(to) ?? null;
-}
-
-function resolveSignalApprovalConversationKeyForDeliveredTarget(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  to: string;
-}): string | null {
-  try {
-    return (
-      resolveSignalTarget({
-        cfg: params.cfg,
-        accountId: params.accountId,
-        input: params.to,
-      })?.to ?? resolveSignalApprovalConversationKey(params.to)
-    );
-  } catch {
-    return resolveSignalApprovalConversationKey(params.to);
-  }
 }
 
 function normalizeSignalApprovalTargetAuthorKey(value: string): string | null {
@@ -385,7 +367,7 @@ export function registerSignalApprovalReactionTargetForDeliveredPayload(params: 
   ) {
     return false;
   }
-  const conversationKey = resolveSignalApprovalConversationKeyForDeliveredTarget({
+  const conversationKey = resolveSignalDeliveredConversationKey({
     cfg: params.cfg,
     accountId: params.target.accountId,
     to: params.target.to,
@@ -600,7 +582,7 @@ export async function maybeResolveSignalApprovalReaction(params: {
     params.logVerboseMessage?.(
       `signal: approval reaction failed id=${target.approvalId} sender=${actorId}: ${String(error)}`,
     );
-    return true;
+    throw error;
   }
 }
 

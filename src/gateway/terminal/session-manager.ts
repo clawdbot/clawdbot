@@ -268,6 +268,7 @@ export class TerminalSessionManager {
       agentId: request.agentId,
       cwd: request.cwd,
       shell: request.shell,
+      ...(request.title ? { title: request.title } : {}),
       backend,
       stageUpload: request.stageUpload ?? stageTerminalUpload,
       closed: false,
@@ -332,7 +333,7 @@ export class TerminalSessionManager {
     return this.writeSession(session, data);
   }
 
-  /** Writes agent input after proving session-key ownership. */
+  /** Writes agent input after proving exact agent-session ownership. */
   writeAgent(
     owner: AgentTerminalOwner,
     sessionId: string,
@@ -366,7 +367,7 @@ export class TerminalSessionManager {
     return this.resizeSession(session, cols, rows);
   }
 
-  /** Resizes an agent-owned PTY after proving session-key ownership. */
+  /** Resizes an agent-owned PTY after proving exact agent-session ownership. */
   resizeAgent(
     owner: AgentTerminalOwner,
     sessionId: string,

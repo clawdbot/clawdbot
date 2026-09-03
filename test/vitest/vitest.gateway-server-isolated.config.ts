@@ -1,5 +1,5 @@
-// Vitest gateway server isolated config wires module-mocking Gateway tests out of
-// the shared module cache.
+// Vitest gateway isolated config wires module-mocking Gateway tests out of the
+// shared module cache.
 import { defineConfig } from "vitest/config";
 import { gatewayServerIsolatedTestFiles } from "./vitest.gateway-server-paths.mjs";
 import {

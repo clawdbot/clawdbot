@@ -4,7 +4,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it } from "vitest";
-import { getPluginToolMeta } from "../plugins/tools.js";
+import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import {
   buildBundleMcpToolsFromCatalog,
   createBundleMcpToolRuntime,
@@ -148,7 +148,9 @@ describe("createBundleMcpToolRuntime", () => {
       "demo__hidden_tool",
       "demo__model_tool",
     ]);
-    expect(getPluginToolMeta(runtime.appTools![0]!)?.mcp?.codexApproval).toEqual({ mode: "auto" });
+    expect(getPluginToolMeta(runtime.appTools![0]!)?.mcp?.codexApproval).toEqual({
+      mode: undefined,
+    });
     expect(
       applyEmbeddedAttemptToolsAllow(runtime.appTools ?? [], ["demo__model_tool"], {
         toolMeta: (tool) => getPluginToolMeta(tool),
@@ -912,5 +914,57 @@ describe("createBundleMcpToolRuntime", () => {
         arguments: { parent: { page_id: "page-id" } },
       }),
     ).toEqual({ parent: { page_id: "page-id" } });
+  });
+
+  it("keeps root fields callable when an MCP input schema uses a root union (#128743)", async () => {
+    const inputSchema = {
+      type: "object",
+      title: "MessagesReplyInput",
+      additionalProperties: false,
+      required: ["thread_id"],
+      properties: {
+        thread_id: { type: "string", minLength: 1, maxLength: 128 },
+        body: { anyOf: [{ type: "string" }, { type: "null" }], default: null },
+        body_file: { anyOf: [{ type: "string" }, { type: "null" }], default: null },
+        task_id: { anyOf: [{ type: "string" }, { type: "null" }], default: null },
+        turn_grant_id: { anyOf: [{ type: "string" }, { type: "null" }], default: null },
+      },
+      anyOf: [
+        { required: ["body"], properties: { body: { type: "string" } } },
+        { required: ["body_file"], properties: { body_file: { type: "string" } } },
+      ],
+    };
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({
+        serverName: "aihub",
+        tools: [
+          {
+            serverName: "aihub",
+            safeServerName: "aihub",
+            toolName: "messages_reply",
+            inputSchema,
+            fallbackDescription: "Reply to a message",
+          },
+        ],
+      }),
+    });
+    const tool = expectDefined(runtime.tools[0], "runtime.tools[0] test invariant");
+
+    expect(() =>
+      validateToolArguments(tool, {
+        type: "toolCall",
+        id: "call-inline-body",
+        name: tool.name,
+        arguments: { thread_id: "thread-1", body: "hello" },
+      }),
+    ).not.toThrow();
+    expect(() =>
+      validateToolArguments(tool, {
+        type: "toolCall",
+        id: "call-body-file",
+        name: tool.name,
+        arguments: { thread_id: "thread-1", body_file: "/tmp/body.md" },
+      }),
+    ).not.toThrow();
   });
 });

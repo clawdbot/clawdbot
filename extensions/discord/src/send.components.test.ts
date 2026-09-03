@@ -1,5 +1,5 @@
 // Discord tests cover send.components plugin behavior.
-import { ChannelType, MessageFlags } from "discord-api-types/v10";
+import { ChannelType, ComponentType, MessageFlags } from "discord-api-types/v10";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDiscordLoopbackRest, makeDiscordRest } from "./send.test-harness.js";
 
@@ -36,9 +36,12 @@ vi.mock("./send.outbound.js", () => ({
 }));
 
 const loadOutboundMediaFromUrlMock = vi.hoisted(() => vi.fn());
-vi.mock("./runtime-api.js", () => ({
-  loadOutboundMediaFromUrl: loadOutboundMediaFromUrlMock,
-}));
+vi.mock("openclaw/plugin-sdk/outbound-media", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/outbound-media")>(
+    "openclaw/plugin-sdk/outbound-media",
+  );
+  return { ...actual, loadOutboundMediaFromUrl: loadOutboundMediaFromUrlMock };
+});
 
 let registerDiscordComponentEntries: typeof import("./components-registry.js").registerDiscordComponentEntries;
 let editDiscordComponentMessage: typeof import("./send.components.js").editDiscordComponentMessage;
@@ -85,17 +88,18 @@ function readRecordArg(
   return arg as Record<string, unknown>;
 }
 
+// Both suites consume these bindings, including when either suite runs alone or first.
+beforeAll(async () => {
+  ({ registerDiscordComponentEntries } = await import("./components-registry.js"));
+  ({
+    editDiscordComponentMessage,
+    registerBuiltDiscordComponentMessage,
+    sendDiscordComponentMessage,
+  } = await import("./send.components.js"));
+});
+
 describe("sendDiscordComponentMessage", () => {
   let registerMock: ReturnType<typeof vi.mocked<typeof registerDiscordComponentEntries>>;
-
-  beforeAll(async () => {
-    ({ registerDiscordComponentEntries } = await import("./components-registry.js"));
-    ({
-      editDiscordComponentMessage,
-      registerBuiltDiscordComponentMessage,
-      sendDiscordComponentMessage,
-    } = await import("./send.components.js"));
-  });
 
   beforeEach(() => {
     registerMock = vi.mocked(registerDiscordComponentEntries);
@@ -226,53 +230,54 @@ describe("sendDiscordComponentMessage", () => {
   });
 
   it("edits component messages and refreshes component registry entries", async () => {
-    const { rest, patchMock, getMock } = makeDiscordRest();
-    getMock.mockResolvedValueOnce({
-      type: ChannelType.GuildText,
-      id: "chan-1",
-    });
-    patchMock.mockResolvedValueOnce({ id: "msg1", channel_id: "chan-1" });
+    const loopback = await createDiscordLoopbackRest();
+    try {
+      await editDiscordComponentMessage(
+        "channel:chan-1",
+        "msg1",
+        {
+          text: "Updated picker",
+          blocks: [
+            {
+              type: "actions",
+              select: {
+                type: "string",
+                options: [{ label: "One", value: "one" }],
+              },
+            },
+          ],
+        },
+        {
+          cfg: DISCORD_TEST_CFG,
+          rest: loopback.rest,
+          token: "t",
+          sessionKey: "agent:main:discord:channel:chan-1",
+          agentId: "main",
+        },
+      );
 
-    await editDiscordComponentMessage(
-      "channel:chan-1",
-      "msg1",
-      {
-        text: "Updated picker",
-        blocks: [{ type: "actions", buttons: [{ label: "Tap" }] }],
-      },
-      {
-        cfg: DISCORD_TEST_CFG,
-        rest,
-        token: "t",
-        sessionKey: "agent:main:discord:channel:chan-1",
-        agentId: "main",
-      },
-    );
-
-    expect(patchMock).toHaveBeenCalledTimes(1);
-    const [patchUrl, patchRequest] = readMockCall(patchMock, 0) as [
-      string,
-      {
-        body?: {
-          flags?: unknown;
-          components?: unknown[];
-          nonce?: unknown;
-          enforce_nonce?: unknown;
-        };
-      },
-    ];
-    expect(patchUrl).toContain("/channels/chan-1/messages/msg1");
-    expect(patchRequest?.body?.flags).toBe(MessageFlags.IsComponentsV2);
-    expect(Array.isArray(patchRequest?.body?.components)).toBe(true);
-    expect(patchRequest?.body?.components).toHaveLength(1);
-    expect(patchRequest?.body).not.toHaveProperty("nonce");
-    expect(patchRequest?.body).not.toHaveProperty("enforce_nonce");
-    expect(registerMock).toHaveBeenCalledTimes(1);
-    const args = readRecordArg(registerMock, 0, 0);
-    expect(args.messageId).toBe("msg1");
-    expect((args.entries as Array<{ sessionKey?: string }>)[0]?.sessionKey).toBe(
-      "agent:main:discord:channel:chan-1",
-    );
+      const patch = loopback.requests.find((request) => request.method === "PATCH");
+      expect(patch?.path).toBe("/v10/channels/chan-1/messages/msg1");
+      const body = JSON.parse(patch?.body ?? "{}") as {
+        flags?: unknown;
+        components?: Array<{ components?: Array<{ components?: Array<{ type?: number }> }> }>;
+      };
+      expect(body.flags).toBe(MessageFlags.IsComponentsV2);
+      expect(body.components).toHaveLength(1);
+      expect(body.components?.[0]?.components?.[1]?.components?.[0]?.type).toBe(
+        ComponentType.StringSelect,
+      );
+      expect(body).not.toHaveProperty("nonce");
+      expect(body).not.toHaveProperty("enforce_nonce");
+      expect(registerMock).toHaveBeenCalledTimes(1);
+      const args = readRecordArg(registerMock, 0, 0);
+      expect(args.messageId).toBe("loopback-message");
+      expect((args.entries as Array<{ sessionKey?: string }>)[0]?.sessionKey).toBe(
+        "agent:main:discord:channel:chan-1",
+      );
+    } finally {
+      await loopback.close();
+    }
   });
 
   it("treats bare numeric component edit targets as channels", async () => {

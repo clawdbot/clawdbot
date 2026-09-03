@@ -1,7 +1,7 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -11,7 +11,6 @@ const suite = createControlUiE2eSuite({
 });
 const configPath = "/tmp/openclaw-config-open-feedback/openclaw.json";
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofPath = path.resolve(".artifacts/control-ui-e2e/config-open-file-feedback/after.png");
 
 async function installClipboardProof(page: Page): Promise<void> {
   await page.addInitScript(() => {
@@ -91,7 +90,10 @@ suite.define(() => {
 
       await expectOpenFailure(page, "No desktop opener is available.");
       if (captureProof) {
-        await mkdir(path.dirname(proofPath), { recursive: true });
+        const proofPath = path.join(
+          createControlUiE2eArtifactDir("config-open-file-feedback"),
+          "after.png",
+        );
         await page.screenshot({ animations: "disabled", fullPage: true, path: proofPath });
       }
     });

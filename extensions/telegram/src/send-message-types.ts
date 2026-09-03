@@ -4,7 +4,7 @@ import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
 import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import type { TelegramInlineButtons } from "./button-types.js";
 import type { createTelegramPromptContextProjectionCursor } from "./prompt-context-projection.js";
-import type { TelegramApi, TelegramApiOverride } from "./send-context.js";
+import type { TelegramApiOverride } from "./send-context.js";
 import type { OpenClawConfig } from "./send.runtime.js";
 
 export type TelegramSendOpts = {
@@ -43,14 +43,18 @@ export type TelegramSendOpts = {
   quoteText?: string;
   /** Forum topic thread ID (for forum supergroups) */
   messageThreadId?: number;
+  /** Channel Direct Messages topic ID. */
+  directMessagesTopicId?: number;
   /** Inline keyboard buttons (reply markup). */
   buttons?: TelegramInlineButtons;
   /** Send image as document to avoid Telegram compression. Defaults to false. */
   forceDocument?: boolean;
   /** Persist each concrete platform send before any later chunk can fail. */
   onDeliveryResult?: (result: TelegramSendResult) => Promise<void> | void;
-  /** @internal Refresh durable custody immediately before Telegram Bot API I/O. */
+  /** @internal Revalidate durable custody before a send operation, not after throttle waits. */
   onPlatformSendDispatch?: () => Promise<void>;
+  /** @internal Synchronously fence custody after refresh and immediately before Telegram I/O. */
+  assertPlatformSendAuthorized?: () => void;
 };
 
 export type TelegramApiCallOpts = Pick<
@@ -62,8 +66,6 @@ export type TelegramThreadedSendOpts = TelegramApiCallOpts &
   Pick<TelegramSendOpts, "replyToMessageId" | "messageThreadId">;
 
 export type TelegramMessageActionOpts = TelegramApiCallOpts & { notify?: boolean };
-
-export type TelegramSendMessageParams = Parameters<TelegramApi["sendMessage"]>[2];
 
 export type TelegramSendResult = {
   messageId: string;
@@ -84,4 +86,5 @@ export type TelegramLocationSendOpts = TelegramThreadedSendOpts &
     | "silent"
     | "onDeliveryResult"
     | "onPlatformSendDispatch"
+    | "assertPlatformSendAuthorized"
   >;

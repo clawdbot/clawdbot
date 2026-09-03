@@ -23,6 +23,7 @@ import {
   resolveShellWrapperTransportArgv,
 } from "../infra/shell-wrapper-resolution.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
+import { markToolDecisionRecorded } from "./agent-tools.before-tool-call.decision.js";
 import {
   DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS,
   DEFAULT_APPROVAL_TIMEOUT_MS,
@@ -64,6 +65,7 @@ type RequestExecApprovalDecisionParams = {
   approvalReviewerDeviceIds?: string[];
   requireDeliveryRoute?: boolean;
   suppressDelivery?: boolean;
+  deliverToApprovalClientsOnly?: boolean;
 };
 
 type ExecApprovalRequestToolParams = RequestExecApprovalDecisionParams & {
@@ -103,6 +105,7 @@ function buildExecApprovalRequestToolParams(
     approvalReviewerDeviceIds: params.approvalReviewerDeviceIds,
     requireDeliveryRoute: params.requireDeliveryRoute,
     suppressDelivery: params.suppressDelivery,
+    deliverToApprovalClientsOnly: params.deliverToApprovalClientsOnly,
     timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
     twoPhase: true,
   };
@@ -161,6 +164,7 @@ async function registerExecApprovalRequest(
     buildExecApprovalRequestToolParams(params),
     { expectFinal: false },
   );
+  markToolDecisionRecorded();
   const decision = parseDecision(registrationResult);
   const id = parseString(registrationResult?.id) ?? params.id;
   const expiresAtMs =
@@ -339,10 +343,20 @@ async function buildHostApprovalDecisionParams(
     runId: params.runId,
     toolCallId: params.toolCallId,
     requireDeliveryRoute: params.requireDeliveryRoute,
-    // Cron has no live reviewer. Register for audit/fallback resolution without
-    // exposing an operator-visible request that the scheduled run cannot answer.
+    // Gateway-host cron cards go only to connected exec approval clients
+    // (Control UI, macOS/iOS/Android apps, `approvals`/`exec-approvals` cap
+    // holders — not the TUI); allow-always there mints a standing grant that
+    // ends the recurrence. With no client connected, the request still registers and
+    // expires no-route into the headless denial (#128031). Node-host cron has
+    // no grant mint/consume path yet, so it keeps the fully suppressed
+    // headless policy instead of raising cards whose allow-always could not
+    // stick as a scoped grant.
     suppressDelivery:
-      params.suppressDelivery === true || params.trigger === "cron" ? true : undefined,
+      params.suppressDelivery === true || (params.trigger === "cron" && params.host !== "gateway")
+        ? true
+        : undefined,
+    deliverToApprovalClientsOnly:
+      params.trigger === "cron" && params.host === "gateway" ? true : undefined,
     approvalReviewerDeviceIds: params.approvalReviewerDeviceIds,
     ...buildExecApprovalTurnSourceContext(params),
   };

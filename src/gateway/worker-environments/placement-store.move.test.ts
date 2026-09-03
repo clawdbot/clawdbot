@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -156,7 +157,9 @@ describe("worker session placement moves", () => {
       },
     });
     expect(begun.intent.operationId).toMatch(/^move:v1:[A-Za-z0-9_-]{43}$/u);
-    expect(database.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 9 });
+    expect(database.db.prepare("PRAGMA user_version").get()).toEqual({
+      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+    });
     expect(store.getPlacementMove(SESSION.sessionId)).toEqual(begun.intent);
     expect(store.getPlacementMoves([SESSION.sessionId, "missing"])).toEqual(
       new Map([[SESSION.sessionId, begun.intent]]),
@@ -184,85 +187,6 @@ describe("worker session placement moves", () => {
         abandonSource: true,
       }),
     ).toThrow("already has a conflicting placement move");
-  });
-
-  it("prepares only new abandonment decisions and joins exact draining retries", async () => {
-    const active = advanceToActive();
-    seedAttachedEnvironment({
-      environmentId: active.environmentId,
-      sessionId: active.sessionId,
-      ownerEpoch: active.activeOwnerEpoch,
-    });
-    const source = {
-      generation: active.generation,
-      environmentId: active.environmentId,
-      ownerEpoch: active.activeOwnerEpoch,
-    };
-    const request = {
-      sessionId: active.sessionId,
-      source,
-      target: { kind: "gateway" as const },
-      abandonSource: true as const,
-    };
-    const prepareNew = vi.fn(async () => {
-      expect(store.get(active.sessionId)).toMatchObject({ state: "active" });
-      expect(store.getPlacementMove(active.sessionId)).toBeUndefined();
-    });
-
-    const begun = await store.preparePlacementMove(request, prepareNew);
-
-    expect(begun).toMatchObject({ joined: false, placement: { state: "draining" } });
-    await expect(store.preparePlacementMove(request, prepareNew)).resolves.toMatchObject({
-      joined: true,
-      intent: { operationId: begun.intent.operationId },
-    });
-    expect(prepareNew).toHaveBeenCalledOnce();
-
-    const conflictingRequests = [
-      { ...request, source: { ...source, generation: source.generation + 1 } },
-      {
-        sessionId: active.sessionId,
-        source,
-        target: { kind: "profile" as const, profileId: "other" },
-      },
-      { sessionId: active.sessionId, source, target: { kind: "gateway" as const } },
-    ];
-    for (const conflictingRequest of conflictingRequests) {
-      await expect(store.preparePlacementMove(conflictingRequest, prepareNew)).rejects.toThrow(
-        "already has a conflicting placement move",
-      );
-    }
-    expect(prepareNew).toHaveBeenCalledOnce();
-  });
-
-  it("keeps the source active when new abandonment preparation fails", async () => {
-    const active = advanceToActive();
-    seedAttachedEnvironment({
-      environmentId: active.environmentId,
-      sessionId: active.sessionId,
-      ownerEpoch: active.activeOwnerEpoch,
-    });
-
-    await expect(
-      store.preparePlacementMove(
-        {
-          sessionId: active.sessionId,
-          source: {
-            generation: active.generation,
-            environmentId: active.environmentId,
-            ownerEpoch: active.activeOwnerEpoch,
-          },
-          target: { kind: "gateway" },
-          abandonSource: true,
-        },
-        async () => {
-          throw new Error("partial transcript persistence failed");
-        },
-      ),
-    ).rejects.toThrow("partial transcript persistence failed");
-
-    expect(store.get(active.sessionId)).toMatchObject({ state: "active" });
-    expect(store.getPlacementMove(active.sessionId)).toBeUndefined();
   });
 
   it("persists explicit abandonment and atomically completes its exact failed source", () => {

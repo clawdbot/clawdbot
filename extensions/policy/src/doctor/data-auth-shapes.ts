@@ -2,7 +2,6 @@ import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PolicyDataHandlingEvidence, PolicyEvidence } from "../policy-state.js";
 import { getPolicyPath } from "../policy-value.js";
-import { POLICY_CHECK_IDS } from "./check-ids.js";
 import { SUPPORTED_AUTH_PROFILE_MODES } from "./policy-constants.js";
 import { policyShapeFinding, unsupportedPolicyKey } from "./shape-helpers.js";
 import { ocPathSegment } from "./utils.js";
@@ -176,28 +175,6 @@ export function dataHandlingEntries(
   kind: PolicyDataHandlingEvidence["kind"],
 ): readonly PolicyDataHandlingEvidence[] {
   return (evidence.dataHandling ?? []).filter((entry) => entry.kind === kind);
-}
-
-export function dataHandlingFinding(
-  entry: PolicyDataHandlingEvidence,
-  params: {
-    readonly checkId: (typeof POLICY_CHECK_IDS)[number];
-    readonly message: string;
-    readonly requirement: string;
-    readonly fixHint: string;
-  },
-): HealthFinding {
-  return {
-    checkId: params.checkId,
-    severity: "error",
-    message: params.message,
-    source: "policy",
-    path: "openclaw config",
-    ocPath: entry.source,
-    target: entry.source,
-    requirement: params.requirement,
-    fixHint: params.fixHint,
-  };
 }
 
 export function dataHandlingLabel(entry: PolicyDataHandlingEvidence): string {

@@ -203,7 +203,7 @@ class ChatControllerTerminalAckTest {
         }
       controller.handleGatewayEvent("health", null)
       val ambiguousOwner = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "main")
-      assertFalse(controller.canSendForOwner(ambiguousOwner))
+      assertFalse(controller.isCurrentComposerOwner(ambiguousOwner))
       assertFalse(
         controller.sendMessageForOwnerAwaitAcceptance(
           message = "unbound main alias",
@@ -215,8 +215,8 @@ class ChatControllerTerminalAckTest {
       controller.prepareMainSessionKey("agent:main:node-test")
       controller.handleGatewayEvent("health", null)
       val owner = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "agent:main:node-test")
-      assertTrue(controller.canSendForOwner(owner))
-      assertFalse(controller.canSendForOwner(owner.copy(gatewayStableId = "gateway-b")))
+      assertTrue(controller.isCurrentComposerOwner(owner))
+      assertFalse(controller.isCurrentComposerOwner(owner.copy(gatewayStableId = "gateway-b")))
 
       assertFalse(
         controller.sendMessageForOwnerAwaitAcceptance(
@@ -263,11 +263,15 @@ class ChatControllerTerminalAckTest {
               settingsGate.await()
               "{}"
             }
+
             "chat.send" -> {
               sendCount += 1
               """{"runId":"run-started","status":"started"}"""
             }
-            else -> "{}"
+
+            else -> {
+              "{}"
+            }
           }
         }
       controller.prepareMainSessionKey("agent:main:node-test")
@@ -403,7 +407,8 @@ class ChatControllerTerminalAckTest {
                   ?.content
               """{"runId":"canonical-run","status":"started"}"""
             }
-            "chat.history" ->
+
+            "chat.history" -> {
               historyResponse(
                 "session-1",
                 listOf(
@@ -411,7 +416,11 @@ class ChatControllerTerminalAckTest {
                   ReplayHistoryMessage("assistant", "done", 2_000),
                 ),
               )
-            else -> "{}"
+            }
+
+            else -> {
+              "{}"
+            }
           }
         }
       controller.handleGatewayEvent("health", null)
@@ -442,8 +451,11 @@ class ChatControllerTerminalAckTest {
         createChatController { method, _ ->
           requestedMethods += method
           when (method) {
-            "chat.send" -> """{"runId":"run-ok","status":"ok"}"""
-            "chat.history" ->
+            "chat.send" -> {
+              """{"runId":"run-ok","status":"ok"}"""
+            }
+
+            "chat.history" -> {
               """
               {
                 "sessionId": "session-1",
@@ -452,7 +464,11 @@ class ChatControllerTerminalAckTest {
                 ]
               }
               """.trimIndent()
-            else -> "{}"
+            }
+
+            else -> {
+              "{}"
+            }
           }
         }
       controller.handleGatewayEvent("health", null)

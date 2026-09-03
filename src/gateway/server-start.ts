@@ -40,7 +40,7 @@ export async function startGatewayServerCore(
   const postReadyWorkBarrier = new Promise<void>((resolve) => {
     releasePostReadyWork = resolve;
   });
-  const gatewayKernel = await createGatewayKernel(port, opts);
+  const gatewayKernel = await createGatewayKernel(port, opts, { deferEarlyRuntime: true });
   if (!gatewayKernel.minimalTestGateway) {
     // Start the Keychain read early so it overlaps bootstrap; post-attach awaits the
     // shared promise before plugins can use TLS.

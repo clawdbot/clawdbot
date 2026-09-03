@@ -53,6 +53,7 @@ export type ChannelsProps = {
   configForm: Record<string, unknown> | null;
   configUiHints: ConfigUiHints;
   configSaving: boolean;
+  configError: string | null;
   configFormDirty: boolean;
   showAdvancedSettings: boolean;
   nostrProfileFormState: NostrProfileFormState | null;

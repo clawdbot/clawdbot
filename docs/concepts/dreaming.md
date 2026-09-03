@@ -17,7 +17,7 @@ Dreaming is enabled by default. Set
 
 ## What dreaming writes
 
-- **Machine state** in `memory/.dreams/` (recall store, phase signals, ingestion checkpoints, locks).
+- **Machine state** in SQLite-backed plugin state (recall store, phase signals, ingestion checkpoints, locks).
 - **Rewrite preimages** in SQLite-backed plugin state before an accepted `MEMORY.md` rewrite.
 - **Human-readable output** in `DREAMS.md` (or an existing `dreams.md`) and optional phase report files under `memory/dreaming/<phase>/YYYY-MM-DD.md`.
 
@@ -68,6 +68,8 @@ Dreaming runs three cooperative phases per sweep, in order: light -> REM -> deep
 ## Session transcript ingestion
 
 Dreaming can ingest redacted session transcripts into the dreaming corpus. Only interactive sessions are eligible. Cron, heartbeat, subagent, and unknown sessions stay out of durable candidate ingestion. Personal and sensitive content is redacted before ingestion, and runtime-marked recalled context is removed so recalled snippets cannot be learned again as new memory.
+
+Two operator controls exclude sessions from automatic ingestion, each with a recorded reason: the [memory admission policy](/concepts/memory-provenance#admission-keeping-sources-out-of-memory) matches retained hook-source, channel, or chat-type metadata, and [`memory forget`](/cli/memory#memory-forget) records selected session IDs as `forgotten` for future scans. Policy changes do not erase existing candidates or prevent direct file writes. Manual session backfill applies both controls in preview, REM, and apply modes, and preserves source-session origins when staging candidates.
 
 ## Consolidation safety
 
@@ -147,11 +149,19 @@ Deep ranking uses six weighted base signals plus phase reinforcement:
 | Consolidation       | 0.10   | Multi-day recurrence strength                     |
 | Conceptual richness | 0.06   | Concept-tag density from snippet/path             |
 
-Light and REM phase hits add a small recency-decayed boost from `memory/.dreams/phase-signals.json`.
+Light and REM phase hits recorded in SQLite-backed plugin state add a small recency-decayed boost.
 
 ## Scheduling
 
 When enabled, `memory-core` auto-manages one cron job for a full dreaming sweep, deduped across the primary runtime workspace and any configured agent workspaces so subagent workspace fan-out does not exclude the main agent's `DREAMS.md` and memory state.
+
+An explicit multi-agent fleet needs an [ambient system owner](/gateway/config-agents#agentsdefaultssystemagent) for this job. If logs report `Agent-less cron job has no resolvable owner`, choose an existing agent to own the sweep. For example, if that agent is `ops`:
+
+```bash
+openclaw config set agents.defaults.systemAgent.agentId ops
+```
+
+This selects the execution owner; it does not change any agent's workspace or limit the sweep to that agent's memory. A sole-agent installation resolves its owner automatically.
 
 | Setting              | Default       |
 | -------------------- | ------------- |

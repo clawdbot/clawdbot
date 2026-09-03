@@ -1,3 +1,5 @@
+import type { PluginManifestRecord } from "./manifest-registry.js";
+
 export function configSnapshot(config: Record<string, unknown> = {}) {
   return {
     snapshot: {
@@ -22,18 +24,21 @@ export function metadataSnapshot(params: {
   origin?: "bundled" | "global";
   installRecord?: Record<string, unknown>;
   icon?: string;
+  packageBuild?: { bundledDist?: boolean };
+  packageDependencies?: Record<string, string>;
 }) {
   const id = params.id ?? "workboard";
   const origin = params.origin ?? "bundled";
   const installRecord =
     params.installRecord ??
     (origin === "global" ? { source: "path", installPath: `/tmp/${id}` } : undefined);
-  const manifest = {
+  const manifest: PluginManifestRecord = {
     id,
     name: params.name ?? "Workboard",
     description: "Coordinate agent work in a shared board.",
     catalog: { featured: true, order: 10 },
     ...(params.icon ? { icon: params.icon } : {}),
+    ...(params.packageDependencies ? { packageDependencies: params.packageDependencies } : {}),
     channels: [],
     providers: [],
     cliBackends: [],
@@ -54,6 +59,7 @@ export function metadataSnapshot(params: {
           origin,
           enabled: params.enabled,
           rootDir: `/tmp/${id}`,
+          ...(params.packageBuild ? { packageBuild: params.packageBuild } : {}),
         },
       ],
       installRecords: installRecord ? { [id]: installRecord } : {},

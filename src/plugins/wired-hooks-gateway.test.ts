@@ -12,9 +12,11 @@ import type {
   PluginHookCronReconciledContext,
   PluginHookCronReconciledEvent,
   PluginHookGatewayContext,
-  PluginHookGatewayStartEvent,
+  PluginHookHandlerMap,
   PluginHookGatewayStopEvent,
 } from "./types.js";
+
+type PluginHookGatewayStartEvent = Parameters<PluginHookHandlerMap["gateway_start"]>[0];
 
 async function expectGatewayHookCall(params: {
   hookName: "gateway_start" | "gateway_stop";

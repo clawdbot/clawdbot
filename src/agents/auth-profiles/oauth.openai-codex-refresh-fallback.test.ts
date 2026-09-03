@@ -59,7 +59,6 @@ const {
 }));
 
 vi.mock("../cli-credentials.js", () => ({
-  readClaudeCliCredentialsCached: () => null,
   readCodexCliCredentialsCached: readCodexCliCredentialsCachedMock,
   readMiniMaxCliCredentialsCached: () => null,
   resetCliCredentialCachesForTest: () => undefined,
@@ -86,9 +85,13 @@ vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
   buildProviderAuthDoctorHintWithPlugin: buildProviderAuthDoctorHintWithPluginMock,
 }));
 
+vi.mock("../../plugins/provider-external-auth.js", () => ({
+  resolveExternalAuthProfilesWithPlugins: () => [],
+}));
+
 vi.mock("../../plugins/provider-runtime.js", () => ({
   buildProviderMissingAuthMessageWithPlugin: () => undefined,
-  resolveExternalAuthProfilesWithPlugins: () => [],
+  resolveProviderDeprecatedAuthProfileIds: () => [],
   resolveProviderSyntheticAuthWithPlugin: () => undefined,
   shouldDeferProviderSyntheticProfileAuthWithPlugin: () => false,
 }));
@@ -98,6 +101,7 @@ afterAll(() => {
   vi.doUnmock("../cli-credentials.js");
   vi.doUnmock("../../plugins/provider-runtime.runtime.js");
   vi.doUnmock("../../plugins/provider-runtime.js");
+  vi.doUnmock("../../plugins/provider-external-auth.js");
   vi.resetModules();
 });
 
@@ -230,6 +234,60 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
         agentDir,
       }),
     ).rejects.toThrow(/OAuth token refresh failed for openai/);
+    expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("never refreshes a retired Claude CLI token as a legacy-profile fallback", async () => {
+    const legacyProfileId = "anthropic:default";
+    const retiredProfileId = "anthropic:claude-cli";
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [legacyProfileId]: {
+            type: "oauth",
+            provider: "anthropic",
+            access: "expired-default-access",
+            refresh: "expired-default-refresh",
+            expires: Date.now() - 60_000,
+          },
+          [retiredProfileId]: {
+            type: "oauth",
+            provider: "anthropic",
+            access: "copied-native-access",
+            refresh: "copied-native-refresh",
+            expires: Date.now() - 60_000,
+          },
+        },
+      },
+      agentDir,
+      { filterExternalAuthProfiles: false, syncExternalCli: false },
+    );
+    refreshProviderOAuthCredentialWithPluginMock
+      .mockRejectedValueOnce(new Error("initial refresh failed"))
+      .mockResolvedValueOnce({
+        type: "oauth",
+        provider: "anthropic",
+        access: "refreshed-copied-native-access",
+        refresh: "refreshed-copied-native-refresh",
+        expires: Date.now() + 60 * 60_000,
+      });
+
+    await expect(
+      resolveApiKeyForProfile({
+        cfg: {
+          auth: {
+            profiles: {
+              [legacyProfileId]: { provider: "anthropic", mode: "oauth" },
+              [retiredProfileId]: { provider: "anthropic", mode: "oauth" },
+            },
+          },
+        },
+        store: ensureAuthProfileStore(agentDir),
+        profileId: legacyProfileId,
+        agentDir,
+      }),
+    ).rejects.toThrow(/OAuth token refresh failed for anthropic/);
     expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
   });
 

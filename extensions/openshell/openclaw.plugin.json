@@ -54,11 +54,13 @@
       },
       "remoteWorkspaceDir": {
         "type": "string",
-        "minLength": 1
+        "minLength": 1,
+        "pattern": "^\\/(?:sandbox|agent)(?:\\/|$)"
       },
       "remoteAgentWorkspaceDir": {
         "type": "string",
-        "minLength": 1
+        "minLength": 1,
+        "pattern": "^\\/(?:sandbox|agent)(?:\\/|$)"
       },
       "timeoutSeconds": {
         "type": "number",

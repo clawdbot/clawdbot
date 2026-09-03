@@ -1,6 +1,108 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
+
+export async function dispatchOpenAiTalkEvent(page: Page, event: unknown) {
+  await page.evaluate((payload) => {
+    const channel = (
+      window as Window & { openclawVideoTalkE2e?: { peer: { channel: EventTarget } } }
+    ).openclawVideoTalkE2e?.peer.channel;
+    if (!channel) {
+      throw new Error("Expected the browser Talk data channel");
+    }
+    channel.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(payload) }));
+  }, event);
+}
+
+export async function installOpenAiTalkFixture(page: Page) {
+  await page.addInitScript(() => {
+    const getUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+    Object.defineProperty(navigator.mediaDevices, "getUserMedia", {
+      configurable: true,
+      value: async (constraints: MediaStreamConstraints) => {
+        const stream = await getUserMedia(constraints);
+        (
+          window as Window & {
+            openclawVideoTalkTracks?: MediaStreamTrack[];
+          }
+        ).openclawVideoTalkTracks = [
+          ...((window as Window & { openclawVideoTalkTracks?: MediaStreamTrack[] })
+            .openclawVideoTalkTracks ?? []),
+          ...stream.getTracks(),
+        ];
+        return stream;
+      },
+    });
+    class FakeDataChannel extends EventTarget {
+      readyState = "open";
+      sent: unknown[] = [];
+
+      send(payload: string) {
+        this.sent.push(JSON.parse(payload));
+      }
+
+      close() {
+        this.readyState = "closed";
+      }
+    }
+
+    class FakePeerConnection extends EventTarget {
+      connectionState = "new";
+      channel = new FakeDataChannel();
+      localDescription: RTCSessionDescriptionInit | null = null;
+      remoteDescription: RTCSessionDescriptionInit | null = null;
+
+      constructor() {
+        super();
+        (
+          window as Window & {
+            openclawVideoTalkE2e?: {
+              dataChannelCreated: boolean;
+              peer: FakePeerConnection;
+            };
+          }
+        ).openclawVideoTalkE2e = { dataChannelCreated: false, peer: this };
+      }
+
+      addTrack() {}
+
+      createDataChannel() {
+        const harness = (
+          window as Window & {
+            openclawVideoTalkE2e?: { dataChannelCreated: boolean };
+          }
+        ).openclawVideoTalkE2e;
+        if (harness) {
+          harness.dataChannelCreated = true;
+        }
+        return this.channel;
+      }
+
+      async createOffer() {
+        return { type: "offer" as const, sdp: "offer-sdp" };
+      }
+
+      async setLocalDescription(description: RTCSessionDescriptionInit) {
+        this.localDescription = description;
+      }
+
+      async setRemoteDescription(description: RTCSessionDescriptionInit) {
+        this.remoteDescription = description;
+      }
+
+      close() {
+        this.connectionState = "closed";
+      }
+    }
+
+    Object.defineProperty(window, "RTCPeerConnection", {
+      configurable: true,
+      value: FakePeerConnection,
+    });
+  });
+  await page.route("https://api.openai.com/v1/realtime/calls", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/sdp", body: "answer-sdp" });
+  });
+}
 
 export type WebRtcSdpE2eProof = {
   bodyCancelCount: number;
@@ -15,10 +117,115 @@ type WebRtcSdpResponseFixture = {
   status: number;
 };
 
+export type MicrophoneLossE2eProof = {
+  tracksStopped: number;
+  peerClosed: boolean;
+  trackState: MediaStreamTrackState | null;
+  stage: string;
+  localConnection: RTCPeerConnectionState | null;
+  localIce: RTCIceConnectionState | null;
+  remoteIce: RTCIceConnectionState;
+  remoteGathering: RTCIceGatheringState;
+  endMicrophone: () => void;
+};
+
+export async function installMicrophoneLossWebRtcFixture(page: Page) {
+  await page.addInitScript(() => {
+    const NativePeerConnection = RTCPeerConnection;
+    const remote = new NativePeerConnection();
+    let localConnection = (): RTCPeerConnectionState | null => null;
+    let localIce = (): RTCIceConnectionState | null => null;
+    let microphone: MediaStreamTrack | undefined;
+    const proof: MicrophoneLossE2eProof = {
+      tracksStopped: 0,
+      peerClosed: false,
+      stage: "idle",
+      get localConnection() {
+        return localConnection();
+      },
+      get localIce() {
+        return localIce();
+      },
+      get remoteIce() {
+        return remote.iceConnectionState;
+      },
+      get remoteGathering() {
+        return remote.iceGatheringState;
+      },
+      get trackState() {
+        return microphone?.readyState ?? null;
+      },
+      // Browser fault injection: exercise the native track event boundary,
+      // without claiming a physical microphone removal or permission revocation.
+      endMicrophone: () => microphone?.dispatchEvent(new Event("ended")),
+    };
+    Object.defineProperty(window, "openclawMicrophoneLossE2e", { value: proof });
+    const getUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+    navigator.mediaDevices.getUserMedia = async (constraints) => {
+      proof.stage = "microphone-requested";
+      const stream = await getUserMedia(constraints);
+      proof.stage = "microphone-acquired";
+      microphone = stream.getAudioTracks()[0];
+      if (microphone) {
+        const stop = microphone.stop.bind(microphone);
+        microphone.stop = () => {
+          proof.tracksStopped += 1;
+          stop();
+        };
+      }
+      return stream;
+    };
+    class ObservedPeerConnection extends NativePeerConnection {
+      constructor() {
+        super();
+        localConnection = () => this.connectionState;
+        localIce = () => this.iceConnectionState;
+      }
+      override close() {
+        proof.peerClosed = true;
+        remote.close();
+        super.close();
+      }
+    }
+    Object.defineProperty(window, "RTCPeerConnection", { value: ObservedPeerConnection });
+    const fetch = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url !== "https://api.openai.com/v1/realtime/calls") {
+        return fetch(input, init);
+      }
+      if (typeof init?.body !== "string") {
+        throw new Error("Missing local WebRTC SDP offer");
+      }
+      proof.stage = "offer-received";
+      await remote.setRemoteDescription({ type: "offer", sdp: init.body });
+      proof.stage = "offer-applied";
+      await remote.setLocalDescription(await remote.createAnswer());
+      proof.stage = "answer-gathering";
+      if (remote.iceGatheringState !== "complete") {
+        await new Promise<void>((resolve) => {
+          const gathered = () => {
+            if (remote.iceGatheringState === "complete") {
+              remote.removeEventListener("icegatheringstatechange", gathered);
+              resolve();
+            }
+          };
+          remote.addEventListener("icegatheringstatechange", gathered);
+        });
+      }
+      proof.stage = "answer-ready";
+      return new Response(remote.localDescription?.sdp, {
+        headers: { "Content-Type": "application/sdp" },
+      });
+    };
+  });
+}
+
 export function videoTalkCatalog(activeProvider: "google" | "openai") {
   return {
     realtime: {
       activeProvider,
+      ready: true,
       providers: [{ id: activeProvider, label: activeProvider, supportsVideoFrames: true }],
     },
   };
@@ -38,7 +245,7 @@ export async function installTalkBrowserFixtures(page: Page) {
       inputProcessor: null as InputProcessor | null,
       meterLevel: 0,
     };
-    const track = { stop: () => (state.tracksStopped += 1) };
+    const track = Object.assign(new EventTarget(), { stop: () => (state.tracksStopped += 1) });
     Object.defineProperty(navigator, "mediaDevices", {
       configurable: true,
       value: {
@@ -49,7 +256,10 @@ export async function installTalkBrowserFixtures(page: Page) {
         ],
         getUserMedia: async (constraints: unknown) => {
           state.constraints.push(constraints);
-          return { getTracks: () => [track] };
+          return {
+            getAudioTracks: () => [track],
+            getTracks: () => [track],
+          };
         },
       },
     });
@@ -107,6 +317,16 @@ export async function installTalkBrowserFixtures(page: Page) {
 async function installWebRtcSdpResponseFixture(page: Page, fixture: WebRtcSdpResponseFixture) {
   await page.addInitScript(() => {
     const proofWindow = window as Window & { openclawWebRtcSdpE2e?: WebRtcSdpE2eProof };
+    const microphoneTrack = Object.assign(new EventTarget(), { stop() {} });
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia: async () => ({
+          getAudioTracks: () => [microphoneTrack],
+          getTracks: () => [microphoneTrack],
+        }),
+      },
+    });
     proofWindow.openclawWebRtcSdpE2e = {
       bodyCancelCount: 0,
       bodyCancelResolvedCount: 0,
@@ -198,25 +418,44 @@ export async function installOversizedWebRtcSdpFixture(page: Page) {
   });
 }
 
-export async function captureComposerProof(page: Page, fileName: string) {
-  const artifactDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "voice-controls");
-  await mkdir(artifactDir, { recursive: true });
+export async function captureComposerProof(
+  owner: { readonly artifactDir: string },
+  page: Page,
+  fileName: string,
+) {
+  const artifactDir = path.join(owner.artifactDir, "voice-controls");
   await page
     .locator(".agent-chat__composer-shell")
     .screenshot({ path: path.join(artifactDir, fileName) });
 }
 
-export async function captureVideoTalkProof(page: Page, fileName: string) {
-  const artifactDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "video-talk");
-  await mkdir(artifactDir, { recursive: true });
+export async function captureMicrophoneLossProof(
+  owner: { readonly artifactDir: string },
+  page: Page,
+  fileName: string,
+) {
+  const artifactDir = path.join(owner.artifactDir, "voice-controls");
+  // The error floats above the composer bounds; retain the real chat context.
+  await page.screenshot({ path: path.join(artifactDir, fileName), fullPage: true });
+}
+
+export async function captureVideoTalkProof(
+  owner: { readonly artifactDir: string },
+  page: Page,
+  fileName: string,
+) {
+  const artifactDir = path.join(owner.artifactDir, "video-talk");
   await page
     .locator(".agent-chat__composer-shell")
     .screenshot({ path: path.join(artifactDir, fileName) });
 }
 
-export async function captureWebRtcSdpAlertProof(page: Page, fileName: string) {
-  const artifactDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "webrtc-sdp");
-  await mkdir(artifactDir, { recursive: true });
+export async function captureWebRtcSdpAlertProof(
+  owner: { readonly artifactDir: string },
+  page: Page,
+  fileName: string,
+) {
+  const artifactDir = path.join(owner.artifactDir, "webrtc-sdp");
   await page
     .locator('.agent-chat__talk-status[role="alert"]')
     .screenshot({ path: path.join(artifactDir, fileName) });

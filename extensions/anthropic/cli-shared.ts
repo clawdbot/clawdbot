@@ -13,65 +13,12 @@ import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coe
 import { CLAUDE_CLI_BACKEND_ID } from "./cli-constants.js";
 export {
   CLAUDE_CLI_BACKEND_ID,
+  CLAUDE_CLI_CLEAR_ENV,
   CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS,
   CLAUDE_CLI_DEFAULT_MODEL_REF,
   CLAUDE_CLI_MODEL_ALIASES,
   CLAUDE_CLI_SESSION_ID_FIELDS,
 } from "./cli-constants.js";
-
-// Claude Code honors provider-routing, auth, and config-root env before
-// consulting its local login state, so inherited shell overrides must not
-// steer OpenClaw-managed Claude CLI runs toward a different provider,
-// endpoint, token source, plugin/config tree, or telemetry bootstrap mode.
-/** Environment variables removed before launching OpenClaw-managed Claude CLI runs. */
-export const CLAUDE_CLI_CLEAR_ENV = [
-  "ANTHROPIC_API_KEY",
-  "ANTHROPIC_API_KEY_OLD",
-  "ANTHROPIC_API_TOKEN",
-  "ANTHROPIC_AUTH_TOKEN",
-  "ANTHROPIC_BASE_URL",
-  "ANTHROPIC_CUSTOM_HEADERS",
-  "ANTHROPIC_OAUTH_TOKEN",
-  "ANTHROPIC_UNIX_SOCKET",
-  "CLAUDE_CONFIG_DIR",
-  // Re-injected per run from OpenClaw's canonical context budget.
-  "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
-  // Re-injected only for 200K runs. Claude's user settings `env` block has
-  // higher precedence than the spawned process environment by design.
-  "CLAUDE_CODE_DISABLE_1M_CONTEXT",
-  "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING",
-  // Re-injected per run from OpenClaw's effective thinking level.
-  "MAX_THINKING_TOKENS",
-  "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
-  "CLAUDE_CODE_ENTRYPOINT",
-  "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
-  "CLAUDE_CODE_OAUTH_SCOPES",
-  "CLAUDE_CODE_OAUTH_TOKEN",
-  "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
-  "CLAUDE_CODE_PLUGIN_CACHE_DIR",
-  "CLAUDE_CODE_PLUGIN_SEED_DIR",
-  "CLAUDE_CODE_REMOTE",
-  "CLAUDE_CODE_USE_COWORK_PLUGINS",
-  "CLAUDE_CODE_USE_BEDROCK",
-  "CLAUDE_CODE_USE_FOUNDRY",
-  "CLAUDE_CODE_USE_VERTEX",
-  "OTEL_EXPORTER_OTLP_ENDPOINT",
-  "OTEL_EXPORTER_OTLP_HEADERS",
-  "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
-  "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
-  "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
-  "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
-  "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
-  "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL",
-  "OTEL_EXPORTER_OTLP_PROTOCOL",
-  "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
-  "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
-  "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
-  "OTEL_LOGS_EXPORTER",
-  "OTEL_METRICS_EXPORTER",
-  "OTEL_SDK_DISABLED",
-  "OTEL_TRACES_EXPORTER",
-] as const;
 
 const CLAUDE_LEGACY_SKIP_PERMISSIONS_ARG = "--dangerously-skip-permissions";
 const CLAUDE_PERMISSION_MODE_ARG = "--permission-mode";
@@ -116,12 +63,6 @@ type ClaudeCliEffortArgAction =
   | { mode: "preserve" }
   | { mode: "omit" }
   | { mode: "set"; effort: ClaudeCliEffort };
-
-/** Explicit thinking opt-out for Claude CLI routes unsupported by Claude Code. */
-export const CLAUDE_CLI_OFF_THINKING_PROFILE = {
-  levels: [{ id: "off" }],
-  defaultLevel: "off",
-} as const;
 
 /** Return whether a provider id refers to the Claude CLI backend. */
 export function isClaudeCliProvider(providerId: string): boolean {
@@ -468,6 +409,21 @@ function resolveClaudeCliRestrictedExecutionArgs(
   baseArgs: readonly string[],
   availability: NonNullable<CliBackendResolveExecutionArgsContext["toolAvailability"]>,
 ): string[] {
+  const preservedDenials: string[] = [];
+  for (let i = 0; i < baseArgs.length; i += 1) {
+    const arg = baseArgs[i] ?? "";
+    if (arg === CLAUDE_DISALLOWED_TOOLS_ARG || arg === "--disallowed-tools") {
+      while (typeof baseArgs[i + 1] === "string" && !baseArgs[i + 1]?.startsWith("-")) {
+        i += 1;
+        preservedDenials.push(...(baseArgs[i] ?? "").split(","));
+      }
+    } else if (
+      arg.startsWith(`${CLAUDE_DISALLOWED_TOOLS_ARG}=`) ||
+      arg.startsWith("--disallowed-tools=")
+    ) {
+      preservedDenials.push(...arg.slice(arg.indexOf("=") + 1).split(","));
+    }
+  }
   const normalized = stripClaudeArgs(baseArgs, {
     bare: CLAUDE_RESTRICTED_BARE_ARGS,
     variadicValue: CLAUDE_RESTRICTED_VARIADIC_VALUE_ARGS,
@@ -492,8 +448,15 @@ function resolveClaudeCliRestrictedExecutionArgs(
       CLAUDE_ALLOWED_TOOLS_ARG,
       availability.openClaw.map((toolName) => `${OPENCLAW_MCP_TOOL_PREFIX}${toolName}`).join(","),
     );
-  } else {
-    normalized.push(CLAUDE_DISALLOWED_TOOLS_ARG, CLAUDE_DENY_MCP_TOOLS_VALUE);
+  }
+  const denials = [
+    ...new Set([
+      ...preservedDenials.map((entry) => entry.trim()).filter(Boolean),
+      ...(availability.openClaw.length === 0 ? [CLAUDE_DENY_MCP_TOOLS_VALUE] : []),
+    ]),
+  ].toSorted();
+  if (denials.length > 0) {
+    normalized.push(CLAUDE_DISALLOWED_TOOLS_ARG, denials.join(","));
   }
   return normalized;
 }

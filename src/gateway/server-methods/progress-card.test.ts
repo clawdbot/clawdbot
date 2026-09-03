@@ -1,16 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import type {
-  ProgressCard,
-  ProgressCardStep,
-} from "../../../packages/gateway-protocol/src/index.js";
-import { resolveCoreOperatorGatewayMethodScope } from "../methods/core-descriptors.js";
-import type { ProgressCardStore } from "../progress-card-store.js";
 import {
-  createProgressCardHandlers,
   PROGRESS_CARD_MAX_STEP_UTF8_BYTES,
   PROGRESS_CARD_MAX_STEPS,
   PROGRESS_CARD_MAX_UTF8_BYTES,
-} from "./progress-card.js";
+  type ProgressCard,
+  type ProgressCardStep,
+} from "../../../packages/gateway-protocol/src/index.js";
+import { resolveCoreOperatorGatewayMethodScope } from "../methods/core-descriptors.js";
+import type { ProgressCardStore } from "../progress-card-store.js";
+import { createProgressCardHandlers } from "./progress-card.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 function createHarness() {

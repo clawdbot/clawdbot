@@ -517,6 +517,36 @@ describe("readSubagentOutput", () => {
 });
 
 describe("buildChildCompletionFindings", () => {
+  it.each([
+    {
+      name: "timeout with its preserved failure cause",
+      outcome: { status: "timeout", error: "  provider rejected the request  " },
+      expected: "timeout: provider rejected the request",
+    },
+    {
+      name: "timeout without a failure cause",
+      outcome: { status: "timeout" },
+      expected: "timeout",
+    },
+    {
+      name: "ordinary failure with its cause",
+      outcome: { status: "error", error: "  provider rejected the request  " },
+      expected: "error: provider rejected the request",
+    },
+  ] as const)("describes a $name in parent-visible findings", ({ outcome, expected }) => {
+    const findings = buildChildCompletionFindings([
+      {
+        childSessionKey: "agent:main:subagent:child",
+        task: "child task",
+        createdAt: 1,
+        completion: { resultText: "captured findings" },
+        execution: { outcome },
+      },
+    ]);
+
+    expect(findings).toContain(`status: ${expected}`);
+  });
+
   it("hard-bounds each child result and the aggregate parent prompt", () => {
     const findings = buildChildCompletionFindings(
       Array.from({ length: 8 }, (_, index) => ({
@@ -711,21 +741,27 @@ describe("buildChildCompletionFindings", () => {
     expect(findings).toContain("(no output)");
   });
 
-  it("uses captured fallback output when a resumed completion returns NO_REPLY", () => {
+  it.each([
+    { name: "successful NO_REPLY", status: "ok", resultText: "NO_REPLY" },
+    { name: "blank failed", status: "error", resultText: "" },
+    { name: "whitespace timed-out", status: "timeout", resultText: " \n\t " },
+    { name: "blank unknown", status: "unknown", resultText: "" },
+  ] as const)("uses captured fallback output for a $name completion", ({ status, resultText }) => {
     const findings = buildChildCompletionFindings([
       {
         childSessionKey: "agent:main:subagent:child",
         task: "child task",
         createdAt: 1,
         completion: {
-          resultText: "NO_REPLY",
+          resultText,
           fallbackResultText: "findings captured before the wake",
         },
-        execution: { outcome: { status: "ok" } },
+        execution: { outcome: { status } },
       },
     ]);
 
     expect(findings).toContain("findings captured before the wake");
+    expect(findings).not.toContain("(no output)");
     expect(findings).not.toContain("NO_REPLY");
   });
 

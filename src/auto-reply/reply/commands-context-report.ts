@@ -2,7 +2,10 @@
 import { estimateTokensFromChars } from "@openclaw/normalization-core/cjk-chars";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
-import { analyzeBootstrapBudget } from "../../agents/bootstrap-budget.js";
+import {
+  analyzeBootstrapBudget,
+  buildBootstrapInjectionStats,
+} from "../../agents/bootstrap-budget.js";
 import { isRealConversationMessage } from "../../agents/compaction-real-conversation.js";
 import {
   resolveBootstrapMaxChars,
@@ -25,9 +28,8 @@ import type { ReplyPayload } from "../types.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { renderContextTreemapPng } from "./context-treemap.js";
 
-function formatInt(n: number): string {
-  return new Intl.NumberFormat("en-US").format(n);
-}
+const numberFormat = new Intl.NumberFormat("en-US");
+const formatInt = (value: number) => numberFormat.format(value);
 
 function formatCharsAndTokens(chars: number): string {
   return `${formatInt(chars)} chars (~${formatInt(estimateTokensFromChars(chars))} tok)`;
@@ -47,7 +49,7 @@ function formatListTop(
   entries: Array<{ name: string; value: number }>,
   cap: number,
 ): { lines: string[]; omitted: number } {
-  const sorted = [...entries].toSorted((a, b) => b.value - a.value);
+  const sorted = entries.toSorted((a, b) => b.value - a.value);
   const top = sorted.slice(0, cap);
   const omitted = Math.max(0, sorted.length - top.length);
   const lines = top.map((e) => `- ${e.name}: ${formatCharsAndTokens(e.value)}`);
@@ -144,6 +146,7 @@ async function resolveContextReport(
   const { systemPrompt, tools, skillsPrompt, bootstrapFiles, injectedFiles, sandboxRuntime } =
     await resolveCommandsSystemPromptBundle(params);
 
+  const injectedWorkspaceFiles = buildBootstrapInjectionStats({ bootstrapFiles, injectedFiles });
   return buildSystemPromptReport({
     source: "estimate",
     generatedAt: Date.now(),
@@ -156,8 +159,7 @@ async function resolveContextReport(
     bootstrapTotalMaxChars,
     sandbox: { mode: sandboxRuntime.mode, sandboxed: sandboxRuntime.sandboxed },
     systemPrompt,
-    bootstrapFiles,
-    injectedFiles,
+    injectedWorkspaceFiles,
     skillsPrompt,
     tools,
   });

@@ -2,7 +2,7 @@ import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
 import type { ReplyOperationRunState } from "./reply-operation-run-state.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 
-type ReplyOperationAgentTurnStatus = "ok" | "failed" | "superseded";
+type ReplyOperationAgentTurnStatus = "ok" | "failed" | "superseded" | "cancelled";
 
 type ReplyOperationAgentTurn = {
   status: ReplyOperationAgentTurnStatus;

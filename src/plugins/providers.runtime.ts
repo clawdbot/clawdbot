@@ -1,6 +1,9 @@
 // Runtime boundary for resolving provider plugins from metadata and config.
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { resolvePluginActivationInputs, withActivatedPluginIds } from "./activation-context.js";
+import {
+  resolveBundledCompatActivationInputs,
+  withActivatedPluginIds,
+} from "./activation-context.js";
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index-install-records.js";
@@ -16,6 +19,7 @@ import { hasExplicitPluginIdScope } from "./plugin-scope.js";
 import { resolveProviderConfigApiOwnerHint } from "./provider-config-owner.js";
 import {
   resolveActivatableProviderOwnerPluginIds,
+  resolveBundledProviderCompatPluginIds,
   resolveDiscoverableProviderOwnerPluginIds,
   resolveDiscoveredProviderPluginIds,
   resolveEnabledProviderPluginIds,
@@ -23,6 +27,7 @@ import {
   resolveOwningPluginIdsForProviderRef,
 } from "./providers.js";
 import { getActivePluginRegistryWorkspaceDir } from "./runtime.js";
+import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-scope.js";
 import {
   buildPluginRuntimeLoadOptionsFromValues,
   createPluginRuntimeLoaderLogger,
@@ -245,13 +250,16 @@ function resolveRuntimeProviderPluginLoadState(
     config: base.rawConfig,
     pluginIds: explicitOwnerPluginIds,
   });
-  const activation = resolvePluginActivationInputs({
+  const activation = resolveBundledCompatActivationInputs({
     rawConfig: requestConfig,
     env: base.env,
     workspaceDir: base.workspaceDir,
     applyAutoEnable: params.applyAutoEnable ?? true,
     discovery: snapshot.discovery,
     manifestRegistry: snapshot.manifestRegistry,
+    onlyPluginIds: runtimeRequestedPluginIds,
+    resolveBundledPluginIds: resolveBundledProviderCompatPluginIds,
+    activation: "defaults",
   });
   const providerPluginIds = mergeExplicitOwnerPluginIds(
     resolveEnabledProviderPluginIds({
@@ -335,23 +343,32 @@ export function resolvePluginProvidersCore(params: {
     );
   }
   const loadState = resolveRuntimeProviderPluginLoadState(params, base, snapshot);
-  if (params.skipIfLoadInFlight && isPluginRegistryLoadInFlight(loadState.loadOptions)) {
+  const generationRegistry = getPluginRuntimeGenerationRegistry();
+  if (
+    !generationRegistry &&
+    params.skipIfLoadInFlight &&
+    isPluginRegistryLoadInFlight(loadState.loadOptions)
+  ) {
     return [];
   }
+  const onlyPluginIds = loadState.loadOptions.onlyPluginIds;
+  // Prepared discovery must retain its exact runtime artifacts, including an empty selection.
   const registry =
-    loadState.loadOptions.onlyPluginIds?.length === 0
+    onlyPluginIds?.length === 0
       ? undefined
-      : (getLoadedRuntimePluginRegistry({
+      : (generationRegistry ??
+        getLoadedRuntimePluginRegistry({
           env: base.env,
           loadOptions: loadState.loadOptions,
           workspaceDir: base.workspaceDir,
-          requiredPluginIds: loadState.loadOptions.onlyPluginIds,
-        }) ?? getRuntimePluginRegistryForLoadOptions(loadState.loadOptions));
+          requiredPluginIds: onlyPluginIds,
+        }) ??
+        getRuntimePluginRegistryForLoadOptions(loadState.loadOptions));
   if (!registry) {
     return [];
   }
 
-  return registry.providers.map((entry) =>
-    Object.assign({}, entry.provider, { pluginId: entry.pluginId }),
-  );
+  return registry.providers
+    .filter((entry) => !onlyPluginIds || onlyPluginIds.includes(entry.pluginId))
+    .map((entry) => Object.assign({}, entry.provider, { pluginId: entry.pluginId }));
 }

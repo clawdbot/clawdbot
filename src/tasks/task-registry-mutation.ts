@@ -3,13 +3,14 @@ import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-w
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { isTaskFlowCancellationPending } from "./task-cancellation-state.js";
 import { isTerminalTaskStatus } from "./task-executor-policy.js";
+import { isTerminalTaskFlow } from "./task-flow-registry.types.js";
 import {
   getTaskFlowById,
   syncFlowFromTaskResult,
   updateFlowRecordByIdExpectedRevision,
 } from "./task-flow-runtime-internal.js";
 import { clearTaskActivity, flushTaskActivity } from "./task-registry-activity.js";
-import { ensureLinkedTaskFlowRegistryReady, isTerminalFlowStatus } from "./task-registry-common.js";
+import { ensureLinkedTaskFlowRegistryReady } from "./task-registry-common.js";
 import { findLatestTaskForFlowId, listTasksForFlowId } from "./task-registry-query.js";
 import {
   cloneTaskDeliveryState,
@@ -20,6 +21,7 @@ import {
   addOwnerKeyIndex,
   addParentFlowIdIndex,
   addRelatedSessionKeyIndex,
+  bumpTaskRegistryRevision,
   deleteOwnerKeyIndex,
   deleteParentFlowIdIndex,
   deleteRelatedSessionKeyIndex,
@@ -46,7 +48,7 @@ function syncManagedFlowCancellationFromTask(task: TaskRecord): void {
     !flow ||
     flow.syncMode !== "managed" ||
     flow.cancelRequestedAt == null ||
-    isTerminalFlowStatus(flow.status)
+    isTerminalTaskFlow(flow)
   ) {
     return;
   }
@@ -75,7 +77,7 @@ function syncManagedFlowCancellationFromTask(task: TaskRecord): void {
       !flow ||
       flow.syncMode !== "managed" ||
       flow.cancelRequestedAt == null ||
-      isTerminalFlowStatus(flow.status)
+      isTerminalTaskFlow(flow)
     ) {
       return;
     }
@@ -123,7 +125,7 @@ function scheduleTaskFlowSyncRetry(task: TaskRecord, operation: string, attempt 
         });
         scheduleTaskFlowSyncRetry(current, operation, attempt + 1);
       }
-    }).catch((error: unknown) => {
+    }, "tasks:mutation").catch((error: unknown) => {
       taskRegistryLog.warn("Failed to admit parent flow sync retry from task", {
         operation,
         taskId,
@@ -188,6 +190,7 @@ export function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskReco
     return null;
   }
   tasks.set(taskId, next);
+  bumpTaskRegistryRevision();
   if (becomesTerminal) {
     clearTaskActivity(taskId);
   }
@@ -239,6 +242,7 @@ export function publishTaskRecordAfterAtomicStore(record: TaskRecord): TaskRecor
     deleteRelatedSessionKeyIndex(next.taskId, current);
   }
   tasks.set(next.taskId, next);
+  bumpTaskRegistryRevision();
   if (becomesTerminal) {
     clearTaskActivity(next.taskId);
   }
