@@ -8,10 +8,6 @@ import type { ChatType } from "../channels/chat-type.js";
 import { readRecentSessionTranscriptActiveEvents } from "../config/sessions/session-accessor.js";
 import type { AgentContextInjection } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  isBundledExtraFilesHookSelected,
-  loadDeclaredExtraBootstrapFiles,
-} from "../hooks/bundled/bootstrap-extra-files/declared-files.js";
 import { isMemoryOriginEligibleForAutomaticInjection } from "../memory-host-sdk/host/types.js";
 import { classifyActiveMemoryWorkspacePaths } from "../plugins/memory-runtime.js";
 import { resolveUserPath } from "../utils.js";
@@ -308,13 +304,12 @@ type BootstrapFileResolutionParams = {
 };
 
 /**
- * Hook effects a resolution applies. Doctor runs without the hook runtime, so
- * "diagnostic" also projects the additions the bundled bootstrap-extra-files
- * handler would make when hook selection would load it; registered handlers
- * still run first and path dedupe in sanitizeBootstrapFiles keeps the
+ * Hook effects a resolution applies. Hook-runtime-free processes (doctor) pass
+ * the files a bundled handler would have added as `projected`; registered
+ * handlers still run first and path dedupe in sanitizeBootstrapFiles keeps the
  * projection idempotent when both are present.
  */
-type BootstrapHookApplication = "none" | "registered" | "diagnostic";
+type BootstrapHookApplication = "none" | "registered" | { projected: WorkspaceBootstrapFile[] };
 
 /** Prepare the same bounded workspace facts without invoking run-owned bootstrap hooks. */
 export async function resolveBootstrapFilesForPreparation(
@@ -393,14 +388,7 @@ async function resolveBootstrapFiles(
           sessionId: params.sessionId,
           agentId: params.agentId,
         });
-  const declared =
-    hooks === "diagnostic" && isBundledExtraFilesHookSelected(params.config)
-      ? await loadDeclaredExtraBootstrapFiles({
-          config: params.config,
-          workspaceDir: params.workspaceDir,
-        })
-      : undefined;
-  const updated = declared ? [...hooked, ...declared.files] : hooked;
+  const updated = typeof hooks === "object" ? [...hooked, ...hooks.projected] : hooked;
   const filteredUpdated = filterCompletedWorkspaceBootstrapFile(
     filterBootstrapFilesAfterHooks({
       files: updated,
@@ -434,14 +422,15 @@ export async function resolveBootstrapContextForRun(params: {
   return { bootstrapFiles, contextFiles };
 }
 
-/** Resolves the run-equivalent bootstrap context in hook-runtime-free processes such as doctor. */
-export async function resolveBootstrapContextForDiagnostics(
+/** Resolves the run-equivalent bootstrap context plus hook additions a caller projected itself. */
+export async function resolveBootstrapContextWithProjectedHookFiles(
   params: Pick<
     BootstrapFileResolutionParams,
     "workspaceDir" | "config" | "agentId" | "readOnlyState"
   >,
+  projected: WorkspaceBootstrapFile[],
 ): ReturnType<typeof resolveBootstrapContextForRun> {
-  const bootstrapFiles = await resolveBootstrapFiles(params, "diagnostic");
+  const bootstrapFiles = await resolveBootstrapFiles(params, { projected });
   const contextFiles = buildBootstrapContextForFiles(bootstrapFiles, params);
   return { bootstrapFiles, contextFiles };
 }

@@ -22,7 +22,7 @@ vi.mock("../agents/agent-scope.js", () => ({
   tryResolveDefaultAgentId: resolveDefaultAgentId,
 }));
 
-vi.mock("../agents/bootstrap-files.js", () => ({
+vi.mock("../agents/bootstrap-files-diagnostics.js", () => ({
   resolveBootstrapContextForDiagnostics,
 }));
 

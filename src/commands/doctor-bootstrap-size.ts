@@ -9,7 +9,7 @@ import {
   buildBootstrapInjectionStats,
   analyzeBootstrapBudget,
 } from "../agents/bootstrap-budget.js";
-import { resolveBootstrapContextForDiagnostics } from "../agents/bootstrap-files.js";
+import { resolveBootstrapContextForDiagnostics } from "../agents/bootstrap-files-diagnostics.js";
 import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
