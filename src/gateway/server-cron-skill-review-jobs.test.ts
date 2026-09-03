@@ -81,6 +81,43 @@ describe("reconcileSkillCollectionReviewJobs", () => {
     expect(remove).toHaveBeenCalledTimes(1);
   });
 
+  it("removes duplicate monitors before converging their declaration", async () => {
+    const older = monitorJob("main", "older");
+    const newer = { ...monitorJob("main", "newer"), updatedAtMs: 2 };
+    const jobs = [older, newer];
+    const remove = vi.fn(async (jobId: string) => {
+      const index = jobs.findIndex((job) => job.id === jobId);
+      if (index >= 0) {
+        jobs.splice(index, 1);
+      }
+      return { ok: true };
+    });
+    const add = vi.fn(
+      async (_input: unknown, options?: { matchesExisting?: (job: CronJob) => boolean }) => {
+        const matches = jobs.filter((job) => options?.matchesExisting?.(job));
+        if (matches.length > 1) {
+          throw new Error("ambiguous declaration key");
+        }
+        return { job: matches[0] };
+      },
+    );
+    const cfg = {
+      agents: { list: [{ id: "main", default: true, workspace: "/tmp/openclaw-main" }] },
+      skills: { workshop: { autonomous: { mode: "propose" } } },
+    } as OpenClawConfig;
+
+    await expect(
+      reconcileSkillCollectionReviewJobs({
+        cron: { add, list: vi.fn(async () => jobs), remove } as never,
+        cfg,
+        logger,
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    expect(remove).toHaveBeenNthCalledWith(1, "older", { systemOwned: true });
+    expect(add).toHaveBeenCalledOnce();
+  });
+
   it("revokes an active review through gateway reconciliation before its final write", async () => {
     const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-review-revoke-"));
     const workspaceDir = path.join(rootDir, "workspace");

@@ -35,6 +35,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Cron system monitors:** remove duplicate heartbeat and skill-review monitor rows before declarative convergence, recovering automatically from ambiguous declaration keys after migration.
 - **Update readiness:** select declared health-check owners before loading plugin APIs, preventing unrelated optional Doctor checks from interrupting upgrades while retaining mandatory readiness failures.
 
 - **Apple chat:** make queued messages immediately retryable after session-settings failures, while keeping retries bound to the exact failed attempt.
