@@ -307,7 +307,12 @@ describe("createCliJsonlStreamingParser", () => {
     );
     parser.finish();
 
-    expect(parser.getOutput()).toMatchObject({
+    // The interim text was that result's reply, not this turn's: a stopped
+    // turn reports empty text like the JSON and JSONL result paths do.
+    expect(parser.getOutput()).toEqual({
+      text: "",
+      sessionId: "interim-then-stop",
+      usage: undefined,
       errorText:
         "Claude CLI ended the turn without a reply (terminal_reason: hook_stopped, stop_reason: tool_use).",
       terminalFailure: {
