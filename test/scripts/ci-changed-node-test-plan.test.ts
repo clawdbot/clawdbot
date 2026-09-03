@@ -224,6 +224,94 @@ describe("CI changed Node test plan", () => {
     ]);
   });
 
+  it.each([
+    ["src/plugins/contracts/registry.retry.test.ts", "contracts-plugins"],
+    [
+      "src/channels/plugins/contracts/session-binding.registry-backed.contract.test.ts",
+      "contracts-channels",
+    ],
+  ])("leaves covered contract target %s to its dedicated matrix", (target, task) => {
+    const before = createChangedNodeTestShards([target]);
+    const dedicatedContractShards = [{ task, includePatterns: [target] }];
+    expect(createChangedNodeTestShards([target], { dedicatedContractShards })).toEqual(
+      before?.filter((shard) => !shard.targets),
+    );
+    // The same path is still a direct local target; CI coverage is opt-in.
+    expect(buildVitestRunPlans([target]).flatMap((plan) => plan.includePatterns ?? [])).toEqual([
+      target,
+    ]);
+    for (const coverage of [
+      [],
+      [{ task, includePatterns: [] }],
+      [{ task, includePatterns: ["src/plugins/contracts/other.test.ts"] }],
+      [{ task: "unrelated-task", includePatterns: [target] }],
+    ]) {
+      expect(createChangedNodeTestShards([target], { dedicatedContractShards: coverage })).toEqual(
+        before,
+      );
+    }
+  });
+
+  it("keeps uncovered and deleted-path coverage beside a dedicated contract target", () => {
+    const target = "src/plugins/contracts/registry.retry.test.ts";
+    const remaining = [
+      "src/plugin-sdk/config-runtime.test.ts",
+      "src/channels/plugins/config-schema.test.ts",
+      "src/plugins/contracts/deleted.test.ts",
+    ];
+    const options = {
+      dedicatedContractShards: [{ task: "contracts-plugins", includePatterns: [target] }],
+    };
+    expect(createChangedNodeTestShards([target, ...remaining], options)).toEqual(
+      createChangedNodeTestShards(remaining),
+    );
+    expect(createChangedNodeTestShards([target, "src/deleted.ts"], options)).toBeNull();
+    expect(createChangedNodeTestShards([target, "tsconfig.json"], options)).toBeNull();
+  });
+
+  it("requires dedicated config ownership and preserves an empty precise build plan", () => {
+    const cwd = mkdtempSync(path.join(tmpdir(), "openclaw-contract-coverage-"));
+    const target = "src/plugins/contracts/fixture.test.ts";
+    const source = "src/fixture.ts";
+    const unrelated = [
+      "src/plugins/contracts/fixture.e2e.test.ts",
+      "src/channels/plugins/contracts/unowned.test.ts",
+    ];
+    try {
+      for (const file of [target, source, ...unrelated]) {
+        mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
+        writeFileSync(
+          path.join(cwd, file),
+          file === target ? 'import "../../fixture.js";\nexport {};\n' : "export {};\n",
+        );
+      }
+      for (const file of unrelated) {
+        const before = createChangedNodeTestShards([file], { cwd });
+        // E2E configs require full-suite metadata; an unknown channel pattern
+        // keeps its exact target rather than claiming dedicated coverage.
+        expect(before?.flatMap((shard) => shard.targets ?? []) ?? null).toEqual(
+          file.endsWith(".e2e.test.ts") ? null : [file],
+        );
+        expect(
+          createChangedNodeTestShards([file], {
+            cwd,
+            dedicatedContractShards: [
+              { task: "contracts-plugins", includePatterns: [file] },
+              { task: "contracts-channels", includePatterns: [file] },
+            ],
+          }),
+        ).toEqual(before);
+      }
+      const dedicatedContractShards = [{ task: "contracts-plugins", includePatterns: [target] }];
+      expect(
+        createChangedNodeTestShards([source], { cwd })?.flatMap((shard) => shard.targets ?? []),
+      ).toEqual([target]);
+      expect(createChangedNodeTestShards([source], { cwd, dedicatedContractShards })).toEqual([]);
+    } finally {
+      rmSync(cwd, { force: true, recursive: true });
+    }
+  });
+
   it("keeps boundary coverage on test-only diffs without the build-artifacts lane", () => {
     // Test-only diffs skip build-artifacts (which hosts the full boundary
     // gate), so the plan carries its own nondist boundary shard instead.

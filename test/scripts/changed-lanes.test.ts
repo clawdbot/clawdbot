@@ -1760,9 +1760,9 @@ describe("scripts/changed-lanes", () => {
       "src/plugin-sdk/config-runtime.test.ts",
       "src/plugins/contracts/registry.retry.test.ts",
       "src/channels/plugins/config-schema.test.ts",
-    ].map((path) => ({
+    ].map((changedPath) => ({
       name: "selects core test graphs",
-      path,
+      path: changedPath,
       expected: {
         lanes: { coreTests: true },
         includes: ["tsgo:core:test"],
