@@ -2834,14 +2834,18 @@ struct GatewayNodeSessionTests {
     }
 
     @Test(.stateDirectoryIsolated)
-    func `credentialless setup handoff does not send a stored device token`() async throws {
+    func `ownerless handoff does not persist or reuse an issued device token`() async throws {
         let identity = DeviceIdentityStore.loadOrCreate()
         _ = DeviceAuthStore.storeToken(
             deviceId: identity.deviceId,
             role: "node",
             token: "previous-gateway-device-token")
 
-        let session = FakeGatewayWebSocketSession()
+        let session = FakeGatewayWebSocketSession(helloAuth: [
+            "deviceToken": "ownerless-issued-device-token",
+            "role": "node",
+            "scopes": [],
+        ])
         let gateway = GatewayNodeSession()
         let options = nodeConnectOptions(includeDeviceIdentity: true, allowStoredDeviceAuth: false)
 
@@ -2856,8 +2860,23 @@ struct GatewayNodeSessionTests {
         #expect(auth["bootstrapToken"] == nil)
         #expect(auth["deviceToken"] == nil)
         #expect(task.latestConnectDevice() != nil)
-        #expect(await gateway.currentDeviceAuthRoles().persisted == [])
+        let initialRoles = await gateway.currentDeviceAuthRoles()
+        #expect(initialRoles.received == ["node"])
+        #expect(initialRoles.persisted.isEmpty)
+        #expect(DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: "node")?
+            .token == "previous-gateway-device-token")
 
+        try await waitUntil("ownerless socket receiving before reconnect") {
+            task.hasPendingReceiveHandler()
+        }
+        task.emitReceiveFailure()
+        try await waitUntil("ownerless reconnect socket created") {
+            session.snapshotMakeCount() == 2
+        }
+        let reconnectAuth = try #require(session.latestTask()?.latestConnectAuth())
+        #expect(reconnectAuth["token"] == nil)
+        #expect(reconnectAuth["bootstrapToken"] == nil)
+        #expect(reconnectAuth["deviceToken"] == nil)
         await gateway.disconnect()
     }
 
