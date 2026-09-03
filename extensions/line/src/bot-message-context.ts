@@ -475,7 +475,7 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
   // The turn answers what arrived. Saying so keeps the agent from describing a
   // short set as the whole send.
   const shortfallNotice = params.missingParts
-    ? `[line: ${params.missingParts} more image${params.missingParts === 1 ? "" : "s"} in this send were not delivered]`
+    ? `[line: ${params.missingParts === 1 ? "1 more image in this send was" : `${params.missingParts} more images in this send were`} not delivered]`
     : undefined;
   const withShortfall = shortfallNotice
     ? formatInboundMediaUnavailableText({ body: rawBody, notice: shortfallNotice })

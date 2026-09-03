@@ -460,6 +460,31 @@ describe("buildLineMessageContext", () => {
     );
   });
 
+  it("counts a single missing image in the singular", async () => {
+    const event = createMessageEvent({ type: "user", userId: "user-image" }, {
+      message: {
+        id: "image-1",
+        type: "image",
+        contentProvider: { type: "line" },
+      },
+    } as Partial<MessageEvent>);
+
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [{ path: "/tmp/one.png", contentType: "image/png" }],
+      missingParts: 1,
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    // A media-only send has no other text, so this sentence is the whole body the
+    // model reads; it has to be a sentence.
+    expect(context?.ctxPayload.BodyForAgent).toBe(
+      "[line: 1 more image in this send was not delivered]",
+    );
+  });
+
   it("keeps materialized media-only text empty and projects structured media facts", async () => {
     const event = createMessageEvent({ type: "user", userId: "user-image" }, {
       message: {
