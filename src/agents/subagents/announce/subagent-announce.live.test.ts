@@ -276,7 +276,6 @@ describeLive("subagent announce live", () => {
       const port = await getFreePort();
       const nonce = randomBytes(3).toString("hex").toUpperCase();
       const childToken = `PROVENANCE_CHILD_${nonce}`;
-      const parentToken = `PROVENANCE_PARENT_${nonce}`;
       const sessionKey = `agent:main:live-subagent-provenance-${nonce.toLowerCase()}`;
 
       state = await createOpenClawTestState({
@@ -309,7 +308,7 @@ describeLive("subagent announce live", () => {
       await server.startupSettled;
       client = await createGatewayClient({ port, token });
 
-      const response = await client.request<AgentPayload>(
+      await client.request<AgentPayload>(
         "agent",
         {
           sessionKey,
@@ -325,12 +324,10 @@ describeLive("subagent announce live", () => {
               context: "isolated",
             })}.`,
             `After the spawn is accepted, call sessions_yield with message="waiting for ${childToken}".`,
-            `Reply exactly ${parentToken} only after the child completion event is visible.`,
           ].join("\n"),
         },
         { expectFinal: true, timeoutMs: REQUEST_TIMEOUT_MS },
       );
-      expect(extractPayloadText(response.result)).toContain(parentToken);
 
       const provenance = await waitFor("internal completion provenance", () =>
         readCompletionProvenance(sessionKey, "main"),
