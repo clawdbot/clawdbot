@@ -87,7 +87,7 @@ import {
 } from "./pending-final-delivery.js";
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { attachProgressNarratorToReplyOptions } from "./progress-narrator.js";
-import { createReplyTimingTracker } from "./reply-timing-tracker.js";
+import { createReplyTimingTracker, isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
 import { mergeSkillFilters } from "./skill-filter.js";
@@ -327,10 +327,13 @@ export async function getReplyFromConfig(
       isFastTestEnv,
       configOverride,
     });
-  // Profiler spans stay inert unless diagnostics enable `profiler` or
-  // `reply.profiler`, so normal replies do not pay per-stage Date.now/array
-  // bookkeeping while we can still split resolver costs on demand.
-  const resolverTiming = createReplyTimingTracker({ log: replyResolverTimingLog, config: cfg });
+  // Retain preparation timings before a stall happens. Whole-turn summaries
+  // include inference and tools, so only profiling warns on their duration.
+  const profilerEnabled = isReplyProfilerEnabled({ config: cfg });
+  const resolverTiming = createReplyTimingTracker({
+    log: replyResolverTimingLog,
+    enabled: profilerEnabled,
+  });
   const useFastTestBootstrap = resolverTiming.measureSync("reply.resolve_fast_test_bootstrap", () =>
     shouldUseReplyFastTestBootstrap({
       isFastTestEnv,
@@ -1007,7 +1010,9 @@ export async function getReplyFromConfig(
         autoFallbackPrimaryProbe,
       }),
     );
-    logResolverTiming("completed", "fast_directive_prepared_reply");
+    if (profilerEnabled) {
+      logResolverTiming("completed", "fast_directive_prepared_reply");
+    }
     return fastReplyResult;
   }
 
@@ -1358,7 +1363,9 @@ export async function getReplyFromConfig(
       autoFallbackPrimaryProbe: runAutoFallbackPrimaryProbe,
     }),
   );
-  logResolverTiming("completed", "prepared_reply");
+  if (profilerEnabled) {
+    logResolverTiming("completed", "prepared_reply");
+  }
   return replyResult;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

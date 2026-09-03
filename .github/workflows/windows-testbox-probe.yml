@@ -9,7 +9,7 @@ on:
         default: "main"
         type: string
       runner_label:
-        description: "Windows runner label"
+        description: "Runner for Windows/WSL probes and headless CI"
         required: false
         default: "blacksmith-16vcpu-windows-2025"
         type: choice
@@ -58,7 +58,8 @@ jobs:
       run:
         shell: pwsh
     steps:
-      - name: Checkout
+      - &windows_checkout
+        name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.target_ref || github.ref }}
@@ -204,7 +205,8 @@ jobs:
 
           exit 0
 
-      - name: Try to exclude workspace from Windows Defender (best-effort)
+      - &windows_defender
+        name: Try to exclude workspace from Windows Defender (best-effort)
         if: ${{ inputs.run_windows_ci }}
         shell: pwsh
         run: |
@@ -222,7 +224,8 @@ jobs:
             Write-Warning "Failed to apply Defender exclusions, continuing. $($_.Exception.Message)"
           }
 
-      - name: Setup Node.js
+      - &windows_node
+        name: Setup Node.js
         if: ${{ inputs.run_windows_ci }}
         shell: bash
         env:
@@ -232,14 +235,16 @@ jobs:
           source .github/actions/setup-pnpm-store-cache/ensure-node.sh
           openclaw_ensure_node "$REQUESTED_NODE_VERSION"
 
-      - name: Setup pnpm
+      - &windows_pnpm
+        name: Setup pnpm
         if: ${{ inputs.run_windows_ci }}
         uses: ./.github/actions/setup-pnpm-store-cache
         with:
           cache-mode: restore
           node-version: 22.x
 
-      - name: Runtime versions
+      - &windows_versions
+        name: Runtime versions
         if: ${{ inputs.run_windows_ci }}
         shell: bash
         run: |
@@ -247,7 +252,8 @@ jobs:
           npm -v
           pnpm -v
 
-      - name: Capture node path
+      - &windows_node_path
+        name: Capture node path
         if: ${{ inputs.run_windows_ci }}
         shell: bash
         run: |
@@ -257,7 +263,8 @@ jobs:
           fi
           echo "NODE_BIN=$node_bin" >> "$GITHUB_ENV"
 
-      - name: Install dependencies
+      - &windows_install
+        name: Install dependencies
         if: ${{ inputs.run_windows_ci }}
         shell: bash
         env:
@@ -282,6 +289,42 @@ jobs:
           export PATH="$NODE_BIN:$PATH"
           pnpm test:windows:ci
 
+      - name: Keep runner alive for SSH inspection
+        if: ${{ always() && !cancelled() }}
+        env:
+          KEEPALIVE_MINUTES: ${{ inputs.keepalive_minutes }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $minutes = 20
+          if ($env:KEEPALIVE_MINUTES -match '^\d+$') {
+            $minutes = [int]$env:KEEPALIVE_MINUTES
+          }
+          $minutes = [Math]::Max(0, [Math]::Min($minutes, 60))
+          Write-Host "keepalive_minutes=$minutes"
+          for ($i = 1; $i -le $minutes; $i++) {
+            Write-Host "keepalive minute $i/$minutes"
+            Start-Sleep -Seconds 60
+          }
+
+      - name: Enforce WSL2 requirement
+        if: ${{ always() && !cancelled() && inputs.require_wsl2 }}
+        run: |
+          if ($env:OPENCLAW_WSL2_PROBE_OK -ne "true") {
+            if ($env:OPENCLAW_WSL2_RESTART_REQUIRED -eq "true") {
+              Write-Error "WSL2 probe enabled required Windows features, but the runner needs a reboot before WSL2 can start."
+              exit 1
+            }
+            Write-Error "WSL2 probe failed or WSL2 is unavailable on this Windows runner."
+            exit 1
+          }
+
+  # Native session qualification must not depend on headless CI or WSL results.
+  native-schtasks:
+    name: Native Scheduled Task proof
+    if: ${{ inputs.run_windows_ci }}
+    runs-on: windows-2025
+    timeout-minutes: 75
+    steps:
       - name: Preflight native Scheduled Task session
         if: ${{ inputs.run_windows_ci }}
         shell: pwsh
@@ -300,6 +343,14 @@ jobs:
             throw "Native Scheduled Task proof requires an interactive Windows runner session."
           }
           exit 0
+
+      - *windows_checkout
+      - *windows_defender
+      - *windows_node
+      - *windows_pnpm
+      - *windows_versions
+      - *windows_node_path
+      - *windows_install
 
       - name: Run native Scheduled Task lifecycle proof
         id: native_schtasks
@@ -357,7 +408,7 @@ jobs:
                 throw "Could not inspect Scheduled Task probe process $probePid."
               }
               if ($process) {
-                $probePath = Join-Path $env:TEST_ROOT "probe.cjs"
+                $probePath = Join-Path $env:TEST_ROOT "probe.mts"
                 $eventsPath = Join-Path $env:TEST_ROOT "runs.txt"
                 if (
                   $process.CommandLine -like "*$probePath*" -and
@@ -441,32 +492,3 @@ jobs:
           $profile = "schtasks-int-$env:TEST_ID"
           Remove-Item -LiteralPath (Join-Path $env:USERPROFILE ".openclaw-$profile") -Recurse -Force -ErrorAction SilentlyContinue
           Remove-Item -LiteralPath $env:TEST_ROOT -Recurse -Force -ErrorAction SilentlyContinue
-
-      - name: Keep runner alive for SSH inspection
-        if: ${{ always() && !cancelled() }}
-        env:
-          KEEPALIVE_MINUTES: ${{ inputs.keepalive_minutes }}
-        run: |
-          $ErrorActionPreference = "Stop"
-          $minutes = 20
-          if ($env:KEEPALIVE_MINUTES -match '^\d+$') {
-            $minutes = [int]$env:KEEPALIVE_MINUTES
-          }
-          $minutes = [Math]::Max(0, [Math]::Min($minutes, 60))
-          Write-Host "keepalive_minutes=$minutes"
-          for ($i = 1; $i -le $minutes; $i++) {
-            Write-Host "keepalive minute $i/$minutes"
-            Start-Sleep -Seconds 60
-          }
-
-      - name: Enforce WSL2 requirement
-        if: ${{ always() && !cancelled() && inputs.require_wsl2 }}
-        run: |
-          if ($env:OPENCLAW_WSL2_PROBE_OK -ne "true") {
-            if ($env:OPENCLAW_WSL2_RESTART_REQUIRED -eq "true") {
-              Write-Error "WSL2 probe enabled required Windows features, but the runner needs a reboot before WSL2 can start."
-              exit 1
-            }
-            Write-Error "WSL2 probe failed or WSL2 is unavailable on this Windows runner."
-            exit 1
-          }

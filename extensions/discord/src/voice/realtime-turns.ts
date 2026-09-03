@@ -132,7 +132,8 @@ export class DiscordRealtimeTurns {
       this.partialUserTranscript,
       this.params.wakeNames(),
     );
-    if (!wakeNameResult || wakeNameResult.edge !== "leading") {
+    // Incomplete words can look like fuzzy names; defer those to the final transcript.
+    if (wakeNameResult?.edge !== "leading" || wakeNameResult.match !== "exact") {
       return;
     }
     this.wakeNameAckedForTurn = true;

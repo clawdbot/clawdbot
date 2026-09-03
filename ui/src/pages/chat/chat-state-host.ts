@@ -12,6 +12,7 @@ import type {
   ChatComposerMemoryFallback,
   ChatGuardianNotice,
   ChatStreamSegment,
+  HumanMention,
 } from "../../lib/chat/chat-types.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import type { ChatRealtimeState } from "./chat-realtime.ts";
@@ -137,7 +138,7 @@ export type ChatPageHost = ChatHost &
     loadAssistantIdentity: () => Promise<void>;
     applySettings: (patch: Partial<UiSettings>) => void;
     handleChatScroll: (event: Event) => void;
-    handleChatDraftChange: (next: string) => void;
+    handleChatDraftChange: (next: string, mentions?: readonly HumanMention[]) => void;
     handleChatInputHistoryKey: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
     handleSendChat: (
       messageOverride?: string,
@@ -150,7 +151,7 @@ export type ChatPageHost = ChatHost &
     steerQueuedChatMessage: (id: string) => Promise<void>;
     moveQueuedChatMessage: (id: string, toIndex: number) => void;
     editQueuedChatMessage: (id: string) => void;
-    updateQueuedChatMessageEdit: (draftText: string) => void;
+    updateQueuedChatMessageEdit: (draftText: string, mentions?: readonly HumanMention[]) => void;
     submitQueuedChatMessageEdit: () => void;
     cancelQueuedChatMessageEdit: () => void;
     handleCloseSidebar: (slot: "detail" | "workspace") => void;

@@ -480,6 +480,51 @@ node reconnects once and lets disconnect cleanup remove the old connection state
 See [Active computer presence](/nodes/presence) for selection, privacy, model
 context, and notification-routing behavior.
 
+### Node host stats
+
+Connected CLI node hosts and the macOS app's shared node-host worker send a
+resource snapshot immediately after connecting, then every 60 seconds. They call
+`node.event` with `event: "node.host.stats"` and an object `payload` (or its JSON
+encoding in `payloadJSON`):
+
+```json
+{
+  "event": "node.host.stats",
+  "payload": {
+    "cpuCount": 8,
+    "loadAverage": [1.25, 1.1, 0.9],
+    "memoryTotalBytes": 17179869184,
+    "memoryFreeBytes": 4294967296,
+    "diskTotalBytes": 1000000000000,
+    "diskAvailableBytes": 250000000000
+  }
+}
+```
+
+`cpuCount` is an integer from 1 to 4096. Optional `loadAverage` contains the
+1-, 5-, and 15-minute averages, each finite and between 0 and 100000. Windows
+has no load average; hosts omit the field when all three readings are zero.
+Memory and disk values are non-negative integer bytes, with free or available
+bytes no greater than their total. Disk fields appear together only when the
+host can read capacity for the volume containing its home directory, independent
+of the worker's current directory.
+
+The Gateway accepts updates only from the current node connection and stamps
+`updatedAtMs` with its own receipt time; nodes never send a timestamp. Successful
+updates appear as `hostStats` in `node.list` and `node.describe` and broadcast
+`node.hostStats` with `{ nodeId, hostStats }` to read-scoped operators, using
+`dropIfSlow: true`. Stats are operator-facing and do not update model-visible
+node context. When received, the Gateway persists the snapshot as `lastHostStats`
+on the paired node record. Disconnecting or reconnecting without a new snapshot
+leaves the previous value intact.
+`node.list` and `node.describe` use live session stats while connected and
+project the saved snapshot as `hostStats` while offline, keeping its original
+`updatedAtMs` so clients can show the last-known age.
+
+The structured `node.event` result uses `reason: "updated"`, `"stale_connection"`,
+or `"invalid_payload"`. An older Gateway may return `handled: false`; the node
+continues at the normal cadence without an immediate retry.
+
 ### Node background alive event
 
 Nodes call `node.event` with `event: "node.presence.alive"` to record that a
@@ -668,9 +713,11 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `agents.files.list`, `agents.files.get`, and `agents.files.set` manage the bootstrap workspace files exposed for an agent.
     - `audit.activity.list` returns the versioned metadata-only activity ledger; `audit.run.inspect` discovers execution ids or inspects one exact execution identity context; `audit.list` remains the compatibility-safe run/tool RPC.
     - `agents.workspace.list` and `agents.workspace.get` (`operator.read`) expose read-only, paginated browsing of an agent's workspace directory for clients in the trusted operator domain described in [Operator scopes](/gateway/operator-scopes). Requests accept workspace-relative paths only; reads stay confined to the realpathed workspace root (symlink and hardlink escapes rejected), size-capped, and limited to UTF-8 text plus common image types (base64). Responses do not expose the host workspace path. There are no write operations in this namespace.
+    - `transcripts.list` (`operator.read`) lists durable meeting captures newest first. Optional `limit` accepts 1–200 (default 50); `providerId` filters the source. The `sessions` result includes selectors, provider/source locators, times, active state, utterance counts, participants, summary availability, optional model/heuristic provenance, and an overview preview capped at 280 characters. Source locators expose only `providerId`, `accountId`, `guildId`, `channelId`, and `meetingUrl`, never free-form metadata.
+    - `transcripts.get` (`operator.read`) accepts `selector` and optional `includeUtterances`. It returns the session and stored summary, including its canonical Markdown; requested utterances are sanitized and bounded by the capture limit of 2,000. Missing summaries omit `summary` rather than generating notes. Both transcript methods read across one trusted Gateway domain, like `agents.workspace.*`; separate domains are required for reader isolation. They do not export files or change capture state. See [Transcripts CLI](/cli/transcripts#gateway-and-control-ui-reads).
     - `tasks.list`, `tasks.get`, and `tasks.cancel` expose the gateway task ledger to SDK and operator clients. See [Task ledger RPCs](#task-ledger-rpcs) below.
     - `artifacts.list`, `artifacts.get`, and `artifacts.download` expose transcript-derived artifact summaries and downloads for an explicit `sessionKey`, `runId`, or `taskId` scope. Run and task queries resolve the owning session server-side and only return transcript media with matching provenance; unsafe or local URL sources return unsupported downloads instead of fetching server-side.
-    - `environments.list` and `environments.status` (`operator.read`) remain available without cloud-worker profiles and preserve gateway-local and node environment discovery. Node environments include the durable `sessionHost` identity used to keep a known offline host visible, while current connected inventory is authoritative over that history. Missing identity means false. Exact bounded `{ total, available }` worker slots are live-only and omitted offline; worker-turn admission consumes a slot, while node-backed remote-exec does not. Configured profile summaries expose their bounded, canonically ordered `executionModes` array plus the existing singular `executionMode` primary/default display projection. Current clients select profiles only by membership in `executionModes`. Configured cloud workers and durable records left by earlier profiles add `worker` metadata with `providerId`, optional `leaseId`, `state`, `ageMs`, optional `idleMs`, and `attachedSessionIds`. Worker lifecycle states are `requested`, `provisioning`, `bootstrapping`, `ready`, `attached`, `idle`, `draining`, `destroying`, `destroyed`, `failed`, and `orphaned`. A connected node may also include `workerBundle: { status: "installed", version }` or `workerBundle: { status: "missing" }`. This optional observation is reconnect-scoped and reports validation of one Gateway-retained bundle; it is not launch authority. The public result never exposes the bundle hash, Gateway namespace, node filesystem path, receipt, or protocol-feature details.
+    - `environments.list` and `environments.status` (`operator.read`) remain available without cloud-worker profiles and preserve gateway-local and node environment discovery. `environments.list` also accepts an optional `runtimeId` from callers with `operator.write`. That request adds one Gateway-owned `requiredNodeCommand` result to each connected node when the runtime requires a node command. Its closed state is `invocable`, `pending-approval`, `undeclared`, or `unauthorized`; it never exposes the node's full pending declaration. Node environments include the durable `sessionHost` identity used to keep a known offline host visible, while current connected inventory is authoritative over that history. Missing identity means false. Exact bounded `{ total, available }` worker slots are live-only and omitted offline; worker-turn admission consumes a slot, while node-backed remote-exec does not. Configured profile summaries expose their bounded, canonically ordered `executionModes` array plus the existing singular `executionMode` primary/default display projection. Current clients select profiles only by membership in `executionModes`. Configured cloud workers and durable records left by earlier profiles add `worker` metadata with `providerId`, optional `leaseId`, `state`, `ageMs`, optional `idleMs`, and `attachedSessionIds`. Worker lifecycle states are `requested`, `provisioning`, `bootstrapping`, `ready`, `attached`, `idle`, `draining`, `destroying`, `destroyed`, `failed`, and `orphaned`. A connected node may also include `workerBundle: { status: "installed", version }` or `workerBundle: { status: "missing" }`. This optional observation is reconnect-scoped and reports validation of one Gateway-retained bundle; it is not launch authority. The public result never exposes the bundle hash, Gateway namespace, node filesystem path, receipt, or protocol-feature details.
     - `environments.create` (`{ profileId, idempotencyKey }`) provisions an environment from a configured plugin provider profile; retries with the same key reuse the durable operation. Direct creation without a session does not select an execution mode, so the provider uses its intentional default; Crabbox prepares `worker-turn`. `environments.destroy` (`{ environmentId }`) requests idempotent teardown of a durable worker environment. Both require `operator.admin`, are control-plane writes, and return the same environment summary shape used by status responses.
     - `worker.desktop.observe` (`{ environmentId, control? }`, `operator.admin`) starts or reuses the environment's desktop forward and returns `{ transport, wsPath, expiresAtMs, control, vncPassword? }`. `wsPath` carries a single-use 60-second token for the Gateway's desktop observer WebSocket; reconnecting requires a fresh observe call. Environments with an observable desktop advertise `worker.desktop: true` in `environments.list`. The method is advertised only when the `cloudWorkers.desktop` lab is enabled. See [Cloud workers](/gateway/cloud-workers#desktop-interactive).
     - `agent.identity.get` returns the effective assistant identity for an agent or session.
@@ -1089,7 +1136,12 @@ return sanitized task summaries, not raw runtime state.
   - Params: optional `status` (`"queued"`, `"running"`, `"completed"`,
     `"failed"`, `"cancelled"`, or `"timed_out"`) or an array of those statuses,
     optional `agentId`, optional `sessionKey`, optional `limit` from `1` to
-    `500`, and optional string `cursor`.
+    `500`, optional string `cursor`, and optional `sortBy` (`"updatedAt"` or
+    `"endedAt"`). Ordering is descending; omitted `sortBy` uses last activity.
+    Use `"endedAt"` with terminal status filters when page membership must
+    reflect completion order. Legacy terminal rows without a stored `endedAt`
+    use their recorded terminal activity time, then creation time, as the
+    canonical completion timestamp before pagination.
   - Result: `{ "tasks": TaskSummary[], "nextCursor"?: string }`.
 - `tasks.get` requires `operator.read`.
   - Params: `{ "taskId": string }`.

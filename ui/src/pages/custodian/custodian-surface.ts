@@ -4,21 +4,17 @@ import { property } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { controlUiPublicAssetPath } from "../../app/public-assets.ts";
 import { icons } from "../../components/icons.ts";
-import {
-  handleMarkdownCodeBlockClick,
-  markdownCodeBlocks,
-} from "../../components/markdown-code-blocks.ts";
-import {
-  enhanceMarkdownTables,
-  handleMarkdownTableInteraction,
-  releaseMarkdownTables,
-} from "../../components/markdown-tables.ts";
+import { markdownBlocks } from "../../components/markdown-blocks.ts";
+import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blocks.ts";
+import { handleMarkdownTableInteraction } from "../../components/markdown-tables.ts";
 import { renderPanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 import "../../components/openclaw-mascot.ts";
 import { t } from "../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import "../../styles/chat/grouped.css";
 import "../../styles/chat/layout.css";
+import "../../styles/chat/message-layout.css";
+import "../../styles/chat/composer.css";
 import "../../styles/chat/text.css";
 import "../../styles/custodian.css";
 import { renderCustodianAlertCard } from "./custodian-alert-card.ts";
@@ -46,7 +42,6 @@ class CustodianSurface extends OpenClawLightDomElement {
   private storeCleanup: (() => void) | null = null;
   private alertCleanup: (() => void) | null = null;
   private lastMessageId: number | null = null;
-  private markdownHost: HTMLElement | null = null;
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -55,10 +50,6 @@ class CustodianSurface extends OpenClawLightDomElement {
   }
 
   override disconnectedCallback(): void {
-    if (this.markdownHost) {
-      releaseMarkdownTables(this.markdownHost);
-      this.markdownHost = null;
-    }
     this.storeCleanup?.();
     this.storeCleanup = null;
     this.alertCleanup?.();
@@ -94,11 +85,6 @@ class CustodianSurface extends OpenClawLightDomElement {
       );
     }
     const transcript = this.querySelector<HTMLElement>(".custodian__messages");
-    if (transcript) {
-      // Assistant bubbles emit table controls that need this transcript owner.
-      this.markdownHost = transcript;
-      enhanceMarkdownTables(transcript);
-    }
     const messageId = this.store.messages.at(-1)?.id ?? null;
     if (messageId !== this.lastMessageId) {
       this.lastMessageId = messageId;
@@ -169,7 +155,7 @@ class CustodianSurface extends OpenClawLightDomElement {
       >
         <div
           class="custodian__messages"
-          ${markdownCodeBlocks()}
+          ${markdownBlocks()}
           aria-live="polite"
           @click=${(event: MouseEvent) => {
             handleMarkdownCodeBlockClick(event);

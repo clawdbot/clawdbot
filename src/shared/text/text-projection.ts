@@ -1,4 +1,5 @@
 import { escapeRegExp } from "../regexp.js";
+import { findCodeRegions } from "./code-regions.js";
 
 type TextProjection = { text: string; delta: string | null };
 type TextProjector = (input: TextProjection) => TextProjection;
@@ -155,7 +156,49 @@ export const leadingEmptyLinesTextFilter: TextFilter = {
   },
 };
 
-function createDuplicateParagraphProjector(): TextProjector {
+function collapsePlainDuplicateParagraphs(text: string): string {
+  return createDuplicateParagraphProjector(false)({ text, delta: null }).text;
+}
+
+function collapseDuplicateParagraphs(text: string): string {
+  const collapsed = collapsePlainDuplicateParagraphs(text);
+  if (collapsed === text) {
+    return text;
+  }
+  const regions = findCodeRegions(text);
+  if (regions.length === 0) {
+    return collapsed;
+  }
+  // The marker is absent from source, so each indexed token is collision-free.
+  let marker = "\0";
+  while (text.includes(marker)) {
+    marker += "\0";
+  }
+  const inlineTokens = new Map<string, string>();
+  const protectedRegions = regions.map((region, index) => {
+    const source = text.slice(region.start, region.end);
+    let token = `${marker}${index}${marker}`;
+    if (!region.block) {
+      token = inlineTokens.get(source) ?? token;
+      inlineTokens.set(source, token);
+    }
+    return { region, token };
+  });
+  let masked = "";
+  let cursor = 0;
+  for (const { region, token } of protectedRegions) {
+    masked += text.slice(cursor, region.start) + token;
+    cursor = region.end;
+  }
+  let projected = collapsePlainDuplicateParagraphs(masked + text.slice(cursor));
+  for (const { region, token } of protectedRegions) {
+    // Replacement-string dollar sequences must remain literal inside code.
+    projected = projected.replace(token, () => text.slice(region.start, region.end));
+  }
+  return projected;
+}
+
+function createDuplicateParagraphProjector(protectCode = true): TextProjector {
   let active = false;
   let trailingNewline = false;
   let text = "";
@@ -239,13 +282,20 @@ function createDuplicateParagraphProjector(): TextProjector {
     const collapsed = hasDuplicate || duplicate;
     let delta = input.delta;
     if (collapsed) {
+      // Code can expose pending whitespace; the plain suffix cannot safely append across it.
       delta =
-        input.delta === null || !wasCollapsed || duplicate !== wasDuplicate || completedParagraph
+        input.delta === null ||
+        !wasCollapsed ||
+        duplicate !== wasDuplicate ||
+        completedParagraph ||
+        (protectCode && /\s$/.test(text))
           ? null
           : added;
       text =
         delta === null
-          ? completed + (paragraph && !duplicate ? (completed ? "\n\n" : "") + paragraph : "")
+          ? protectCode
+            ? collapseDuplicateParagraphs(input.text)
+            : completed + (paragraph && !duplicate ? (completed ? "\n\n" : "") + paragraph : "")
           : text + delta;
     } else {
       text = input.text;
@@ -261,6 +311,6 @@ function createDuplicateParagraphProjector(): TextProjector {
 }
 
 export const duplicateParagraphTextFilter: TextFilter = {
-  transform: (text) => createDuplicateParagraphProjector()({ text, delta: null }).text,
+  transform: collapseDuplicateParagraphs,
   create: createDuplicateParagraphProjector,
 };

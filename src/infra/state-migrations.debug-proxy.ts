@@ -7,6 +7,7 @@ import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js"
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { sha256Hex } from "./crypto-digest.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "./sqlite-number.js";
 
 const DEBUG_PROXY_SQLITE_SIDECAR_SUFFIXES = ["", "-shm", "-wal", "-journal"] as const;
 
@@ -144,7 +145,7 @@ function assertTableColumns(db: DatabaseSync, table: string, expected: readonly 
 }
 
 function normalizeSqliteInteger(value: number | bigint | null): number | null {
-  return typeof value === "bigint" ? Number(value) : value;
+  return value === null ? null : sqliteNumber(value);
 }
 
 function readLegacyDebugProxyCapture(params: { sourcePath: string; blobDir: string }): {

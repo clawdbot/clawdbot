@@ -20,9 +20,10 @@ import { resolveChatPaneWorkerPresentation } from "./chat-pane-placement.ts";
 async function loadPlacementMoveCatalog(
   client: GatewayBrowserClient,
   includeProfiles: boolean,
+  runtimeId: string | undefined,
   requirement?: DevicePlacementRequirement,
 ) {
-  const catalog = await requestPlaceCatalog(client);
+  const catalog = await requestPlaceCatalog(client, runtimeId);
   return {
     profiles: includeProfiles ? catalog.profiles : [],
     devices: projectDevicePlacements(catalog.environments, requirement),
@@ -57,6 +58,7 @@ async function selectChatPanePlacementTarget(params: {
       await loadPlacementMoveCatalog(
         params.client,
         hasOperatorAdminAccess(params.gatewaySnapshot.hello?.auth ?? null),
+        runtime?.id,
         runtime?.devicePlacement,
       ),
   });

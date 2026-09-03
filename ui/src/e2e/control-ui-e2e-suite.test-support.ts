@@ -1,5 +1,6 @@
 import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, inject } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, inject, vi } from "vitest";
+import { getActiveGatewayRootWorkCount } from "../../../src/process/gateway-work-admission.js";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
@@ -90,6 +91,17 @@ export async function holdModuleResponse(page: Page, module: RegExp) {
   return { request, release, requests: () => requests };
 }
 
+export async function closeControlUiE2eBrowserContext(context: BrowserContext): Promise<void> {
+  await context.close();
+  // Requests outlive sockets; Gateway cleanup must not retire their admission
+  // roots before pending handlers (including lazy imports) have finished.
+  // waitFor also works in afterAll; retain the UI E2E config's poll budget.
+  await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0), {
+    interval: 100,
+    timeout: 15_000,
+  });
+}
+
 export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): ControlUiE2eSuite {
   // Global setup already checked the executable; keep that result across isolated files.
   const { executablePath: chromiumExecutablePath, available: chromiumAvailable } =
@@ -104,7 +116,7 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
 
   const closeBrowserContext = async (context: BrowserContext): Promise<void> => {
     // Retain failed closes for the final browser teardown owner.
-    await context.close();
+    await closeControlUiE2eBrowserContext(context);
     openBrowserContexts.delete(context);
   };
   const closeOpenBrowserContexts = async (): Promise<void> => {

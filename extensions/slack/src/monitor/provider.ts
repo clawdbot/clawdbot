@@ -449,6 +449,22 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         installationState.update(contextInstallationIdentity.kind);
         await installSlackRuntimeForIdentity(contextInstallationIdentity);
       }
+      if (
+        !current.apiAppId &&
+        identity.apiAppId &&
+        current.installationIdentity.kind !== "degraded"
+      ) {
+        // HTTP accounts have no app token and auth.test omits app_id for bot tokens,
+        // so the first signed event is the earliest trusted source. Recorded once;
+        // later mismatches are dropped by shouldDropMismatchedSlackEvent, never re-learned.
+        applySlackInstallationIdentity(current, {
+          ...current.installationIdentity,
+          apiAppId: identity.apiAppId,
+        });
+        runtime.log?.(
+          `[${account.accountId}] slack app id ${identity.apiAppId} learned from signed event`,
+        );
+      }
       if (recovered || adopted) {
         publishSlackConnectedStatus(opts.setStatus, current.identityHealth);
       }
@@ -867,7 +883,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         ...(identity.kind === "enterprise"
           ? {
               enterprise: {
-                apiAppId: identity.apiAppId,
                 enterpriseId: identity.enterpriseId,
               },
             }

@@ -101,7 +101,11 @@ const standaloneFile = "ui/src/e2e/board-fixture.e2e.test.ts";
 const bundledFile = "ui/src/e2e/mount-fallback.e2e.test.ts";
 const serialBundledFile = "ui/src/e2e/chat-stream-runtime-budgets.e2e.test.ts";
 const privateFile = "ui/src/e2e/approval-bootstrap.e2e.test.ts";
-const qaLabFile = "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts";
+const qaLabFiles = [
+  "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
+  "extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts",
+  "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
+];
 
 type OwnershipProbe = {
   files: Array<{ file: string; project: string; phase: number; workers: number }>;
@@ -360,31 +364,25 @@ describe("Control UI E2E resource ownership", () => {
     },
   );
 
-  it("owns the complete inventory once and shards the project union without losing QA Lab or real-Gateway siblings", () => {
+  it("owns the complete inventory once and shards the project union without losing QA Lab or real-Gateway siblings", async () => {
+    const { uiE2ePrivateServerTestFiles, uiE2eSerialTestFiles } =
+      await import("./vitest/vitest.ui-e2e.config.ts");
     const result = probeOwnership();
     const inventory = fs
-      .globSync(["ui/src/**/*.e2e.test.ts", qaLabFile], { cwd: repoRoot })
+      .globSync(["ui/src/**/*.e2e.test.ts", ...qaLabFiles], { cwd: repoRoot })
       .toSorted();
     expect(result.files.map((entry) => entry.file).toSorted()).toEqual(inventory);
     expect(result.setupError).toBeUndefined();
     expect(result.rootWorkers).toBeGreaterThan(0);
     expect(result.rootWorkers).toBeLessThanOrEqual(2);
-    expect(
-      Object.fromEntries(
-        ["ui-e2e-bundled", "ui-e2e-standalone", "ui-e2e-serial", "ui-e2e-serial-standalone"].map(
-          (name) => [name, result.files.filter((entry) => entry.project === name).length],
-        ),
-      ),
-    ).toEqual({
-      "ui-e2e-bundled": inventory.length - 30,
-      "ui-e2e-standalone": 3,
-      "ui-e2e-serial": 7,
-      "ui-e2e-serial-standalone": 20,
-    });
     for (const entry of result.files) {
-      const serial = entry.project.startsWith("ui-e2e-serial");
+      const serial = uiE2eSerialTestFiles.includes(entry.file);
+      expect(entry.project.startsWith("ui-e2e-serial")).toBe(serial);
       expect(entry.phase).toBe(serial ? 1 : 0);
       expect(entry.workers).toBe(serial ? 1 : result.rootWorkers);
+      if (uiE2ePrivateServerTestFiles.includes(entry.file)) {
+        expect(entry.project).toBe("ui-e2e-serial-standalone");
+      }
     }
     expect(result.leases).toEqual([{ outDir: expect.any(String), closed: true, removed: true }]);
     expect(result.shards.flat().toSorted()).toEqual(inventory);
@@ -397,13 +395,14 @@ describe("Control UI E2E resource ownership", () => {
     const realGateway = [
       "agent-file-lifecycle.real-gateway",
       "control-ui-auth-transports",
+      "cron-duration-save.real-gateway",
       "logs-lifecycle",
       "mcp-app-conformance",
       "session-progress-hovercard.real-gateway",
       "usage-sessions-owner-attribution",
     ]
       .map((name) => `ui/src/e2e/${name}.e2e.test.ts`)
-      .concat(qaLabFile);
+      .concat(qaLabFiles);
     expect(
       result.files
         .filter((entry) => realGateway.includes(entry.file))
@@ -411,7 +410,7 @@ describe("Control UI E2E resource ownership", () => {
     ).toEqual(
       realGateway.toSorted().map((file) => ({
         file,
-        project: file.endsWith("/mcp-app-conformance.e2e.test.ts")
+        project: uiE2ePrivateServerTestFiles.includes(file)
           ? "ui-e2e-serial-standalone"
           : "ui-e2e-serial",
       })),
@@ -522,7 +521,7 @@ describe("Control UI E2E Vitest sharding", () => {
 
   it("assigns every discovered file once with committed timings, ignoring stale keys", async () => {
     const committed = fs.readFileSync(timingPath, "utf8");
-    const discovered = fs.globSync(["ui/src/**/*.e2e.test.ts", qaLabFile], { cwd: repoRoot });
+    const discovered = fs.globSync(["ui/src/**/*.e2e.test.ts", ...qaLabFiles], { cwd: repoRoot });
     const { uiE2eSerialTestFiles } = await import("./vitest/vitest.ui-e2e.config.ts");
     const serial = new Set(uiE2eSerialTestFiles);
     const files = [
@@ -563,7 +562,7 @@ describe("Control UI E2E Vitest sharding", () => {
   ])("preserves the no-file partition with %s", async (_name, contents) => {
     const files = specifications(
       fs
-        .globSync(["ui/src/**/*.e2e.test.ts", qaLabFile], { cwd: repoRoot })
+        .globSync(["ui/src/**/*.e2e.test.ts", ...qaLabFiles], { cwd: repoRoot })
         .map((file) => path.join(repoRoot, file)),
     );
     useTimings(null);

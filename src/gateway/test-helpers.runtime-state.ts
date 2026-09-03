@@ -63,7 +63,13 @@ type GatewayTestHoistedState = {
     resolveEndBeforeTimeoutIds: Set<string>;
     compactEmbeddedAgentSession: Mock<CompactEmbeddedAgentSessionFn>;
   };
-  testTailscaleWhois: { value: TailscaleWhoisIdentity | null };
+  testTailscaleWhois: {
+    value: TailscaleWhoisIdentity | null;
+    calls: Array<{
+      ip: string;
+      opts?: { timeoutMs?: number; cacheTtlMs?: number; errorTtlMs?: number };
+    }>;
+  };
   getReplyFromConfig: Mock<GetReplyFromConfigFn>;
   sendWhatsAppMock: Mock<SendWhatsAppFn>;
   testState: {
@@ -125,7 +131,7 @@ const gatewayTestHoisted = vi.hoisted(() => {
         },
       }),
     },
-    testTailscaleWhois: { value: null },
+    testTailscaleWhois: { value: null, calls: [] },
     getReplyFromConfig: vi.fn<GetReplyFromConfigFn>().mockResolvedValue(undefined),
     sendWhatsAppMock: vi.fn().mockResolvedValue({ messageId: "msg-1", toJid: "jid-1" }),
     testState: {

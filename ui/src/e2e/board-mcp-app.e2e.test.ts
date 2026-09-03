@@ -41,15 +41,11 @@ function widget(index: number) {
   } as const;
 }
 
-function boardSnapshot(
-  count: number,
-  chatDock: "left" | "right" | "bottom" | "hidden" = "right",
-  revision = 1,
-) {
+function boardSnapshot(count: number, revision = 1) {
   return {
     sessionKey,
     revision,
-    tabs: [{ tabId: "main", title: "Main", position: 0, chatDock }],
+    tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
     widgets: Array.from({ length: count }, (_, index) => widget(index)),
   };
 }
@@ -151,40 +147,23 @@ async function readBoardIdentity(page: Page) {
   });
 }
 
-async function expectRetainedBoardMode(
+async function expectRetainedBoardPresentation(
   page: Page,
-  mode: "chat" | "split" | "dashboard",
+  presentation: "split" | "expanded",
 ): Promise<void> {
-  const hidden = mode === "chat";
   await expect
     .poll(() => readBoardIdentity(page))
-    .toEqual({ connected: true, hidden, inert: hidden, same: true });
-  await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(!hidden);
+    .toEqual({ connected: true, hidden: false, inert: false, same: true });
+  await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(true);
   await expect
-    .poll(() =>
-      page
-        .locator("wa-radio.settings-segmented__btn--active")
-        .evaluateAll((radios) => radios.map((radio) => radio.getAttribute("value"))),
-    )
-    .toEqual([mode]);
-}
-
-async function waitForCachedBoardFace(page: Page, face: "chat" | "dashboard"): Promise<void> {
-  await page.waitForFunction(
-    ({ key, expectedFace }) => {
-      const chatPage = document.querySelector("openclaw-chat-page");
-      const context = chatPage ? Reflect.get(chatPage, "context") : undefined;
-      const sessions = context?.sessions?.state?.result?.sessions;
-      return (
-        Array.isArray(sessions) &&
-        sessions.some(
-          (session: { key?: unknown; boardFace?: unknown }) =>
-            session.key === key && session.boardFace === expectedFace,
-        )
-      );
-    },
-    { key: sessionKey, expectedFace: face },
-  );
+    .poll(() => page.locator(".sidebar-region__right-runtime .side-panel").count())
+    .toBe(1);
+  await expect
+    .poll(() => page.locator(".sidebar-region--expanded").count())
+    .toBe(presentation === "expanded" ? 1 : 0);
+  await expect
+    .poll(() => page.locator(".chat-thread").isVisible())
+    .toBe(presentation !== "expanded");
 }
 
 describeControlUiE2e("Control UI dashboard MCP Apps", () => {
@@ -351,7 +330,7 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
     );
   });
 
-  it("retains one board runtime across Chat, Split, and Dashboard", async () => {
+  it("retains one board runtime across split and expanded panel states", async () => {
     const context = await browser.newContext({
       permissions: ["local-network-access"],
       viewport: { width: 1280, height: 800 },
@@ -362,7 +341,6 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
       sessionKey,
       featureMethods: [
         "board.get",
-        "board.update",
         "board.widget.appView",
         "chat.history",
         "chat.metadata",
@@ -371,14 +349,7 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
         "sessions.patch",
       ],
       methodResponses: {
-        "board.get": boardSnapshot(1, "hidden"),
-        "board.update": {
-          sequence: [
-            boardSnapshot(1, "right", 2),
-            boardSnapshot(1, "hidden", 3),
-            boardSnapshot(1, "right", 4),
-          ],
-        },
+        "board.get": boardSnapshot(1),
         "board.widget.appView": {
           viewId: "retained-view",
           expiresAtMs: Date.now() + 3_600_000,
@@ -395,64 +366,19 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
       appView: (await gateway.getRequests("board.widget.appView")).length,
       mcpView: (await gateway.getRequests("mcp.app.view")).length,
     };
-    const initialPatchCount = (await gateway.getRequests("sessions.patch")).length;
-    const mode = (value: "chat" | "split" | "dashboard") =>
-      page.locator(`wa-radio.settings-segmented__btn[value="${value}"]`);
+    const stablePatchCount = (await gateway.getRequests("sessions.patch")).length;
+    const stableListCount = (await gateway.getRequests("sessions.list")).length;
+    const sidePanel = page.locator(".sidebar-region__right-runtime .side-panel");
+    await expectRetainedBoardPresentation(page, "split");
 
-    await mode("chat").click();
-    await expect
-      .poll(async () => (await gateway.getRequests("sessions.patch")).length)
-      .toBe(initialPatchCount + 1);
-    expect((await gateway.getRequests("sessions.patch")).at(-1)?.params).toMatchObject({
-      agentId: "main",
-      boardFace: "chat",
-      key: sessionKey,
-    });
-    await expectRetainedBoardMode(page, "chat");
+    await sidePanel.getByRole("button", { name: "Expand side panel" }).click();
+    await expectRetainedBoardPresentation(page, "expanded");
 
-    await mode("split").click();
-    await expect.poll(async () => (await gateway.getRequests("board.update")).length).toBe(1);
-    await expect
-      .poll(async () => (await gateway.getRequests("sessions.patch")).length)
-      .toBe(initialPatchCount + 2);
-    expect((await gateway.getRequests("sessions.patch")).at(-1)?.params).toMatchObject({
-      agentId: "main",
-      boardFace: "dashboard",
-      key: sessionKey,
-    });
-    await expectRetainedBoardMode(page, "split");
-    await waitForCachedBoardFace(page, "dashboard");
-
-    const facePatchCount = (await gateway.getRequests("sessions.patch")).length;
-    const faceListCount = (await gateway.getRequests("sessions.list")).length;
-    await mode("dashboard").click();
-    await expect.poll(async () => (await gateway.getRequests("board.update")).length).toBe(2);
-    expect(await gateway.getRequests("sessions.patch")).toHaveLength(facePatchCount);
-    expect(await gateway.getRequests("sessions.list")).toHaveLength(faceListCount);
-    await expectRetainedBoardMode(page, "dashboard");
-
-    await mode("split").click();
-    await expect.poll(async () => (await gateway.getRequests("board.update")).length).toBe(3);
-    expect(await gateway.getRequests("sessions.patch")).toHaveLength(facePatchCount);
-    expect(await gateway.getRequests("sessions.list")).toHaveLength(faceListCount);
-    await expectRetainedBoardMode(page, "split");
-    expect((await gateway.getRequests("board.update")).map((request) => request.params)).toEqual([
-      {
-        sessionKey,
-        agentId: "main",
-        ops: [{ kind: "tab_update", tabId: "main", chatDock: "right" }],
-      },
-      {
-        sessionKey,
-        agentId: "main",
-        ops: [{ kind: "tab_update", tabId: "main", chatDock: "hidden" }],
-      },
-      {
-        sessionKey,
-        agentId: "main",
-        ops: [{ kind: "tab_update", tabId: "main", chatDock: "right" }],
-      },
-    ]);
+    await sidePanel.getByRole("button", { name: "Collapse" }).click();
+    await expectRetainedBoardPresentation(page, "split");
+    expect(await gateway.getRequests("board.update")).toHaveLength(0);
+    expect(await gateway.getRequests("sessions.patch")).toHaveLength(stablePatchCount);
+    expect(await gateway.getRequests("sessions.list")).toHaveLength(stableListCount);
     expect(await gateway.getRequests("board.get")).toHaveLength(stableCounts.boardGet);
     expect(await gateway.getRequests("board.widget.appView")).toHaveLength(stableCounts.appView);
     expect(await gateway.getRequests("mcp.app.view")).toHaveLength(stableCounts.mcpView);

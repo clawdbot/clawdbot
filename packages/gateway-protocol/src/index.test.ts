@@ -26,9 +26,6 @@ import {
   validateSessionsSearchParams,
   validateSessionsSendParams,
   validateSessionsUsageParams,
-  validateTasksCancelParams,
-  validateTasksListParams,
-  validateTasksRecoveryParams,
   validateTalkConfigResult,
   validateTalkClientCreateParams,
   validateTalkClientCreateResult,
@@ -172,8 +169,12 @@ describe("lazy protocol validators", () => {
   });
 
   it("validates session board face list and patch values", () => {
-    expectAccepted(validateSessionsListParams, [{ boardFace: "dashboard" }]);
-    expectRejected(validateSessionsListParams, [{ boardFace: "grid" }]);
+    expectAccepted(validateSessionsListParams, [
+      { boardFace: "dashboard" },
+      { hasBoard: true },
+      { hasBoard: false },
+    ]);
+    expectRejected(validateSessionsListParams, [{ boardFace: "grid" }, { hasBoard: "yes" }]);
     expectAccepted(validateSessionsPatchParams, [{ key: "agent:main:main", boardFace: "chat" }]);
     expectRejected(validateSessionsPatchParams, [{ key: "agent:main:main", boardFace: "grid" }]);
     // The schemas are closed objects; the pre-rename name must not slip back in.
@@ -1038,36 +1039,6 @@ describe("validateModelsProbeParams", () => {
       {},
       { provider: "openai", timeoutMs: 0 },
       { provider: "openai", extra: true },
-    ]);
-  });
-});
-
-describe("validateTasksListParams", () => {
-  it("accepts SDK task ledger filters", () => {
-    expectAccepted(validateTasksListParams, [
-      {
-        status: ["running", "completed"],
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        limit: 50,
-        cursor: "100",
-      },
-    ]);
-  });
-
-  it("rejects internal task statuses and unknown fields", () => {
-    expectRejected(validateTasksListParams, [{ status: "succeeded" }]);
-    expectRejected(validateTasksCancelParams, [{ taskId: "task-1", force: true }]);
-  });
-});
-
-describe("validateTasksRecoveryParams", () => {
-  it("accepts one to ten task ids and rejects unbounded recovery batches", () => {
-    expectAccepted(validateTasksRecoveryParams, [{ taskIds: ["task-1", "task-2"] }]);
-    expectRejected(validateTasksRecoveryParams, [
-      { taskIds: [] },
-      { taskIds: Array.from({ length: 11 }, (_, index) => `task-${index}`) },
-      { taskIds: ["task-1"], force: true },
     ]);
   });
 });

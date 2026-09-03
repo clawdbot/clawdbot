@@ -314,6 +314,7 @@ Now create channels and start chatting. The agent sees the channel name, and eac
 - Group DMs are ignored by default (`channels.discord.dm.groupEnabled=false`).
 - Native slash commands run in isolated command sessions (`agent:<agentId>:discord:slash:<userId>`), while still carrying `CommandTargetSessionKey` to the routed conversation session.
 - Text-only cron/heartbeat announce delivery to Discord collapses to the final assistant-visible answer, sent once. Media and structured component payloads remain multi-message when the agent emits multiple deliverable payloads.
+- A send response without a Discord message ID stays unconfirmed. Queued delivery records the missing identity for recovery instead of reporting success or immediately sending a duplicate; inspect delivery warnings with `openclaw health --verbose`.
 
 ## Forum channels
 
@@ -1282,7 +1283,7 @@ Notes:
 - `stt-tts` replies remain active until Discord finishes playing them; long responses are not cut off by a fixed one-minute playback deadline.
 - In realtime modes, `voice.realtime.provider`, `voice.realtime.model`, and `voice.realtime.speakerVoice` configure the realtime audio session. For OpenAI Realtime 2.1 plus the Codex brain, use `voice.realtime.model: "gpt-realtime-2.1"` and `voice.model: "openai/gpt-5.6-sol"`.
 - Realtime voice modes include small `IDENTITY.md`, `USER.md`, and `SOUL.md` profile files in the realtime provider instructions by default so fast direct turns keep the same identity, user grounding, and persona as the routed OpenClaw agent. Set `voice.realtime.bootstrapContextFiles` to a subset to customize this, or `[]` to disable it. Only those profile files are supported; `AGENTS.md` stays in the normal agent context. The injected profile context does not replace `openclaw_agent_consult` for workspace work, current facts, memory lookup, or tool-backed actions.
-- In OpenAI `agent-proxy` realtime mode, wake-name gating adapts to the room by default: one human can talk naturally without a wake name, while two or more humans must start or end a turn with one. Other bots do not count as people. Set `voice.realtime.requireWakeName: true` to always require a wake name or `false` to never require one. Configured wake names must be one or two words. If `voice.realtime.wakeNames` is unset, OpenClaw uses the routed agent `name` plus `OpenClaw`, falling back to the agent id plus `OpenClaw`. An active wake-name gate disables realtime provider auto-response, routes accepted turns through the OpenClaw agent consult path, and gives a short spoken acknowledgement when a leading wake name is recognized from partial transcription before the final transcript arrives. The policy follows live joins and leaves without reconnecting voice.
+- In OpenAI `agent-proxy` realtime mode, wake-name gating adapts to the room by default: one human can talk naturally without a wake name, while two or more humans must start or end a turn with one. Other bots do not count as people. Set `voice.realtime.requireWakeName: true` to always require a wake name or `false` to never require one. Configured wake names must be one or two words. If `voice.realtime.wakeNames` is unset, OpenClaw uses the routed agent `name` plus `OpenClaw`, falling back to the agent id plus `OpenClaw`. An active wake-name gate disables realtime provider auto-response, routes accepted turns through the OpenClaw agent consult path, and gives a short spoken acknowledgement when an exact leading wake name is recognized from partial transcription before the final transcript arrives. Fuzzy name matching waits for the final transcript, so an unfinished ordinary word does not trigger an acknowledgement. The policy follows live joins and leaves without reconnecting voice.
 - The OpenAI realtime provider accepts current Realtime 2 event names and legacy Codex-compatible aliases for output audio and transcript events, so compatible provider snapshots can drift without dropping assistant audio.
 - `voice.realtime.bargeIn` controls whether Discord speaker-start events interrupt active realtime playback. If unset, it follows the realtime provider's input-audio interruption setting.
 - `voice.realtime.minBargeInAudioEndMs` controls the minimum assistant playback duration before an OpenAI realtime barge-in truncates audio. Default: `250`. Set `0` for immediate interruption in low-echo rooms, or raise it for echo-heavy speaker setups.
@@ -1307,6 +1308,66 @@ Notes:
 - `The operation was aborted` receive events are expected when OpenClaw finalizes a captured speaker segment; they are verbose diagnostics, not warnings.
 - Verbose Discord voice logs include a bounded one-line STT transcript preview for each accepted speaker segment, so debugging shows both the user side and the agent reply side without dumping unbounded transcript text.
 - In `agent-proxy` mode, forced consult fallback skips likely incomplete transcript fragments such as text ending in `...` or a trailing connector like "and", plus obvious non-actionable closings like "be right back" or "bye". Logs show `forced agent consult skipped reason=...` when this prevents a stale queued answer.
+
+### Meeting notes
+
+Use the `discord-voice` transcripts provider to keep a note-taking bot in a voice
+channel only while humans are present. Capture is listen-only: the bot never
+speaks in that channel and does not start a realtime conversation provider.
+Enable Discord voice, configure an authenticated [speech-to-text provider](/nodes/audio),
+and add an occupancy-driven transcript source:
+
+```json5
+{
+  channels: {
+    discord: {
+      voice: { enabled: true },
+    },
+  },
+  tools: {
+    media: {
+      models: [{ provider: "openai", model: "gpt-4o-transcribe", capabilities: ["audio"] }],
+      audio: { enabled: true },
+    },
+  },
+  transcripts: {
+    autoStart: [
+      {
+        providerId: "discord-voice",
+        guildId: "123456789012345678",
+        channelId: "234567890123456789",
+        whenOccupied: true,
+      },
+    ],
+  },
+}
+```
+
+The bot needs Connect permission in the target channel and the `GuildVoiceStates`
+intent, which `voice.enabled: true` enables by default. Do not explicitly disable
+`channels.discord.intents.voiceStates`. Keep the channel inside any configured
+`voice.allowedChannels` allowlist. Use `transcripts.autoStart`, not conversational
+`voice.autoJoin`, for this note-taking recipe. Tell participants that the bot
+captures and stores transcripts before enabling it.
+
+For multiple Discord accounts, add `accountId` to select the voice-enabled bot
+unless the configured default account resolves it unambiguously. Configure at
+most one occupancy-driven `discord-voice` entry per account and guild; the bot
+cannot capture multiple voice channels in the same guild. Later conflicting
+entries are skipped with a warning.
+
+The bot joins on human arrival, including when the channel is already occupied
+at startup. After the last human leaves, it waits 30 seconds before leaving and
+generating notes; a return during that grace keeps capture running. Episodes use
+generated session IDs, ignoring a configured `sessionId`. A session stopped less
+than 10 minutes ago can reopen for the same source after a Gateway restart or a
+short gap, preserving its ID, start time, and accumulated utterances.
+
+Notes include participants, an overview, decisions, action items, and risks.
+They use the agent's utility model, falling back to its primary model and then
+deterministic heuristic notes if model generation fails. Read stored notes with
+the `transcripts` tool, the [CLI](/cli/transcripts), or the Control UI Meetings
+page. The tool's `summarize` action regenerates notes from the stored transcript.
 
 ### Follow users in voice
 

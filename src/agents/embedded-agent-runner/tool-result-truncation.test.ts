@@ -68,6 +68,7 @@ function createPromptProjectionStateForTest(): ToolResultPromptProjectionState {
     replacements: new Map(),
     frozen: new Set(),
     ambiguousBaseKeys: new Set(),
+    restoredCacheTtl: new Map(),
     sourceTextByKey: new Map(),
   };
 }
@@ -1767,6 +1768,7 @@ describe("truncateOversizedToolResultsInSession", () => {
       48_000,
       projectionState,
     ).messages[0];
+    const staleProjectionState = cloneToolResultPromptProjectionState(projectionState);
 
     const result = truncateOversizedToolResultsInSessionManager({
       sessionManager: SessionManager.open(scope),
@@ -1778,6 +1780,17 @@ describe("truncateOversizedToolResultsInSession", () => {
     });
 
     expect(result.truncated).toBe(true);
+    expect(projectionState.sourceTextByKey.size).toBe(0);
+    expect(projectionState.replacements.size).toBe(0);
+    expect(projectionState.frozen.size).toBe(0);
+    preparePromptProjectionStateForTest({
+      sessionId,
+      messages: SessionManager.open(scope).buildSessionContext().messages,
+      state: staleProjectionState,
+    });
+    expect(staleProjectionState.sourceTextByKey.size).toBe(0);
+    expect(staleProjectionState.replacements.size).toBe(0);
+    expect(staleProjectionState.frozen.size).toBe(0);
     const activeToolResult = SessionManager.open(scope)
       .getBranch()
       .find((entry) => entry.type === "message" && entry.message.role === "toolResult");

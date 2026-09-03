@@ -378,6 +378,7 @@ describe("scheduled Codex app authority", () => {
       {
         config: {
           apps: {
+            newly_connected: { enabled: true, default_tools_approval_mode: "approve" },
             calendar: {
               tools: {
                 list: { approval_mode: "writes" },
@@ -410,6 +411,7 @@ describe("scheduled Codex app authority", () => {
     });
     expect(intersected.configPatch).toMatchObject({
       apps: {
+        newly_connected: { enabled: false },
         _default: {
           enabled: false,
           destructive_enabled: false,
@@ -837,7 +839,7 @@ describe("scheduled Codex app authority", () => {
 
     await expect(provider.build()).rejects.toMatchObject({
       name: "AgentHarnessPreflightError",
-      message: expect.stringContaining("Scheduled Codex app policy verification exceeded"),
+      message: expect.stringContaining("Codex app policy verification exceeded"),
     });
     expect(Date.now() - startedAt).toBeLessThan(1_000);
     expect(request.mock.calls.map(([method]) => method)).toEqual([

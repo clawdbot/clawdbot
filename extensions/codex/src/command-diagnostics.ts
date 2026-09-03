@@ -217,7 +217,7 @@ async function confirmCodexDiagnosticsFeedback(
     return "Cannot send Codex diagnostics because this command did not include a stable session identity.";
   }
   const currentTargets = pending.privateRouted
-    ? await resolvePendingCodexDiagnosticsTargets(deps, pending.targets, ctx.config)
+    ? resolvePendingCodexDiagnosticsTargets(deps, pending.targets, ctx.config)
     : await resolveCodexDiagnosticsTargets(deps, ctx);
   if (!codexDiagnosticsTargetsMatch(pending.targets, currentTargets)) {
     return "The Codex diagnostics sessions changed before confirmation. Run /diagnostics again for the current threads.";
@@ -412,7 +412,7 @@ async function resolveCodexDiagnosticsTargets(
       continue;
     }
     seenBindingKeys.add(key);
-    const binding = await deps.bindingStore.read(candidate.identity);
+    const binding = deps.bindingStore.read(candidate.identity);
     if (!binding?.threadId || seenThreadIds.has(binding.threadId)) {
       continue;
     }
@@ -422,14 +422,14 @@ async function resolveCodexDiagnosticsTargets(
   return targets;
 }
 
-async function resolvePendingCodexDiagnosticsTargets(
+function resolvePendingCodexDiagnosticsTargets(
   deps: CodexCommandDeps,
   targets: readonly CodexDiagnosticsTarget[],
   config?: PluginCommandContext["config"],
-): Promise<CodexDiagnosticsTarget[]> {
+): CodexDiagnosticsTarget[] {
   const resolved: CodexDiagnosticsTarget[] = [];
   for (const target of targets) {
-    const binding = await deps.bindingStore.read(target.identity);
+    const binding = deps.bindingStore.read(target.identity);
     if (!binding?.threadId) {
       continue;
     }

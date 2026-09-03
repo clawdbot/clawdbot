@@ -176,11 +176,14 @@ describe("loadProviderScopedThinkingCatalog", () => {
   });
 
   it("falls back to the scoped catalog while a published owner has the replaced config", async () => {
+    const config = { skills: { entries: { marker: { enabled: false } } } };
     preparedSnapshotMock.mockResolvedValue({
       catalogOwner: undefined,
       agentDir: "/tmp/model-catalog-test",
       activeProjectKeys: [],
-      config: { skills: { entries: { marker: { enabled: false } } } },
+      config,
+      observationConfig: config,
+      isCurrent: () => true,
       authModes: {},
       metadataSnapshot: createPluginMetadataSnapshot({
         config: {},

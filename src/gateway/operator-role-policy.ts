@@ -7,7 +7,7 @@ import type { SessionCreatedActor } from "../config/sessions/session-entry-prove
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { getUserProfileRole } from "../state/user-profiles.js";
+import { GATEWAY_OWNER_PROFILE_ID, getUserProfileRole } from "../state/user-profiles.js";
 import { bumpGatewayAccessRevision } from "./gateway-access-revision.js";
 import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
 import {
@@ -71,7 +71,8 @@ export function resolveOperatorRolePolicyForProfile(
   profileId: string | undefined,
   cfg: OpenClawConfig,
 ): GatewayOperatorRoleDefinition | undefined {
-  if (!cfg.gateway?.roles) {
+  // The owner attributes the shared-secret system actor; roles govern identified people only.
+  if (!cfg.gateway?.roles || profileId === GATEWAY_OWNER_PROFILE_ID) {
     return undefined;
   }
   return resolveOperatorRolePolicyForAssignment(
@@ -88,7 +89,7 @@ export function resolveOperatorRolePolicyForAssignment(
   cfg: OpenClawConfig,
 ): GatewayOperatorRoleDefinition | undefined {
   const roles = cfg.gateway?.roles;
-  if (!roles) {
+  if (!roles || profileId === GATEWAY_OWNER_PROFILE_ID) {
     return undefined;
   }
   if (!profileId) {
@@ -133,7 +134,9 @@ export function resolveGatewayOperatorRoleActor(
     return actor;
   }
   const profileId = gatewayClientSessionCreator(client ?? null)?.id;
-  return profileId ? { kind: "operator", profileId } : undefined;
+  return profileId && profileId !== GATEWAY_OWNER_PROFILE_ID
+    ? { kind: "operator", profileId }
+    : undefined;
 }
 
 /** Resolves the current named policy from an authoritative operator or system actor. */

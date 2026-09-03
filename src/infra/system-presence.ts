@@ -1,5 +1,4 @@
 // Detects system command availability for setup and diagnostics.
-import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import {
@@ -10,8 +9,9 @@ import {
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { PresenceEntry } from "../../packages/gateway-protocol/src/schema/snapshot.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
+import { resolveMachineModelIdentifier } from "./machine-model.js";
 import { pickBestEffortPrimaryLanIPv4 } from "./network-discovery-display.js";
-import { DARWIN_SYSTEM_PROBE_TIMEOUT_MS, resolveDarwinProductVersion } from "./os-summary.js";
+import { resolveDarwinProductVersion } from "./os-summary.js";
 
 export type SystemPresence = {
   host?: string;
@@ -91,19 +91,7 @@ function initSelfPresence() {
   const host = os.hostname();
   const ip = resolvePrimaryIPv4() ?? undefined;
   const version = resolveRuntimeServiceVersion(process.env);
-  const modelIdentifier = (() => {
-    const p = os.platform();
-    if (p === "darwin") {
-      const res = spawnSync("sysctl", ["-n", "hw.model"], {
-        encoding: "utf-8",
-        timeout: DARWIN_SYSTEM_PROBE_TIMEOUT_MS,
-        killSignal: "SIGKILL",
-      });
-      const out = normalizeOptionalString(res.stdout) ?? "";
-      return out.length > 0 ? out : undefined;
-    }
-    return os.arch();
-  })();
+  const modelIdentifier = resolveMachineModelIdentifier();
   const platform = (() => {
     const p = os.platform();
     const rel = os.release();

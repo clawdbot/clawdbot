@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { waitForPidFile } from "../../../../test/helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { createProcessSupervisor } from "../supervisor.js";
 import { createChildAdapter } from "./child.js";
@@ -141,6 +142,40 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
 
     expect(exit.reason).toBe(timing.reason);
     await waitFor(() => !isAlive(rootPid) && !isAlive(descendantPid));
+  });
+
+  it("bounds construction while secret delivery blocks and cleans the real command", async () => {
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    const cwd = tempDirs.make("openclaw-service-secret-construction-");
+    const pidPath = path.join(cwd, "command.pid");
+    const command = `
+      require("node:fs").writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
+      setInterval(() => {}, 1000);
+    `;
+    const supervisor = createProcessSupervisor();
+    const pendingRun = supervisor.spawn({
+      mode: "child",
+      argv: [process.execPath, "-e", command],
+      stdinMode: "pipe-closed",
+      sessionId: "service-secret-construction",
+      backendId: "service-secret-construction",
+      timeoutMs: 500,
+      secretInput: {
+        fd: 3,
+        createData: () => Buffer.alloc(8 * 1024 * 1024, 97),
+      },
+    });
+    const commandPid = await waitForPidFile(pidPath, 5_000);
+    activePids.add(commandPid);
+    expect(isAlive(commandPid)).toBe(true);
+
+    const run = await pendingRun;
+    await expect(run.wait()).resolves.toMatchObject({
+      reason: "overall-timeout",
+      timedOut: true,
+    });
+    await waitFor(() => !isAlive(commandPid));
+    await supervisor.shutdown();
   });
 
   it("preserves root-result timing while retaining descendant cleanup ownership", async () => {

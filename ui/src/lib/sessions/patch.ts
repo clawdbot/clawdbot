@@ -45,8 +45,10 @@ export type SessionPatchOptions = {
   deferListRefresh?: boolean;
 };
 
+export type SessionPatchResult = SessionsPatchResult & { listRefreshError?: string };
+
 export type SessionPatchRoute = (
   key: string,
   patch: SessionPatch,
   options?: SessionPatchOptions,
-) => Promise<SessionsPatchResult | null>;
+) => Promise<SessionPatchResult | null>;

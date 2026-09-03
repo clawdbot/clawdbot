@@ -172,7 +172,6 @@ function createGatewayReloadHandlers(
     logChannels: { info: vi.fn(), error: vi.fn() },
     logCron: { error: vi.fn() },
     logReload: { info: vi.fn(), warn: vi.fn() },
-    createHealthMonitor: () => null,
     ...handlerParams,
     cronReconciliation: params.cronReconciliation ?? createTestCronReconciliation(),
     ...(requestRecoveryRestart === null
@@ -192,7 +191,6 @@ function createDefaultGatewayReloadState(
     hookClientIpConfig: {} as never,
     heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
     cronState: createTestCronState(),
-    channelHealthMonitor: null,
     ...overrides,
   };
 }
@@ -235,7 +233,7 @@ function startManagedGatewayConfigReloader(params: ManagedReloaderTestParams) {
     resolveSharedGatewaySessionGenerationForConfig: () => undefined,
     sharedGatewaySessionGenerationState: { current: undefined, required: null },
     clients: [],
-    reconcileTerminalSessions: vi.fn(),
+    reconcileRuntimePolicy: vi.fn(),
     commitTerminalConfig: vi.fn(),
     acceptTerminalConfig: vi.fn(),
     ...params,
@@ -565,7 +563,6 @@ function createHotTailPlan(overrides: Partial<GatewayReloadPlan> = {}): GatewayR
     restartGmailWatcher: false,
     restartCron: false,
     restartHeartbeat: false,
-    restartHealthMonitor: false,
     reloadPlugins: false,
     restartChannels: new Set(),
     disposeMcpRuntimes: false,
@@ -678,7 +675,6 @@ function createReloadHandlersForTest(
       cron: cron as never,
       reconcileHeartbeatJobs,
     }),
-    channelHealthMonitor: null,
   };
   const setState = vi.fn((nextState: typeof state) => {
     state = nextState;
@@ -860,7 +856,7 @@ function createManagedRestartSequenceHarness(
     prepareTerminalConfig: (plan, nextConfig) => {
       terminalPolicy.prepareConfig(nextConfig, { restartPending: plan.restartGateway });
     },
-    reconcileTerminalSessions: vi.fn(() => {
+    reconcileRuntimePolicy: vi.fn(() => {
       if (options.invalidateGenerationOnReconcile && !generationInvalidated) {
         generationInvalidated = true;
         enforceSharedGatewaySessionGenerationForConfigWrite({
@@ -1044,7 +1040,7 @@ async function runManagedOwnershipScenario(params: {
   const acceptTerminalConfig = vi.fn(() => resolveAccepted?.());
   const commitTerminalConfig = vi.fn();
   const prepareTerminalConfig = vi.fn();
-  const reconcileTerminalSessions = vi.fn();
+  const reconcileRuntimePolicy = vi.fn();
   const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
   let queuedB = false;
   const resolvedConfigs: OpenClawConfig[] = [];
@@ -1127,7 +1123,7 @@ async function runManagedOwnershipScenario(params: {
     subscribeToWrites: captureConfigWriteListener(writeListenerRef, false),
     activateRuntimeSecrets: activateRuntimeSecrets as never,
     prepareTerminalConfig,
-    reconcileTerminalSessions,
+    reconcileRuntimePolicy,
     commitTerminalConfig,
     acceptTerminalConfig,
     requestRecoveryRestart,
@@ -1145,7 +1141,7 @@ async function runManagedOwnershipScenario(params: {
       configB,
       prepareTerminalConfig,
       resolvedConfigs,
-      reconcileTerminalSessions,
+      reconcileRuntimePolicy,
       requestRecoveryRestart,
       sharedState,
       expectedGeneration: generation("new-shared-token"),
@@ -1611,7 +1607,7 @@ describe("managed reload transaction ownership", () => {
     expect(result.setState).not.toHaveBeenCalled();
     expect(result.requestRecoveryRestart).not.toHaveBeenCalled();
     expect(result.commitTerminalConfig).toHaveBeenCalledOnce();
-    expect(result.reconcileTerminalSessions).toHaveBeenCalledOnce();
+    expect(result.reconcileRuntimePolicy).toHaveBeenCalledOnce();
     const resolved = result.resolvedConfigs.at(-1);
     expect(resolved?.gateway?.auth?.token).toBe("new-shared-token");
     expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledOnce();
@@ -1690,7 +1686,7 @@ describe("managed reload transaction ownership", () => {
     expect(result.commitTerminalConfig).toHaveBeenCalledOnce();
     expect(result.acceptTerminalConfig).toHaveBeenCalledOnce();
     expect(result.prepareTerminalConfig).toHaveBeenCalledOnce();
-    expect(result.reconcileTerminalSessions).toHaveBeenCalledOnce();
+    expect(result.reconcileRuntimePolicy).toHaveBeenCalledOnce();
     expect(hoisted.applyLoggingConfig).not.toHaveBeenCalled();
     expect(hoisted.resetSkillSnapshotConfigFingerprintCache).toHaveBeenCalledOnce();
     expect(getActiveSecretsRuntimeSnapshot()?.sourceConfig).toEqual(result.configA);
@@ -1711,7 +1707,7 @@ describe("managed reload transaction ownership", () => {
       expect(result.commitTerminalConfig).not.toHaveBeenCalled();
       expect(result.acceptTerminalConfig).toHaveBeenCalledOnce();
       expect(result.prepareTerminalConfig).toHaveBeenCalledOnce();
-      expect(result.reconcileTerminalSessions).not.toHaveBeenCalled();
+      expect(result.reconcileRuntimePolicy).not.toHaveBeenCalled();
       expect(result.requestRecoveryRestart).not.toHaveBeenCalled();
       expect(getActiveSecretsRuntimeSnapshot()?.sourceConfig).toEqual(result.configB);
     },
@@ -3045,42 +3041,6 @@ describe("gateway hot reload superseded tail recovery", () => {
 });
 
 describe("gateway hot reload commit policy", () => {
-  it("retires the old health monitor before publishing its replacement", async () => {
-    const events: string[] = [];
-    const oldMonitor = {
-      stop: vi.fn(() => events.push("stop")),
-      waitForIdle: vi.fn(async () => {
-        events.push("waitForIdle");
-      }),
-    };
-    const nextMonitor = {};
-    let state: Parameters<ReloadHandlerParams["setState"]>[0] = {
-      hooksConfig: {} as never,
-      hookClientIpConfig: {} as never,
-      heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
-      cronState: createTestCronState(),
-      channelHealthMonitor: oldMonitor as never,
-    };
-    const setState = vi.fn((nextState: typeof state) => {
-      events.push("setState");
-      state = nextState;
-    });
-    const { applyHotReload } = createGatewayReloadHandlers({
-      getState: () => state,
-      setState,
-      createHealthMonitor: vi.fn(() => {
-        events.push("create");
-        return nextMonitor as never;
-      }),
-      requestRecoveryRestart: vi.fn(() => ({ status: "emitted" as const })),
-    });
-
-    await applyHotReload(createHotTailPlan({ restartHealthMonitor: true }), {} as OpenClawConfig);
-
-    expect(events).toEqual(["setState", "stop", "waitForIdle", "create", "setState"]);
-    expect(state.channelHealthMonitor).toBe(nextMonitor);
-  });
-
   it("preserves SIGUSR1 policy when hook preparation rejects the config", async () => {
     setGatewaySigusr1RestartPolicy({ allowExternal: false });
     const { applyHotReload } = createReloadHandlersForTest();
@@ -3147,7 +3107,6 @@ describe("gateway hot reload commit policy", () => {
           restartGmailWatcher: false,
           restartCron: false,
           restartHeartbeat: false,
-          restartHealthMonitor: false,
           reloadPlugins: false,
           restartChannels: new Set(),
           disposeMcpRuntimes: false,
@@ -3324,7 +3283,6 @@ describe("gateway restart deferral preflight", () => {
       restartGmailWatcher: false,
       restartCron: false,
       restartHeartbeat: false,
-      restartHealthMonitor: false,
       reloadPlugins: false,
       restartChannels: new Set<ChannelKind>(),
       disposeMcpRuntimes: false,
@@ -4959,7 +4917,7 @@ describe("gateway Gmail hot reload handlers", () => {
     const prepareTerminalConfig = vi.fn((plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => {
       terminalPolicy.prepareConfig(nextConfig, { restartPending: plan.restartGateway });
     });
-    const reconcileTerminalSessions = vi.fn();
+    const reconcileRuntimePolicy = vi.fn();
     const setState = vi.fn();
     const promoteSnapshot = vi.fn(async () => true);
     const logReload = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -4980,7 +4938,7 @@ describe("gateway Gmail hot reload handlers", () => {
       logReload,
       activateRuntimeSecrets: activateRuntimeSecrets as never,
       prepareTerminalConfig,
-      reconcileTerminalSessions,
+      reconcileRuntimePolicy,
       commitTerminalConfig: terminalPolicy.commitConfig,
       acceptTerminalConfig: terminalPolicy.acceptConfig,
       restartRecoveryAvailable: false,
@@ -5034,7 +4992,7 @@ describe("gateway Gmail hot reload handlers", () => {
         await vi.runAllTimersAsync();
 
         expect(prepareTerminalConfig).not.toHaveBeenCalled();
-        expect(reconcileTerminalSessions).not.toHaveBeenCalled();
+        expect(reconcileRuntimePolicy).not.toHaveBeenCalled();
         expect(activateRuntimeSecrets).not.toHaveBeenCalled();
         expect(setState).not.toHaveBeenCalled();
         expect(promoteSnapshot).not.toHaveBeenCalled();
@@ -5055,7 +5013,7 @@ describe("gateway Gmail hot reload handlers", () => {
       await vi.runAllTimersAsync();
 
       expect(prepareTerminalConfig).toHaveBeenCalledOnce();
-      expect(reconcileTerminalSessions).toHaveBeenCalledOnce();
+      expect(reconcileRuntimePolicy).toHaveBeenCalledOnce();
       expect(promoteSnapshot).toHaveBeenCalledOnce();
       expect(logReload.error).not.toHaveBeenCalled();
       expect(getActiveSecretsRuntimeSnapshot()?.config).toEqual(safeConfig);
@@ -5260,12 +5218,9 @@ describe("gateway Gmail hot reload handlers", () => {
         publishFailureAsDegraded: true,
         canPublishFailureAsDegraded: expect.any(Function),
       });
-      const deferredPlan = buildGatewayReloadPlan(
-        diffConfigPaths(harness.initialConfig, harness.deferredConfig),
-      );
       await vi.advanceTimersByTimeAsync(500);
       expect(harness.requestRecoveryRestart.mock.calls).toEqual([
-        [`config reload: ${deferredPlan.restartReasons.join(", ")}`, undefined],
+        ["config reload: gateway.port, gateway.auth.mode", undefined],
       ]);
     } finally {
       hoisted.activeTaskBlockers.length = 0;
@@ -6565,10 +6520,6 @@ describe("gateway plugin hot reload handlers", () => {
     {
       label: "cron replacement",
       plan: createCronRestartPlan(),
-    },
-    {
-      label: "health monitor replacement",
-      plan: createHotTailPlan({ restartHealthMonitor: true }),
     },
     {
       label: "Gmail watcher replacement",

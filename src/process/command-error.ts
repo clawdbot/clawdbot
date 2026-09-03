@@ -6,11 +6,10 @@ import type { runCommandBuffered } from "./exec.js";
 
 export function formatCommandOutput(output: string | Buffer, maxChars = 800): string {
   // CR redraws replace the current frame; trim before making edge tabs visible.
+  // Anchor each CR run/frame so unmatched runs do not repeatedly scan their suffixes.
   const text = stripAnsi(output.toString())
-    .replace(/\r\n/g, "\n")
-    .split("\n")
-    .map((line) => line.replace(/\r+$/, "").split("\r").at(-1) ?? "")
-    .join("\n")
+    .replace(/(^|[^\r])\r+(?=\n|$)/g, "$1")
+    .replace(/(^|\n)[^\n]*\r/g, "$1")
     .trim()
     .replace(/[^\n]+/g, sanitizeTerminalText);
   const tail = text.split("\n").slice(-12).join("\n");

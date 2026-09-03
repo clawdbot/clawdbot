@@ -104,16 +104,25 @@ describe("detectChangedScope Windows routing", () => {
     }
   });
 
-  it("routes shared test-state fixture changes to Windows", () => {
+  it("routes shared test-state and process fixture owners to Windows", () => {
     for (const fixturePath of [
       "src/test-utils/openclaw-test-state.ts",
       "src/test-utils/openclaw-test-state.test.ts",
+      "test/helpers/openclaw-test-instance.ts",
+      "test/helpers/openclaw-test-instance.test.ts",
+      "test/helpers/openclaw-test-instance.cli.test-support.mjs",
+      "scripts/lib/managed-child-process.mts",
+      "scripts/lib/vitest-resource-ownership.mts",
     ]) {
       expect(detectChangedScope([fixturePath]), fixturePath).toMatchObject({
         runNode: true,
         runWindows: true,
       });
     }
+    expect(detectChangedScope(["test/helpers/promise.ts"]).runWindows).toBe(false);
+    expect(
+      detectChangedScope(["test/helpers/openclaw-test-instance-extra.test.ts"]).runWindows,
+    ).toBe(false);
   });
 
   it("routes process-start identity and every consumer of it to Windows", () => {

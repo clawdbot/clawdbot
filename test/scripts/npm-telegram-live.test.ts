@@ -22,6 +22,45 @@ function mkTempRoot() {
   return root;
 }
 
+function runHotpathCandidate(consentSupported: boolean) {
+  const root = mkTempRoot();
+  const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
+  const hotpath = script.slice(
+    script.indexOf('if [ "${OPENCLAW_NPM_TELEGRAM_SKIP_HOTPATH:-0}" != "1" ]'),
+    script.indexOf('\nexport OPENCLAW_NPM_TELEGRAM_SUT_COMMAND="$sut_command"'),
+  );
+  writeFileSync(
+    path.join(root, "openclaw"),
+    `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$ARGV_LOG"; if [[ "$*" == "plugins install --help" && "$CONSENT_SUPPORTED" == "1" ]]; then printf '  --accept-capabilities  Accept reviewed plugin capabilities\\n'; fi
+`,
+    { mode: 0o755 },
+  );
+  execFileSync(
+    "bash",
+    [
+      "-c",
+      `set -Eeuo pipefail
+source scripts/lib/openclaw-e2e-instance.sh
+openclaw_e2e_run_command() { "$@"; }
+runtime_home="$FIXTURE_ROOT/runtime"
+mkdir -p "$runtime_home"
+sut_command="$FIXTURE_ROOT/openclaw"
+${hotpath}`,
+    ],
+    {
+      cwd: path.resolve(TEST_DIR, "../.."),
+      env: {
+        ...process.env,
+        ARGV_LOG: path.join(root, "argv.log"),
+        CONSENT_SUPPORTED: consentSupported ? "1" : "0",
+        FIXTURE_ROOT: root,
+      },
+    },
+  );
+  return readFileSync(path.join(root, "argv.log"), "utf8").trim().split("\n");
+}
+
 afterEach(() => {
   for (const root of tempRoots.splice(0)) {
     rmSync(root, { force: true, recursive: true });
@@ -211,6 +250,17 @@ describe("package Telegram live Docker E2E", () => {
     expect(script).not.toContain("/app/node_modules/openclaw/package.json");
     expect(script).not.toContain("link_installed_package_dependency");
   });
+
+  it.each([false, true])(
+    "runs the onboarding hotpath with candidate consent support=%s",
+    (supported) => {
+      const calls = runHotpathCandidate(supported);
+      expect(calls.filter((call) => call.startsWith("plugins install @openclaw/codex"))).toEqual(
+        supported ? ["plugins install @openclaw/codex --accept-capabilities"] : [],
+      );
+      expect(calls.some((call) => call.startsWith("onboard "))).toBe(true);
+    },
+  );
 
   it("adds private SDK exports only to the trusted harness manifest", () => {
     const root = mkTempRoot();

@@ -48,26 +48,44 @@ describe("PluginsPage", () => {
 
   afterEach(resetPluginsPageTestState);
 
-  it("accepts matching route data without issuing a duplicate list request", async () => {
+  it.each([false, true])(
+    "adopts matching route data without duplicate requests (delayed: %s)",
+    async (delayed) => {
+      const { client, request } = createClient(async () => createResult());
+      const harness = createGateway(client);
+      const result = createResult();
+      const routeData: PluginsRouteData = createPluginsRouteData(harness.gateway, result);
+
+      const { page } = await mountPage(
+        createContext(harness.gateway),
+        delayed ? undefined : routeData,
+      );
+
+      if (delayed) {
+        expect(page.querySelector("h1")?.textContent).toBe("Plugins");
+        expect(request).not.toHaveBeenCalled();
+        harness.emit(client, false);
+        harness.emit(client, true);
+        await page.updateComplete;
+        expect(request).not.toHaveBeenCalled();
+        page.routeData = createPluginsRouteData(harness.gateway, result);
+        await page.updateComplete;
+      }
+
+      expect(page.result).toBe(result);
+      expect(request).not.toHaveBeenCalled();
+      expect(page.querySelectorAll("h1")).toHaveLength(1);
+      expect(page.querySelector("h1")?.textContent).toBe("Plugins");
+    },
+  );
+
+  it("surfaces a route catalog load failure without retrying it", async () => {
     const { client, request } = createClient(async () => createResult());
     const harness = createGateway(client);
-    const result = createResult();
-    const routeData: PluginsRouteData = createPluginsRouteData(harness.gateway, result);
-
-    const { page } = await mountPage(createContext(harness.gateway), routeData);
-
-    expect(page.result).toBe(result);
-    expect(request).not.toHaveBeenCalled();
-    expect(page.querySelectorAll("h1")).toHaveLength(1);
-    expect(page.querySelector("h1")?.textContent).toBe("Plugins");
-  });
-
-  it("surfaces an initial catalog load failure", async () => {
-    const { client } = createClient(async () => {
-      throw new Error("catalog unavailable");
+    const { page } = await mountPage(createContext(harness.gateway), {
+      ...createPluginsRouteData(harness.gateway, null),
+      error: "catalog unavailable",
     });
-    const harness = createGateway(client);
-    const { page } = await mountPage(createContext(harness.gateway));
 
     await waitForFast(() =>
       expect(page.querySelector(".plugins-page-error")?.textContent).toContain(
@@ -77,6 +95,7 @@ describe("PluginsPage", () => {
     expect(
       page.querySelector(".plugins-page-error")?.textContent?.match(/catalog unavailable/gu),
     ).toHaveLength(1);
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("refreshes the authoritative catalog after a same-client reconnect", async () => {

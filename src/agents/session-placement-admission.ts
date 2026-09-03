@@ -1,9 +1,20 @@
 import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createAbortError } from "../infra/abort-signal.js";
+import {
+  assertAgentRunLifecycleGenerationCurrent,
+  captureAgentRunLifecycleGeneration,
+} from "../infra/agent-events.js";
+import { registerAgentRunCapacityWait } from "../infra/agent-run-capacity-wait.js";
+import { retainQueuedAgentRunContext } from "../infra/agent-run-registry.js";
+import { enqueueCommandInLane, isCommandLaneTaskMarkerCurrent } from "../process/command-queue.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { resolveSessionLane } from "./embedded-agent-runner/lanes.js";
+import { resolveEmbeddedRunSessionLanePolicy } from "./embedded-agent-runner/run/lane-runtime.js";
 import type { RunEmbeddedAgentParams } from "./embedded-agent-runner/run/params.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 import type { SandboxContext } from "./sandbox/types.js";
+import { resolveSessionPlacementTurnSettlementAssertion } from "./session-placement-forced-terminal-settlement.js";
 import { settleRequesterAfterSessionSpawns } from "./subagents/registry/subagent-registry.js";
 
 export type LocalTurnPlacementClaim = {
@@ -104,15 +115,81 @@ export async function withSessionPlacementTurnAdmission(
   return result;
 }
 
-/** Runs a CLI turn and settles accepted child ownership after placement releases it. */
+/** Serializes direct CLI turns with every runtime before acquiring placement ownership. */
 export async function withLocalSessionPlacementTurnSettlement(
   claim: LocalTurnPlacementClaim,
-  task: () => Promise<EmbeddedAgentRunResult>,
+  task: (assertSettlementCurrent: () => void) => Promise<EmbeddedAgentRunResult>,
+  options: Pick<
+    RunEmbeddedAgentParams,
+    "abortSignal" | "lifecycleGeneration" | "trigger" | "inputProvenance"
+  > = {},
 ): Promise<EmbeddedAgentRunResult> {
   const provider = state.provider;
-  const result = provider ? await provider.executeLocalTurn(claim, task) : await task();
-  settleYieldedRequesterAfterPlacementRelease(claim, result);
-  return result;
+  const lifecycleGeneration =
+    options.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(claim.runId);
+  const assertOwnerCurrent = () => {
+    assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+    if (state.provider !== provider) {
+      throw createAbortError("session placement owner changed during turn admission");
+    }
+  };
+  const assertCurrent = () => {
+    if (options.abortSignal?.aborted) {
+      throw options.abortSignal.reason instanceof Error
+        ? options.abortSignal.reason
+        : createAbortError("Operation aborted", { cause: options.abortSignal.reason });
+    }
+    assertOwnerCurrent();
+  };
+  assertCurrent();
+  const releaseQueuedContext = retainQueuedAgentRunContext(claim.runId, lifecycleGeneration);
+  let releaseCapacityWait: (() => void) | undefined;
+  try {
+    return await enqueueCommandInLane(
+      resolveSessionLane(claim.sessionKey?.trim() || claim.sessionId),
+      async (taskMarker) => {
+        assertCurrent();
+        const runLocal = async () => {
+          // Placement admission can itself await work. A cancelled or replaced
+          // queue owner must never execute through the captured provider.
+          assertCurrent();
+          const assertClaimCurrent = resolveSessionPlacementTurnSettlementAssertion();
+          let open = true;
+          const assertSettlementCurrent = () => {
+            // Queue reset closes this task even if its callback has not returned.
+            if (!open || !isCommandLaneTaskMarkerCurrent(taskMarker)) {
+              throw createAbortError("session placement turn settlement is closed");
+            }
+            assertOwnerCurrent();
+            assertClaimCurrent?.();
+          };
+          try {
+            assertSettlementCurrent();
+            releaseCapacityWait?.();
+            releaseQueuedContext?.("admitted");
+            return await task(assertSettlementCurrent);
+          } finally {
+            open = false;
+          }
+        };
+        const result = provider
+          ? await provider.executeLocalTurn(claim, runLocal)
+          : await runLocal();
+        settleYieldedRequesterAfterPlacementRelease(claim, result);
+        return result;
+      },
+      {
+        priority: resolveEmbeddedRunSessionLanePolicy(options.trigger, options.inputProvenance)
+          .priority,
+        onQueued: () => {
+          releaseCapacityWait = registerAgentRunCapacityWait(claim.runId, lifecycleGeneration);
+        },
+      },
+    );
+  } finally {
+    releaseCapacityWait?.();
+    releaseQueuedContext?.("abandoned");
+  }
 }
 
 function settleYieldedRequesterAfterPlacementRelease(

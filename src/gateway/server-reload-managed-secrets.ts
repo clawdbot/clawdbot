@@ -117,8 +117,9 @@ export function createManagedReloadSecretHandlers(options: {
   params: Pick<
     ManagedGatewayConfigReloaderParams,
     | "activateRuntimeSecrets"
+    | "assertRuntimeSecurityConfig"
     | "clients"
-    | "reconcileTerminalSessions"
+    | "reconcileRuntimePolicy"
     | "resolveSharedGatewaySessionGenerationForConfig"
     | "sharedGatewaySessionGenerationState"
   >;
@@ -325,6 +326,7 @@ export function createManagedReloadSecretHandlers(options: {
         continue;
       }
       const prepared = preparation.snapshot;
+      params.assertRuntimeSecurityConfig?.(prepared.config, transactionOwnership.runtimeEnv?.env);
       // Resolution can change channel lifetimes even when only a provider
       // definition changed. Rebuild each attempt so a lost CAS leaves no targets.
       const resolvedChannelPlan = buildGatewayReloadPlan(
@@ -364,7 +366,7 @@ export function createManagedReloadSecretHandlers(options: {
       let publishedSnapshotRevision: number | null = null;
       let publishedSharedGatewaySessionGeneration: SharedGatewaySessionGenerationOwnership | null =
         null;
-      let terminalConfigReconciled = false;
+      let runtimePolicyReconciled = false;
       let applicationStatus: Awaited<ReturnType<typeof applyHotReload>>;
       try {
         const publication: GatewayHotReloadPublication = {
@@ -421,9 +423,9 @@ export function createManagedReloadSecretHandlers(options: {
                 // PTY and socket eviction cannot roll back. Run them only after
                 // the last fallible runtime commit step has accepted this config.
                 // Failures bubble to applyHotReload's committed-state recovery path.
-                if (!terminalConfigReconciled) {
-                  params.reconcileTerminalSessions(plan, prepared.config);
-                  terminalConfigReconciled = true;
+                if (!runtimePolicyReconciled) {
+                  await params.reconcileRuntimePolicy(prepared.config, "committed");
+                  runtimePolicyReconciled = true;
                 }
                 if (sharedGatewaySessionGenerationChanged) {
                   disconnectStaleSharedGatewayAuthClients({

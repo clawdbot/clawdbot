@@ -72,6 +72,8 @@ describe("Codex app-server main thread cleanup", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const requests: Array<{ method: string; params: unknown }> = [];
+    const turnStarted = createDeferred<void>();
+    const abort = new AbortController();
     let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
     const request = vi.fn(async (method: string, params?: unknown) => {
       requests.push({ method, params });
@@ -79,6 +81,7 @@ describe("Codex app-server main thread cleanup", () => {
         return threadStartResult();
       }
       if (method === "turn/start") {
+        turnStarted.resolve();
         return turnStartResult();
       }
       return {};
@@ -98,23 +101,32 @@ describe("Codex app-server main thread cleanup", () => {
     });
 
     const run = runCodexAppServerAttempt(
-      { ...createParams(sessionFile, workspaceDir), contextEngine },
+      { ...createParams(sessionFile, workspaceDir), contextEngine, abortSignal: abort.signal },
       { bindingStore: testCodexAppServerBindingStore, clientFactory },
     );
-    await vi.waitFor(() => expect(requests.map((entry) => entry.method)).toContain("turn/start"), {
-      interval: 1,
-      timeout: 5_000,
-    });
-    await notify({
-      method: "turn/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        turn: { id: "turn-1", status: "completed" },
-      },
-    });
-
-    const result = await run;
+    let result: Awaited<typeof run>;
+    try {
+      // Cold preparation has no five-second contract. Wait for the native request,
+      // but surface an early run failure instead of leaving its promise unobserved.
+      await Promise.race([
+        turnStarted.promise,
+        run.then(() => {
+          throw new Error("Codex attempt completed before requesting a turn");
+        }),
+      ]);
+      await notify({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: { id: "turn-1", status: "completed" },
+        },
+      });
+      result = await run;
+    } finally {
+      abort.abort();
+      await run.catch(() => undefined);
+    }
     expect(readAttemptTerminal(result).aborted).toBe(false);
     const firstBinding = await readCodexAppServerBinding(sessionFile);
     expect({

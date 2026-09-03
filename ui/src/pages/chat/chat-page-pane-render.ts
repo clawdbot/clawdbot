@@ -109,6 +109,7 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
                 sessionKey,
                 options.data,
               )}
+              .dashboardExpanded=${options.data?.dashboardExpanded === true}
               .routeFace=${options.data?.face ?? "chat"}
               .paneTitle=${title}
               .narrow=${options.narrow}

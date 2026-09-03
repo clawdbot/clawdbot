@@ -71,6 +71,7 @@ function initialTurn(entry: PlacementStartupEntry): ChatQueueItem {
   return {
     id: recovery.messageId,
     text: recovery.message,
+    ...(recovery.mentions?.length ? { mentions: recovery.mentions } : {}),
     attachments: entry.attachments,
     createdAt: entry.createdAt,
     sessionKey: recovery.sessionKey,
@@ -157,6 +158,7 @@ export default function createApplicationPlacementStartupRuntime(
         entry.owner.sessionKey,
         {
           text: recovery.message,
+          mentions: recovery.mentions,
           attachments: entry.attachments,
           createdAt: entry.createdAt,
         },

@@ -1,4 +1,5 @@
 import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createCodexAttemptPreparationTiming } from "./attempt-preparation-timing.js";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { activateCodexAttemptTurn } from "./run-attempt-active-turn.js";
 import { cleanupCodexAttempt } from "./run-attempt-cleanup.js";
@@ -23,15 +24,24 @@ export async function runCodexAppServerAttempt(
   params: EmbeddedRunAttemptParamsV2,
   options: CodexRunAttemptOptions,
 ): Promise<EmbeddedRunAttemptResult> {
-  const connection = await prepareCodexAttemptConnection({ params, options });
-  const runtime = await prepareCodexAttemptRuntime(connection);
-  const attemptTools = await prepareCodexAttemptTools(runtime);
-  const attemptContext = await prepareCodexAttemptContext(runtime, attemptTools);
-  const attemptPrompt = await prepareCodexAttemptPrompt(attemptContext);
+  const preparation = createCodexAttemptPreparationTiming(params);
+  const connection = await preparation.measure("connection", () =>
+    prepareCodexAttemptConnection({ params, options }),
+  );
+  const runtime = await preparation.measure("runtime", () =>
+    prepareCodexAttemptRuntime(connection),
+  );
+  const attemptTools = await preparation.measure("tools", () => prepareCodexAttemptTools(runtime));
+  const attemptContext = await preparation.measure("context", () =>
+    prepareCodexAttemptContext(runtime, attemptTools),
+  );
+  const attemptPrompt = await preparation.measure("prompt", () =>
+    prepareCodexAttemptPrompt(attemptContext),
+  );
   const resources = prepareCodexAttemptResources(attemptPrompt);
   attemptTools.runtimeYieldCompletionClaim.current = () =>
     resources.state.nativeHookRelay?.hasClaimedDirectChild() ?? false;
-  await startCodexAttemptRuntime(resources);
+  await preparation.measure("runtime-start", () => startCodexAttemptRuntime(resources));
 
   const turnRuntime = createCodexAttemptTurnState(resources);
   try {
@@ -46,18 +56,23 @@ export async function runCodexAppServerAttempt(
       turnRuntime,
       lifecycle,
     );
-    const { ensureCurrentThreadRoute } = await prepareCodexAttemptRoute(
-      resources,
-      turnRuntime,
-      notifications,
-      serverRequests.handleServerRequest,
+    const { ensureCurrentThreadRoute } = await preparation.measure("thread-route", () =>
+      prepareCodexAttemptRoute(
+        resources,
+        turnRuntime,
+        notifications,
+        serverRequests.handleServerRequest,
+      ),
     );
-    const turnRequest = await prepareCodexAttemptTurnRequest(
-      resources,
-      turnRuntime,
-      ensureCurrentThreadRoute,
-      notifications.waitForActiveNativeTurnCompletion,
+    const turnRequest = await preparation.measure("turn-request", () =>
+      prepareCodexAttemptTurnRequest(
+        resources,
+        turnRuntime,
+        ensureCurrentThreadRoute,
+        notifications.waitForActiveNativeTurnCompletion,
+      ),
     );
+    preparation.ready();
     const turnStart = await startCodexAttemptTurn(
       resources,
       turnRuntime,

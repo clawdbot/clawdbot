@@ -47,7 +47,7 @@ import {
   isCronJobRunning,
   resolveCronJobLastRunStatus,
 } from "../../lib/cron-status.ts";
-import { parseCronEveryMs } from "../../lib/cron/decimal.ts";
+import { parseCronDurationMs } from "../../lib/cron/decimal.ts";
 import type {
   CronFieldErrors,
   CronFieldKey,
@@ -1518,7 +1518,7 @@ function renderGeneralSection(props: CronProps) {
 function describeFormSchedule(form: CronFormState): string | null {
   if (form.scheduleKind === "every") {
     const amount = form.everyAmount.trim();
-    if (parseCronEveryMs(amount, form.everyUnit) === undefined) {
+    if (parseCronDurationMs(amount, form.everyUnit) === undefined) {
       return null;
     }
     if (Number(amount) === 1) {
@@ -1950,13 +1950,13 @@ function renderFailureAlertRows(props: CronProps, channelOptions: readonly Chann
             label: t("cron.form.failureAlertAfter"),
             help: t("cron.form.failureAlertAfterHelp"),
             errorKey: "failureAlertAfter",
-            placeholder: "2",
+            placeholder: t("cron.form.failureAlertInherit"),
           })}
           ${renderCronInputField(props, "failureAlertCooldownSeconds", {
             label: t("cron.form.failureAlertCooldown"),
             help: t("cron.form.failureAlertCooldownHelp"),
             errorKey: "failureAlertCooldownSeconds",
-            placeholder: "3600",
+            placeholder: t("cron.form.failureAlertInherit"),
           })}
           ${renderCronSelectField(props, "failureAlertChannel", {
             label: t("cron.form.failureAlertChannel"),
@@ -1972,8 +1972,8 @@ function renderFailureAlertRows(props: CronProps, channelOptions: readonly Chann
           })}
           ${renderCronSelectField(props, "failureAlertDeliveryMode", {
             label: t("cron.form.failureAlertMode"),
-            value: props.form.failureAlertDeliveryMode || "announce",
             options: [
+              { value: "", label: t("cron.form.failureAlertInherit") },
               { value: "announce", label: t("cron.form.failureAlertAnnounce") },
               { value: "webhook", label: t("cron.form.failureAlertWebhook") },
             ],

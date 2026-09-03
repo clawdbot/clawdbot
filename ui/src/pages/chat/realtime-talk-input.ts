@@ -118,21 +118,29 @@ export function describeRealtimeTalkInputError(error: unknown): string {
 }
 
 async function discoverRealtimeTalkDevices(
-  requestPermission: boolean,
+  requestPermission: () => boolean,
   kind: RealtimeTalkDeviceKind,
 ): Promise<RealtimeTalkDeviceDiscovery> {
   const devices = globalThis.navigator?.mediaDevices;
   if (!devices?.enumerateDevices) {
     return { devices: [], permissionRequired: false, issue: "list-unsupported" };
   }
+  const permissionRequestedAtStart = requestPermission();
   let entries: MediaDeviceInfo[];
   try {
     entries = await devices.enumerateDevices();
   } catch (error) {
+    // Preserve a gesture's queued upgrade if passive enumeration failed. The
+    // permission-bearing pass cannot recursively upgrade itself again.
+    if (!permissionRequestedAtStart && requestPermission()) {
+      return discoverRealtimeTalkDevices(requestPermission, kind);
+    }
     return { devices: [], permissionRequired: false, issue: deviceIssueFromError(error) };
   }
   const permissionRequired = deviceDetailsHidden(entries, kind);
-  if (!requestPermission || !permissionRequired || !devices.getUserMedia) {
+  // Permission intent belongs to the caller's live surface, not the earlier
+  // enumeration. There is no asynchronous gap between this check and the probe.
+  if (!permissionRequired || !devices.getUserMedia || !requestPermission()) {
     return { devices: normalizeDevices(entries, kind), permissionRequired, issue: null };
   }
 
@@ -157,13 +165,13 @@ async function discoverRealtimeTalkDevices(
 }
 
 export async function discoverRealtimeTalkInputs(
-  requestPermission: boolean,
+  requestPermission: () => boolean,
 ): Promise<RealtimeTalkDeviceDiscovery> {
   return discoverRealtimeTalkDevices(requestPermission, "audioinput");
 }
 
 export async function discoverRealtimeTalkCameras(
-  requestPermission: boolean,
+  requestPermission: () => boolean,
 ): Promise<RealtimeTalkDeviceDiscovery> {
   return discoverRealtimeTalkDevices(requestPermission, "videoinput");
 }

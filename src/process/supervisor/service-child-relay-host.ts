@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type { Duplex, Readable } from "node:stream";
 import { toErrorObject } from "../../infra/errors.js";
@@ -27,7 +27,6 @@ type ServiceChildRelayAdapter = SpawnProcessAdapter<NodeJS.Signals | null> & {
 type AuthorityState = "starting" | "active" | "closing" | "closed" | "identity-lost";
 type StdioEntry = "ignore" | "inherit" | "ipc" | "pipe" | number;
 
-const retainedChildren = new Map<string, ChildProcess>();
 const PUSHED_OUTPUT_BUFFER_LIMIT_BYTES = 256 * 1024;
 
 function readChildMessage(raw: unknown): ServiceChildRelayMessage | ServiceChildAnchorMessage {
@@ -124,6 +123,7 @@ function createOutputRelay(stream?: Readable) {
 }
 
 export async function createServiceChildRelayAdapter(params: {
+  assertCurrent?: () => void;
   command: string;
   args: string[];
   argv0?: string;
@@ -134,6 +134,7 @@ export async function createServiceChildRelayAdapter(params: {
   secretInput?: SpawnSecretInput;
   oomScoreWrapperSelected: boolean;
   windowsShellCommand?: string;
+  abortSignal?: AbortSignal;
 }): Promise<ServiceChildRelayAdapter> {
   const generation = randomUUID();
   const useWindowsJobAnchor =
@@ -153,21 +154,23 @@ export async function createServiceChildRelayAdapter(params: {
   const controlFd = useWindowsJobAnchor ? undefined : reserveStdioEntry(stdio, "pipe");
   reserveStdioEntry(stdio, "ipc");
 
+  if (params.abortSignal?.aborted) {
+    throw new Error("service child construction aborted");
+  }
+  params.assertCurrent?.();
   const child = spawn(process.execPath, resolveRuntimeWorkerArgv(workerUrl), {
     stdio,
-    // Windows must keep its exact Job owner alive long enough to observe host IPC loss.
+    // A detached Windows Job owner survives host loss long enough to clean up.
+    // Keep its child handle referenced so an idle host can finish admission and lineage cleanup.
     detached: useWindowsJobAnchor,
     windowsHide: true,
     env: process.env,
   });
-  retainedChildren.set(generation, child);
-  child.unref();
 
   // SAFETY: a defined controlFd was reserved as a pipe in this exact spawn stdio array.
   const control = controlFd === undefined ? null : (child.stdio[controlFd] as Duplex | null);
   if (!child.connected || (!useWindowsJobAnchor && (!control || !child.stdout || !child.stderr))) {
     child.kill("SIGKILL");
-    retainedChildren.delete(generation);
     throw new Error("service child lifecycle channels were not created");
   }
   const stdoutRelay = createOutputRelay(child.stdout ?? undefined);
@@ -195,8 +198,10 @@ export async function createServiceChildRelayAdapter(params: {
   }>();
   const extinctionCompletion = createDeferredCore();
   // Failures can arrive before either public wait is requested.
+  void startup.promise.catch(() => {});
   void resultCompletion.promise.catch(() => {});
   void extinctionCompletion.promise.catch(() => {});
+  const constructionAbort = createDeferredCore<never>();
   let startupErrorAckDelivery: Promise<void> | undefined;
 
   const settleWait = () => {
@@ -233,6 +238,24 @@ export async function createServiceChildRelayAdapter(params: {
     settleWait();
     extinctionCompletion.reject(waitError);
   };
+
+  const constructionAbortSignal = params.abortSignal;
+  const onConstructionAbort = () => {
+    child.kill("SIGKILL");
+    loseIdentity("construction aborted");
+    constructionAbort.reject(waitError ?? new Error("service child construction aborted"));
+  };
+  if (constructionAbortSignal) {
+    constructionAbortSignal.addEventListener("abort", onConstructionAbort, { once: true });
+  }
+  const removeConstructionAbortListener = () => {
+    if (constructionAbortSignal) {
+      constructionAbortSignal.removeEventListener("abort", onConstructionAbort);
+    }
+  };
+  if (constructionAbortSignal?.aborted) {
+    onConstructionAbort();
+  }
 
   const sendChildMessage = (
     message: ServiceChildStart | ServiceChildControlMessage,
@@ -290,6 +313,8 @@ export async function createServiceChildRelayAdapter(params: {
     }
     inboundSequence = message.sequence;
     if (message.type === "ready" && state === "starting") {
+      // Ready is not construction-complete: secret delivery can still be
+      // blocked. Keep abort protection until the adapter returns.
       commandPid = message.commandPid;
       state = "active";
       startup.resolve();
@@ -401,7 +426,6 @@ export async function createServiceChildRelayAdapter(params: {
     finishAuthorityClose(
       childError?.message ?? "Windows service child anchor exited without a closing receipt",
     );
-    retainedChildren.delete(generation);
   };
   child.once("disconnect", () => {
     childDisconnected = true;
@@ -409,10 +433,9 @@ export async function createServiceChildRelayAdapter(params: {
   });
   child.once("exit", () => {
     childExited = true;
+    removeConstructionAbortListener();
     if (useWindowsJobAnchor) {
       finishWindowsAuthority();
-    } else {
-      retainedChildren.delete(generation);
     }
   });
 
@@ -430,32 +453,38 @@ export async function createServiceChildRelayAdapter(params: {
     windowsShellCommand: params.windowsShellCommand,
   };
   try {
-    await sendChildMessage(start);
+    await Promise.race([sendChildMessage(start), constructionAbort.promise]);
   } catch (error) {
+    removeConstructionAbortListener();
     child.kill("SIGKILL");
-    retainedChildren.delete(generation);
     throw error;
   }
 
   const [startupResult, secretDeliveryResult] = await Promise.allSettled([
     startup.promise,
-    secretDelivery?.deliverTo(child),
+    secretDelivery?.deliverTo(child, { abortSignal: params.abortSignal }),
   ]);
   const startupError = startupResult.status === "rejected" ? startupResult.reason : undefined;
   const secretDeliveryError =
     secretDeliveryResult.status === "rejected" ? secretDeliveryResult.reason : undefined;
   if (startupError !== undefined || secretDeliveryError !== undefined) {
+    removeConstructionAbortListener();
     if (useWindowsJobAnchor && startupError !== undefined) {
       await startupErrorAckDelivery;
       await extinctionCompletion.promise;
     } else {
       child.kill("SIGKILL");
-      retainedChildren.delete(generation);
     }
     // Startup owns command admission, so its exact failure wins over a concurrent
     // backpressured secret pipe closing as a consequence of that failed admission.
     throw startupError ?? secretDeliveryError;
   }
+  if (params.abortSignal?.aborted || waitError) {
+    removeConstructionAbortListener();
+    child.kill("SIGKILL");
+    throw waitError ?? new Error("service child construction aborted");
+  }
+  removeConstructionAbortListener();
 
   const stdin = createManagedChildStdin(child.stdin);
   if (params.input !== undefined) {

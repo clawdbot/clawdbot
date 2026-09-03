@@ -3,6 +3,7 @@ import {
   validateFullReleaseCandidateBinding,
   validateFullReleaseCandidateRequest,
 } from "./full-release-candidate-contract.mjs";
+import { hasRequiredLinuxCrossOsSuites } from "./lib/cross-os-release-checks/suite-filter.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 
 // Full profiles carry over 500 job records. Keep complete evidence under one
@@ -287,7 +288,12 @@ export function normalizeReleaseCoveragePolicy({
   runReleaseSoak,
   targetVersion,
   candidateVersion,
+  crossOsSuiteFilter = "",
 }) {
+  // All-group evidence may omit advisory OS lanes, never required Linux suites.
+  if (rerunGroup === "all" && !hasRequiredLinuxCrossOsSuites(crossOsSuiteFilter)) {
+    throw new Error("release coverage policy requires all Linux cross-OS suites");
+  }
   if (coveragePolicy === undefined) {
     return undefined;
   }
@@ -331,8 +337,7 @@ export function validateReleaseCoveragePolicyBinding(plan, validationInputs = {}
   }
 }
 
-// The release owner approved only these Telegram integration omissions for
-// 2026.8.1. This declaration never turns a failed or unrun test into a pass.
+// Owner declarations bind omissions to one release; waived or unrun never means passed.
 export function normalizeReleaseTelegramWaiver({
   telegramWaiver,
   targetVersion,
@@ -348,11 +353,11 @@ export function normalizeReleaseTelegramWaiver({
     return "";
   }
   if (
-    telegramWaiver !== "2026.8.1-owner-approved" ||
-    targetVersion !== "2026.8.1" ||
+    telegramWaiver !== `${targetVersion}-owner-approved` ||
+    parseReleaseVersion(stringValue(targetVersion))?.baseVersion !== stringValue(targetVersion) ||
     !["stable", "full"].includes(releaseProfile)
   ) {
-    throw new Error("Telegram waiver requires owner-approved 2026.8.1 stable/full validation");
+    throw new Error("Telegram waiver requires an exact stable/full owner declaration");
   }
   if (candidateVersion !== undefined && candidateVersion !== targetVersion) {
     throw new Error("Telegram waiver target version differs from the release candidate");
@@ -384,10 +389,10 @@ export function normalizeReleaseTelegramWaiver({
   // the waived release exactly; a moving dist-tag does not establish version.
   if (
     [releasePackageSpec, packageAcceptancePackageSpec, npmTelegramPackageSpec].some(
-      (spec) => spec !== "" && spec !== "openclaw@2026.8.1",
+      (spec) => spec !== "" && spec !== `openclaw@${targetVersion}`,
     )
   ) {
-    throw new Error("Telegram waiver package overrides must be openclaw@2026.8.1");
+    throw new Error(`Telegram waiver package overrides must be openclaw@${targetVersion}`);
   }
   return telegramWaiver;
 }
@@ -1166,7 +1171,12 @@ function blockerIndex(issues) {
   return issues.map((issue) => jsonSha256(blockerEvidence(issue))).toSorted();
 }
 
-function isReleaseCheckJobAdvisory({ jobName, releaseProfile, workflowRef }) {
+export function isReleaseCheckJobAdvisory({ jobName, releaseProfile, workflowRef }) {
+  // Cross-OS Windows/macOS results remain evidence without gating npm publication.
+  // Match only execution lanes: Linux and shared preparation still block.
+  if (/^cross_os_release_checks \/ (?:Windows|macOS) \/ /u.test(jobName)) {
+    return true;
+  }
   if (
     jobName.startsWith("Run QA Lab parity lane (") ||
     jobName === "Run QA Lab parity report" ||

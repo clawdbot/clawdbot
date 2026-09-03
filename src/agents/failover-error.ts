@@ -93,10 +93,18 @@ function findCliFailoverError<T extends FailoverError>(
   return undefined;
 }
 
-export function findCliMaxTurnsError(err: unknown): FailoverError | undefined {
+// Codes for turns the CLI backend ended itself. Their tool effects already ran,
+// so replay, model rotation, and generic failure copy must all defer to them.
+const CLI_TERMINAL_STOP_CODES = new Set(["cli_max_turns", "cli_turn_stopped"]);
+
+export function isCliTerminalStopCode(code: string | undefined): boolean {
+  return code !== undefined && CLI_TERMINAL_STOP_CODES.has(code);
+}
+
+export function findCliTerminalStopError(err: unknown): FailoverError | undefined {
   return findCliFailoverError(
     err,
-    (error) => (error.code === "cli_max_turns" ? error : undefined),
+    (error) => (isCliTerminalStopCode(error.code) ? error : undefined),
     new Set(),
   );
 }
@@ -731,7 +739,7 @@ export function resolveModelFallbackError(
   }
   // Recorded terminal stops prohibit replay regardless of provider policy.
   // Keep the wrapper identity before coercion can discard the terminal fact.
-  if (findCliMaxTurnsError(err)) {
+  if (findCliTerminalStopError(err)) {
     return { kind: "terminal", error: err };
   }
   if (isAgentHarnessPreflightError(err)) {

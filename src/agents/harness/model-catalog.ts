@@ -114,6 +114,8 @@ export async function augmentModelCatalogWithAgentHarness(params: {
   defaultModel?: string;
   snapshot: ModelCatalogSnapshot;
   pluginRegistry?: PluginRegistry | null;
+  isCurrent?: () => boolean;
+  observationConfig?: OpenClawConfig;
   onError?: (error: unknown) => void;
 }): Promise<ModelCatalogSnapshot> {
   const rawDefaultModel = params.defaultModel?.trim();
@@ -145,11 +147,13 @@ export async function augmentModelCatalogWithAgentHarness(params: {
   if (runtime === "auto" || runtime === "openclaw") {
     return params.snapshot;
   }
-  const pluginRegistry = params.pluginRegistry ?? getActivePluginRegistry();
+  const pluginRegistry = params.observationConfig
+    ? params.pluginRegistry
+    : (params.pluginRegistry ?? getActivePluginRegistry());
   const harness = pluginRegistry?.agentHarnesses.find(
     (entry) => entry.harness.id === runtime,
   )?.harness;
-  if (!harness?.loadModelCatalog) {
+  if (!harness?.loadModelCatalog || params.isCurrent?.() === false) {
     return params.snapshot;
   }
   try {
@@ -168,13 +172,16 @@ export async function augmentModelCatalogWithAgentHarness(params: {
       return resolved ? [resolved] : [];
     });
     const listedRows = await harness.loadModelCatalog({
-      config: params.cfg,
+      config: params.observationConfig ?? params.cfg,
       agentId: params.agentId,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
       configuredModelRefs,
     });
-    if (!params.pluginRegistry && getActivePluginRegistry() !== pluginRegistry) {
+    if (
+      params.isCurrent?.() === false ||
+      (!params.pluginRegistry && getActivePluginRegistry() !== pluginRegistry)
+    ) {
       return params.snapshot;
     }
     if (listedRows.length === 0) {
@@ -196,6 +203,7 @@ export function augmentPreparedModelCatalogWithAgentHarness(params: {
   input: PreparedModelRuntimeInput;
   snapshot: ModelCatalogSnapshot;
   pluginRegistry?: PluginRegistry;
+  isCurrent?: () => boolean;
 }): Promise<ModelCatalogSnapshot> {
   const agentId = params.input.agentId ?? resolveDefaultAgentId(params.input.config);
   return augmentModelCatalogWithAgentHarness({
@@ -210,5 +218,7 @@ export function augmentPreparedModelCatalogWithAgentHarness(params: {
     defaultModel: resolveAgentEffectiveModelPrimary(params.input.config, agentId),
     snapshot: params.snapshot,
     pluginRegistry: params.pluginRegistry,
+    isCurrent: params.isCurrent,
+    observationConfig: params.input.config,
   });
 }

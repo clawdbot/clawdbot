@@ -142,41 +142,44 @@ describe("process supervisor scope extinction", () => {
     async (reuseRunId) => {
       const first = createStubChildAdapter();
       const sibling = createStubChildAdapter({ pid: 4321 });
-      const [firstExtinction, siblingExtinction] = [createDeferred(), createDeferred()];
-      first.waitForExtinction = async () => await firstExtinction.promise;
+      const siblingExtinction = createDeferred();
       sibling.waitForExtinction = async () => await siblingExtinction.promise;
       const startup = createDeferred<StubChildAdapter>();
       createChildAdapterMock.mockReturnValueOnce(startup.promise).mockResolvedValueOnce(sibling);
 
       const supervisor = createProcessSupervisor();
-      const pending = ["failed-owner", "pending-owner"].map((sessionId) =>
-        spawnChild(supervisor, {
-          ...(reuseRunId ? { runId: "same-agent-run" } : {}),
-          sessionId,
-          scopeKey: "scope:failed-drain",
-          argv: createSilentIdleArgv(),
-        }),
-      );
+      const sharedId = reuseRunId ? { runId: "same-agent-run" } : {};
+      const firstPending = spawnChild(supervisor, {
+        ...sharedId,
+        sessionId: "failed-owner",
+        scopeKey: "scope:failed-drain",
+        argv: createSilentIdleArgv(),
+      });
+      const siblingRun = await spawnChild(supervisor, {
+        ...sharedId,
+        sessionId: "pending-owner",
+        scopeKey: "scope:failed-drain",
+        argv: createSilentIdleArgv(),
+      });
       supervisor.cancelScope("scope:failed-drain");
       const drain = supervisor.waitForScope("scope:failed-drain");
       startup.resolve(first);
-      const runs = await Promise.all(pending);
-      expect(first.killMock).toHaveBeenCalledWith("SIGTERM");
+      const firstRun = await firstPending;
+      expect(first.killMock).toHaveBeenCalledWith("SIGKILL");
+      expect(first.disposeMock).toHaveBeenCalled();
       expect(sibling.killMock).toHaveBeenCalledWith("SIGTERM");
-      expect(supervisor.getRecord(runs[1]!.runId)).toMatchObject({ pid: sibling.pid });
-      first.settle(0);
+      expect(supervisor.getRecord(siblingRun.runId)).toMatchObject({ pid: sibling.pid });
       sibling.settle(0);
-      await Promise.all(runs.map((run) => run.wait()));
+      await Promise.all([firstRun.wait(), siblingRun.wait()]);
 
       const drained = vi.fn();
       void drain.then(drained, drained);
-      firstExtinction.reject(new Error("first owner lost authority"));
       await Promise.resolve();
       expect(drained).not.toHaveBeenCalled();
       expect(sibling.disposeMock).not.toHaveBeenCalled();
 
-      siblingExtinction.resolve();
-      await expect(drain).rejects.toThrow("first owner lost authority");
+      siblingExtinction.reject(new Error("sibling owner lost authority"));
+      await expect(drain).rejects.toThrow("sibling owner lost authority");
       expect(sibling.disposeMock).toHaveBeenCalledTimes(1);
     },
   );
