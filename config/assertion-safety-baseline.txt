@@ -3712,12 +3712,10 @@ ui/src/app/config.ts	1
 ui/src/app/custom-theme.ts	2
 ui/src/app/native-bridge.ts	3
 ui/src/app/native-gateways.runtime.ts	4
-ui/src/app/native-link-routing.ts	3
-ui/src/app/native-nav-state.ts	1
-ui/src/app/native-notifications.ts	3
+ui/src/app/native-link-routing.ts	1
+ui/src/app/native-notifications.ts	2
 ui/src/app/native-route-memory.ts	1
 ui/src/app/native-web-chrome.ts	2
-ui/src/app/native-window-drag.ts	1
 ui/src/app/overlays.ts	1
 ui/src/app/question-prompt.ts	2
 ui/src/app/server-prefs-state.ts	14
