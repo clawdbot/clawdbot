@@ -278,9 +278,16 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       // every other caller defaults to the configured search corpus.
       const sourceFilterList = searchSources ?? this.settings.searchSources;
       const hybrid = this.settings.query.hybrid;
+      // Both retrieval legs are capped by this pool, and fusion runs after it, so a
+      // pool that shrinks with the requested count hides chunks that only become
+      // top-ranked once vector and keyword scores combine: top-1 then differs from
+      // the first row of a wider request. Floor the pool at what the configured
+      // default result count already retrieves, so an explicit small-k caller ranks
+      // over the same candidates as the default path without widening worst-case cost.
+      const poolResults = Math.max(maxResults, this.settings.query.maxResults);
       const candidates = Math.min(
         200,
-        Math.max(1, Math.floor(maxResults * hybrid.candidateMultiplier)),
+        Math.max(1, Math.floor(poolResults * hybrid.candidateMultiplier)),
       );
       const finalizeKeywords = (results: KeywordSearchHit[]) =>
         this.finalizeKeywordOnlyResults({
