@@ -156,7 +156,7 @@ Options:
   --npm-preflight-run <id>            Reuse successful OpenClaw NPM Release preflight run.
   --plugin-sdk-api-acknowledgement <digest>
                                       8-character digest from the Plugin SDK API diff report.
-  --windows-node-tag <tag>            Exact Windows Node release tag. Required for stable.
+  --windows-node-tag <tag>            Optional exact Windows Node tag for postpublish asset promotion.
   --skip-dispatch                     Require Full Release Validation run; separate npm run only for historical recovery.
   --skip-local-generated-check        Do not run local generated release baseline checks before dispatch.
   --run-parallels                    Force candidate Parallels smoke; beta defaults to postpublish release:beta-smoke.
@@ -326,15 +326,10 @@ export function parseArgs(argv: string[]) {
   if (options.pluginPublishScope === "all-publishable" && options.plugins.trim()) {
     throw new Error("--plugins is only valid with --plugin-publish-scope selected");
   }
+  // Apps can attach after npm and GitHub publication; only an explicitly selected
+  // Windows promotion needs a source tag and its immutable installer digests.
   if (options.windowsNodeTag && !WINDOWS_NODE_TAG_PATTERN.test(options.windowsNodeTag)) {
     throw new Error("--windows-node-tag must be an explicit version tag, not latest");
-  }
-  if (
-    !options.tag.includes("-alpha.") &&
-    !options.tag.includes("-beta.") &&
-    !options.windowsNodeTag
-  ) {
-    throw new Error("stable release candidates require --windows-node-tag");
   }
   if (!["mock-openai", "live-frontier"].includes(options.telegramProviderMode)) {
     throw new Error("--telegram-provider-mode must be mock-openai or live-frontier");
@@ -1470,11 +1465,13 @@ function pluginPlanArgs(options: ReturnType<typeof parseArgs>) {
 }
 
 function collectPluginPlan(script: string, options: ReturnType<typeof parseArgs>): unknown {
-  return JSON.parse(
+  const plan: unknown = JSON.parse(
     run("node", ["--import", "tsx", join(TOOLING_ROOT, script), ...pluginPlanArgs(options)], {
       capture: true,
     }),
   );
+  console.log(formatPluginPlanSummary(script, plan).join("\n"));
+  return plan;
 }
 
 async function collectPluginPlanWithRetry(script: string, options: ReturnType<typeof parseArgs>) {
@@ -1498,8 +1495,15 @@ async function collectPluginPlanWithRetry(script: string, options: ReturnType<ty
   throw lastError;
 }
 
-function pluginPlanPackageCount(plan: unknown) {
-  return isRecord(plan) && Array.isArray(plan.packages) ? plan.packages.length : 0;
+function formatPluginPlanSummary(label: string, plan: unknown): string[] {
+  const count = isRecord(plan) && Array.isArray(plan.all) ? plan.all.length : 0;
+  const warnings = isRecord(plan) && Array.isArray(plan.warnings) ? plan.warnings : [];
+  return [
+    `- ${label}: ${count} packages`,
+    ...warnings
+      .filter((warning): warning is string => typeof warning === "string")
+      .map((warning) => `- Warning: ${warning}`),
+  ];
 }
 
 function shellQuote(value: unknown) {
@@ -2267,8 +2271,8 @@ async function main() {
       `- tarball: ${basename(tarballPath)}`,
       `- tarball sha256: ${actualTarballSha}`,
       `- npm dist-tag: ${options.npmDistTag}`,
-      `- plugin npm plan: ${pluginPlanPackageCount(pluginNpmPlan)} packages`,
-      `- ClawHub plan: ${pluginPlanPackageCount(pluginClawHubPlan)} packages`,
+      ...formatPluginPlanSummary("plugin npm plan", pluginNpmPlan),
+      ...formatPluginPlanSummary("ClawHub plan", pluginClawHubPlan),
       `- Parallels: ${parallels.status}${parallels.reason ? ` (${parallels.reason})` : ""}`,
       `- NPM Telegram E2E: ${npmTelegram.status}${
         npmTelegram.runId ? ` ${npmTelegram.runId} ${npmTelegram.url}` : ""

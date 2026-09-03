@@ -139,9 +139,7 @@ export function createNativeNotificationsCapability(): NativeNotificationsCapabi
       postMessage({ type: "send-test" });
     },
     backgroundSessionCompleted(completion) {
-      if (snapshot.permission === "granted") {
-        postMessage({ type: "background-session-completed", ...completion });
-      }
+      postMessage({ type: "background-session-completed", ...completion });
     },
     dispose() {
       window.removeEventListener(NATIVE_NOTIFICATIONS_STATUS_EVENT, handleStatus);

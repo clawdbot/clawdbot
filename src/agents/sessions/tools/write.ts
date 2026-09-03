@@ -544,14 +544,12 @@ export function createWriteToolDefinition(
         if (signal?.aborted) {
           throw new Error("Operation aborted");
         }
-        // Terminal no-op: file already has identical content.
+        // No-op: file already has identical content. Not terminal — the model
+        // may still be mid-task and needs a continuation, not an ended turn.
         if (precheck.state === "same") {
-          return {
-            ...textResult(`No changes made to ${path}. The file already has identical content.`, {
-              changed: false,
-            } satisfies WriteToolDetails),
-            terminate: true,
-          };
+          return textResult(`No changes made to ${path}. The file already has identical content.`, {
+            changed: false,
+          } satisfies WriteToolDetails);
         }
         const details = await resolveWriteDetails({ absolutePath, content, ops, path, precheck });
         try {

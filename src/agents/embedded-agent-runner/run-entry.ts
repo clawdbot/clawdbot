@@ -38,6 +38,7 @@ import {
 import type { EmbeddedAgentRunResult, TraceAttempt } from "./types.js";
 
 type RunEntryCandidateOptions = {
+  classifyResult: (result: EmbeddedAgentRunResult) => ModelFallbackResultClassification;
   allowTransientCooldownProbe?: boolean;
   isFinalFallbackAttempt?: boolean;
   isFallbackRetry: boolean;
@@ -48,6 +49,7 @@ type RunEntryCandidateOptions = {
 
 type RunEntryCandidate<T> = {
   result: T;
+  classification?: ModelFallbackResultClassification;
   turnAttempt?: ContextEngineTurnAttemptFacts;
 };
 
@@ -128,6 +130,8 @@ type EmbeddedAgentRunEntryParams<T extends EmbeddedAgentRunResult> = {
   sessionOverride: RunEntrySessionOverride;
   abortSignal?: AbortSignal;
   onFallbackStep?: (step: ModelFallbackStepFields) => void | Promise<void>;
+  /** Runs once after the successful winner is accepted, before post-turn context commit. */
+  onAcceptedTerminal?: () => void | (() => void) | Promise<void | (() => void)>;
   runCandidate: (provider: string, model: string, options: RunEntryCandidateOptions) => Promise<T>;
 };
 
@@ -465,33 +469,7 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
       ...(params.behavior.kind === "maintenance"
         ? {}
         : {
-            classifyResult: ({
-              result: candidate,
-              provider,
-              model,
-            }: {
-              result: RunEntryCandidate<T>;
-              provider: string;
-              model: string;
-            }) => {
-              const deliveryEvidence =
-                params.behavior.kind === "channel-delivery"
-                  ? params.behavior.readDeliveryEvidence()
-                  : undefined;
-              const classification = classifyEmbeddedAgentRunResultForModelFallback({
-                result: candidate.result,
-                provider,
-                model,
-                ...deliveryEvidence,
-              });
-              const effectiveClassification =
-                params.behavior.kind === "followup-delivery"
-                  ? preserveFollowupResultForDelivery(classification)
-                  : classification;
-              return effectiveClassification && committedSideEffect?.()
-                ? undefined
-                : effectiveClassification;
-            },
+            classifyResult: ({ result }: { result: RunEntryCandidate<T> }) => result.classification,
           }),
       ...(canFallbackAfterError ? { canFallbackAfterError } : {}),
       ...(params.behavior.kind === "maintenance"
@@ -518,7 +496,35 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
         const isFallbackRetry = candidateIndex > 0;
         candidateIndex += 1;
         let contextEngineTurnCandidate: ContextEngineTurnAttemptFacts | undefined;
+        let classified: { value: ModelFallbackResultClassification } | undefined;
+        const classifyResult = (result: EmbeddedAgentRunResult) => {
+          if (!classified) {
+            const classification =
+              params.behavior.kind === "maintenance"
+                ? undefined
+                : classifyEmbeddedAgentRunResultForModelFallback({
+                    result,
+                    provider,
+                    model,
+                    ...readChannelDeliveryEvidence?.(),
+                  });
+            const effectiveClassification =
+              params.behavior.kind === "followup-delivery"
+                ? preserveFollowupResultForDelivery(classification)
+                : classification;
+            // CLI continuity settles while the session lane is held. The outer
+            // fallback loop consumes this same decision after that owner releases.
+            classified = {
+              value:
+                effectiveClassification && committedSideEffect?.()
+                  ? undefined
+                  : effectiveClassification,
+            };
+          }
+          return classified.value;
+        };
         const result = await params.runCandidate(provider, model, {
+          classifyResult,
           allowTransientCooldownProbe: options?.allowTransientCooldownProbe,
           isFinalFallbackAttempt: options?.isFinalFallbackAttempt,
           isFallbackRetry,
@@ -529,7 +535,11 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
             unsettledContextEngineTurnAttempt = facts;
           },
         });
-        return { result, turnAttempt: contextEngineTurnCandidate };
+        return {
+          result,
+          classification: classifyResult(result),
+          turnAttempt: contextEngineTurnCandidate,
+        };
       },
     });
     const abortFields =
@@ -568,25 +578,37 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
       behavior: params.behavior,
       runId: params.identity.runId,
     });
-    if (fallbackResult.result.turnAttempt) {
-      if (
-        canAdvanceContextEngineTurn({
-          result,
-          fallbackOutcome: settledResult.outcome,
-          terminal,
-        })
-      ) {
-        await finalizeAcceptedContextEngineTurn({
-          facts: fallbackResult.result.turnAttempt,
-          lease: contextEngineLogicalTurnLease,
-        });
-      } else {
-        discardContextEngineTurnAttemptIntent({
-          facts: fallbackResult.result.turnAttempt,
-          lease: contextEngineLogicalTurnLease,
-        });
+    const acceptedTerminal =
+      !params.abortSignal?.aborted &&
+      canAdvanceContextEngineTurn({
+        result,
+        fallbackOutcome: settledResult.outcome,
+        terminal,
+      });
+    let releaseAcceptedTerminalWork: (() => void) | undefined;
+    if (acceptedTerminal) {
+      const acceptedTerminalWork = await params.onAcceptedTerminal?.();
+      if (typeof acceptedTerminalWork === "function") {
+        releaseAcceptedTerminalWork = acceptedTerminalWork;
       }
-      unsettledContextEngineTurnAttempt = undefined;
+    }
+    try {
+      if (fallbackResult.result.turnAttempt) {
+        if (acceptedTerminal) {
+          await finalizeAcceptedContextEngineTurn({
+            facts: fallbackResult.result.turnAttempt,
+            lease: contextEngineLogicalTurnLease,
+          });
+        } else {
+          discardContextEngineTurnAttemptIntent({
+            facts: fallbackResult.result.turnAttempt,
+            lease: contextEngineLogicalTurnLease,
+          });
+        }
+        unsettledContextEngineTurnAttempt = undefined;
+      }
+    } finally {
+      releaseAcceptedTerminalWork?.();
     }
     let sessionOverrideSettled = false;
     const settleSessionOverride = async () => {

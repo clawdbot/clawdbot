@@ -98,6 +98,23 @@ export function controlUiBundledSettingsStorageKey(baseUrl: string): string {
   return `openclaw.control.settings.v1:${controlUiBundledGatewayUrl(baseUrl)}`;
 }
 
+export function createControlUiMockSameOriginGatewayScript(): string {
+  return `;(${installControlUiMockSameOriginGateway.toString()})();`;
+}
+
+function installControlUiMockSameOriginGateway() {
+  // Standalone mock pages emulate Gateway-served UI so same-origin security
+  // checks exercise package assets instead of falling back to initials.
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  (
+    window as Window & {
+      ["__OPENCLAW_NATIVE_CONTROL_AUTH__"]?: { gatewayUrl: string };
+    }
+  )["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = {
+    gatewayUrl: `${protocol}//${window.location.host}`,
+  };
+}
+
 type ControlUiRouteTarget = {
   hash?: string;
   pathname?: string;
@@ -307,6 +324,7 @@ export type ControlUiMockGatewayScenario = {
   assistantAgentId?: string;
   assistantName?: string;
   automaticallyFetchFavicons?: boolean;
+  communityInvite?: boolean;
   basePath?: string;
   controlUiTabs?: Array<{
     group?: string;
@@ -765,6 +783,7 @@ function controlUiE2ePreviewConfigPlugin(
     basePath: "/",
     assistantName: "",
     assistantAvatar: "",
+    communityInvite: true,
   },
 ): Plugin {
   return {
@@ -954,6 +973,7 @@ function normalizeScenario(
   return {
     attachmentMaxBytes: scenario.attachmentMaxBytes ?? DEFAULT_MOCK_ATTACHMENT_MAX_BYTES,
     automaticallyFetchFavicons: scenario.automaticallyFetchFavicons ?? false,
+    communityInvite: scenario.communityInvite ?? true,
     agentModel:
       scenario.agentModel === undefined ? "openai/gpt-5.5" : scenario.agentModel?.trim() || null,
     assistantAgentId: scenario.assistantAgentId?.trim() || defaultAgentId,
@@ -1038,6 +1058,7 @@ export function createControlUiMockBootstrapConfig(scenario: ControlUiMockGatewa
   return {
     allowExternalEmbedUrls: false,
     automaticallyFetchFavicons: normalizedScenario.automaticallyFetchFavicons,
+    communityInvite: normalizedScenario.communityInvite,
     assistantAgentId: normalizedScenario.assistantAgentId,
     assistantAvatar: "",
     assistantName: normalizedScenario.assistantName,
@@ -1913,6 +1934,8 @@ function installControlUiMockGateway(
           shared: { source: "system-configured", accountId: 1, login: "system-bot" },
           pendingPersonal: null,
         };
+      case "users.list":
+        return { profiles: [] };
       case "users.github.status":
       case "tools.github.status": {
         const system = {
@@ -2094,6 +2117,8 @@ function installControlUiMockGateway(
         };
       case "commands.list":
         return { commands: [] };
+      case "plugins.list":
+        return { plugins: [] };
       case "health":
         return {
           agents: [],

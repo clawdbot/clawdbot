@@ -10,6 +10,7 @@ import ai.openclaw.app.NodeRuntimeMode
 import ai.openclaw.app.R
 import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.chat.ChatController
+import ai.openclaw.app.closeNodeRuntimeTestFixture
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.i18n.NativeStringResources
@@ -43,6 +44,7 @@ import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
@@ -121,7 +123,7 @@ class ChatComposerLayoutTest {
   fun tearDown() {
     viewModelStore.clear()
     setApplicationRuntime(originalRuntime)
-    runtime.disconnect()
+    closeNodeRuntimeTestFixture(runtime)
     AndroidScreenshotFixture.configure(AndroidScreenshotScene.Home)
     Settings.Global.putString(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, originalAnimatorScale)
     NativeStringResources.install(app)
@@ -445,13 +447,13 @@ class ChatComposerLayoutTest {
     NativeStringResources.setApplicationLocales(LocaleListCompat.forLanguageTags("fr"))
     val fontScale = mutableStateOf(1f)
     showChat(viewportWidth = 320.dp, viewportHeight = 640.dp, fontScale = { fontScale.value }, talkActive = true)
-    val requestField = ChatController::class.java.getDeclaredField("requestGateway").apply { isAccessible = true }
+    val requestField = ChatController::class.java.getDeclaredField("requestGatewayForGateway").apply { isAccessible = true }
 
     @Suppress("UNCHECKED_CAST")
-    val originalRequest = requestField.get(controller) as suspend (String, String?) -> String
+    val originalRequest = requestField.get(controller) as suspend (String, String, String?) -> String
     var modelLabel = "GPT-5.6 Sol"
-    val request: suspend (String, String?) -> String = { method, params ->
-      val response = originalRequest(method, params)
+    val request: suspend (String, String, String?) -> String = { gatewayId, method, params ->
+      val response = originalRequest(gatewayId, method, params)
       if (method == "chat.metadata") {
         val metadata = Json.parseToJsonElement(response).jsonObject
         val models =
@@ -480,10 +482,12 @@ class ChatComposerLayoutTest {
             modelLabel = name
             controller.handleGatewayEvent("chat.metadata.changed", "{}")
           }
+          // Catalog publication can precede ViewModel collection and the picker rendering.
           composeRule.waitUntil {
-            controller.modelCatalog.value
-              .singleOrNull()
-              ?.name == name
+            composeRule
+              .onAllNodes(hasContentDescription(nativeString("Model")) and hasText(name))
+              .fetchSemanticsNodes()
+              .size == 1
           }
           assertComposerControlsVisible(talkActive = true, modelLabel = name)
           val label = composeRule.onNodeWithText(name, useUnmergedTree = true).assertIsDisplayed()
@@ -520,49 +524,7 @@ class ChatComposerLayoutTest {
   fun longProgressPlanKeepsEditorAndStopVisibleAndLastStepReachable() {
     showChat()
     val steps = List(20) { index -> "Step ${index + 1}: verify the Android chat behavior and document the result." }
-    val response =
-      buildJsonObject {
-        put(
-          "card",
-          buildJsonObject {
-            put("sessionKey", JsonPrimitive(controller.sessionKey.value))
-            put("revision", JsonPrimitive(1))
-            put("updatedAt", JsonPrimitive(System.currentTimeMillis()))
-            put(
-              "steps",
-              buildJsonArray {
-                steps.forEachIndexed { index, step ->
-                  add(
-                    buildJsonObject {
-                      put("step", JsonPrimitive(step))
-                      put("status", JsonPrimitive(if (index == 0) "in_progress" else "pending"))
-                    },
-                  )
-                }
-              },
-            )
-          },
-        )
-      }.toString()
-    val requestField = ChatController::class.java.getDeclaredField("requestGateway").apply { isAccessible = true }
-
-    @Suppress("UNCHECKED_CAST")
-    val request = requestField.get(controller) as suspend (String, String?) -> String
-    val progressRequest: suspend (String, String?) -> String = { method, params ->
-      if (method == "progressCard.get") response else request(method, params)
-    }
-    composeRule.runOnIdle {
-      requestField.set(controller, progressRequest)
-      controller.handleGatewayEvent(
-        "progressCard.changed",
-        """{"sessionKey":"${controller.sessionKey.value}","revision":1}""",
-      )
-    }
-    composeRule.waitUntil {
-      controller.progressCard.value
-        ?.steps
-        ?.size == steps.size
-    }
+    showProgressCard(steps)
 
     assertComposerControlsVisible()
     if (composeRule.onAllNodesWithContentDescription("Expand progress card").fetchSemanticsNodes().isNotEmpty()) {
@@ -570,6 +532,39 @@ class ChatComposerLayoutTest {
     }
     assertComposerControlsVisible()
     composeRule.onNodeWithText(steps.last()).performScrollTo().assertIsDisplayed()
+    assertComposerControlsVisible()
+  }
+
+  @Test
+  fun progressCardSharesComposerSurfaceAndExpandsUpward() {
+    showChat(viewportHeight = 400.dp)
+    showProgressCard(listOf("Inspect the Android layout", "Implement the attached panel", "Verify the result"))
+
+    val card = composeRule.onNodeWithTag("chat-progress-card")
+    val composer = composeRule.onNodeWithTag("chat-composer-surface")
+    val editor = composeRule.onNode(hasSetTextAction())
+    val collapsedCard = card.getUnclippedBoundsInRoot()
+    val composerBefore = composer.getUnclippedBoundsInRoot()
+    val editorBefore = editor.getUnclippedBoundsInRoot()
+    composeRule.onNodeWithContentDescription(nativeString("Expand progress card")).performClick()
+
+    val expandedCard = card.getUnclippedBoundsInRoot()
+    val composerAfter = composer.getUnclippedBoundsInRoot()
+    val editorAfter = editor.getUnclippedBoundsInRoot()
+    assertTrue(
+      "The collapsed progress card must live inside the composer surface",
+      collapsedCard.top >= composerBefore.top && collapsedCard.bottom <= composerBefore.bottom,
+    )
+    assertEquals("Expanding progress must not move the composer bottom", composerBefore.bottom.value, composerAfter.bottom.value, 0.5f)
+    assertEquals("Expanding progress must not move the editor top", editorBefore.top.value, editorAfter.top.value, 0.5f)
+    assertEquals("Expanding progress must not move the editor bottom", editorBefore.bottom.value, editorAfter.bottom.value, 0.5f)
+    assertEquals(
+      "The expanded progress card must share the composer surface top",
+      composerAfter.top.value,
+      expandedCard.top.value,
+      0.5f,
+    )
+    assertTrue("The composer surface must expand upward", composerAfter.top < composerBefore.top)
     assertComposerControlsVisible()
   }
 
@@ -650,6 +645,52 @@ class ChatComposerLayoutTest {
         "sessions.changed",
         """{"reason":"patch","session":{"key":"$sessionKey","sessionId":"$sessionId","agentId":"main","permissionMode":"$mode","permissionModePending":$pending}}""",
       )
+    }
+  }
+
+  private fun showProgressCard(steps: List<String>) {
+    val response =
+      buildJsonObject {
+        put(
+          "card",
+          buildJsonObject {
+            put("sessionKey", JsonPrimitive(controller.sessionKey.value))
+            put("revision", JsonPrimitive(1))
+            put("updatedAt", JsonPrimitive(System.currentTimeMillis()))
+            put(
+              "steps",
+              buildJsonArray {
+                steps.forEachIndexed { index, step ->
+                  add(
+                    buildJsonObject {
+                      put("step", JsonPrimitive(step))
+                      put("status", JsonPrimitive(if (index == 0) "in_progress" else "pending"))
+                    },
+                  )
+                }
+              },
+            )
+          },
+        )
+      }.toString()
+    val requestField = ChatController::class.java.getDeclaredField("requestGatewayForGateway").apply { isAccessible = true }
+
+    @Suppress("UNCHECKED_CAST")
+    val request = requestField.get(controller) as suspend (String, String, String?) -> String
+    val progressRequest: suspend (String, String, String?) -> String = { gatewayId, method, params ->
+      if (method == "progressCard.get") response else request(gatewayId, method, params)
+    }
+    composeRule.runOnIdle {
+      requestField.set(controller, progressRequest)
+      controller.handleGatewayEvent(
+        "progressCard.changed",
+        """{"sessionKey":"${controller.sessionKey.value}","revision":1}""",
+      )
+    }
+    composeRule.waitUntil {
+      controller.progressCard.value
+        ?.steps
+        ?.size == steps.size
     }
   }
 

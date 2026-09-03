@@ -67,7 +67,7 @@ type RunManagedCommandOptions = ManagedCommandOptions & {
 };
 
 type ManagedCommandOutcome =
-  | { type: "completed"; status: number }
+  | { type: "completed"; exit: number | NodeJS.Signals }
   | { type: "failed"; error: unknown }
   | { type: "timeout" }
   | { type: "aborted" }
@@ -416,7 +416,7 @@ export async function runManagedCommand({
     child.once(requireProcessTreeExit ? "exit" : "close", (status, received) => {
       notifyOutcome({
         type: "completed",
-        status: received ? signalExitCode(received) : (status ?? 1),
+        exit: received ?? status ?? 1,
       });
     });
     if (timeoutMs !== undefined) {
@@ -453,7 +453,9 @@ export async function runManagedCommand({
     }
     let outcome = await completion;
     if (outcome.type === "completed" && requireProcessTreeExit) {
-      void finalize();
+      // Preserve actual signal cleanup; numeric 143 must still reject lingering descendants.
+      const exitSignal = typeof outcome.exit === "string" ? outcome.exit : undefined;
+      void finalize(exitSignal);
     }
     // Cleanup failure overrides the first cancellation, including during strict drainage.
     const cleanup = finalization ? await finalization : undefined;
@@ -477,7 +479,7 @@ export async function runManagedCommand({
     if (outcome.type === "signal") {
       return signalExitCode(outcome.signal);
     }
-    return outcome.status;
+    return typeof outcome.exit === "string" ? signalExitCode(outcome.exit) : outcome.exit;
   } finally {
     clearTimeout(timeoutTimer);
     signal?.removeEventListener("abort", abort);

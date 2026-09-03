@@ -12,10 +12,7 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import {
-  resetRemoteModelCatalogOverlayForTest,
-  setRemoteModelCatalogOverlaySourcesForTest,
-} from "../model-catalog/remote-overlay.test-support.js";
+import { setRemoteModelCatalogOverlaySourcesForTest } from "../model-catalog/remote-overlay.test-support.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import * as usageFormat from "../utils/usage-format.js";
@@ -715,7 +712,6 @@ describe("session cost usage", () => {
         checked_at: 200,
       }),
     });
-    resetRemoteModelCatalogOverlayForTest();
     const config = {
       models: {
         providers: {
@@ -748,7 +744,6 @@ describe("session cost usage", () => {
       });
     } finally {
       setRemoteModelCatalogOverlaySourcesForTest();
-      resetRemoteModelCatalogOverlayForTest();
     }
   });
 

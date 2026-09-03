@@ -1,3 +1,4 @@
+import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -30,7 +31,7 @@ import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../gateway-errors.ts";
-import { parseCronEveryMs } from "./decimal.ts";
+import { parseCronDurationMs } from "./decimal.ts";
 
 export { loadCronScopeStats } from "./scope.ts";
 
@@ -89,7 +90,7 @@ export type CronFormState = {
   failureAlertCooldownSeconds: string;
   failureAlertChannel: string;
   failureAlertTo: string;
-  failureAlertDeliveryMode: "announce" | "webhook";
+  failureAlertDeliveryMode: "" | "announce" | "webhook";
   failureAlertAccountId: string;
   timeoutSeconds: string;
 };
@@ -171,11 +172,11 @@ const DEFAULT_CRON_FORM: CronFormState = {
   deliveryCompletionDestination: undefined,
   deliveryFailureDestination: undefined,
   failureAlertMode: "inherit",
-  failureAlertAfter: "2",
-  failureAlertCooldownSeconds: "3600",
+  failureAlertAfter: "",
+  failureAlertCooldownSeconds: "",
   failureAlertChannel: "last",
   failureAlertTo: "",
-  failureAlertDeliveryMode: "announce",
+  failureAlertDeliveryMode: "",
   failureAlertAccountId: "",
   timeoutSeconds: "",
 };
@@ -355,7 +356,7 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
       errors.scheduleAt = "cron.errors.scheduleAtInvalid";
     }
   } else if (form.scheduleKind === "every") {
-    const everyMs = parseCronEveryMs(form.everyAmount, form.everyUnit);
+    const everyMs = parseCronDurationMs(form.everyAmount, form.everyUnit);
     if (everyMs === undefined) {
       errors.everyAmount = "cron.errors.everyAmountInvalid";
     } else if (form.triggerEnabled && everyMs < resolveCronTriggerMinIntervalMs()) {
@@ -367,11 +368,8 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
     }
     if (!form.scheduleExact) {
       const staggerAmount = form.staggerAmount.trim();
-      if (staggerAmount) {
-        const stagger = toNumber(staggerAmount, 0);
-        if (stagger <= 0) {
-          errors.staggerAmount = "cron.errors.staggerAmountInvalid";
-        }
+      if (staggerAmount && !parseCronDurationMs(staggerAmount, form.staggerUnit, true)) {
+        errors.staggerAmount = "cron.errors.staggerAmountInvalid";
       }
     }
   }
@@ -415,16 +413,13 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
     const afterRaw = form.failureAlertAfter.trim();
     if (afterRaw) {
       const after = toNumber(afterRaw, 0);
-      if (!Number.isFinite(after) || after <= 0) {
-        errors.failureAlertAfter = "Failure alert threshold must be greater than 0.";
+      if (!Number.isFinite(after) || after < 1) {
+        errors.failureAlertAfter = "Failure alert threshold must be at least 1.";
       }
     }
     const cooldownRaw = form.failureAlertCooldownSeconds.trim();
-    if (cooldownRaw) {
-      const cooldown = toNumber(cooldownRaw, -1);
-      if (!Number.isFinite(cooldown) || cooldown < 0) {
-        errors.failureAlertCooldownSeconds = "Cooldown must be 0 or greater.";
-      }
+    if (cooldownRaw && parseFailureAlertCooldownMs(cooldownRaw) === undefined) {
+      errors.failureAlertCooldownSeconds = "Cooldown must be finite and 0 or greater.";
     }
   }
   return errors;
@@ -829,8 +824,8 @@ function formatDateTimeLocal(input: string): string {
 
 // Render everyMs back to the largest unit that divides it exactly, falling through
 // to decimal seconds. Sub-second remainders are built from BigInt quotient/remainder,
-// not float division, so every integer millisecond up to Number.MAX_SAFE_INTEGER
-// round-trips losslessly through parseCronEveryMs when the job is resaved.
+// not float division, so every accepted millisecond round-trips losslessly
+// through parseCronDurationMs when the job is resaved.
 function parseEverySchedule(everyMs: number): Pick<CronFormState, "everyAmount" | "everyUnit"> {
   if (everyMs % 86_400_000 === 0) {
     return { everyAmount: String(everyMs / 86_400_000), everyUnit: "days" };
@@ -841,11 +836,11 @@ function parseEverySchedule(everyMs: number): Pick<CronFormState, "everyAmount" 
   if (everyMs % 60_000 === 0) {
     return { everyAmount: String(everyMs / 60_000), everyUnit: "minutes" };
   }
-  return { everyAmount: everyMsToSecondsString(everyMs), everyUnit: "seconds" };
+  return { everyAmount: durationMsToSecondsString(everyMs), everyUnit: "seconds" };
 }
 
-function everyMsToSecondsString(everyMs: number): string {
-  const value = BigInt(everyMs);
+function durationMsToSecondsString(ms: number): string {
+  const value = BigInt(ms);
   const whole = value / 1_000n;
   const remainder = value % 1_000n;
   if (remainder === 0n) {
@@ -867,13 +862,13 @@ function parseStaggerSchedule(
   if (staggerMs % 60_000 === 0) {
     return {
       scheduleExact: false,
-      staggerAmount: String(Math.max(1, staggerMs / 60_000)),
+      staggerAmount: String(staggerMs / 60_000),
       staggerUnit: "minutes",
     };
   }
   return {
     scheduleExact: false,
-    staggerAmount: String(Math.max(1, Math.ceil(staggerMs / 1_000))),
+    staggerAmount: durationMsToSecondsString(staggerMs),
     staggerUnit: "seconds",
   };
 }
@@ -887,7 +882,7 @@ function isReadOnlyCronPayload(payload: CronPayload | null): boolean {
 }
 
 function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
-  const failureAlert = job.failureAlert;
+  const failureAlert = typeof job.failureAlert === "object" ? job.failureAlert : undefined;
   const payload = getCronJobPayload(job);
   const payloadLocked = isReadOnlyCronPayload(payload);
   if (!isCronFormSessionTarget(job.sessionTarget)) {
@@ -940,33 +935,16 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     deliveryCompletionDestination:
       job.delivery?.mode === "announce" ? job.delivery.completionDestination : undefined,
     deliveryFailureDestination: job.delivery?.failureDestination,
-    failureAlertMode:
-      failureAlert === false
-        ? "disabled"
-        : failureAlert && typeof failureAlert === "object"
-          ? "custom"
-          : "inherit",
-    failureAlertAfter:
-      failureAlert && typeof failureAlert === "object" && typeof failureAlert.after === "number"
-        ? String(failureAlert.after)
-        : DEFAULT_CRON_FORM.failureAlertAfter,
+    failureAlertMode: job.failureAlert === false ? "disabled" : failureAlert ? "custom" : "inherit",
+    failureAlertAfter: typeof failureAlert?.after === "number" ? String(failureAlert.after) : "",
     failureAlertCooldownSeconds:
-      failureAlert &&
-      typeof failureAlert === "object" &&
-      typeof failureAlert.cooldownMs === "number"
-        ? String(Math.floor(failureAlert.cooldownMs / 1000))
-        : DEFAULT_CRON_FORM.failureAlertCooldownSeconds,
-    failureAlertChannel:
-      failureAlert && typeof failureAlert === "object"
-        ? (failureAlert.channel ?? CRON_CHANNEL_LAST)
-        : CRON_CHANNEL_LAST,
-    failureAlertTo: failureAlert && typeof failureAlert === "object" ? (failureAlert.to ?? "") : "",
-    failureAlertDeliveryMode:
-      failureAlert && typeof failureAlert === "object"
-        ? (failureAlert.mode ?? "announce")
-        : "announce",
-    failureAlertAccountId:
-      failureAlert && typeof failureAlert === "object" ? (failureAlert.accountId ?? "") : "",
+      typeof failureAlert?.cooldownMs === "number"
+        ? durationMsToSecondsString(failureAlert.cooldownMs)
+        : "",
+    failureAlertChannel: failureAlert?.channel ?? CRON_CHANNEL_LAST,
+    failureAlertTo: failureAlert?.to ?? "",
+    failureAlertDeliveryMode: failureAlert?.mode ?? "",
+    failureAlertAccountId: failureAlert?.accountId ?? "",
     timeoutSeconds:
       payload?.kind === "agentTurn" && typeof payload.timeoutSeconds === "number"
         ? String(payload.timeoutSeconds)
@@ -1002,7 +980,7 @@ function hasUnchangedCronSchedule(form: CronFormState, job: CronJob): boolean {
     return form.scheduleAt === formatDateTimeLocal(schedule.at);
   }
   if (schedule.kind === "every") {
-    return parseCronEveryMs(form.everyAmount, form.everyUnit) === schedule.everyMs;
+    return parseCronDurationMs(form.everyAmount, form.everyUnit) === schedule.everyMs;
   }
   if (schedule.kind === "cron") {
     const stagger = parseStaggerSchedule(schedule.staggerMs);
@@ -1026,7 +1004,7 @@ function buildCronSchedule(form: CronFormState) {
     return { kind: "at" as const, at: new Date(ms).toISOString() };
   }
   if (form.scheduleKind === "every") {
-    const everyMs = parseCronEveryMs(form.everyAmount, form.everyUnit);
+    const everyMs = parseCronDurationMs(form.everyAmount, form.everyUnit);
     if (everyMs === undefined) {
       throw new Error(t("cron.errors.invalidIntervalAmount"));
     }
@@ -1043,11 +1021,10 @@ function buildCronSchedule(form: CronFormState) {
   if (!staggerAmount) {
     return { kind: "cron" as const, expr, tz: form.cronTz.trim() || undefined };
   }
-  const staggerValue = toNumber(staggerAmount, 0);
-  if (staggerValue <= 0) {
+  const staggerMs = parseCronDurationMs(staggerAmount, form.staggerUnit, true);
+  if (staggerMs === undefined) {
     throw new Error(t("cron.errors.invalidStaggerAmount"));
   }
-  const staggerMs = form.staggerUnit === "minutes" ? staggerValue * 60_000 : staggerValue * 1_000;
   return { kind: "cron" as const, expr, tz: form.cronTz.trim() || undefined, staggerMs };
 }
 
@@ -1097,40 +1074,53 @@ function buildCronPayload(form: CronFormState) {
 
 function normalizePersistedDeliveryChannel(
   value: string,
-  options: { preserveLastOnUpdate?: boolean } = {},
+  options: { preserveLast?: boolean } = {},
 ) {
   const channel = value.trim();
   if (!channel) {
     return undefined;
   }
   if (channel === CRON_CHANNEL_LAST) {
-    return options.preserveLastOnUpdate ? CRON_CHANNEL_LAST : undefined;
+    return options.preserveLast ? CRON_CHANNEL_LAST : undefined;
   }
   return channel;
 }
 
-function buildFailureAlert(form: CronFormState, existing?: CronJob["failureAlert"]) {
+function parseFailureAlertCooldownMs(value: string): number | undefined {
+  const raw = value.trim();
+  const seconds = toNumber(raw, Number.NaN);
+  if (!raw || !Number.isFinite(seconds) || seconds < 0) {
+    return undefined;
+  }
+  // Keep decimal precision; normalize other accepted Number spellings before the same scale.
+  const decimal =
+    seconds === 0 || parseStrictFiniteNumber(raw) === undefined ? String(seconds) : raw;
+  const [coefficient, exponent = "0"] = decimal.split(/[eE]/u);
+  const ms = Number(`${coefficient}e${Number(exponent) + 3}`);
+  return Number.isFinite(ms) && ms >= 0 ? Math.floor(ms) : undefined;
+}
+
+function buildFailureAlert(
+  form: CronFormState,
+  source?: CronJob["failureAlert"],
+  isUpdate = false,
+) {
   if (form.failureAlertMode === "disabled") {
     return false as const;
   }
   if (form.failureAlertMode !== "custom") {
-    return existing !== undefined ? null : undefined;
+    return isUpdate && source !== undefined ? null : undefined;
   }
-  const existingConfig = existing && typeof existing === "object" ? existing : undefined;
+  const sourceConfig = source && typeof source === "object" ? source : undefined;
+  const existingConfig = isUpdate ? sourceConfig : undefined;
   const after = toNumber(form.failureAlertAfter.trim(), 0);
-  const cooldownRaw = form.failureAlertCooldownSeconds.trim();
-  const cooldownSeconds = cooldownRaw.length > 0 ? toNumber(cooldownRaw, 0) : undefined;
-  const cooldownMs =
-    cooldownSeconds !== undefined && Number.isFinite(cooldownSeconds) && cooldownSeconds >= 0
-      ? Math.floor(cooldownSeconds * 1000)
-      : undefined;
-  const deliveryMode = form.failureAlertDeliveryMode;
+  const cooldownMs = parseFailureAlertCooldownMs(form.failureAlertCooldownSeconds);
   const accountId = form.failureAlertAccountId.trim();
   const to = form.failureAlertTo.trim();
-  const patch: Record<string, unknown> = {
+  return {
     after: after > 0 ? Math.floor(after) : existingConfig?.after !== undefined ? null : undefined,
     channel: normalizePersistedDeliveryChannel(form.failureAlertChannel, {
-      preserveLastOnUpdate: Boolean(existingConfig?.channel),
+      preserveLast: Boolean(sourceConfig?.channel),
     }),
     to: to || (existingConfig?.to ? null : undefined),
     ...(cooldownMs !== undefined
@@ -1138,12 +1128,10 @@ function buildFailureAlert(form: CronFormState, existing?: CronJob["failureAlert
       : existingConfig?.cooldownMs !== undefined
         ? { cooldownMs: null }
         : {}),
+    mode: form.failureAlertDeliveryMode || (existingConfig?.mode !== undefined ? null : undefined),
+    accountId: accountId || (existingConfig?.accountId ? null : undefined),
+    includeSkipped: sourceConfig?.includeSkipped,
   };
-  if (deliveryMode) {
-    patch.mode = deliveryMode;
-  }
-  patch.accountId = accountId || (existingConfig?.accountId ? null : undefined);
-  return patch;
 }
 
 type CronSaveResult = { saved: false } | { saved: true; jobId: string | null };
@@ -1180,7 +1168,7 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
       : undefined;
     const editingPayload = editingJob ? getCronJobPayload(editingJob) : null;
     const sourceJob = editingJob ?? state.cronCloningJob;
-    // Form fields cannot represent process commands, anchors, or full timestamp/stagger precision.
+    // Form fields cannot represent process commands, anchors, or full timestamp precision.
     const schedule =
       sourceJob && hasUnchangedCronSchedule(form, sourceJob)
         ? editingJob
@@ -1221,7 +1209,7 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
             channel:
               selectedDeliveryMode === "announce"
                 ? normalizePersistedDeliveryChannel(form.deliveryChannel, {
-                    preserveLastOnUpdate: Boolean(editingJob?.delivery?.channel),
+                    preserveLast: Boolean(editingJob?.delivery?.channel),
                   })
                 : undefined,
             to:
@@ -1247,7 +1235,7 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
                 : {}),
             } as const)
           : undefined;
-    const failureAlert = buildFailureAlert(form, editingJob?.failureAlert);
+    const failureAlert = buildFailureAlert(form, sourceJob?.failureAlert, Boolean(editingJob));
     const triggerScript = form.triggerScript.trim();
     const trigger = form.triggerEnabled
       ? editingJob?.trigger?.script === triggerScript &&

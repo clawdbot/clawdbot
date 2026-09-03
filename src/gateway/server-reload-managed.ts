@@ -40,7 +40,6 @@ import {
   assertIrreversibleReloadPlanHasRecoveryOwner,
   restoreCanonicalSecretRefs,
 } from "./server-reload-utils.js";
-import { startGatewayChannelHealthMonitor } from "./server-runtime-services.js";
 import {
   captureSharedGatewaySessionGenerationOwnership,
   disconnectStaleSharedGatewayAuthClients,
@@ -184,8 +183,6 @@ export function startManagedGatewayConfigReloader(
         assertOpenClawDatabasesReady({ env: process.env, operation: "gateway-restart" }),
       ),
     restartRecoveryAvailable,
-    createHealthMonitor: () =>
-      startGatewayChannelHealthMonitor({ channelManager: params.channelManager }),
   });
   const runManagedRestart = async (
     plan: GatewayReloadPlan,
@@ -264,7 +261,7 @@ export function startManagedGatewayConfigReloader(
     let requiredOwnership: SharedGatewaySessionGenerationOwnership | null = null;
     try {
       assertCurrent();
-      params.reconcileTerminalSessions(plan, preparedRuntimeConfig);
+      await params.reconcileRuntimePolicy(preparedRuntimeConfig, "restart");
       assertCurrent();
       await beforeRestartRequest?.();
       assertCurrent();
@@ -371,6 +368,7 @@ export function startManagedGatewayConfigReloader(
       // object from the source-derived candidate. Record the committed one so a
       // rebuild below stamps owners with the identity readers actually supply.
       lastCommittedRuntimeConfig = committedRuntimeConfig;
+      params.resolveGatewayContext?.()?.mentionInbox?.invalidate();
       if (canAdvancePreparedModelRuntimeConfigInPlace(plan)) {
         advancePreparedModelRuntimeConfig(committedRuntimeConfig);
       }

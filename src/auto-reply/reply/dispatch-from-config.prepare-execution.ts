@@ -277,7 +277,19 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
   // Snapshot verbose progress visibility for this run: commentary
   // classification in the CLI runners is wired once at run start, so a
   // mid-run verbose toggle cannot move inter-tool commentary between lanes.
-  const deliverStandaloneCommentaryProgress = shouldEmitVerboseProgress();
+  const standaloneCommentaryProgressVisible = shouldEmitVerboseProgress();
+  const resolveVerboseProgressVisibility = () =>
+    standaloneCommentaryProgressVisible &&
+    shouldSendVerboseProgressMessages() &&
+    !shouldSuppressProgressDelivery();
+  const { commentaryPayloadsEnabled, draftOwnsCommentaryProgress } =
+    resolveTurnCommentaryProgressOwner({
+      commentaryPayloadsEnabled: state.commentaryPayloadsEnabled,
+      options: params.replyOptions,
+      resolveVerboseProgressVisibility,
+    });
+  const deliverStandaloneCommentaryProgress =
+    standaloneCommentaryProgressVisible && !draftOwnsCommentaryProgress;
   const itemEventForwardingOptions = {
     forwardWhenSourceDeliverySuppressed: true,
     requiresToolSummaryVisibility: true,
@@ -327,16 +339,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
         return await forwardItemEvent?.(payload);
       }
     : undefined;
-  const resolveVerboseProgressVisibility = () =>
-    deliverStandaloneCommentaryProgress &&
-    shouldSendVerboseProgressMessages() &&
-    !shouldSuppressProgressDelivery();
-  const { commentaryPayloadsEnabled } = resolveTurnCommentaryProgressOwner({
-    commentaryPayloadsEnabled: state.commentaryPayloadsEnabled,
-    options: params.replyOptions,
-    resolveVerboseProgressVisibility,
-  });
-
   const replyResolver =
     params.replyResolver ??
     (

@@ -26,6 +26,12 @@ type GlobalRegistryState = typeof globalThis & {
 export function getPluginRegistryState(): RegistryState | undefined {
   return (globalThis as GlobalRegistryState)[PLUGIN_REGISTRY_STATE];
 }
+
+/** Policy reads the process-active registry, independently of request or registration scopes. */
+export function getActivePluginGatewayNodePolicyRegistry(): PluginRegistry | null {
+  return getPluginRegistryState()?.activeRegistry ?? null;
+}
+
 export function getActivePluginRegistryWorkspaceDirFromState(): string | undefined {
   return getActivePluginRegistryWorkspaceDirFromStateCore();
 }

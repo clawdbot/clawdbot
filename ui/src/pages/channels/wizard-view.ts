@@ -14,6 +14,8 @@ import type { ChannelWizardState, ChannelWizardStep } from "./wizard-controller.
 type ChannelWizardViewProps = {
   wizard: ChannelWizardState;
   channelLabel: (channelId: string) => string;
+  channelIconUrl?: (channelId: string) => string | undefined;
+  channelHasPluginIcon?: (channelId: string) => boolean;
   // Pending multiselect toggles live in page state so re-renders keep them.
   multiselectValues: readonly unknown[];
   onToggleMultiselect: (value: unknown) => void;
@@ -236,7 +238,12 @@ export function renderChannelWizard(
     >
       <div class="channels-wizard">
         <div class="channels-wizard__header">
-          ${channel ? renderChannelIcon(channel, label, "tile") : nothing}
+          ${channel
+            ? renderChannelIcon(channel, label, "tile", {
+                pluginIconUrl: props.channelIconUrl?.(channel),
+                preferPluginIcon: props.channelHasPluginIcon?.(channel),
+              })
+            : nothing}
           <div class="channels-wizard__heading">
             <h2>${t("channels.setup.title", { channel: label })}</h2>
             <div class="muted channels-wizard__subtitle">

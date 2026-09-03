@@ -184,9 +184,21 @@ See [Plugins](/tools/plugin) for the full plugin system guide, and [Capability m
 | `name`                               | No       | `string`                     | Human-readable plugin name.                                                                                                                                                                                                                                                                                                                                                                      |
 | `description`                        | No       | `string`                     | Short summary shown in plugin surfaces.                                                                                                                                                                                                                                                                                                                                                          |
 | `catalog`                            | No       | `object`                     | Optional presentation hints for plugin catalog surfaces. This metadata does not install, enable, or grant trust to a plugin.                                                                                                                                                                                                                                                                     |
-| `icon`                               | No       | `string`                     | HTTPS image URL for marketplace/catalog cards. ClawHub accepts any valid `https://` URL and falls back to the default plugin icon when this is omitted or invalid.                                                                                                                                                                                                                               |
 | `version`                            | No       | `string`                     | Informational plugin version.                                                                                                                                                                                                                                                                                                                                                                    |
 | `uiHints`                            | No       | `Record<string, object>`     | UI labels, placeholders, and sensitivity hints for config fields.                                                                                                                                                                                                                                                                                                                                |
+
+## Plugin icon
+
+Place the portable plugin icon at `assets/icon.png`, relative to the plugin root. No manifest
+field is required. Use a square PNG that remains recognizable at 16 px; 512×512 is recommended.
+Missing, unreadable, or invalid icons are ignored and do not invalidate the plugin.
+
+OpenClaw adopts this fixed package path as its icon convention, matching the path proposed in
+[Agent Plugins 1.1](https://github.com/agentplugins/agent-plugins-spec/pull/66). Other Agent Plugins
+consumers may not discover it unless that proposal is adopted. The fixed path keeps packages
+portable and inspectable, avoids manifest path indirection and precedence rules, and lets OpenClaw
+render the icon without a runtime network request. Top-level plugin-branding icon URLs are not
+loaded; provider-auth artwork remains server-owned catalog metadata.
 
 Prefer top-level `sessionRouteStateOwners` for static doctor ownership. The
 older `doctorContract.sessionRouteStateOwners: true` declaration plus a
@@ -666,6 +678,8 @@ Use `setup` when setup and onboarding surfaces need cheap plugin-owned metadata 
 Top-level `cliBackends` stays valid and continues to describe CLI inference backends. `setup.cliBackends` is the setup-specific descriptor surface for control-plane/setup flows that should stay metadata-only.
 
 When present, `setup.providers` and `setup.cliBackends` are the preferred descriptor-first lookup surface for setup discovery. If the descriptor only narrows the candidate plugin and setup still needs richer setup-time runtime hooks, set `requiresRuntime: true` and keep `setup-api` in place as the fallback execution path.
+
+Without an explicit `openclaw.setupEntry`, OpenClaw resolves the conventional `setup-api` file at the package root or in package-local `dist/`. Standalone runtime builds include that public surface automatically.
 
 OpenClaw includes `setup.providers[].envVars` in generic provider auth and env-var lookups. Put setup and status env metadata there.
 
@@ -1471,9 +1485,9 @@ Use it when setup, doctor, status, or read-only presence flows need a cheap yes/
 }
 ```
 
-Use `env.allOf` when every listed variable is required and `env.anyOf` when any one non-empty variable is enough. If a tiny non-runtime check needs more than environment metadata, use `specifier` plus `exportName` as shown for `persistedAuthState`. A complete `specifier` and `exportName` pair takes precedence over `env`; env-only metadata avoids loading a module. If the check needs full config resolution or the real channel runtime, keep that logic in the plugin `config.hasConfiguredState` hook instead.
+Use `env.allOf` when every listed variable is required and `env.anyOf` when any one non-empty variable is enough. If a tiny non-runtime check needs more than environment metadata, use `specifier` plus `exportName` as shown for `persistedAuthState`. A complete, non-empty `specifier` and `exportName` pair takes precedence over `env`. If either field is absent or blank, the probe uses its `env` metadata without loading a module. If the check needs full config resolution or the real channel runtime, keep that logic in the plugin `config.hasConfiguredState` hook instead.
 
-For both state probes, OpenClaw builds rewrite source specifiers to the exact emitted JavaScript artifact, including its `.js` or `.cjs` extension. Built checkout metadata uses paths relative to the plugin root; standalone packages use the plugin-local `dist/` directory.
+For both state probes, OpenClaw builds rewrite source specifiers only for complete module pairs, naming the exact emitted JavaScript artifact, including its `.js` or `.cjs` extension. Env-backed incomplete pairs are preserved unchanged. Built checkout metadata uses paths relative to the plugin root; standalone packages use the plugin-local `dist/` directory.
 
 ## Discovery precedence (duplicate plugin ids)
 

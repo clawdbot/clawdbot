@@ -16,11 +16,10 @@ import {
   NODE_WORKER_PRIVATE_COMMANDS,
   isPrivateNodeInvokeCommand,
 } from "../infra/node-commands.js";
-import { getActivePluginGatewayNodePolicyRegistry } from "../plugins/runtime.js";
+import { getActivePluginGatewayNodePolicyRegistry } from "../plugins/runtime-state.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import { normalizeDeviceMetadataForPolicy } from "./device-metadata-normalization.js";
 import { MOBILE_NODE_COMMANDS } from "./node-command-policy-mobile.js";
-import type { NodeSession } from "./node-registry.js";
 
 const CAMERA_COMMANDS = ["camera.list"];
 const MAC_CAMERA_COMMANDS = ["camera.ptz.status"];
@@ -328,10 +327,15 @@ export function isForegroundRestrictedPluginNodeCommand(command: string): boolea
       entry.policy.commands.some((policyCommand) => policyCommand.trim() === normalized),
   );
 }
-type NodeCommandPolicyNode = Pick<NodeSession, "platform" | "deviceFamily"> &
-  Partial<Pick<NodeSession, "caps" | "commands" | "connId" | "nodeId">> & {
-    approvedCommands?: readonly string[];
-  };
+type NodeCommandPolicyNode = {
+  platform?: string;
+  deviceFamily?: string;
+  caps?: string[];
+  commands?: string[];
+  connId?: string;
+  nodeId?: string;
+  approvedCommands?: readonly string[];
+};
 
 function isDesktopPlatformId(platformId: PlatformId): boolean {
   return platformId === "macos" || platformId === "windows" || platformId === "linux";
@@ -533,7 +537,7 @@ export function retainFulfilledNodeCapabilities(params: {
 
 export function isNodeCommandAllowed(params: {
   command: string;
-  declaredCommands?: string[];
+  declaredCommands?: readonly string[];
   allowlist: Set<string>;
 }): { ok: true } | { ok: false; reason: string } {
   const command = params.command.trim();
@@ -554,4 +558,46 @@ export function isNodeCommandAllowed(params: {
     return { ok: false, reason: "node did not declare commands" };
   }
   return { ok: true };
+}
+
+export type RequiredNodeCommandAuthority = {
+  command: string;
+  state: "invocable" | "pending-approval" | "undeclared" | "unauthorized";
+};
+
+/**
+ * Resolves declaration, pairing, and runtime policy once at their Gateway owner.
+ * Clients receive one closed state instead of rebuilding authority from partial lists.
+ */
+export function resolveRequiredNodeCommandAuthority(params: {
+  requiredCommands: readonly string[];
+  declaredCommands: readonly string[];
+  effectiveCommands: readonly string[];
+  withheldCommands: readonly string[];
+  allowlist: Set<string>;
+}): RequiredNodeCommandAuthority | undefined {
+  const declaredCommands = new Set(params.declaredCommands);
+  const effectiveCommands = new Set(params.effectiveCommands);
+  const withheldCommands = new Set(params.withheldCommands);
+  for (const command of params.requiredCommands) {
+    if (
+      effectiveCommands.has(command) &&
+      isNodeCommandAllowed({
+        command,
+        declaredCommands: params.effectiveCommands,
+        allowlist: params.allowlist,
+      }).ok
+    ) {
+      continue;
+    }
+    if (declaredCommands.has(command) && !effectiveCommands.has(command)) {
+      return { command, state: "pending-approval" };
+    }
+    if (declaredCommands.has(command) || withheldCommands.has(command)) {
+      return { command, state: "unauthorized" };
+    }
+    return { command, state: "undeclared" };
+  }
+  const command = params.requiredCommands[0];
+  return command ? { command, state: "invocable" } : undefined;
 }

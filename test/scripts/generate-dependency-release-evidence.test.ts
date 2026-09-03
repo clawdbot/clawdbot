@@ -323,7 +323,7 @@ describe("generate-dependency-release-evidence", () => {
         const binDir = path.join(dir, "bin");
         const outputDir = path.join(dir, "evidence");
         const sourceDir = path.join(dir, "candidate");
-        const marker = path.join(dir, "candidate-tooling-executed");
+        const marker = path.join(dir, "pnpm-cwd");
         const githubOutput = path.join(dir, "github-output");
         await mkdir(binDir);
         await mkdir(sourceDir);
@@ -339,9 +339,9 @@ describe("generate-dependency-release-evidence", () => {
             "#!/usr/bin/env node",
             'const { writeFileSync } = require("node:fs");',
             "const args = process.argv.slice(2);",
-            'const toolingRoot = args[0] === "--dir" ? args[1] : process.cwd();',
-            'if (toolingRoot === process.env.RELEASE_TEST_SOURCE_ROOT) { writeFileSync(process.env.RELEASE_TEST_MARKER, "candidate"); throw new Error("Candidate tooling executed"); }',
-            'if (args[2] !== "deps:vuln:gate" || args[args.indexOf("--root") + 1] !== process.env.RELEASE_TEST_SOURCE_ROOT) throw new Error("Wrong report or target");',
+            "writeFileSync(process.env.RELEASE_TEST_MARKER, process.cwd());",
+            'if (args[0] !== "deps:vuln:gate") throw new Error("Wrong report command");',
+            'if (args[args.indexOf("--root") + 1] !== process.env.RELEASE_TEST_SOURCE_ROOT) throw new Error("Wrong report target");',
             'writeFileSync(args[args.indexOf("--json") + 1], JSON.stringify({ blockers: [{ id: "GHSA-fixture" }] }));',
             'writeFileSync(args[args.indexOf("--markdown") + 1], "# Blocking advisory evidence\\n");',
             "process.exitCode = 1;",
@@ -374,9 +374,9 @@ describe("generate-dependency-release-evidence", () => {
           },
         );
 
+        await expect(readFile(marker, "utf8")).resolves.toBe(path.resolve("."));
         expect(result.status).toBe(1);
-        expect(result.stderr).toContain("Command failed: pnpm --dir");
-        await expect(readFile(marker, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+        expect(result.stderr).toContain("Command failed: pnpm deps:vuln:gate");
         await expect(readFile(githubOutput, "utf8")).resolves.toBe(`dir=${outputDir}\n`);
         await expect(
           readFile(path.join(outputDir, "dependency-vulnerability-gate.json"), "utf8"),

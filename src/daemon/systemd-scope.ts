@@ -2,6 +2,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { hasErrnoCode } from "../infra/errno.js";
+import { isGatewayServiceEnv } from "./constants.js";
+import { resolveDaemonHomeDir } from "./paths.js";
 import type { GatewayServiceEnv } from "./service-types.js";
 import { execSystemctl, isSystemdUnitActive, type SystemdUnitScope } from "./systemd-exec.js";
 import { resolveSystemdServiceName, resolveSystemdUnitPath } from "./systemd-service-files.js";
@@ -12,6 +15,70 @@ const SYSTEM_SYSTEMD_UNIT_DIRS = [
   "/usr/lib/systemd/system",
   "/lib/systemd/system",
 ] as const;
+
+/** Proves service absence without interpreting failed manager commands as absence. */
+export async function isSystemdServiceAbsent(env: GatewayServiceEnv): Promise<boolean> {
+  if (
+    env.DBUS_SESSION_BUS_ADDRESS ||
+    env.DBUS_SYSTEM_BUS_ADDRESS ||
+    env.SYSTEMD_UNIT_PATH ||
+    env.SUDO_USER ||
+    isGatewayServiceEnv(env) ||
+    typeof process.geteuid !== "function"
+  ) {
+    return false;
+  }
+  const home = resolveDaemonHomeDir(env);
+  const runtimeDirs = new Set(
+    [`/run/user/${process.geteuid()}`, env.XDG_RUNTIME_DIR].filter((value): value is string =>
+      Boolean(value),
+    ),
+  );
+  const configHome = env.XDG_CONFIG_HOME || path.posix.join(home, ".config");
+  const dataHome = env.XDG_DATA_HOME || path.posix.join(home, ".local/share");
+  const userRoots = [
+    path.posix.join(home, ".config"),
+    configHome,
+    dataHome,
+    ...(env.XDG_CONFIG_DIRS || "/etc/xdg").split(":"),
+    ...(env.XDG_DATA_DIRS || "/usr/local/share:/usr/share").split(":"),
+    "/etc",
+    "/usr/local/lib",
+    "/usr/lib",
+    "/lib",
+  ];
+  const unitName = `${resolveSystemdServiceName(env)}.service`;
+  if (![...runtimeDirs, ...userRoots].every((dir) => path.posix.isAbsolute(dir))) {
+    return false;
+  }
+  // sd_booted() uses /run/systemd/system; user managers own runtime/systemd/private.
+  // Require the complete runtime directory absent so transient/generated units cannot hide.
+  const absentPaths = [
+    "/run/systemd",
+    ...[...runtimeDirs].map((dir) => path.posix.join(dir, "systemd")),
+    ...userRoots.flatMap((dir) =>
+      ["user", "user.control", "user.attached"].map((scope) =>
+        path.posix.join(dir, "systemd", scope, unitName),
+      ),
+    ),
+    ...["/etc", "/usr/local/lib", "/usr/lib", "/lib"].flatMap((dir) =>
+      ["system", "system.control", "system.attached"].map((scope) =>
+        path.posix.join(dir, "systemd", scope, unitName),
+      ),
+    ),
+  ];
+  for (const candidate of absentPaths) {
+    try {
+      await fs.lstat(candidate);
+      return false;
+    } catch (error) {
+      if (!hasErrnoCode(error, "ENOENT")) {
+        return false;
+      }
+    }
+  }
+  return (await findInstalledSystemdGatewayScope(env)) === null;
+}
 
 async function findSystemSystemdUnitPath(env: GatewayServiceEnv): Promise<string | null> {
   const serviceFile = `${resolveSystemdServiceName(env)}.service`;

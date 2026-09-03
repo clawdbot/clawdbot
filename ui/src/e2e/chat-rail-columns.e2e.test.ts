@@ -784,7 +784,7 @@ suite.define(() => {
             .toBe("none");
           await expectExpandedSidePanelFillsRegion(page);
           await captureRichPanel(page, `rails-tabs-expanded-${themeMode}`);
-          await sidePanel(page).getByRole("button", { name: "Restore side panel" }).click();
+          await sidePanel(page).getByRole("button", { name: "Collapse" }).click();
 
           await sidePanel(page).getByRole("button", { name: "Close", exact: true }).click();
           await expect.poll(() => sidePanel(page).count()).toBe(0);

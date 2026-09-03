@@ -173,7 +173,6 @@
     "native.android.1b95ee4b75f6033b": "Autentikasi yang disimpan tidak valid",
     "native.android.1bbbdb0fb0e3a5a3": "Nonaktifkan",
     "native.android.1c35de4d06275916": "Selamat datang di OpenClaw",
-    "native.android.1c3686e1c087e2c8": "Tidak dapat memuat katalog penyedia.",
     "native.android.1c4acd27277544e0": "Akses hanya baca; aturan persetujuan alat native tetap berlaku.",
     "native.android.1c4be71b5c3aa079": "Memerlukan koneksi",
     "native.android.1c62b20321fbbd26": "Lupakan",
@@ -1455,7 +1454,6 @@
     "native.android.e5021b83ff593f1e": "Saat ini",
     "native.android.e502c87002ff73f0": "${seconds} dtk",
     "native.android.e50e16c71fc204f1": "Beberapa pemeriksaan status saluran tidak selesai.",
-    "native.android.e5387d6aaf34ede8": "Mencari…",
     "native.android.e53f4d638a7fa07e": "Hubungkan gateway untuk memuat permintaan persetujuan di aplikasi.",
     "native.android.e541942ff77b53eb": "Mendengarkan (PTT)",
     "native.android.e54941cceace936d": "Putar ulang ke sini",
@@ -2243,6 +2241,7 @@
     "native.apple.36797a0a0d370b1c": "Jalankan Pemeriksaan Kesehatan Sekarang",
     "native.apple.367d222547a7dfa4": "Konteks",
     "native.apple.3704f5846ba19f61": "Menguji…",
+    "native.apple.3707ddd116730423": "\\(minimum)–\\(maximum)",
     "native.apple.3763e29c884dd87a": "Perbarui token Gateway",
     "native.apple.37715ac8050292a6": "Diperbarui oleh %@",
     "native.apple.377a95b3a57b9e32": "Kredensial disimpan bersama profil ini di Rantai Kunci Mac Anda.",
@@ -2450,6 +2449,7 @@
     "native.apple.4a85eb1605f1ba49": "+%1$lld lagi bekerja",
     "native.apple.4a999d79dfd4a4e2": "Gateway mengembalikan respons status saluran yang tidak terduga.",
     "native.apple.4aa0a356f580cb09": "unknown gateway error",
+    "native.apple.4adc28ed0e25f735": "Tidak Dapat Membuka Sesi Latar Belakang",
     "native.apple.4b1707775e3d4ded": "Node Watch online",
     "native.apple.4b1c264d08779b81": "Terdegradasi",
     "native.apple.4b34153a64ea0fbe": "%@, sehat",
@@ -3657,6 +3657,7 @@
     "native.apple.bb24048d5940285c": "Aktifkan atau pasang plugin penyedia text-inference pada Gateway ini, lalu periksa lagi.",
     "native.apple.bb25a6eb7fab6d0e": "Muncul ke permukaan",
     "native.apple.bb3054116d83e716": "Buka kembali OpenClaw untuk mencoba lagi daemon CUA yang tertanam.",
+    "native.apple.bb3b23bb105850ba": "\\(maximum)",
     "native.apple.bb5f5e891aeadb25": "Gateway terpasang ini sudah tidak tersedia.",
     "native.apple.bb69920e6930860f": "Automation issues",
     "native.apple.bb7347e3399c42ee": "Konteks dari %@ — %@",
@@ -4298,6 +4299,7 @@
     "native.apple.f4155b853aa86198": "Bagian Skills",
     "native.apple.f420de18a586c900": "Gunakan login browser Anda",
     "native.apple.f43c1f8049a80f31": "Hapus Utas",
+    "native.apple.f4483cba92be9484": "Pilih Teks",
     "native.apple.f454890b0dc22cfd": "Lokal (Mac ini)",
     "native.apple.f47dbe72f59ee9cb": "Izin mikrofon dan pengenalan ucapan diperlukan.",
     "native.apple.f496b5c54219ca5f": "Siap untuk tindakan cepat",
@@ -4428,6 +4430,7 @@
     "native.apple.ff9163dd493d583b": "Bangunkan",
     "native.apple.ffba42bcdc2cc866": "1 token",
     "native.apple.ffcccb2c944378ff": "Speakerphone",
-    "native.apple.ffd5f2e059651aa1": "Buka Pengaturan Gateway"
+    "native.apple.ffd5f2e059651aa1": "Buka Pengaturan Gateway",
+    "native.apple.ffefad3c8b30c36d": "Salin kode"
   }
 }

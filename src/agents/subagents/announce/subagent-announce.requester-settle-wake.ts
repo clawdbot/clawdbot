@@ -4,6 +4,7 @@
  * Lifecycle owns the persisted outbox state on retained subagent run rows;
  * this module selects a drained wave and delivers its synthesized wake.
  */
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { logWarn } from "../../../logger.js";
@@ -21,6 +22,7 @@ import {
 import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import {
+  countActiveDescendantRuns,
   getLatestSubagentRunByChildSessionKey,
   hasDescendantRunAwaitingSettle,
   listSubagentRunsForRequester,
@@ -49,6 +51,8 @@ export type RequesterSettleWakeBatchState = Omit<RequesterSettleWakeState, "reti
 const REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS = 3;
 const REQUESTER_SETTLE_WAKE_MAX_AMBIGUOUS_REPLAYS = 3;
 const REQUESTER_SETTLE_WAKE_MAX_DEFERRALS = 10;
+const REQUESTER_SETTLE_WAKE_ROUTE_NOTICE_MAX_CHARS = 1_024;
+const ROUTE_NOTICE_TRUNCATION = "\n[model-route changes truncated]";
 const REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS = [30_000, 120_000] as const;
 const activeRequesterSettleWakeBatches = new Set<string>();
 
@@ -165,6 +169,7 @@ function readSharedBatchState(batch: readonly SubagentRunRecord[]): RequesterSet
 function deferRequesterSettleWakeBatch(params: {
   batchRunIds: readonly string[];
   state: RequesterSettleWakeBatchState;
+  countTowardsLimit: boolean;
   transitionBatch: (runIds: readonly string[], state: RequesterSettleWakeBatchState) => void;
   completeBatch(
     runIds: readonly string[],
@@ -172,8 +177,15 @@ function deferRequesterSettleWakeBatch(params: {
     delivery?: SubagentAnnounceDeliveryResult,
   ): void;
 }): void {
-  const deferralCount = (params.state.deferralCount ?? 0) + 1;
-  if (deferralCount >= REQUESTER_SETTLE_WAKE_MAX_DEFERRALS) {
+  const now = Date.now();
+  if ((params.state.nextAttemptAt ?? 0) > now) {
+    return;
+  }
+  // Live descendants are valid overlapping work, not a stale settle loop.
+  // Reset their stale-deferral budget so long-running waves cannot terminalize
+  // an already completed sibling before the requester can receive it.
+  const deferralCount = params.countTowardsLimit ? (params.state.deferralCount ?? 0) + 1 : 0;
+  if (params.countTowardsLimit && deferralCount >= REQUESTER_SETTLE_WAKE_MAX_DEFERRALS) {
     completeRequesterSettleWakeBatch({
       runIds: params.batchRunIds,
       state: params.state,
@@ -193,7 +205,7 @@ function deferRequesterSettleWakeBatch(params: {
     ...(params.state.replayCount !== undefined ? { replayCount: params.state.replayCount } : {}),
     nextAttemptAt: Math.max(
       params.state.nextAttemptAt ?? 0,
-      Date.now() + REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[0],
+      now + REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[0],
     ),
     batchRunIds: [...params.batchRunIds],
     ...(params.state.requesterYieldBatch === true ? { requesterYieldBatch: true } : {}),
@@ -337,6 +349,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
       deferRequesterSettleWakeBatch({
         batchRunIds,
         state: selectedState,
+        countTowardsLimit: countActiveDescendantRuns(requesterSessionKey, requesterAgentId) === 0,
         transitionBatch: params.transitionBatch,
         completeBatch,
       });
@@ -384,20 +397,34 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
     return false;
   }
 
-  const findings = buildChildCompletionFindings(
-    dedupeLatestChildCompletionRows(
-      filterCurrentDirectChildCompletionRows(settledBatch, {
-        requesterSessionKey,
-        requesterAgentId,
-        getLatestSubagentRunByChildSessionKey,
-      }),
-    ),
+  const completionRows = dedupeLatestChildCompletionRows(
+    filterCurrentDirectChildCompletionRows(settledBatch, {
+      requesterSessionKey,
+      requesterAgentId,
+      getLatestSubagentRunByChildSessionKey,
+    }),
   );
+  const findings = buildChildCompletionFindings(completionRows);
   const requesterSessionOrigin = normalizeDeliveryContext(params.requesterOrigin);
   const directOrigin = resolveAnnounceOrigin(requesterEntry, requesterSessionOrigin);
-  const terminalReply = currentSettledEntry.completion?.terminalReply;
+  // The scheduling row need not be the rerouted child. Keep every current
+  // child's producer-owned notice, with stable bytes and one batch-wide cap.
+  const routeNotices = [
+    ...new Set(
+      completionRows.flatMap(({ completion }) => {
+        const reply = completion?.terminalReply;
+        return reply?.disposition === "visible" && reply.modelRouteChange
+          ? [reply.modelRouteChange]
+          : [];
+      }),
+    ),
+  ]
+    .toSorted()
+    .join("\n");
   const modelRouteChange =
-    terminalReply?.disposition === "visible" ? terminalReply.modelRouteChange : undefined;
+    routeNotices.length > REQUESTER_SETTLE_WAKE_ROUTE_NOTICE_MAX_CHARS
+      ? `${truncateUtf16Safe(routeNotices, REQUESTER_SETTLE_WAKE_ROUTE_NOTICE_MAX_CHARS - ROUTE_NOTICE_TRUNCATION.length)}${ROUTE_NOTICE_TRUNCATION}`
+      : routeNotices;
   const completionChannel = normalizeMessageChannel(directOrigin?.channel);
   const wakeMessage = buildRequesterSettleWakeMessage({
     findings,
@@ -437,6 +464,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
       deferRequesterSettleWakeBatch({
         batchRunIds,
         state,
+        countTowardsLimit: countActiveDescendantRuns(requesterSessionKey, requesterAgentId) === 0,
         transitionBatch: params.transitionBatch,
         completeBatch,
       });

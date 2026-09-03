@@ -612,42 +612,45 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
       cfg: replyConfig,
     });
   });
-  if (isDispatchOperationAborted()) {
-    await flushDeferredFinalText();
-  }
-  const sessionMetadataChanges = takeCommandSessionMetadataChanges(ctx);
-  notifySessionMetadataChanges(sessionMetadataChanges);
-  const resolvedCommandReply = isCommandReplyForDelivery(replyResult);
-  const finalDispatchAcquisition = resolvedCommandReply
-    ? ({ status: "ready" } as const)
-    : await state.ensureDispatchReplyOperation("dispatch");
-  if (finalDispatchAcquisition.status === "aborted") {
-    await releasePendingContinuation();
-    return { status: "complete" as const, result: state.finishReplyOperationAbortedDispatch() };
-  }
-  if (finalDispatchAcquisition.status === "busy") {
-    await releasePendingContinuation();
-    return {
-      status: "complete" as const,
-      result: state.finishReplyOperationBusyDispatch({
-        recordAgentDispatchCompleted: true,
-        ...(state.routeState.sessionMetadataChangesForResult
-          ? { sessionMetadataChanges: state.routeState.sessionMetadataChangesForResult }
-          : {}),
-      }),
-    };
-  }
+  try {
+    if (isDispatchOperationAborted()) {
+      await flushDeferredFinalText();
+    }
+    const sessionMetadataChanges = takeCommandSessionMetadataChanges(ctx);
+    notifySessionMetadataChanges(sessionMetadataChanges);
+    const resolvedCommandReply = isCommandReplyForDelivery(replyResult);
+    const finalDispatchAcquisition = resolvedCommandReply
+      ? ({ status: "ready" } as const)
+      : await state.ensureDispatchReplyOperation("dispatch");
+    if (finalDispatchAcquisition.status === "aborted") {
+      return { status: "complete" as const, result: state.finishReplyOperationAbortedDispatch() };
+    }
+    if (finalDispatchAcquisition.status === "busy") {
+      return {
+        status: "complete" as const,
+        result: state.finishReplyOperationBusyDispatch({
+          recordAgentDispatchCompleted: true,
+          ...(state.routeState.sessionMetadataChangesForResult
+            ? { sessionMetadataChanges: state.routeState.sessionMetadataChangesForResult }
+            : {}),
+        }),
+      };
+    }
 
-  const acpTailResult = await handleAcpDispatchTailAfterReset(state);
-  if (acpTailResult) {
+    const acpTailResult = await handleAcpDispatchTailAfterReset(state);
+    if (acpTailResult) {
+      return acpTailResult;
+    }
+    const nextState = extendPreparedDispatchState(state, {
+      deliberateSilentTerminalReply,
+      pendingContinuation,
+      pendingContinuationSettlement,
+      replyResult,
+    });
+    // Finalization now owns the exact settlement; earlier returns and throws release it here.
+    pendingContinuationSettlement = undefined;
+    return { status: "ready" as const, state: nextState };
+  } finally {
     await releasePendingContinuation();
-    return acpTailResult;
   }
-  const nextState = extendPreparedDispatchState(state, {
-    deliberateSilentTerminalReply,
-    pendingContinuation,
-    pendingContinuationSettlement,
-    replyResult,
-  });
-  return { status: "ready" as const, state: nextState };
 }

@@ -13,7 +13,6 @@
   ],
   "name": "Anthropic",
   "description": "Anthropic models, Claude CLI, and native Claude session catalog.",
-  "icon": "https://cdn.simpleicons.org/anthropic",
   "activation": {
     "onStartup": true
   },

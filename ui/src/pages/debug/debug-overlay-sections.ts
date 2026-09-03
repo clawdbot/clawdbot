@@ -1,6 +1,7 @@
 import { formatByteSize } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type TemplateResult } from "lit";
+import { repeat } from "lit/directives/repeat.js";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
@@ -59,11 +60,7 @@ export type DebugOverlayStatusSnapshot = {
     heapUsedBytes: number;
     heapTotalBytes: number;
   };
-  diskSpace?: {
-    availableBytes: number;
-    totalBytes: number;
-    path?: string;
-  };
+  disks?: SystemInfoResult["disks"];
   uptimeMs?: number;
 };
 
@@ -106,6 +103,8 @@ function collectSamples(
     const value = read(entry.status);
     if (typeof value === "number" && Number.isFinite(value)) {
       samples.push({ value, at: entry.at });
+    } else {
+      samples.length = 0;
     }
   }
   return samples;
@@ -156,10 +155,6 @@ function renderStatus(
     typeof eventLoop?.delayMaxMs === "number"
       ? t("debug.overlay.maxShort", { value: formatDelayMs(eventLoop.delayMaxMs) })
       : "";
-  const diskTotalSub =
-    typeof status.diskSpace?.totalBytes === "number"
-      ? t("debug.overlay.totalShort", { value: formatStorageBytes(status.diskSpace.totalBytes) })
-      : "";
   return html`
     <div class="debug-overlay__vitals">
       <openclaw-debug-sparkline
@@ -188,18 +183,27 @@ function renderStatus(
         .format=${formatDelayMs}
         .floorMax=${20}
       ></openclaw-debug-sparkline>
-      ${status.diskSpace
-        ? html`<openclaw-debug-sparkline
-            class="debug-overlay__vital debug-overlay__vital--disk"
-            title=${status.diskSpace.path ?? ""}
-            .label=${t("debug.overlay.disk")}
-            .sub=${diskTotalSub}
-            .samples=${collectSamples(history, (sample) => sample.diskSpace?.availableBytes)}
-            .format=${formatFreeBytes}
-            autorange
-          ></openclaw-debug-sparkline>`
-        : nothing}
     </div>
+    ${status.disks?.length
+      ? html`<div class="debug-overlay__vitals debug-overlay__disks">
+          ${repeat(
+            status.disks ?? [],
+            (disk) => disk.path,
+            (disk) => html`<openclaw-debug-sparkline
+              class="debug-overlay__vital debug-overlay__vital--disk"
+              title=${disk.path}
+              .label=${`${t("debug.overlay.disk")} ${disk.path}`}
+              .sub=${t("debug.overlay.totalShort", { value: formatStorageBytes(disk.totalBytes) })}
+              .samples=${collectSamples(
+                history,
+                (sample) => sample.disks?.find((entry) => entry.path === disk.path)?.availableBytes,
+              )}
+              .format=${formatFreeBytes}
+              autorange
+            ></openclaw-debug-sparkline>`,
+          )}
+        </div>`
+      : nothing}
     ${typeof status.uptimeMs === "number"
       ? html`<div class="debug-overlay__vitals-footer mono">
           ${t("debug.overlay.uptime")} ${formatDurationHuman(status.uptimeMs)}
@@ -254,19 +258,10 @@ export const DEBUG_OVERLAY_SECTIONS: readonly DebugOverlaySectionDescriptor[] = 
         context.client.request<DebugOverlayStatusSnapshot>("status", {}, { signal }),
         context.client.request<SystemInfoResult>("system.info", {}, { signal }).catch(() => null),
       ]);
-      const diskSpace =
-        typeof systemInfo?.diskAvailableBytes === "number" &&
-        typeof systemInfo.diskTotalBytes === "number"
-          ? {
-              availableBytes: systemInfo.diskAvailableBytes,
-              totalBytes: systemInfo.diskTotalBytes,
-              ...(systemInfo.diskPath ? { path: systemInfo.diskPath } : {}),
-            }
-          : undefined;
       return {
         eventLoop: value.eventLoop,
         processMemory: value.processMemory,
-        ...(diskSpace ? { diskSpace } : {}),
+        disks: systemInfo?.disks,
         ...(typeof value.uptimeMs === "number" ? { uptimeMs: value.uptimeMs } : {}),
       } satisfies DebugOverlayStatusSnapshot;
     },

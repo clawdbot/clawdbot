@@ -103,14 +103,11 @@ async function waitForChildClose(
 }
 
 describe("run-additional-boundary-checks", () => {
-  it("keeps prompt snapshot drift checks in their dedicated CI lane", () => {
+  it("keeps prompt snapshot drift checks out of boundary shards", () => {
     // The snapshot check regenerates prompt fixtures over the full agent
     // tool/prompt import graph; packing it into a boundary shard makes that
     // shard the PR wall clock, so it owns the check-prompt-snapshots lane.
     expect(BOUNDARY_CHECKS.some((check) => check.label === "prompt:snapshots:check")).toBe(false);
-    const workflow = fs.readFileSync(".github/workflows/ci.yml", "utf8");
-    expect(workflow).toContain("check_name: check-prompt-snapshots");
-    expect(workflow).toContain('run_check "prompt:snapshots:check" pnpm prompt:snapshots:check');
   });
 
   it("normalizes concurrency input", () => {
@@ -236,20 +233,29 @@ describe("run-additional-boundary-checks", () => {
     });
   });
 
-  it("keeps widen-then-assert lint in CI boundary checks", () => {
-    expect(BOUNDARY_CHECKS).toContainEqual({
-      label: "lint:no-widen-then-assert",
-      command: "pnpm",
-      args: ["run", "lint:no-widen-then-assert"],
+  it("runs the shared focused guard pass once across every source root", () => {
+    const { scripts } = JSON.parse(fs.readFileSync("package.json", "utf8")) as {
+      scripts: Record<string, string>;
+    };
+    const assertionCommand = scripts["lint:no-chained-type-assertions"];
+    expect(assertionCommand).toBe(
+      "node scripts/run-oxlint.mjs --openclaw-focused-config --config config/oxlint/boundary-guards.json src extensions packages ui/src",
+    );
+    expect(scripts["lint:no-widen-then-assert"]).toBe(assertionCommand);
+    const focusedChecks = BOUNDARY_CHECKS.filter((check) => {
+      const scriptName = check.args[check.args[0] === "run" ? 1 : 0];
+      return (
+        check.command === "pnpm" &&
+        scripts[scriptName ?? ""]?.includes("--config config/oxlint/boundary-guards.json")
+      );
     });
-  });
-
-  it("keeps chained-type-assertions lint in CI boundary checks", () => {
-    expect(BOUNDARY_CHECKS).toContainEqual({
-      label: "lint:no-chained-type-assertions",
-      command: "pnpm",
-      args: ["run", "lint:no-chained-type-assertions"],
-    });
+    expect(focusedChecks).toEqual([
+      {
+        label: "lint:no-chained-type-assertions",
+        command: "pnpm",
+        args: ["run", "lint:no-chained-type-assertions"],
+      },
+    ]);
   });
 
   it("keeps the Telegram grammY type import guard in source boundary checks", () => {

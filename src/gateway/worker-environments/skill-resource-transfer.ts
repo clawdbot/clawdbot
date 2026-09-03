@@ -97,7 +97,29 @@ export async function transferSkillResources(params: {
   };
   try {
     check();
-    const resolvedSkills = structuredClone(params.snapshot.resolvedSkills ?? []);
+    const deliveredSourcePaths = new Set(
+      delivery.skills
+        .map((skill) => skill.sourcePath)
+        .filter((sourcePath): sourcePath is string => sourcePath !== undefined),
+    );
+    const resolvedSkills = structuredClone(params.snapshot.resolvedSkills ?? []).filter(
+      (skill) => skill.filePath.startsWith("node://") || deliveredSourcePaths.has(skill.filePath),
+    );
+    const skippedSkillNames = new Set(
+      (params.snapshot.resolvedSkills ?? [])
+        .filter(
+          (skill) =>
+            !skill.filePath.startsWith("node://") && !deliveredSourcePaths.has(skill.filePath),
+        )
+        .map((skill) => skill.name),
+    );
+    const retainedSkillNames = new Set([
+      ...resolvedSkills.map((skill) => skill.name),
+      ...delivery.skills.map((skill) => skill.name),
+    ]);
+    const skills = structuredClone(params.snapshot.skills).filter(
+      (skill) => !skippedSkillNames.has(skill.name) || retainedSkillNames.has(skill.name),
+    );
     const mounts: Array<{ hostPath: string; containerPath: string }> = [];
     for (const [index, skill] of delivery.skills.entries()) {
       const bundle = prepareSkillBundle(skill.files);
@@ -118,7 +140,7 @@ export async function transferSkillResources(params: {
           );
         }
       }
-      const selected = resolvedSkills.find((candidate) => candidate.name === skill.name);
+      const selected = resolvedSkills.find((candidate) => candidate.filePath === skill.sourcePath);
       const sourceBase =
         selected?.baseDir ?? (skill.sourcePath ? path.dirname(skill.sourcePath) : undefined);
       if (!sourceBase) {
@@ -135,6 +157,7 @@ export async function transferSkillResources(params: {
       source: params.snapshot,
       snapshot: {
         ...params.snapshot,
+        skills,
         resolvedSkills,
         prompt: formatSkillsForPromptBounded({ skills: resolvedSkills, preserveOrder: true }),
       },

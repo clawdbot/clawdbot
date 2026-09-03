@@ -96,6 +96,11 @@ default agent.
 The skills table renders horizontal tabs as single spaces so descriptions
 stay aligned with the neighboring columns.
 
+`info` resolves an exact skill name before a metadata key. Key, case-insensitive,
+and separator-normalized matches must identify one skill; ambiguous selectors
+fail instead of choosing discovery order. Workshop reads and update targeting
+use the same lookup.
+
 `check` reports missing prerequisites independently of agent exclusion: a skill
 excluded by the agent allowlist can also appear under **Missing requirements**.
 Disabled skills and skills blocked by the bundled allowlist keep their separate
@@ -283,10 +288,11 @@ you can attach, without changing the session. `read --session <session-key>`
 also requires `--revision <hash>` and reads only that exact selected revision;
 it does not expose other private revisions or grant permission to edit them.
 
-Personal operations require an authenticated Gateway profile. A shared token
-or password alone does not identify a person; use the existing workspace
-commands when operating a solo Gateway without a profile. An explicitly
-selected remote Gateway never falls back to a client-local personal library.
+Personal operations require an authenticated Gateway profile. The Control UI on a
+single-user Gateway uses a durable owner profile, but ephemeral CLI connections
+do not inherit it. A CLI shared token or password alone still has no personal
+profile; use the existing workspace commands in that case. An explicitly selected
+remote Gateway never falls back to a client-local personal library.
 
 Sharing makes a skill available to teammates but does not grant edit access.
 Transfer to team ownership requires administrator authority. Saving affects

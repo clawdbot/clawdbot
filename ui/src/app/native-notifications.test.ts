@@ -127,7 +127,7 @@ describe("native notifications", () => {
   });
 
   it.each(["unknown", "notDetermined", "denied", "granted"] as const)(
-    "sends private background completion only with granted permission: %s",
+    "forwards completion to the native permission owner without prompting: %s",
     (permission) => {
       const postMessage = installBridge();
       capability = createNativeNotificationsCapability();
@@ -142,11 +142,9 @@ describe("native notifications", () => {
 
       capability?.backgroundSessionCompleted({ runId: "run-1", path: "/chat/research" });
 
-      expect(postMessage.mock.calls).toEqual(
-        permission === "granted"
-          ? [[{ type: "background-session-completed", runId: "run-1", path: "/chat/research" }]]
-          : [],
-      );
+      expect(postMessage.mock.calls).toEqual([
+        [{ type: "background-session-completed", runId: "run-1", path: "/chat/research" }],
+      ]);
     },
   );
 

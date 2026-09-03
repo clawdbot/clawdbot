@@ -36,6 +36,8 @@ export function createChatMetadataOwner(
     workspaceDir: `/tmp/${id}/workspace`,
     activeProjectKeys: [],
     config,
+    observationConfig: config,
+    isCurrent: () => true,
     authModes: resolveUsableAgentCredentialModes(credentials),
     metadataSnapshot: createPluginMetadataSnapshotFixture(),
     allowGatewaySubagentBinding: false,

@@ -42,7 +42,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
   protected appendEntry<T extends SessionEntry>(
     entry: T,
     options?: AppendPersistenceOptions,
-  ): { entry: T; anchor?: TranscriptEntryAnchor } {
+  ): { entry: T; anchor?: TranscriptEntryAnchor; appended: boolean } {
     // oxlint-disable-next-line unicorn/prefer-structured-clone -- Match the persisted JSON/toJSON shape exactly.
     const canonicalEntry = JSON.parse(JSON.stringify(entry)) as T;
     if (!isIndexedSessionEntry(canonicalEntry)) {
@@ -101,7 +101,12 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       }
     }
     this.pendingDeliberateAppend = false;
-    return { entry: canonicalEntry, anchor: persistenceResult?.anchor };
+    return {
+      entry: canonicalEntry,
+      anchor: persistenceResult?.anchor,
+      // Detached managers append locally; only the storage owner supplies a durable anchor.
+      appended: persistenceResult?.appended ?? true,
+    };
   }
 
   private resolveCurrentTurnEntryId(): string | null {
@@ -129,7 +134,12 @@ export class SessionManagerEntries extends SessionManagerPersistence {
   appendMessageWithTranscriptAnchor(
     message: Message | CustomMessage | BashExecutionMessage,
     options?: AppendPersistenceOptions,
-  ): { entryId: string; message: SessionMessageEntry["message"]; anchor?: TranscriptEntryAnchor } {
+  ): {
+    entryId: string;
+    message: SessionMessageEntry["message"];
+    anchor?: TranscriptEntryAnchor;
+    appended: boolean;
+  } {
     if (message.role === "assistant") {
       applyAssistantDeliveryDirectives(message);
     }
@@ -154,7 +164,12 @@ export class SessionManagerEntries extends SessionManagerPersistence {
         if (this.persistenceTarget && !anchor) {
           throw new Error(`Session transcript anchor was not returned: ${current.id}`);
         }
-        return { entryId: current.id, message: current.message, ...(anchor ? { anchor } : {}) };
+        return {
+          entryId: current.id,
+          message: current.message,
+          ...(anchor ? { anchor } : {}),
+          appended: false,
+        };
       }
     }
     const entry: SessionMessageEntry = {
@@ -164,11 +179,12 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       timestamp: new Date().toISOString(),
       message,
     };
-    const { entry: persisted, anchor } = this.appendEntry(entry, options);
+    const { entry: persisted, anchor, appended } = this.appendEntry(entry, options);
     return {
       entryId: persisted.id,
       message: persisted.message,
       ...(anchor ? { anchor } : {}),
+      appended,
     };
   }
 

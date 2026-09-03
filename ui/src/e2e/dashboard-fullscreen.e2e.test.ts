@@ -449,51 +449,25 @@ suite.define(() => {
     }
   });
 
-  it("shows the board fullscreen control in split and dashboard faces", async () => {
+  it("expands and collapses the dashboard side panel", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
-      const hiddenDockSnapshot = {
-        ...boardSnapshot,
-        revision: 2,
-        tabs: boardSnapshot.tabs.map((tab) =>
-          tab.tabId === "main" ? { ...tab, chatDock: "hidden" } : tab,
-        ),
-      };
       const gateway = await installMockGateway(page, {
         sessionKey,
-        featureMethods: ["board.get", "board.update"],
-        methodResponses: {
-          "board.get": boardSnapshot,
-          "board.update": hiddenDockSnapshot,
-        },
+        featureMethods: ["board.get"],
+        methodResponses: { "board.get": boardSnapshot },
       });
       await rememberMainTab(page);
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
       await gateway.waitForRequest("board.get");
 
-      const fullscreen = page.locator(".board-fullscreen-button");
-      await fullscreen.waitFor();
-      expect(await fullscreen.getAttribute("aria-label")).toBe("Enter fullscreen");
-      expect(await fullscreen.getAttribute("aria-pressed")).toBe("false");
-      expect(await page.locator('wa-radio[value="split"]').getAttribute("class")).toContain(
-        "settings-segmented__btn--active",
-      );
-
-      await fullscreen.click();
-      await expect.poll(() => fullscreen.getAttribute("aria-pressed")).toBe("true");
-      expect(
-        await page.evaluate(() =>
-          document.fullscreenElement?.classList.contains("chat-pane-primary-column"),
-        ),
-      ).toBe(true);
-      await page.getByRole("button", { name: "Exit fullscreen" }).click();
-      await expect.poll(() => fullscreen.getAttribute("aria-pressed")).toBe("false");
-
-      await page.locator('wa-radio[value="dashboard"]').click();
-      await gateway.waitForRequest("board.update");
-      await expect
-        .poll(() => page.locator('wa-radio[value="dashboard"]').getAttribute("class"))
-        .toContain("settings-segmented__btn--active");
-      await page.getByRole("button", { name: "Enter fullscreen" }).waitFor();
+      await page.locator(".board-session-surface").waitFor();
+      await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
+      await page.locator(".chat-thread").waitFor();
+      await page.getByRole("button", { name: "Expand side panel" }).click();
+      await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
+      await expect.poll(() => page.locator(".chat-thread").isHidden()).toBe(true);
+      await page.getByRole("button", { name: "Collapse", exact: true }).click();
+      await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
     });
   });
 

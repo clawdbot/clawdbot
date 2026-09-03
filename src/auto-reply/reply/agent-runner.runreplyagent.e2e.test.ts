@@ -4239,6 +4239,57 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it.each([
+    {
+      name: "releases a queued followup after the pending tool delivery idle bound",
+      elapsedMs: 30_000,
+      owned: false,
+    },
+    {
+      name: "keeps a queued followup owned until pending tool delivery settles",
+      elapsedMs: 29_999,
+      owned: true,
+    },
+  ])("$name", async ({ elapsedMs, owned }) => {
+    vi.useFakeTimers();
+    const toolResultStarted = createDeferred();
+    const toolResultReleased = createDeferred();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      void params.onToolResult?.({ text: "pending tool result" });
+      return { payloads: [{ text: "followup complete" }], meta: {} };
+    });
+    const { followupRun, run } = createMinimalRun({
+      isActive: true,
+      isRunActive: () => false,
+      shouldFollowup: true,
+      resolvedQueueMode: "collect",
+      opts: {
+        forceToolResultProgress: true,
+        onToolResult: async () => {
+          toolResultStarted.resolve();
+          await toolResultReleased.promise;
+        },
+      },
+    });
+    let followup: Promise<void> | undefined;
+    try {
+      await run();
+      followup = requireScheduledFollowupRunner()(followupRun);
+      await toolResultStarted.promise;
+
+      await vi.advanceTimersByTimeAsync(elapsedMs);
+      expect(replyRunRegistry.get("main") !== undefined).toBe(owned);
+
+      toolResultReleased.resolve();
+      await followup;
+      expect(replyRunRegistry.get("main")).toBeUndefined();
+    } finally {
+      toolResultReleased.resolve();
+      await followup;
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
     { label: "empty output", payloads: [] },
     { label: "reasoning-only output", payloads: [{ text: "internal", isReasoning: true }] },
     { label: "commentary-only output", payloads: [{ text: "internal", isCommentary: true }] },
@@ -4345,16 +4396,15 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const onPendingContinuation = vi.fn();
     const { run } = createMinimalRun({ opts: { onPendingContinuation } });
 
-    await expect(run()).resolves.toMatchObject({
+    const result = await run();
+    expect(result).toMatchObject({
       text: "I’m continuing this work and will send the result when it is ready.",
       replyToId: "msg",
     });
     expect(onPendingContinuation).toHaveBeenCalledOnce();
-    expect(onPendingContinuation.mock.calls[0]?.[0]).toMatchObject({
-      statusPayload: {
-        text: "I’m continuing this work and will send the result when it is ready.",
-      },
-    });
+    expect(
+      getReplyPayloadMetadata(requireRecord(result, "continuation status"))?.continuationStatus,
+    ).toBe(true);
   });
 
   it("delivers an explicit yield acknowledgment after accepting a child spawn", async () => {
@@ -5435,6 +5485,78 @@ describe("runReplyAgent typing (heartbeat)", () => {
       }
     },
   );
+
+  it("clears native fallback state without attributing finalizer response usage to the native model", async () => {
+    const runtimeModelSelection = { provider: "openai", model: "gpt-5.6-sol" };
+    const response = { provider: "google", model: "gemini-2.5-flash" };
+    const selectedModelRef = `${runtimeModelSelection.provider}/${runtimeModelSelection.model}`;
+    const responseModelRef = `${response.provider}/${response.model}`;
+    const runId = "native-fallback-cleared";
+    const usage = { input: 120, output: 8 };
+    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
+      modelProvider: runtimeModelSelection.provider,
+      model: runtimeModelSelection.model,
+      fallbackNotice: {
+        kind: "active",
+        selectedModel: selectedModelRef,
+        activeModel: responseModelRef,
+        reason: "timeout",
+      },
+    });
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "finalized answer" }],
+      meta: {
+        agentMeta: {
+          sessionId: "session",
+          ...response,
+          agentHarnessId: "codex",
+          runtimeModelSelection,
+          usage,
+        },
+      },
+    });
+    const { run } = createMinimalRun({
+      opts: { runId },
+      sessionEntry,
+      sessionStore,
+      storePath,
+      runOverrides: runtimeModelSelection,
+      sessionCtx: { ChatType: "direct" },
+    });
+    const fallbackEvents: Array<Record<string, unknown>> = [];
+    const off = onAgentEvent((event) => {
+      if (
+        event.runId === runId &&
+        event.stream === "lifecycle" &&
+        (event.data.phase === "fallback" || event.data.phase === "fallback_cleared")
+      ) {
+        fallbackEvents.push(event.data);
+      }
+    });
+    try {
+      const result = await run();
+      const text = (Array.isArray(result) ? result : [result])
+        .map((payload) => payload?.text ?? "")
+        .join("\n");
+
+      expect(requireStoredSessionEntry(storePath).fallbackNotice).toBeUndefined();
+      expect(fallbackEvents).toEqual([
+        expect.objectContaining({
+          phase: "fallback_cleared",
+          selectedProvider: runtimeModelSelection.provider,
+          selectedModel: runtimeModelSelection.model,
+          activeProvider: runtimeModelSelection.provider,
+          activeModel: runtimeModelSelection.model,
+          previousActiveModel: responseModelRef,
+        }),
+      ]);
+      expect(text).toContain(`Model Fallback cleared: ${selectedModelRef}`);
+      expect(text).toContain("finalized answer");
+      expect(consumeReplyUsageState(runId)).toMatchObject({ ...response, usage });
+    } finally {
+      off();
+    }
+  });
 
   it("announces fallback transitions and emits lifecycle events while verbose is off", async () => {
     const sessionEntry = makeSessionEntry();

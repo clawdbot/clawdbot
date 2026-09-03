@@ -8,6 +8,7 @@ import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
 import { t } from "../../i18n/index.ts";
 import { normalizeAgentTargetLabel } from "../../lib/agents/display.ts";
 import "../../components/web-awesome-popover.ts";
+import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -98,6 +99,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
           recoveryScope: "",
         },
         agentsHydrated: this.place?.agentsHydrated ?? false,
+        runtimeId: this.place?.devicePlacementRuntime()?.id ?? "",
       }),
       {
         requestUpdate: () => this.requestUpdate(),
@@ -287,12 +289,19 @@ export class NewSessionPage extends OpenClawLightDomElement {
     const groupDefaults = catalog.groupDefaultsKey(this.data);
     if (this.openedFor !== openKey) {
       const ownedMessage = this.messageOwnerKey === openKey ? this.submission.message : "";
+      const ownedMentions = this.messageOwnerKey === openKey ? this.submission.mentions : undefined;
       this.openedFor = openKey;
       this.openedGroupDefaults = groupDefaults;
       this.openedAgentId = resolvedAgentId;
       this.place.setAgentsHydrated(agentsReady);
       this.resetDraft();
-      this.messageOwnerKey = restoreDraft(this.context, this.submission, openKey, ownedMessage);
+      this.messageOwnerKey = restoreDraft(
+        this.context,
+        this.submission,
+        openKey,
+        ownedMessage,
+        ownedMentions,
+      );
       return;
     }
     if (this.openedGroupDefaults !== groupDefaults) {
@@ -348,9 +357,9 @@ export class NewSessionPage extends OpenClawLightDomElement {
       : catalog.routeKeyFromSearch(window.location.search);
   }
 
-  private setMessageFromUser(message: string) {
+  private setMessageFromUser(message: string, mentions?: readonly HumanMention[]) {
     if (!this.submission.submitting && !this.submission.pendingPlacement.sessionKey) {
-      this.submission.setMessage(message);
+      this.submission.setMessage(message, mentions);
       this.messageOwnerKey = catalog.routeKeyFromSearch(window.location.search);
     }
   }
@@ -412,7 +421,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
       isCatalogTarget: catalog.isTarget(this.data),
       renderTargetBar: () => this.renderTargetBar(),
       requestUpdate: () => this.requestUpdate(),
-      onMessage: (message) => this.setMessageFromUser(message),
+      onMessage: (message, mentions) => this.setMessageFromUser(message, mentions),
       onOpenImage: this.setImageLightbox,
     });
   }

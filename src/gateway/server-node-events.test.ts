@@ -9,6 +9,7 @@ import type { DurableMessageBatchSendResult } from "../channels/message/runtime.
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { getCurrentActiveNodeContext, setActiveNodeContext } from "../infra/active-node-context.js";
 import {
   prepareGatewaySuspend,
   resumeGatewaySuspend,
@@ -2287,6 +2288,133 @@ describe("agent request events", () => {
     });
     expect(updatePairedDevicePresenceMock).toHaveBeenCalledTimes(2);
   });
+
+  it("stores host stats on the current connection without Accessibility or prompt changes", async () => {
+    const registry = new NodeRegistry();
+    const client = makeNodeClient("stats-connection", "stats-node");
+    const session = registry.register(client, { pairingIdentity: "stats-identity" });
+    const broadcast = vi.fn();
+    const ctx: NodeEventContext = {
+      ...buildCtx(),
+      broadcast,
+      updateNodeHostStats: (params) => registry.updateHostStats(params),
+    };
+    const stats = {
+      cpuCount: 8,
+      loadAverage: [1.5, 1, 0.5],
+      memoryTotalBytes: 8192,
+      memoryFreeBytes: 4096,
+      diskTotalBytes: 32768,
+      diskAvailableBytes: 16384,
+    };
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(100_000);
+    setActiveNodeContext({ nodeId: "active-computer" });
+    try {
+      await expect(
+        handleNodeEvent(
+          ctx,
+          session.nodeId,
+          { event: "node.host.stats", payloadJSON: JSON.stringify(stats) },
+          { connId: client.connId, presenceAllowed: false },
+        ),
+      ).resolves.toEqual({
+        ok: true,
+        event: "node.host.stats",
+        handled: true,
+        reason: "updated",
+      });
+      expect(session.hostStats).toEqual({ ...stats, updatedAtMs: 100_000 });
+      expect(broadcast).toHaveBeenCalledExactlyOnceWith(
+        "node.hostStats",
+        { nodeId: session.nodeId, hostStats: { ...stats, updatedAtMs: 100_000 } },
+        { dropIfSlow: true },
+      );
+      expect(getCurrentActiveNodeContext()).toEqual({ nodeId: "active-computer" });
+      expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+      expect(updatePairedDevicePresenceMock).not.toHaveBeenCalled();
+    } finally {
+      nowSpy.mockRestore();
+      setActiveNodeContext(null);
+      registry.unregister(client.connId);
+    }
+  });
+
+  it.each(["stale", "missing", "unknown", "invalidated"] as const)(
+    "rejects host stats from a %s connection without replacing the live snapshot",
+    async (connection) => {
+      const registry = new NodeRegistry();
+      const client = makeNodeClient("stats-connection", "stats-node");
+      const session = registry.register(client, { pairingIdentity: "stats-identity" });
+      const stats = { cpuCount: 4, memoryTotalBytes: 8192, memoryFreeBytes: 4096 };
+      registry.updateHostStats({
+        nodeId: session.nodeId,
+        connId: client.connId,
+        stats,
+        observedAtMs: 100,
+      });
+      if (connection === "invalidated") {
+        registry.invalidateConnectionForPairingChange(client.connId);
+      }
+      const broadcast = vi.fn();
+      const ctx: NodeEventContext = {
+        ...buildCtx(),
+        broadcast,
+        updateNodeHostStats: (params) => registry.updateHostStats(params),
+      };
+      try {
+        await expect(
+          handleNodeEvent(
+            ctx,
+            connection === "unknown" ? "unknown-node" : session.nodeId,
+            {
+              event: "node.host.stats",
+              payloadJSON: JSON.stringify({ ...stats, memoryFreeBytes: 1024 }),
+            },
+            {
+              connId:
+                connection === "missing"
+                  ? undefined
+                  : connection === "stale"
+                    ? "retired-connection"
+                    : client.connId,
+            },
+          ),
+        ).resolves.toEqual({
+          ok: true,
+          event: "node.host.stats",
+          handled: false,
+          reason: "stale_connection",
+        });
+        expect(session.hostStats).toEqual({ ...stats, updatedAtMs: 100 });
+        expect(broadcast).not.toHaveBeenCalled();
+      } finally {
+        registry.unregister(client.connId);
+      }
+    },
+  );
+
+  it.each(["not json", "null", "[]", '{"cpuCount":4}'])(
+    "rejects malformed host stats: %s",
+    async (payloadJSON) => {
+      const updateNodeHostStats = vi.fn();
+      const broadcast = vi.fn();
+      await expect(
+        handleNodeEvent(
+          { ...buildCtx(), updateNodeHostStats, broadcast },
+          "stats-node",
+          { event: "node.host.stats", payloadJSON },
+          { connId: "stats-connection" },
+        ),
+      ).resolves.toEqual({
+        ok: true,
+        event: "node.host.stats",
+        handled: false,
+        reason: "invalid_payload",
+      });
+      expect(updateNodeHostStats).not.toHaveBeenCalled();
+      expect(broadcast).not.toHaveBeenCalled();
+    },
+  );
 
   it("updates authenticated accessibility-backed node activity without a system event", async () => {
     const broadcast = vi.fn();

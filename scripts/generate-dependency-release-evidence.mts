@@ -12,6 +12,7 @@ import {
   RELEASE_DEPENDENCY_RISK_LOCKFILES,
   resolveReleaseDependencyRiskAcceptance,
 } from "./lib/release-dependency-risk-acceptance.mts";
+import { REPORT_CLI_PARSE_OPTIONS } from "./lib/report-cli-helpers.mts";
 
 /**
  * Dependency evidence reports generated for release artifacts.
@@ -357,6 +358,7 @@ async function runEvidenceReports(
   packageVersion: string,
 ) {
   let riskAcceptance: ReturnType<typeof resolveReleaseDependencyRiskAcceptance> = null;
+  const toolingRoot = path.resolve(import.meta.dirname, "..");
   // Report implementations belong to this tooling checkout; --root selects only the source data.
   // Release branches can keep frozen product bytes while trusted release tooling is repaired.
   for (const report of DEPENDENCY_EVIDENCE_REPORTS) {
@@ -364,8 +366,6 @@ async function runEvidenceReports(
       runCommand(
         "pnpm",
         [
-          "--dir",
-          path.resolve(import.meta.dirname, ".."),
           report.command.slice("pnpm ".length),
           "--",
           "--root",
@@ -376,7 +376,7 @@ async function runEvidenceReports(
           "--markdown",
           reportPath(outputDir, report.markdown),
         ],
-        rootDir,
+        toolingRoot,
         execFileSyncImpl,
       );
     } catch (error) {
@@ -571,12 +571,7 @@ export function parseArgs(argv: string[]): EvidenceCliOptions {
         rejectShortOptions: true,
       }),
     ),
-    {
-      duplicateOptionMessage: (flag) => `${flag} was provided more than once.`,
-      onUnhandledArg(arg) {
-        throw new Error(`Unsupported argument: ${arg}`);
-      },
-    },
+    REPORT_CLI_PARSE_OPTIONS,
   );
   return helpIndex === -1 ? parsed : { ...parsed, help: true };
 }

@@ -28,11 +28,7 @@ import {
 } from "./net.js";
 import { checkBrowserOrigin } from "./origin-check.js";
 import { withSerializedRateLimitAttempt } from "./rate-limit-attempt-serialization.js";
-export {
-  resolveEffectiveSharedGatewayAuth,
-  resolveGatewayAuth,
-  type ResolvedGatewayAuth,
-} from "./auth-resolve.js";
+export { resolveGatewayAuth, type ResolvedGatewayAuth } from "./auth-resolve.js";
 const LEGACY_OPENCLAW_ENV_NOTE =
   " Legacy CLAWDBOT_* and MOLTBOT_* environment variables are ignored; use OPENCLAW_* names.";
 
@@ -62,7 +58,11 @@ type ConnectAuth = {
   password?: string;
 };
 
-type GatewayAuthSurface = "http" | "http-user-profile-avatar" | "ws-control-ui";
+type GatewayAuthSurface =
+  | "http"
+  | "http-control-ui-read"
+  | "http-user-profile-avatar"
+  | "ws-control-ui";
 
 /** Inputs needed to authorize one HTTP or websocket gateway connection. */
 type AuthorizeGatewayConnectParams = {
@@ -254,7 +254,11 @@ function authorizeTrustedProxy(params: {
 }
 
 function shouldAllowTailscaleHeaderAuth(authSurface: GatewayAuthSurface): boolean {
-  return authSurface === "ws-control-ui" || authSurface === "http-user-profile-avatar";
+  return (
+    authSurface === "ws-control-ui" ||
+    authSurface === "http-control-ui-read" ||
+    authSurface === "http-user-profile-avatar"
+  );
 }
 
 function authorizeHttpBrowserOrigin(params: {
@@ -449,12 +453,12 @@ async function authorizeGatewayConnectCore(
   const explicitSharedSecretAuth = hasExplicitSharedSecretAuth(connectAuth);
 
   if (
-    authSurface === "http-user-profile-avatar" &&
+    (authSurface === "http-control-ui-read" || authSurface === "http-user-profile-avatar") &&
     auth.allowTailscale &&
     !localDirect &&
     !explicitSharedSecretAuth
   ) {
-    // Reject cross-origin ambient avatar requests before the Tailscale WhoIs
+    // Reject cross-origin ambient Control UI requests before the Tailscale WhoIs
     // lookup. Explicit shared-secret auth is not subject to this browser gate.
     const originResult = authorizeHttpBrowserOrigin({
       authSurface,
@@ -589,6 +593,16 @@ export async function authorizeHttpGatewayConnect(
   return authorizeGatewayConnect({
     ...params,
     authSurface: "http",
+  });
+}
+
+/** Authorize a read-only Control UI HTTP request, including verified Tailscale identity. */
+export async function authorizeControlUiReadHttpGatewayConnect(
+  params: Omit<AuthorizeGatewayConnectParams, "authSurface">,
+): Promise<GatewayAuthResult> {
+  return authorizeGatewayConnect({
+    ...params,
+    authSurface: "http-control-ui-read",
   });
 }
 

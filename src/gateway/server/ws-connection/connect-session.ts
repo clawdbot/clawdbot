@@ -8,11 +8,7 @@ import {
 import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes, PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../../../config/io.js";
-import {
-  captureAuthenticatedNodePairingState,
-  type NodePairingGeneration,
-  type NodePairingIdentity,
-} from "../../../infra/device-pairing-node-state.js";
+import { captureAuthenticatedNodePairingState } from "../../../infra/device-pairing-node-state.js";
 import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeRoutingConfig } from "../../../infra/voicewake-routing.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
@@ -20,12 +16,7 @@ import { resolveLocalNodeId } from "../../../node-host/local-id.js";
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../skills/runtime/remote.js";
 import { classifyTailscaleLogin } from "../../../state/user-profiles-tailscale-login.js";
-import {
-  adoptTailscaleProfileAvatar,
-  ensureProfileForEmail,
-  ensureProfileForTailscaleIdentity,
-  getUserProfileDisplay,
-} from "../../../state/user-profiles.js";
+import { adoptTailscaleProfileAvatar } from "../../../state/user-profiles.js";
 import {
   isBrowserCopilotClient,
   isEphemeralGatewayClient,
@@ -33,6 +24,7 @@ import {
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../../../version.js";
 import { verifyAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
 import { buildAuthenticatedPresenceUser } from "../../authenticated-presence-user.js";
+import { shouldUseGatewayOwnerProfile } from "../../gateway-owner-profile.js";
 import { createAuthenticatedGitHubIdentitySync } from "../../github-user-identity.js";
 import {
   attachGatewayLocalUserIngress,
@@ -56,11 +48,17 @@ import { truncateCloseReason } from "../close-reason.js";
 import { broadcastPresenceSnapshot } from "../presence-events.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import {
+  rejectGatewayConnectOrigin,
   rejectUnavailableProfileConnect,
   resolveEffectiveConnectionScopes,
+  resolveGatewayConnectPolicyFailure,
 } from "./connect-admission.js";
 import { sendGatewayHello } from "./connect-hello.js";
 import { prepareGatewayNodeConnect } from "./connect-node-session.js";
+import {
+  resolveAuthenticatedProfile,
+  resolveGatewayConnectUserProfile,
+} from "./connect-user-profile.js";
 import { resolveControlUiBuildMismatch } from "./control-ui-build-admission.js";
 import type {
   DeviceAuthorizedGatewayConnect,
@@ -71,19 +69,14 @@ import { prepareGatewayReceiverHandoff } from "./request-start.js";
 /** Match production release versions (YYYY.M.PATCH or YYYY.M.PATCH-beta.N). */
 const RELEASED_VERSION_RE = /^\d{4}\.\d+\.\d+/;
 
-type AuthenticatedNodePairingAdmission = {
+type AuthenticatedNodePairingAdmission = NonNullable<
+  Awaited<ReturnType<typeof captureAuthenticatedNodePairingState>>
+> & {
   authenticated: { nodeId: string; publicKey: string; token: string };
-  identity: NodePairingIdentity;
-  generation?: NodePairingGeneration;
 };
 
 function isReleasedVersion(version: string): boolean {
   return RELEASED_VERSION_RE.test(version);
-}
-
-function resolveAuthenticatedProfile(profileId: string, updatedAt: number) {
-  const { id, displayName, avatarRevision, hasAvatar } = getUserProfileDisplay(profileId);
-  return { profileId: id, displayName, avatarRevision, hasAvatar, updatedAt };
 }
 
 export async function attachAuthenticatedGatewayConnect(
@@ -97,7 +90,6 @@ export async function attachAuthenticatedGatewayConnect(
     pluginSurfaceBaseUrl,
     pluginNodeCapabilities = [],
     buildRequestContext,
-    getRequiredSharedGatewaySessionGeneration,
     close,
     isClosed,
     clearHandshakeTimer,
@@ -175,9 +167,8 @@ export async function attachAuthenticatedGatewayConnect(
       return;
     }
     nodePairingAdmission = {
+      ...admittedPairingState,
       authenticated: authenticatedNodePairing,
-      identity: admittedPairingState.identity,
-      ...(admittedPairingState.generation ? { generation: admittedPairingState.generation } : {}),
     };
   }
 
@@ -206,22 +197,33 @@ export async function attachAuthenticatedGatewayConnect(
   const rolesConfigured = Boolean(context.configSnapshot.gateway?.roles);
   const sharedSecretOperatorOwner =
     role === "operator" && (authMethod === "token" || authMethod === "password");
+  // Synthetic callers bypass WS admission; ephemeral control-plane clients stay unprofiled.
+  const ownerProfileExpected =
+    shouldTrackPresence &&
+    shouldUseGatewayOwnerProfile({ role, authenticatedUserId, authMethod, rolesConfigured });
   let authenticatedUserProfile: GatewayWsClient["authenticatedUserProfile"];
-  if (authenticatedUserId && (!resolveAuthenticatedGitHubIdentity || rolesConfigured)) {
+  if (
+    ownerProfileExpected ||
+    (authenticatedUserId && (!resolveAuthenticatedGitHubIdentity || rolesConfigured))
+  ) {
     try {
-      const profile = resolveAuthenticatedGitHubIdentity
-        ? await resolveAuthenticatedGitHubIdentity()
-        : authResult.tailscaleIdentity
-          ? ensureProfileForTailscaleIdentity(authResult.tailscaleIdentity)
-          : ensureProfileForEmail(authenticatedUserId);
-      const profileId = "profileId" in profile ? profile.profileId : profile.id;
       // The live profile callback refreshes edits and detached provider-avatar adoption.
-      authenticatedUserProfile = resolveAuthenticatedProfile(profileId, profile.updatedAt);
+      authenticatedUserProfile = await resolveGatewayConnectUserProfile({
+        ownerProfileExpected,
+        authenticatedUserId,
+        authResult,
+        resolveAuthenticatedGitHubIdentity,
+      });
     } catch (error) {
       logWsControl.warn(
         `user profile resolution failed conn=${connId} user=${formatForLog(authenticatedUserId)}: ${formatForLog(error)}`,
       );
-      if (rolesConfigured && role === "operator" && !sharedSecretOperatorOwner) {
+      if (
+        !ownerProfileExpected &&
+        rolesConfigured &&
+        role === "operator" &&
+        !sharedSecretOperatorOwner
+      ) {
         await rejectUnavailableProfileConnect(context, error);
         return;
       }
@@ -390,7 +392,7 @@ export async function attachAuthenticatedGatewayConnect(
   const prepareLocalUserIngress = (profile = authenticatedUserProfile) =>
     prepareGatewayLocalUserIngress({
       authMethod,
-      authenticatedUserExpected: Boolean(authenticatedUserId),
+      authenticatedUserExpected: Boolean(authenticatedUserId) || ownerProfileExpected,
       ...(profile
         ? {
             profile: {
@@ -425,6 +427,7 @@ export async function attachAuthenticatedGatewayConnect(
     ...(authenticatedUserIsTailscaleProvider ? { authenticatedUserIsTailscaleProvider: true } : {}),
     ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
     clientIp: reportedClientIp,
+    ...(context.browserOrigin ? { browserOrigin: context.browserOrigin } : {}),
     ...(internal ? { internal } : {}),
     ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),
     ...(Object.keys(pluginNodeCapabilitySurfaces).length > 0
@@ -523,16 +526,15 @@ export async function attachAuthenticatedGatewayConnect(
     }
   }
 
-  // Authentication may finish before pairing/profile work does. Revalidate at
-  // the registration boundary so a credential rotation cannot miss this client.
-  if (
-    sessionUsesSharedGatewayAuth &&
-    getRequiredSharedGatewaySessionGeneration &&
-    sessionSharedGatewaySessionGeneration !== getRequiredSharedGatewaySessionGeneration()
-  ) {
-    setCloseCause("gateway-auth-rotated", { authGenerationStale: true });
+  const policyFailure = resolveGatewayConnectPolicyFailure(context, state);
+  if (policyFailure) {
     await releasePendingNodePairingCleanup();
-    close(4001, "gateway auth changed");
+    if (policyFailure.kind === "auth") {
+      setCloseCause("gateway-auth-rotated", { authGenerationStale: true });
+      close(4001, "gateway auth changed");
+    } else {
+      rejectGatewayConnectOrigin(context, policyFailure.reason);
+    }
     return;
   }
   const handoffReceiver = prepareGatewayReceiverHandoff(socket, role);
@@ -618,6 +620,7 @@ export async function attachAuthenticatedGatewayConnect(
     const nodeSession = requestContext.nodeRegistry.register(nextClient, {
       remoteIp: reportedClientIp,
       pairingIdentity: admittedNodePairing.identity.key,
+      approvedSurface: admittedNodePairing.approvedSurface,
       ...(pairingGeneration ? { pairingGeneration } : {}),
     });
     recordRemoteNodeInfo({

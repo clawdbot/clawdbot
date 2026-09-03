@@ -80,6 +80,7 @@ import type { InternalSessionEntry as SessionEntry } from "./types.js";
 async function withCommittedHistoryMaintenance<T>(
   { agentId, storePath }: { agentId?: string; storePath: string },
   run: (recordCommit: (database: OpenClawAgentDatabase) => void) => Promise<T>,
+  options: { scheduleNext?: boolean } = {},
 ): Promise<T> {
   let committed = false;
   try {
@@ -91,7 +92,7 @@ async function withCommittedHistoryMaintenance<T>(
   } finally {
     // A partial commit still needs maintenance, but only after archive publication and
     // lifecycle-owner cleanup finish. Rejected preparation or rollback creates no pressure.
-    if (committed) {
+    if (committed && options.scheduleNext !== false) {
       kickSessionHistoryDiskBudgetMaintenance({ agentId, storePath, force: true });
     }
   }
@@ -226,6 +227,7 @@ export async function resetSessionEntryLifecycle(
     { agentId: resolved.agentId, storePath: params.storePath },
     async (recordCommit) =>
       runExclusiveSqliteSessionWrite(resolved, async () => {
+        params.commitGuard?.();
         const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
         const targetSnapshot = readLifecycleTargetSnapshot(database, params.target);
         const current = targetSnapshot[0];
@@ -243,6 +245,7 @@ export async function resetSessionEntryLifecycle(
           ...(current?.entry.sessionId ? { previousSessionId: current.entry.sessionId } : {}),
         };
         runOpenClawAgentWriteTransaction((transactionDb) => {
+          params.commitGuard?.();
           assertLifecycleTargetUnchanged(transactionDb, params.target, current?.entry, "reset");
           if (shouldAppendResetBoundary && current?.entry.sessionId && params.resetBoundary) {
             const event = buildSessionResetBoundaryEvent({
@@ -561,15 +564,7 @@ async function deleteSqliteSessionEntryLifecycleLocked(
         );
       });
       if (result.deleted) {
-        deletePersonalGitHubSessionReceipts({
-          agentId: resolved.agentId,
-          env: resolved.env,
-          sessionKeys: [
-            params.target.canonicalKey,
-            ...params.target.storeKeys,
-            ...prepared.targetSnapshot.map((row) => row.sessionKey),
-          ],
-        });
+        // The deletion is committed; observers must invalidate even if receipt cleanup fails.
         emitSessionIdentityMutation({
           kind: "delete",
           previous: {
@@ -578,6 +573,15 @@ async function deleteSqliteSessionEntryLifecycleLocked(
               : {}),
             sessionKeys: prepared.targetSnapshot.map((row) => row.sessionKey),
           },
+        });
+        deletePersonalGitHubSessionReceipts({
+          agentId: resolved.agentId,
+          env: resolved.env,
+          sessionKeys: [
+            params.target.canonicalKey,
+            ...params.target.storeKeys,
+            ...prepared.targetSnapshot.map((row) => row.sessionKey),
+          ],
         });
       }
       result.archivedTranscripts = await publishSessionStateArchives(
@@ -604,6 +608,26 @@ export async function deleteSessionEntryLifecycle(
   params: DeleteSessionEntryLifecycleParams,
 ): Promise<DeleteSessionEntryLifecycleResult> {
   return await deleteSqliteSessionEntryLifecycleInternal(params, false);
+}
+
+/** Disk-budget owner: delete one exact archived row without recursively scheduling another pass. */
+export async function deleteDiskBudgetSessionEntryLifecycle(
+  params: DeleteSessionEntryLifecycleParams,
+): Promise<DeleteSessionEntryLifecycleResult> {
+  const agentId = params.agentId ?? parseAgentSessionKey(params.target.canonicalKey)?.agentId;
+  const resolved = resolveSqliteStoreScope(params.storePath, { agentId });
+  return await withCommittedHistoryMaintenance(
+    params,
+    async (recordCommit) =>
+      await deleteSqliteSessionEntryLifecycleLocked(
+        resolved,
+        params,
+        false,
+        undefined,
+        recordCommit,
+      ),
+    { scheduleNext: false },
+  );
 }
 
 /** Rolls back one exact locked row created by failed trusted harness initialization. */

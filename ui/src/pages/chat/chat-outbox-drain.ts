@@ -67,6 +67,7 @@ export type QueuedChatSendOptions = {
   pendingSettings?: Promise<boolean>;
   previousAttachments?: ChatAttachment[];
   previousDraft?: string;
+  previousMentions?: ChatQueueItem["mentions"];
   restoreAttachments?: boolean;
   restoreDraft?: boolean;
   /** Recognized remote commands remain editable when the Gateway rejects them. */

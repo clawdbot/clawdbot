@@ -162,6 +162,16 @@
   align-items: flex-start;
 }
 
+/* Compact icon-only actions align with a one-line heading instead of the
+   full-size controls that require top alignment. */
+@media not all and (max-width: 640px) {
+  .settings-section__header:not(:has(.settings-section__desc)):has(
+    .settings-section__actions .btn--xs.btn--icon
+  ) {
+    align-items: center;
+  }
+}
+
 .settings-section__header:has(.settings-section__copy):has(.settings-section__actions) {
   column-gap: var(--space-5);
 }

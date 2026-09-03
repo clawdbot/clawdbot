@@ -7,7 +7,11 @@ import type {
 } from "@openclaw/acp-core/types";
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
-import type { SessionRow, SessionRunStatus } from "../../../packages/gateway-protocol/src/index.js";
+import type {
+  SessionEntryArchiveReason,
+  SessionRow,
+  SessionRunStatus,
+} from "../../../packages/gateway-protocol/src/index.js";
 import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { SessionGoal } from "../../../packages/gateway-protocol/src/schema/sessions-goal.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
@@ -330,6 +334,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     archivedAt?: number;
     /** Actor that archived the session; cleared when the session is restored. */
     archivedBy?: SessionActor;
+    /** Stable lifecycle cause; absent values are legacy archives and remain manually protected. */
+    archiveReason?: SessionEntryArchiveReason;
     /** Timestamp (ms) when the session was pinned for quick access. */
     pinnedAt?: number;
     /** Timestamp (ms) when an operator client last marked the session read. */

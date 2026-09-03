@@ -466,6 +466,7 @@ async function deliverSlackThreadAnnouncement(params: {
   sourceSessionKey?: string;
   sourceTool?: string;
   requesterAbandoned?: boolean;
+  requesterAbandonment?: "timeout" | "recovering_timeout";
   isSourceSessionEffectsAllowed?: () => boolean;
   isCompletionOwnedByRequesterYield?: () => boolean;
   requesterSessionActivity?: () => { sessionId: string; isActive: boolean };
@@ -488,7 +489,8 @@ async function deliverSlackThreadAnnouncement(params: {
         sessionId: params.sessionId ?? "requester-session-4",
         isActive: params.isActive === true,
       })),
-    isRequesterSessionAbandoned: () => params.requesterAbandoned === true,
+    resolveRequesterSessionAbandonment: () =>
+      params.requesterAbandonment ?? (params.requesterAbandoned === true ? "timeout" : undefined),
     getRuntimeConfig: () => ({}) as never,
     sendMessage: params.sendMessage ?? runtimeSendMessage,
     ...(params.requesterTranscriptFixture
@@ -601,6 +603,7 @@ async function deliverTelegramDirectMessageCompletion(params: {
   sourceTool?: string;
   runtimeConfig?: Record<string, unknown>;
   requesterAbandoned?: boolean;
+  requesterAbandonment?: "timeout" | "recovering_timeout";
   origin?: {
     channel: "telegram";
     to: string;
@@ -623,7 +626,8 @@ async function deliverTelegramDirectMessageCompletion(params: {
           : (params.requesterSessionId ?? "requester-session-telegram"),
       isActive: params.isActive === true,
     }),
-    isRequesterSessionAbandoned: () => params.requesterAbandoned === true,
+    resolveRequesterSessionAbandonment: () =>
+      params.requesterAbandonment ?? (params.requesterAbandoned === true ? "timeout" : undefined),
     getRuntimeConfig: () => (params.runtimeConfig ?? {}) as never,
     sendMessage: params.sendMessage ?? runtimeSendMessage,
     ...(params.queueEmbeddedAgentMessageWithOutcome
@@ -3275,6 +3279,34 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         path: "none",
       }),
     ]);
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
+  });
+
+  it("defers completion dispatch while requester timeout recovery is unsettled", async () => {
+    const callGateway = createPayloadGatewayMock({ text: "child completion output" });
+    const sendMessage = createSendMessageMock();
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
+    const result = await deliverTelegramDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      requesterAbandonment: "recovering_timeout",
+      isActive: false,
+      queueEmbeddedAgentMessageWithOutcome,
+      internalEvents: taskCompletionEvents({
+        childSessionId: "child-session-id",
+        taskLabel: "telegram recovering completion",
+      }),
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "none",
+      reason: "completion_handoff_pending",
+      error: "requester timeout recovery is still settling",
+      disposition: "retryable",
+    });
     expect(callGateway).not.toHaveBeenCalled();
     expect(sendMessage).not.toHaveBeenCalled();
     expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();

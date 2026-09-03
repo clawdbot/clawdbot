@@ -34,7 +34,7 @@ on:
         default: false
         type: boolean
       telegram_waiver:
-        description: Explicit owner-approved Telegram integration waiver for stable 2026.8.1 only
+        description: Telegram waiver <target-version>-owner-approved for stable/full; requires release-owner approval
         required: false
         default: ""
         type: string
@@ -108,7 +108,7 @@ on:
         default: ""
         type: string
       cross_os_suite_filter:
-        description: Optional focused cross-OS suite filter, e.g. windows/packaged-upgrade or packaged-fresh
+        description: Optional cross-OS selection for all or cross-os runs, e.g. ubuntu,macos or windows/packaged-upgrade
         required: false
         default: ""
         type: string
@@ -348,6 +348,7 @@ jobs:
           NPM_TELEGRAM_PACKAGE_SPEC: ${{ inputs.npm_telegram_package_spec }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
           LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
+          CROSS_OS_SUITE_FILTER: ${{ steps.filters.outputs.cross_os_suite_filter }}
           TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
           TARGET_REF: ${{ inputs.ref }}
           TARGET_SHA: ${{ steps.resolve.outputs.sha }}
@@ -448,7 +449,8 @@ jobs:
           const policy = releaseContext && beta && train === 'beta' ? 'npm-beta-v1'
             : releaseContext && stable && train === 'stable' ? 'npm-stable-v1' : undefined;
           normalizeReleaseCoveragePolicy({ coveragePolicy: policy, releaseProfile: env.RELEASE_PROFILE,
-            rerunGroup: env.RERUN_GROUP, runReleaseSoak: env.RUN_RELEASE_SOAK, targetVersion: version.version });
+            rerunGroup: env.RERUN_GROUP, runReleaseSoak: env.RUN_RELEASE_SOAK, targetVersion: version.version,
+            crossOsSuiteFilter: env.CROSS_OS_SUITE_FILTER });
           const scope = policy === 'npm-beta-v1' ? 'npm-beta' : policy === 'npm-stable-v1' ? 'npm-stable' : 'full';
           appendFileSync(env.GITHUB_OUTPUT, `npm_dist_tag=${distTag}\nrelease_candidate_branch=${branch}\ncoverage_policy=${policy ?? ''}\nci_release_scope=${scope}\nskip_package_telegram_e2e=${beta ? 'true' : env.SKIP_PACKAGE_TELEGRAM_E2E}\n`);
           NODE

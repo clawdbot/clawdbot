@@ -75,6 +75,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   // behind the operator-scoped config.get.
   "config.changed": [READ_SCOPE],
   "users.prefs.changed": [READ_SCOPE],
+  "mentions.changed": [READ_SCOPE],
   "skills.changed": [READ_SCOPE],
   "voicewake.changed": [READ_SCOPE],
   "voicewake.routing.changed": [READ_SCOPE],
@@ -86,6 +87,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "node.pair.requested": [PAIRING_SCOPE],
   "node.pair.resolved": [PAIRING_SCOPE],
   "node.presence": [READ_SCOPE],
+  "node.hostStats": [READ_SCOPE],
   [GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED]: [READ_SCOPE],
   "sessions.catalog.host": [READ_SCOPE],
   "sessions.changed": [READ_SCOPE],

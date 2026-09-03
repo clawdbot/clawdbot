@@ -181,7 +181,7 @@ describe("diffConfigPaths", () => {
     { prev: { mcp: { apps: { enabled: true } } }, next: {} },
   ])("preserves the Apps restart boundary for whole MCP changes", ({ prev, next }) => {
     const changedPaths = diffGatewayReloadPaths(prev, next, listConfigReloadRefinementPrefixes());
-    expect(changedPaths).toEqual(["mcp", "mcp.apps"]);
+    expect(changedPaths).toEqual(["mcp.apps"]);
     expect(buildGatewayReloadPlan(changedPaths).restartReasons).toContain("mcp.apps");
   });
 
@@ -412,9 +412,18 @@ describe("buildGatewayReloadPlan", () => {
 
   it.each([
     "gateway.port",
+    "gateway.bind",
+    "gateway.tls.enabled",
     "gateway.terminal.enabled",
+    "gateway.controlUi.enabled",
+    "gateway.controlUi.basePath",
+    "gateway.controlUi.root",
     "cloudWorkers.profiles.aws.settings.class",
     "browser.enabled",
+    "browser.evaluateEnabled",
+    "browser.ssrfPolicy.allowedHostnames",
+    "browser.extensionRelay.enabled",
+    "browser.tabCleanup.enabled",
     "plugins.installs.telegram.installPath",
     "plugins.load.paths.0",
     "gateway.auth.mode",
@@ -428,6 +437,106 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartReasons).toEqual([path]);
     expect(plan.hotReasons).toStrictEqual([]);
   });
+
+  it.each([
+    "gateway.http.securityHeaders.strictTransportSecurity",
+    "gateway.nodes.pairing.autoApproveLocal",
+    "gateway.nodes.pairing.autoApproveCidrs",
+    "gateway.nodes.pairing.sshVerify",
+    "gateway.terminal.shell",
+    "gateway.terminal.detachedSessionTimeoutSeconds",
+    "gateway.http.endpoints.chatCompletions.enabled",
+    "gateway.http.endpoints.responses.enabled",
+    "gateway.http.endpoints.responses.files.maxBytes",
+    "gateway.tools.allow",
+    "gateway.tools.deny",
+    "gateway.cliAgents.enabled",
+    "gateway.controlUi.environment.label",
+    "gateway.controlUi.communityInvite",
+    "gateway.controlUi.github.token",
+    "gateway.controlUi.toolTitles",
+    "gateway.controlUi.sessionObserver",
+    "gateway.controlUi.embedSandbox",
+    "gateway.controlUi.allowExternalEmbedUrls",
+    "gateway.controlUi.automaticallyFetchFavicons",
+    "gateway.controlUi.allowedOrigins",
+    "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback",
+    "gateway.nodes.commands.allow",
+    "gateway.nodes.commands.deny",
+    "gateway.nodes.pluginTools.enabled",
+    "gateway.nodes.allowSkills",
+    "gateway.nodes.browser.mode",
+    "gateway.nodes.browser.node",
+    "gateway.push.apns.relay.baseUrl",
+  ])("hot-applies Gateway request policy without restarting subsystems: %s", (path) => {
+    const plan = buildGatewayReloadPlan([path]);
+
+    expect(plan).toMatchObject({
+      restartGateway: false,
+      restartReasons: [],
+      hotReasons: [path],
+      noopPaths: [],
+      restartHeartbeat: false,
+      restartCron: false,
+      reloadHooks: false,
+      reloadPlugins: false,
+      disposeMcpRuntimes: false,
+      restartChannels: new Set(),
+      restartChannelAccounts: new Map(),
+    });
+    expect(resolveConfigReloadMetadata(path).kind).toBe("hot");
+  });
+
+  it.each([
+    {
+      name: "only request policies",
+      config: {
+        gateway: {
+          tools: { deny: ["sessions_list"] },
+          http: { endpoints: { responses: { enabled: true } } },
+          controlUi: { environment: { label: "Test", color: "teal" }, sessionObserver: false },
+          nodes: { browser: { mode: "off" }, pairing: { autoApproveLocal: false } },
+          terminal: { shell: "/bin/sh" },
+        },
+      },
+      restartReasons: [],
+    },
+    {
+      name: "request policies and startup settings",
+      config: {
+        gateway: {
+          port: 18791,
+          http: {
+            endpoints: { responses: { enabled: true } },
+            securityHeaders: { strictTransportSecurity: "max-age=31536000" },
+          },
+          controlUi: { environment: { label: "Test", color: "teal" }, basePath: "/chat" },
+          nodes: { pairing: { sshVerify: false } },
+        },
+      },
+      restartReasons: ["gateway.port", "gateway.controlUi.basePath"],
+    },
+  ] satisfies { name: string; config: OpenClawConfig; restartReasons: string[] }[])(
+    "preserves $name when adding or removing Gateway config",
+    ({ config, restartReasons }) => {
+      for (const [previous, next] of [
+        [{}, config],
+        [config, {}],
+      ] as const) {
+        const changedPaths = diffGatewayReloadPaths(
+          previous,
+          next,
+          listConfigReloadRefinementPrefixes(),
+        );
+        const plan = buildGatewayReloadPlan(changedPaths);
+
+        expect(plan.restartReasons).toEqual(restartReasons);
+        expect(plan.restartGateway).toBe(restartReasons.length > 0);
+        expect(plan.hotReasons).toContain("gateway.http.endpoints");
+        expect(plan.hotReasons).toContain("gateway.controlUi.environment");
+      }
+    },
+  );
 
   it.each([
     {
@@ -5190,7 +5299,10 @@ describe("startGatewayConfigReloader", () => {
 
     expect(harness.onHotReload).not.toHaveBeenCalled();
     const [plan, restartedConfig] = getOnlyRestartCall(harness);
-    expect(plan.changedPaths).toEqual(["plugins.entries", "plugins.installs.lossless-claw"]);
+    expect(plan.changedPaths).toEqual([
+      "plugins.entries.lossless-claw",
+      "plugins.installs.lossless-claw",
+    ]);
     expect(plan.restartGateway).toBe(true);
     expect(plan.restartReasons).toEqual(["plugins.installs.lossless-claw"]);
     expect(restartedConfig).toBe(nextConfig);
@@ -5720,7 +5832,9 @@ describe("startGatewayConfigReloader skills invalidation", () => {
 
     const after = getSkillsSnapshotVersion();
     expect(after).toBeGreaterThan(before);
-    expect(log.info).toHaveBeenCalledWith("skills snapshot invalidated by config change (skills)");
+    expect(log.info).toHaveBeenCalledWith(
+      expect.stringContaining("skills snapshot invalidated by config change"),
+    );
 
     await reloader.stop();
   });

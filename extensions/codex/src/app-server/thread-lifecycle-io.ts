@@ -20,14 +20,12 @@ import {
   attestCodexThreadToolSurface,
   discardUnattestedCodexPluginThread,
 } from "./plugin-thread-attestation.js";
-import {
-  buildCodexPluginAppsConfigPatchFromPolicyContext,
-  mergeCodexThreadConfigs,
-} from "./plugin-thread-config.js";
+import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
 import {
   assertCodexThreadAcceptsDirectInput,
   assertCodexThreadStartResponse,
 } from "./protocol-validators.js";
+import { isCodexThreadReadMissingError } from "./rpc-error.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import {
   fingerprintCodexThreadConfig,
@@ -47,6 +45,7 @@ import type {
   CodexStartOrResumeThreadParams,
   CodexResumeThreadContext,
   CodexStartThreadContext,
+  CodexThreadResumePreparation,
 } from "./thread-lifecycle-types.js";
 import { resolveCodexAppServerModelProvider } from "./thread-model-selection.js";
 import { CodexThreadPolicyHandoffError, refreshCodexThreadPolicy } from "./thread-policy.js";
@@ -82,19 +81,20 @@ export async function resumeExistingCodexThread(
     throwIfAborted,
     clearCurrentBinding,
   } = context;
+  let acceptedConfiguration: CodexThreadResumePreparation | undefined;
+  let disposeConfiguration: (() => void) | undefined;
   let resumeReservation: { release: () => void } | undefined;
-  let resumeResponseAccepted = false;
   let ordinaryAppConfigChanged = false;
   let policyOutcome: CodexThreadPolicyHandoffError["outcome"] = "not-written";
-  const assertHandoffCurrent = () => {
-    params.params.hostCapabilities.assertActive();
-    throwIfAborted();
-    context.assertResumeOwnership();
-    context.assertResumeConfiguration();
-  };
   const abandonClient =
     params.abandonClient ?? (() => closeCodexStartupClientBestEffort(params.client));
   try {
+    // Preparation reads must share resume recovery, before any subscription is acquired.
+    const configuration = await context.prepareResume();
+    const assertHandoffCurrent = configuration.assertConfigured;
+    disposeConfiguration = configuration.dispose;
+    await context.releaseRetainedThread(configuration.assertCurrent);
+    configuration.assertCurrent();
     const authProfileId =
       resumeBinding.connectionScope === "supervision"
         ? undefined
@@ -111,21 +111,16 @@ export async function resumeExistingCodexThread(
     // resume (including scheduled tool ceilings), then admit the loaded thread below.
     const pluginThreadConfig =
       context.prebuiltPluginThreadConfig ??
-      (params.pluginThreadConfig?.requiresCurrentPolicyCheck
+      (params.pluginThreadConfig?.enabled
         ? await lifecycleTiming.measure("plugin-config-build", () =>
             params.pluginThreadConfig?.build(),
           )
-        : undefined);
-    const pluginAppsConfigPatch =
-      pluginThreadConfig?.configPatch ??
-      (params.pluginThreadConfig?.enabled && resumeBinding.pluginAppPolicyContext
-        ? buildCodexPluginAppsConfigPatchFromPolicyContext(resumeBinding.pluginAppPolicyContext)
         : undefined);
     const resumeConfig = applyCodexNativeSkillIsolation(
       mergeCodexThreadConfigs(
         params.config,
         userMcpServersConfigPatch,
-        pluginAppsConfigPatch,
+        pluginThreadConfig?.configPatch,
         finalConfigPatch.configPatch,
       ),
       nativeSkillIsolation,
@@ -168,12 +163,12 @@ export async function resumeExistingCodexThread(
         abandonClient,
         request: resumeParams,
         signal: params.signal,
-        assertCurrent: context.assertResumeOwnership,
+        assertCurrent: configuration.assertCurrent,
       }),
     );
-    resumeResponseAccepted = true;
+    acceptedConfiguration = configuration;
     assertCodexThreadAcceptsDirectInput(response.thread);
-    context.assertResumeConfiguration();
+    configuration.assertConfigured();
     // Current-policy denial must release this subscription and stop, not retry
     // as a fresh thread. A confirmed config change still follows normal rotation.
     const loadedPluginThreadConfig = await context.buildLoadedPluginThreadConfig?.(resumeBinding);
@@ -320,12 +315,15 @@ export async function resumeExistingCodexThread(
     // Pre-write ownership conflicts and unsafe helper outcomes cannot rotate
     // the binding. Overload is an exact pre-enqueue rejection, not a stale thread.
     if (
-      !resumeResponseAccepted &&
-      (!(error instanceof CodexAppServerRpcError) || isCodexAppServerOverloadError(error))
+      !acceptedConfiguration &&
+      (!(error instanceof CodexAppServerRpcError) ||
+        (error.method === "thread/read" &&
+          !isCodexThreadReadMissingError(error, resumeBinding.threadId)) ||
+        isCodexAppServerOverloadError(error))
     ) {
       throw error;
     }
-    if (resumeResponseAccepted) {
+    if (acceptedConfiguration) {
       const handoffError =
         error instanceof CodexThreadPolicyHandoffError ||
         error instanceof CodexAppServerUnsafeSubscriptionError
@@ -336,7 +334,7 @@ export async function resumeExistingCodexThread(
       const subscriptionReleased = await unsubscribeCodexThreadBestEffort(params.client, {
         threadId: resumeBinding.threadId,
         timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
-        assertCurrent: context.assertResumeOwnership,
+        assertCurrent: acceptedConfiguration.assertCurrent,
       }).catch(() => false);
       if (
         !subscriptionReleased ||
@@ -369,10 +367,11 @@ export async function resumeExistingCodexThread(
       if (!ordinaryAppConfigChanged || !subscriptionReleased) {
         throw handoffError;
       }
-      assertHandoffCurrent();
+      acceptedConfiguration.assertConfigured();
     }
     if (
       resumeBinding.pendingResumeConfiguration ||
+      resumeBinding.preserveNativeModel ||
       resumeBinding.connectionScope === "supervision" ||
       params.signal?.aborted
     ) {
@@ -382,6 +381,8 @@ export async function resumeExistingCodexThread(
       error,
     });
     await clearCurrentBinding("rotating a stale thread binding");
+  } finally {
+    disposeConfiguration?.();
   }
 
   return undefined;

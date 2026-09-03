@@ -1,0 +1,7 @@
+/* The lobster uses this ledge even when the invitation is disabled. */
+.sidebar-shell__invite {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 auto;
+  margin-inline: calc(-1 * var(--sidebar-pad-x));
+}

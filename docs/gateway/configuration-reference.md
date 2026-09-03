@@ -287,7 +287,7 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 - Loaded from package or bundle directories under `~/.openclaw/extensions` and `<workspace>/.openclaw/extensions`, plus files or directories listed in `plugins.load.paths`.
 - Put standalone plugin files in `plugins.load.paths`; auto-discovered extension roots ignore top-level `.js`, `.mjs`, and `.ts` files so helper scripts in those roots do not block startup.
 - Discovery accepts native OpenClaw plugins plus compatible Codex bundles and Claude bundles, including manifestless Claude default-layout bundles.
-- **Config changes require a gateway restart.**
+- With the default hybrid reload mode, ordinary plugin policy and entry changes hot-reload the plugin runtime. Plugin code, metadata, and discovery-root changes require a Gateway restart; active plugins can also declare restart-triggering config prefixes.
 - `allow`: optional allowlist (only listed plugins load). `deny` wins.
 - `plugins.entries.<id>.apiKey`: plugin-level API key convenience field (when supported by the plugin).
 - `plugins.entries.<id>.env`: plugin-scoped env var map.
@@ -539,6 +539,10 @@ See [Plugins](/tools/plugin).
 - Control service: loopback only (port derived from `gateway.port`, default `18791`).
 - `extraArgs` appends extra launch flags to local Chromium startup (for example
   `--disable-gpu`, window sizing, or debug flags).
+- Browser profiles, the default profile, and global launch settings hot-reload.
+  Changed launch settings replace affected managed browsers on their next use;
+  externally attached browsers stay running. Enablement, evaluation, SSRF policy,
+  extension relay, and tab cleanup require a Gateway restart.
 
 ---
 
@@ -757,6 +761,7 @@ Gateway or node host and check `openclaw nodes pending` again.
       enabled: true,
       basePath: "/openclaw",
       // environment: { label: "edge", color: "amber" },
+      // communityInvite: true, // show the sidebar Discord invitation unless dismissed
       // root: "dist/control-ui",
       // github: { token: { source: "store", provider: "default", id: "CONTROL_UI_GITHUB" } },
       // toolTitles: false, // opt-in AI purpose titles for tool calls (spends utility-model tokens)
@@ -869,7 +874,8 @@ Gateway or node host and check `openclaw nodes pending` again.
   `openclaw config unset gateway.tailscale.preserveFunnel`. Default `false`.
 - `controlUi.allowedOrigins`: explicit browser-origin allowlist for Gateway WebSocket connects. Required for public non-loopback browser origins. Private same-origin LAN/Tailnet UI loads from loopback, RFC1918/link-local, `.local`, `.ts.net`, or Tailscale CGNAT hosts are accepted without enabling Host-header fallback.
 - `controlUi.environment`: optional visual identity for distinguishing Gateway environments. Set `{ label: "edge", color: "amber" }` to show a matching top stripe, agent-avatar ring, environment pills, browser-title suffix, and tinted favicon. `label` is trimmed and must contain 1–24 characters. `color` must be `teal`, `amber`, `purple`, `coral`, `pink`, `blue`, `green`, `red`, or `gray`. The label and color are visible before sign-in; omit the setting to keep the default appearance unchanged.
-- `controlUi.github.token`: optional SecretRef-backed service credential for Control UI GitHub previews and project discovery. Prefer this explicit setting when the Gateway should own GitHub service access independently of its shared process environment. When omitted, the shipped `GH_TOKEN` then `GITHUB_TOKEN` process-environment fallback remains active. An explicitly configured but unavailable credential fails closed instead of using that fallback. Its exact environment or store name is excluded from agent execution; a custom name does not clear unrelated native `GH_TOKEN` or `GITHUB_TOKEN` values. This credential is separate from `tools.github` agent identities and does not create an OS-user security boundary.
+- `controlUi.communityInvite`: show the Discord community invitation in the sidebar. Default: `true`. Set `false` on the Gateway serving the UI to hide it for every browser using that deployment, including browsers connected to a different remote Gateway. The setting hot-reloads; existing pages pick it up after browser refresh or reconnect. Re-enabling preserves browser-local dismissals.
+- `controlUi.github.token`: optional SecretRef-backed service credential for Control UI project discovery and GitHub hover previews without a managed agent identity. Hover previews prefer the selected agent's effective `tools.github` identity, including an inherited system identity, and remain restricted to public repositories. Prefer this explicit setting when the Gateway should own service access independently of its shared process environment. When omitted, service access retains the shipped `GH_TOKEN` then `GITHUB_TOKEN` process-environment fallback. An explicitly configured but unavailable credential fails closed instead of using an unrelated credential. Its exact environment or store name is excluded from agent execution; a custom name does not clear unrelated native `GH_TOKEN` or `GITHUB_TOKEN` values. This credential is separate from `tools.github` agent identities and does not create an OS-user security boundary.
 - `controlUi.toolTitles`: opt in to AI-generated purpose titles for tool calls in Control UI chat. Default: `false` (tool rendering stays fully deterministic with no background model calls). When enabled, the `chat.toolTitles` method labels complex calls through standard utility-model routing — the agent's `utilityModel` (an operator decision that may send bounded tool arguments to the chosen provider, like every utility task), or the session provider's declared small-model default (OpenAI → `gpt-5.6-luna`, Anthropic → `claude-haiku-4-5`) — and caches results in the per-agent state database so repeat views never re-bill. `utilityModel: \"\"` disables titles like every other utility task; titles never fall back to the primary model.
 - `controlUi.automaticallyFetchFavicons`: link favicons in Control UI chat. Default: `true`. The authenticated browser asks its same-origin Gateway for each hostname. The Gateway requests only `https://<hostname>/favicon.ico`, rejects IP literals and private/internal destinations, pins public DNS results, revalidates every redirect under the same strict SSRF policy, limits redirects/time/bytes/concurrency, validates the image, and returns a private-cacheable image blob. OpenClaw does not use Google or another favicon service for this flow. This discloses linked hostnames and the Gateway's network address to those destination sites. Set `false` to prevent the browser from requesting favicon routes and the Gateway from contacting link destinations.
 - `controlUi.dangerouslyAllowHostHeaderOriginFallback`: dangerous mode that enables Host-header origin fallback for deployments that intentionally rely on Host-header origin policy.
@@ -878,8 +884,8 @@ Gateway or node host and check `openclaw nodes pending` again.
   Catalog providers can also advertise terminal-based session creation. The method is available only when Labs `cliAgents.enabled` is on, the Gateway terminal is available, and the selected provider exposes the capability. Callers supply `cwd`; create a fresh worktree first with `worktrees.create` when needed, because terminal start does not provision one.
 
 - `terminal.enabled`: the admin-scoped operator terminal. Default: `true`; set `false` to opt out. The terminal starts a host PTY in the selected agent workspace, inherits the Gateway process environment, and is refused for agents with `sandbox.mode: "all"`. Disable it on deployments where admin operators should not get a host shell; changing it restarts the Gateway and updates the Control UI content security policy.
-- `terminal.shell`: optional shell executable. When unset, OpenClaw uses `$SHELL` on Unix and `%ComSpec%` on Windows.
-- `terminal.detachedSessionTimeoutSeconds`: how long a terminal session survives after its connection drops (page reload, laptop sleep), staying reattachable via `terminal.attach` with its recent output replayed. Default: `300`. Set `0` to kill sessions the moment their connection drops. Detached sessions keep running their commands, so shorten this on shared or exposed hosts.
+- `terminal.shell`: optional shell executable. When unset, OpenClaw uses `$SHELL` on Unix and `%ComSpec%` on Windows. Changes hot-apply to newly opened terminals; existing terminals keep running their original shell.
+- `terminal.detachedSessionTimeoutSeconds`: how long a terminal session survives after its connection drops (page reload, laptop sleep), staying reattachable via `terminal.attach` with its recent output replayed. Default: `300`. Set `0` to kill sessions the moment their connection drops. Changes hot-apply to existing detached sessions using their original disconnect time; expired sessions close immediately, while attached terminals keep running. Detached sessions keep running their commands, so shorten this on shared or exposed hosts.
 - `remote.transport`: `ssh` (default) or `direct` (ws/wss). For `direct`, `remote.url` must be `wss://` for public hosts; plaintext `ws://` is accepted only for loopback, LAN, link-local, `.local`, `.ts.net`, and Tailscale CGNAT hosts.
 - `remote.remotePort`: gateway port on the remote SSH host. Defaults to `18789`; use this when the local tunnel port differs from the remote gateway port.
 - `remote.tlsFingerprint`: expected SHA-256 certificate fingerprint for a remote `wss://` Gateway. The macOS app applies it to both operator/control and companion-node connections. Without an explicit value, macOS records a first-use pin only after normal system trust succeeds.
@@ -921,7 +927,7 @@ Gateway or node host and check `openclaw nodes pending` again.
     Empty allowlists are treated as unset; use `gateway.http.endpoints.responses.files.allowUrl=false`
     and/or `gateway.http.endpoints.responses.images.allowUrl=false` to disable URL fetching.
 - Optional response hardening header:
-  - `gateway.http.securityHeaders.strictTransportSecurity` (set only for HTTPS origins you control; see [Trusted Proxy Auth](/gateway/trusted-proxy-auth#tls-termination-and-hsts))
+  - `gateway.http.securityHeaders.strictTransportSecurity` hot-applies to subsequent responses, including health probes. Set only for HTTPS origins you control; use `false` or remove the value to stop sending the header. See [Trusted Proxy Auth](/gateway/trusted-proxy-auth#tls-termination-and-hsts).
 
 ### Multi-instance isolation
 
@@ -1401,8 +1407,9 @@ contain tokens; see the [CLI reference](/cli/webhooks).
 A successful push or hook response is transport/admission evidence, not proof of
 completed email processing or delivery. Verify the restricted reader through
 [logs and its run output](/automation/cron-jobs#verify-the-reader-boundary). For a
-reader-to-agent handoff, expose only the required tool and constrain
-[`tools.agentToAgent`](/gateway/config-tools#tools-agenttoagent); see also
+reader-to-agent handoff, expose only the required tool and constrain the
+default-on [`tools.agentToAgent`](/gateway/config-tools#tools-agenttoagent)
+policy with `allow`, or set `enabled: false` when no handoff is needed; see also
 [Prompt injection](/gateway/security#prompt-injection) and
 [per-agent sandbox and tools](/tools/multi-agent-sandbox-tools).
 

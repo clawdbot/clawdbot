@@ -4,8 +4,14 @@ import * as artifacts from "./artifacts.js";
 import * as commands from "./commands.js";
 import * as skillLibrary from "./skill-library.js";
 import * as skillWorkshop from "./skill-protocol-schemas.js";
+import * as transcripts from "./transcripts.js";
 
 export const AgentSkillProtocolSchemas = {
+  TranscriptSessionSummary: transcripts.TranscriptSessionSummarySchema,
+  TranscriptsListParams: transcripts.TranscriptsListParamsSchema,
+  TranscriptsListResult: transcripts.TranscriptsListResultSchema,
+  TranscriptsGetParams: transcripts.TranscriptsGetParamsSchema,
+  TranscriptsGetResult: transcripts.TranscriptsGetResultSchema,
   SkillsLibraryListParams: skillLibrary.SkillsLibraryListParamsSchema,
   SkillsLibraryReadParams: skillLibrary.SkillsLibraryReadParamsSchema,
   SkillsLibrarySaveParams: skillLibrary.SkillsLibrarySaveParamsSchema,
@@ -45,6 +51,7 @@ export const AgentSkillProtocolSchemas = {
   AgentsListResult: agentsModelsSkills.AgentsListResultSchema,
   ModelChoice: agentsModelsSkills.ModelChoiceSchema,
   ModelsAuthLogoutParams: agentsModelsSkills.ModelsAuthLogoutParamsSchema,
+  ModelsAuthOrderSetParams: agentsModelsSkills.ModelsAuthOrderSetParamsSchema,
   ModelsAuthStatusParams: agentsModelsSkills.ModelsAuthStatusParamsSchema,
   ModelsListParams: agentsModelsSkills.ModelsListParamsSchema,
   ModelsListResult: agentsModelsSkills.ModelsListResultSchema,

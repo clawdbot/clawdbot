@@ -72,7 +72,7 @@ on:
         default: false
         type: boolean
       telegram_waiver:
-        description: Explicit owner-approved Telegram integration waiver for stable 2026.8.1 only
+        description: Telegram waiver <target-version>-owner-approved for stable/full; requires release-owner approval
         required: false
         default: ""
         type: string
@@ -110,7 +110,7 @@ on:
         default: ""
         type: string
       cross_os_suite_filter:
-        description: Optional focused cross-OS suite filter, e.g. windows/packaged-upgrade or packaged-fresh
+        description: Optional cross-OS selection for all or cross-os runs, e.g. ubuntu,macos or windows/packaged-upgrade
         required: false
         default: ""
         type: string
@@ -1446,7 +1446,7 @@ jobs:
       package_version: ${{ needs.prepare_release_package.outputs.package_version }}
       prepublish_plugin_registry_json: ${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.prepare_release_package.outputs.prepublish_plugin_registry_json || '' }}
       suite_profile: custom
-      docker_lanes: release-typed-onboarding doctor-switch update-channel-switch skill-install update-corrupt-plugin upgrade-survivor published-upgrade-survivor root-managed-vps-upgrade update-restart-auth plugins-offline plugin-update plugin-binding-command-escape
+      docker_lanes: release-typed-onboarding doctor-switch update-channel-switch skill-install update-corrupt-plugin upgrade-survivor update-first-hop-compat published-upgrade-survivor root-managed-vps-upgrade update-restart-auth plugins-offline plugin-update plugin-binding-command-escape
       published_upgrade_survivor_baseline: ${{ needs.resolve_target.outputs.frozen_upgrade_baseline && format('openclaw@{0}', needs.resolve_target.outputs.frozen_upgrade_baseline) || 'openclaw@latest' }}
       published_upgrade_survivor_scenarios: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'reported-issues' || '' }}
       telegram_mode: ${{ (needs.resolve_target.outputs.telegram_waiver != '' || needs.resolve_target.outputs.skip_package_telegram_e2e == 'true') && 'none' || 'mock-openai' }}

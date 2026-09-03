@@ -173,7 +173,6 @@
     "native.android.1b95ee4b75f6033b": "احراز هویت ذخیره‌شده نامعتبر است",
     "native.android.1bbbdb0fb0e3a5a3": "غیرفعال کردن",
     "native.android.1c35de4d06275916": "به OpenClaw خوش آمدید",
-    "native.android.1c3686e1c087e2c8": "کاتالوگ ارائه‌دهندگان بارگیری نشد.",
     "native.android.1c4acd27277544e0": "دسترسی فقط‌خواندنی؛ قوانین تأیید ابزار بومی همچنان اعمال می‌شوند.",
     "native.android.1c4be71b5c3aa079": "نیازمند اتصال",
     "native.android.1c62b20321fbbd26": "فراموش کردن",
@@ -1455,7 +1454,6 @@
     "native.android.e5021b83ff593f1e": "فعلی",
     "native.android.e502c87002ff73f0": "${seconds} ثانیه",
     "native.android.e50e16c71fc204f1": "برخی بررسی‌های وضعیت کانال تکمیل نشدند.",
-    "native.android.e5387d6aaf34ede8": "در حال جستجو…",
     "native.android.e53f4d638a7fa07e": "برای بارگذاری درخواست‌های تأیید در برنامه، به Gateway متصل شوید.",
     "native.android.e541942ff77b53eb": "در حال شنیدن (PTT)",
     "native.android.e54941cceace936d": "بازگشت به اینجا",
@@ -2243,6 +2241,7 @@
     "native.apple.36797a0a0d370b1c": "اجرای بررسی سلامت اکنون",
     "native.apple.367d222547a7dfa4": "زمینه",
     "native.apple.3704f5846ba19f61": "در حال آزمایش…",
+    "native.apple.3707ddd116730423": "\\(minimum)–\\(maximum)",
     "native.apple.3763e29c884dd87a": "به‌روزرسانی توکن Gateway",
     "native.apple.37715ac8050292a6": "به‌روزرسانی‌شده توسط %@",
     "native.apple.377a95b3a57b9e32": "اطلاعات ورود همراه با این نمایه در Keychain مک شما ذخیره می‌شود.",
@@ -2450,6 +2449,7 @@
     "native.apple.4a85eb1605f1ba49": "+%1$lld مورد دیگر در حال کار",
     "native.apple.4a999d79dfd4a4e2": "Gateway پاسخ وضعیت کانال غیرمنتظره‌ای برگرداند.",
     "native.apple.4aa0a356f580cb09": "unknown gateway error",
+    "native.apple.4adc28ed0e25f735": "نشست پس‌زمینه باز نشد",
     "native.apple.4b1707775e3d4ded": "گره Watch آنلاین",
     "native.apple.4b1c264d08779b81": "دچار افت کیفیت",
     "native.apple.4b34153a64ea0fbe": "%@، سالم",
@@ -3657,6 +3657,7 @@
     "native.apple.bb24048d5940285c": "یک افزونه ارائه‌دهنده استنتاج متنی را روی این Gateway فعال یا نصب کنید، سپس دوباره بررسی کنید.",
     "native.apple.bb25a6eb7fab6d0e": "به‌سطح‌آمدن",
     "native.apple.bb3054116d83e716": "برای تلاش مجدد دیمن CUA تعبیه‌شده، OpenClaw را دوباره باز کنید.",
+    "native.apple.bb3b23bb105850ba": "\\(maximum)",
     "native.apple.bb5f5e891aeadb25": "این gateway جفت‌شده دیگر در دسترس نیست.",
     "native.apple.bb69920e6930860f": "Automation issues",
     "native.apple.bb7347e3399c42ee": "زمینه از %@ — %@",
@@ -4298,6 +4299,7 @@
     "native.apple.f4155b853aa86198": "بخش Skills",
     "native.apple.f420de18a586c900": "از ورودهای مرورگر خود استفاده کنید",
     "native.apple.f43c1f8049a80f31": "حذف رشته‌ها",
+    "native.apple.f4483cba92be9484": "انتخاب متن",
     "native.apple.f454890b0dc22cfd": "محلی (این Mac)",
     "native.apple.f47dbe72f59ee9cb": "مجوز دسترسی به میکروفون و تشخیص گفتار لازم است.",
     "native.apple.f496b5c54219ca5f": "آماده برای اقدامات سریع",
@@ -4428,6 +4430,7 @@
     "native.apple.ff9163dd493d583b": "بیدار کردن",
     "native.apple.ffba42bcdc2cc866": "۱ توکن",
     "native.apple.ffcccb2c944378ff": "بلندگو",
-    "native.apple.ffd5f2e059651aa1": "باز کردن تنظیمات Gateway"
+    "native.apple.ffd5f2e059651aa1": "باز کردن تنظیمات Gateway",
+    "native.apple.ffefad3c8b30c36d": "کپی کد"
   }
 }

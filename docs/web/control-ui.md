@@ -44,18 +44,28 @@ When you run several Gateways, set `gateway.controlUi.environment` to distinguis
 
 The environment adds a 2 px top stripe, an agent-avatar ring, label pills in the sidebar and narrow topbar, a browser-title suffix, and a matching favicon. The label is trimmed and must contain 1–24 characters. Available colors are `teal`, `amber`, `purple`, `coral`, `pink`, `blue`, `green`, `red`, and `gray`. The label and color are intentionally visible before sign-in; leave `environment` unset to keep the standard appearance unchanged.
 
+## Community invitation
+
+The sidebar shows a Discord community invitation by default. Its close button dismisses it for the current browser origin. To hide the invitation for everyone using a Control UI deployment, run this on the Gateway serving that UI:
+
+```bash
+openclaw config set gateway.controlUi.communityInvite false
+```
+
+After the Gateway applies the change, reload the browser page or reconnect to pick it up. The setting belongs to the Gateway serving the UI, including when that UI connects to a different remote Gateway. Setting it to `false` hides the card even in new browser profiles. Re-enabling it with `true` preserves existing browser-local dismissals.
+
 ## New session names
 
-In **New session**, pausing typing for one second prepares a suggested name using
-only the selected agent's utility model. The composer discloses that unsent draft
-text is sent to the title provider. Preparation starts after at least 12 characters
+In **New session**, pausing typing for one second prepares a session name in the
+background using only the selected agent's utility model. Preparation sends unsent
+draft text to that provider before submission. It starts after at least 12 characters
 and sends at most the first 1,000 characters; it does not send attachments.
 
 Preparation is disabled in incognito and for slash commands. Edits replace stale
-suggestions, and only one request runs at a time. A missing or failed utility model
+prepared names, and only one request runs at a time. A missing or failed utility model
 does not fall back to the primary model or prevent you from starting the session.
 
-**Start session** uses a matching suggestion if it is ready. Otherwise, normal
+**Start session** uses a matching prepared name if it is ready. Otherwise, normal
 initial naming runs after submission; Start never waits for the speculative call.
 This is creation-only: later messages do not regenerate an existing session's
 name. Explicit worktree names are preserved, and typing never creates a worktree
@@ -168,6 +178,8 @@ one canonical message, including its attachments.
 
 Authenticated people have a durable Gateway profile with a display name, avatar, linked emails, and optional verified GitHub identity. Open **Settings → Profile → Identity** to update the editable fields. The profile follows the authenticated person across browsers; clearing browser site data does not delete it.
 
+On a single-user Gateway, unidentified operators share one durable owner profile across devices, including device-token reconnects. Its unset display name is seeded from the Gateway host account's full name, never its login name; saved names are never overwritten. Without a full name, the sidebar shows **Owner**. With `gateway.roles` configured, only token/password connections receive this owner profile; other unidentified connections see an explanation in Identity instead of editing controls. The owner profile has no email and grants no additional permissions.
+
 GitHub-backed sign-in through Cloudflare Access or Tailscale Serve fills the read-only **GitHub account** row with the verified public avatar and account link without replacing a custom OpenClaw avatar. **Git co-author credit** is a separate toggle, on by default for verified accounts, that controls future commits from shared sessions. See [User model](/concepts/user-model#gateway-profile-and-github-credit) for verification, retry, account-change, noreply privacy, and eligibility rules.
 
 **Settings → Profile → GitHub connections** separately shows **My GitHub** and **System GitHub**. Identified people, including read-scoped operators, can connect and disconnect only their own account; administrators can also change the shared System account. Connecting defaults to **For me** for identified users and never changes their sign-in identity, co-author preference, or shared execution defaults. Personal credentials support explicit Gateway-brokered **Publish PR** actions, not ordinary agent shell commands. See [GitHub connections](/concepts/user-model#github-connections).
@@ -182,7 +194,7 @@ Local agent avatars use [authenticated avatar URLs](#avatar-route-auth) in this 
 
 ## Gateway host status
 
-Open **Settings → Connection** to see the **Gateway Host** card with the Gateway machine, LAN address, operating system, runtime, uptime, CPU load, memory, and state-volume disk space. The card refreshes every 10 seconds while visible through the `system.info` Gateway RPC, which requires the `operator.read` scope. Older Gateways and connections without that scope omit the card.
+Open **Settings → Connection** to see the **Gateway Host** card with the Gateway machine, LAN address, operating system, runtime, uptime, CPU load, memory, and space for each mounted local disk. The card refreshes every 10 seconds while visible through the `system.info` Gateway RPC, which requires the `operator.read` scope. If mounted-disk discovery is unavailable, the card retains the state-directory disk reading when available. Connections without the required scope omit the card.
 
 ## Language support
 
@@ -346,7 +358,7 @@ Choose **Icon & color** from a session menu and select a color swatch to add a n
 
 New session **+** controls are links: click to open the draft in the current browser tab, Command-click (macOS) or Ctrl-click (Windows/Linux) to open another tab, or right-click for the browser's **Open Link in New Tab/Window** menu. Middle-click works too. The smaller plus controls on group and catalog sections preserve their target in the new tab; your current conversation stays open.
 
-The **+** in the sidebar's **Sessions** toolbar opens a full-page draft at `/new`: nothing is created until you send the first message. A unified **Place** picker chooses a Gateway project or folder and an execution destination. Connections with `operator.write` can choose **Gateway · local**, **Auto** (least-busy device), or any paired device returned by `environments.list`; administrators additionally see configured cloud profiles and **Connect a machine…**. A cloud profile is selectable when its advertised execution modes include the selected runtime, so one Crabbox **Cloud · profile** row supports both OpenClaw and Codex. Automatic selection chooses the eligible host with the most available worker slots, breaking ties by device ID; runtimes that do not consume worker slots use device ID order. Device eligibility remains authoritative to the environment catalog and the selected runtime: OpenClaw `worker-turn` requires an available current session host with valid worker capacity and at least one free slot; Codex `remote-exec` requires its currently invocable, explicitly authorized exec-server command and consumes no worker slot. Offline known hosts, connected non-hosts, incompatible or saturated hosts, hosts missing required capabilities, outdated hosts, and unavailable hosts remain visible with a reason and next step.
+The **+** in the sidebar's **Sessions** toolbar opens a full-page draft at `/new`: nothing is created until you send the first message. A unified **Place** picker chooses a Gateway project or folder and an execution destination. Connections with `operator.write` can choose **Gateway · local**, **Auto** (least-busy device), or any paired device returned by `environments.list`; administrators additionally see configured cloud profiles and **Connect a machine…**. A cloud profile is selectable when its advertised execution modes include the selected runtime, so one Crabbox **Cloud · profile** row supports both OpenClaw and Codex. Automatic selection chooses the eligible host with the most available worker slots, breaking ties by device ID; runtimes that do not consume worker slots use device ID order. Device eligibility remains authoritative to the environment catalog and the selected runtime: OpenClaw `worker-turn` requires an available current session host with valid worker capacity and at least one free slot; Codex `remote-exec` requires its currently invocable, explicitly authorized exec-server command and consumes no worker slot. When that command is unavailable, the picker distinguishes a node that did not declare it, a declaration that awaits pairing approval, and a declaration blocked by Gateway command policy. Offline known hosts, connected non-hosts, incompatible or saturated hosts, hosts missing required capabilities, outdated hosts, and unavailable hosts remain visible with a reason and next step.
 
 The folder defaults to the agent workspace. Write-scoped connections can browse, restore recent Gateway folders, and start sessions anywhere inside a configured agent workspace; another absolute Gateway path requires `operator.admin` but can run directly without being a Git checkout. Local placement keeps the optional **Worktree** control with a base-branch picker backed by `worktrees.branches` (no fetch) and an optional worktree name (the branch becomes `openclaw/<name>`). Choosing either a device or cloud profile forces a managed worktree from the selected Gateway source.
 
@@ -388,6 +400,8 @@ For local worktree sessions, sending the first message opens the admitted sessio
 For a remote target, the Control UI creates the managed-worktree session with an empty initial message and no `execNode`, dispatches it by exact `deviceId`, `autoDevice: true`, or `profileId` (plus an optional cloud machine class), waits for active placement, and then sends the first message and attachments with the same idempotency key used by recovery. Explicit and automatic device dispatch require `operator.write`; cloud profile dispatch requires `operator.admin`. The composer footer chooses the new session's model and reasoning level.
 
 Model and **Effort** are separate adjacent composer controls in chat and New session, on desktop and mobile. The model picker never contains Effort or Fast-mode controls. Long model labels ellipsize to leave room for the other controls; the full name remains in the picker, accessible label, and tooltip. Mobile Effort uses a gauge whose needle reflects the current level, with a lightning badge when Fast mode is active. In chat, Fast mode stays in the Effort menu, or appears as the adjacent control when reasoning is unavailable. Models with neither available control omit it.
+
+When you switch sessions, the composer keeps the session's known model name visible while refreshing the model options available for that session. If the model is not yet known, the control shows a loading placeholder.
 
 Once the session is created, chat opens immediately. Remote startup uses the same transcript progress indicator and elapsed timer as GitHub workspace preparation, showing provisioning, workspace preparation, startup, and first-message delivery as they happen. The composer stays disabled until the first message is accepted; normal startup is not an error. Startup failures remain visible in the session, with **Retry** when recovery is available.
 
@@ -437,7 +451,7 @@ This label does not change which request the approval buttons resolve.
     - A saved assistant answer replaces its live stream without waiting for the run to finish. Refreshing history or reconnecting while that reply finishes does not add another copy of the saved answer. Later streamed continuations remain visible. Remote workspace reconciliation can keep the working indicator and Stop control active after the answer appears; a later reconciliation failure remains visible beside the answer.
     - Scroll up to read earlier messages without following incoming output. Use the down-arrow button to return to the latest message. Scrolling manually interrupts that movement or a restored scroll position; messages continue to reserve their space as full text, images, and tool output load.
     - Links to `github.com` in chat messages — yours and the agent's — carry a small GitHub mark before their text, whether the message wrote a bare URL, a `[#3434](…)` shorthand, or any other label. The mark is drawn from the bundled icon set, never fetched from the network, and is decorative only: it is skipped for image-only links such as badges, never appears inside code spans or code blocks, is not read by screen readers, and is not part of copied text.
-    - Hovering or keyboard-focusing a public GitHub issue or pull request link shows its state, title, author, recent activity, comments, and change statistics. The connected Gateway fetches and caches public metadata without changing the link target, including when the UI uses a remote Gateway. It uses the explicit Control UI GitHub credential, then the shared Gateway process-environment fallback, after confirming the repository is public; without either, it uses GitHub's anonymous API with a longer cache. It never uses an agent GitHub identity.
+    - Hovering or keyboard-focusing a public GitHub issue or pull request link shows its state, title, author, recent activity, comments, and change statistics. The connected Gateway fetches and caches public metadata without changing the link target, including when the UI uses a remote Gateway. The card's title and repository reference open the exact link you hovered or focused, including comment fragments and query parameters, even when another link to the same item has already filled the cache. Previews use the selected agent's configured GitHub identity, inheriting the system identity when there is no agent override. Without a managed identity, they retain the explicit Control UI GitHub credential, then the shared Gateway process-environment fallback; public previews still work anonymously without credentials. Configured managed identities fail visibly instead of switching accounts, and authenticated previews remain restricted to public repositories. Failures show a short explanation below **GitHub preview unavailable**, including rate-limit retry timing when GitHub supplies it.
     - Talk through browser realtime sessions. OpenAI supports browser WebRTC and Gateway-relayed provider WebSockets, Google Live uses a constrained one-use browser token over WebSocket, and backend-only realtime voice plugins use Gateway relay. Video-capable browser sessions can choose a device-local camera in Settings or flip cameras from the live preview; the browser captures JPEG frames for the realtime provider without streaming camera video through the Gateway. Client-owned provider sessions start with `talk.client.create`; Gateway relay sessions start with `talk.session.create`. The relay keeps provider credentials on the Gateway while the browser streams microphone PCM through `talk.session.appendAudio`, forwards provider delegations or `openclaw_agent_consult` tool calls through Gateway policy and the larger configured OpenClaw model, and routes active-run voice steering through `talk.client.steer` or `talk.session.steer`. Browser WebRTC GPT-Live delegates on the Gateway-owned sideband, but each delegation has the same spoken-confirmation gate and browser-owned `talk.client.steer` lifecycle; a newer spoken task can also supersede the running delegation. Gateway-relayed GPT-Live uses the normal relay consult and steering path. Configure the realtime provider, model, and speaker voice on **Settings → Talk**, whose pickers come from `talk.catalog` and show whether the selection is ready to use.
     - Stream tool calls and live tool output cards in Chat (agent events). Tool activity renders as kind-aware rows: shell commands show the syntax-highlighted command with terminal-style output; supported edit and write calls show bounded inline diffs with source syntax highlighting, line numbers when available, and `+added -removed` stats; and consecutive calls collapse into a summary such as "Ran 13 commands, read 6 files, edited 9 files". While a run is live, the newest running call names the group header. Expand a row to inspect its remaining arguments and raw output.
     - Tool activity counts distinct calls, not start/update/result events, repeated history or live projections, or Gateway observation RPCs. Nested calls count independently, even when their names and arguments match. File summaries count distinct file paths; expand the activity to see each call.
@@ -449,7 +463,7 @@ This label does not change which request the approval buttons resolve.
   <Accordion title="Channels, sessions, memory">
     - Channels: built-in plus bundled/external plugin channels status, QR login, and per-channel config (`channels.status`, `web.login.*`, `config.patch`).
     - Channel probe refreshes keep the previous snapshot visible while slow provider checks finish, and label partial snapshots when a probe or audit exceeds its UI budget.
-    - Threads (a workspace page at `/sessions`, with a **Worktrees** tab alongside it): list configured-agent sessions by default, pin frequent sessions, rename them, archive or restore sessions, fall back from stale unconfigured agent session keys, and apply per-session model/thinking/fast/verbose/trace/reasoning overrides (`sessions.list`, `sessions.patch`). A three-way **Active / Archived / All** filter controls both this page and the sidebar; All dims archived rows and labels them explicitly. Archived sessions keep their transcripts, are never auto-pruned, and remain shelved until explicitly unarchived or deleted. Rows show an unread dot for active sessions with activity since they were last read, with mark-unread/mark-read actions (`sessions.patch { unread }`), and a Fork action that branches the transcript into a new session (`sessions.create { parentSessionKey, fork: true }`). Overview tiles above the table summarize the loaded roster (session count, live runs, unread sessions, total tokens, and archived count when available), each row carries a kind glyph with a live-run dot, status renders as a plain dot plus label, and the Tokens column shows a context-window usage meter when the session reports token and context sizes. Row management actions live in a per-row menu (kebab button or right-click) mirroring the sidebar's session menu, and the row drawer carries the agent runtime and run duration alongside the other session details.
+    - Threads (a workspace page at `/sessions`, with a **Worktrees** tab alongside it): list configured-agent sessions by default, pin frequent sessions, rename them, archive or restore sessions, fall back from stale unconfigured agent session keys, and apply per-session model/thinking/fast/verbose/trace/reasoning overrides (`sessions.list`, `sessions.patch`). A three-way **Active / Archived / All** filter controls both this page and the sidebar; All dims archived rows and labels them explicitly. Archived sessions keep their transcripts and remain shelved until explicitly unarchived or deleted. Sessions archived automatically at the active-session cap can also be deleted automatically when the session store exceeds its disk budget; manually archived and legacy sessions stay protected. Rows show an unread dot for active sessions with activity since they were last read, with mark-unread/mark-read actions (`sessions.patch { unread }`), and a Fork action that branches the transcript into a new session (`sessions.create { parentSessionKey, fork: true }`). Overview tiles above the table summarize the loaded roster (session count, live runs, unread sessions, total tokens, and archived count when available), each row carries a kind glyph with a live-run dot, status renders as a plain dot plus label, and the Tokens column shows a context-window usage meter when the session reports token and context sizes. Row management actions live in a per-row menu (kebab button or right-click) mirroring the sidebar's session menu, and the row drawer carries the agent runtime and run duration alongside the other session details.
     - Native Claude and Codex sidebar catalogs stream one host at a time, then reconcile after node connectivity changes, on page focus, and at most every 30 seconds while visible. Catalog changes trigger a faster follow-up pass, so sessions created in the native tools appear without reloading the Control UI. Claude Desktop rows also retain their local custom-group label when present; OpenClaw reads that mapping from Desktop's local store and never writes it.
     - Session grouping: a Group by control organizes the sessions table into sections by custom groups, channel, kind, agent, or date. Custom groups persist per session via `sessions.patch` (`category`), so sessions started from message channels (Discord, Telegram, WhatsApp, ...) can be categorized too; assign groups by dragging rows onto a section, or with the per-row group selector, and create groups with the New group action.
     - Memory (a tab on the Agents page, scoped to the selected agent): dreaming status, enable/disable toggle, and Dream Diary reader (`doctor.memory.status`, `doctor.memory.dreamDiary`, `config.patch`). When the `memory-wiki` plugin is enabled, the Diary view adds **Imported Insights** and **Memory Wiki** sub-tabs that browse imported source chats and the compiled wiki — clustered synthesis, entity, and concept pages plus annotated sources and reports, with claims, open questions, contradictions, and inline page previews (`wiki.importInsights`, `wiki.overview`, `wiki.get`).
@@ -463,6 +477,8 @@ This label does not change which request the approval buttons resolve.
     - Plugins: browse the installed inventory and curated store, search ClawHub, install and remove plugin code, and enable or disable installed plugins (`plugins.*`); MCP server rows edit `mcp.servers` through the config methods.
     - Skills: status, enable/disable, install, API key updates (`skills.*`).
     - Devices: one inventory joins paired device records, the node catalog, and live presence (`device.pair.list`, `node.list`, `system-presence`). The Gateway host is pinned first; paired clients show connection status, roles, tokens, capabilities, and commands. Duplicate pairings collapse into an expandable group, and **Clean up N stale** bulk-removes admin-confirmed offline duplicates that were auto-approved (silent local, trusted-CIDR, or SSH-verified) or predate approval provenance. Entries can be removed (`node.pair.remove`, `device.pair.remove`), device pairing and node re-approvals handled inline (`device.pair.*`, `node.pair.approve`/`reject`), and mobile setup codes created from the same card.
+      Resource meters show Gateway host load, memory, disk, and uptime from `system.info`, and node meters appear when the node reports `hostStats`. The connected page refreshes host stats every 60 seconds and alongside quiet node reloads; node stats also refresh on `node.hostStats` events. Capability chips explain each capability on hover. **Desktop** opens that machine in a standalone desktop window (the docked Desktop panel stays hidden on Settings routes) and appears only when the Gateway reports an available desktop environment. For a node, enable `desktop.host.enabled: true` in its config, add `desktop.stream` to `gateway.nodes.commands.allow`, and restart both the node and Gateway; the node then reconnects with a pending reapproval for the new command, which you approve inline or with `openclaw nodes approve <requestId>`. A dashed Desktop chip explains this setup when only the command is advertised.
+
     - Exec approvals: edit gateway or node allowlists and ask policy for `exec host=gateway/node` (`exec.approvals.*`).
 
   </Accordion>
@@ -504,7 +520,8 @@ This label does not change which request the approval buttons resolve.
 
   </Accordion>
   <Accordion title="Debug, logs, update">
-    - Debug: status/health/models snapshots, event log, manual RPC calls, and a System busyness overlay with live CPU, memory, and event-loop delay graphs (`status`, `health`, `models.list`).
+    - Debug: status/health/models snapshots, event log, manual RPC calls, and a System busyness overlay with live CPU, memory, event-loop delay, and per-disk free-space graphs (`status`, `health`, `models.list`, `system.info`). Connection also shows each mounted local storage volume separately, labeled by its mount path. Disk snapshots refresh every ten seconds; memory-backed filesystems and hidden macOS system volumes are excluded.
+    - Lane tables omit disabled, empty lanes, including `hook-dispatch` when HTTP hooks are off. Disabled lanes remain visible while work is running or queued.
     - The event log includes Control UI refresh/RPC timings, slow chat/config render timings, and browser responsiveness entries for long animation frames or long tasks when the browser exposes those PerformanceObserver entry types.
     - Logs: live tail of gateway file logs with filter/export (`logs.tail`).
     - Update: run a package/git update plus restart (`update.run`) with a restart report, then poll `update.status` after reconnect to verify the running gateway version.
@@ -519,6 +536,7 @@ This label does not change which request the approval buttons resolve.
     - Webhook mode uses `delivery.mode = "webhook"` with `delivery.to` set to a valid HTTP(S) webhook URL.
     - For main-session tasks, webhook and none delivery modes are available.
     - Advanced edit controls include delete-after-run, clear agent override, cron exact/stagger options, agent model/thinking overrides, and best-effort delivery toggles.
+    - Saved interval labels retain millisecond precision: a 90-second interval displays as `Every 1m 30s`. Repeat and stagger inputs accept decimal amounts that resolve to whole milliseconds; editing a cron expression preserves its stagger window.
     - Form validation is inline with field-level errors; invalid values disable the save button until fixed.
     - Set `cron.webhookToken` to send a dedicated bearer token; if omitted, the webhook is sent without an auth header.
     - `cron.webhook` is a retired legacy fallback rejected by current config validation. Run `openclaw doctor --fix` to migrate stored jobs that still use `notify: true` to explicit per-job webhook or completion delivery and remove the old key.
@@ -587,6 +605,8 @@ The Activity tab lives in **Settings › System**, next to Logs and Debug. It ha
 
 The Sessions view owns its query independently of the sidebar. Its people filter uses the Gateway's full visible-session associations before pagination, not the four-avatar participant preview. `sessions.list` accepts `involvingProfileId` and `includePeople`; the response reports the canonical selected profile ID, bounded people counts, and `peopleIncomplete`. Only Gateway profiles appear as people. Remote, agent, and unresolved identities cannot acquire profile names or links through an equal raw ID. Counts and dates describe associated sessions, not a person's last input; recorded participation, verified creation, and assigned responsibility remain distinct from permission to see a session. Old profile links follow profile merges. A limit notice identifies incomplete participant history or truncated results.
 
+The Sessions view batches bursts of session-change events into a refresh. Event-driven refreshes pause while the browser tab is hidden and catch up once when you return. Changing filters or retrying a failed request still loads immediately.
+
 Live activity entries keep only sanitized summaries and redacted, truncated output previews. Tool argument values are not stored in Activity state; the UI shows that arguments are hidden and records only the argument field count. The in-memory list follows the current browser tab, survives navigation within the Control UI, and resets on page reload, session switch, Gateway switch, or **Clear**.
 
 The Run inspector shows the retained trust domain, ingress, invoker, represented subject, sponsor, agent definition and principal, runtime instance, applicable grants, assurance evidence, lineage, and a bounded decision-receipt list. Every fact has a text evidence state. **Absent** means the owning boundary explicitly recorded no value; **unattributed** means a supported path had no usable invoker; **unknown** means expected evidence is missing or unreadable; and **unsupported** means the path has no Phase 0 evidence contract. Color is supplemental only.
@@ -600,6 +620,30 @@ Approval and message-delivery links use the `approval-decision:` and `message-de
 Run inspection requires `operator.read` and a Gateway that advertises `audit.run.inspect`. Execution identity collection is off by default; enable `logging.audit.executionIdentity`, restart the Gateway, and record a new run when you need this evidence. Retained contexts are limited to 30 days and 100,000 rows. A known run can therefore report unavailable or expired identity evidence, and a run reference can be ambiguous when it correlates more than one execution. The UI does not guess between executions: choose a returned candidate to navigate to `/activity?view=run&execution=<percent-encoded-execution-id>` and query that exact execution.
 
 The audit ledger is best-effort operational evidence, not a lossless compliance archive. A missing or expired record does not prove that a run or action did not occur. The inspector never displays prompt or message text, command bodies, arguments, file paths, credentials, environment values, raw source identifiers, or arbitrary plugin data. See [Audit history](/gateway/audit) for collection, privacy, retention, and CLI inspection details.
+
+## Meetings page
+
+Open **Meetings** from the sidebar's Pages menu to read durable meeting notes
+across the Gateway. The page lists up to 200 recent captures, grouped by local
+day with newest meetings first. Rows show the title, provider, start time,
+duration or **In progress** state, participants, utterance count, and a short
+overview when notes are available. Captures with zero utterances remain in the
+list with muted styling and **No speech captured** instead of an overview.
+Use **Refresh** to reload the list.
+
+Select a meeting to read its notes. When recorded, **Notes: model** or
+**Notes: heuristic** identifies the summary source. The canonical notes include
+the speaker-labeled **Transcript** at the end, after decisions, action items,
+and risks. A meeting can appear before it has notes, including while capture
+is active.
+
+Meetings reads the same shared SQLite records as `openclaw transcripts`, through
+the read-only `transcripts.list` and `transcripts.get` RPCs. Both require
+`operator.read` within one trusted Gateway domain; the page is not restricted to
+the selected agent's captures. It does not start capture or regenerate notes.
+Discord voice and the Google Meet, Microsoft Teams, and Zoom meeting plugins
+populate this store. See [Transcripts CLI](/cli/transcripts) for capture setup,
+agent reads, and exports.
 
 ## Operator terminal
 
@@ -756,6 +800,17 @@ Chat error banners, including cloud runner failures, show short messages in full
 
   </Accordion>
 </AccordionGroup>
+
+### Markdown tables
+
+Markdown tables scroll horizontally within the conversation. **Copy table** copies
+tab-separated cells, and **Expand table** opens a larger view. In Chat, workspace
+file and session links work in either view, including Enter and Space keyboard
+activation. Following a link closes the expanded view so you can use its destination.
+
+The **Ask OpenClaw** panel supports table scrolling, copying, expansion, and web
+links. Its session links open with a click or Enter. Space does not activate
+those links, and workspace-file references do not open a preview.
 
 ### Mermaid diagrams
 
@@ -1059,6 +1114,8 @@ pnpm ui:build
 ```
 
 For bundled builds, the Gateway retains manifest-verified assets so already-open tabs can fetch older asset URLs after an update. The cache keeps at most three generations and 96 MiB total, preferring the current generation; older generations can be pruned sooner to meet the byte budget. Background startup preparation reuses verified inventories through publication and pruning instead of rereading unchanged retained assets at each step. Newly published assets are verified before reuse, including a concurrent publisher's winning copy. Configured `gateway.controlUi.root` builds do not use this cache.
+
+Bundled public assets (themes, fonts, icons, and artwork) use `?v=<build-id>` URLs with a one-year immutable HTTP cache. The ID includes a digest of the public files, so rebuilding changed files at the same commit also changes their URLs. The Gateway snapshots this identity at startup; restart it after rebuilding an in-place installation. Unversioned requests, stale IDs, documents, `sw.js`, and custom `gateway.controlUi.root` installs keep `Cache-Control: no-cache`. The service worker keeps its network-first policy for public assets, allowing the browser's HTTP cache to satisfy matching versioned requests.
 
 Non-index static assets use `Last-Modified` for conditional `GET` and `HEAD` requests. `If-None-Match` takes precedence over `If-Modified-Since`: `*` matches an existing asset, while other values receive the normal `200` response because static assets do not emit ETags. Date-only revalidation still returns `304` for unchanged assets. If no available content encoding is acceptable, the Gateway returns `406` before evaluating either condition.
 

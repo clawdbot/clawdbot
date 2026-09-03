@@ -2171,6 +2171,29 @@ describe("session accessor seam", () => {
     });
   });
 
+  it("keeps a pending reset through bookkeeping until an explicit consumer resolves it", async () => {
+    const scope = {
+      sessionKey: "agent:main:pending-reset",
+      storePath,
+    };
+    await replaceSessionEntry(scope, {
+      sessionId: "pending-reset-session",
+      lifecycleRevision: "pending-reset-revision",
+      updatedAt: 0,
+    });
+
+    await updateSessionEntry(scope, () => ({ model: "gpt-5.5", updatedAt: Date.now() }));
+    expect(loadSessionEntry(scope)).toMatchObject({ model: "gpt-5.5", updatedAt: 0 });
+
+    await markSessionAbortTarget({ scope });
+    expect(loadSessionEntry(scope)).toMatchObject({ abortedLastRun: true, updatedAt: 0 });
+
+    await updateSessionEntry(scope, () => ({ updatedAt: Date.now() }), {
+      consumePendingReset: true,
+    });
+    expect(loadSessionEntry(scope)?.updatedAt).toBeGreaterThan(0);
+  });
+
   it("replaces entries so deleted fields stay removed", async () => {
     const scope = {
       sessionKey: "agent:main:main",

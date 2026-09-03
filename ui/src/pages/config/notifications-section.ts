@@ -46,6 +46,7 @@ const WEB_PUSH_CATEGORIES = [
   ["approvalRequested", () => t("configView.notifications.approvalRequested")],
   ["agentFinished", () => t("configView.notifications.agentFinished")],
   ["agentQuestion", () => t("configView.notifications.agentQuestion")],
+  ["humanMentioned", () => t("configView.notifications.humanMentioned")],
   ["scheduledTaskFailed", () => t("configView.notifications.scheduledTaskFailed")],
   ["backgroundTaskFailed", () => t("configView.notifications.backgroundTaskFailed")],
 ] as const;
@@ -174,7 +175,7 @@ function renderUserNotificationPreferences(
         ${WEB_PUSH_CATEGORIES.map(([key, label]) =>
           renderSettingsToggleRow({
             title: label(),
-            checked: preferences.categories[key],
+            checked: preferences.categories[key] === true,
             onChange: (checked) =>
               patch({ categories: { ...preferences.categories, [key]: checked } }),
           }),
@@ -568,7 +569,7 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
         </div>
       </section>
       ${registered && push.preferences
-        ? html`<div class="settings-page" ?inert=${push.loading}>
+        ? html`<div class="settings-stack" ?inert=${push.loading}>
             ${push.preferences.durableIdentity
               ? renderUserNotificationPreferences(push.preferences.user, (preferences) =>
                   props.onWebPushSetUserPreferences?.(preferences),

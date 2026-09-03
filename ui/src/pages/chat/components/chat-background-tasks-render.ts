@@ -111,7 +111,7 @@ export function renderBackgroundTasksRail(
         ? html`<div class="chat-tasks-rail__state">${t("tasksPage.disconnected")}</div>`
         : nothing}
       ${backgroundTasks.error
-        ? html`<div class="chat-tasks-rail__state chat-tasks-rail__state--error">
+        ? html`<div class="chat-tasks-rail__state chat-tasks-rail__state--error" role="alert">
             ${backgroundTasks.error}
           </div>`
         : nothing}
