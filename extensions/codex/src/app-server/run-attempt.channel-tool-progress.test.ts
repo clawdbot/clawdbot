@@ -1,10 +1,15 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import { itemNotification } from "./protocol.test-helpers.js";
 import {
+  bindProductionHarnessHostCapabilitiesForTest,
+  createCodexRuntimePlanFixture,
   createParams,
+  createRuntimeDynamicTool,
   createStartedThreadHarness,
   runCodexAppServerAttempt,
+  setCodexTestModelSupportsTools,
   setupRunAttemptTestHooks,
   tempDir,
 } from "./run-attempt-test-harness.js";
@@ -219,5 +224,61 @@ describe("Codex channel tool progress", () => {
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
+  });
+
+  it("forwards hideFromChannelProgress on Codex dynamic tool start/result events", async () => {
+    const tool = createRuntimeDynamicTool("hidden_plugin_probe");
+    tool.hideFromChannelProgress = true;
+    dynamicToolBuildState.openClawCodingToolsFactory = () => [tool];
+
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "channel-hidden-plugin-session.jsonl"),
+      path.join(tempDir, "channel-hidden-plugin-workspace"),
+    );
+    const onAgentEvent = vi.fn();
+    params.messageChannel = "telegram";
+    params.verboseLevel = "on";
+    params.onAgentEvent = onAgentEvent;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    setCodexTestModelSupportsTools(params, true);
+    const closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);
+
+    try {
+      const run = runCodexAppServerAttempt(params);
+      await harness.waitForMethod("turn/start");
+      const toolResult = (await harness.handleServerRequest({
+        id: "request-hidden-plugin-probe",
+        method: "item/tool/call",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "hidden-plugin-1",
+          namespace: null,
+          tool: "hidden_plugin_probe",
+          arguments: {},
+        },
+      })) as { success?: boolean };
+      expect(toolResult.success).toBe(true);
+
+      const toolEvents = onAgentEvent.mock.calls
+        .map(([event]) => event)
+        .filter(
+          (event) =>
+            event.stream === "tool" &&
+            event.data?.toolCallId === "hidden-plugin-1" &&
+            event.data?.name === "hidden_plugin_probe",
+        );
+      expect(toolEvents).toHaveLength(2);
+      expect(toolEvents.map((event) => event.data?.phase)).toEqual(["start", "result"]);
+      for (const event of toolEvents) {
+        expect(event.data?.hideFromChannelProgress).toBe(true);
+      }
+
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await run;
+    } finally {
+      closeHostCapabilities();
+    }
   });
 });
