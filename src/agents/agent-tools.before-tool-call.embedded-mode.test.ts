@@ -646,7 +646,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     expect(approvalCall.request.pluginId).toBeUndefined();
     expect(approvalCall.request.title).toBe("Apply Skill Workshop proposal");
     expect(approvalCall.request.description).toBe(
-      "Apply a pending proposal inside the global Skill Workshop directory.",
+      "Apply a pending proposal inside your agent's Workshop directory.",
     );
     expect(approvalCall.request.severity).toBe("warning");
     expect(approvalCall.request.allowedDecisions).toEqual(["allow-once", "deny"]);

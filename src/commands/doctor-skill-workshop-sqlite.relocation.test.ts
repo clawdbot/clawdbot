@@ -405,7 +405,7 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
     const skillContent =
       "---\nname: ambiguous-workshop\ndescription: Ambiguous procedure\n---\n\n# Ambiguous\n";
     const now = "2026-09-01T00:00:00.000Z";
-    const record: SkillProposalRecord = {
+    const record: SkillProposalRecord & { appliedAt: string } = {
       schema: SKILL_WORKSHOP_SCHEMA,
       id: "ambiguous-workshop-20260901-1234567890",
       kind: "create",

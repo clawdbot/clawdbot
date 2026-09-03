@@ -55,14 +55,20 @@ let testState: OpenClawTestState;
 let workspaceDir: string;
 let skillsRoot: string;
 
+const workshopParams = { config: {}, agentId: "main" };
+type WorkshopOperationParams<T extends object> = Omit<T, keyof typeof workshopParams>;
+
 const listWritableSkillCollection = (
-  options?: Parameters<typeof listWritableSkillCollectionImpl>[0],
-) => listWritableSkillCollectionImpl({ config: {}, agentId: "main", ...options });
-const reconcileSkillCollection = (params: Parameters<typeof reconcileSkillCollectionImpl>[0]) =>
-  reconcileSkillCollectionImpl({ config: {}, agentId: "main", ...params });
+  options?: WorkshopOperationParams<
+    NonNullable<Parameters<typeof listWritableSkillCollectionImpl>[0]>
+  >,
+) => listWritableSkillCollectionImpl({ ...workshopParams, ...options });
+const reconcileSkillCollection = (
+  params: WorkshopOperationParams<Parameters<typeof reconcileSkillCollectionImpl>[0]>,
+) => reconcileSkillCollectionImpl({ ...workshopParams, ...params });
 const restoreLatestSkillCollectionBackup = (
-  params: Parameters<typeof restoreLatestSkillCollectionBackupImpl>[0],
-) => restoreLatestSkillCollectionBackupImpl({ config: {}, agentId: "main", ...params });
+  params: WorkshopOperationParams<Parameters<typeof restoreLatestSkillCollectionBackupImpl>[0]>,
+) => restoreLatestSkillCollectionBackupImpl({ ...workshopParams, ...params });
 
 beforeEach(async () => {
   copyDirectoryBefore.mockReset();
