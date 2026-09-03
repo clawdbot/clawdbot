@@ -1740,7 +1740,9 @@ describe("node.invoke APNs wake path", () => {
     const nodeId = "ios-node-late-apns-wake-result";
     mockDirectWakeConfig(nodeId);
     mocks.sendApnsBackgroundWake.mockImplementation(async () => {
-      await new Promise<void>((resolve) => setTimeout(resolve, 101));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 101);
+      });
       return {
         ok: true,
         status: 200,
