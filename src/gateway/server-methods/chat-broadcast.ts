@@ -9,7 +9,7 @@ type ChatBroadcastContext = Pick<
   GatewayRequestContext,
   "broadcast" | "nodeSendToSession" | "agentRunSeq"
 > &
-  Partial<Pick<GatewayRequestContext, "getRuntimeConfig">>;
+  Partial<Pick<GatewayRequestContext, "getRuntimeConfig" | "chatRunState">>;
 
 type SideResultPayload = {
   kind: "btw";
@@ -119,7 +119,9 @@ export function broadcastChatTerminal(params: ChatBroadcastParams & ChatTerminal
     seq,
     ...terminal,
   };
+  const group = params.context.chatRunState?.runs.get(params.runId)?.liveTextGroup;
   params.context.broadcast("chat", payload, {
+    ...(group ? { liveText: { group } } : {}),
     sessionKeys: resolveChatSessionKeys({
       context: params.context,
       sessionKey: params.sessionKey,

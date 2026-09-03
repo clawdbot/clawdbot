@@ -26,6 +26,7 @@ import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-tra
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import { hashCliImageTurnEntryId } from "../cli-image-turn-correlation.js";
 import { findCliTerminalStopError } from "../failover-error.js";
+import { resolveAgentRunErrorLifecycleFields } from "../run-termination.js";
 import { getCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
 import { executePreparedCliRun as executePreparedCliRunImpl } from "./execute.js";
 import {
@@ -825,59 +826,79 @@ describe("executePreparedCliRun supervisor output capture", () => {
     },
   );
 
-  it("preserves max-turn failure through fork successor persistence errors", async () => {
-    const stdout = `${JSON.stringify({
-      type: "result",
-      subtype: "error_max_turns",
-      session_id: "fork-successor",
-      terminal_reason: "max_turns",
-      errors: ["Reached maximum number of turns (1)"],
-    })}\n`;
-    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
-      const input = args[0] as SupervisorSpawnInput;
-      input.onStdout?.(stdout);
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 1,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: input.captureOutput === false ? "" : stdout,
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
+  it.each([false, true])(
+    "preserves primary run failure through fork persistence errors (watchdog=%s)",
+    async (watchdog) => {
+      const stdout = `${JSON.stringify(
+        watchdog
+          ? {
+              type: "system",
+              subtype: "init",
+              session_id: "fork-successor",
+            }
+          : {
+              type: "result",
+              subtype: "error_max_turns",
+              session_id: "fork-successor",
+              terminal_reason: "max_turns",
+              errors: ["Reached maximum number of turns (1)"],
+            },
+      )}\n`;
+      supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const input = args[0] as SupervisorSpawnInput;
+        input.onStdout?.(stdout);
+        return createManagedRun({
+          reason: watchdog ? "overall-timeout" : "exit",
+          exitCode: watchdog ? null : 1,
+          exitSignal: watchdog ? "SIGTERM" : null,
+          durationMs: watchdog ? 1_000 : 50,
+          stdout: input.captureOutput === false ? "" : stdout,
+          stderr: "",
+          timedOut: watchdog,
+          noOutputTimedOut: false,
+        });
       });
-    });
-    const persistenceError = new Error("fork successor persistence failed");
-    const persistCliSessionForkSuccessor = vi.fn().mockRejectedValue(persistenceError);
-    const restoreCliSessionFork = vi.fn().mockResolvedValue(undefined);
-    const context = buildPreparedCliRunContext({
-      output: "jsonl",
-      provider: "claude-cli",
-      runId: "run-fork-max-turns",
-    });
-    context.preparedBackend.backend.resumeArgs = ["--resume", "{sessionId}"];
-    context.preparedBackend.backend.forkArg = "--fork-session";
-    context.params.forkCliSessionOnResume = true;
-    context.params.claimCliSessionFork = vi.fn().mockResolvedValue(true);
-    context.params.persistCliSessionForkSuccessor = persistCliSessionForkSuccessor;
-    context.params.restoreCliSessionFork = restoreCliSessionFork;
+      const persistenceError = new Error("fork successor persistence failed");
+      if (!watchdog) {
+        persistenceError.name = "TimeoutError";
+      }
+      const persistCliSessionForkSuccessor = vi.fn().mockRejectedValue(persistenceError);
+      const restoreCliSessionFork = vi.fn().mockResolvedValue(undefined);
+      const context = buildPreparedCliRunContext({
+        output: "jsonl",
+        provider: "claude-cli",
+        runId: "run-fork-primary-failure",
+      });
+      context.preparedBackend.backend.resumeArgs = ["--resume", "{sessionId}"];
+      context.preparedBackend.backend.forkArg = "--fork-session";
+      context.params.forkCliSessionOnResume = true;
+      context.params.claimCliSessionFork = vi.fn().mockResolvedValue(true);
+      context.params.persistCliSessionForkSuccessor = persistCliSessionForkSuccessor;
+      context.params.restoreCliSessionFork = restoreCliSessionFork;
 
-    let failure: unknown;
-    try {
-      await executePreparedCliRun(context, "fork-source");
-    } catch (error) {
-      failure = error;
-    }
+      let failure: unknown;
+      try {
+        await executePreparedCliRun(context, "fork-source");
+      } catch (error) {
+        failure = error;
+      }
 
-    expect(failure).toBeInstanceOf(AggregateError);
-    expect((failure as AggregateError).errors).toEqual([
-      expect.objectContaining({ code: "cli_max_turns" }),
-      persistenceError,
-    ]);
-    expect(findCliTerminalStopError(failure)).toMatchObject({ code: "cli_max_turns" });
-    expect(persistCliSessionForkSuccessor).toHaveBeenCalledWith("fork-successor");
-    expect(restoreCliSessionFork).toHaveBeenCalledTimes(1);
-  });
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect((failure as AggregateError).errors).toEqual([
+        expect.objectContaining({ code: watchdog ? "cli_overall_timeout" : "cli_max_turns" }),
+        persistenceError,
+      ]);
+      if (!watchdog) {
+        expect(findCliTerminalStopError(failure)).toMatchObject({ code: "cli_max_turns" });
+      }
+      expect(resolveAgentRunErrorLifecycleFields(failure, undefined)).toEqual(
+        watchdog ? { stopReason: "timeout", timeoutPhase: "provider" } : {},
+      );
+      expect((failure as AggregateError).cause).toBe((failure as AggregateError).errors[0]);
+      expect(persistCliSessionForkSuccessor).toHaveBeenCalledWith("fork-successor");
+      expect(restoreCliSessionFork).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("composes plugin-owned JSONL parsing into the production executor", async () => {
     const agentEvents: Array<{ stream: string; phase?: string; text?: string }> = [];

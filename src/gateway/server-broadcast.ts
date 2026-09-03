@@ -214,6 +214,31 @@ function hasEventScope(
   return required.some((scope) => scopes.includes(scope));
 }
 
+type FrameBase = { eventJSON: string; payloadFragment: string; stateVersionFragment: string };
+// ws bufferedAmount includes the unmasked server frame's 2/4/10-byte header.
+const MAX_SERVER_FRAME_HEADER_BYTES = 10;
+
+function frameWithSequence(base: FrameBase, seq: number, payload = base.payloadFragment): string {
+  return `{"type":"event","event":${base.eventJSON}${payload},"seq":${seq}${base.stateVersionFragment}}`;
+}
+
+type PendingLiveText = {
+  group: object;
+  key: string;
+  payload: unknown;
+  bytes: number;
+  isCurrent?: () => boolean;
+  send: () => void;
+};
+type ClientDelivery = {
+  socket: GatewayWsClient["socket"];
+  inFlight: number;
+  draining: boolean;
+  bytes: number;
+  groups: Map<object, Map<string, PendingLiveText>>;
+  pending: Set<PendingLiveText>;
+};
+
 export function createGatewayBroadcaster(params: {
   clients: Set<GatewayWsClient>;
   preparePresenceProjection?: (
@@ -233,6 +258,66 @@ export function createGatewayBroadcaster(params: {
   const reportedSlowPayloadClients = new WeakSet<GatewayWsClient>();
   const indexedClients =
     params.clients instanceof GatewayClientRegistry ? params.clients : undefined;
+  const deliveries = new WeakMap<GatewayWsClient, ClientDelivery>();
+  const deliveryFor = (client: GatewayWsClient) => {
+    let state = deliveries.get(client);
+    if (!state || state.socket !== client.socket) {
+      state = {
+        socket: client.socket,
+        inFlight: 0,
+        draining: false,
+        bytes: 0,
+        groups: new Map(),
+        pending: new Set(),
+      };
+      deliveries.set(client, state);
+    }
+    return state;
+  };
+  // Pending text and socket writes share the connection budget and upstream backpressure.
+  const bufferedBytes = (state: ClientDelivery) => state.socket.bufferedAmount + state.bytes;
+  const takePending = (state: ClientDelivery, entry: PendingLiveText) => {
+    state.pending.delete(entry);
+    const group = state.groups.get(entry.group)!;
+    group.delete(entry.key);
+    if (!group.size) {
+      state.groups.delete(entry.group);
+    }
+    state.bytes -= entry.bytes;
+  };
+  const isCurrent = (predicate?: () => boolean) => {
+    try {
+      return predicate?.() !== false;
+    } catch {
+      return false;
+    }
+  };
+  const drain = (state: ClientDelivery, group?: object) => {
+    if (state.draining) {
+      return;
+    }
+    state.draining = true;
+    try {
+      // A barrier may overtake in-flight writes, but never another group's queue.
+      // The guard also contains synchronous send callbacks without recursive drains.
+      for (const entry of state.pending) {
+        if (group ? entry.group !== group : state.inFlight !== 0) {
+          if (group) {
+            continue;
+          }
+          break;
+        }
+        takePending(state, entry);
+        try {
+          entry.send();
+        } catch (err) {
+          log.error(`broadcast pending send failed: ${formatErrorMessage(err)}`);
+        }
+      }
+    } finally {
+      state.draining = false;
+    }
+  };
 
   const broadcastInternal = (
     event: string,
@@ -240,8 +325,9 @@ export function createGatewayBroadcaster(params: {
     opts?: GatewayBroadcastOpts,
     targetConnIds?: ReadonlySet<string>,
     explicitPluginScope?: GatewayPluginEventScope,
+    retained?: { client: GatewayWsClient; socket: GatewayWsClient["socket"]; base: FrameBase },
   ) => {
-    if (event === "sessions.changed") {
+    if (!retained && event === "sessions.changed") {
       // Delivery is queued here so process-local handlers run after websocket fanout returns.
       queuePluginSessionsChanged(payload);
     }
@@ -259,41 +345,43 @@ export function createGatewayBroadcaster(params: {
       event === "presence" ? (payload as { presence: SystemPresence[] }) : undefined;
     let projectPresence: ((client: GatewayWsClient) => SystemPresence[]) | undefined;
     let outboundEventLogged = false;
-    let frameBase:
-      | {
-          eventJSON: string;
-          payloadFragment: string;
-          stateVersionFragment: string;
-        }
-      | undefined;
+    let frameBase: FrameBase | undefined = retained?.base;
+    let frameFields: Omit<FrameBase, "payloadFragment"> | undefined;
+    const frameBaseFor = (value: unknown): FrameBase => {
+      frameFields ??= {
+        eventJSON: JSON.stringify(event),
+        stateVersionFragment:
+          opts?.stateVersion === undefined
+            ? ""
+            : serializeFrameField("stateVersion", opts.stateVersion),
+      };
+      return {
+        ...frameFields,
+        payloadFragment: presencePayload ? "" : serializeFrameField("payload", value),
+      };
+    };
     // Lazy so filtered-out broadcasts (zero eligible clients) never pay
     // JSON.stringify for the payload.
     const getFrameBase = () => {
-      if (!frameBase) {
-        frameBase = {
-          eventJSON: JSON.stringify(event),
-          payloadFragment: presencePayload ? "" : serializeFrameField("payload", payload),
-          stateVersionFragment:
-            opts?.stateVersion === undefined
-              ? ""
-              : serializeFrameField("stateVersion", opts.stateVersion),
-        };
-      }
-      return frameBase;
+      return (frameBase ??= frameBaseFor(payload));
     };
-    const sessionSubscriptionVerified =
-      (opts as { sessionSubscriptionVerified?: boolean } | undefined)
-        ?.sessionSubscriptionVerified === true;
+    const sessionSubscriptionVerified = opts?.sessionSubscriptionVerified === true;
     const isSessionSubscriptionEvent = SESSION_SUBSCRIPTION_EVENTS.has(event);
     const sessionMessageSubscribers = params.sessionMessageSubscribers;
     let sessionSubscriberConnIdsByKey: Array<ReadonlySet<string> | undefined> | undefined;
-    const recipients =
-      targetConnIds && indexedClients
+    const recipients = retained
+      ? [retained.client]
+      : targetConnIds && indexedClients
         ? indexedClients.getByConnectionIds(targetConnIds)
         : params.clients;
     for (const c of recipients) {
       // Closing nodes remain discoverable until their owner drains admitted lifecycle work.
-      if (c.invalidated === true || c.socket.readyState !== WEBSOCKET_OPEN_READY_STATE) {
+      if (
+        !params.clients.has(c) ||
+        (retained && c.socket !== retained.socket) ||
+        c.invalidated === true ||
+        c.socket.readyState !== WEBSOCKET_OPEN_READY_STATE
+      ) {
         continue;
       }
       if (targetConnIds && !indexedClients && !targetConnIds.has(c.connId)) {
@@ -311,10 +399,14 @@ export function createGatewayBroadcaster(params: {
       }
       const requiresSessionSubscription =
         event === "session.typing" ||
+        sessionSubscriptionVerified ||
         ((isBrowserCopilotClient(c.connect.client) ||
           hasGatewayClientCap(c.connect.caps, GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS)) &&
           isSessionSubscriptionEvent);
-      if (requiresSessionSubscription && !(isTargeted && sessionSubscriptionVerified)) {
+      if (
+        requiresSessionSubscription &&
+        !(isTargeted && sessionSubscriptionVerified && !retained)
+      ) {
         if (!sessionKeys.length || !sessionMessageSubscribers) {
           continue;
         }
@@ -338,6 +430,9 @@ export function createGatewayBroadcaster(params: {
           continue;
         }
       }
+      if (retained && !isCurrent(opts?.liveText?.isCurrent)) {
+        continue;
+      }
       if (!outboundEventLogged) {
         outboundEventLogged = true;
         logWs("out", "event", () => {
@@ -356,15 +451,21 @@ export function createGatewayBroadcaster(params: {
           return logMeta;
         });
       }
+      const state = deliveryFor(c);
+      const live = opts?.liveText;
+      if (live && !live.coalesce) {
+        drain(state, live.group);
+      }
       const nextSeq = (clientSeq.get(c) ?? 0) + 1;
-      const slow = c.socket.bufferedAmount > MAX_BUFFERED_BYTES;
+      const bufferedAmount = bufferedBytes(state);
+      const slow = bufferedAmount > MAX_BUFFERED_BYTES;
       if (!slow) {
         reportedSlowPayloadClients.delete(c);
       } else if (!reportedSlowPayloadClients.has(c)) {
         reportedSlowPayloadClients.add(c);
         logRejectedLargePayload({
           surface: "gateway.ws.outbound_buffer",
-          bytes: c.socket.bufferedAmount,
+          bytes: bufferedAmount,
           limitBytes: MAX_BUFFERED_BYTES,
           reason: opts?.dropIfSlow ? "ws_send_buffer_drop" : "ws_send_buffer_close",
         });
@@ -382,6 +483,60 @@ export function createGatewayBroadcaster(params: {
           /* ignore */
         }
         c.socket.terminate();
+        continue;
+      }
+      if (!retained && live?.coalesce && state.inFlight > 0) {
+        let previous = state.groups.get(live.group)?.get(live.coalesce.key);
+        if (previous && !isCurrent(previous.isCurrent)) {
+          takePending(state, previous);
+          previous = undefined;
+        }
+        try {
+          const nextPayload = previous ? live.coalesce.merge(previous.payload, payload) : payload;
+          const base = previous ? frameBaseFor(nextPayload) : getFrameBase();
+          // Reserve the complete frame and maximum sequence width; unrelated sends
+          // can advance the sequence while this entry is waiting to drain.
+          const bytes =
+            Buffer.byteLength(frameWithSequence(base, Number.MAX_SAFE_INTEGER)) +
+            MAX_SERVER_FRAME_HEADER_BYTES;
+          if (bufferedBytes(state) - (previous?.bytes ?? 0) + bytes <= MAX_BUFFERED_BYTES) {
+            if (previous) {
+              takePending(state, previous);
+            }
+            const socket = c.socket;
+            const entry: PendingLiveText = {
+              group: live.group,
+              key: live.coalesce.key,
+              payload: nextPayload,
+              bytes,
+              isCurrent: live.isCurrent,
+              send: () =>
+                broadcastInternal(event, nextPayload, opts, targetConnIds, explicitPluginScope, {
+                  client: c,
+                  socket,
+                  base,
+                }),
+            };
+            const group = state.groups.get(live.group) ?? new Map();
+            group.set(entry.key, entry);
+            state.groups.set(live.group, group);
+            state.pending.add(entry);
+            state.bytes += bytes;
+            continue;
+          }
+        } catch (err) {
+          log.error(
+            `broadcast serialization failed for event ${event}: ${formatErrorMessage(err)}`,
+          );
+          return;
+        }
+        // Flush the old deltas, then send this ingress unmerged under the normal slow policy.
+        drain(state, live.group);
+        broadcastInternal(event, payload, opts, targetConnIds, explicitPluginScope, {
+          client: c,
+          socket: c.socket,
+          base: getFrameBase(),
+        });
         continue;
       }
       // Build the frame before consuming the seq: a serialization failure
@@ -404,7 +559,7 @@ export function createGatewayBroadcaster(params: {
             presence: projectPresence(c),
           });
         }
-        frame = `{"type":"event","event":${base.eventJSON}${payloadFragment},"seq":${nextSeq}${base.stateVersionFragment}}`;
+        frame = frameWithSequence(base, nextSeq, payloadFragment);
       } catch (err) {
         log.error(`broadcast serialization failed for event ${event}: ${formatErrorMessage(err)}`);
         return;
@@ -413,11 +568,30 @@ export function createGatewayBroadcaster(params: {
       // an unstamped frame is invisible to the client's gap detector, so a
       // drop between two targeted sends would go unnoticed forever.
       clientSeq.set(c, nextSeq);
+      state.inFlight += 1;
+      let finished = false;
+      const sent = (err?: Error) => {
+        if (finished) {
+          return;
+        }
+        finished = true;
+        state.inFlight -= 1;
+        if (err) {
+          log.error(`broadcast send failed conn=${c.connId}: ${formatErrorMessage(err)}`, {
+            event,
+          });
+          state.pending.clear();
+          state.groups.clear();
+          state.bytes = 0;
+          state.socket.terminate();
+        } else {
+          drain(state);
+        }
+      };
       try {
-        c.socket.send(frame);
+        state.socket.send(frame, sent);
       } catch (err) {
-        log.error(`broadcast send failed conn=${c.connId}: ${formatErrorMessage(err)}`, { event });
-        c.socket.terminate();
+        sent(err instanceof Error ? err : new Error(String(err)));
       }
     }
   };
@@ -433,11 +607,12 @@ export function createGatewayBroadcaster(params: {
 
   const getBufferedAmount: GatewayBufferedAmountFn = (connId) => {
     if (indexedClients) {
-      return indexedClients.getByConnectionId(connId)?.socket.bufferedAmount;
+      const client = indexedClients.getByConnectionId(connId);
+      return client ? bufferedBytes(deliveryFor(client)) : undefined;
     }
     for (const client of params.clients) {
       if (client.connId === connId) {
-        return client.socket.bufferedAmount;
+        return bufferedBytes(deliveryFor(client));
       }
     }
     return undefined;

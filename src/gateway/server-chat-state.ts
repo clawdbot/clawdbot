@@ -104,6 +104,8 @@ type ChatRunRecord = {
   rawBuffer?: string;
   buffer?: string;
   bufferIsCurrent?: () => boolean;
+  /** Retire queued connection snapshots when this buffering generation is cleared. */
+  liveTextGroup?: object;
   /** Projection stays valid only while source and managed-media facts match the run state. */
   bufferProjection?: { source: string; suppress: boolean };
   planSnapshot?: ChatRunPlanSnapshot;
@@ -267,6 +269,7 @@ export function createChatRunState(): ChatRunState {
     delete record.rawBuffer;
     delete record.buffer;
     delete record.bufferIsCurrent;
+    delete record.liveTextGroup;
     delete record.bufferProjection;
     delete record.planSnapshot;
     delete record.progressSnapshot;
@@ -283,6 +286,7 @@ export function createChatRunState(): ChatRunState {
   const clear = () => {
     for (const record of store.runs.values()) {
       clearPendingLiveTextFlushes(record);
+      delete record.liveTextGroup;
     }
     store.runs.clear();
   };

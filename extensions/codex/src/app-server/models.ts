@@ -119,7 +119,7 @@ async function withCodexAppServerModelRequest<T>(
     if (useSharedClient) {
       releaseLeasedSharedCodexAppServerClient(client);
     } else {
-      client.close();
+      await client.closeAndWait();
     }
   }
 }

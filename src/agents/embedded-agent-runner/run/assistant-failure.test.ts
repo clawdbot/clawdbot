@@ -8,9 +8,11 @@ import {
   PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
   PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
 } from "../../../llm/types.js";
+import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../../agent-run-terminal-outcome.js";
 import { classifyAssistantFailoverReason } from "../../embedded-agent-helpers/assistant-message-failures.js";
 import { FailoverError } from "../../failover-error.js";
 import { runWithModelFallback } from "../../model-fallback-runner.js";
+import { resolveAgentRunErrorLifecycleFields } from "../../run-termination.js";
 import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
@@ -620,6 +622,54 @@ describe("handleEmbeddedAssistantFailure", () => {
       },
     ]);
   });
+
+  it.each([
+    {
+      phase: "prompt",
+      providerStarted: false,
+      expectedTimeout: { timeoutPhase: "provider", providerStarted: false },
+    },
+    {
+      phase: "compaction",
+      providerStarted: true,
+      expectedTimeout: { providerStarted: true },
+    },
+  ] as const)(
+    "preserves canonical provider-start attribution through $phase idle-timeout fallback",
+    async ({ phase, providerStarted, expectedTimeout }) => {
+      const fixture = makeIdleTimeoutFailureInput({ replaySafe: true });
+      fixture.input.attempt.terminal = { kind: "timeout", phase, source: "idle" };
+      fixture.input.attempt.promptTimeoutOutcome = { providerStarted };
+      fixture.input.terminalState = resolveEmbeddedRunAttemptTerminalState({
+        attempt: fixture.input.attempt,
+        assistant: fixture.input.currentAttemptAssistant,
+      });
+      fixture.input.maybeRefreshRuntimeAuthForAuthError = vi.fn(async () => false);
+      fixture.input.maybeRetryTransient = vi.fn(async () => false);
+      fixture.input.advanceAuthProfile = vi.fn(async () => false);
+
+      expect(fixture.input.terminalState.outcome).toMatchObject({
+        status: "timeout",
+        reason: "hard_timeout",
+        ...expectedTimeout,
+      });
+
+      const failure = await handleEmbeddedAssistantFailure(fixture.input).catch(
+        (error: unknown) => error,
+      );
+
+      expect(failure).toBeInstanceOf(FailoverError);
+      expect(fixture.input.advanceAuthProfile).toHaveBeenCalledOnce();
+      const lifecycleFields = resolveAgentRunErrorLifecycleFields(failure, undefined);
+      expect(lifecycleFields).toEqual({ stopReason: "timeout", ...expectedTimeout });
+      expect(
+        buildAgentRunTerminalOutcomeFromLifecycleEvent({
+          phase: "error",
+          data: lifecycleFields,
+        }).reason,
+      ).toBe("hard_timeout");
+    },
+  );
 
   it.each(["HTTP 429 Too Many Requests", INCOMPLETE_TERMINAL_STREAM_MESSAGE])(
     "does not route a caller timeout with %s through failover",

@@ -284,7 +284,7 @@ export async function handleEmbeddedAssistantFailure(input: {
   const outcome = await handleAssistantFailover({
     initialDecision,
     terminal: input.attempt.terminal,
-    signalOwnedInterruption,
+    terminalState: input.terminalState,
     fallbackConfigured: input.fallbackConfigured,
     failoverFailure,
     failoverReason: assistantFailoverReason,

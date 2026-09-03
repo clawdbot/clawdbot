@@ -97,6 +97,7 @@ vi.mock("./session-utils.js", () => {
 
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
+import { abortChatRunById, registerChatAbortController } from "./chat-abort.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import {
   emitAgentEvent,
@@ -113,7 +114,8 @@ import {
   resolveChatErrorKindFromError,
   type AgentEventHandlerOptions,
 } from "./server-chat.js";
-import { broadcastChatError } from "./server-methods/chat-broadcast.js";
+import { broadcastChatError, broadcastChatFinal } from "./server-methods/chat-broadcast.js";
+import type { GatewayWsClient } from "./server/ws-types.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 import { loadSessionEntry } from "./session-utils.js";
 
@@ -983,6 +985,135 @@ describe("agent event handler", () => {
       chatRunState.clear();
     }
   });
+
+  it.each(["native", "dispatch", "abort"] as const)(
+    "bounds connection snapshots until %s completion without losing the terminal reply",
+    (terminal) => {
+      vi.useFakeTimers();
+      const harness = createHarness();
+      const { handler, chatRunState, nodeSendToSession, agentRunSeq } = harness;
+      const callbacks: Array<() => void> = [];
+      const frames: Array<{
+        event: string;
+        seq: number;
+        payload: {
+          stream?: string;
+          data?: { delta?: string };
+          state?: string;
+          deltaText?: string;
+        };
+      }> = [];
+      const socket = {
+        readyState: 1,
+        bufferedAmount: 0,
+        send: (wire: string, callback?: () => void) => {
+          frames.push(JSON.parse(wire));
+          if (callback) {
+            callbacks.push(callback);
+          }
+        },
+        close: vi.fn(),
+        terminate: vi.fn(),
+      };
+      const client = {
+        connId: "held-reader",
+        socket,
+        usesSharedGatewayAuth: false,
+        connect: { role: "operator", scopes: ["operator.read"] },
+      } as unknown as GatewayWsClient;
+      const broadcaster = createGatewayBroadcaster({ clients: new Set([client]) });
+      harness.broadcast.mockImplementation(broadcaster.broadcast);
+      harness.broadcastToConnIds.mockImplementation(broadcaster.broadcastToConnIds);
+      const runId = "backpressured-run";
+      const sessionKey = "agent:main:backpressured";
+      registerChatRun(chatRunState, runId, sessionKey, runId);
+      const chunks = Array.from({ length: 24 }, (_, i) => `[${i}]${"abc🚀".repeat(64)}`);
+      const expected = chunks.join("");
+
+      try {
+        let text = "";
+        for (const [index, delta] of chunks.entries()) {
+          text += delta;
+          emitAgentEvent(handler, runId, "item", answerCandidate("answer", text), {
+            seq: index * 2 + 1,
+          });
+          emitAgentEvent(handler, runId, "assistant", { text, delta }, { seq: index * 2 + 2 });
+          vi.advanceTimersByTime(75);
+        }
+        // The existing producer pacing still delivers updates to nodes, but a
+        // socket with an unfinished write must not retain every historical prefix.
+        expect(nodeSendToSession.mock.calls.length).toBeGreaterThan(chunks.length);
+        expect(frames.length).toBeLessThan(6);
+        if (terminal === "native") {
+          emitAgentEvent(handler, runId, "item", answerCandidate("answer", expected, "selected"), {
+            seq: chunks.length * 2 + 1,
+          });
+          emitLifecycleEnd(handler, runId, chunks.length * 2 + 2);
+        } else if (terminal === "dispatch") {
+          broadcastChatFinal({
+            context: { ...harness, ...broadcaster },
+            runId,
+            sessionKey,
+            message: { role: "assistant", content: [{ type: "text", text: expected }] },
+          });
+          chatRunState.clearRun(runId);
+        } else {
+          const chatAbortControllers = new Map();
+          registerChatAbortController({
+            chatAbortControllers,
+            runId,
+            sessionId: runId,
+            sessionKey,
+            timeoutMs: 60_000,
+          });
+          expect(
+            abortChatRunById(
+              {
+                ...harness,
+                ...broadcaster,
+                chatAbortControllers,
+                removeChatRun: (sourceRunId, clientRunId, key) =>
+                  chatRunState.registry.remove(sourceRunId, clientRunId, key),
+              },
+              { runId, sessionKey },
+            ).aborted,
+          ).toBe(true);
+        }
+        const beforeDrain = frames.length;
+        while (callbacks.length) {
+          callbacks.shift()?.();
+        }
+        expect(frames).toHaveLength(beforeDrain);
+        expect(frames.map(({ seq }) => seq)).toEqual(frames.map((_, index) => index + 1));
+        expect(frames.at(-1)).toMatchObject({
+          event: "chat",
+          payload: {
+            state: terminal === "abort" ? "aborted" : "final",
+            message: { content: [{ type: "text", text: expected }] },
+          },
+        });
+        if (terminal !== "abort") {
+          expect(
+            frames
+              .filter((f) => f.event === "agent" && f.payload.stream === "assistant")
+              .map((f) => f.payload.data?.delta)
+              .join(""),
+          ).toBe(expected);
+          expect(
+            frames
+              .filter((f) => f.event === "chat" && f.payload.state === "delta")
+              .map((f) => f.payload.deltaText)
+              .join(""),
+          ).toBe(expected);
+        }
+        expect(socket.close).not.toHaveBeenCalled();
+      } finally {
+        handler.dispose();
+        chatRunState.clear();
+        agentRunSeq.clear();
+      }
+    },
+  );
 
   it.each([
     { audience: "visible", controlUiVisible: true },

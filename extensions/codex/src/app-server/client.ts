@@ -1014,7 +1014,11 @@ export class CodexAppServerClient {
     }
     this.pending.clear();
     for (const handler of this.closeHandlers) {
-      handler(this);
+      try {
+        handler(this);
+      } catch (closeError) {
+        embeddedAgentLog.warn("codex app-server close handler failed", { error: closeError });
+      }
     }
   }
 }

@@ -12,7 +12,15 @@ export type GatewayBroadcastOpts = {
   dropIfSlow?: boolean;
   /** Canonical subscription keys for session-scoped delivery. */
   sessionKeys?: readonly string[];
+  /** Target recipients were selected from subscriptions at ingress. */
+  sessionSubscriptionVerified?: boolean;
   stateVersion?: GatewayBroadcastStateVersion;
+  /** Private live-text ownership; omitting coalesce flushes this group's progress. */
+  liveText?: {
+    group: object;
+    isCurrent?: () => boolean;
+    coalesce?: { key: string; merge: (previous: unknown, next: unknown) => unknown };
+  };
 };
 
 /** Broadcast function signature for all connected clients. */

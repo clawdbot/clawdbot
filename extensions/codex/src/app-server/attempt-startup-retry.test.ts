@@ -25,7 +25,6 @@ import {
   testCodexAppServerBindingStore,
 } from "./session-binding.test-helpers.js";
 import {
-  clearSharedCodexAppServerClient,
   clearSharedCodexAppServerClientAndWait,
   createIsolatedCodexAppServerClient,
   getLeasedSharedCodexAppServerClient,
@@ -192,7 +191,7 @@ describe("Codex app-server startup retry", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     vi.stubEnv("CODEX_API_KEY", "");
     vi.stubEnv("OPENAI_API_KEY", "");
-    clearSharedCodexAppServerClient();
+    await clearSharedCodexAppServerClientAndWait();
     defaultCodexPluginMetadataCache.clear();
     resetCodexTestBindingStore();
   });
