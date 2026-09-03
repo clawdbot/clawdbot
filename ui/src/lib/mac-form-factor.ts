@@ -40,6 +40,7 @@ const APPLE_SILICON_FORM_FACTORS: Record<string, MacFormFactor> = {
   "Mac16,11": "mini",
   "Mac16,12": "laptop",
   "Mac16,13": "laptop",
+  "Mac17,2": "laptop",
 };
 
 const MACBOOK_AIR_IDENTIFIERS = new Set([

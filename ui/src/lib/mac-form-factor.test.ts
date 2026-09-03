@@ -17,6 +17,7 @@ describe("Mac model identity", () => {
     ["Mac15,5", "imac", "iMac"],
     ["Mac16,11", "mini", "Mac mini"],
     ["Mac16,6", "laptop", "MacBook Pro"],
+    ["Mac17,2", "laptop", "MacBook Pro"],
     ["Mac16,12", "laptop", "MacBook Air"],
     ["Mac99,99", undefined, undefined],
     [undefined, undefined, undefined],

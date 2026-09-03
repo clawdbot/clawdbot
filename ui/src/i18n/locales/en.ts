@@ -686,7 +686,7 @@ export const en: TranslationMap & {
       desktop: "Desktop",
       desktopOpenWindow: "Open this desktop in a new window",
       desktopEnableHint:
-        "Enable desktop.host.enabled: true in the node config and add desktop.stream to gateway.nodes.commands.allow, then restart the node and Gateway.",
+        "Enable desktop.host.enabled: true in the node config and add desktop.stream to gateway.nodes.commands.allow, then restart both. The node reconnects with a pending reapproval for desktop.stream; approve it here or with openclaw nodes approve.",
       uptime: "up {time}",
       loadLabel: "load {load}",
       loadTitle: "Load averages (1 / 5 / 15 min): {averages} on {cores} cores",
