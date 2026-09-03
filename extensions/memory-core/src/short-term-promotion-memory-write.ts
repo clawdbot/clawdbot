@@ -70,7 +70,7 @@ export function isAtomicReplacePermissionError(error: unknown): boolean {
   return code === "EACCES" || code === "EPERM" || code === "EEXIST" || code === "EROFS";
 }
 
-export async function writeExistingMemoryInPlace(params: {
+async function writeExistingMemoryInPlace(params: {
   filePath: string;
   expectedContent: string;
   content: string;
@@ -102,7 +102,9 @@ export async function writeExistingMemoryInPlace(params: {
           restored,
         );
         if (bytesWritten <= 0) {
-          throw new Error("MEMORY.md restore write made no progress", { cause: error });
+          throw new Error(`${path.basename(params.filePath)} restore write made no progress`, {
+            cause: error,
+          });
         }
         restored += bytesWritten;
       }
@@ -110,7 +112,7 @@ export async function writeExistingMemoryInPlace(params: {
       await handle.sync();
     } catch (restoreError) {
       throw new Error(
-        "MEMORY.md in-place write failed and restoring the original content also failed",
+        `${path.basename(params.filePath)} in-place write failed and restoring the original content also failed`,
         { cause: restoreError },
       );
     }
@@ -124,32 +126,45 @@ export function hashMemoryContent(content: string): string {
   return createHash("sha256").update(content).digest("hex");
 }
 
-export async function writeMemoryContent(params: {
-  memoryPath: string;
-  memoryWritePath: string;
-  expectedHash?: string;
-  expectedContent?: string;
-  allowInPlaceFallback?: boolean;
-  content: string;
-}): Promise<void> {
-  const memoryDirMode = (await fs.stat(path.dirname(params.memoryWritePath))).mode & 0o7777;
+type MemoryContentCommit =
+  | { content: string; expectedContent?: string }
+  | { content: null; expectedContent: string };
+
+export async function commitMemoryContent(
+  params: {
+    filePath: string;
+    tempPrefix: string;
+    expectedHash?: string;
+    allowInPlaceFallback?: boolean;
+    conflictMessage?: string;
+  } & MemoryContentCommit,
+): Promise<void> {
+  if (params.content === null) {
+    if ((await readMemoryContent(params.filePath)) !== params.expectedContent) {
+      throw new MemoryWriteConflictError(params.conflictMessage);
+    }
+    // Unlink is atomic; the preimage check preserves external edits made after planning.
+    await fs.unlink(params.filePath);
+    return;
+  }
+  const memoryDirMode = (await fs.stat(path.dirname(params.filePath))).mode & 0o7777;
   try {
     await replaceFileAtomic({
-      filePath: params.memoryWritePath,
+      filePath: params.filePath,
       content: params.content,
       dirMode: memoryDirMode,
       mode: 0o600,
       preserveExistingMode: true,
-      tempPrefix: `${path.basename(params.memoryPath)}.promotion`,
+      tempPrefix: params.tempPrefix,
       syncTempFile: true,
       syncParentDir: true,
       throwOnCleanupError: true,
       beforeRename: async () => {
         if (
           params.expectedHash &&
-          hashMemoryContent(await readMemoryContent(params.memoryWritePath)) !== params.expectedHash
+          hashMemoryContent(await readMemoryContent(params.filePath)) !== params.expectedHash
         ) {
-          throw new MemoryWriteConflictError();
+          throw new MemoryWriteConflictError(params.conflictMessage);
         }
         // OpenClaw writers are serialized. The recoverable preimage covers the
         // accepted race with external editors between this check and rename.
@@ -177,9 +192,10 @@ export async function writeMemoryContent(params: {
       params.expectedContent === undefined ||
       !isAtomicReplacePermissionError(error) ||
       !(await writeExistingMemoryInPlace({
-        filePath: params.memoryWritePath,
+        filePath: params.filePath,
         expectedContent: params.expectedContent,
         content: params.content,
+        conflictMessage: params.conflictMessage,
       }))
     ) {
       throw error;

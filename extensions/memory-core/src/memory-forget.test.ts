@@ -177,10 +177,16 @@ describe("memory forget", () => {
       archiveTranscript: true,
     });
 
-    // The rewrite runs out of disk halfway through the write. fs-safe writes
-    // the temp blob through fs.open + FileHandle.writeFile, so the fault hooks
-    // the temp-file open and leaves a half-written blob behind, exactly like a
-    // mid-write ENOSPC.
+    // Exercise both the old direct write and the replacement temp write so this
+    // regression fails against the original boundary for the observed data loss.
+    const writeFile = fs.writeFile.bind(fs);
+    const directWriteFault = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+      if (args[0] === memoryPath) {
+        await writeFile(memoryPath, "Curated ope");
+        throw Object.assign(new Error("no space left on device"), { code: "ENOSPC" });
+      }
+      return await writeFile(...args);
+    });
     const open = fs.open.bind(fs);
     const tempPrefix = `${memoryPath}.forget.`;
     const fault = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
@@ -199,6 +205,7 @@ describe("memory forget", () => {
       ).rejects.toMatchObject({ code: "ENOSPC" });
     } finally {
       fault.mockRestore();
+      directWriteFault.mockRestore();
     }
     expect(await fs.readFile(memoryPath, "utf8")).toBe(originalContent);
 

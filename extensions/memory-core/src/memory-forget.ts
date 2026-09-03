@@ -40,7 +40,6 @@ import {
   listMemoryEntryOrigins,
   recordMemorySessionTombstones,
 } from "./memory-entry-origins.js";
-import { applyMemoryFileRewrite } from "./memory-forget-atomic-write.js";
 import { collectTranscriptWrites } from "./memory-forget-curated-writes.js";
 import { summarizeParticipantMatches, type MemoryForgetReport } from "./memory-forget-report.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
@@ -51,6 +50,7 @@ import {
   SESSION_CORPUS_RELATIVE_DIR,
   writeSessionIngestionState,
 } from "./session-ingestion.js";
+import { commitMemoryContent, hashMemoryContent } from "./short-term-promotion-memory-write.js";
 import type { ShortTermRecallEntry } from "./short-term-promotion-types.js";
 
 type ForgetDatabase = {
@@ -695,7 +695,15 @@ async function forgetWorkspaceMemory(
       });
     }
     for (const rewrite of [...memoryRewrites, ...corpusRewrites]) {
-      await applyMemoryFileRewrite(rewrite);
+      await commitMemoryContent({
+        filePath: rewrite.absolutePath,
+        tempPrefix: `${path.basename(rewrite.absolutePath)}.forget`,
+        expectedHash: hashMemoryContent(rewrite.expectedContent),
+        expectedContent: rewrite.expectedContent,
+        allowInPlaceFallback: true,
+        conflictMessage: `${path.basename(rewrite.absolutePath)} changed before the memory forget rewrite could commit`,
+        content: rewrite.remove ? null : rewrite.content,
+      });
     }
     deleteMemoryEntryOrigins({ agentId: params.agentId, entryKeys: [...entryKeys] });
     return report;
