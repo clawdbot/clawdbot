@@ -13,11 +13,7 @@ describe("Skill Workshop proposal draft preparation", () => {
       content: "# Release Check\n",
       date: "2026-07-29T00:00:00.000Z",
       maxSkillBytes: 1024,
-      supportFiles: [
-        { path: "scripts/check/release.ts", content: "check();\n" },
-        { path: "scripts/check-release.ts", content: "check();\n" },
-        { path: "references/checklist.md", content: "Verify artifacts.\n" },
-      ],
+      supportFiles: [{ path: "references/checklist.md", content: "Verify artifacts.\n" }],
       goal: "  Preserve release quality.  ",
       evidence: "  Existing operator checklist.  ",
     });
@@ -29,11 +25,12 @@ describe("Skill Workshop proposal draft preparation", () => {
         goal: "Preserve release quality.",
         evidence: "Existing operator checklist.",
         scan: { state: "clean", critical: 0 },
-        supportFiles: expect.arrayContaining([
-          expect.objectContaining({ path: "references/checklist.md" }),
-          expect.objectContaining({ path: "scripts/check-release.ts" }),
-          expect.objectContaining({ path: "scripts/check/release.ts" }),
-        ]),
+        supportFiles: [
+          expect.objectContaining({
+            path: "references/checklist.md",
+            content: "Verify artifacts.\n",
+          }),
+        ],
       },
     });
     if (!prepared.ok) {
@@ -76,25 +73,6 @@ describe("Skill Workshop proposal draft preparation", () => {
       ok: false,
       error: {
         message: expect.stringContaining("recognized literal credential in skill-name"),
-      },
-    });
-
-    const overlap = prepareSkillProposalDraft({
-      name: "release-check",
-      description: "Check a release",
-      content: "# Release Check\n",
-      date: "2026-07-29T00:00:00.000Z",
-      maxSkillBytes: 1024,
-      supportFiles: [
-        { path: "scripts/check/release.ts", content: "check();\n" },
-        { path: "scripts/check-release.ts", content: "check();\n" },
-        { path: "scripts/check", content: "check();\n" },
-      ],
-    });
-    expect(overlap).toMatchObject({
-      ok: false,
-      error: {
-        message: "Support file paths cannot overlap: scripts/check and scripts/check/release.ts",
       },
     });
   });

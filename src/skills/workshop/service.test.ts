@@ -1790,7 +1790,7 @@ describe("skill workshop proposals", () => {
     expect(unchanged?.content).not.toContain(sample);
   });
 
-  it("rejects unsafe support paths before creating proposal state", async () => {
+  it("validates support paths before creating proposal state", async () => {
     const workspaceDir = await makeWorkspace();
 
     await expect(
@@ -1843,8 +1843,38 @@ describe("skill workshop proposals", () => {
         ],
       }),
     ).rejects.toThrow("cannot overlap");
+    await expect(
+      proposeCreateSkill({
+        workspaceDir,
+        name: "Non-neighbor Support Path",
+        description: "Reject separated path conflicts",
+        content: "# Non-neighbor Support Path\n",
+        supportFiles: [
+          { path: "scripts/a/b", content: "bad\n" },
+          { path: "scripts/a-b", content: "bad\n" },
+          { path: "scripts/a", content: "bad\n" },
+        ],
+      }),
+    ).rejects.toThrow("Support file paths cannot overlap: scripts/a and scripts/a/b");
 
     await expect(fs.access(path.join(stateDir, "skill-workshop"))).rejects.toThrow();
+
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Distinct Support Paths",
+      description: "Keep distinct paths accepted",
+      content: "# Distinct Support Paths\n",
+      supportFiles: [
+        { path: "scripts/a/b", content: "good\n" },
+        { path: "scripts/a-b", content: "good\n" },
+        { path: "references/a", content: "good\n" },
+      ],
+    });
+    expect(proposal.record.supportFiles?.map((file) => file.path)).toEqual([
+      "scripts/a/b",
+      "scripts/a-b",
+      "references/a",
+    ]);
   });
 
   it("rejects non-text and executable proposal directory support files", async () => {
