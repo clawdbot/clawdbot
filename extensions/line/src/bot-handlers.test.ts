@@ -1029,36 +1029,6 @@ describe("handleLineWebhookEvents", () => {
     expect(processMessage).not.toHaveBeenCalled();
   });
 
-  it("stays silent when a tap only opened the composer", async () => {
-    resolveLineQuestionPostbackMock.mockResolvedValueOnce({ status: "custom-input" });
-    const processMessage = vi.fn();
-    const context = createLineWebhookTestContext({ processMessage, dmPolicy: "open" });
-
-    await handleLineWebhookEvents(
-      [
-        {
-          type: "postback",
-          replyToken: "reply-token",
-          timestamp: Date.now(),
-          source: { type: "user", userId: "user-one" },
-          mode: "active",
-          webhookEventId: "evt-question-custom",
-          deliveryContext: { isRedelivery: false },
-          postback: {
-            data: "line.question=ask_3d8dbe55be452a9a39add7c909beb119&line.custom=1",
-          },
-        } as never,
-      ],
-      context,
-    );
-
-    // The keyboard the tap opened is the feedback; a notice on top of it would
-    // reach the whole group for one member's tap.
-    expect(pairingDeliveryMocks.replyMessageLine).not.toHaveBeenCalled();
-    expect(pairingDeliveryMocks.pushMessageLine).not.toHaveBeenCalled();
-    expect(processMessage).not.toHaveBeenCalled();
-  });
-
   it("still routes an ordinary postback to the agent", async () => {
     resolveLineQuestionPostbackMock.mockClear();
     const processMessage = vi.fn();

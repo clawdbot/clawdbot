@@ -220,7 +220,7 @@ describe("LINE rich-message boundaries", () => {
     expect(prepared.text).toContain("Deploy the release candidate to the shared staging cluster");
   });
 
-  it("gives the free-text control a tap that opens the composer", () => {
+  it("draws the declared options and leaves the free-text route to the card text", () => {
     const prepared = prepareLineReplyPayload({
       text: "Agent needs input: Which environment?",
       presentationTextMode: "fallback",
@@ -271,20 +271,13 @@ describe("LINE rich-message boundaries", () => {
         contents?: { footer?: { contents?: Array<{ action?: { data?: string } }> } };
       };
     };
-    const footer = line.flexMessage?.contents?.footer?.contents as
-      | Array<{ action?: { data?: string; inputOption?: string } }>
-      | undefined;
+    const footer = line.flexMessage?.contents?.footer?.contents;
+    // A tap on the free-text control would open the composer and nothing else:
+    // the answer typed after it is queued as a new turn rather than claimed by
+    // the question. The card's own words carry that route instead.
     expect(footer?.map((button) => button.action?.data)).toEqual([
       "line.question=ask_3d8dbe55be452a9a39add7c909beb119&line.option=0",
       "line.question=ask_3d8dbe55be452a9a39add7c909beb119&line.option=1",
-      "line.question=ask_3d8dbe55be452a9a39add7c909beb119&line.custom=1",
-    ]);
-    // The tap records nothing, so opening the composer is the whole point of it
-    // and the only feedback a card LINE will not let us edit can give.
-    expect(footer?.map((button) => button.action?.inputOption)).toEqual([
-      undefined,
-      undefined,
-      "openKeyboard",
     ]);
   });
 

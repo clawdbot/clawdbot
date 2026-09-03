@@ -17,14 +17,6 @@ describe("LINE question postback data", () => {
     });
   });
 
-  it("round-trips the free-text choice", () => {
-    const data = buildLineQuestionPostbackData({ questionId: QUESTION_ID, customInput: true });
-    expect(parseLineQuestionPostbackData(data!)).toEqual({
-      questionId: QUESTION_ID,
-      customInput: true,
-    });
-  });
-
   it("renders no control when the option index is unresolved", () => {
     // -1 is what an unresolved Gateway option index looks like; a button that cannot
     // name its option must not be offered at all.

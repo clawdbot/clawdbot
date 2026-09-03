@@ -616,10 +616,7 @@ async function handlePostbackEvent(
     // A recorded answer needs no acknowledgement: the agent's next reply is the
     // feedback, and LINE already echoed the label through the action's displayText.
     const pushTarget = groupId ?? roomId ?? (userId ? `line:${userId}` : undefined);
-    // A recorded answer and a tap that opened the composer both speak for
-    // themselves: the agent's next reply is the feedback for one, the keyboard
-    // is the feedback for the other.
-    if (outcome.status === "answered" || outcome.status === "custom-input" || !pushTarget) {
+    if (outcome.status === "answered" || !pushTarget) {
       return;
     }
     await sendLineHandlerText({

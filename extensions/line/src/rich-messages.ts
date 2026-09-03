@@ -153,7 +153,9 @@ function toLineQuestionChoice(
   questionOptionIndices: AskUserQuestionOptionIndices | undefined,
 ): LineQuestionPostback | undefined {
   if ("intent" in action) {
-    return { questionId: action.questionId, customInput: true };
+    // The free-text control is dropped before the card is built, so only a
+    // declared choice ever reaches here.
+    return undefined;
   }
   const optionIndex = resolveAskUserQuestionOptionIndex({
     questionOptionIndices,
@@ -161,6 +163,19 @@ function toLineQuestionChoice(
     optionValue: action.optionValue,
   });
   return optionIndex === undefined ? undefined : { questionId: action.questionId, optionIndex };
+}
+
+/**
+ * LINE can open the composer on a tap (`inputOption: "openKeyboard"`), but the
+ * answer typed after one is not claimed by the pending question on this runtime:
+ * it is queued as a new turn and the question aborts. A control whose only
+ * outcome is "now type" would therefore promise something that does not happen,
+ * so the free-text route stays in the words the card already carries, the way
+ * Discord and Slack leave it.
+ */
+function isLineTextFallbackButton(button: MessagePresentationButton): boolean {
+  const action = resolveMessagePresentationButtonAction(button);
+  return action?.type === "question" && "intent" in action && action.intent === "custom-input";
 }
 
 /** A control the Gateway owns, whose label the operator cannot disambiguate. */
@@ -183,9 +198,7 @@ function toLineAction(
     // The free-text control answers nothing by itself; opening the composer is
     // what it is for, and it is the only feedback the tap can give on a card
     // LINE will not let us edit afterwards.
-    return choice && "customInput" in choice
-      ? { type: "postback", label, data, displayText: label, inputOption: "openKeyboard" }
-      : { type: "postback", label, data, displayText: label };
+    return { type: "postback", label, data, displayText: label };
   }
   if (normalized?.type === "command") {
     return { type: "message", label, text: normalized.command };
@@ -218,6 +231,9 @@ export function renderLinePresentation(
   for (const block of presentation.blocks) {
     if (block.type === "buttons") {
       for (const button of block.buttons) {
+        if (isLineTextFallbackButton(button)) {
+          continue;
+        }
         const action = toLineAction(button, questionOptionIndices);
         if (!action) {
           return null;
