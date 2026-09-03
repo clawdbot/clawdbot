@@ -10,7 +10,7 @@ import { resolveProviderSyntheticAuthWithPlugin } from "../plugins/provider-runt
 import type { ProviderAuthEvidence } from "../secrets/provider-env-vars.js";
 import { secretRefKey } from "../secrets/ref-contract.js";
 import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
-import { listProfilesForProvider } from "./auth-profiles/profile-list.js";
+import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveProviderEnvAuthLookupMaps } from "./model-auth-env-vars.js";
 import {
@@ -50,6 +50,24 @@ type ProviderAuthLookupCaches = {
 
 function resolveAuthProfileStoreInput(input: AuthProfileStoreInput) {
   return typeof input === "function" ? input() : input;
+}
+
+function resolveCatalogAuthProfileOrder(params: {
+  config?: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  provider: string;
+  store: AuthProfileStore;
+}): string[] {
+  return resolveAuthProfileOrder({
+    cfg: params.config,
+    provider: params.provider,
+    store: params.store,
+    authAliasLookupParams: {
+      config: params.config,
+      env: params.env,
+    },
+    readinessMode: "read-only",
+  });
 }
 
 /** Create a resolver over the credential map already selected for one lifecycle generation. */
@@ -174,10 +192,17 @@ export function createProviderApiKeyResolver(
         discoveryApiKey: fromConfig.discoveryApiKey,
       };
     }
+    const authStore = resolveAuthProfileStoreInput(authStoreInput);
     const fromProfiles = resolveApiKeyFromProfiles({
       provider: authProvider,
-      store: resolveAuthProfileStoreInput(authStoreInput),
+      store: authStore,
       env,
+      profileIds: resolveCatalogAuthProfileOrder({
+        config,
+        env,
+        provider,
+        store: authStore,
+      }),
     });
     return fromProfiles?.apiKey
       ? {
@@ -203,33 +228,25 @@ export function createProviderAuthResolver(
     const lookupCaches = getLookupCaches();
     const authProvider = resolveProviderIdForAuthFromCaches(provider, lookupCaches);
     const authStore = resolveAuthProfileStoreInput(authStoreInput);
-    const ids = listProfilesForProvider(authStore, authProvider);
-
-    let oauthCandidate:
-      | {
-          apiKey: string | undefined;
-          discoveryApiKey?: string;
-          mode: "oauth";
-          source: "profile";
-          profileId: string;
-        }
-      | undefined;
+    const ids = resolveCatalogAuthProfileOrder({
+      config,
+      env,
+      provider,
+      store: authStore,
+    });
     for (const id of ids) {
       const cred = authStore.profiles[id];
       if (!cred) {
         continue;
       }
       if (cred.type === "oauth") {
-        // Prefer concrete API-key profiles, but keep one OAuth profile as a
-        // fallback so provider routing can advertise OAuth-backed availability.
-        oauthCandidate ??= {
+        return {
           apiKey: options?.oauthMarker,
           discoveryApiKey: toDiscoveryApiKey(cred.access),
           mode: "oauth",
           source: "profile",
           profileId: id,
         };
-        continue;
       }
       const resolved = resolveApiKeyFromCredential(cred, env);
       if (!resolved) {
@@ -242,9 +259,6 @@ export function createProviderAuthResolver(
         source: "profile" as const,
         profileId: id,
       };
-    }
-    if (oauthCandidate) {
-      return oauthCandidate;
     }
 
     const envVar = resolveEnvApiKeyVarName(authProvider, env, {

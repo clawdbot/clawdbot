@@ -218,8 +218,9 @@ export function resolveApiKeyFromProfiles(params: {
   provider: string;
   store: AuthProfileStore;
   env?: NodeJS.ProcessEnv;
+  profileIds?: readonly string[];
 }): (ProfileApiKeyResolution & { profileId: string }) | undefined {
-  const ids = listProfilesForProvider(params.store, params.provider);
+  const ids = params.profileIds ?? listProfilesForProvider(params.store, params.provider);
   for (const id of ids) {
     const resolved = resolveApiKeyFromCredential(params.store.profiles[id], params.env);
     if (resolved) {

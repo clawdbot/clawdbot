@@ -968,8 +968,19 @@ export function buildOpenAIProvider(): ProviderPlugin {
             };
           }
         } catch {
-          // OAuth discovery is advisory; fall through so configured API-key
-          // auth can still publish the standard OpenAI catalog.
+          // The selected profile remains authoritative below.
+        }
+        if (auth.profileId && isCodexCatalogAuthMode(auth.mode)) {
+          return {
+            providers: { [PROVIDER_ID]: buildOpenAICodexStaticProviderConfig() },
+            outcomes: [
+              {
+                provider: PROVIDER_ID,
+                profileId: auth.profileId,
+                status: "unavailable",
+              },
+            ],
+          };
         }
         if (auth.mode === "api_key" && auth.apiKey) {
           const catalog = scopeOpenAICatalogOutcome(

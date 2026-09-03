@@ -49,7 +49,10 @@ vi.mock("../plugins/provider-runtime.js", () => ({
 
 vi.mock("./provider-auth-aliases.js", () => ({
   resolveProviderAuthAliasMap: () => ({ "proof-alias": "openai" }),
-  resolveProviderIdForAuth: (provider: string) => provider.trim().toLowerCase(),
+  resolveProviderIdForAuth: (provider: string) => {
+    const normalized = provider.trim().toLowerCase();
+    return normalized === "proof-alias" ? "openai" : normalized;
+  },
 }));
 
 type ProviderRuntimeModule = typeof import("../plugins/provider-runtime.js");
@@ -310,13 +313,10 @@ describe("models-config provider auth provenance", () => {
     "missing-value",
     "cleared",
     "cold",
-    "expired",
   ] as const;
   it.each(
     discoveryCases.flatMap(([type, callback]) =>
-      unavailableStates
-        .filter((state) => state !== "expired" || type === "token")
-        .map((state) => ({ type, callback, state })),
+      unavailableStates.map((state) => ({ type, callback, state })),
     ),
   )(
     "isolates $type $state through $callback without fallback or anonymous HTTP",
@@ -366,15 +366,6 @@ describe("models-config provider auth provenance", () => {
             delete profile.token;
           }
         }
-        if (state === "expired") {
-          const raw = expectDefined(fixture.store.profiles[fixture.profileId], "selected profile");
-          if (raw.type === "token") {
-            raw.expires = 1;
-          }
-          if (profile.type === "token") {
-            profile.expires = 1;
-          }
-        }
         if (!["unpublished", "cleared", "agent-mismatch"].includes(state)) {
           fixture.publish();
         }
@@ -395,6 +386,32 @@ describe("models-config provider auth provenance", () => {
         expect(JSON.stringify([providers, fixture.outcomes])).not.toMatch(
           /stale-inline|wrong-account-key|wrong-env-key|runtime-discovery-key/,
         );
+      });
+    },
+  );
+
+  it.each(["resolveProviderAuth", "resolveProviderApiKey"] as const)(
+    "skips expired profiles through %s and uses the next canonical candidate",
+    async (callback) => {
+      await withDiscoveryFixture("token", callback, async (fixture) => {
+        const selected = expectDefined(
+          fixture.store.profiles[fixture.profileId],
+          "selected profile",
+        );
+        if (selected.type !== "token") {
+          throw new Error("expected token profile");
+        }
+        selected.expires = 1;
+        fixture.store.profiles["openai:fallback"] = {
+          type: "api_key",
+          provider: "openai",
+          key: "eligible-fallback-key",
+        };
+
+        await fixture.discover();
+
+        expect(fixture.authorization).toEqual(["Bearer eligible-fallback-key"]);
+        expect(fixture.errors).toEqual([]);
       });
     },
   );
@@ -625,6 +642,193 @@ describe("models-config provider auth provenance", () => {
       source: "profile",
       profileId: "openai:default",
     });
+  });
+
+  it("uses canonical profile order for provider catalog discovery", () => {
+    const profileA = "openai:profile-a";
+    const profileB = "openai:profile-b";
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        [profileA]: {
+          type: "api_key",
+          provider: "openai",
+          key: "key-a",
+        },
+        [profileB]: {
+          type: "api_key",
+          provider: "openai",
+          key: "key-b",
+        },
+      },
+    };
+    const config: OpenClawConfig = {
+      auth: {
+        order: {
+          openai: [profileB, profileA],
+        },
+      },
+    };
+
+    expect(createProviderAuthResolver({}, store, config)("openai")).toMatchObject({
+      apiKey: "key-b",
+      profileId: profileB,
+    });
+    expect(createProviderApiKeyResolver({}, store, config)("openai")).toMatchObject({
+      apiKey: "key-b",
+      profileId: profileB,
+    });
+
+    store.order = { openai: [profileA, profileB] };
+    expect(createProviderAuthResolver({}, store, config)("openai")).toMatchObject({
+      apiKey: "key-a",
+      profileId: profileA,
+    });
+
+    delete store.order;
+    store.usageStats = {
+      [profileA]: {
+        cooldownUntil: Date.now() + 60_000,
+        cooldownReason: "rate_limit",
+        cooldownModel: "gpt-5.5",
+      },
+    };
+    const cooldownConfig: OpenClawConfig = {
+      auth: {
+        order: {
+          openai: [profileA, profileB],
+        },
+      },
+    };
+    expect(createProviderAuthResolver({}, store, cooldownConfig)("openai")).toMatchObject({
+      apiKey: "key-b",
+      profileId: profileB,
+    });
+    expect(createProviderApiKeyResolver({}, store, cooldownConfig)("openai")).toMatchObject({
+      apiKey: "key-b",
+      profileId: profileB,
+    });
+
+    const aliasConfig: OpenClawConfig = {
+      auth: {
+        order: {
+          "proof-alias": [profileB, profileA],
+        },
+      },
+    };
+    expect(createProviderAuthResolver({}, store, aliasConfig)("proof-alias")).toMatchObject({
+      apiKey: "key-b",
+      profileId: profileB,
+    });
+    expect(createProviderApiKeyResolver({}, store, aliasConfig)("proof-alias")).toMatchObject({
+      apiKey: "key-b",
+      profileId: profileB,
+    });
+  });
+
+  it("keeps unresolved OAuth refs selected for locked catalog resolution", () => {
+    const profileId = "openai:oauth-ref";
+    const auth = createProviderAuthResolver(
+      {},
+      {
+        version: 1,
+        profiles: {
+          [profileId]: {
+            type: "oauth",
+            provider: "openai",
+            access: "",
+            refresh: "",
+            expires: 0,
+            oauthRef: {
+              source: "openclaw-credentials",
+              provider: "openai-codex",
+              id: "00000000000000000000000000000000",
+            },
+          },
+        },
+      },
+      { auth: { order: { openai: [profileId] } } },
+    )("openai");
+
+    expect(auth).toMatchObject({
+      apiKey: undefined,
+      mode: "oauth",
+      profileId,
+      source: "profile",
+    });
+  });
+
+  it("publishes the canonically selected OpenAI account through implicit model config", async () => {
+    const profileA = "openai:profile-a";
+    const profileB = "openai:profile-b";
+    const keyA = "rejected-profile-a";
+    const keyB = "selected-profile-b";
+    const config: OpenClawConfig = {
+      auth: {
+        order: {
+          openai: [profileB, profileA],
+        },
+      },
+    };
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        [profileA]: { type: "api_key", provider: "openai", key: keyA },
+        [profileB]: { type: "api_key", provider: "openai", key: keyB },
+      },
+    };
+    const requests: string[] = [];
+    const outcomes: Array<import("../plugins/provider-catalog.types.js").ProviderCatalogOutcome> =
+      [];
+    const agentDir = tempDirs.make("openai-profile-order-");
+    const { buildOpenAIProvider } = await import("../../extensions/openai/api.js");
+    const { planOpenClawModelsJson } = await import("./models-config.plan.js");
+    discovery.providers = [buildOpenAIProvider()];
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+      const authorization = new Headers(init?.headers).get("authorization") ?? "";
+      requests.push(authorization);
+      if (authorization === `Bearer ${keyA}`) {
+        return new Response("unauthorized", { status: 401 });
+      }
+      if (authorization === `Bearer ${keyB}`) {
+        return Response.json({ data: [{ id: "gpt-5.5", object: "model" }] });
+      }
+      throw new Error("unexpected OpenAI catalog authorization");
+    });
+
+    try {
+      const plan = await planOpenClawModelsJson({
+        context: {
+          cfg: config,
+          discoveryAuthConfig: config,
+          sourceConfigForSecrets: config,
+          agentDir,
+          env: {},
+          envFingerprint: {},
+          providerDiscoveryProviderIds: ["openai"],
+          onProviderCatalogOutcome: (outcome) => outcomes.push(outcome),
+        },
+        authStore: store,
+        existingRaw: "",
+        existingParsed: null,
+      });
+
+      expect(requests).toEqual([`Bearer ${keyB}`]);
+      expect(outcomes).toEqual([{ provider: "openai", profileId: profileB, status: "ready" }]);
+      expect(plan.action).toBe("write");
+      const providers =
+        plan.action === "write"
+          ? (
+              JSON.parse(plan.contents) as {
+                providers?: Record<string, { models?: Array<{ id?: string }> }>;
+              }
+            ).providers
+          : undefined;
+      expect(providers?.openai?.models?.map((model) => model.id)).toContain("gpt-5.5");
+    } finally {
+      fetchSpy.mockRestore();
+      discovery.providers = [];
+    }
   });
 
   it("resolves plugin-owned synthetic auth through the provider hook", () => {
