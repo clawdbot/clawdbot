@@ -5,6 +5,11 @@ import {
   loadExactSessionEntry,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
 import { markCompleteReplyConfig } from "./get-reply-fast-path.test-support.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -14,11 +19,31 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "discord",
+        plugin: createChannelTestPluginBase({
+          id: "discord",
+          capabilities: { nativeCommands: true, chatTypes: ["direct"] },
+        }),
+        source: "test",
+      },
+    ]),
+  );
 });
 
-async function resolveTextSlashDirective(body: string) {
+afterEach(() => {
+  resetPluginRuntimeStateForTest();
+});
+
+async function resolveTextSlashDirective(
+  body: string,
+  options?: { commandsText?: boolean; surface?: string },
+) {
   const storePath = path.join(tempDirs.make("openclaw-text-slash-directive-"), "sessions.json");
-  const sessionKey = "agent:main:webchat:direct:user-1";
+  const surface = options?.surface ?? "webchat";
+  const sessionKey = `agent:main:${surface}:direct:user-1`;
   const ctx = buildTestCtx({
     Body: body,
     BodyForAgent: body,
@@ -32,8 +57,8 @@ async function resolveTextSlashDirective(body: string) {
       commandName: body.slice(1).split(/\s+/, 1)[0],
       body,
     },
-    Provider: "webchat",
-    Surface: "webchat",
+    Provider: surface,
+    Surface: surface,
     GatewayClientScopes: ["operator.admin"],
     SessionKey: sessionKey,
   });
@@ -41,7 +66,10 @@ async function resolveTextSlashDirective(body: string) {
   await replaceSessionEntry({ sessionKey, storePath }, sessionEntry);
   const result = await resolveReplyDirectives({
     ctx,
-    cfg: markCompleteReplyConfig({ session: { store: storePath } }),
+    cfg: markCompleteReplyConfig({
+      session: { store: storePath },
+      commands: options?.commandsText === undefined ? undefined : { text: options.commandsText },
+    }),
     agentId: "main",
     agentDir: "/tmp/agent",
     workspaceDir: "/tmp/workspace",
@@ -86,5 +114,16 @@ describe("text slash directive ownership", () => {
       reply: { text: expect.stringContaining("Exec defaults set (host=gateway).") },
     });
     expect(loadExactSessionEntry({ sessionKey, storePath })?.entry.execHost).toBe("gateway");
+  });
+
+  it("preserves text exec commands when text routing is disabled on a native surface", async () => {
+    const body = "/exec host=gateway";
+    const { result, sessionKey, storePath } = await resolveTextSlashDirective(body, {
+      commandsText: false,
+      surface: "discord",
+    });
+
+    expect(result).toMatchObject({ kind: "continue", result: { cleanedBody: body } });
+    expect(loadExactSessionEntry({ sessionKey, storePath })?.entry.execHost).toBeUndefined();
   });
 });
