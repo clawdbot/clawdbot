@@ -333,6 +333,18 @@ private class OpenedAndroidClientDatabases private constructor(
   val clientState: ClientStateDatabase,
 ) : AutoCloseable {
   companion object {
+    suspend fun inMemory(context: Context): OpenedAndroidClientDatabases {
+      val appContext = context.applicationContext
+      val state = Room.inMemoryDatabaseBuilder(appContext, ClientStateDatabase::class.java).build().openValidated()
+      return try {
+        val cache = Room.inMemoryDatabaseBuilder(appContext, GatewayCacheDatabase::class.java).build().openValidated()
+        OpenedAndroidClientDatabases(appContext, cache, state)
+      } catch (error: Throwable) {
+        state.close()
+        throw error
+      }
+    }
+
     suspend fun open(
       context: Context,
       gatewayCacheName: String = GATEWAY_CACHE_DB_NAME,
@@ -504,20 +516,26 @@ internal class AndroidClientDatabases private constructor(
       clientStateName: String = CLIENT_STATE_DB_NAME,
       legacyName: String = LEGACY_CHAT_DATABASE_NAME,
       registeredGatewayIds: Set<String>? = null,
-    ): AndroidClientDatabases {
+    ): AndroidClientDatabases =
+      start {
+        OpenedAndroidClientDatabases.open(
+          context = context.applicationContext,
+          gatewayCacheName = gatewayCacheName,
+          clientStateName = clientStateName,
+          legacyName = legacyName,
+          registeredGatewayIds = registeredGatewayIds,
+        )
+      }
+
+    fun inMemory(context: Context): AndroidClientDatabases = start { OpenedAndroidClientDatabases.inMemory(context) }
+
+    private fun start(open: suspend () -> OpenedAndroidClientDatabases): AndroidClientDatabases {
       val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
       val openedReference = AtomicReference<OpenedAndroidClientDatabases?>()
       val closed = AtomicBoolean(false)
       val initialization =
         scope.async {
-          val opened =
-            OpenedAndroidClientDatabases.open(
-              context = context.applicationContext,
-              gatewayCacheName = gatewayCacheName,
-              clientStateName = clientStateName,
-              legacyName = legacyName,
-              registeredGatewayIds = registeredGatewayIds,
-            )
+          val opened = open()
           if (closed.get()) {
             opened.close()
             throw CancellationException("Android client databases closed during initialization")
@@ -614,8 +632,6 @@ private class DeferredChatTranscriptCache(
 private class DeferredChatCommandOutbox(
   private val ready: suspend () -> OpenedAndroidClientDatabases,
 ) : ChatCommandOutbox {
-  override val supportsBranchCoordination: Boolean = true
-
   override suspend fun load(gatewayId: String): List<ChatOutboxItem> = ready().commandOutbox.load(gatewayId)
 
   override suspend fun wasAdmitted(id: String): Boolean = ready().commandOutbox.wasAdmitted(id)

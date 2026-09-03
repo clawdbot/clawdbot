@@ -376,20 +376,6 @@ export function clearManagedPluginOfficialCatalogCache(): void {
   getManagedPluginCache().officialCatalog = undefined;
 }
 
-function resolveCatalogManifestIcon(manifest: unknown): string | undefined {
-  if (!manifest || typeof manifest !== "object") {
-    return undefined;
-  }
-  return normalizeOptionalString((manifest as { icon?: unknown }).icon);
-}
-
-function resolveCatalogEntryIcon(entry: OfficialExternalPluginCatalogEntry | undefined) {
-  return (
-    normalizeOptionalString(entry?.icon) ??
-    resolveCatalogManifestIcon(getOfficialExternalPluginCatalogManifest(entry ?? {}))
-  );
-}
-
 function mergeCatalogMetadata(
   hosted: OfficialExternalPluginCatalogEntry,
   bundled: OfficialExternalPluginCatalogEntry,
@@ -399,7 +385,6 @@ function mergeCatalogMetadata(
   const bundledManifest = getOfficialExternalPluginCatalogManifest(bundled);
   const bundledCatalog = bundledManifest?.catalog;
   const bundledPlugin = bundledManifest?.plugin;
-  const bundledIcon = resolveCatalogManifestIcon(bundledManifest);
   const bundledName = normalizeOptionalString(bundled.name);
   const bundledDescription = normalizeOptionalString(bundled.description);
   const bundledKind = normalizeOptionalString(bundled.kind);
@@ -430,7 +415,6 @@ function mergeCatalogMetadata(
       ...hostedManifest,
       ...(bundledPlugin ? { plugin: { ...hostedManifest?.plugin, ...bundledPlugin } } : {}),
       ...(mergedCatalog ? { catalog: mergedCatalog } : {}),
-      ...(!resolveCatalogManifestIcon(hostedManifest) && bundledIcon ? { icon: bundledIcon } : {}),
     },
   };
 }
@@ -754,6 +738,20 @@ function resolveInstalledHostedOfficialEntry(params: {
   };
 }
 
+export type ManagedPluginIconSource = { kind: "file"; path: string; rootPath: string };
+
+function resolvePluginIconSource(params: {
+  metadata: PluginMetadataSnapshot;
+  pluginId: string;
+}): ManagedPluginIconSource | undefined {
+  const normalizedPluginId = params.metadata.normalizePluginId(params.pluginId);
+  const manifest = params.metadata.byPluginId.get(normalizedPluginId);
+  const localIconPath = normalizeOptionalString(manifest?.iconPath);
+  if (localIconPath && manifest) {
+    return { kind: "file", path: localIconPath, rootPath: manifest.rootDir };
+  }
+  return undefined;
+}
 function resolveManagedPluginMetadataParams(config: OpenClawConfig, env: NodeJS.ProcessEnv) {
   const workspace = resolvePluginControlPlaneWorkspace({ config, env });
   return {
@@ -798,41 +796,16 @@ export function refreshManagedPluginMetadata(params: {
   return snapshot;
 }
 
-/** Resolve the current manifest/catalog icon URL without accepting a caller-provided URL. */
-export const resolveManagedPluginIconUrl = withManagedPluginCache(
+/** Resolve the current package-local icon without accepting caller-provided input. */
+export const resolveManagedPluginIconSource = withManagedPluginCache(
   async (params: {
     config: OpenClawConfig;
     pluginId: string;
     env?: NodeJS.ProcessEnv;
-    officialCatalog?: OfficialCatalogResult;
-  }): Promise<string | undefined> => {
+  }): Promise<ManagedPluginIconSource | undefined> => {
     const env = params.env ?? process.env;
     const metadata = resolveManagedPluginMetadata(params.config, env);
-    const officialCatalog = params.officialCatalog ?? (await loadOfficialCatalog());
-    const normalizedPluginId = metadata.normalizePluginId(params.pluginId);
-    const record = metadata.index.plugins.find(
-      (candidate) => metadata.normalizePluginId(candidate.pluginId) === normalizedPluginId,
-    );
-    if (!record) {
-      return resolveCatalogEntryIcon(
-        officialCatalog.entries.find(
-          (candidate) => resolveOfficialExternalPluginId(candidate) === normalizedPluginId,
-        ),
-      );
-    }
-    const ownership = resolveInstalledPluginPackageOwnership(metadata.index, record.pluginId);
-    const installOwner = ownership.ok ? ownership.value.installOwner : undefined;
-    const { entry: officialEntry } = resolveInstalledHostedOfficialEntry({
-      record,
-      ...(installOwner ? { installOwner } : {}),
-      installRecord: installOwner ? metadata.index.installRecords[installOwner] : undefined,
-      officialEntries: prepareCatalogEntries(officialCatalog.entries),
-      bundledOfficialEntries: prepareCatalogEntries(listOfficialExternalPluginCatalogEntries()),
-    });
-    return (
-      resolveCatalogEntryIcon(officialEntry) ??
-      normalizeOptionalString(metadata.byPluginId.get(normalizedPluginId)?.icon)
-    );
+    return resolvePluginIconSource({ metadata, pluginId: params.pluginId });
   },
 );
 
@@ -894,7 +867,7 @@ export const listManagedPlugins = withManagedPluginCache(
     const bundledOfficialEntries = prepareCatalogEntries(
       listOfficialExternalPluginCatalogEntries(),
     );
-    const installedIconsById = new Map<string, string | undefined>();
+    const installedIconsById = new Map<string, ManagedPluginIconSource | undefined>();
     const installedClawHubPackages = new Set<string>();
     const capabilityConsentDiagnostics: PluginDiagnostic[] = [];
     const plugins = metadata.index.plugins.map((record): ManagedPluginCatalogEntry => {
@@ -1000,8 +973,7 @@ export const listManagedPlugins = withManagedPluginCache(
       if (!installedIconsById.has(normalizedPluginId)) {
         installedIconsById.set(
           normalizedPluginId,
-          resolveCatalogEntryIcon(officialEntry) ??
-            normalizeOptionalString(metadata.byPluginId.get(normalizedPluginId)?.icon),
+          resolvePluginIconSource({ metadata, pluginId: record.pluginId }),
         );
       }
       if (installedIconsById.get(normalizedPluginId)) {
@@ -1072,7 +1044,6 @@ export const listManagedPlugins = withManagedPluginCache(
         ...(catalog.featured !== undefined ? { featured: catalog.featured } : {}),
         ...(featuredAt !== undefined ? { featuredAt } : {}),
         ...(catalog.order !== undefined ? { order: catalog.order } : {}),
-        ...(resolveCatalogEntryIcon(entry) ? { hasIcon: true } : {}),
         ...(install ? { install } : {}),
       });
     }

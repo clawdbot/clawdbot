@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { castAgentMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
@@ -10,6 +11,7 @@ import {
   persistSessionTranscriptTurn,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import {
   buildLateMediaAttachedProjection,
   createUserTurnTranscriptRecorder,
@@ -569,7 +571,27 @@ describe("user turn transcript persistence", () => {
       recorder.markRuntimePersisted(persisted?.message, persisted?.admission);
       const initialGeneration = recorder.getAdmissionReceipt()?.generation;
 
-      await recorder.confirmSteerTargetRunIdForPersistence?.("active-run");
+      const admission = recorder.getAdmissionReceipt();
+      if (!admission) {
+        throw new Error("missing persisted admission");
+      }
+      const { db } = openOpenClawAgentDatabase({
+        agentId: target.agentId,
+        path: admission.storePath,
+      });
+      const work = trackSqliteStatementExecutions(db, ["fts", "size"], (sql) =>
+        sql.includes("session_transcript_fts")
+          ? "fts"
+          : sql.includes("octet_length")
+            ? "size"
+            : null,
+      );
+      try {
+        await recorder.confirmSteerTargetRunIdForPersistence?.("active-run");
+      } finally {
+        work.restore();
+      }
+      expect(work.counts).toEqual({ fts: 0, size: 0 });
 
       expect(recorder.getAdmissionReceipt()?.generation).not.toBe(initialGeneration);
       expect(recorder.getPersistedMessage?.()).toMatchObject({

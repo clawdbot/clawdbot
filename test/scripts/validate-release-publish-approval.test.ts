@@ -611,14 +611,23 @@ describe("scripts/validate-release-publish-approval.mjs", () => {
     expect(result.uploads).toEqual([]);
   });
 
-  androidIt("publishes both assets for the exact successful native qualification", () => {
-    const result = runAndroidApproval({ nativeCi: {}, publication: {} });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.uploads).toEqual([
-      "dist/OpenClaw-Android.apk#OpenClaw-Android.apk",
-      "dist/OpenClaw-Android-SHA256SUMS.txt#OpenClaw-Android-SHA256SUMS.txt",
-    ]);
-  });
+  androidIt.each(["in_progress", "completed"])(
+    "publishes qualified Android assets after GitHub finalization with parent %s",
+    (status) => {
+      const result = runAndroidApproval({
+        nativeCi: {},
+        run: { status, conclusion: status === "completed" ? "success" : null },
+        release: { isDraft: false },
+        publication: {},
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.uploads).toEqual([
+        "dist/OpenClaw-Android.apk#OpenClaw-Android.apk",
+        "dist/OpenClaw-Android-SHA256SUMS.txt#OpenClaw-Android-SHA256SUMS.txt",
+      ]);
+      expect(result.waitedForAndroid).toBe(false);
+    },
+  );
 
   androidIt.each([
     ["run ID", { id: 92 }],

@@ -1294,7 +1294,9 @@ describe("cron service ops seam coverage", () => {
         },
       });
       runOpenClawStateWriteTransaction(({ db }) => {
-        db.prepare("UPDATE task_runs SET ended_at = -1 WHERE run_id = ?").run(taskRunId);
+        db.prepare(
+          "UPDATE task_runs SET created_at = -1, started_at = -1, ended_at = -1, last_event_at = -1 WHERE run_id = ?",
+        ).run(taskRunId);
       });
 
       await start(state);

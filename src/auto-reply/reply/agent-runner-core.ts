@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasSessionAutoModelFallbackProvenance } from "../../agents/agent-scope.js";
 import { hasVisibleCommittedMessagingToolDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
+import type { ModelRef } from "../../agents/model-ref-shared.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveSessionPluginStatusLines,
@@ -192,7 +193,12 @@ export function hasSuccessfulTerminalSourceReplyDelivery(params: {
 export function resolveFallbackOriginModel(params: {
   run: FollowupRun["run"];
   fallbackStateEntry?: SessionEntry;
+  runtimeModelSelection?: ModelRef;
 }): { provider: string; model: string; persistedAutoFallback: boolean } {
+  // Runtime-owned selection is not a fallback from the caller's nominal model.
+  if (params.runtimeModelSelection) {
+    return { ...params.runtimeModelSelection, persistedAutoFallback: false };
+  }
   const entry = params.fallbackStateEntry;
   const isAutoFallbackOverride =
     entry?.modelOverrideSource === "auto" ||

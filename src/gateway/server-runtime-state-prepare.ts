@@ -174,7 +174,6 @@ export async function prepareGatewayKernelState(params: {
     bindDeviceNodeControl,
     bindWorkerNodeDesktopControl,
     bindNodeWorkspaceBindingResolver,
-    bindGitHubPublication,
     handleNodeWorkerBundleTransferRequest,
     handleWorkerBootstrapArtifactTransferRequest,
     handleNodeWorkspaceTransferRequest,
@@ -253,9 +252,6 @@ export async function prepareGatewayKernelState(params: {
       workerPlacementRuntime.dispatchService.dispatch,
     );
   }
-  if (githubPublicationRuntime) {
-    bindGitHubPublication?.(githubPublicationRuntime.coordinator);
-  }
   const bindDeviceNodeRuntime = bindDeviceNodeControl
     ? (transport: Parameters<NonNullable<typeof bindDeviceNodeControl>>[0]) => {
         bindDeviceNodeControl(transport);
@@ -309,7 +305,6 @@ export async function prepareGatewayKernelState(params: {
   const {
     bindHost,
     controlUiEnabled,
-    strictTransportSecurityHeader,
     controlUiBasePath,
     controlUiRoot: controlUiRootOverride,
     resolvedAuth,
@@ -494,7 +489,6 @@ export async function prepareGatewayKernelState(params: {
     controlUiRoot: controlUiRootLifecycle.state,
     openAiChatCompletionsEnabled: opts.openAiChatCompletionsEnabled,
     openResponsesEnabled: opts.openResponsesEnabled,
-    strictTransportSecurityHeader,
     resolvedAuth,
     rateLimiter: authRateLimiter,
     joinRateLimiter: browserAuthRateLimiter,
@@ -571,7 +565,6 @@ export async function prepareGatewayKernelState(params: {
     bindHost,
     controlUiEnabled,
     controlUiRootLifecycle,
-    strictTransportSecurityHeader,
     controlUiBasePath,
     resolvedAuth,
     tailscaleConfig,

@@ -493,76 +493,90 @@ describe("Scheduled Task stop/restart cleanup", () => {
     });
   });
 
-  it("adopts exact persisted Windows argv and escalates through taskkill tree cleanup", async () => {
-    await withPreparedGatewayTask(async ({ env, stdout }) => {
-      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-      pushSuccessfulSchtasksResponses(3);
-      inspectPortUsageMock.mockResolvedValue(freePortUsage());
-      let forced = false;
-      spawnSync.mockImplementation((command, args) => {
-        const executable = command.toLowerCase();
-        if (executable.endsWith("taskkill.exe")) {
-          const argv = Array.isArray(args) ? args.map(String) : [];
-          if (argv.includes("/F")) {
-            forced = true;
+  it.each(["gateway", "task-supervisor", "gateway-with-supervisor"])(
+    "stops the exact installed Windows %s even before its port is bound",
+    async (owner) => {
+      await withPreparedGatewayTask(async ({ env, stdout }) => {
+        vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+        pushSuccessfulSchtasksResponses(3);
+        inspectPortUsageMock.mockResolvedValue(freePortUsage());
+        let forced = false;
+        spawnSync.mockImplementation((command, args) => {
+          const executable = command.toLowerCase();
+          if (executable.endsWith("taskkill.exe")) {
+            const argv = Array.isArray(args) ? args.map(String) : [];
+            if (argv.includes("/F")) {
+              forced = true;
+              return {
+                pid: 0,
+                output: [null, "", ""],
+                stdout: "",
+                stderr: "",
+                status: 0,
+                signal: null,
+              };
+            }
             return {
               pid: 0,
               output: [null, "", ""],
               stdout: "",
               stderr: "",
-              status: 0,
+              status: 1,
               signal: null,
             };
           }
+          const processes = [
+            ...(owner === "gateway-with-supervisor"
+              ? [
+                  {
+                    ProcessId: 4141,
+                    CommandLine: `${INSTALLED_GATEWAY_COMMAND_LINE} --task-supervisor`,
+                  },
+                ]
+              : []),
+            {
+              ProcessId: 3131,
+              CommandLine:
+                '"C:\\Program Files\\nodejs\\node.exe" "C:\\other-openclaw.cjs" gateway --port 18789',
+            },
+            ...(!forced
+              ? [
+                  {
+                    ProcessId: 4242,
+                    CommandLine:
+                      INSTALLED_GATEWAY_COMMAND_LINE +
+                      (owner === "task-supervisor" ? " --task-supervisor" : ""),
+                  },
+                ]
+              : []),
+            { ProcessId: 9999, CommandLine: "powershell.exe" },
+          ];
+          const output = JSON.stringify(processes);
           return {
             pid: 0,
-            output: [null, "", ""],
-            stdout: "",
+            output: [null, output, ""],
+            stdout: output,
             stderr: "",
-            status: 1,
+            status: 0,
             signal: null,
           };
-        }
-        const processes = [
-          {
-            ProcessId: 3131,
-            CommandLine:
-              '"C:\\Program Files\\nodejs\\node.exe" "C:\\other-openclaw.cjs" gateway --port 18789',
-          },
-          ...(!forced
-            ? [
-                {
-                  ProcessId: 4242,
-                  CommandLine: INSTALLED_GATEWAY_COMMAND_LINE,
-                },
-              ]
-            : []),
-          { ProcessId: 9999, CommandLine: "powershell.exe" },
-        ];
-        const output = JSON.stringify(processes);
-        return {
-          pid: 0,
-          output: [null, output, ""],
-          stdout: output,
-          stderr: "",
-          status: 0,
-          signal: null,
-        };
+        });
+
+        await stopScheduledTask({ env, stdout });
+
+        const taskkillCalls = spawnSync.mock.calls
+          .filter(([command]) => command.toLowerCase().endsWith("taskkill.exe"))
+          .map(([, args]) => args);
+        expect(taskkillCalls).toEqual([
+          ["/T", "/PID", "4242"],
+          ["/F", "/T", "/PID", "4242"],
+        ]);
+        expect(taskkillCalls.flat()).not.toContain("3131");
+        expect(taskkillCalls.flat()).not.toContain("4141");
+        expect(killProcessTreeMock).not.toHaveBeenCalled();
       });
-
-      await stopScheduledTask({ env, stdout });
-
-      const taskkillCalls = spawnSync.mock.calls
-        .filter(([command]) => command.toLowerCase().endsWith("taskkill.exe"))
-        .map(([, args]) => args);
-      expect(taskkillCalls).toEqual([
-        ["/T", "/PID", "4242"],
-        ["/F", "/T", "/PID", "4242"],
-      ]);
-      expect(taskkillCalls.flat()).not.toContain("3131");
-      expect(killProcessTreeMock).not.toHaveBeenCalled();
-    });
-  });
+    },
+  );
 
   it("starts a registered task and ignores audit observer failures", async () => {
     await withPreparedGatewayTask(async ({ env }) => {

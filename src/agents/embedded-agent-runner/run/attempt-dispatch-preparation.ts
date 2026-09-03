@@ -262,6 +262,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
       fallbackActive: modelId !== requestedModelId || Boolean(fallbackReason),
       fallbackReason,
       agentHarnessId: runtime.agentHarness.id,
+      nativeSessionRuntime: preparedRuntime.nativeSessionRuntime,
       expectedRuntimeArtifact: expectedHarnessArtifact?.artifact,
       runtimePlan,
       model: effectiveModel,

@@ -2441,6 +2441,91 @@ describe("package acceptance workflow", () => {
     );
   });
 
+  it.each([
+    [PLUGIN_NPM_RELEASE_WORKFLOW, "preview_plugins_npm", "Resolve plugin release plan"],
+    [PLUGIN_CLAWHUB_RELEASE_WORKFLOW, "preview_plugins_clawhub", "Resolve plugin release plan"],
+    [RELEASE_PUBLISH_WORKFLOW, "publish", "Resolve ClawHub release plan"],
+    [
+      ".github/workflows/plugin-clawhub-new.yml",
+      "resolve_bootstrap_plan",
+      "Resolve plugin bootstrap plan",
+    ],
+  ])("keeps plugin freshness warnings visible without blocking %s", (workflow, job, step) => {
+    const root = tempDirs.make("plugin-plan-warnings-");
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "node"), '#!/bin/sh\ncat "$MOCK_PLUGIN_PLAN"\n', { mode: 0o755 });
+    const parentPlan = workflow === RELEASE_PUBLISH_WORKFLOW;
+    if (parentPlan) {
+      const helperDir = join(root, ".release-harness/scripts/lib");
+      mkdirSync(helperDir, { recursive: true });
+      writeFileSync(
+        join(helperDir, "release-publish-children.sh"),
+        "resolve_child_workflow_ref() { printf '%s\\n' \"release-publish/aaaaaaaaaaaa-1\"; }\n",
+      );
+    }
+    const plugin = {
+      packageName: "@openclaw/example",
+      packageDir: "extensions/example",
+      version: "2026.9.1",
+      channel: "stable",
+      publishTag: "latest",
+    };
+    const warning =
+      '@openclaw/example@2026.9.1: example-runtime pinned "1.2.3", npm latest is "1.2.4".';
+    const planPath = join(root, "plan.json");
+    writeFileSync(
+      planPath,
+      JSON.stringify({
+        all: [plugin],
+        candidates: [plugin],
+        bootstrapCandidates: [plugin],
+        missingTrustedPublisher: [],
+        skippedPublished: [],
+        warnings: [warning],
+        bootstrap: { shouldDispatch: false },
+      }),
+    );
+    const script = workflowStep(workflowJob(workflow, job), step).run;
+    if (!script) {
+      throw new Error(`Missing plugin plan step in ${workflow}`);
+    }
+    const summaryPath = join(root, "summary.md");
+    const result = spawnSync("bash", ["-c", script], {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        PATH: `${bin}:${process.env.PATH}`,
+        MOCK_PLUGIN_PLAN: planPath,
+        GITHUB_OUTPUT: join(root, "output"),
+        GITHUB_STEP_SUMMARY: summaryPath,
+        GITHUB_WORKSPACE: root,
+        RUNNER_TEMP: root,
+        GITHUB_SHA: "a".repeat(40),
+        GITHUB_RUN_ID: "1",
+        GITHUB_RUN_ATTEMPT: "1",
+        WORKFLOW_FULL_REF: "refs/heads/main",
+        PARENT_WORKFLOW_BRANCH: "main",
+        PARENT_WORKFLOW_FULL_REF: "refs/heads/main",
+        RELEASE_TAG: "v2026.9.1",
+        TARGET_SHA: "b".repeat(40),
+        PLUGIN_PUBLISH_SCOPE: "all-publishable",
+        PLUGINS: "",
+        PUBLISH_SCOPE: "all-publishable",
+        RELEASE_PLUGINS: plugin.packageName,
+        BASE_REF: "",
+        NPM_DIST_TAG: "default",
+        PREFLIGHT_ONLY: "false",
+      },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(summaryPath, "utf8")).toBe(`- Warning: ${warning}\n`);
+    expect(result.stdout).toContain(plugin.packageName);
+    expect(readFileSync(join(root, "output"), "utf8")).toContain(
+      parentPlan ? "bootstrap_should_dispatch=false" : "candidate_count=1",
+    );
+  });
+
   it("runs plugin npm preflight trust from the exact workflow tooling checkout", () => {
     const job = workflowJob(PLUGIN_NPM_RELEASE_WORKFLOW, "preview_plugins_npm");
     const checkout = workflowStep(job, "Checkout trusted planning tooling");
@@ -2997,7 +3082,7 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
     expect(dispatchIndex).toBeLessThan(receiptIndex);
     const draftIndex = events.indexOf("draft");
     expect(draftIndex).toBeGreaterThanOrEqual(0);
-    expect(events.indexOf("windows")).toBeGreaterThan(draftIndex);
+    expect(events).not.toContain("windows");
     expect(events).not.toContain("android");
     expect(dispatchIndex).toBeGreaterThan(draftIndex);
     const gateIndex = events.indexOf("wait:openclaw-npm-release.yml:publish_openclaw_npm:true");
@@ -3019,46 +3104,49 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
       failure: "receipt preparation",
       env: { CLAWHUB_AUTHORIZATION_OUTCOME: "failure", CLAWHUB_RECEIPT_OUTCOME: "skipped" },
       bootstrapCompleted: false,
-      startsNative: false,
+      approvesClawHub: false,
     },
     {
       failure: "receipt upload",
       env: { CLAWHUB_RECEIPT_OUTCOME: "failure" },
       bootstrapCompleted: false,
-      startsNative: false,
+      approvesClawHub: false,
     },
     {
       failure: "bootstrap publication",
       env: { MOCK_BOOTSTRAP_RESULT: "1" },
       bootstrapCompleted: false,
-      startsNative: true,
+      approvesClawHub: true,
     },
     {
       failure: "normal ClawHub publication",
       env: { MOCK_CLAWHUB_RESULT: "1" },
       bootstrapCompleted: true,
-      startsNative: true,
+      approvesClawHub: true,
     },
-  ])("collects core evidence after $failure fails", ({ env, bootstrapCompleted, startsNative }) => {
-    const fixture = createReleasePublishFixture();
-    const job = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
-    const start = fixture.run(workflowStep(job, "Start core npm publication"));
-    expect(start.status, start.stderr).toBe(0);
-    const completed = fixture.run(workflowStep(job, "Complete publish workflows"), env);
-    expect(completed.status, completed.stderr).toBe(1);
-    const events = fixture.events();
-    expect(events).toContain("wait:openclaw-npm-release.yml:terminal:false");
-    const approval = String(startsNative);
-    expect(events).toContain(`wait:plugin-clawhub-release.yml:terminal:${approval}`);
-    expect(events).toContain(`wait:plugin-clawhub-new.yml:terminal:${approval}`);
-    const verification = `verify:1:bootstrap=${bootstrapCompleted}:workflow=refs/heads/main`;
-    expect(events.indexOf(verification)).toBeGreaterThan(
-      events.lastIndexOf("finished:openclaw-npm-release.yml:0"),
-    );
-    expect(events).toContain("release-evidence");
-    expect(events.includes("windows")).toBe(startsNative);
-    expect(fixture.summary()).toContain("left as draft");
-  });
+  ])(
+    "collects core evidence after $failure fails",
+    ({ env, bootstrapCompleted, approvesClawHub }) => {
+      const fixture = createReleasePublishFixture();
+      const job = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
+      const start = fixture.run(workflowStep(job, "Start core npm publication"));
+      expect(start.status, start.stderr).toBe(0);
+      const completed = fixture.run(workflowStep(job, "Complete publish workflows"), env);
+      expect(completed.status, completed.stderr).toBe(1);
+      const events = fixture.events();
+      expect(events).toContain("wait:openclaw-npm-release.yml:terminal:false");
+      const approval = String(approvesClawHub);
+      expect(events).toContain(`wait:plugin-clawhub-release.yml:terminal:${approval}`);
+      expect(events).toContain(`wait:plugin-clawhub-new.yml:terminal:${approval}`);
+      const verification = `verify:1:bootstrap=${bootstrapCompleted}:workflow=refs/heads/main`;
+      expect(events.indexOf(verification)).toBeGreaterThan(
+        events.lastIndexOf("finished:openclaw-npm-release.yml:0"),
+      );
+      expect(events).toContain("release-evidence");
+      expect(events).not.toContain("windows");
+      expect(fixture.summary()).toContain("left as draft");
+    },
+  );
 
   it.each(["plugin", "core"] as const)(
     "collects failed %s npm publication without repeating approval",
@@ -3325,7 +3413,6 @@ wait_for_run openclaw-npm-release.yml 404 "$EXPECTED_SHA" "$STARTED_JOB" "$APPRO
       'if [[ "$resolved_workflow_sha" != "$expected_sha" ]]',
       'verify_child_run_sha "$workflow" "$run_id" "$expected_sha" || return 1',
       'approve_pending_deployments "${workflow}" "${run_id}" "${expected_sha}"',
-      'wait_for_run windows-node-release.yml "${windows_node_run_id}" "${PARENT_WORKFLOW_SHA}"',
       'dispatch_workflow_at_ref "${RELEASE_TAG}" "${TARGET_SHA}" android-release.yml',
       'wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}" "${PARENT_WORKFLOW_SHA}"',
       'wait_for_run_background openclaw-npm-release.yml "${openclaw_npm_run_id}" "${PARENT_WORKFLOW_SHA}"',
@@ -3596,13 +3683,14 @@ NODE
     }
   });
 
-  it("requires native-bound Android approval support in the frozen source before publication", () => {
-    const job = workflowJob(RELEASE_PUBLISH_WORKFLOW, "resolve_release_target");
+  it("requires native-bound approval support only for Android qualification", () => {
+    const job = workflowJob(RELEASE_PUBLISH_WORKFLOW, "qualify_android_native");
     const step = workflowStep(job, "Verify Android approval consumer capability");
     const root = tempDirs.make("android-frozen-approval-consumer-");
     const git = (...args: string[]) =>
       execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
     git("init", "-q");
+    git("remote", "add", "origin", root);
     git(
       "-c",
       "user.name=OpenClaw Test",
@@ -3634,9 +3722,6 @@ NODE
         env: { PATH: process.env.PATH, EXPECTED_SHA: source },
       });
       expect(result.status === 0, result.stderr).toBe(source === supportedSource);
-      if (source === legacySource) {
-        expect(result.stderr).toContain("Qualify this source with release_profile=full");
-      }
     }
   });
 
@@ -3695,6 +3780,96 @@ NODE
       '"${GITHUB_WORKSPACE}/.release-harness/scripts/compare-release-evidence-zip.py"',
     );
   });
+
+  it.each([
+    {
+      label: "current Docker publication",
+      docker: "current",
+      conclusion: "success",
+      npm: true,
+      ok: true,
+    },
+    {
+      label: "historical Docker publication",
+      docker: "historical",
+      conclusion: "success",
+      npm: true,
+      ok: true,
+    },
+    {
+      label: "failed Docker publication",
+      docker: "current",
+      conclusion: "failure",
+      npm: true,
+      ok: false,
+    },
+    {
+      label: "missing Docker publication",
+      docker: "missing",
+      conclusion: "success",
+      npm: true,
+      ok: false,
+    },
+    {
+      label: "ambiguous Docker publication",
+      docker: "both",
+      conclusion: "success",
+      npm: true,
+      ok: false,
+    },
+    {
+      label: "missing npm publication",
+      docker: "current",
+      conclusion: "success",
+      npm: false,
+      ok: false,
+    },
+  ])(
+    "checks $label for failed-parent closeout without app evidence",
+    ({ docker, conclusion, npm, ok }) => {
+      const evidenceStep = workflowStep(
+        workflowJob(STABLE_MAIN_CLOSEOUT_WORKFLOW, "verify"),
+        "Verify release workflow evidence",
+      );
+      const script = evidenceStep.run?.match(
+        /node --input-type=module - "\$RUNNER_TEMP\/release-publish-run.json" <<'NODE'\n([\s\S]*?)\nNODE/u,
+      )?.[1];
+      expect(script).toBeDefined();
+      const root = tempDirs.make("stable-closeout-recovery-");
+      const runPath = join(root, "run.json");
+      const jobs = npm ? [{ name: "Publish plugins, then OpenClaw", conclusion: "success" }] : [];
+      if (docker === "current" || docker === "both") {
+        jobs.push({ name: "Publish Docker images / Publish prepared Docker images", conclusion });
+      }
+      if (docker === "historical" || docker === "both") {
+        jobs.push({
+          name: "Publish Docker images / Verify attestations and promote channel",
+          conclusion,
+        });
+      }
+      writeFileSync(
+        runPath,
+        JSON.stringify({
+          workflowName: "OpenClaw Release Publish",
+          event: "workflow_dispatch",
+          status: "completed",
+          conclusion: "failure",
+          jobs,
+        }),
+      );
+      const result = spawnSync(process.execPath, ["--input-type=module", "-", runPath], {
+        input: script,
+        encoding: "utf8",
+        env: { ...process.env, ALLOW_FAILED_PUBLISH_RECOVERY: "true" },
+      });
+      expect(result.status, result.stderr).toBe(ok ? 0 : 1);
+      if (ok) {
+        expect(result.stdout).toContain("apps may be pending");
+      } else {
+        expect(result.stderr).toContain("requires one successful publication job");
+      }
+    },
+  );
 
   it("verifies immutable postpublish evidence before stable closeout reads it", () => {
     const workflow = readFileSync(STABLE_MAIN_CLOSEOUT_WORKFLOW, "utf8");
@@ -3764,6 +3939,17 @@ NODE
     expect(workflow).toContain("TRIGGER_SHA: ${{ github.sha }}");
     expect(workflow).toContain('main_ref="$TRIGGER_SHA"');
     expect(workflow).toContain("ref: ${{ needs.resolve.outputs.main_ref }}");
+    expect(
+      workflowStep(
+        workflowJob(STABLE_MAIN_CLOSEOUT_WORKFLOW, "verify"),
+        "Checkout trusted closeout tooling",
+      ).with,
+    ).toMatchObject({
+      ref: "${{ github.workflow_sha }}",
+      path: ".closeout-tooling",
+      "persist-credentials": false,
+    });
+    expect(workflow).toContain("node .closeout-tooling/scripts/verify-stable-main-closeout.mjs");
     expect(workflow).toContain(
       "Stable closeout skipped: $evidence_source_tag predates immutable postpublish evidence.",
     );
@@ -3790,27 +3976,10 @@ NODE
       'const recoveryRequested = process.env.ALLOW_FAILED_PUBLISH_RECOVERY === "true";',
     );
     expect(workflow).toContain("Failed-publish recovery requires conclusion=failure");
+    expect(workflow).toContain('--allow-failed-publish-recovery "$ALLOW_FAILED_PUBLISH_RECOVERY"');
+    expect(workflow).toContain('"Publish Docker images / Publish prepared Docker images"');
     expect(workflow).toContain(
-      '--require-complete-platform-assets "$ALLOW_FAILED_PUBLISH_RECOVERY"',
-    );
-    expect(workflow).toContain("verify_checksum_manifest OpenClaw-Android-SHA256SUMS.txt");
-    expect(workflow).toContain("verify_checksum_manifest OpenClawCompanion-SHA256SUMS.txt");
-    expect(workflow).toContain("actual=\"$(awk 'NF { name=$2;");
-    expect(workflow).toContain('sub(/^\\*/, "", name)');
-    expect(workflow).not.toContain('sub(/^\\\\*/, "", name)');
-    expect(workflow).toContain('sed \'s/\\r$//\' "$manifest" > "$normalized"');
-    expect(workflow).toContain('sha256sum --strict --check "$normalized"');
-    expect(workflow).toContain(
-      "Windows Node Release must contain one successful signed-installer promotion job.",
-    );
-    expect(workflow).toContain('"Verify Authenticode signatures"');
-    expect(workflow).toContain("EXPECTED_INSTALLER_DIGESTS:");
-    expect(workflow).toContain('--windows-node-release-run-id "${WINDOWS_NODE_RELEASE_RUN_ID:-}"');
-    expect(workflow).toContain(
-      '--windows-node-installer-digests "${WINDOWS_NODE_INSTALLER_DIGESTS:-}"',
-    );
-    expect(workflow).toContain(
-      '--signer-workflow "$GITHUB_REPOSITORY/.github/workflows/android-release.yml"',
+      'existing_manifest_args=(--existing-manifest "$CLOSEOUT_DIR/$closeout_asset"',
     );
     expect(workflow).toContain(
       "Stable closeout requires repository variables RELEASE_ROLLBACK_DRILL_ID and RELEASE_ROLLBACK_DRILL_DATE, or explicit manual overrides.",
@@ -9999,60 +10168,124 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     }
   });
 
-  it("gates stable GitHub publication on the Windows Hub release asset contract", () => {
-    const releaseWorkflow = [
-      readFileSync("scripts/lib/release-publish-children.sh", "utf8"),
-      readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8"),
-    ].join("\n");
+  it("keeps optional Windows promotion downstream of published npm and GitHub releases", () => {
+    const workflow = readWorkflow(RELEASE_PUBLISH_WORKFLOW);
+    const publish = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
+    const finalize = workflowJob(RELEASE_PUBLISH_WORKFLOW, "finalize_github_release");
+    const windows = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish_windows");
+    const dispatch = workflowStep(windows, "Dispatch detached Windows promotion");
+    const child = workflowJob(WINDOWS_NODE_RELEASE_WORKFLOW, "promote_signed_windows_installers");
+
+    for (const input of ["windows_node_tag", "windows_node_installer_digests"]) {
+      expect(workflow.on?.workflow_dispatch?.inputs?.[input]).toMatchObject({ required: false });
+    }
+    expect(publish.needs).toEqual(["resolve_release_target"]);
+    expect(finalize.needs).toEqual(["publish", "publish_docker"]);
+    expect(windows.needs).toEqual(["resolve_release_target", "finalize_github_release"]);
+    expect(windows["continue-on-error"]).toBe(true);
+    expect(windows.if).toContain("needs.finalize_github_release.result == 'success'");
+    expect(windows.if).toContain(
+      "inputs.windows_node_tag != '' || inputs.windows_node_installer_digests != ''",
+    );
+    expect(dispatch.env).toMatchObject({
+      WINDOWS_NODE_TAG: "${{ inputs.windows_node_tag }}",
+      WINDOWS_NODE_INSTALLER_DIGESTS: "${{ inputs.windows_node_installer_digests }}",
+      PARENT_WORKFLOW_SHA: "${{ github.workflow_sha }}",
+    });
+    expect(workflowStep(windows, "Record failed Windows dispatch").if).toBe("${{ failure() }}");
+    expect(workflowStep(windows, "Upload Windows dispatch evidence").if).toBe("${{ always() }}");
+    expect(workflowStep(child, "Record Windows promotion outcome").if).toBe("${{ always() }}");
+    expect(workflowStep(child, "Upload Windows promotion evidence").if).toBe("${{ always() }}");
+  });
+
+  it.each([
+    { scenario: "omitted", selected: false, hasDigests: false, dispatchFailure: false, exit: 0 },
+    { scenario: "selected", selected: true, hasDigests: true, dispatchFailure: false, exit: 0 },
+    {
+      scenario: "dispatch failure",
+      selected: true,
+      hasDigests: true,
+      dispatchFailure: true,
+      exit: 1,
+    },
+    {
+      scenario: "missing digests",
+      selected: true,
+      hasDigests: false,
+      dispatchFailure: false,
+      exit: 1,
+    },
+  ])(
+    "dispatches optional Windows promotion without waiting: $scenario",
+    ({ selected, hasDigests, dispatchFailure, exit }) => {
+      const source = readFileSync("scripts/lib/release-publish-children.sh", "utf8");
+      const root = tempDirs.make("windows-detached-publish-");
+      const dispatchPath = join(root, "dispatch");
+      const summaryPath = join(root, "summary");
+      const workflowSha = "d".repeat(40);
+      const workflowRef = `release-publish/${workflowSha.slice(0, 12)}-123`;
+      const digests = JSON.stringify({
+        "OpenClawCompanion-Setup-x64.exe": `sha256:${"a".repeat(64)}`,
+        "OpenClawCompanion-Setup-arm64.exe": `sha256:${"b".repeat(64)}`,
+      });
+      writeFileSync(summaryPath, "");
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          `
+set -euo pipefail
+dispatch_workflow_at_ref() {
+  printf '%s\\n' "$@" > "$DISPATCH_ARGS"
+  ${dispatchFailure ? "return 1" : "echo 456"}
+}
+wait_for_run() { echo unexpected-windows-wait >&2; return 99; }
+${shellFunctionSource(source, "is_stable_release")}
+${shellFunctionSource(source, "dispatch_workflow")}
+${shellFunctionSource(source, "promote_windows_release_assets")}
+promote_windows_release_assets
+`,
+        ],
+        {
+          encoding: "utf8",
+          timeout: 10_000,
+          env: {
+            PATH: process.env.PATH,
+            DISPATCH_ARGS: dispatchPath,
+            GITHUB_STEP_SUMMARY: summaryPath,
+            GITHUB_REPOSITORY: "openclaw/openclaw",
+            RELEASE_TAG: "v2026.9.1",
+            CHILD_WORKFLOW_REF: workflowRef,
+            PARENT_WORKFLOW_SHA: workflowSha,
+            WINDOWS_NODE_TAG: selected ? "v0.6.3" : "",
+            WINDOWS_NODE_INSTALLER_DIGESTS: hasDigests ? digests : "",
+          },
+        },
+      );
+      expect(result.status, result.stderr).toBe(exit);
+      expect(result.stderr).not.toContain("unexpected-windows-wait");
+      expect(existsSync(dispatchPath)).toBe(selected && hasDigests);
+      if (selected && hasDigests) {
+        expect(readFileSync(dispatchPath, "utf8").trim().split("\n")).toEqual([
+          workflowRef,
+          workflowSha,
+          "windows-node-release.yml",
+          "-f",
+          "tag=v2026.9.1",
+          "-f",
+          "windows_node_tag=v0.6.3",
+          "-f",
+          `expected_installer_digests=${digests}`,
+        ]);
+      }
+      expect(readFileSync(summaryPath, "utf8").includes("actions/runs/456")).toBe(
+        selected && hasDigests && !dispatchFailure,
+      );
+    },
+  );
+
+  it("validates Windows signatures and pinned digests in the promotion owner", () => {
     const windowsWorkflow = readFileSync(WINDOWS_NODE_RELEASE_WORKFLOW, "utf8");
-    const releaseDocs = readFileSync("docs/reference/RELEASING.md", "utf8");
-    const releaseSkill = readFileSync(RELEASE_MAINTAINER_SKILL, "utf8");
-
-    expect(releaseWorkflow).toContain(
-      "Stable OpenClaw publish requires an explicit windows_node_tag.",
-    );
-    expect(releaseWorkflow).toContain(
-      "Stable OpenClaw publish requires candidate-approved windows_node_installer_digests.",
-    );
-    expect(releaseWorkflow).toContain("promote_windows_release_assets()");
-    expect(releaseWorkflow).toContain("dispatch_workflow windows-node-release.yml");
-    expect(releaseWorkflow).toContain("verify_windows_release_asset_contract");
-    expect(releaseWorkflow).toContain("Validate stable Windows source release");
-    expect(releaseWorkflow).toContain("id: windows_source");
-    expect(releaseWorkflow).toContain(
-      "windows_node_installer_digests: ${{ steps.windows_source.outputs.installer_digests }}",
-    );
-    expect(releaseWorkflow).toContain(
-      "APPROVED_INSTALLER_DIGESTS: ${{ inputs.windows_node_installer_digests }}",
-    );
-    expect(releaseWorkflow).toContain("no longer matches its candidate-approved digest");
-    expect(releaseWorkflow).toContain(
-      "WINDOWS_NODE_INSTALLER_DIGESTS: ${{ needs.resolve_release_target.outputs.windows_node_installer_digests }}",
-    );
-    expect(releaseWorkflow).toContain(
-      '-f expected_installer_digests="${WINDOWS_NODE_INSTALLER_DIGESTS}"',
-    );
-    expect(releaseWorkflow).toContain("missing prevalidated Windows installer digests");
-    expect(releaseWorkflow).toContain("does not match its pinned digest");
-    expect(releaseWorkflow).toContain(
-      "Stable release OpenClawCompanion asset names do not exactly match the current contract",
-    );
-    expect(releaseWorkflow).toContain('select(.name | startswith("OpenClawCompanion-"))');
-    expect(releaseWorkflow).toContain(
-      "Windows checksum manifest does not exactly match the installer asset contract",
-    );
-    expect(releaseWorkflow).toContain("Windows checksum manifest contains malformed entries");
-    expect(releaseWorkflow).toContain("([.[].name] | unique | length) == length");
-    expect(releaseWorkflow).toContain("Windows checksum manifest does not match pinned digest");
-    expect(releaseWorkflow).toContain(
-      "Windows source release ${WINDOWS_NODE_TAG} must contain exactly one required asset",
-    );
-    expect(releaseWorkflow.indexOf("Validate stable Windows source release")).toBeLessThan(
-      releaseWorkflow.indexOf("\n  publish:\n"),
-    );
-
-    expect(releaseWorkflow).toContain("finalize_github_release:");
-
     expect(windowsWorkflow).not.toContain("default: latest");
     expect(windowsWorkflow).toContain("expected_installer_digests:");
     expect(windowsWorkflow).toContain("expected_installer_digests must contain exactly");
@@ -10086,15 +10319,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     );
     expect(windowsWorkflow).toContain("Promoted Windows SHA-256 manifest does not match");
     expect(windowsWorkflow).toContain("Promoted Windows release asset checksum mismatch");
-    expect(releaseDocs).toContain(
-      "the selected `windows_node_tag`, its saved `windows_node_installer_digests`,",
-    );
-    expect(releaseDocs).toContain(
-      "candidate-approved `windows_node_installer_digests`, and verify the canonical",
-    );
-    expect(releaseSkill.replace(/\s+/gu, " ")).toContain(
-      "candidate-approved installer digest map as `windows_node_installer_digests`.",
-    );
   });
 
   it("keeps the signed Android APK contract independent of core publication", () => {
@@ -10204,17 +10428,17 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(releaseDocs).toContain("signed standalone Android APK");
   });
 
-  it("rejects malformed Windows checksum manifest lines before parsing entries", () => {
-    const releaseWorkflow = [
-      readFileSync("scripts/lib/release-publish-children.sh", "utf8"),
-      readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8"),
-    ].join("\n");
-    const validateManifestLinesIndex = releaseWorkflow.indexOf("all(.[]; test(");
-    const parseManifestLinesIndex = releaseWorkflow.indexOf("map(capture(");
+  it("rejects malformed Windows checksum manifest lines before using entries", () => {
+    const verify =
+      workflowStep(
+        workflowJob(WINDOWS_NODE_RELEASE_WORKFLOW, "promote_signed_windows_installers"),
+        "Verify promoted release asset contract",
+      ).run ?? "";
+    const validateIndex = verify.indexOf('throw "Invalid Windows SHA-256 manifest entry: $_"');
+    const parseIndex = verify.indexOf("[PSCustomObject]@{");
 
-    expect(validateManifestLinesIndex).toBeGreaterThan(-1);
-    expect(parseManifestLinesIndex).toBeGreaterThan(validateManifestLinesIndex);
-    expect(releaseWorkflow).toContain('else error("malformed Windows checksum manifest entry")');
+    expect(validateIndex).toBeGreaterThan(-1);
+    expect(parseIndex).toBeGreaterThan(validateIndex);
   });
 
   it("rejects unsafe direct Windows recovery before uploading assets", () => {

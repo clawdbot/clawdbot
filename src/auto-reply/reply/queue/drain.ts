@@ -17,7 +17,12 @@ import {
   channelRouteCompactKey,
   channelRouteDedupeKey,
 } from "../../../plugin-sdk/channel-route.js";
-import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/gateway-work-admission.js";
+import {
+  getGatewayRestartDrainSignal,
+  isGatewayRestartDrainError,
+  runWithGatewayIndependentRootWorkContinuation,
+  waitForGatewayRestartFenceSettlement,
+} from "../../../process/gateway-work-admission.js";
 import { defaultRuntime } from "../../../runtime.js";
 import {
   buildPersistedUserTurnMediaInputsFromFields,
@@ -38,7 +43,7 @@ import {
   waitForQueueDebounce,
 } from "../../../utils/queue-helpers.js";
 import { isRoutableChannel } from "../route-reply.js";
-import { FOLLOWUP_QUEUES, trimSummaryElisionsToCap } from "./state.js";
+import { clearFollowupQueue, FOLLOWUP_QUEUES, trimSummaryElisionsToCap } from "./state.js";
 import {
   admitFollowupRunLifecycle,
   completeFollowupRunLifecycle,
@@ -66,6 +71,27 @@ const FOLLOWUP_DRAIN_CALLBACKS_KEY = Symbol.for("openclaw.followupDrainCallbacks
 const FOLLOWUP_RUN_CALLBACKS = resolveGlobalMap<string, (run: FollowupRun) => Promise<void>>(
   FOLLOWUP_DRAIN_CALLBACKS_KEY,
 );
+let followedRestartDrainSignal: AbortSignal | undefined;
+
+function bindFollowupRestartDrainSignal(): void {
+  const signal = getGatewayRestartDrainSignal();
+  if (signal === followedRestartDrainSignal) {
+    return;
+  }
+  followedRestartDrainSignal = signal;
+  signal.addEventListener(
+    "abort",
+    () => {
+      // Durable input recovery owns restart replay. Retire process-local queue
+      // authority synchronously so it cannot keep the old Gateway alive.
+      for (const key of FOLLOWUP_RUN_CALLBACKS.keys()) {
+        clearFollowupQueue(key);
+      }
+      FOLLOWUP_RUN_CALLBACKS.clear();
+    },
+    { once: true },
+  );
+}
 
 const QUEUED_ADMISSION_OWNER_STATE_KEY = Symbol.for("openclaw.queuedAdmissionOwnerState");
 const queuedAdmissionOwnerState = resolveGlobalSingleton(QUEUED_ADMISSION_OWNER_STATE_KEY, () => ({
@@ -118,6 +144,7 @@ export function rememberFollowupDrainCallback(
   key: string,
   runFollowup: (run: FollowupRun) => Promise<void>,
 ): void {
+  bindFollowupRestartDrainSignal();
   FOLLOWUP_RUN_CALLBACKS.set(key, runFollowup);
 }
 
@@ -1664,6 +1691,10 @@ export function scheduleFollowupDrain(
       queue.lastEnqueuedAt = Date.now();
       if (isFollowupRunDeferredError(err)) {
         retryDeferred = true;
+      } else if (isGatewayRestartDrainError(err)) {
+        // A reversible signal fence may reopen. One-way abort synchronously
+        // retires the queue above; rollback leaves it here for normal retry.
+        await waitForGatewayRestartFenceSettlement();
       } else {
         defaultRuntime.error?.(`followup queue drain failed for ${key}: ${String(err)}`);
       }

@@ -7336,9 +7336,73 @@ describe("runCodexAppServerAttempt", () => {
     expect(turnRequestParams?.approvalsReviewer).toBe("user");
   });
 
-  it.each(["stdio", "websocket", "unix", "proxy"] as const)(
-    "preserves supervised native model and transport/home guards over %s",
-    async (transport) => {
+  it("rejects a newly observed native model before inference with stale prepared host auth", async () => {
+    const { sessionFile, workspaceDir, agentDir } = createRunPaths();
+    const modelRef = { provider: "openai", model: "gpt-5.5" };
+    await writeExistingBinding(sessionFile, workspaceDir, {
+      preserveNativeModel: true,
+      authProfileId: "openai:host",
+      model: modelRef.model,
+      modelProvider: modelRef.provider,
+    });
+    const harness = createStartedThreadHarness(
+      async (method) => {
+        if (method === "thread/resume") {
+          return {
+            ...threadStartResult("thread-existing", { cwd: workspaceDir }),
+            model: "gpt-5.6-luna",
+            modelProvider: "openai",
+          };
+        }
+        // Keep pre-fix execution finite: the regression is accepting inference, not a timeout.
+        if (method === "turn/start") {
+          return { turn: { id: "turn-1", status: "completed", items: [] } };
+        }
+        return undefined;
+      },
+      { persistedThreads: ["thread-existing"] },
+    );
+    const params = createParams(sessionFile, workspaceDir, { provider: "openai" });
+    params.agentDir = agentDir;
+    params.modelId = modelRef.model;
+    params.model = { ...params.model, id: modelRef.model };
+    params.authProfileId = "openai:host";
+    params.resolvedApiKey = "prepared-host-api-key";
+    params.authProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:host": { type: "api_key", provider: "openai", key: "prepared-host-api-key" },
+      },
+    };
+    const expectedOwnership = { model: "native" as const, auth: "host" as const, modelRef };
+    params.expectedSessionRuntimeOwnership = expectedOwnership;
+    const result = await runCodexAppServerAttempt(params).catch((error: unknown) => {
+      if (!(error instanceof Error)) {
+        throw error;
+      }
+      return error;
+    });
+    expect(harness.requests.some(({ method }) => method === "thread/resume")).toBe(true);
+    expect(harness.requests.some(({ method }) => method === "turn/start")).toBe(false);
+    expect(result instanceof Error || Boolean(readAttemptTerminal(result).promptError)).toBe(true);
+    expect(await readCodexAppServerBinding(sessionFile)).toMatchObject({
+      threadId: "thread-existing",
+      preserveNativeModel: true,
+      model: "gpt-5.6-luna",
+      modelProvider: "openai",
+    });
+  });
+
+  it.each([
+    { transport: "stdio", hasAnswer: true },
+    { transport: "stdio", hasAnswer: false },
+    { transport: "proxy", hasAnswer: true },
+    { transport: "proxy", hasAnswer: false },
+    { transport: "websocket", hasAnswer: false },
+    { transport: "unix", hasAnswer: false },
+  ] as const)(
+    "preserves supervised native model and transport/home guards over $transport (answer: $hasAnswer)",
+    async ({ transport, hasAnswer }) => {
       const { sessionFile, workspaceDir, agentDir } = createRunPaths();
       const codexHome = path.join(tempDir, "review-codex-home");
       vi.stubEnv("CODEX_HOME", codexHome);
@@ -7378,7 +7442,7 @@ describe("runCodexAppServerAttempt", () => {
       });
       const nativeResponse = {
         ...threadStartResult("thread-existing", { cwd: workspaceDir }),
-        model: "gpt-5.5",
+        model: "gpt-5.6-luna",
         modelProvider: "openai",
         approvalsReviewer: "auto_review",
         serviceTier: "priority",
@@ -7490,22 +7554,43 @@ describe("runCodexAppServerAttempt", () => {
         }
         harness.send({
           method: "turn/completed",
-          params: { threadId: "thread-existing", turn: { id: "turn-1", status: "completed" } },
+          params: {
+            threadId: "thread-existing",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+              items: hasAnswer
+                ? [{ type: "agentMessage", id: "native-answer", text: "native answer" }]
+                : [],
+            },
+          },
         });
         const result = await run;
         expect(result.terminal).toEqual({ kind: "ok" });
-        expect(result.settledTurnFinalizationContext).toEqual({ source: "unavailable" });
-        expect(Object.isFrozen(result.settledTurnFinalizationContext)).toBe(true);
+        expect(result.runtimeModelSelection).toEqual({
+          provider: "openai",
+          model: "gpt-5.6-luna",
+        });
         expect(capture).not.toHaveBeenCalled();
-        expect(warn).toHaveBeenCalledWith(
-          "codex settled-turn finalization context is unavailable",
-          expect.objectContaining({
-            runId: params.runId,
-            threadId: "thread-existing",
-            turnId: "turn-1",
-            reason: "native_auth_finalization_unsupported",
-          }),
-        );
+        if (hasAnswer) {
+          expect(result.currentAttemptAssistant).toMatchObject({
+            provider: "openai",
+            model: "gpt-5.6-luna",
+          });
+          expect(result.settledTurnFinalizationContext).toBeUndefined();
+        } else {
+          expect(result.settledTurnFinalizationContext).toEqual({ source: "unavailable" });
+          expect(Object.isFrozen(result.settledTurnFinalizationContext)).toBe(true);
+          expect(warn).toHaveBeenCalledWith(
+            "codex settled-turn finalization context is unavailable",
+            expect.objectContaining({
+              runId: params.runId,
+              threadId: "thread-existing",
+              turnId: "turn-1",
+              reason: "native_auth_finalization_unsupported",
+            }),
+          );
+        }
         expect(result.messagesSnapshot).toContainEqual(
           expect.objectContaining({
             role: "toolResult",

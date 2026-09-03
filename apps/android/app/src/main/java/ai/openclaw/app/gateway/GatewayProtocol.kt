@@ -897,6 +897,7 @@ enum class GatewayMethod(
   SessionsTitlePrepare("sessions.title.prepare"),
   TranscriptsList("transcripts.list"),
   TranscriptsGet("transcripts.get"),
+  ModelsAuthOrderSet("models.authOrderSet"),
 }
 
 enum class GatewayEvent(
@@ -932,6 +933,7 @@ enum class GatewayEvent(
   NodePairRequested("node.pair.requested"),
   NodePairResolved("node.pair.resolved"),
   NodePresence("node.presence"),
+  NodeHostStats("node.hostStats"),
   NodeRunnerInventoryChanged("node.runnerInventory.changed"),
   NodeInvokeCancel("node.invoke.cancel"),
   NodeInvokeInput("node.invoke.input"),

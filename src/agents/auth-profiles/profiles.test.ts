@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveOAuthDir } from "../../config/paths.js";
+import { writeConfigMachineState } from "../../state/config-machine-state.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -21,6 +22,7 @@ import {
   getRuntimeAuthProfileStoreStateMutationToken,
 } from "./mutation-lineage.js";
 import { resolveApiKeyForProfile } from "./oauth.js";
+import { reloadSharedAuthStoreOwnership, SHARED_AUTH_STORE_STATE_KEY } from "./path-resolve.js";
 import { loadPersistedAuthProfileStore } from "./persisted.js";
 import {
   clearLastGoodProfileWithLock,
@@ -1825,6 +1827,53 @@ describe("promoteAuthProfileInOrder", () => {
 });
 
 describe("setAuthProfileOrder", () => {
+  it("writes an explicit main-agent order to the canonical shared store", async () => {
+    await withAuthProfileTestState(
+      "openclaw-auth-order-set-shared-main-",
+      async ({ agentDir }) => {
+        writeConfigMachineState(
+          SHARED_AUTH_STORE_STATE_KEY,
+          { location: "state-db" },
+          { env: process.env },
+        );
+        reloadSharedAuthStoreOwnership(process.env);
+        saveAuthProfileStore({
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            "openai:first": {
+              type: "oauth",
+              provider: "openai",
+              access: "first",
+              refresh: "first-refresh",
+              expires: Date.now() + 60_000,
+            },
+            "openai:second": {
+              type: "oauth",
+              provider: "openai",
+              access: "second",
+              refresh: "second-refresh",
+              expires: Date.now() + 60_000,
+            },
+          },
+          order: { openai: ["openai:first", "openai:second"] },
+        });
+
+        await setAuthProfileOrder({
+          agentDir,
+          provider: "openai",
+          order: ["openai:second", "openai:first"],
+          sharedStoreWrite: true,
+        });
+
+        expect(loadPersistedAuthProfileStore()?.order?.openai).toEqual([
+          "openai:second",
+          "openai:first",
+        ]);
+      },
+      { clearOAuthDir: true },
+    );
+  });
+
   it("canonicalizes every alias-equivalent provider state mutation", async () => {
     await withAuthProfileTestState("openclaw-auth-alias-state-", async ({ agentDir }) => {
       fs.mkdirSync(agentDir, { recursive: true });

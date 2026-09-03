@@ -253,11 +253,13 @@ suite.define(() => {
         gateway.waitForRequest("exec.approvals.get"),
       ]);
       await expect.poll(() => page.getByText("Build Node", { exact: true }).isVisible()).toBe(true);
-      await expect.poll(() => page.getByText("connected", { exact: true }).count()).toBe(0);
+      // The connected node row carries a status pill and capability chips; an
+      // unknown capability keeps its raw name as a generic chip.
+      await expect.poll(() => page.getByText("connected", { exact: true }).count()).toBe(1);
+      const chips = page.locator(".device-capability");
+      await expect.poll(() => chips.filter({ hasText: "Browser" }).count()).toBe(1);
+      await expect.poll(() => chips.filter({ hasText: "filesystem" }).count()).toBe(1);
       await page.getByText("Details", { exact: true }).click();
-      await expect
-        .poll(() => page.getByText(/Capabilities: browser, filesystem/).isVisible())
-        .toBe(true);
       await expect
         .poll(() =>
           page

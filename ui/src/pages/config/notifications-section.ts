@@ -568,7 +568,7 @@ export function renderNotificationsSection(props: NotificationsSectionProps) {
         </div>
       </section>
       ${registered && push.preferences
-        ? html`<div class="settings-page" ?inert=${push.loading}>
+        ? html`<div class="settings-stack" ?inert=${push.loading}>
             ${push.preferences.durableIdentity
               ? renderUserNotificationPreferences(push.preferences.user, (preferences) =>
                   props.onWebPushSetUserPreferences?.(preferences),

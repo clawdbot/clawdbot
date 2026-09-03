@@ -29,6 +29,7 @@ import type {
   ChatMetadataResult,
   ChatMetadataSessionEntry,
 } from "./chat-metadata-contract.js";
+import { projectChatSessionMetadata } from "./chat-metadata-session-projection.js";
 import type {
   ChatStartupProjectionReadParams,
   ChatStartupProjectionResult,
@@ -623,7 +624,11 @@ export function createGatewayChatMetadataRuntime(params: {
           `prepared chat metadata is unavailable for agent "${agentId}"`,
         );
       }
-      return projectAgent(generation, agent, readParams.sessionEntry);
+      const projection = await projectAgent(generation, agent, readParams.sessionEntry);
+      return {
+        isCurrent: projection.isCurrent,
+        read: () => projectChatSessionMetadata(readParams, projection.read(), deps.getConfig()),
+      };
     });
 
   const readStartup = async (
@@ -634,7 +639,9 @@ export function createGatewayChatMetadataRuntime(params: {
       session: PreparedAgentProjection,
     ): ChatStartupProjectionResult => ({
       // History consumes stable catalogs only; live readiness stays inside the current-read fence.
-      ...(readParams.readPolicy === "ready" ? {} : { metadata: session.read() }),
+      ...(readParams.readPolicy === "ready"
+        ? {}
+        : { metadata: projectChatSessionMetadata(readParams, session.read(), deps.getConfig()) }),
       sessionModelCatalog: session.modelCatalog,
       defaultModelCatalog: neutral.modelCatalog,
     });

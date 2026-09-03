@@ -3,6 +3,7 @@ import {
   createNewSessionPageE2eSuite,
   installMockGateway,
   controlUiSessionPath,
+  captureNewSessionComposerUiProof,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
@@ -19,10 +20,14 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}new`);
-      await page.getByText("When you pause, draft text is sent", { exact: false }).waitFor();
       const message = page.locator(".new-session-page__message");
       await message.fill("repair the sidebar naming");
-      await page.getByText("Session name: Repair sidebar naming", { exact: true }).waitFor();
+      await gateway.waitForRequest("sessions.title.prepare");
+      expect(
+        await page.getByText("When you pause, draft text is sent", { exact: false }).count(),
+      ).toBe(0);
+      expect(await page.getByText("Session name:", { exact: false }).count()).toBe(0);
+      await captureNewSessionComposerUiProof(suite, page, "prepared-title-composer.png");
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
       await page.getByRole("button", { name: "Start session" }).click();
       expect(await gateway.waitForRequest("sessions.create")).toMatchObject({
@@ -56,7 +61,10 @@ suite.define(() => {
       await message.blur();
       await page.clock.runFor(1_500);
       expect(await gateway.getRequests("sessions.title.prepare")).toHaveLength(1);
-      await page.getByText("Session name: Composed draft", { exact: true }).waitFor();
+      await page.getByRole("button", { name: "Start session" }).click();
+      expect(await gateway.waitForRequest("sessions.create")).toMatchObject({
+        params: { displayName: "Composed draft" },
+      });
     });
   });
 

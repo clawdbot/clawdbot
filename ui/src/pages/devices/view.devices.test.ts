@@ -1,67 +1,23 @@
 /* @vitest-environment jsdom */
 import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { openDesktopFocus } from "../../components/desktop/desktop-focus-window.ts";
 import type { InventoryRemovalRequest } from "../../lib/nodes/index.ts";
+import { createDevicesViewProps, deviceSystemInfo } from "../../test-helpers/devices-fixtures.ts";
 import { renderDevices } from "./view.ts";
 import type { DevicesProps } from "./view.types.ts";
 
-function baseProps(overrides: Partial<DevicesProps> = {}): DevicesProps {
-  return {
-    loading: false,
-    nodes: [],
-    presence: [],
-    gatewayVersion: null,
-    lastError: null,
-    devicesLoading: false,
-    devicesError: null,
-    devicesList: {
-      pending: [],
-      paired: [],
-    },
-    canPairDevice: true,
-    canManagePairing: true,
-    canAdmin: true,
-    configForm: null,
-    configLoading: false,
-    configSaving: false,
-    configDirty: false,
-    configFormMode: "form",
-    execApprovalsLoading: false,
-    execApprovalsSaving: false,
-    execApprovalsDirty: false,
-    execApprovalsSnapshot: null,
-    execApprovalsForm: null,
-    execApprovalsSelectedAgent: null,
-    execApprovalsTarget: "gateway",
-    execApprovalsTargetNodeId: null,
-    onDevicePairSetupOpen: () => undefined,
-    onDeviceApprove: () => undefined,
-    onDeviceReject: () => undefined,
-    onDeviceRotate: () => undefined,
-    onDeviceRevoke: () => undefined,
-    onNodeApprove: () => undefined,
-    onNodeReject: () => undefined,
-    onInventoryRemove: () => undefined,
-    onInventoryCleanup: () => undefined,
-    onLoadConfig: () => undefined,
-    onLoadExecApprovals: () => undefined,
-    onBindDefault: () => undefined,
-    onBindAgent: () => undefined,
-    onSaveBindings: () => undefined,
-    onExecApprovalsTargetChange: () => undefined,
-    onExecApprovalsSelectAgent: () => undefined,
-    onExecApprovalsPatch: () => undefined,
-    onExecApprovalsRemove: () => undefined,
-    onSaveExecApprovals: () => undefined,
-    ...overrides,
-  };
-}
+vi.mock("../../components/desktop/desktop-focus-window.ts", () => ({
+  openDesktopFocus: vi.fn(),
+}));
+
+afterEach(() => document.body.replaceChildren());
 
 function renderDevicesContainer(overrides: Partial<DevicesProps>): HTMLDivElement {
   const container = document.createElement("div");
   document.body.append(container);
-  render(renderDevices(baseProps(overrides)), container);
+  render(renderDevices(createDevicesViewProps(overrides)), container);
   return container;
 }
 
@@ -239,6 +195,137 @@ describe("devices pending rendering", () => {
 });
 
 describe("devices inventory rendering", () => {
+  it.each([
+    { load: 3.2, free: 41, diskFree: 1200, tone: "ok" },
+    { load: 18, free: 24, diskFree: 240, tone: "warn" },
+    { load: 28, free: 8, diskFree: 80, tone: "danger" },
+  ])("renders node resource pressure as $tone", ({ load, free, diskFree, tone }) => {
+    const container = renderDevicesContainer({
+      nodes: [
+        {
+          nodeId: "studio",
+          displayName: "Studio",
+          connected: true,
+          paired: true,
+          platform: "macos 27.0",
+          modelIdentifier: "Mac15,14",
+          version: "2026.8.1",
+          hostStats: {
+            cpuCount: 24,
+            loadAverage: [load, 2.8, 2.4],
+            memoryTotalBytes: 192 * 1024 ** 3,
+            memoryFreeBytes: free * 1024 ** 3,
+            diskTotalBytes: 2048 * 1024 ** 3,
+            diskAvailableBytes: diskFree * 1024 ** 3,
+            updatedAtMs: 1000,
+          },
+        },
+        { nodeId: "without-stats", displayName: "Without stats", paired: true, connected: true },
+      ],
+    });
+    const row = getSettingsRow(container, "Studio");
+    expect(row.querySelectorAll(`.device-resources .session-context-meter--${tone}`)).toHaveLength(
+      3,
+    );
+    expect(row.querySelector(".device-resource")?.getAttribute("title")).toContain(
+      `${load.toFixed(2)} / 2.80 / 2.40 on 24 cores`,
+    );
+    expect(row.querySelector(".settings-row__desc")?.textContent).toContain(
+      "macOS 27.0 · Mac Studio · Mac15,14 · 2026.8.1",
+    );
+    expect(
+      getSettingsRow(container, "Without stats").querySelector(".device-resources"),
+    ).toBeNull();
+    if (tone === "ok") {
+      expect(row.textContent).toContain("151 / 192 GB");
+    }
+  });
+
+  it("hides only meters whose optional inputs are absent", () => {
+    const container = renderDevicesContainer({
+      nodes: [
+        {
+          nodeId: "memory",
+          displayName: "Memory only",
+          paired: true,
+          hostStats: {
+            cpuCount: 8,
+            memoryTotalBytes: 32 * 1024 ** 3,
+            memoryFreeBytes: 16 * 1024 ** 3,
+            updatedAtMs: 1000,
+          },
+        },
+      ],
+    });
+    const meters = getSettingsRow(container, "Memory only").querySelectorAll(".device-resource");
+    expect(meters).toHaveLength(1);
+    expect(meters[0]?.textContent).toContain("16 / 32 GB");
+  });
+
+  it.each(["gateway", "node:studio"])(
+    "opens the recorded %s desktop environment in a focus window",
+    (environmentId) => {
+      // Settings routes hide the docked panel, so the row must open the standalone window.
+      vi.mocked(openDesktopFocus).mockClear();
+      const container = renderDevicesContainer({
+        basePath: "/ui",
+        presence: [{ host: "Gateway", mode: "gateway", ts: 1000 }],
+        nodes: [{ nodeId: "studio", displayName: "Studio", paired: true, connected: true }],
+        desktopEnvironments: [
+          { id: environmentId, type: "host", status: "available", desktop: true },
+        ],
+      });
+      expect(container.querySelectorAll(".device-entry__desktop")).toHaveLength(1);
+      findButton(
+        getSettingsRow(container, environmentId === "gateway" ? "Gateway" : "Studio"),
+        "Desktop",
+      ).click();
+      expect(openDesktopFocus).toHaveBeenCalledExactlyOnceWith("/ui", environmentId);
+    },
+  );
+
+  it.each([undefined, false])(
+    "does not infer Desktop availability from commands: %s",
+    (desktop) => {
+      const container = renderDevicesContainer({
+        nodes: [
+          { nodeId: "studio", displayName: "Studio", paired: true, commands: ["desktop.stream"] },
+        ],
+        desktopEnvironments: [
+          { id: "node:studio", type: "node", status: "available", desktop },
+          { id: "node:other", type: "node", status: "available", desktop: true },
+        ],
+      });
+      const row = getSettingsRow(container, "Studio");
+      expect(row.querySelector(".device-entry__desktop")).toBeNull();
+      const chip = row.querySelector('[aria-disabled="true"]');
+      expect(chip?.getAttribute("title")).toContain("desktop.host.enabled: true");
+      expect(chip?.getAttribute("title")).toContain("gateway.nodes.commands.allow");
+      expect(row.querySelector("details")?.textContent).toContain("Commands: desktop.stream");
+    },
+  );
+
+  it("renders Gateway resources and uptime from system info", () => {
+    const container = renderDevicesContainer({
+      presence: [{ host: "Gateway", mode: "gateway", ts: 1000 }],
+      gatewaySystemInfo: {
+        ...deviceSystemInfo,
+        uptimeMs: (11 * 24 + 4) * 3600000,
+        cpuCount: 16,
+        loadAverage: [3.2, 2.8, 2.4],
+        memoryTotalBytes: 64 * 1024 ** 3,
+        memoryFreeBytes: 32 * 1024 ** 3,
+        diskTotalBytes: 2 * 1024 ** 4,
+        diskAvailableBytes: 1.2 * 1024 ** 4,
+      },
+    });
+    const row = getSettingsRow(container, "Gateway");
+    expect(row.querySelectorAll(".device-resource")).toHaveLength(3);
+    expect(row.textContent).toContain("load 3.2");
+    expect(row.textContent).toContain("1.2 TB free");
+    expect(row.querySelector(".settings-row__desc")?.textContent).toContain("up 11d 4h");
+  });
+
   it("pins the Gateway self beacon before paired devices", () => {
     const container = renderDevicesContainer({
       presence: [
@@ -408,7 +495,7 @@ describe("devices inventory rendering", () => {
     expect(installed?.querySelector(".settings-row__desc")?.textContent).not.toContain(
       "Worker slots",
     );
-    expect(installed ? statusesByText(installed, "connected") : []).toHaveLength(0);
+    expect(installed ? statusesByText(installed, "connected") : []).toHaveLength(1);
     expect(installed ? statusesByText(installed, "worker missing") : []).toHaveLength(0);
     expect(missing ? statusesByText(missing, "worker missing") : []).toHaveLength(1);
     expect(
@@ -423,6 +510,7 @@ describe("devices inventory rendering", () => {
   it("shows device and Gateway version drift", () => {
     const container = renderDevicesContainer({
       gatewayVersion: "2026.7.2",
+      basePath: "",
       nodes: [
         {
           nodeId: "node-old",

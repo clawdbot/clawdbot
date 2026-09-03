@@ -264,7 +264,7 @@ The app keeps a registry of every gateway it has paired with, so you can keep op
 - Credentials, device tokens, TLS trust, chat history, and queued offline messages are stored per Gateway. Changing focus never mixes state between Gateways, and messages queued while offline are delivered only to the Gateway they were written for.
 - **Forget** removes a gateway's registry entry together with its credentials, device tokens, TLS pin, and cached chats.
 
-The **Channels**, **Dreaming**, **Health** logs, **Skills**, and **Usage** pages keep their last loaded data while refreshing. When refreshes overlap, only the latest request updates the page's data, error, and progress. Disconnecting clears the displayed summaries.
+The **Channels**, **Dreaming**, **Health** logs, **Skills**, and **Usage** pages keep their last loaded data while refreshing. A failed first load shows an error rather than empty counts or default health values. When refreshes overlap, only the latest request updates the page's data, error, and progress. Disconnecting clears the displayed summaries.
 
 ### Presence alive beacons
 
@@ -362,7 +362,8 @@ Camera commands (foreground only; permission-gated): `camera.snap` (jpg), `camer
 - Start continuous **Talk** from the Chat waveform. Dictation, voice-note
   recording, and Talk are mutually exclusive microphone paths.
 - Talk Mode promotes the existing foreground service from `connectedDevice` to `connectedDevice|microphone` before capture starts, then demotes it when Talk Mode stops. The node service declares `FOREGROUND_SERVICE_CONNECTED_DEVICE` with `CHANGE_NETWORK_STATE`; Android 14+ also requires the `FOREGROUND_SERVICE_MICROPHONE` declaration, the `RECORD_AUDIO` runtime grant, and the microphone service type at runtime.
-- By default, Android Talk uses native speech recognition, Gateway chat, and `talk.speak` through the configured gateway Talk provider. Local system TTS is used only when `talk.speak` is unavailable.
+- By default, Android Talk uses native speech recognition, Gateway chat, and `talk.speak` through the configured gateway Talk provider. It inherits the session's thinking setting. Local system TTS is used only when `talk.speak` is unavailable.
+- Gateway config changes refresh Android's cached Talk settings on the next use, without reconnecting or interrupting an active capture.
 - Android Talk uses realtime Gateway relay only when `talk.realtime.mode` is `realtime` and `talk.realtime.transport` is `gateway-relay`.
 - Enable **Settings → Voice → Listen for wake words** for foreground on-device
   Voice Wake. Android advertises `voiceWake` only when enabled, on-device
