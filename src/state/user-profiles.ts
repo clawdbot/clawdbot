@@ -5,6 +5,7 @@ import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { sql } from "kysely";
 import {
   GATEWAY_OWNER_PROFILE_ID,
+  type UserProfile as UserProfileListItem,
   type UserProfileGitHubIdentity,
 } from "../../packages/gateway-protocol/src/schema/users.js";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
@@ -59,21 +60,7 @@ export {
   listProfiles,
 } from "./user-profile-list.js";
 
-type UserProfile = {
-  id: string;
-  displayName: string | null;
-  avatarMime: UserProfileAvatarMime | null;
-  mergedInto: string | null;
-  role?: string;
-  createdAt: number;
-  updatedAt: number;
-};
-
-type UserProfileListItem = UserProfile & {
-  emails: string[];
-  githubIdentity: UserProfileGitHubIdentity | null;
-  hasAvatar: boolean;
-};
+type UserProfile = Omit<UserProfileListItem, "emails" | "githubIdentity" | "hasAvatar">;
 
 type GitHubAuthenticationAlias =
   | { kind: "email"; email: string }
