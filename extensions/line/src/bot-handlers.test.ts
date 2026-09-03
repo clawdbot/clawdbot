@@ -995,7 +995,6 @@ describe("handleLineWebhookEvents", () => {
   });
 
   it.each([
-    ["custom-input" as const, "Reply with your own answer."],
     ["already-terminal" as const, "That question is no longer waiting for an answer."],
     ["failed" as const, "Could not record that answer. Reply with the option text instead."],
   ])("tells the tapper what happened when a %s tap did not answer", async (status, notice) => {
@@ -1015,7 +1014,7 @@ describe("handleLineWebhookEvents", () => {
           webhookEventId: `evt-question-${status}`,
           deliveryContext: { isRedelivery: false },
           postback: {
-            data: "line.question=ask_3d8dbe55be452a9a39add7c909beb119&line.custom=1",
+            data: "line.question=ask_3d8dbe55be452a9a39add7c909beb119&line.option=0",
           },
         } as never,
       ],
@@ -1027,6 +1026,36 @@ describe("handleLineWebhookEvents", () => {
       [{ type: "text", text: notice }],
       expect.anything(),
     );
+    expect(processMessage).not.toHaveBeenCalled();
+  });
+
+  it("stays silent when a tap only opened the composer", async () => {
+    resolveLineQuestionPostbackMock.mockResolvedValueOnce({ status: "custom-input" });
+    const processMessage = vi.fn();
+    const context = createLineWebhookTestContext({ processMessage, dmPolicy: "open" });
+
+    await handleLineWebhookEvents(
+      [
+        {
+          type: "postback",
+          replyToken: "reply-token",
+          timestamp: Date.now(),
+          source: { type: "user", userId: "user-one" },
+          mode: "active",
+          webhookEventId: "evt-question-custom",
+          deliveryContext: { isRedelivery: false },
+          postback: {
+            data: "line.question=ask_3d8dbe55be452a9a39add7c909beb119&line.custom=1",
+          },
+        } as never,
+      ],
+      context,
+    );
+
+    // The keyboard the tap opened is the feedback; a notice on top of it would
+    // reach the whole group for one member's tap.
+    expect(pairingDeliveryMocks.replyMessageLine).not.toHaveBeenCalled();
+    expect(pairingDeliveryMocks.pushMessageLine).not.toHaveBeenCalled();
     expect(processMessage).not.toHaveBeenCalled();
   });
 

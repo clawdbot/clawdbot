@@ -17,7 +17,7 @@ describe("LINE question postback data", () => {
     });
   });
 
-  it("round-trips a custom-input choice", () => {
+  it("round-trips the free-text choice", () => {
     const data = buildLineQuestionPostbackData({ questionId: QUESTION_ID, customInput: true });
     expect(parseLineQuestionPostbackData(data!)).toEqual({
       questionId: QUESTION_ID,

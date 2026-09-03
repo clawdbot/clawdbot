@@ -163,6 +163,11 @@ function toLineQuestionChoice(
   return optionIndex === undefined ? undefined : { questionId: action.questionId, optionIndex };
 }
 
+/** A control the Gateway owns, whose label the operator cannot disambiguate. */
+function isLineQuestionButton(button: MessagePresentationButton): boolean {
+  return resolveMessagePresentationButtonAction(button)?.type === "question";
+}
+
 function toLineAction(
   button: MessagePresentationButton,
   questionOptionIndices?: AskUserQuestionOptionIndices,
@@ -172,7 +177,15 @@ function toLineAction(
   if (normalized?.type === "question") {
     const choice = toLineQuestionChoice(normalized, questionOptionIndices);
     const data = choice && buildLineQuestionPostbackData(choice);
-    return data ? { type: "postback", label, data, displayText: label } : undefined;
+    if (!data) {
+      return undefined;
+    }
+    // The free-text control answers nothing by itself; opening the composer is
+    // what it is for, and it is the only feedback the tap can give on a card
+    // LINE will not let us edit afterwards.
+    return choice && "customInput" in choice
+      ? { type: "postback", label, data, displayText: label, inputOption: "openKeyboard" }
+      : { type: "postback", label, data, displayText: label };
   }
   if (normalized?.type === "command") {
     return { type: "message", label, text: normalized.command };
@@ -200,6 +213,7 @@ export function renderLinePresentation(
   const quickReplyItems: LineQuickReplyItem[] = [];
   const carriedBlocks: MessagePresentationBlock[] = [];
   const cardBody: string[] = [];
+  const questionLabels = new Set<string>();
   const questionOptionIndices = resolveAskUserQuestionOptionIndices(payload);
   for (const block of presentation.blocks) {
     if (block.type === "buttons") {
@@ -207,6 +221,16 @@ export function renderLinePresentation(
         const action = toLineAction(button, questionOptionIndices);
         if (!action) {
           return null;
+        }
+        // Two Gateway options are distinct by contract, but a label is truncated
+        // to fit the control. Options that collide after that would be two
+        // identical taps, so the whole reply falls back to text that still
+        // distinguishes them.
+        if (isLineQuestionButton(button)) {
+          if (questionLabels.has(button.label)) {
+            return null;
+          }
+          questionLabels.add(button.label);
         }
         buttons.push({ label: button.label, action });
       }

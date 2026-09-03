@@ -582,12 +582,7 @@ async function handleLeaveEvent(event: LeaveEvent, _context: LineHandlerContext)
 }
 
 /** What a tap that did not answer the question has to tell the person who tapped. */
-function lineQuestionOutcomeNotice(status: "custom-input" | "already-terminal" | "failed"): string {
-  if (status === "custom-input") {
-    // The Gateway leaves the question pending for a typed answer, so without this
-    // the tap only echoes its own label and then looks like nothing happened.
-    return "Reply with your own answer.";
-  }
+function lineQuestionOutcomeNotice(status: "already-terminal" | "failed"): string {
   if (status === "already-terminal") {
     // The Gateway reports one terminal state for answered, cancelled and expired
     // questions alike, so the notice claims only what it knows.
@@ -621,7 +616,10 @@ async function handlePostbackEvent(
     // A recorded answer needs no acknowledgement: the agent's next reply is the
     // feedback, and LINE already echoed the label through the action's displayText.
     const pushTarget = groupId ?? roomId ?? (userId ? `line:${userId}` : undefined);
-    if (outcome.status === "answered" || !pushTarget) {
+    // A recorded answer and a tap that opened the composer both speak for
+    // themselves: the agent's next reply is the feedback for one, the keyboard
+    // is the feedback for the other.
+    if (outcome.status === "answered" || outcome.status === "custom-input" || !pushTarget) {
       return;
     }
     await sendLineHandlerText({
