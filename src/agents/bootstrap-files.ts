@@ -8,6 +8,7 @@ import type { ChatType } from "../channels/chat-type.js";
 import { readRecentSessionTranscriptActiveEvents } from "../config/sessions/session-accessor.js";
 import type { AgentContextInjection } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadDeclaredExtraBootstrapFiles } from "../hooks/bundled/bootstrap-extra-files/declared-files.js";
 import { isMemoryOriginEligibleForAutomaticInjection } from "../memory-host-sdk/host/types.js";
 import { classifyActiveMemoryWorkspacePaths } from "../plugins/memory-runtime.js";
 import { resolveUserPath } from "../utils.js";
@@ -303,22 +304,30 @@ type BootstrapFileResolutionParams = {
   readOnlyState?: boolean;
 };
 
+/**
+ * Hook effects a resolution applies. Doctor runs without the hook runtime, so
+ * "diagnostic" also projects the additions the bundled bootstrap-extra-files
+ * handler would make; registered handlers still run first and path dedupe in
+ * sanitizeBootstrapFiles keeps the projection idempotent when both are present.
+ */
+type BootstrapHookApplication = "none" | "registered" | "diagnostic";
+
 /** Prepare the same bounded workspace facts without invoking run-owned bootstrap hooks. */
 export async function resolveBootstrapFilesForPreparation(
   params: BootstrapFileResolutionParams,
 ): Promise<WorkspaceBootstrapFile[]> {
-  return resolveBootstrapFiles({ ...params, readOnlyState: true }, false);
+  return resolveBootstrapFiles({ ...params, readOnlyState: true }, "none");
 }
 
 export async function resolveBootstrapFilesForRun(
   params: BootstrapFileResolutionParams,
 ): Promise<WorkspaceBootstrapFile[]> {
-  return resolveBootstrapFiles(params, true);
+  return resolveBootstrapFiles(params, "registered");
 }
 
 async function resolveBootstrapFiles(
   params: BootstrapFileResolutionParams,
-  applyHooks: boolean,
+  hooks: BootstrapHookApplication,
 ): Promise<WorkspaceBootstrapFile[]> {
   const sessionKey = params.sessionKey ?? params.sessionId;
   const session = {
@@ -369,16 +378,25 @@ async function resolveBootstrapFiles(
     runKind: params.runKind,
   });
 
-  const updated = applyHooks
-    ? await applyBootstrapHookOverrides({
-        files: bootstrapFiles,
-        workspaceDir: params.workspaceDir,
-        config: params.config,
-        sessionKey: params.sessionKey,
-        sessionId: params.sessionId,
-        agentId: params.agentId,
-      })
-    : bootstrapFiles;
+  const hooked =
+    hooks === "none"
+      ? bootstrapFiles
+      : await applyBootstrapHookOverrides({
+          files: bootstrapFiles,
+          workspaceDir: params.workspaceDir,
+          config: params.config,
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+          agentId: params.agentId,
+        });
+  const declared =
+    hooks === "diagnostic"
+      ? await loadDeclaredExtraBootstrapFiles({
+          config: params.config,
+          workspaceDir: params.workspaceDir,
+        })
+      : undefined;
+  const updated = declared ? [...hooked, ...declared.files] : hooked;
   const filteredUpdated = filterCompletedWorkspaceBootstrapFile(
     filterBootstrapFilesAfterHooks({
       files: updated,
@@ -408,6 +426,18 @@ export async function resolveBootstrapContextForRun(params: {
   contextFiles: EmbeddedContextFile[];
 }> {
   const bootstrapFiles = await resolveBootstrapFilesForRun(params);
+  const contextFiles = buildBootstrapContextForFiles(bootstrapFiles, params);
+  return { bootstrapFiles, contextFiles };
+}
+
+/** Resolves the run-equivalent bootstrap context in hook-runtime-free processes such as doctor. */
+export async function resolveBootstrapContextForDiagnostics(
+  params: Pick<
+    BootstrapFileResolutionParams,
+    "workspaceDir" | "config" | "agentId" | "readOnlyState"
+  >,
+): ReturnType<typeof resolveBootstrapContextForRun> {
+  const bootstrapFiles = await resolveBootstrapFiles(params, "diagnostic");
   const contextFiles = buildBootstrapContextForFiles(bootstrapFiles, params);
   return { bootstrapFiles, contextFiles };
 }

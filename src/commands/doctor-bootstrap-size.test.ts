@@ -8,7 +8,7 @@ const resolveAgentWorkspaceDir = vi.hoisted(() =>
 );
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "main"));
 const listAgentIds = vi.hoisted(() => vi.fn(() => ["main"]));
-const resolveBootstrapContextForRun = vi.hoisted(() => vi.fn());
+const resolveBootstrapContextForDiagnostics = vi.hoisted(() => vi.fn());
 const resolveBootstrapMaxChars = vi.hoisted(() => vi.fn(() => 20_000));
 const resolveBootstrapTotalMaxChars = vi.hoisted(() => vi.fn(() => 150_000));
 
@@ -23,7 +23,7 @@ vi.mock("../agents/agent-scope.js", () => ({
 }));
 
 vi.mock("../agents/bootstrap-files.js", () => ({
-  resolveBootstrapContextForRun,
+  resolveBootstrapContextForDiagnostics,
 }));
 
 vi.mock("../agents/embedded-agent-helpers.js", () => ({
@@ -36,8 +36,8 @@ import { noteBootstrapFileSize } from "./doctor-bootstrap-size.js";
 describe("noteBootstrapFileSize", () => {
   beforeEach(() => {
     note.mockClear();
-    resolveBootstrapContextForRun.mockReset();
-    resolveBootstrapContextForRun.mockResolvedValue({
+    resolveBootstrapContextForDiagnostics.mockReset();
+    resolveBootstrapContextForDiagnostics.mockResolvedValue({
       bootstrapFiles: [],
       contextFiles: [],
     });
@@ -45,7 +45,7 @@ describe("noteBootstrapFileSize", () => {
   });
 
   it("emits a warning when bootstrap files are truncated", async () => {
-    resolveBootstrapContextForRun.mockResolvedValue({
+    resolveBootstrapContextForDiagnostics.mockResolvedValue({
       bootstrapFiles: [
         {
           name: "AGENTS.md",
@@ -75,20 +75,20 @@ describe("noteBootstrapFileSize", () => {
   it("threads the default agent id through bootstrap size resolution", async () => {
     resolveDefaultAgentId.mockReturnValueOnce("custom-agent");
     listAgentIds.mockReturnValueOnce(["custom-agent"]);
-    resolveBootstrapContextForRun.mockResolvedValue({
+    resolveBootstrapContextForDiagnostics.mockResolvedValue({
       bootstrapFiles: [],
       contextFiles: [],
     });
     await noteBootstrapFileSize({} as OpenClawConfig);
     expect(resolveBootstrapMaxChars).toHaveBeenCalledWith(expect.anything(), "custom-agent");
     expect(resolveBootstrapTotalMaxChars).toHaveBeenCalledWith(expect.anything(), "custom-agent");
-    expect(resolveBootstrapContextForRun).toHaveBeenCalledWith(
+    expect(resolveBootstrapContextForDiagnostics).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "custom-agent" }),
     );
   });
 
   it("stays silent when files are comfortably within limits", async () => {
-    resolveBootstrapContextForRun.mockResolvedValue({
+    resolveBootstrapContextForDiagnostics.mockResolvedValue({
       bootstrapFiles: [
         {
           name: "AGENTS.md",
@@ -106,7 +106,7 @@ describe("noteBootstrapFileSize", () => {
   it("labels a secondary agent whose bootstrap files exceed the limit", async () => {
     listAgentIds.mockReturnValue(["main", "secondary"]);
     resolveAgentWorkspaceDir.mockImplementation((_cfg, agentId) => `/tmp/${agentId}`);
-    resolveBootstrapContextForRun.mockImplementation(async ({ agentId }) => ({
+    resolveBootstrapContextForDiagnostics.mockImplementation(async ({ agentId }) => ({
       bootstrapFiles:
         agentId === "secondary"
           ? [
@@ -128,6 +128,6 @@ describe("noteBootstrapFileSize", () => {
 
     expect(note).toHaveBeenCalledTimes(1);
     expect(note.mock.calls[0]?.[0]).toContain('Agent "secondary":');
-    expect(resolveBootstrapContextForRun).toHaveBeenCalledTimes(2);
+    expect(resolveBootstrapContextForDiagnostics).toHaveBeenCalledTimes(2);
   });
 });
