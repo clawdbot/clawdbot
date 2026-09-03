@@ -618,11 +618,15 @@ describe("GPT-Live gateway relay bridge", () => {
       sendAudio: vi.fn(),
       close: vi.fn(),
     } satisfies OpenAIQuicksilverAudioPeerContract;
+    const createPeer = vi.fn((callbacks: OpenAIQuicksilverAudioPeerCallbacks) => {
+      peerCallbacks = callbacks;
+      return peerPromise;
+    });
     const onClose = vi.fn();
     const bridge = new OpenAIQuicksilverGatewayBridge(
       {
         providerConfig: {},
-        model: "gpt-live-1-codex",
+        model: "gpt-live-test-canary",
         voice: "marin",
         audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
         onAudio: vi.fn(),
@@ -636,10 +640,7 @@ describe("GPT-Live gateway relay bridge", () => {
           token: "oauth-token",
           accountId: "account-1",
         })),
-        createPeer: vi.fn((callbacks) => {
-          peerCallbacks = callbacks;
-          return peerPromise;
-        }),
+        createPeer,
         fetchImpl: vi.fn(async () => createCallResponse("v=answer\r\n", "rtc_pending_audio")),
         webSocketFactory: () => new FakeSocket(),
       },
@@ -654,6 +655,9 @@ describe("GPT-Live gateway relay bridge", () => {
       rejectPeer: (error: Error) => rejectPeer?.(error),
       resolvePeer: () => resolvePeer?.(peer),
       triggerPeerError: (error: Error) => peerCallbacks?.onError(error),
+      waitForPeerStart: async () => {
+        await vi.waitFor(() => expect(createPeer).toHaveBeenCalledOnce());
+      },
     };
   }
 
@@ -685,8 +689,10 @@ describe("GPT-Live gateway relay bridge", () => {
   });
 
   it("discards queued microphone audio when closed before the media peer resolves", async () => {
-    const { bridge, connection, onClose, peer, resolvePeer } = createPendingPeerBridge();
+    const { bridge, connection, onClose, peer, resolvePeer, waitForPeerStart } =
+      createPendingPeerBridge();
     const testBridge = bridge as unknown as TestableGatewayBridge;
+    await waitForPeerStart();
     bridge.sendAudio(Buffer.from([0x41, 0x42]));
     bridge.close();
     bridge.close();
@@ -696,7 +702,7 @@ describe("GPT-Live gateway relay bridge", () => {
     expect(onClose).toHaveBeenCalledWith("completed");
     resolvePeer();
 
-    await expect(connection).rejects.toThrow("GPT-Live gateway relay bridge closed");
+    await expect(connection).rejects.toThrow("OpenAI GPT-Live gateway relay failed");
     await vi.waitFor(() => expect(peer.close).toHaveBeenCalledOnce());
     expect(peer.sendAudio).not.toHaveBeenCalled();
     bridge.sendAudio(Buffer.from([0x43, 0x44]));
@@ -704,14 +710,15 @@ describe("GPT-Live gateway relay bridge", () => {
   });
 
   it("discards queued microphone audio when media peer creation fails", async () => {
-    const { bridge, connection, peer, rejectPeer } = createPendingPeerBridge();
+    const { bridge, connection, peer, rejectPeer, waitForPeerStart } = createPendingPeerBridge();
     const pendingAudioState = bridge as unknown as {
       pendingAudio: OpenAIQuicksilverPendingAudio;
     };
+    await waitForPeerStart();
     bridge.sendAudio(Buffer.from([0x41, 0x42]));
     rejectPeer(new Error("media peer unavailable"));
 
-    await expect(connection).rejects.toThrow("media peer unavailable");
+    await expect(connection).rejects.toThrow("OpenAI GPT-Live gateway relay failed");
     expect(pendingAudioState.pendingAudio).toHaveLength(0);
     bridge.sendAudio(Buffer.from([0x43, 0x44]));
     expect(pendingAudioState.pendingAudio).toHaveLength(0);
@@ -726,8 +733,9 @@ describe("GPT-Live gateway relay bridge", () => {
       onError: () => bridgeRef.current?.close(),
     });
     bridgeRef.current = harness.bridge;
+    await harness.waitForPeerStart();
     const connectionRejected = expect(harness.connection).rejects.toThrow(
-      "GPT-Live gateway relay bridge closed",
+      "OpenAI GPT-Live gateway relay failed",
     );
 
     harness.triggerPeerError(new Error("media peer failed"));
@@ -747,9 +755,10 @@ describe("GPT-Live gateway relay bridge", () => {
       },
     });
     const testBridge = harness.bridge as unknown as TestableGatewayBridge;
+    await harness.waitForPeerStart();
     harness.bridge.sendAudio(Buffer.from([0x41, 0x42]));
     const connectionRejected = expect(harness.connection).rejects.toThrow(
-      "GPT-Live gateway relay bridge closed",
+      "OpenAI GPT-Live gateway relay failed",
     );
 
     expect(() => harness.triggerPeerError(new Error("media peer failed"))).toThrow(callbackError);
@@ -832,7 +841,7 @@ describe("GPT-Live gateway relay bridge", () => {
     const bridge = new OpenAIQuicksilverGatewayBridge(
       {
         providerConfig: {},
-        model: "gpt-live-1-codex",
+        model: "gpt-live-test-canary",
         voice: "marin",
         audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
         onAudio: vi.fn(),
@@ -899,7 +908,7 @@ describe("GPT-Live gateway relay bridge", () => {
     const bridge = new OpenAIQuicksilverGatewayBridge(
       {
         providerConfig: {},
-        model: "gpt-live-1-codex",
+        model: "gpt-live-test-canary",
         voice: "marin",
         instructions: "Speak briefly.",
         audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
@@ -938,6 +947,7 @@ describe("GPT-Live gateway relay bridge", () => {
     expect(JSON.parse(body).session.delegation).toEqual({ type: "client", ack_filler: false });
     expect(JSON.parse(body).session.instructions).toContain("Wait for the host control result");
     expect(createOffer).toHaveBeenCalledOnce();
+    expect(fetchImpl).toHaveBeenCalledOnce();
     expect(applyAnswer).toHaveBeenCalledWith("v=answer\r\n");
     expect(adoptPendingAudio).not.toHaveBeenCalled();
     emitSideband(connectedSocket, {
@@ -954,7 +964,7 @@ describe("GPT-Live gateway relay bridge", () => {
       },
     ]);
 
-    emitSideband(connectedSocket, { type: "output_audio.delta", delta: "ignored-media-copy" });
+    emitSideband(connectedSocket, { type: "output_audio.delta", audio: "ignored-media-copy" });
     expect(onEvent).toHaveBeenCalledWith({ direction: "server", type: "output_audio.delta" });
     expect(onAudio).not.toHaveBeenCalled();
 
@@ -1010,7 +1020,7 @@ describe("GPT-Live gateway relay bridge", () => {
     const bridge = new OpenAIQuicksilverGatewayBridge(
       {
         providerConfig: {},
-        model: "gpt-live-1-codex",
+        model: "gpt-live-test-canary",
         voice: "marin",
         audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
         onAudio: vi.fn(),

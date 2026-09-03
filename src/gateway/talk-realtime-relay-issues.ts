@@ -38,3 +38,7 @@ export function buildTalkRealtimeRelayIssuePayload(
     phase: issue.phase,
   };
 }
+
+export function projectTalkRealtimeRelayProviderError(): string {
+  return "Realtime provider error.";
+}

@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
-import { formatErrorMessage } from "../infra/errors.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../talk/agent-consult-tool.js";
 import { buildRealtimeVoiceAgentCancelProviderResult } from "../talk/agent-run-control-shared.js";
+import { projectInternalRealtimeVoicePublicConfig } from "../talk/provider-internal.js";
 import {
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   type RealtimeVoiceAudioClearReason,
@@ -22,6 +22,7 @@ import {
 import {
   buildTalkRealtimeRelayIssuePayload as relayIssuePayload,
   createTalkRealtimeRelayIssue as realtimeRelayIssue,
+  projectTalkRealtimeRelayProviderError as projectRelayProviderErrorMessage,
 } from "./talk-realtime-relay-issues.js";
 import {
   cancelTalkRealtimeRelayProviderToolCall,
@@ -67,6 +68,11 @@ export function createTalkRealtimeRelaySession(
   params: CreateTalkRealtimeRelaySessionParams,
 ): TalkRealtimeRelaySessionResult {
   enforceRelaySessionLimits(params.connId);
+  const publicModel = projectInternalRealtimeVoicePublicConfig({
+    provider: params.provider,
+    providerConfig: params.providerConfig,
+    config: { model: params.model },
+  }).model;
   const forceAgentConsultOnFinalTranscript = params.forceAgentConsultOnFinalTranscript === true;
   const relaySessionId = randomUUID();
   const expiresAtMs = resolveExpiresAtMsFromDurationMs(RELAY_SESSION_TTL_MS);
@@ -391,7 +397,7 @@ export function createTalkRealtimeRelaySession(
         const issue = realtimeRelayIssue({
           message: outcome.message,
           provider: params.provider.id,
-          model: params.model,
+          model: publicModel,
           phase: "response",
         });
         const errorTalkEvent = harness.talk.recentEvents.findLast(
@@ -532,9 +538,9 @@ export function createTalkRealtimeRelaySession(
         return;
       }
       const issue = realtimeRelayIssue({
-        message: formatErrorMessage(error),
+        message: projectRelayProviderErrorMessage(),
         provider: params.provider.id,
-        model: params.model,
+        model: publicModel,
         phase: ready ? "stream" : "connect",
       });
       failureEmitted = true;
@@ -557,7 +563,7 @@ export function createTalkRealtimeRelaySession(
         const issue = realtimeRelayIssue({
           message: "Realtime provider closed before the session became ready.",
           provider: params.provider.id,
-          model: params.model,
+          model: publicModel,
           phase: "connect",
         });
         emit(relayIssuePayload(relaySessionId, issue), {
@@ -575,13 +581,13 @@ export function createTalkRealtimeRelaySession(
     harness.close();
     try {
       bridge.close();
-    } catch (error) {
+    } catch {
       params.context.logGateway.warn(
-        `failed to close realtime relay bridge after provider terminated during creation: ${formatErrorMessage(error)}`,
+        `failed to close realtime relay bridge after provider terminated during creation: ${projectRelayProviderErrorMessage()}`,
       );
     }
     if (earlyTerminal.kind === "error") {
-      throw earlyTerminal.error;
+      throw new Error(projectRelayProviderErrorMessage());
     }
     throw new Error(`Realtime provider closed during session creation: ${earlyTerminal.reason}`);
   }
@@ -648,15 +654,15 @@ export function createTalkRealtimeRelaySession(
   registerTalkConnectionCleanup(params.connId, "realtime-relay", () => {
     closeTalkRealtimeRelaySessionsForConnection(params.connId);
   });
-  bridge.connect().catch((error: unknown) => {
+  bridge.connect().catch(() => {
     const active = relaySessions.get(relaySessionId);
     if (active !== relay) {
       return;
     }
     const issue = realtimeRelayIssue({
-      message: formatErrorMessage(error),
+      message: projectRelayProviderErrorMessage(),
       provider: params.provider.id,
-      model: params.model,
+      model: publicModel,
       phase: "connect",
     });
     failureEmitted = true;
@@ -678,7 +684,7 @@ export function createTalkRealtimeRelaySession(
       outputEncoding: "pcm16",
       outputSampleRateHz: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ.sampleRateHz,
     },
-    ...(params.model ? { model: params.model } : {}),
+    ...(publicModel ? { model: publicModel } : {}),
     ...(params.voice ? { voice: params.voice } : {}),
     expiresAt: Math.floor(expiresAtMs / 1000),
   };

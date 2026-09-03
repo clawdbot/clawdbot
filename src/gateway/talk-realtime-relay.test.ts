@@ -590,7 +590,7 @@ describe("talk realtime gateway relay", () => {
         request.onError?.(new Error("provider rejected session"));
         request.onClose?.("error");
       },
-      expectedError: "provider rejected session",
+      expectedError: "Realtime provider error.",
     },
     {
       name: "close before error",
@@ -1785,7 +1785,6 @@ describe("talk realtime gateway relay", () => {
       autoRespondToAudio: true,
       interruptResponseOnInputAudio: true,
     });
-
     const readyPayload = findEventPayload(events, (payload) => payload.type === "ready");
     expectRecordFields(readyPayload, {
       relaySessionId: session.relaySessionId,
@@ -2070,7 +2069,7 @@ describe("talk realtime gateway relay", () => {
     expectRecordFields(errorPayload, {
       relaySessionId: session.relaySessionId,
       type: "error",
-      message: "OpenAI API key rejected with 401",
+      message: "Realtime provider error.",
       code: "realtime_unavailable",
       provider: "openai",
       model: "gpt-realtime-2",
@@ -2187,6 +2186,62 @@ describe("talk realtime gateway relay", () => {
       transport: "gateway-relay",
       phase: "connect",
     });
+  });
+
+  it.each([
+    { name: "opaque", hideModel: true, model: "gpt-live-test-private" },
+    { name: "public", hideModel: false, model: "gpt-realtime-test-public" },
+  ])("redacts provider details for a $name relay model", ({ hideModel, model }) => {
+    const sensitiveDetails = ["sensitive-route", "sensitive-session", "sensitive-transcript"];
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "openai",
+      label: "OpenAI Realtime",
+      isConfigured: () => true,
+      createBridge: (request) => {
+        bridgeRequest = request;
+        return makeRelayTransport();
+      },
+      ...(hideModel
+        ? {
+            [Symbol.for("openclaw.internal.realtime-voice-provider.v1")]: {
+              isBrowserSessionConfigured: () => true,
+              projectPublicConfig: ({ config }: { config: Record<string, unknown> }) => {
+                const { model: _model, ...publicConfig } = config;
+                return publicConfig;
+              },
+            },
+          }
+        : {}),
+    };
+    const events: Array<{ payload: unknown }> = [];
+    const context = {
+      broadcastToConnIds: (_event: string, payload: unknown) => {
+        events.push({ payload });
+      },
+    } as never;
+
+    const session = createTalkRealtimeRelaySession({
+      context,
+      connId: "conn-private-model",
+      provider,
+      providerConfig: { model },
+      instructions: "brief",
+      tools: [],
+      model,
+    });
+    bridgeRequest?.onError?.(new Error(`provider rejected ${model} ${sensitiveDetails.join(" ")}`));
+
+    if (hideModel) {
+      expect(session).not.toHaveProperty("model");
+    } else {
+      expect(session).toHaveProperty("model", model);
+    }
+    const projected = JSON.stringify(events);
+    expect(projected).toContain("Realtime provider error.");
+    for (const privateValue of [...(hideModel ? [model] : []), ...sensitiveDetails]) {
+      expect(projected).not.toContain(privateValue);
+    }
   });
 
   it("does not route assistant echo transcripts back into the realtime model", async () => {

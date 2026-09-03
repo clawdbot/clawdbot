@@ -39,8 +39,10 @@ import {
 import { getUserPreferences } from "../../state/user-preferences.js";
 import { resolveUserProfileId } from "../../state/user-profiles.js";
 import { resolveTalkSessionAgentId } from "../../talk/agent-target.js";
+import { projectInternalRealtimeVoicePublicConfig } from "../../talk/provider-internal.js";
 import {
   canonicalizeRealtimeVoiceProviderId,
+  getRealtimeVoiceProvider,
   listRealtimeVoiceProviders,
 } from "../../talk/provider-registry.js";
 import {
@@ -582,10 +584,14 @@ function resolveTalkResponseFromConfig(params: {
         ...effectiveRealtime,
       }
     : configuredPayload?.realtime;
-  const sourcePayload: TalkConfigResponse = {
-    ...configuredPayload,
-    ...(realtime ? { realtime } : {}),
-  };
+  const sourcePayload = projectTalkRealtimePublicModels({
+    payload: {
+      ...configuredPayload,
+      ...(realtime ? { realtime } : {}),
+    },
+    runtimeConfig: params.runtimeConfig,
+    effectiveProvider,
+  });
   const payload = params.includeSecrets
     ? projectTalkSourcePayloadForSecrets(sourcePayload)
     : sourcePayload;
@@ -641,6 +647,44 @@ function resolveTalkResponseFromConfig(params: {
       provider,
       config: responseConfig,
     },
+  };
+}
+
+function projectTalkRealtimePublicModels(params: {
+  payload: TalkConfigResponse;
+  runtimeConfig: OpenClawConfig;
+  effectiveProvider?: string;
+}): TalkConfigResponse {
+  const realtime = params.payload.realtime;
+  if (!realtime) {
+    return params.payload;
+  }
+  const project = <T extends TalkProviderConfig>(
+    providerId: string | undefined,
+    config: T,
+    providerConfig: TalkProviderConfig = config,
+  ): T => {
+    const provider = getRealtimeVoiceProvider(providerId, params.runtimeConfig);
+    return projectInternalRealtimeVoicePublicConfig({
+      ...(provider ? { provider } : {}),
+      providerId,
+      providerConfig,
+      config,
+    });
+  };
+  const providers = realtime.providers
+    ? Object.fromEntries(
+        Object.entries(realtime.providers).map(([id, config]) => [id, project(id, config)]),
+      )
+    : undefined;
+  const providerConfig = realtime.providers?.[params.effectiveProvider ?? ""] ?? {};
+  return {
+    ...params.payload,
+    realtime: project(
+      params.effectiveProvider,
+      { ...realtime, ...(providers ? { providers } : {}) },
+      providerConfig,
+    ),
   };
 }
 

@@ -891,8 +891,6 @@ extensions/openai/openai-provider.ts	5
 extensions/openai/provider-policy-api.ts	2
 extensions/openai/realtime-provider-shared.ts	2
 extensions/openai/realtime-quicksilver-bridge.ts	1
-extensions/openai/realtime-quicksilver-delegation-controller.ts	1
-extensions/openai/realtime-quicksilver.ts	1
 extensions/openai/realtime-voice-bridge.ts	3
 extensions/openai/realtime-voice-session-policy.ts	4
 extensions/openai/speech-provider.ts	2

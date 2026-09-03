@@ -118,12 +118,12 @@ class TalkModeConfigParsingTest {
     val providerLevelBrowserOnly =
       json
         .parseToJsonElement(
-          """{"talk":{"realtime":{"provider":"openai","providers":{"openai":{"model":"gpt-live-1-codex"}}}}}""",
+          """{"talk":{"realtime":{"provider":"openai","providers":{"openai":{"model":"gpt-live-test-canary"}}}}}""",
         ).jsonObject
     val topLevelWins =
       json
         .parseToJsonElement(
-          """{"talk":{"realtime":{"provider":"openai","model":"gpt-realtime-2.1","providers":{"openai":{"model":"gpt-live-1-codex"}}}}}""",
+          """{"talk":{"realtime":{"provider":"openai","model":"gpt-realtime-2.1","providers":{"openai":{"model":"gpt-live-test-canary"}}}}}""",
         ).jsonObject
 
     assertFalse(TalkModeGatewayConfigParser.parse(providerLevelBrowserOnly).realtimeRelayModelSupported)

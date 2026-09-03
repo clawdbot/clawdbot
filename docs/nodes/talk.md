@@ -30,9 +30,8 @@ Client-owned realtime Talk normally forwards provider tool calls through `talk.c
 
 Thin audio clients can request `gateway-control-v1` in
 `talk.client.create.capabilities`. OpenAI GA Realtime requires a Platform API
-key for this mode. Native GPT-Live uses its existing ChatGPT OAuth or Platform
-authentication; requesting Gateway control does not switch the selected model
-or authentication route.
+key for this mode. Native GPT-Live also requires Platform API-key
+authentication; requesting Gateway control does not switch the selected model.
 
 Success returns `clientControl: { owner: "gateway" }`, a 60-second single-use
 `clientSecret`, and the relative offer URL `/plugins/openai/realtime/calls`.
@@ -345,37 +344,27 @@ Supported keys: `voice` / `voice_id` / `voiceId`, `model` / `model_id` / `modelI
 }
 ```
 
-OpenAI browser WebRTC and Gateway-relay Talk support native GPT-Live. Select a
-supported native model in **Settings → Talk**; the provider catalog supplies
-the available model IDs. Browser and Gateway-relay WebRTC prefer a ChatGPT
-OAuth subscription profile and fall back to Platform
-API-key auth. OAuth creates the WebRTC call through the Codex backend using
-JSON `sdp` and `session`; Platform keys use multipart call creation at
-`https://api.openai.com/v1/live`. Both use a Gateway-owned public API sideband.
-Other backend bridges connect directly over the Frameless Bidi
-WebSocket and require Platform API-key auth, whose `/v1/live` access is currently
-[waitlist-gated](https://openai.com/form/gpt-live-1-in-the-api/).
+OpenAI browser WebRTC and Gateway-relay Talk support native GPT-Live. Set the
+account-issued model value in `talk.realtime.model`; opaque model values are
+not published through catalogs or diagnostics. Browser Talk uses client WebRTC
+with Gateway-owned control. Gateway relay and other backend consumers use the
+direct bidirectional transport. All GPT-Live paths require a Platform API key.
 
-The quickest setup is the Control UI: **Settings → Talk**, pick **OpenAI** and
-a `gpt-live-*` model. The OAuth prerequisite is an OpenClaw auth profile
-created with `openclaw models auth login --provider openai` — an existing
-Codex CLI sign-in is not read. GPT-Live also requires the bundled `openai`
-plugin registered in full mode; a restrictive `plugins.allow` list fails
-session creation with "OpenAI GPT-Live browser session broker is unavailable".
+Configure the Platform key for the OpenAI provider. GPT-Live browser Talk also
+requires the bundled `openai` plugin registered in full mode; a restrictive
+`plugins.allow` list fails session creation with "OpenAI GPT-Live browser
+session broker is unavailable".
 Runtime bounds: 8 concurrent sessions per Gateway and a 30-minute session TTL.
 Browser sessions also use 60-second single-use offer tokens.
 
-GPT-Live follows the Codex V3 voice contract: `arbor`, `breeze`, `cove`,
-`ember`, `juniper`, `maple`, `sol`, `spruce`, and `vale`, with `cove` as the
-default. GA Realtime has a separate voice set. A `403 Voice session access
-denied` response does not identify the cause by itself; check the selected
-account, model, and voice. ChatGPT OAuth with `spruce` has current speech
-roundtrip verification; Platform GPT-Live verification requires API access.
+Current Platform-key sessions accept `marin` and `cedar`, with `marin` as the
+default. A rejected session does not identify the cause by itself; check the
+selected account, model, and voice.
 
 | Consumer                    | GPT-Live status                                                            |
 | --------------------------- | -------------------------------------------------------------------------- |
-| Browser Talk                | Supported with client WebRTC and Gateway-owned sideband                    |
-| Gateway-relay Talk          | Supported with Gateway-owned WebRTC and sideband                           |
+| Browser Talk                | Supported with Platform-key client WebRTC and Gateway-owned sideband       |
+| Gateway-relay Talk          | Supported with direct Platform-key transport                               |
 | Discord bidirectional voice | Supported with the Platform-key backend WebSocket                          |
 | Voice Call and telephony    | Supported with the Platform-key backend WebSocket                          |
 | iOS client-owned Talk       | Implemented; GPT-Live device live verification pending                     |
@@ -388,8 +377,8 @@ the Gateway offer exchange; Android retains an explicit GPT-Live model gate.
 For model capability limits, see [Discord voice policies](/channels/discord#voice-channels)
 and [Voice Call tools](/plugins/voice-call#realtime-voice-conversations).
 
-The Gateway-owned WebRTC route keeps OAuth and Platform credentials away from
-relay clients. Backend WebSocket paths keep the Platform key on the Gateway;
+The Gateway-owned WebRTC route keeps Platform credentials away from relay
+clients. Backend WebSocket paths keep the Platform key on the Gateway;
 OpenClaw converts telephony G.711 u-law audio to and from GPT-Live's 24 kHz PCM
 contract.
 
@@ -406,8 +395,7 @@ iOS client-owned WebRTC, Voice Call, GA Gateway relay, provider WebSocket
 transports, Discord realtime voice, and Android realtime remain
 Platform-key-only. GA browser Talk keeps the existing client-owned data channel
 and `talk.client.toolCall` loop; only the credential owner and SDP exchange path
-change under OAuth. GPT-Live Gateway relay prefers ChatGPT OAuth and falls back
-to waitlist-enabled Platform access.
+change under OAuth. GPT-Live remains Platform-key-only.
 
 | Key                                      | Default                                    | Notes                                                                                                                                                                                                                                                        |
 | ---------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |

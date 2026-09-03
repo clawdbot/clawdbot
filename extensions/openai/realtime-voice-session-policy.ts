@@ -24,13 +24,15 @@ import {
   asSafeIntegerInRange,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveOpenAIChatGptSubscriptionAuth } from "./realtime-auth.js";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import {
   readRealtimeErrorDetail,
   resolveOpenAIProviderConfigRecord,
 } from "./realtime-provider-shared.js";
-import { OPENAI_GPT_LIVE_MODELS, OPENAI_GPT_LIVE_VOICES } from "./realtime-quicksilver.js";
+import {
+  OPENAI_GPT_LIVE_AUTH_REQUIRED,
+  OPENAI_GPT_LIVE_AUTHORED_PLATFORM_AUTH_UNAVAILABLE,
+} from "./realtime-quicksilver-redaction.js";
 
 export type OpenAIRealtimeVoice = (typeof OPENAI_REALTIME_VOICES)[number];
 
@@ -80,15 +82,9 @@ export const OPENAI_REALTIME_MODELS = [
   "gpt-realtime-2.1",
   "gpt-realtime-2.1-mini",
   "gpt-realtime-2",
-  ...OPENAI_GPT_LIVE_MODELS,
 ] as const;
 export const OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
-export const OPENAI_REALTIME_CAPABILITIES: RealtimeVoiceProviderCapabilities & {
-  voicesByModel: Record<string, readonly string[]>;
-} = {
-  voicesByModel: Object.fromEntries(
-    OPENAI_GPT_LIVE_MODELS.map((model) => [model, OPENAI_GPT_LIVE_VOICES]),
-  ),
+export const OPENAI_REALTIME_CAPABILITIES: RealtimeVoiceProviderCapabilities = {
   transports: ["webrtc", "gateway-relay"],
   inputAudioFormats: [
     REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
@@ -258,10 +254,6 @@ type OpenAIRealtimeApiKeyResolution =
 
 export const OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED =
   "OpenAI Realtime voice requires an OpenAI Platform API key";
-const OPENAI_GPT_LIVE_AUTH_REQUIRED =
-  "GPT-Live Talk requires either an OpenAI Platform API key or a ChatGPT OAuth subscription profile";
-const OPENAI_GPT_LIVE_AUTHORED_PLATFORM_AUTH_UNAVAILABLE =
-  "GPT-Live Talk requires a working OpenAI Platform API key or ChatGPT OAuth subscription profile. The selected Platform API-key source could not be resolved, so OAuth fallback was not used; fix or remove it.";
 export const OPENAI_REALTIME_API_KEY_REQUIRED = "OpenAI Realtime voice requires an API key";
 export const OPENAI_REALTIME_CONFIGURED_API_KEY_REJECTED =
   "OpenAI Realtime rejected the selected API key. Update or remove the active OpenAI API-key source";
@@ -553,18 +545,6 @@ export async function resolveOpenAIQuicksilverBridgeAuth(
   },
   runtime: OpenAIRealtimeHost,
 ) {
-  const { resolveAgentDir } = runtime;
-  const subscriptionAuth = await resolveOpenAIChatGptSubscriptionAuth(
-    {
-      cfg: params.cfg,
-      agentDir:
-        params.cfg && params.agentId ? resolveAgentDir(params.cfg, params.agentId) : undefined,
-    },
-    runtime,
-  );
-  if (subscriptionAuth) {
-    return subscriptionAuth;
-  }
   const platformAuth = await resolveOpenAIRealtimePlatformAuth(params, runtime);
   if (platformAuth.status === "available") {
     return { type: "api-key" as const, token: platformAuth.value };

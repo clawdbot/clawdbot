@@ -6,6 +6,7 @@
  * RealtimeVoiceProviderPlugin contract.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveBundledProviderPolicySurface } from "../plugins/provider-public-artifacts.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import type {
   RealtimeVoiceBrowserSession,
@@ -60,6 +61,10 @@ type InternalRealtimeVoiceProviderApi = {
     providerConfig: RealtimeVoiceProviderConfig;
     model?: string;
   }) => InternalRealtimeVoiceProviderCapabilities;
+  projectPublicConfig?: (ctx: {
+    providerConfig: RealtimeVoiceProviderConfig;
+    config: RealtimeVoiceProviderConfig;
+  }) => RealtimeVoiceProviderConfig;
   validateGatewayRelayLaunch?: (ctx: {
     cfg?: OpenClawConfig;
     providerConfig: RealtimeVoiceProviderConfig;
@@ -141,6 +146,28 @@ export function resolveInternalRealtimeVoiceGatewayRelayCapabilities(params: {
     providerConfig: params.providerConfig,
     model: params.model,
   });
+}
+
+export function projectInternalRealtimeVoicePublicConfig<
+  T extends RealtimeVoiceProviderConfig,
+>(params: {
+  provider?: RealtimeVoiceProviderPlugin;
+  providerId?: string;
+  providerConfig: RealtimeVoiceProviderConfig;
+  config: T;
+}): T {
+  const project =
+    (params.provider
+      ? readInternalRealtimeVoiceProviderApi(params.provider)?.projectPublicConfig
+      : undefined) ??
+    (params.providerId
+      ? resolveBundledProviderPolicySurface(params.providerId)?.projectRealtimeVoicePublicConfig
+      : undefined);
+  const projected = project?.({ providerConfig: params.providerConfig, config: params.config });
+  if (projected) {
+    return projected as T; // SAFETY: projections only remove or replace `model`; other fields stay intact.
+  }
+  return params.config;
 }
 
 export function resolveInternalRealtimeVoiceGatewayRelayLaunchError(params: {

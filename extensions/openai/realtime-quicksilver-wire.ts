@@ -27,15 +27,15 @@ const OPENAI_REALTIME_ERROR_DETAIL_MAX_CHARS = 500;
 const OPENAI_REALTIME_SDP_ANSWER_MAX_BYTES = 256 * 1024;
 const OPENAI_REALTIME_LOCATION_MAX_BYTES = 512;
 const OPENAI_REALTIME_CALL_ID_RE = /^[A-Za-z0-9_-]{1,128}$/u;
-const OPENAI_GPT_LIVE_WAITLIST_URL = "https://openai.com/form/gpt-live-1-in-the-api/";
 
 function redactOpenAIRealtimeErrorDetail(
   text: string,
   auth: OpenAIQuicksilverAuth,
+  model: string,
   redactSensitiveText: OpenAIRealtimeHost["redactSensitiveText"],
 ): string {
   let redacted = text;
-  const exactSecrets = [auth.token, auth.type === "oauth" ? auth.accountId : undefined];
+  const exactSecrets = [auth.token, auth.type === "oauth" ? auth.accountId : undefined, model];
   for (const secret of exactSecrets) {
     if (secret) {
       redacted = redacted.split(secret).join("[REDACTED]");
@@ -362,7 +362,7 @@ function describeOpenAIQuicksilverCallError(
     (normalized.includes("model_not_found") ||
       normalized.includes("does not exist or you do not have access"))
   ) {
-    return `OpenAI Platform API-key access to /v1/live is waitlist-gated. Use a ChatGPT OAuth profile or request access at ${OPENAI_GPT_LIVE_WAITLIST_URL}`;
+    return "OpenAI Platform API-key access is unavailable for the selected GPT-Live model. Verify the selected model and Platform account access.";
   }
   if (
     status === 400 &&
@@ -371,7 +371,7 @@ function describeOpenAIQuicksilverCallError(
   ) {
     return "The GPT-Live model value is not permitted. Choose a supported GPT-Live model in Settings > Talk.";
   }
-  return `GPT-Live call creation failed (${status})${detail ? `: ${detail}` : ""}`;
+  return `GPT-Live call creation failed (${status})`;
 }
 
 export async function createOpenAIQuicksilverCall(
@@ -451,6 +451,7 @@ export async function createOpenAIQuicksilverCall(
           redactOpenAIRealtimeErrorDetail(
             providerDetail?.text.trim() ?? "",
             params.auth,
+            params.session.model,
             runtime.redactSensitiveText,
           ),
           OPENAI_REALTIME_ERROR_DETAIL_MAX_CHARS,

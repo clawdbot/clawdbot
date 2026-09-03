@@ -126,6 +126,10 @@ type InternalRealtimeVoiceProviderApi = {
     supportsToolCalls?: boolean;
     transports?: string[];
   };
+  projectPublicConfig: (ctx: {
+    providerConfig: Record<string, unknown>;
+    config: Record<string, unknown>;
+  }) => Record<string, unknown>;
   validateGatewayRelayLaunch: (ctx: {
     cfg?: object;
     providerConfig: Record<string, unknown>;
