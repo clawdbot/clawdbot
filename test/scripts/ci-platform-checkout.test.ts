@@ -522,6 +522,29 @@ it.concurrent.each([
   55_000,
 );
 
+it("retains sentinel startup errors before registration", async () => {
+  await withCiCheckoutFixture(
+    "early-leader-exit",
+    (root) => {
+      writeFileSync(path.join(root, "checkout.sh"), "exit 99\n");
+      const preload = path.join(root, "startup.mjs");
+      writeFileSync(
+        preload,
+        'if (process.argv[2] === "sentinel") throw new Error("injected sentinel startup failure");\n',
+      );
+      return { NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` };
+    },
+    (report, result, stderr) => {
+      expect(result, stderr).toEqual({ code: 1, signal: null });
+      expect(report.error).toBe("Error: Sentinel exited before readiness (1)");
+      expect(report.output).toContain("injected sentinel startup failure");
+      expect(report.ownedProcesses).toEqual([]);
+      expect(report.cleanupRemaining).toEqual([]);
+      expect(report.commands).toEqual([]);
+    },
+  );
+}, 55_000);
+
 it("joins an unregistered sentinel before supervisor close on disconnect", async () => {
   await withCiCheckoutFixture(
     "early-leader-exit",

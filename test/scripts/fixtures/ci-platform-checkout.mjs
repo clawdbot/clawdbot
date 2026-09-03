@@ -89,9 +89,10 @@ function readWindowsProcessCensus(pids) {
   if (result.error || result.status !== 0 || result.stderr !== "") {
     throw new Error(
       "Fixture Windows process census failed (" +
-        (result.error?.code ?? result.status) +
+        (result.error?.code ?? result.signal ?? result.status) +
         "): " +
         result.stderr,
+      { cause: result.error },
     );
   }
   const observations = JSON.parse(result.stdout);
@@ -275,7 +276,7 @@ async function waitForReady(predicate, child, stopped = () => !fs.existsSync(lea
 
 function launch(role, attempt) {
   const child = spawn(process.execPath, [fixture, role, root, policyScenario, String(attempt)], {
-    stdio: "ignore",
+    stdio: ["ignore", "ignore", "inherit"],
   });
   child.on("error", (error) => {
     throw error;
@@ -1101,8 +1102,9 @@ async function supervise() {
       );
     }
     sentinel = spawn(process.execPath, [fixture, "sentinel", root, policyScenario], {
-      // Parent teardown owns this group even before sentinel self-registration.
-      stdio: "ignore",
+      // Parent teardown owns this group before self-registration. Keep startup
+      // errors in the existing report so census failures do not become opaque exits.
+      stdio: ["ignore", output, output],
     });
     // stop() joins the sentinel's actual close through pendingChildren before reporting.
     void track(sentinel);
