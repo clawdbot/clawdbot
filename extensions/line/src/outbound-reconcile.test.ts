@@ -173,16 +173,37 @@ describe("LINE unknown-send reconciliation", () => {
     ).toEqual(["replayed-1", "replayed-2"]);
   });
 
-  it("keys every push a payload fans out into, whatever kind it is", async () => {
-    await linePlugin.outbound?.sendPayload?.({
-      cfg: CFG,
-      to: TARGET,
-      text: "caption",
-      payload: {
+  it.each([
+    [
+      "a card, media and text",
+      {
         text: "caption",
         mediaUrl: "https://example.com/image.png",
         channelData: { line: { flexMessage: { altText: "alt", contents: { type: "bubble" } } } },
       },
+    ],
+    [
+      "a batch carrying quick replies",
+      {
+        text: "",
+        channelData: {
+          line: {
+            quickReplies: ["One", "Two"],
+            flexMessage: { altText: "alt", contents: { type: "bubble" } },
+          },
+        },
+      },
+    ],
+    [
+      "markdown that renders as its own segments",
+      { text: "| Name | Status |\n|---|---|\n| OpenClaw | ready |\n\nAfter the table." },
+    ],
+  ])("keys every platform send %s fans out into", async (_name, payload) => {
+    await linePlugin.outbound?.sendPayload?.({
+      cfg: CFG,
+      to: TARGET,
+      text: (payload as { text: string }).text,
+      payload,
       deliveryQueueId: QUEUE_ID,
       deliveryPartIndex: 0,
       deliveryPartCount: 1,
@@ -192,7 +213,7 @@ describe("LINE unknown-send reconciliation", () => {
     // adapter declares it reconciles those kinds; a push that skipped the recorder
     // would be replayed under a fresh key LINE cannot deduplicate.
     const keys = pushedRequests().map((request) => request.retryKey);
-    expect(keys.length).toBeGreaterThan(1);
+    expect(keys.length).toBeGreaterThan(0);
     expect(keys).toEqual(
       keys.map((_, pushIndex) =>
         resolveLinePushRetryKey({ deliveryQueueId: QUEUE_ID, partIndex: 0, pushIndex }),

@@ -103,10 +103,28 @@ export function createRuntime(): { runtime: PluginRuntime; mocks: LineRuntimeMoc
     await recordStubbedPush(opts, text);
     return lineResult("m-text");
   });
-  const pushMessagesLine = vi.fn(async () => lineResult("m-batch"));
-  const pushFlexMessage = vi.fn(async () => lineResult("m-flex"));
-  const pushTemplateMessage = vi.fn(async () => lineResult("m-template"));
-  const pushLocationMessage = vi.fn(async () => lineResult("m-loc"));
+  const pushMessagesLine = vi.fn(
+    async (_to: string, _messages: unknown, opts?: StubbedPushOpts) => {
+      await recordStubbedPush(opts, "m-batch");
+      return lineResult("m-batch");
+    },
+  );
+  const pushFlexMessage = vi.fn(
+    async (_to: string, _alt: string, _contents: unknown, opts?: StubbedPushOpts) => {
+      await recordStubbedPush(opts, "m-flex");
+      return lineResult("m-flex");
+    },
+  );
+  const pushTemplateMessage = vi.fn(
+    async (_to: string, _alt: string, _t: unknown, opts?: StubbedPushOpts) => {
+      await recordStubbedPush(opts, "m-template");
+      return lineResult("m-template");
+    },
+  );
+  const pushLocationMessage = vi.fn(async (_to: string, _loc: unknown, opts?: StubbedPushOpts) => {
+    await recordStubbedPush(opts, "m-loc");
+    return lineResult("m-loc");
+  });
   const pushTextMessageWithQuickReplies = vi.fn<
     typeof import("./send.js").pushTextMessageWithQuickReplies
   >(async () => lineResult("m-quick"));
