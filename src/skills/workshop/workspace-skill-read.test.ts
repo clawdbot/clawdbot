@@ -109,7 +109,6 @@ describe("listWritableWorkshopSkillSummaries", () => {
     expect(names(sizeLimited)).toEqual(["alpha", "beta", "gamma"]);
     await expect(
       readWritableWorkshopSkill("delta", {
-        config: {},
         agentId: "main",
         ...sizeLimited,
         env: testState.env,

@@ -59,30 +59,39 @@ function withWorkshopOwner<T extends { config?: OpenClawConfig; agentId?: string
   };
 }
 
-const applySkillProposal = (input: Parameters<typeof applySkillProposalImpl>[0]) =>
-  applySkillProposalImpl(withWorkshopOwner(input));
+type OptionalWorkshopConfig<T> = Omit<T, "config"> & { config?: OpenClawConfig };
+
+const applySkillProposal = (
+  input: OptionalWorkshopConfig<Parameters<typeof applySkillProposalImpl>[0]>,
+) => applySkillProposalImpl(withWorkshopOwner(input));
 const getSkillProposalRunProgress = (
-  input: Parameters<typeof getSkillProposalRunProgressImpl>[0],
+  input: OptionalWorkshopConfig<Parameters<typeof getSkillProposalRunProgressImpl>[0]>,
 ) => getSkillProposalRunProgressImpl(withWorkshopOwner(input));
 const inspectSkillProposal = (
   proposalId: string,
-  input?: Parameters<typeof inspectSkillProposalImpl>[1],
+  input?: OptionalWorkshopConfig<Parameters<typeof inspectSkillProposalImpl>[1]>,
 ) => inspectSkillProposalImpl(proposalId, withWorkshopOwner(input ?? {}));
-const listSkillProposals = (input?: Parameters<typeof listSkillProposalsImpl>[0]) =>
-  listSkillProposalsImpl(withWorkshopOwner(input ?? {}));
-const proposeCreateSkill = (input: Parameters<typeof proposeCreateSkillImpl>[0]) =>
-  proposeCreateSkillImpl(withWorkshopOwner(input));
-const proposeUpdateSkill = (input: Parameters<typeof proposeUpdateSkillImpl>[0]) =>
-  proposeUpdateSkillImpl(withWorkshopOwner(input));
-const quarantineSkillProposal = (input: Parameters<typeof quarantineSkillProposalImpl>[0]) =>
-  quarantineSkillProposalImpl(withWorkshopOwner(input));
-const rejectSkillProposal = (input: Parameters<typeof rejectSkillProposalImpl>[0]) =>
-  rejectSkillProposalImpl(withWorkshopOwner(input));
+const listSkillProposals = (
+  input?: OptionalWorkshopConfig<Parameters<typeof listSkillProposalsImpl>[0]>,
+) => listSkillProposalsImpl(withWorkshopOwner(input ?? {}));
+const proposeCreateSkill = (
+  input: OptionalWorkshopConfig<Parameters<typeof proposeCreateSkillImpl>[0]>,
+) => proposeCreateSkillImpl(withWorkshopOwner(input));
+const proposeUpdateSkill = (
+  input: OptionalWorkshopConfig<Parameters<typeof proposeUpdateSkillImpl>[0]>,
+) => proposeUpdateSkillImpl(withWorkshopOwner(input));
+const quarantineSkillProposal = (
+  input: OptionalWorkshopConfig<Parameters<typeof quarantineSkillProposalImpl>[0]>,
+) => quarantineSkillProposalImpl(withWorkshopOwner(input));
+const rejectSkillProposal = (
+  input: OptionalWorkshopConfig<Parameters<typeof rejectSkillProposalImpl>[0]>,
+) => rejectSkillProposalImpl(withWorkshopOwner(input));
 const resolvePendingSkillProposal = (
-  input: Parameters<typeof resolvePendingSkillProposalImpl>[0],
+  input: OptionalWorkshopConfig<Parameters<typeof resolvePendingSkillProposalImpl>[0]>,
 ) => resolvePendingSkillProposalImpl(withWorkshopOwner(input));
-const reviseSkillProposal = (input: Parameters<typeof reviseSkillProposalImpl>[0]) =>
-  reviseSkillProposalImpl(withWorkshopOwner(input));
+const reviseSkillProposal = (
+  input: OptionalWorkshopConfig<Parameters<typeof reviseSkillProposalImpl>[0]>,
+) => reviseSkillProposalImpl(withWorkshopOwner(input));
 
 beforeAll(async () => {
   stateDir = await stateDirs.make("openclaw-skill-workshop-state-");
