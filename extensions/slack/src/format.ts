@@ -105,6 +105,10 @@ function buildSlackLink(link: MarkdownLinkSpan, text: string) {
 
 type SlackMarkdownOptions = {
   tableMode?: MarkdownTableMode;
+  /** The caller wraps the output in this emphasis; Slack cannot nest the same style, so inner markers are dropped. */
+  enclosingStyle?: "bold" | "italic";
+  /** Escape every Slack angle token (mentions, special commands, links) instead of preserving it. */
+  mentions?: "escape";
 };
 
 const SLACK_MRKDWN_WORD_CHARACTER_RE = /[\p{L}\p{M}\p{N}_]/u;
@@ -403,7 +407,7 @@ function protectSlackAssistantTranscriptRoleHeaders(text: string): string {
   return `${SLACK_ASSISTANT_TRANSCRIPT_PREFIX}${text}`;
 }
 
-function buildSlackRenderOptions(enclosingStyle?: "bold" | "italic", mentions?: "escape") {
+function buildSlackRenderOptions({ enclosingStyle, mentions }: SlackMarkdownOptions = {}) {
   return {
     annotationMarkers: {
       assistant_transcript_role: {
@@ -427,10 +431,7 @@ function buildSlackRenderOptions(enclosingStyle?: "bold" | "italic", mentions?: 
 
 export function normalizeSlackOutboundText(
   markdown: string,
-  options: SlackMarkdownOptions & {
-    enclosingStyle?: "bold" | "italic";
-    mentions?: "escape";
-  } = {},
+  options: SlackMarkdownOptions = {},
 ): string {
   const ir = makeSlackEmphasisStylesSafe(
     markdownToIR(markdown ?? "", {
@@ -443,11 +444,7 @@ export function normalizeSlackOutboundText(
     }),
   );
   return protectSlackAssistantTranscriptRoleHeaders(
-    renderMarkdownWithMarkers(
-      ir,
-      buildSlackRenderOptions(options.enclosingStyle, options.mentions),
-      SLACK_FORMAT_PROFILE,
-    ),
+    renderMarkdownWithMarkers(ir, buildSlackRenderOptions(options), SLACK_FORMAT_PROFILE),
   );
 }
 

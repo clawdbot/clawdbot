@@ -153,6 +153,12 @@ export function buildSlackProgressStreamChunks(params: {
 
 type SlackProgressCardState = "working" | "success" | "error";
 
+// Card text is transient status: render authored Markdown as mrkdwn, but never
+// let it ping anyone or nest the card's own bold/italic wrapper.
+function renderProgressCardText(text: string, enclosingStyle?: "bold" | "italic"): string {
+  return normalizeSlackOutboundText(text, { mentions: "escape", enclosingStyle });
+}
+
 export function buildSlackProgressCardBlocks(params: {
   state: SlackProgressCardState;
   title: string;
@@ -171,16 +177,14 @@ export function buildSlackProgressCardBlocks(params: {
     .slice(-SLACK_MAX_BLOCKS)
     .map(
       (entry) =>
-        `${statusLabels[entry.status]}: ${normalizeSlackOutboundText(compactDetail(entry.step, maxLineChars), { mentions: "escape" })}`,
+        `${statusLabels[entry.status]}: ${renderProgressCardText(compactDetail(entry.step, maxLineChars))}`,
     );
   const narration = params.narration?.replace(/\s+/g, " ").trim();
   const authoredText = params.lines
     .filter(isAuthoredProgressLine)
     .map((line) => line.text.trim())
     .filter((text, index, values) => text && text !== narration && values.indexOf(text) === index)
-    .map((text) =>
-      normalizeSlackOutboundText(compactDetail(text, maxLineChars), { mentions: "escape" }),
-    )
+    .map((text) => renderProgressCardText(compactDetail(text, maxLineChars)))
     .join("\n");
   const finalStatus =
     params.state === "working" ? undefined : params.state === "success" ? "complete" : "error";
@@ -188,10 +192,8 @@ export function buildSlackProgressCardBlocks(params: {
   const status =
     params.state === "success" ? "Completed: " : params.state === "error" ? "Failed: " : "";
   const sections = [
-    `${status}*${normalizeSlackOutboundText(params.title.trim() || "Working", { mentions: "escape", enclosingStyle: "bold" })}*`,
-    narration
-      ? `_${normalizeSlackOutboundText(narration, { mentions: "escape", enclosingStyle: "italic" })}_`
-      : "",
+    `${status}*${renderProgressCardText(params.title.trim() || "Working", "bold")}*`,
+    narration ? `_${renderProgressCardText(narration, "italic")}_` : "",
     planLines.join("\n"),
     authoredText,
     attention ? escapeSlackMrkdwn(attention.title) : "",
