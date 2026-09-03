@@ -35,7 +35,7 @@ export const updateGenerationSelectionSchema = z
   .strict();
 
 const descriptorSchema = updateGenerationSelectionSchema
-  .extend({ packageVersion: nonEmptyStringSchema })
+  .extend({ packageVersion: nonBlankStringSchema })
   .strict();
 const serviceIntentSchema = z
   .object({
@@ -124,7 +124,7 @@ const updateGenerationTransactionReceiptUnion = z.discriminatedUnion("kind", [
       namespaceKey: nonEmptyStringSchema,
       serviceBefore: serviceIntentSchema,
       previousSelection: updateGenerationSelectionSchema.nullable(),
-      previousPackageVersion: nonEmptyStringSchema.nullable(),
+      previousPackageVersion: nonBlankStringSchema.nullable(),
       stableBindingAlreadyVerified: z.boolean(),
       brokerId: nonBlankStringSchema,
       brokerRevision: nonBlankStringSchema.nullable(),
@@ -135,10 +135,10 @@ const updateGenerationTransactionReceiptUnion = z.discriminatedUnion("kind", [
       ...receiptBase,
       kind: z.literal("generation-materialization-intent"),
       role: z.enum(["previous", "candidate"]),
-      sourceArtifactId: nonEmptyStringSchema,
+      sourceArtifactId: nonBlankStringSchema,
       generationId: generationIdSchema,
       manifest: manifestSchema,
-      packageVersion: nonEmptyStringSchema,
+      packageVersion: nonBlankStringSchema,
       entrypointRelativePath: relativeEntrypointSchema,
     })
     .strict(),
@@ -200,8 +200,8 @@ const updateGenerationTransactionReceiptUnion = z.discriminatedUnion("kind", [
     .object({
       ...receiptBase,
       kind: z.literal("completion"),
-      packageVersion: nonEmptyStringSchema,
-      launcherVersion: nonEmptyStringSchema,
+      packageVersion: nonBlankStringSchema,
+      launcherVersion: nonBlankStringSchema,
       serviceRunning: z.boolean(),
       serviceEnabled: z.boolean().optional(),
       evidence: retainedPairEvidenceSchema,
@@ -221,7 +221,7 @@ const updateGenerationTransactionReceiptUnion = z.discriminatedUnion("kind", [
       ...receiptBase,
       kind: z.literal("rolled-back"),
       selection: updateGenerationSelectionSchema,
-      launcherVersion: nonEmptyStringSchema,
+      launcherVersion: nonBlankStringSchema,
       serviceRunning: z.boolean(),
       serviceEnabled: z.boolean().optional(),
       evidence: selectedEvidenceSchema,

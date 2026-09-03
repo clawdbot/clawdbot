@@ -340,6 +340,12 @@ function assertReceiptTransition(
   if (projection.cleanupCompleted) {
     throw new Error("Cannot append to a cleaned update generation transaction");
   }
+  if (receipt.kind === "generation-materialization-intent" && receipt.role === "candidate") {
+    const retained = projection.baselineSelection ?? projection.intent.previousSelection;
+    if (retained?.generationId === receipt.generationId) {
+      throw new Error("Candidate materialization requires a distinct retained generation");
+    }
+  }
   if (receipt.kind === "generation-materialized") {
     const planned = projection.materializationIntents[receipt.role];
     if (!planned || planned.generationId !== receipt.generation.generationId) {
