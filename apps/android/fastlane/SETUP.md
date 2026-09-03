@@ -3,8 +3,13 @@
 Install:
 
 ```bash
-brew install fastlane
+cd apps/android
+gem install bundler -v 2.6.9
+bundle _2.6.9_ install
 ```
+
+The expected runtime is recorded in `apps/android/.ruby-version`. Fastlane and
+its transitive dependencies are checksum-locked in `apps/android/Gemfile.lock`.
 
 Create a Google Play service account JSON key with Google Play Developer API access, then grant that service account access to the OpenClaw app in Play Console.
 
@@ -53,7 +58,7 @@ Validate auth:
 
 ```bash
 cd apps/android
-fastlane android auth_check
+BUNDLE_GEMFILE="$PWD/Gemfile" bundle _2.6.9_ exec fastlane android auth_check
 ```
 
 Archive locally without upload:
@@ -116,7 +121,7 @@ Direct Fastlane entry point:
 
 ```bash
 cd apps/android
-fastlane android release_upload
+BUNDLE_GEMFILE="$PWD/Gemfile" bundle _2.6.9_ exec fastlane android release_upload
 ```
 
 Use the direct Fastlane entry point only for maintainer debugging when explicitly

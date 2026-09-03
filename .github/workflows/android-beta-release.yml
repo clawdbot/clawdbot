@@ -151,12 +151,17 @@ jobs:
         uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
         with:
           ruby-version: "3.4.10"
+          bundler: "2.6.9"
+          bundler-cache: false
+          working-directory: apps/android
 
-      - name: Install pinned Fastlane
+      - name: Install locked Fastlane bundle
+        working-directory: apps/android
         run: |
           set -euo pipefail
-          gem install fastlane --version 2.238.0 --no-document
-          test "$(ruby -e 'require "rubygems"; print Gem::Specification.find_by_name("fastlane").version')" = "2.238.0"
+          bundle _2.6.9_ install --jobs 4 --retry 3
+          bundle _2.6.9_ check
+          test "$(bundle _2.6.9_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.238.0"
 
       - name: Revalidate release authority immediately before signing access
         uses: ./.mobile-release-authority/.github/actions/mobile-release-authority

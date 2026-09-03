@@ -874,7 +874,7 @@ describe("mobile release authority", () => {
           "Setup Node environment",
           "Setup Android toolchain",
           "Setup Ruby",
-          "Install pinned Fastlane",
+          "Install locked Fastlane bundle",
         ],
       },
     ] as const;
@@ -1003,6 +1003,23 @@ describe("mobile release authority", () => {
       expect(release.steps[uploadIndex]?.env).not.toHaveProperty("GH_APP_PRIVATE_KEY");
       expect(release.steps[uploadIndex]?.env).not.toHaveProperty("MOBILE_RELEASE_REF_TOKEN");
       expect(release.steps[recordIndex]?.with?.operation).toBe("record");
+
+      if (platform === "android") {
+        const rubyStep = release.steps.find((step) => step.name === "Setup Ruby");
+        const bundleStep = release.steps.find(
+          (step) => step.name === "Install locked Fastlane bundle",
+        );
+        expect(rubyStep?.with).toMatchObject({
+          "bundler-cache": false,
+          "ruby-version": "3.4.10",
+          "working-directory": "apps/android",
+          bundler: "2.6.9",
+        });
+        expect(bundleStep?.run).toContain("bundle _2.6.9_ install --jobs 4 --retry 3");
+        expect(bundleStep?.run).toContain("bundle _2.6.9_ check");
+        expect(bundleStep?.run).toContain("bundle _2.6.9_ exec ruby");
+        expect(source).not.toContain("gem install fastlane");
+      }
 
       const secretPlacements = Object.entries(workflow.jobs).flatMap(([jobName, job]) =>
         job.steps.flatMap((step) => {

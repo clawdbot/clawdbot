@@ -5,6 +5,9 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const fastfilePath = path.join(process.cwd(), "apps", "android", "fastlane", "Fastfile");
+const rubyVersionPath = path.join(process.cwd(), "apps", "android", ".ruby-version");
+const gemfilePath = path.join(process.cwd(), "apps", "android", "Gemfile");
+const gemfileLockPath = path.join(process.cwd(), "apps", "android", "Gemfile.lock");
 
 function readFastfile(): string {
   return readFileSync(fastfilePath, "utf8");
@@ -35,6 +38,23 @@ function laneBody(source: string, name: string): string {
 }
 
 describe("Android Fastlane release upload gates", () => {
+  it("pins Ruby and the complete Fastlane dependency graph", () => {
+    const gemfile = readFileSync(gemfilePath, "utf8");
+    const lockfile = readFileSync(gemfileLockPath, "utf8");
+
+    expect(readFileSync(rubyVersionPath, "utf8")).toBe("3.4.10\n");
+    expect(gemfile).toContain('ruby "3.4.10"');
+    expect(gemfile).toContain('gem "fastlane", "2.238.0"');
+    expect(lockfile).toContain("fastlane (2.238.0)");
+    expect(lockfile).toContain("arm64-darwin");
+    expect(lockfile).toContain("x86_64-darwin");
+    expect(lockfile).toContain("aarch64-linux");
+    expect(lockfile).toContain("x86_64-linux");
+    expect(lockfile).toContain("CHECKSUMS");
+    expect(lockfile).toContain("RUBY VERSION\n   ruby 3.4.10");
+    expect(lockfile).toContain("BUNDLED WITH\n   2.6.9");
+  });
+
   it("publishes Wear releases to the matching form-factor track", () => {
     const wearTrack = functionBody(readFastfile(), "wear_play_track");
 
