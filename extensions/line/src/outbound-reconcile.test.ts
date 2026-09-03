@@ -173,8 +173,14 @@ describe("LINE unknown-send reconciliation", () => {
     ).toEqual(["replayed-1", "replayed-2"]);
   });
 
-  it("treats an unrecorded delivery as one that never reached LINE", async () => {
-    await expect(reconcile()).resolves.toEqual({ status: "not_sent" });
+  it("refuses a delivery that carried no durable record instead of replaying it", async () => {
+    // A recorded push lands before the marker that routes a delivery here, so an
+    // empty record means core withheld the queue id and those pushes went out
+    // under keys LINE will not deduplicate. Replaying is a second copy.
+    await expect(reconcile()).resolves.toMatchObject({
+      status: "unresolved",
+      retryable: false,
+    });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

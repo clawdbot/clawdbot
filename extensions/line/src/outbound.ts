@@ -427,9 +427,17 @@ async function reconcileLineUnknownSend(
     };
   }
   if (plans.length === 0) {
-    // No push was recorded, so none reached LINE and the queued delivery can be
-    // replayed from the start without duplicating anything.
-    return { status: "not_sent" };
+    // A push records itself before the dispatch marker that brings a delivery
+    // here at all (send.ts), so an empty record does not mean nothing was sent:
+    // it means this delivery never carried a recorder, which is what core does
+    // when the send needed a capability this adapter does not declare. Those
+    // pushes went out under keys LINE will not deduplicate, so replaying them
+    // would deliver a second copy. Refuse instead.
+    return {
+      status: "unresolved",
+      error: "LINE delivery carried no durable record, so a replay could not be deduplicated",
+      retryable: false,
+    };
   }
   // One payload can fan out into several platform sends, and the settled queue
   // entry must carry the identity of every one of them. Collecting per push is
