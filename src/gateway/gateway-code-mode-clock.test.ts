@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { onAgentEvent } from "../infra/agent-events.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -107,6 +106,7 @@ describe("Gateway Code Mode clock rollback", () => {
       let responseCount = 0;
       const responseBodies: Array<{ input?: unknown[] }> = [];
       let approvalId = "";
+      let restoreWallClock = () => {};
       const writeSseResponse = (events: Record<string, unknown>[]) =>
         events.map((event) => "data: " + JSON.stringify(event) + "\n\n").join("") +
         "data: [DONE]\n\n";
@@ -283,7 +283,10 @@ describe("Gateway Code Mode clock rollback", () => {
           caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
           deviceIdentity,
           onEvent: (event) => {
-            if (event.event !== "plugin.approval.requested") {
+            if (
+              event.event !== "plugin.approval.requested" &&
+              event.event !== "plugin.approval.resolved"
+            ) {
               return;
             }
             const payload = event.payload;
@@ -291,15 +294,20 @@ describe("Gateway Code Mode clock rollback", () => {
               return;
             }
             const request = (payload as { request?: unknown }).request;
-            if (!request || typeof request !== "object") {
-              return;
-            }
-            if ((request as { pluginId?: unknown }).pluginId !== approvalPluginId) {
-              return;
+            if (event.event === "plugin.approval.requested") {
+              if (!request || typeof request !== "object") {
+                return;
+              }
+              if ((request as { pluginId?: unknown }).pluginId !== approvalPluginId) {
+                return;
+              }
             }
             const id = (payload as { id?: unknown }).id;
             if (typeof id === "string") {
               approvalId = id;
+            }
+            if (event.event === "plugin.approval.resolved" && id === approvalId) {
+              restoreWallClock();
             }
           },
         });
@@ -329,16 +337,6 @@ describe("Gateway Code Mode clock rollback", () => {
             { timeout: 30_000, interval: 20 },
           );
 
-          let restoreWallClock = () => {};
-          const unsubscribeResolution = onAgentEvent((event) => {
-            if (
-              event.runId === started.runId &&
-              event.stream === "lifecycle" &&
-              event.data.phase === "approval-resolved"
-            ) {
-              restoreWallClock();
-            }
-          });
           const wallClockBeforeRollback = Date.now();
           const wallClock = vi.spyOn(Date, "now").mockReturnValue(wallClockBeforeRollback - 5_000);
           restoreWallClock = () => wallClock.mockRestore();
@@ -354,7 +352,6 @@ describe("Gateway Code Mode clock rollback", () => {
             ).resolves.toEqual({ ok: true });
           } finally {
             restoreWallClock();
-            unsubscribeResolution();
           }
 
           const completed = await client.request<{ status?: string }>(
