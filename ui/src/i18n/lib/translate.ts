@@ -233,6 +233,21 @@ class I18nManager {
     this.subscribers.forEach((sub) => sub(this.locale));
   }
 
+  public translateActive(key: string): string | undefined {
+    const keys = key.split(".");
+    let value: unknown = this.translations[this.locale];
+
+    for (const k of keys) {
+      if (value && typeof value === "object") {
+        value = Reflect.get(value, k);
+      } else {
+        return undefined;
+      }
+    }
+
+    return typeof value === "string" ? value : undefined;
+  }
+
   public t(key: string, params?: Record<string, string>): string {
     const keys = key.split(".");
     let value: unknown = this.translations[this.locale] || this.translations[DEFAULT_LOCALE];
@@ -275,6 +290,7 @@ class I18nManager {
 
 export const i18n = new I18nManager();
 export const t = (key: string, params?: Record<string, string>) => i18n.t(key, params);
+export const translateActive = (key: string) => i18n.translateActive(key);
 
 if (typeof process !== "undefined" && (process.env?.VITEST || process.env?.NODE_ENV === "test")) {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.i18nManagerTestApi")] = {

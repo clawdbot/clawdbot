@@ -5,13 +5,15 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import * as ts from "typescript";
 import {
-  loadControlUiSourceCatalog,
   loadControlUiTranslationMemory,
   materializeControlUiLocaleCatalog,
-  readControlUiSourceCatalog,
 } from "./lib/control-ui-i18n-catalog.ts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
 import { syncControlUiRawCopyBaseline } from "./lib/control-ui-i18n-raw-copy.ts";
+import {
+  loadControlUiSourceCatalog,
+  readControlUiSourceCatalog,
+} from "./lib/control-ui-i18n-source-catalog.ts";
 import { collectSourceFileContents } from "./lib/source-file-scan-cache.mts";
 
 export type CatalogFallbackBaseline = {
