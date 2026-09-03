@@ -237,6 +237,7 @@ type Workflow = {
   env?: Record<string, string>;
   jobs?: Record<string, WorkflowJob>;
   on?: {
+    schedule?: Array<{ cron?: string }>;
     workflow_call?: {
       inputs?: Record<string, unknown>;
     };
@@ -5389,6 +5390,9 @@ test "$package_manager" = "pnpm@12.1.0"
       default: "",
       required: false,
     });
+    expect(
+      readWorkflow(UPDATE_MIGRATION_WORKFLOW).on?.workflow_dispatch?.inputs,
+    ).not.toHaveProperty("allow_frozen_target_scenario_omissions");
     expect(workflow).toContain("default: plugin-deps-cleanup");
     expect(workflow).not.toMatch(/\n {2}schedule:/u);
     expect(job.with).toMatchObject({
@@ -5397,6 +5401,7 @@ test "$package_manager" = "pnpm@12.1.0"
       published_upgrade_survivor_baselines: "${{ inputs.baselines }}",
       published_upgrade_survivor_scenarios: "${{ inputs.scenarios }}",
     });
+    expect(job.with).not.toHaveProperty("allow_frozen_target_scenario_omissions");
     expect(workflow).toContain("telegram_mode: none");
     expect(workflow).toContain("secrets: inherit");
     expect(packageWorkflow).toContain("published-upgrade-survivor/update-migration");
@@ -6240,12 +6245,46 @@ describe("package artifact reuse", () => {
     ).toBe(1);
   });
 
-  it("enables prerelease plugin companions for scheduled ref validation", () => {
-    const scheduled = workflowJob(SCHEDULED_LIVE_CHECKS_WORKFLOW, "live_and_openwebui_checks");
-    expect(scheduled.with).toMatchObject({
+  it("separates daily live checks from the secretless weekly upgrade survivors", () => {
+    const workflow = readWorkflow(SCHEDULED_LIVE_CHECKS_WORKFLOW);
+    const daily = workflowJob(SCHEDULED_LIVE_CHECKS_WORKFLOW, "live_and_openwebui_checks");
+    const weekly = workflowJob(SCHEDULED_LIVE_CHECKS_WORKFLOW, "weekly_upgrade_survivors");
+
+    expect(workflow.on?.schedule).toEqual([{ cron: "23 4 * * *" }, { cron: "41 6 * * 1" }]);
+    expect(daily.if).toBe(
+      "github.event_name == 'workflow_dispatch' || github.event.schedule == '23 4 * * *'",
+    );
+    expect(daily.with).toMatchObject({
       enable_prepublish_plugin_registry: true,
       ref: "${{ github.sha }}",
     });
+    expect(weekly.if).toBe(
+      "github.event_name == 'schedule' && github.event.schedule == '41 6 * * 1'",
+    );
+    expect(weekly.permissions).toEqual({
+      actions: "read",
+      contents: "read",
+      packages: "read",
+      "pull-requests": "read",
+    });
+    expect(weekly.with).toMatchObject({
+      ref: "${{ github.sha }}",
+      include_repo_e2e: false,
+      include_release_path_suites: false,
+      include_openwebui: false,
+      include_live_suites: false,
+      allow_unreleased_changelog: true,
+      docker_lanes: "update-migration",
+      published_upgrade_survivor_baselines: "2026.7.1 2026.8.1",
+      published_upgrade_survivor_scenarios: "mobile-pairing-reconnect watchos-direct-node",
+      shared_image_artifact_namespace: "scheduled-upgrade-survivors",
+      shared_image_policy: "no-push-artifact",
+    });
+    expect(weekly.secrets).toBeUndefined();
+    expect(weekly.with).not.toHaveProperty("docker_e2e_bare_image");
+    expect(weekly.with).not.toHaveProperty("docker_e2e_functional_image");
+    expect(weekly.with).not.toHaveProperty("allow_frozen_target_scenario_omissions");
+    expect(readWorkflow(UPDATE_MIGRATION_WORKFLOW).on?.schedule).toBeUndefined();
   });
 
   it("gives memory extension shards enough CPU without lowering their planner cost", () => {
@@ -6964,11 +7003,7 @@ describe("package artifact reuse", () => {
         expect(job.env?.DEEPSEEK_API_KEY, jobName).toBe("${{ secrets.DEEPSEEK_API_KEY }}");
       }
     }
-    for (const workflowPath of [
-      RELEASE_CHECKS_WORKFLOW,
-      SCHEDULED_LIVE_CHECKS_WORKFLOW,
-      PACKAGE_ACCEPTANCE_WORKFLOW,
-    ]) {
+    for (const workflowPath of [RELEASE_CHECKS_WORKFLOW, PACKAGE_ACCEPTANCE_WORKFLOW]) {
       for (const [jobName, job] of Object.entries(readWorkflow(workflowPath).jobs ?? {})) {
         if (
           job.uses === `./${LIVE_E2E_WORKFLOW}` ||
@@ -6980,6 +7015,14 @@ describe("package artifact reuse", () => {
         }
       }
     }
+    expect(
+      workflowJob(SCHEDULED_LIVE_CHECKS_WORKFLOW, "live_and_openwebui_checks").secrets,
+    ).toMatchObject({
+      DEEPSEEK_API_KEY: "${{ secrets.DEEPSEEK_API_KEY }}",
+    });
+    expect(
+      workflowJob(SCHEDULED_LIVE_CHECKS_WORKFLOW, "weekly_upgrade_survivors").secrets,
+    ).toBeUndefined();
     const hydrationHome = tempDirs.make("live-auth-hydration-");
     const hydrated = spawnSync(
       "bash",

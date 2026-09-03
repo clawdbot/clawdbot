@@ -1128,6 +1128,7 @@ process.stdout.write(sessionDir + "\\n");
     ) as string[];
 
     expect(scenarios).toContain("base");
+    expect(scenarios).toContain("mobile-pairing-reconnect");
     expect(scenarios).toContain("acpx-openclaw-tools-bridge");
     expect(scenarios).toContain("prerelease-plugin-registry");
     expect(scenarios).toContain("sqlite-volume");
@@ -1152,6 +1153,98 @@ process.stdout.write(sessionDir + "\\n");
       expect(() => run(wrongChannel)).toThrow(/update.channel/);
     },
   );
+
+  it("requires password auth for the mobile pairing reconnect scenario", () => {
+    expect(() =>
+      assertConfig({
+        acceptedIntents: ["gateway"],
+        config: { gateway: { auth: { mode: "password" } } },
+        scenario: "mobile-pairing-reconnect",
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertConfig({
+        acceptedIntents: ["gateway"],
+        config: { gateway: { auth: { mode: "token" } } },
+        scenario: "mobile-pairing-reconnect",
+      }),
+    ).toThrow(/gateway auth mode/);
+  });
+
+  it("allows token rotation and requires each reconnect to use the newest stored token", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-mobile-pairing-evidence-"));
+    const phases = ["baseline", "candidate-first", "candidate-restart", "final"];
+    const hashes = ["a", "b", "c", "d", "e"].map((value) => value.repeat(64));
+    const files = phases.map((phase, index) => {
+      const file = join(root, `${phase}.json`);
+      const scopedNodeSurfaceReapproval = index > 0;
+      writeJson(file, {
+        phase,
+        ok: true,
+        health: true,
+        connectedDevicePresent: true,
+        pendingPairingCount: scopedNodeSurfaceReapproval ? 1 : 0,
+        pendingDevicePairingCount: 0,
+        pendingNodePairingCount: scopedNodeSurfaceReapproval ? 1 : 0,
+        pairedDevicePresent: true,
+        pairedNodePresent: true,
+        nodeSurfaceReapprovalRequired: scopedNodeSurfaceReapproval,
+        nodeSurfaceReapprovalExpected: scopedNodeSurfaceReapproval,
+        nodeSurfaceCommandAdditions: scopedNodeSurfaceReapproval
+          ? ["watch.notify", "watch.status"]
+          : [],
+        missingPasswordReason: true,
+        missingPasswordClose1008: true,
+        credentials: {
+          node: {
+            usedTokenHash: hashes[index],
+            storedTokenHash: hashes[index + 1],
+            deviceTokenReturned: true,
+            tokenRotated: true,
+          },
+          operator: {
+            usedTokenHash: hashes[0],
+            storedTokenHash: hashes[0],
+            deviceTokenReturned: true,
+            tokenRotated: false,
+          },
+        },
+      });
+      return file;
+    });
+    const verify = () =>
+      execFileSync(
+        process.execPath,
+        [ASSERTIONS_PATH, "assert-mobile-pairing-evidence", ...files],
+        {
+          stdio: "pipe",
+        },
+      );
+    const finalEvidenceFile = files[2];
+    if (!finalEvidenceFile) {
+      throw new Error("final mobile pairing evidence fixture missing");
+    }
+
+    try {
+      expect(verify).not.toThrow();
+      const stale = JSON.parse(readFileSync(finalEvidenceFile, "utf8"));
+      stale.credentials.node.usedTokenHash = hashes[0];
+      writeJson(finalEvidenceFile, stale);
+      expect(verify).toThrow(/newest stored token/);
+      stale.credentials.node.usedTokenHash = hashes[2];
+      stale.nodeSurfaceCommandAdditions = ["watch.status", "system.run"];
+      writeJson(finalEvidenceFile, stale);
+      expect(verify).toThrow(/known command-surface reapproval/);
+      stale.nodeSurfaceCommandAdditions = [];
+      stale.pendingPairingCount = 0;
+      stale.pendingNodePairingCount = 0;
+      stale.nodeSurfaceReapprovalRequired = false;
+      writeJson(finalEvidenceFile, stale);
+      expect(verify).toThrow(/known command-surface reapproval/);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
 
   it.each(["base", "sqlite-volume"])(
     "seeds recent ordered session timestamps for %s",
@@ -1239,50 +1332,53 @@ process.stdout.write(sessionDir + "\\n");
     },
   );
 
-  it("keeps the watch direct-node seed free of unrelated migration specimens", () => {
-    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-watch-seed-"));
-    try {
-      const stateDir = join(root, "state");
-      const workspace = join(root, "workspace");
-      mkdirSync(stateDir, { recursive: true });
-      mkdirSync(workspace, { recursive: true });
-      const env = {
-        ...process.env,
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_TEST_WORKSPACE_DIR: workspace,
-        OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "watchos-direct-node",
-      };
-
-      execFileSync(process.execPath, [ASSERTIONS_PATH, "seed"], { env, stdio: "pipe" });
-
-      expect(existsSync(join(workspace, "IDENTITY.md"))).toBe(true);
-      expect(existsSync(join(workspace, ".openclaw", "workspace-state.json"))).toBe(true);
-      for (const relative of [
-        "sessions/sessions.json",
-        "agents/main/sessions/legacy-session.json",
-        "exec-approvals.json",
-        "plugin-runtime-deps",
-      ]) {
-        expect(existsSync(join(stateDir, relative)), relative).toBe(false);
-      }
-      for (const stage of ["baseline", "survival"]) {
-        const stageEnv = {
-          ...env,
-          OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE: stage,
+  it.each(["watchos-direct-node", "mobile-pairing-reconnect"])(
+    "keeps the %s seed free of unrelated migration specimens",
+    (scenario) => {
+      const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-companion-seed-"));
+      try {
+        const stateDir = join(root, "state");
+        const workspace = join(root, "workspace");
+        mkdirSync(stateDir, { recursive: true });
+        mkdirSync(workspace, { recursive: true });
+        const env = {
+          ...process.env,
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_TEST_WORKSPACE_DIR: workspace,
+          OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
         };
-        execFileSync(process.execPath, [ASSERTIONS_PATH, "assert-state"], {
-          env: stageEnv,
-          stdio: "pipe",
-        });
-        execFileSync(process.execPath, [ASSERTIONS_PATH, "assert-exec-approvals"], {
-          env: stageEnv,
-          stdio: "pipe",
-        });
+
+        execFileSync(process.execPath, [ASSERTIONS_PATH, "seed"], { env, stdio: "pipe" });
+
+        expect(existsSync(join(workspace, "IDENTITY.md"))).toBe(true);
+        expect(existsSync(join(workspace, ".openclaw", "workspace-state.json"))).toBe(true);
+        for (const relative of [
+          "sessions/sessions.json",
+          "agents/main/sessions/legacy-session.json",
+          "exec-approvals.json",
+          "plugin-runtime-deps",
+        ]) {
+          expect(existsSync(join(stateDir, relative)), relative).toBe(false);
+        }
+        for (const stage of ["baseline", "survival"]) {
+          const stageEnv = {
+            ...env,
+            OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE: stage,
+          };
+          execFileSync(process.execPath, [ASSERTIONS_PATH, "assert-state"], {
+            env: stageEnv,
+            stdio: "pipe",
+          });
+          execFileSync(process.execPath, [ASSERTIONS_PATH, "assert-exec-approvals"], {
+            env: stageEnv,
+            stdio: "pipe",
+          });
+        }
+      } finally {
+        rmSync(root, { force: true, recursive: true });
       }
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
+    },
+  );
 
   it("requires every seeded legacy cron specimen before update", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-cron-"));
