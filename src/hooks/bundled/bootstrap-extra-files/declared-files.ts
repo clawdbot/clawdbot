@@ -30,7 +30,9 @@ function resolveExtraBootstrapPatterns(cfg: OpenClawConfig | undefined): string[
 /**
  * True when hook selection would register the bundled handler. Managed and
  * plugin hooks may replace it by name, and doctor must not describe files a
- * replacement never adds. Discovery mirrors the Gateway loader's workspace.
+ * replacement never adds. The Gateway loads internal hooks once from its
+ * default workspace (server-startup-plugins -> loadInternalHooks), never per
+ * analyzed workspace, so discovery resolves that same directory here.
  */
 export function isBundledExtraFilesHookSelected(cfg: OpenClawConfig | undefined): boolean {
   if (!cfg) {
