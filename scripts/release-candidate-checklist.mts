@@ -1555,12 +1555,15 @@ export function buildPublishCommand(
   npmPreflightSource?: Awaited<ReturnType<typeof validateNpmPreflightRunSource>>,
 ) {
   const workflowRef =
-    options.publishWorkflowRef ||
-    npmPreflightSource?.workflowRef ||
-    (options.tag.includes("-alpha.") ? options.workflowRef : "main");
-  if (options.tag.includes("-alpha.") && !TIDECLAW_ALPHA_WORKFLOW_REF_PATTERN.test(workflowRef)) {
+    options.publishWorkflowRef || npmPreflightSource?.workflowRef || options.workflowRef;
+  const publishRefPattern = options.tag.includes("-alpha.")
+    ? TIDECLAW_ALPHA_WORKFLOW_REF_PATTERN
+    : /^release-publish\/[a-f0-9]{12}-[1-9][0-9]*$/u;
+  if (!publishRefPattern.test(workflowRef)) {
     throw new Error(
-      "alpha release publish requires a matching tideclaw/alpha/YYYY-MM-DD-HHMMZ workflow ref",
+      options.tag.includes("-alpha.")
+        ? "alpha release publish requires a matching tideclaw/alpha/YYYY-MM-DD-HHMMZ workflow ref"
+        : "regular release publish requires protected tooling; supply --publish-workflow-ref release-publish/<sha12>-<epoch> after creating and pushing the tag at the trusted tooling SHA",
     );
   }
   const fields: Array<[string, string | number | undefined]> = [

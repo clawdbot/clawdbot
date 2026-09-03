@@ -54,6 +54,7 @@ import {
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const publishWorkflowRef = "release-publish/bbbbbbbbbbbb-123";
 
 function candidateGitFixture(files: Record<string, string>) {
   const root = tempDirs.make("openclaw-candidate-");
@@ -429,7 +430,6 @@ describe("release candidate checklist", () => {
   });
 
   it("routes a repaired publisher independently from immutable preflight evidence", () => {
-    const publishWorkflowRef = "release-publish/bbbbbbbbbbbb-123";
     const options = parseArgs([
       "--tag",
       "v2026.8.2-beta.1",
@@ -463,6 +463,22 @@ describe("release candidate checklist", () => {
       expect(() => parseArgs(["--tag", "v2026.8.2-beta.1", "--publish-workflow-ref", ref])).toThrow(
         "protected release-publish tag",
       );
+    },
+  );
+
+  it.each(["v2026.9.1", "v2026.9.1-beta.1"])(
+    "refuses to print a main-sourced publish command for %s",
+    (tag) => {
+      const options = parseArgs(["--tag", tag]);
+      const producer = { status: "passed", headSha: "a".repeat(40), workflowRef: "main" };
+      for (const source of [undefined, producer]) {
+        expect(() => buildPublishCommand(options, source)).toThrow(
+          "--publish-workflow-ref release-publish/<sha12>-<epoch>",
+        );
+        expect(buildPublishCommand({ ...options, publishWorkflowRef }, source)).toContain(
+          `'--ref' '${publishWorkflowRef}'`,
+        );
+      }
     },
   );
 
@@ -1655,6 +1671,7 @@ describe("release candidate checklist", () => {
         ]),
         releaseProfile: profile,
         npmPreflightRunId: "222",
+        publishWorkflowRef,
         skipTelegram,
       };
       const dispatchWorkflow = vi.fn(() => "333");
@@ -1781,6 +1798,7 @@ describe("release candidate checklist", () => {
         "--skip-dispatch",
       ]),
       workflowRef: "main",
+      publishWorkflowRef,
       fullReleaseRunAttempt: 2,
     };
 
@@ -1791,7 +1809,7 @@ describe("release candidate checklist", () => {
     expect(command).toContain("'plugin_sdk_api_acknowledgement=a1b2c3d4'");
     expect(command).toContain("'tag=v2026.5.14-beta.3'");
     expect(command).toContain("'plugin_publish_scope=all-publishable'");
-    expect(command).toContain("'--ref' 'main'");
+    expect(command).toContain(`'--ref' '${publishWorkflowRef}'`);
     expect(command).not.toContain("windows_node_tag=");
 
     const workflow = parse(
@@ -1824,7 +1842,11 @@ describe("release candidate checklist", () => {
       "--npm-preflight-run",
       "222",
     ]);
-    const command = buildPublishCommand({ ...options, fullReleaseRunAttempt: 1 });
+    const command = buildPublishCommand({
+      ...options,
+      publishWorkflowRef,
+      fullReleaseRunAttempt: 1,
+    });
 
     expect(command).toContain("'tag=v2026.5.14'");
     expect(command).toContain("'npm_dist_tag=latest'");
@@ -1847,6 +1869,7 @@ describe("release candidate checklist", () => {
         "main",
       ]),
       workflowRef: "main",
+      publishWorkflowRef,
       windowsNodeInstallerDigests: JSON.stringify({
         "OpenClawCompanion-Setup-x64.exe": `sha256:${"a".repeat(64)}`,
         "OpenClawCompanion-Setup-arm64.exe": `sha256:${"b".repeat(64)}`,
@@ -1973,6 +1996,7 @@ describe("release candidate checklist", () => {
         "--skip-dispatch",
       ]),
       workflowRef: "main",
+      publishWorkflowRef,
       npmTelegramRunId: "333",
     };
 
