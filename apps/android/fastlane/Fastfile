@@ -10,6 +10,7 @@ ANDROID_FASTLANE_ROOT = File.expand_path(__dir__, Dir.pwd)
 DEFAULT_PLAY_PACKAGE_NAME = "ai.openclaw.app"
 DEFAULT_PLAY_TRACK = "internal"
 DEFAULT_PLAY_RELEASE_STATUS = "completed"
+ANDROID_FASTLANE_EXECUTION_PROVENANCE_ENV = "_OPENCLAW_ANDROID_FASTLANE_EXECUTION_PROVENANCE"
 ANDROID_RELEASE_SIGNING_GRADLE_PROPERTIES = [
   "OPENCLAW_ANDROID_STORE_FILE",
   "OPENCLAW_ANDROID_STORE_PASSWORD",
@@ -26,6 +27,7 @@ def load_env_file(path)
 
     key, value = stripped.split("=", 2)
     next if key.nil? || key.empty? || value.nil?
+    next if key == ANDROID_FASTLANE_EXECUTION_PROVENANCE_ENV
 
     ENV[key] = value if ENV[key].nil? || ENV[key].strip.empty?
   end
@@ -98,6 +100,14 @@ def mobile_release_intent_context!(gateway_version:)
     receipt_digest: receipt_digest,
     target_ref: target_ref
   }
+end
+
+def validate_android_fastlane_execution_provenance!
+  mode = ENV.fetch("OPENCLAW_MOBILE_RELEASE_REF_MODE", "").strip
+  return unless mode == "intent"
+  return if ENV.fetch(ANDROID_FASTLANE_EXECUTION_PROVENANCE_ENV, "").strip == "locked"
+
+  UI.user_error!("Protected Android beta CI requires the checksum-locked Android Fastlane bundle.")
 end
 
 def validate_ci_play_destination!(intent_context:)
@@ -638,6 +648,7 @@ def upload_play_store_build!(version_metadata, upload_metadata: false, upload_im
 end
 
 load_env_file(File.join(ANDROID_FASTLANE_ROOT, ".env"))
+validate_android_fastlane_execution_provenance!
 
 platform :android do
   desc "Validate Google Play API credentials"

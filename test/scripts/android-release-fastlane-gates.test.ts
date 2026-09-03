@@ -1,13 +1,15 @@
 // Android Fastlane release gate tests keep Play uploads tied to mobile release refs.
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const fastfilePath = path.join(process.cwd(), "apps", "android", "fastlane", "Fastfile");
 const rubyVersionPath = path.join(process.cwd(), "apps", "android", ".ruby-version");
 const gemfilePath = path.join(process.cwd(), "apps", "android", "Gemfile");
 const gemfileLockPath = path.join(process.cwd(), "apps", "android", "Gemfile.lock");
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function readFastfile(): string {
   return readFileSync(fastfilePath, "utf8");
@@ -157,6 +159,61 @@ describe("Android Fastlane release upload gates", () => {
     expect(finalizer).toContain('"--target-sha"');
     expect(finalizer).not.toContain('"git"');
     expect(finalizer).not.toContain("push");
+  });
+
+  it("requires locked wrapper provenance after loading intent mode from .env", () => {
+    const fastfile = readFastfile();
+    const marker = "_OPENCLAW_ANDROID_FASTLANE_EXECUTION_PROVENANCE";
+    const loader = functionBody(fastfile, "load_env_file");
+    const provenance = functionBody(fastfile, "validate_android_fastlane_execution_provenance!");
+    const envPath = path.join(tempDirs.make("openclaw-android-fastlane-env-"), ".env");
+    writeFileSync(
+      envPath,
+      ["OPENCLAW_MOBILE_RELEASE_REF_MODE=intent", `${marker}=locked`, ""].join("\n"),
+    );
+    const source = `
+module UI
+  def self.user_error!(message)
+    raise message
+  end
+end
+ANDROID_FASTLANE_EXECUTION_PROVENANCE_ENV = "${marker}"
+def load_env_file${loader}
+def validate_android_fastlane_execution_provenance!${provenance}
+def run_case(path, provenance)
+  ENV.delete("OPENCLAW_MOBILE_RELEASE_REF_MODE")
+  ENV.delete(ANDROID_FASTLANE_EXECUTION_PROVENANCE_ENV)
+  ENV[ANDROID_FASTLANE_EXECUTION_PROVENANCE_ENV] = provenance unless provenance == "missing"
+  load_env_file(path)
+  begin
+    validate_android_fastlane_execution_provenance!
+    puts "ok:#{ENV.fetch(ANDROID_FASTLANE_EXECUTION_PROVENANCE_ENV, "missing")}"
+  rescue => error
+    puts "error:#{error.message}:#{ENV.fetch(ANDROID_FASTLANE_EXECUTION_PROVENANCE_ENV, "missing")}"
+  end
+end
+run_case(ARGV.fetch(0), "fallback")
+run_case(ARGV.fetch(0), "locked")
+run_case(ARGV.fetch(0), "missing")
+`;
+    const result = spawnSync("ruby", ["-e", source, envPath], { encoding: "utf8" });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim().split("\n")).toEqual([
+      "error:Protected Android beta CI requires the checksum-locked Android Fastlane bundle.:fallback",
+      "ok:locked",
+      "error:Protected Android beta CI requires the checksum-locked Android Fastlane bundle.:missing",
+    ]);
+    expect(loader).toContain("next if key == ANDROID_FASTLANE_EXECUTION_PROVENANCE_ENV");
+    const envLoad = fastfile.indexOf('load_env_file(File.join(ANDROID_FASTLANE_ROOT, ".env"))');
+    const provenanceCheck = fastfile.indexOf(
+      "\nvalidate_android_fastlane_execution_provenance!",
+      envLoad,
+    );
+    const platform = fastfile.indexOf("\nplatform :android do", provenanceCheck);
+    expect(envLoad).toBeGreaterThan(-1);
+    expect(provenanceCheck).toBeGreaterThan(envLoad);
+    expect(platform).toBeGreaterThan(provenanceCheck);
   });
 
   it("validates the complete Android intent context before store mutation", () => {

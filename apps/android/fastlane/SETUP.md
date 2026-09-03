@@ -1,6 +1,12 @@
 # fastlane setup (OpenClaw Android)
 
-Install:
+For the standard local setup:
+
+```bash
+brew install fastlane
+```
+
+For a checksum-locked, reproducible setup:
 
 ```bash
 cd apps/android
@@ -8,8 +14,11 @@ gem install bundler -v 2.6.9
 bundle _2.6.9_ install
 ```
 
-The expected runtime is recorded in `apps/android/.ruby-version`. Fastlane and
-its transitive dependencies are checksum-locked in `apps/android/Gemfile.lock`.
+The expected reproducible runtime is recorded in `apps/android/.ruby-version`.
+Fastlane and its transitive dependencies are checksum-locked in
+`apps/android/Gemfile.lock`. Android release wrappers prefer that bundle when
+it is installed. Normal local commands otherwise retain the direct Homebrew
+Fastlane and rbenv fallbacks.
 
 Create a Google Play service account JSON key with Google Play Developer API access, then grant that service account access to the OpenClaw app in Play Console.
 
@@ -58,8 +67,11 @@ Validate auth:
 
 ```bash
 cd apps/android
-BUNDLE_GEMFILE="$PWD/Gemfile" bundle _2.6.9_ exec fastlane android auth_check
+fastlane android auth_check
 ```
+
+Use `BUNDLE_GEMFILE="$PWD/Gemfile" bundle _2.6.9_ exec fastlane android auth_check`
+when reproducing the protected CI toolchain exactly.
 
 Archive locally without upload:
 
@@ -107,7 +119,8 @@ Repository/environment secrets required by name:
 The protected lane uploads the phone AAB to `internal` and the Wear AAB to
 `wear:internal` in one Google Play edit, then commits that edit once. The
 store-returned phone and Wear version codes are included in the signed release
-intent. Production promotion remains manual.
+intent. Intent mode requires the checksum-locked Android bundle and never falls
+back to a global or rbenv Fastlane. Production promotion remains manual.
 
 After the committed edit, the workflow records
 `refs/openclaw/mobile-releases/android/<version-name>-<phone-version-code>` at
@@ -121,12 +134,18 @@ Direct Fastlane entry point:
 
 ```bash
 cd apps/android
+fastlane android release_upload
+```
+
+For the exact protected-CI toolchain:
+
+```bash
 BUNDLE_GEMFILE="$PWD/Gemfile" bundle _2.6.9_ exec fastlane android release_upload
 ```
 
-Use the direct Fastlane entry point only for maintainer debugging when explicitly
-requested. Agent-driven releases must use `pnpm android:release:upload` and stop
-if it fails.
+Use these direct Fastlane entry points only for maintainer debugging when
+explicitly requested. Agent-driven releases must use
+`pnpm android:release:upload` and stop if it fails.
 
 Release rules:
 
