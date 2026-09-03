@@ -600,11 +600,11 @@ final class DashboardManager {
         source.pendingGatewaySwitch = needsReplacement ? intent : nil
         guard source.pendingGatewaySwitch != nil else { return nil }
         return Task { @MainActor in
-            guard self.controller(in: window, for: currentTarget)?.pendingGatewaySwitch == intent else { return }
+            guard self.controller(in: window, for: currentTarget)?.pendingGatewaySwitch === intent else { return }
             do {
                 let (configuration, endpoint) = try await self.windowConfiguration(for: target)
                 guard !Task.isCancelled, let current = self.controller(in: window, for: currentTarget),
-                      current.pendingGatewaySwitch == intent else { return }
+                      current.pendingGatewaySwitch === intent else { return }
                 current.pendingGatewaySwitch = nil
                 if let replacement = self.replaceWindowController(
                     current,
@@ -618,7 +618,7 @@ final class DashboardManager {
                 self.updateFrontmostDashboardTarget()
             } catch {
                 guard !Task.isCancelled, let current = self.controller(in: window, for: currentTarget),
-                      current.pendingGatewaySwitch == intent else { return }
+                      current.pendingGatewaySwitch === intent else { return }
                 current.pendingGatewaySwitch = nil
                 _ = current.takePendingNativeActions()
                 Self.showGatewayError(error, message: "Could Not Switch Gateway")

@@ -28,9 +28,12 @@ private final class DashboardWindow: NSWindow {
     }
 }
 
-struct DashboardGatewaySwitchIntent: Equatable {
-    let id = UUID()
+final class DashboardGatewaySwitchIntent {
     let target: DashboardGatewayTarget
+
+    init(target: DashboardGatewayTarget) {
+        self.target = target
+    }
 }
 
 private final class DashboardLinkSplitView: NSSplitView {

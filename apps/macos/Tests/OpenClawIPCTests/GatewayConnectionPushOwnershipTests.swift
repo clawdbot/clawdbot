@@ -61,11 +61,10 @@ extension GatewayConnectionControlTests {
             }
             defer { NotificationCenter.default.removeObserver(observer) }
 
-            let queued = DispatchSemaphore(value: 0)
-            // Hold the actual MainActor consumer while the socket owner advances.
-            // The queued hello and agent event must retain their original ownership.
+            let buffered = await connection.subscribe()
+            // Leave this real subscription unread while its owner advances. The
+            // live Control consumer stays free to process work on the MainActor.
             let producer = Task.detached {
-                defer { queued.signal() }
                 if replacement.contains("shutdown") {
                     await connection._test_handlePush(
                         .event(EventFrame(type: "event", event: "shutdown")), socketGeneration: 1)
@@ -89,6 +88,8 @@ extension GatewayConnectionControlTests {
                     if replacement != "shutdown" {
                         source.setEndpoint(GatewayConnection.EndpointSnapshot(
                             config: (URL(string: "ws://127.0.0.1:49226")!, nil, nil), routeAuthority: nil, revision: 2))
+                        await control.endpointDidChange(.connecting(
+                            mode: .remote, detail: "Switching Gateway", routeRevision: 2))
                     }
                     if replacement != "adopted" { await connection.shutdown() }
                 }
@@ -107,8 +108,13 @@ extension GatewayConnectionControlTests {
                         socketGeneration: socket)
                 }
             }
-            #expect(Self.waitForQueuedPushes(queued))
-            try await producer.value
+            do {
+                try await producer.value
+                try await Self.assertBufferedOwnership(buffered, replacement: replacement)
+            } catch {
+                await control.disconnect()
+                throw error
+            }
             let deadline = ContinuousClock.now + .seconds(2)
             while !acknowledged.value,
                   !(["unavailable", "adopted"].contains(replacement) && activity.current?.sessionKey == "a-main"),
@@ -136,8 +142,45 @@ extension GatewayConnectionControlTests {
         }
     }
 
-    private nonisolated static func waitForQueuedPushes(_ queued: DispatchSemaphore) -> Bool {
-        queued.wait(timeout: .now() + 2) == .success
+    private nonisolated static func assertBufferedOwnership(
+        _ stream: AsyncStream<GatewayConnection.PushDelivery>,
+        replacement: String) async throws
+    {
+        let admitsReplacement = ["admitted", "reconnect", "replaced-shutdown"].contains(replacement)
+        let terminalEvent = admitsReplacement ? "heartbeat" : (replacement == "shutdown" ? "shutdown" : "agent")
+        let deliveries = try await AsyncTimeout.withTimeout(
+            seconds: 2,
+            onTimeout: { CancellationError() },
+            operation: {
+                var queued: [GatewayConnection.PushDelivery] = []
+                for await delivery in stream {
+                    queued.append(delivery)
+                    if case let .event(event) = delivery.push, event.event == terminalEvent { break }
+                }
+                return queued
+            })
+        let oldDeliveries = deliveries.filter { $0.mainSessionKey == "a-main" }
+        #expect(oldDeliveries.contains {
+            if case .snapshot = $0.push {
+                true
+            } else {
+                false
+            }
+        })
+        #expect(oldDeliveries.contains {
+            guard case let .event(event) = $0.push else { return false }
+            return event.event == (replacement.contains("shutdown") ? "shutdown" : "agent")
+        })
+        for delivery in oldDeliveries {
+            #expect(!delivery.isCurrent)
+        }
+        if admitsReplacement {
+            let currentDeliveries = deliveries.filter { $0.mainSessionKey == "b-main" }
+            #expect(!currentDeliveries.isEmpty)
+            for delivery in currentDeliveries {
+                #expect(delivery.isCurrent)
+            }
+        }
     }
 
     private nonisolated static func workStarted(sessionKey: String) -> GatewayPush {
