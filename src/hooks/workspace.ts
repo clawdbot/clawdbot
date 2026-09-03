@@ -11,6 +11,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { resolveBundledHooksDir } from "./bundled-dir.js";
+import { isHookLoadable, resolveInternalHookSelection } from "./configured.js";
 import { resolveHookInvocationPolicy, resolveHookManifestMetadata } from "./frontmatter.js";
 import { resolvePluginHookDirs } from "./plugin-hooks.js";
 import { resolveHookEntries } from "./policy.js";
@@ -328,6 +329,21 @@ export function loadWorkspaceHookEntries(
   opts?: HookDiscoveryOptions,
 ): HookEntry[] {
   return prepareWorkspaceHookEntries(workspaceDir, opts).entries;
+}
+
+/**
+ * Hook entries the loader would register for this config: discovered, merged by
+ * source precedence, and config-eligible. Hook-runtime-free callers (doctor)
+ * share it so their projection cannot drift from what the Gateway loads.
+ */
+export function resolveLoadableHookEntries(cfg: OpenClawConfig, workspaceDir: string): HookEntry[] {
+  const selection = resolveInternalHookSelection(cfg);
+  if (!selection.configured) {
+    return [];
+  }
+  return loadWorkspaceHookEntries(workspaceDir, { config: cfg }).filter((entry) =>
+    isHookLoadable({ entry, config: cfg, names: selection.names }),
+  );
 }
 
 function readRootFileUtf8(params: {

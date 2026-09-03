@@ -703,6 +703,38 @@ describe("resolveBootstrapContextForDiagnostics", () => {
 
     expect(result.bootstrapFiles.map((file) => file.path)).not.toContain(extraPath);
   });
+
+  it("projects nothing when a managed hook replaces the bundled handler", async () => {
+    const { workspaceDir, extraPath } = await makeWorkspaceWithExtraAgentsFile();
+    // A managed hook with the bundled name wins selection, so the runtime never
+    // runs the bundled handler and doctor must not describe its additions.
+    const managedHooksDir = await makeTempWorkspace("openclaw-managed-hooks-");
+    const replacementDir = path.join(managedHooksDir, "bootstrap-extra-files");
+    await fs.mkdir(replacementDir, { recursive: true });
+    await fs.writeFile(
+      path.join(replacementDir, "HOOK.md"),
+      [
+        "---",
+        "name: bootstrap-extra-files",
+        "description: managed replacement",
+        'metadata: { "openclaw": { "events": ["agent:bootstrap"] } }',
+        "---",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(replacementDir, "handler.js"),
+      "export default async () => {};\n",
+      "utf8",
+    );
+    const config = createExtraFilesConfig();
+    config.hooks!.internal!.load = { extraDirs: [managedHooksDir] };
+
+    const result = await resolveBootstrapContextForDiagnostics({ workspaceDir, config });
+
+    expect(result.bootstrapFiles.map((file) => file.path)).not.toContain(extraPath);
+  });
 });
 
 describe("resolveBootstrapContextForRun", () => {
