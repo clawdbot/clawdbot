@@ -302,7 +302,7 @@ gateway can only send pushes for iOS devices that paired with that gateway.
 - One Chat surface for text, realtime voice, dictation, and voice notes through the operator gateway session.
 - iOS node commands in foreground: camera snap/clip, screen record, location, contacts, calendar, reminders, photos, motion, local notifications.
 - Authenticated background `node.presence.alive` beacons that update gateway last-seen metadata when the app moves between foreground and background, without treating suspended sockets as connected.
-- Connected nodes publish CPU count, memory, and available home-volume disk capacity immediately and every 60 seconds through `node.host.stats`, supplying the Control UI Devices meters. Disk fields are omitted when unavailable; iOS does not report load averages. Reporting stops when the node route disconnects or changes, and iOS suspension can pause updates.
+- Connected nodes publish CPU count and memory immediately and every 60 seconds through `node.host.stats`, supplying the Control UI Devices meters. iOS reports neither load averages nor disk capacity (Apple's required-reason API policy does not allow sending disk-space values off-device). Reporting stops when the node route disconnects or changes, and iOS suspension can pause updates.
 - Share extension deep-link forwarding into the connected gateway session.
 
 ## Computer Use Relationship
@@ -342,7 +342,6 @@ Pass criteria:
 
 ## Known Issues / Limitations / Problems
 
-- App Store follow-up: resolve the required-reason API policy for disk-capacity reporting before distribution. Apple's [disk-space API reasons](https://developer.apple.com/documentation/bundleresources/app-privacy-configuration/nsprivacyaccessedapitypes/nsprivacyaccessedapitype) permit display on another device only over the local network, with explicit user permission; they do not cover automatic reporting to an Internet Gateway.
 - Foreground-first: iOS can suspend sockets in background; reconnect recovery is still being tuned.
 - Background command limits are strict: `camera.*`, `screen.*`, and `talk.*` are blocked when backgrounded.
 - Background location requires `Always` location permission.

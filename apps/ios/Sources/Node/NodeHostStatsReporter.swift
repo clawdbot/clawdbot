@@ -5,25 +5,19 @@ enum NodeHostStatsReporter {
     static let eventName = "node.host.stats"
     static let intervalSeconds: TimeInterval = 60
 
+    // Disk capacity is deliberately not sampled: Apple's required-reason API policy
+    // does not permit sending disk-space values off-device, and the Gateway treats
+    // the disk fields as optional.
     struct Payload: Encodable {
         let cpuCount: Int
         let memoryTotalBytes: UInt64
         let memoryFreeBytes: UInt64
-        let diskTotalBytes: Int64?
-        let diskAvailableBytes: Int64?
     }
 
     struct Sampler {
         var cpuCount: () -> Int = { ProcessInfo.processInfo.activeProcessorCount }
         var memoryTotalBytes: () -> UInt64 = { ProcessInfo.processInfo.physicalMemory }
         var memoryFreeBytes: () throws -> UInt64 = { try NodeHostStatsReporter.sampleFreeMemory() }
-        var diskCapacity: () throws -> (totalBytes: Int64?, availableBytes: Int64?) = {
-            let values = try URL(fileURLWithPath: NSHomeDirectory()).resourceValues(forKeys: [
-                .volumeTotalCapacityKey,
-                .volumeAvailableCapacityForImportantUsageKey,
-            ])
-            return (values.volumeTotalCapacity.map(Int64.init), values.volumeAvailableCapacityForImportantUsage)
-        }
     }
 
     private struct NodeEventRequestPayload: Encodable {
@@ -34,22 +28,10 @@ enum NodeHostStatsReporter {
     static func makePayload(sampler: Sampler = Sampler()) throws -> Payload {
         let memoryTotalBytes = sampler.memoryTotalBytes()
         let memoryFreeBytes = try min(sampler.memoryFreeBytes(), memoryTotalBytes)
-        let disk = try? sampler.diskCapacity()
-        let diskTotalBytes: Int64?
-        let diskAvailableBytes: Int64?
-        if let total = disk?.totalBytes, let available = disk?.availableBytes {
-            diskTotalBytes = max(0, total)
-            diskAvailableBytes = max(0, min(available, total))
-        } else {
-            diskTotalBytes = nil
-            diskAvailableBytes = nil
-        }
         return Payload(
             cpuCount: max(1, min(4096, sampler.cpuCount())),
             memoryTotalBytes: memoryTotalBytes,
-            memoryFreeBytes: memoryFreeBytes,
-            diskTotalBytes: diskTotalBytes,
-            diskAvailableBytes: diskAvailableBytes)
+            memoryFreeBytes: memoryFreeBytes)
     }
 
     static func makeNodeEventRequestPayloadJSON(
