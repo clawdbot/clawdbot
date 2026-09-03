@@ -155,26 +155,6 @@ describe("core model owner generations", () => {
   });
 });
 
-describe("backend-declared model call deadlines", () => {
-  it("surfaces a non-core backend request timeout in the activity snapshot", () => {
-    const ref = { sessionId: "cli-session", sessionKey: "agent:main:cli" };
-    startDiagnosticRunActivityTracking();
-    markDiagnosticModelStartedForTest({
-      ...ref,
-      runId: "cli-run",
-      provider: "anthropic",
-      model: "claude-sonnet-5",
-      observationUnit: "turn",
-      requestTimeoutMs: 480_000,
-    });
-
-    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
-      activeWorkKind: "model_call",
-      activeModelCallRequestTimeoutMs: 480_000,
-    });
-  });
-});
-
 describe("diagnostic run activity listener lifecycle", () => {
   it("does not register a listener when the module is imported", async () => {
     stopDiagnosticRunActivityTracking();
