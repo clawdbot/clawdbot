@@ -18,8 +18,8 @@ import {
   channelRouteDedupeKey,
 } from "../../../plugin-sdk/channel-route.js";
 import {
+  getGatewayRestartDrainSignal,
   isGatewayRestartDrainError,
-  isGatewayRestartDraining,
   runWithGatewayIndependentRootWorkContinuation,
   waitForGatewayRestartFenceSettlement,
 } from "../../../process/gateway-work-admission.js";
@@ -43,7 +43,7 @@ import {
   waitForQueueDebounce,
 } from "../../../utils/queue-helpers.js";
 import { isRoutableChannel } from "../route-reply.js";
-import { FOLLOWUP_QUEUES, trimSummaryElisionsToCap } from "./state.js";
+import { clearFollowupQueue, FOLLOWUP_QUEUES, trimSummaryElisionsToCap } from "./state.js";
 import {
   admitFollowupRunLifecycle,
   completeFollowupRunLifecycle,
@@ -71,6 +71,27 @@ const FOLLOWUP_DRAIN_CALLBACKS_KEY = Symbol.for("openclaw.followupDrainCallbacks
 const FOLLOWUP_RUN_CALLBACKS = resolveGlobalMap<string, (run: FollowupRun) => Promise<void>>(
   FOLLOWUP_DRAIN_CALLBACKS_KEY,
 );
+let followedRestartDrainSignal: AbortSignal | undefined;
+
+function bindFollowupRestartDrainSignal(): void {
+  const signal = getGatewayRestartDrainSignal();
+  if (signal === followedRestartDrainSignal) {
+    return;
+  }
+  followedRestartDrainSignal = signal;
+  signal.addEventListener(
+    "abort",
+    () => {
+      // Durable input recovery owns restart replay. Retire process-local queue
+      // authority synchronously so it cannot keep the old Gateway alive.
+      for (const key of FOLLOWUP_RUN_CALLBACKS.keys()) {
+        clearFollowupQueue(key);
+      }
+      FOLLOWUP_RUN_CALLBACKS.clear();
+    },
+    { once: true },
+  );
+}
 
 const QUEUED_ADMISSION_OWNER_STATE_KEY = Symbol.for("openclaw.queuedAdmissionOwnerState");
 const queuedAdmissionOwnerState = resolveGlobalSingleton(QUEUED_ADMISSION_OWNER_STATE_KEY, () => ({
@@ -123,6 +144,7 @@ export function rememberFollowupDrainCallback(
   key: string,
   runFollowup: (run: FollowupRun) => Promise<void>,
 ): void {
+  bindFollowupRestartDrainSignal();
   FOLLOWUP_RUN_CALLBACKS.set(key, runFollowup);
 }
 
@@ -1433,7 +1455,6 @@ export function scheduleFollowupDrain(
   const drainQueuedFollowups = async (): Promise<void> => {
     let retryDeferred = false;
     let waitingForSteer = false;
-    let restartDrainRejected = false;
     try {
       const collectState = { forceIndividualCollect: false };
       while (queue.items.length > 0 || queue.droppedCount > 0) {
@@ -1671,11 +1692,9 @@ export function scheduleFollowupDrain(
       if (isFollowupRunDeferredError(err)) {
         retryDeferred = true;
       } else if (isGatewayRestartDrainError(err)) {
-        // Pending-signal fences can roll back. Wait, then stop only if
-        // one-way restart drain is still active. Rescheduling a committed
-        // drain keeps the dying process alive until SIGKILL.
+        // A reversible signal fence may reopen. One-way abort synchronously
+        // retires the queue above; rollback leaves it here for normal retry.
         await waitForGatewayRestartFenceSettlement();
-        restartDrainRejected = isGatewayRestartDraining();
       } else {
         defaultRuntime.error?.(`followup queue drain failed for ${key}: ${String(err)}`);
       }
@@ -1687,19 +1706,17 @@ export function scheduleFollowupDrain(
         queue.draining = false;
         delete queue.drainOwner;
         const hasPendingQueueWork = queue.items.length > 0 || queue.droppedCount > 0;
-        if (!restartDrainRejected) {
-          if (waitingForSteer && hasPendingQueueWork) {
-            if (!queue.items.some((item) => item.steerPending)) {
-              scheduleFollowupDrain(key, effectiveRunFollowup);
-            }
-          } else if (retryDeferred && hasPendingQueueWork) {
-            scheduleFollowupDrain(key, effectiveRunFollowup);
-          } else if (!hasPendingQueueWork) {
-            FOLLOWUP_QUEUES.delete(key);
-            clearFollowupDrainCallback(key);
-          } else {
+        if (waitingForSteer && hasPendingQueueWork) {
+          if (!queue.items.some((item) => item.steerPending)) {
             scheduleFollowupDrain(key, effectiveRunFollowup);
           }
+        } else if (retryDeferred && hasPendingQueueWork) {
+          scheduleFollowupDrain(key, effectiveRunFollowup);
+        } else if (!hasPendingQueueWork) {
+          FOLLOWUP_QUEUES.delete(key);
+          clearFollowupDrainCallback(key);
+        } else {
+          scheduleFollowupDrain(key, effectiveRunFollowup);
         }
       }
     }

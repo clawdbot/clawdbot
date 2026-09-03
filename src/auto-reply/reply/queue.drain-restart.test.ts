@@ -406,7 +406,72 @@ describe("followup queue drain restart after idle window", () => {
         expect(getActiveGatewayRootWorkCount()).toBe(0);
       });
       expect(attempts).toBe(1);
-      expect(getExistingFollowupQueue(key)?.items).toHaveLength(1);
+      expect(getExistingFollowupQueue(key)).toBeUndefined();
+    } finally {
+      clearSessionQueues([key]);
+      resetGatewayWorkAdmission();
+    }
+  });
+
+  it("retries a draining error when restart admission remains open", async () => {
+    resetGatewayWorkAdmission();
+    const key = `test-draining-error-with-open-admission-${Date.now()}`;
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const delivered = createDeferred();
+    let attempts = 0;
+
+    const runFollowup = async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        throw new GatewayDrainingError();
+      }
+      delivered.resolve();
+    };
+
+    try {
+      enqueueFollowupRun(key, createRun({ prompt: "retry while admission is open" }), settings);
+      scheduleFollowupDrain(key, runFollowup);
+      await delivered.promise;
+      await vi.waitFor(() => {
+        expect(getExistingFollowupQueue(key)).toBeUndefined();
+      });
+      expect(attempts).toBe(2);
+    } finally {
+      clearSessionQueues([key]);
+      resetGatewayWorkAdmission();
+    }
+  });
+
+  it("does not reschedule when a restart-signal fence commits to drain", async () => {
+    resetGatewayWorkAdmission();
+    const key = `test-restart-signal-commit-${Date.now()}`;
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const firstFailed =
+      createDeferred<NonNullable<ReturnType<typeof beginGatewayRestartSignalAdmission>>>();
+    let attempts = 0;
+
+    const runFollowup = async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        const signal = beginGatewayRestartSignalAdmission();
+        if (!signal) {
+          throw new Error("expected restart-signal fence");
+        }
+        firstFailed.resolve(signal);
+        throw new GatewayDrainingError();
+      }
+    };
+
+    try {
+      enqueueFollowupRun(key, createRun({ prompt: "queued during restart commit" }), settings);
+      scheduleFollowupDrain(key, runFollowup);
+      await firstFailed.promise;
+      markGatewayRestartDraining();
+      await vi.waitFor(() => {
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+      });
+      expect(attempts).toBe(1);
+      expect(getExistingFollowupQueue(key)).toBeUndefined();
     } finally {
       clearSessionQueues([key]);
       resetGatewayWorkAdmission();
@@ -452,6 +517,7 @@ describe("followup queue drain restart after idle window", () => {
       await vi.waitFor(() => {
         expect(getActiveGatewayRootWorkCount()).toBe(0);
       });
+      expect(getExistingFollowupQueue(key)).toBeUndefined();
     } finally {
       clearSessionQueues([key]);
       resetGatewayWorkAdmission();
@@ -819,5 +885,51 @@ describe("followup queue drain restart after idle window", () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.prompt).toBe("before-idle");
+  });
+
+  it("retires queued followups and callbacks when one-way restart drain begins", async () => {
+    resetGatewayWorkAdmission();
+    const key = `test-lifecycle-restart-clears-queue-${Date.now()}`;
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const abandoned = vi.fn();
+    const settled = vi.fn();
+    const staleCalls: FollowupRun[] = [];
+    const queued = createRun({ prompt: "retire on lifecycle restart" });
+    queued.turnAdoptionLifecycle = {
+      admission: "cancel-only",
+      onAdopted: async () => {},
+      onAbandoned: abandoned,
+      onSettled: settled,
+    };
+
+    try {
+      enqueueFollowupRun(
+        key,
+        queued,
+        settings,
+        "message-id",
+        async (run) => {
+          staleCalls.push(run);
+        },
+        false,
+      );
+      expect(getExistingFollowupQueue(key)?.items).toEqual([queued]);
+
+      markGatewayRestartDraining();
+
+      expect(getExistingFollowupQueue(key)).toBeUndefined();
+      expect(abandoned).toHaveBeenCalledOnce();
+      expect(settled).toHaveBeenCalledOnce();
+      resetGatewayWorkAdmission();
+      enqueueFollowupRun(key, createRun({ prompt: "fresh lifecycle" }), settings);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(staleCalls).toHaveLength(0);
+      expect(getExistingFollowupQueue(key)?.items).toHaveLength(1);
+    } finally {
+      clearSessionQueues([key]);
+      resetGatewayWorkAdmission();
+    }
   });
 });
