@@ -279,7 +279,18 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright
 
 USER node
 
-HEALTHCHECK --interval=3m --timeout=10s --start-period=15s --retries=3 \
-  CMD ["node", "dist/docker-healthcheck.js"]
+# The canonical image runs dist/docker-healthcheck.js. Measured on a Banana Pi
+# F3 it costs ~14.3s (3 runs) because it loads the bundled runtime config and
+# reads the SQLite gateway lock, so it cannot finish inside main's 10s timeout
+# -- Docker records `ExitCode: -1, Health check exceeded timeout`. Raised to 45s
+# it completes but still exits 1 unpredictably while /healthz and /readyz serve
+# correctly, so the container reports unhealthy for a working gateway.
+#
+# This probe reads the port from the documented env var and issues one request:
+# ~0.7s cold, and it never failed across the runs measured. It does NOT see a
+# bare `--port` flag passed without OPENCLAW_GATEWAY_PORT; that limitation is
+# stated in docs/install/docker.md rather than left for an operator to discover.
+HEALTHCHECK --interval=3m --timeout=30s --start-period=120s --retries=3 \
+  CMD node -e 'const p=process.env.OPENCLAW_GATEWAY_PORT||18789; fetch(`http://127.0.0.1:${p}/healthz`).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))'
 ENTRYPOINT ["tini", "-s", "--"]
 CMD ["node", "openclaw.mjs", "gateway"]

@@ -710,6 +710,17 @@ returns `{"ok":true,"status":"live"}` and `GET /readyz` returns
 
 ### riscv64 notes
 
+- **Health check reads `OPENCLAW_GATEWAY_PORT`.** The riscv64 image uses a
+  lightweight probe instead of the `dist/docker-healthcheck.js` used by the
+  amd64/arm64 images. That script costs about 14 seconds on a Banana Pi F3
+  because it loads the bundled runtime config and reads the gateway lock, which
+  does not fit the container health-check timeout, and it returned failures on
+  that hardware while the gateway was serving `/healthz` normally. The
+  replacement issues a single request in well under a second. The tradeoff: it
+  reads the port from `OPENCLAW_GATEWAY_PORT` and does not see a `--port` flag
+  passed on its own, so set the environment variable when running the gateway on
+  a non-default port, or the container reports unhealthy while working.
+
 - **Authentication is required in containers.** Because the gateway binds to a
   non-loopback address inside a container, set `OPENCLAW_GATEWAY_TOKEN` or
   `OPENCLAW_GATEWAY_PASSWORD` (or pass `--token`/`--password`). Without one the
