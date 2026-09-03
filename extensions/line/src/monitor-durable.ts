@@ -27,10 +27,9 @@ export function resolveLineDurableReplyOptions(params: {
   if (params.replyToken && !params.replyTokenUsed) {
     return false;
   }
-  // Recovery replays a part by re-rendering it from the recorded payload, and a
-  // rich or media reply re-renders against live configuration. Widening the
-  // durable path to them is a separate contract change from resolving an
-  // interrupted send, so it stays on the inline path this fix does not touch.
+  // Widening which replies take the durable path is a separate contract change
+  // from resolving one that was interrupted, so rich and media replies keep the
+  // inline path this fix does not touch.
   if (hasLineChannelData(params.payload)) {
     return false;
   }
