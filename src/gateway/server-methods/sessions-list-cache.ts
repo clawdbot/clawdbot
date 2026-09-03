@@ -1,6 +1,7 @@
 import type { SessionsListParams } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readAgentRunIndexVersion } from "../../infra/agent-run-registry.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import {
   readSessionIdentityMutationVersion,
   readSessionLifecycleVersion,
@@ -26,7 +27,6 @@ type SessionListFence = {
   agentDatabaseRegistryToken: symbol;
   incognitoDatabaseGeneration: number;
   lifecyclePersistenceVersion: number;
-  modelCatalogRevision: string;
   sessionAutomationVersion: number;
   sessionIdentityMutationVersion: number;
   sessionLifecycleVersion: number;
@@ -38,9 +38,10 @@ type SessionListFence = {
   workerPlacementDiskSpaceVersion: number;
   workerPlacementRunnerAvailabilityVersion: number;
 };
-type SessionListOperation = SessionListFence & { promise: Promise<SessionsListResult> };
-type SessionListCompleted = SessionListFence & { expiresAt?: number; result: SessionsListResult };
-type SessionListState = {
+type CatalogFence = { modelCatalogRevision: string };
+type SessionListOperation = CatalogFence & { promise: Promise<SessionsListResult> };
+type SessionListCompleted = CatalogFence & { expiresAt?: number; result: SessionsListResult };
+type SessionListState = SessionListFence & {
   completed: Map<string, SessionListCompleted>;
   config: OpenClawConfig;
   inFlight: Map<string, SessionListOperation>;
@@ -84,16 +85,12 @@ function readSessionListModelCatalogFence(
     .join(",");
 }
 
-function readSessionListFence(
-  context: GatewayRequestContext,
-  modelCatalog: SessionListModelCatalog | undefined,
-): SessionListFence {
+function readSessionListFence(context: GatewayRequestContext): SessionListFence {
   return {
     agentRunIndexVersion: readAgentRunIndexVersion(),
     agentDatabaseRegistryToken: readOpenClawAgentDatabaseRegistryToken(),
     incognitoDatabaseGeneration: readOpenIncognitoAgentDatabaseGeneration(),
     lifecyclePersistenceVersion: readSessionLifecyclePersistenceVersion(),
-    modelCatalogRevision: readSessionListModelCatalogFence(modelCatalog),
     sessionAutomationVersion: readSessionAutomationVersion(),
     sessionIdentityMutationVersion: readSessionIdentityMutationVersion(),
     sessionLifecycleVersion: readSessionLifecycleVersion(),
@@ -116,7 +113,6 @@ function matchesSessionListFence(value: SessionListFence, fence: SessionListFenc
     value.agentDatabaseRegistryToken === fence.agentDatabaseRegistryToken &&
     value.incognitoDatabaseGeneration === fence.incognitoDatabaseGeneration &&
     value.lifecyclePersistenceVersion === fence.lifecyclePersistenceVersion &&
-    value.modelCatalogRevision === fence.modelCatalogRevision &&
     value.sessionAutomationVersion === fence.sessionAutomationVersion &&
     value.sessionIdentityMutationVersion === fence.sessionIdentityMutationVersion &&
     value.sessionLifecycleVersion === fence.sessionLifecycleVersion &&
@@ -149,27 +145,34 @@ function sessionListState(
   config: OpenClawConfig,
 ): SessionListState {
   let state = sessionListsByContext.get(context);
-  if (!state || state.config !== config) {
-    state = { completed: new Map(), config, inFlight: new Map() };
+  // Every input that can change a projected row must fence reuse. Session identity,
+  // Gateway projection, and live-run mutations have separate monotonic owners.
+  const fence = readSessionListFence(context);
+  if (!state || state.config !== config || !matchesSessionListFence(state, fence)) {
+    // Pending callers retain their generation until they settle, but its completed
+    // pages are already unusable and must not remain reachable through those callers.
+    state?.completed.clear();
+    state = { ...fence, completed: new Map(), config, inFlight: new Map() };
     sessionListsByContext.set(context, state);
   }
   return state;
 }
 
-function rememberCompletedSessionList(
+function readCompletedSessionList(
   state: SessionListState,
   workKey: string,
-  completed: SessionListCompleted,
-): void {
-  state.completed.delete(workKey);
-  state.completed.set(workKey, completed);
-  while (state.completed.size > SESSIONS_LIST_COMPLETED_CACHE_LIMIT) {
-    const oldest = state.completed.keys().next().value;
-    if (oldest === undefined) {
-      break;
-    }
-    state.completed.delete(oldest);
+  modelCatalogRevision: string,
+): SessionsListResult | undefined {
+  const completed = state.completed.get(workKey);
+  if (
+    completed?.modelCatalogRevision === modelCatalogRevision &&
+    (completed.expiresAt === undefined || completed.expiresAt > Date.now())
+  ) {
+    return completed.result;
   }
+  // Keep invalid lookups in this synchronous frame, not a suspended refresh.
+  state.completed.delete(workKey);
+  return undefined;
 }
 
 function resolveSessionListExpiration(result: SessionsListResult): number | null | undefined {
@@ -202,23 +205,19 @@ export async function respondWithCachedSessionList(params: {
 }): Promise<void> {
   const workKey = sessionListWorkKey(params.request, params.client, params.config);
   const state = sessionListState(params.context, params.config);
-  // Every input that can change a projected row must fence reuse. Session identity,
-  // Gateway projection, and live-run mutations have separate monotonic owners.
-  const fence = readSessionListFence(params.context, params.modelCatalog);
+  const modelCatalogRevision = readSessionListModelCatalogFence(params.modelCatalog);
   // Activity windows and child retention expire without mutations; hidden paginated rows
   // prevent deriving a safe deadline, so only concurrent temporal requests share work.
   const cacheCompleted = params.request.activeMinutes === undefined && !params.request.spawnedBy;
-  const completed = cacheCompleted ? state.completed.get(workKey) : undefined;
-  if (
-    completed &&
-    matchesSessionListFence(completed, fence) &&
-    (completed.expiresAt === undefined || completed.expiresAt > Date.now())
-  ) {
-    params.respond(true, completed.result, undefined);
+  const completed = cacheCompleted
+    ? readCompletedSessionList(state, workKey, modelCatalogRevision)
+    : undefined;
+  if (completed) {
+    params.respond(true, completed, undefined);
     return;
   }
   const pending = state.inFlight.get(workKey);
-  if (pending && matchesSessionListFence(pending, fence)) {
+  if (pending?.modelCatalogRevision === modelCatalogRevision) {
     params.respond(true, await pending.promise, undefined);
     return;
   }
@@ -230,16 +229,20 @@ export async function respondWithCachedSessionList(params: {
     .then((result) => {
       if (
         cacheCompleted &&
-        matchesSessionListFence(readSessionListFence(params.context, params.modelCatalog), fence)
+        sessionListsByContext.get(params.context) === state &&
+        matchesSessionListFence(state, readSessionListFence(params.context)) &&
+        readSessionListModelCatalogFence(params.modelCatalog) === modelCatalogRevision
       ) {
         const expiresAt = resolveSessionListExpiration(result);
         if (expiresAt !== null && (expiresAt === undefined || expiresAt > Date.now())) {
-          rememberCompletedSessionList(state, workKey, { ...fence, result, expiresAt });
+          state.completed.delete(workKey);
+          state.completed.set(workKey, { modelCatalogRevision, result, expiresAt });
+          pruneMapToMaxSize(state.completed, SESSIONS_LIST_COMPLETED_CACHE_LIMIT);
         }
       }
       return result;
     });
-  const operation = { ...fence, promise };
+  const operation = { modelCatalogRevision, promise };
   state.inFlight.set(workKey, operation);
   try {
     params.respond(true, await promise, undefined);
