@@ -102,6 +102,17 @@ export async function transferSkillResources(params: {
         .map((skill) => skill.sourcePath)
         .filter((sourcePath): sourcePath is string => sourcePath !== undefined),
     );
+    const skippedSkillNames = new Set(
+      (params.snapshot.resolvedSkills ?? [])
+        .filter(
+          (skill) =>
+            !skill.filePath.startsWith("node://") && !deliveredSourcePaths.has(skill.filePath),
+        )
+        .map((skill) => skill.name),
+    );
+    const skills = structuredClone(params.snapshot.skills).filter(
+      (skill) => !skippedSkillNames.has(skill.name),
+    );
     const resolvedSkills = structuredClone(params.snapshot.resolvedSkills ?? []).filter(
       (skill) => skill.filePath.startsWith("node://") || deliveredSourcePaths.has(skill.filePath),
     );
@@ -142,6 +153,7 @@ export async function transferSkillResources(params: {
       source: params.snapshot,
       snapshot: {
         ...params.snapshot,
+        skills,
         resolvedSkills,
         prompt: formatSkillsForPromptBounded({ skills: resolvedSkills, preserveOrder: true }),
       },
