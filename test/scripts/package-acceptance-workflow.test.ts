@@ -2441,6 +2441,91 @@ describe("package acceptance workflow", () => {
     );
   });
 
+  it.each([
+    [PLUGIN_NPM_RELEASE_WORKFLOW, "preview_plugins_npm", "Resolve plugin release plan"],
+    [PLUGIN_CLAWHUB_RELEASE_WORKFLOW, "preview_plugins_clawhub", "Resolve plugin release plan"],
+    [RELEASE_PUBLISH_WORKFLOW, "publish", "Resolve ClawHub release plan"],
+    [
+      ".github/workflows/plugin-clawhub-new.yml",
+      "resolve_bootstrap_plan",
+      "Resolve plugin bootstrap plan",
+    ],
+  ])("keeps plugin freshness warnings visible without blocking %s", (workflow, job, step) => {
+    const root = tempDirs.make("plugin-plan-warnings-");
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "node"), '#!/bin/sh\ncat "$MOCK_PLUGIN_PLAN"\n', { mode: 0o755 });
+    const parentPlan = workflow === RELEASE_PUBLISH_WORKFLOW;
+    if (parentPlan) {
+      const helperDir = join(root, ".release-harness/scripts/lib");
+      mkdirSync(helperDir, { recursive: true });
+      writeFileSync(
+        join(helperDir, "release-publish-children.sh"),
+        "resolve_child_workflow_ref() { printf '%s\\n' \"release-publish/aaaaaaaaaaaa-1\"; }\n",
+      );
+    }
+    const plugin = {
+      packageName: "@openclaw/example",
+      packageDir: "extensions/example",
+      version: "2026.9.1",
+      channel: "stable",
+      publishTag: "latest",
+    };
+    const warning =
+      '@openclaw/example@2026.9.1: example-runtime pinned "1.2.3", npm latest is "1.2.4".';
+    const planPath = join(root, "plan.json");
+    writeFileSync(
+      planPath,
+      JSON.stringify({
+        all: [plugin],
+        candidates: [plugin],
+        bootstrapCandidates: [plugin],
+        missingTrustedPublisher: [],
+        skippedPublished: [],
+        warnings: [warning],
+        bootstrap: { shouldDispatch: false },
+      }),
+    );
+    const script = workflowStep(workflowJob(workflow, job), step).run;
+    if (!script) {
+      throw new Error(`Missing plugin plan step in ${workflow}`);
+    }
+    const summaryPath = join(root, "summary.md");
+    const result = spawnSync("bash", ["-c", script], {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        PATH: `${bin}:${process.env.PATH}`,
+        MOCK_PLUGIN_PLAN: planPath,
+        GITHUB_OUTPUT: join(root, "output"),
+        GITHUB_STEP_SUMMARY: summaryPath,
+        GITHUB_WORKSPACE: root,
+        RUNNER_TEMP: root,
+        GITHUB_SHA: "a".repeat(40),
+        GITHUB_RUN_ID: "1",
+        GITHUB_RUN_ATTEMPT: "1",
+        WORKFLOW_FULL_REF: "refs/heads/main",
+        PARENT_WORKFLOW_BRANCH: "main",
+        PARENT_WORKFLOW_FULL_REF: "refs/heads/main",
+        RELEASE_TAG: "v2026.9.1",
+        TARGET_SHA: "b".repeat(40),
+        PLUGIN_PUBLISH_SCOPE: "all-publishable",
+        PLUGINS: "",
+        PUBLISH_SCOPE: "all-publishable",
+        RELEASE_PLUGINS: plugin.packageName,
+        BASE_REF: "",
+        NPM_DIST_TAG: "default",
+        PREFLIGHT_ONLY: "false",
+      },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(summaryPath, "utf8")).toBe(`- Warning: ${warning}\n`);
+    expect(result.stdout).toContain(plugin.packageName);
+    expect(readFileSync(join(root, "output"), "utf8")).toContain(
+      parentPlan ? "bootstrap_should_dispatch=false" : "candidate_count=1",
+    );
+  });
+
   it("runs plugin npm preflight trust from the exact workflow tooling checkout", () => {
     const job = workflowJob(PLUGIN_NPM_RELEASE_WORKFLOW, "preview_plugins_npm");
     const checkout = workflowStep(job, "Checkout trusted planning tooling");

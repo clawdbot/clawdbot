@@ -43,6 +43,7 @@ import {
 import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { resolveInstalledPluginLifecycleOwnership } from "../plugins/installed-plugin-package-ownership.js";
 import { configReferencesNpmInstallPath } from "../plugins/installs.js";
+import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import {
   withPluginLifecycleLease,
   type PluginLifecycleLeaseContext,
@@ -419,7 +420,7 @@ async function runPluginUpdateCommandUnlocked(
     allowPrompt: !params.opts.dryRun,
   });
   const deferredInstallTransactions: PluginInstallTransaction[] = [];
-  let pluginResult;
+  let pluginResult: Awaited<ReturnType<typeof updateNpmInstalledPlugins>>;
   try {
     pluginResult =
       pluginSelection.pluginIds.length > 0
@@ -471,10 +472,13 @@ async function runPluginUpdateCommandUnlocked(
   try {
     if (pluginSelection.pluginIds.length > 0 && pluginResult.changed && !params.opts.dryRun) {
       const nextInstallRecords = pluginResult.config.plugins?.installs ?? {};
-      const afterIndex = loadInstalledPluginIndex({
-        config: pluginResult.config,
-        installRecords: nextInstallRecords,
-      });
+      // The installer may restore or replace bytes at a previously observed path.
+      const afterIndex = withPluginCache(createPluginCache(), () =>
+        loadInstalledPluginIndex({
+          config: pluginResult.config,
+          installRecords: nextInstallRecords,
+        }),
+      );
       const reconciled = reconcilePluginPackageUpdateConfig({
         config: pluginResult.config,
         beforeIndex: installedPluginIndex,

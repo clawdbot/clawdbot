@@ -662,6 +662,13 @@ pnpm test:install:smoke
   package-local runtime, and pass the npm and ClawHub release metadata checks
   before a tag or publish workflow can start. Do not defer README, entrypoint,
   or packed-artifact failures to postpublish verification.
+- Keep plugin `openclaw.release.requireLatestDependencies` declarations. npm
+  `latest` drift and unavailable latest lookups are advisory warnings, not
+  release blockers. Full Release Validation's Codex lanes validate the Codex
+  pin; retain that frozen, tested pin when upstream publishes a newer version.
+  Record the warnings in candidate output and job summaries. Missing or
+  malformed required runtime dependency metadata, package/install failures,
+  and failed required validation lanes still block release.
 - Before generating the changelog, require green CI for the exact Code SHA, not
   an earlier branch SHA. Heal every related blocking CI, release-check, packaging,
   or root-Dockerfile lane on the release branch and rerun the affected exact-SHA

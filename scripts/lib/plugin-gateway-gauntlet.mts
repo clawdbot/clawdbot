@@ -31,11 +31,6 @@ const ANSI_PATTERN = new RegExp(String.raw`\u001B\[[0-9;]*m`, "gu");
 const QA_SUMMARY_MAX_BYTES_ENV = "OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_QA_SUMMARY_MAX_BYTES";
 const DEFAULT_QA_SUMMARY_MAX_BYTES = 2 * 1024 * 1024;
 
-function readPositiveIntEnv(name: string, fallback: number) {
-  const raw = process.env[name];
-  return raw === undefined || raw === "" ? fallback : parsePositiveInt(raw, name);
-}
-
 function normalizeStringOrEmpty(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -583,7 +578,10 @@ function readQaSuiteSummary(summaryPath: string) {
 }
 
 function readQaSuiteSummaryText(summaryPath: string) {
-  const maxBytes = readPositiveIntEnv(QA_SUMMARY_MAX_BYTES_ENV, DEFAULT_QA_SUMMARY_MAX_BYTES);
+  const maxBytes = parsePositiveInt(
+    process.env[QA_SUMMARY_MAX_BYTES_ENV] || String(DEFAULT_QA_SUMMARY_MAX_BYTES),
+    QA_SUMMARY_MAX_BYTES_ENV,
+  );
   const stat = fs.statSync(summaryPath);
   if (!stat.isFile()) {
     throw new Error(`QA suite summary is not a file: ${summaryPath}`);

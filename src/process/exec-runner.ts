@@ -308,10 +308,8 @@ async function runCommandWithOutputEncoding(
       }
     } else {
       const remaining = Math.max(0, maxCombinedOutputBytes - combinedBytesBeforeChunk);
-      if (remaining > 0) {
-        appendCapturedOutput(capture, buffer.subarray(0, remaining), maxBytes, captureMode);
-      }
-      capture.truncatedBytes += Math.max(0, buffer.byteLength - remaining);
+      const maxCaptureBytes = Math.min(maxBytes, capture.bytes + remaining);
+      appendCapturedOutput(capture, buffer, maxCaptureBytes, captureMode);
     }
     if (
       (combinedLimitExceeded &&

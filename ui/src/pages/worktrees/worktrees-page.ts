@@ -382,7 +382,7 @@ class WorktreesPage extends OpenClawLightDomElement {
             type="text"
             aria-label=${t("worktrees.name")}
             ?disabled=${this.creating}
-            placeholder=${t("newSession.worktreeNamePlaceholder")}
+            placeholder=${t("worktrees.namePlaceholder")}
             .value=${this.createName}
             @input=${(event: Event) => {
               this.createName = (event.target as HTMLInputElement).value;
@@ -391,12 +391,12 @@ class WorktreesPage extends OpenClawLightDomElement {
         `,
       })}
       ${renderSettingsRow({
-        title: t("newSession.baseBranch"),
+        title: t("worktrees.baseBranch"),
         control: html`
           <input
             class="settings-input"
             type="text"
-            aria-label=${t("newSession.baseBranch")}
+            aria-label=${t("worktrees.baseBranch")}
             ?disabled=${this.creating}
             list="worktrees-create-branches"
             .value=${this.createBaseRef}

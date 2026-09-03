@@ -400,11 +400,20 @@ Shell installers do not establish the same service ownership proof. If their
 service refresh is denied, they report code installation success, leave the
 service untouched, and print guidance to inspect ownership and restart manually.
 
+On Linux without a service manager, updates proceed when native inspection proves
+the service is absent and the selected Gateway has no active lock or listener.
+The command reports that there is no Gateway to restart. Existing service files,
+manager runtime state, or failed filesystem inspection still require service access.
+
 If service inspection is unavailable, a restart-enabled code update refuses to
 mutate the checkout or package tree; it does not assume that no service exists.
 Run `openclaw gateway status --deep` and retry when access is restored. Use
 `--no-restart` only after manually stopping the Gateway, then restart it
 manually after the update. Services owned by another install remain untouched.
+
+The published 2026.8.2 CLI also refuses updates on service-less Linux installs.
+Use `openclaw update --no-restart` for that upgrade after confirming that no Gateway
+is running; the new CLI cannot fix the old CLI's pre-update inspection.
 
 Package-manager updates normally keep using the Node binary recorded in the
 managed service. If that Node cannot run the target release, but the current

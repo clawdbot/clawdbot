@@ -246,7 +246,7 @@ function renderParticipantMenu(
       </div>`;
     })}
     ${unresolvedCount > 0
-      ? html`<div class="session-hovercard__participant-unresolved" role="listitem">
+      ? html`<div class="session-hovercard__more" role="listitem">
           ${t("sessionHovercard.moreParticipantsLabel", { count: String(unresolvedCount) })}
         </div>`
       : nothing}
