@@ -73,11 +73,11 @@ describe("chat session sharing menu", () => {
     const ownerLink = root.querySelector<HTMLAnchorElement>(
       ".chat-pane__sharing-owner a.person-activity-link",
     );
-    expect(ownerLink?.getAttribute("href")).toBe("/activity?person=owner");
+    expect(ownerLink?.getAttribute("href")).toBe("/activity/owner");
     expect(root.querySelector(".session-menu__separator")).toBeNull();
 
     ownerLink?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-    expect(navigate).toHaveBeenCalledWith("owner");
+    expect(navigate).toHaveBeenCalledWith("owner", "Owner");
 
     dropdown?.dispatchEvent(
       new CustomEvent("wa-select", {
@@ -257,7 +257,7 @@ describe("chat session sharing menu", () => {
       root
         .querySelector("a.person-activity-avatar-link:has(openclaw-session-owner-chip)")
         ?.getAttribute("href"),
-    ).toBe("/activity?person=owner");
+    ).toBe("/activity/owner");
   });
 
   it("publishes a manageable draft through the shared visibility callback", () => {

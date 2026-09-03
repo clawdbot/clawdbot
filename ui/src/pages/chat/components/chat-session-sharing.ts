@@ -116,6 +116,7 @@ export function renderChatSessionSharing(props: ChatSessionSharingProps, inline 
   const ownerActivity = personActivityLink(
     owner?.identity?.type === "profile" ? owner.identity.id : undefined,
     props.personActivity,
+    owner?.label,
   );
   if (!canManage) {
     return visibility === "draft"
