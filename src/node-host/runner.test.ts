@@ -114,6 +114,10 @@ vi.mock("../infra/machine-name.js", () => ({
   getMachineDisplayName: vi.fn(async () => "test-node"),
 }));
 
+vi.mock("../infra/machine-model.js", () => ({
+  resolveMachineModelIdentifier: vi.fn(() => "TestMachine1,1"),
+}));
+
 vi.mock("../infra/executable-path.js", () => ({
   resolveExecutableFromPathEnv: vi.fn((bin: string) => mocks.resolvedExecutables.get(bin) ?? null),
 }));
@@ -277,6 +281,9 @@ describe("runNodeHost", () => {
 
       expect(lastCapturedOptions()?.platform).toBe(platform);
       expect(lastCapturedOptions()?.deviceFamily).toBe(deviceFamily);
+      expect(lastCapturedOptions()?.modelIdentifier).toBe(
+        runtime === "freebsd" ? undefined : "TestMachine1,1",
+      );
     },
   );
 
