@@ -271,11 +271,12 @@ describe("loadWorkspaceSkills", () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-workshop-isolation-"));
     const alphaDir = path.join(root, "alpha");
     const betaDir = path.join(root, "beta");
+    const workspaceDir = path.join(root, "workspace");
     const config = {
       agents: {
         entries: {
-          alpha: { agentDir: alphaDir, workspace: path.join(root, "alpha-workspace") },
-          beta: { agentDir: betaDir, workspace: path.join(root, "beta-workspace") },
+          alpha: { agentDir: alphaDir, workspace: workspaceDir },
+          beta: { agentDir: betaDir, workspace: workspaceDir },
         },
       },
     } satisfies OpenClawConfig;
@@ -291,11 +292,11 @@ describe("loadWorkspaceSkills", () => {
           description: `${agentId} skill`,
         });
       }
-      const alpha = loadWorkspaceSkills(path.join(root, "alpha-workspace"), {
+      const alpha = loadWorkspaceSkills(workspaceDir, {
         config,
         agentId: "alpha",
       });
-      const beta = loadWorkspaceSkills(path.join(root, "beta-workspace"), {
+      const beta = loadWorkspaceSkills(workspaceDir, {
         config,
         agentId: "beta",
       });

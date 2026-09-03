@@ -369,6 +369,7 @@ function loadSkillEntries(
     workspaceDir,
     workspaceSkillsDir,
     workspaceOnly,
+    opts?.agentId ? normalizeAgentId(opts.agentId) : undefined,
     custodianAgentId,
     opts?.workshopSkillsDir,
     opts?.managedSkillsDir,
