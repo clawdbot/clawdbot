@@ -349,6 +349,41 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     expect(sendParams.accountId).toBe(accountId);
   });
 
+  it("falls back to the requester's route when the target's stored route is internal-only", async () => {
+    const session = {
+      key: "agent:jarvis:webchat:target-session",
+      kind: "direct",
+      classification: "direct",
+      channel: "webchat",
+      deliveryContext: {
+        channel: "webchat",
+        to: "agent:jarvis:webchat:target-session",
+      },
+    } satisfies GatewaySessionListRow;
+    sessionListRows = [session];
+
+    await runSessionsSendA2AFlow({
+      targetSessionKey: session.key,
+      displayKey: session.key,
+      message: "Test message",
+      announceTimeoutMs: 10_000,
+      maxPingPongTurns: 0,
+      roundOneReply: "Worker completed successfully",
+      requesterSessionKey: "agent:jarvis:discord:channel:requester-room",
+      requesterChannel: "discord",
+      requesterTo: "channel:requester-room",
+      requesterAccountId: "voice-account",
+      requesterThreadId: "thread-1",
+    });
+
+    const sendCall = requireGatewayCall("send");
+    const sendParams = sendCall.params as Record<string, unknown>;
+    expect(sendParams.channel).toBe("discord");
+    expect(sendParams.to).toBe("channel:requester-room");
+    expect(sendParams.accountId).toBe("voice-account");
+    expect(sendParams.threadId).toBe("thread-1");
+  });
+
   it.each(["NO_REPLY", "HEARTBEAT_OK", "ANNOUNCE_SKIP", "REPLY_SKIP"])(
     "does not re-inject exact control reply %s into agent-to-agent flow",
     async (roundOneReply) => {

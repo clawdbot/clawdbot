@@ -500,6 +500,10 @@ export function createSessionsSendTool(opts?: {
   agentId?: string;
   agentSessionKey?: string;
   agentChannel?: string;
+  /** Requester's live delivery target/account/thread; used when the target's own announce route is internal-only. */
+  requesterAccountId?: string;
+  requesterTo?: string;
+  requesterThreadId?: string | number;
   sandboxed?: boolean;
   config?: OpenClawConfig;
   callGateway?: GatewayCaller;
@@ -1132,6 +1136,9 @@ export function createSessionsSendTool(opts?: {
                     requesterSessionKey: replyRequesterSessionKey,
                     requesterAgentId,
                     requesterChannel,
+                    requesterAccountId: opts?.requesterAccountId,
+                    requesterTo: opts?.requesterTo,
+                    requesterThreadId: opts?.requesterThreadId,
                     baseline: flowBaseline,
                     roundOneReply,
                     waitRunId,
