@@ -174,6 +174,7 @@ function createLegacyStateMigrationDetectionResult(params?: {
     targetMainKey: "main",
     stateDir: "/tmp/state",
     oauthDir: "/tmp/oauth",
+    pluginSessionStoreAgentIds: [],
     deviceAuth: {
       sourcePath: "/tmp/state/identity/device-auth.json",
       sourcePresent: false,
