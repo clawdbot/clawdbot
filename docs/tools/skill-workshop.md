@@ -14,8 +14,9 @@ generated skills. Through this path, agents and operators create a **proposal** 
 draft with content, target binding, scanner state, hashes, and rollback
 metadata) that becomes a live skill only when applied.
 
-Skill Workshop writes only under the active agent's
-`<state-dir>/agents/<agentId>/workshop-skills`. Operators edit
+By default, Skill Workshop writes only under the active agent's
+`<state-dir>/agents/<agentId>/workshop-skills`. When `agents.<id>.agentDir` is
+configured, it writes under `<agentDir>/workshop-skills` instead. Operators edit
 bundled, plugin, ClawHub, extra-root, managed, personal-agent, project, and
 workspace skills through their owning tools or files. The same authoring tool
 also supports [personal library skills](/tools/skills#personal-skills-on-a-shared-gateway)
