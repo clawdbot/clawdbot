@@ -1,4 +1,5 @@
 import { isContextOverflow } from "@openclaw/ai/internal/runtime";
+import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { requireSessionKeyOrSkip } from "../../../infra/session-keys.js";
@@ -81,6 +82,10 @@ export async function recoverEmbeddedRunOverflow(
             }
             // A non-overflow prompt failure must not inherit a stale assistant
             // error from the previous transcript leaf.
+            return null;
+          }
+          // Preserve the structured terminal outcome before the text-only fallback below.
+          if (isProviderRefusalAssistantError(input.assistantOverflowCandidate)) {
             return null;
           }
           if (

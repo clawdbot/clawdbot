@@ -9,6 +9,7 @@ import {
 } from "./failover-error.js";
 import { AgentHarnessPreflightError, recordAgentHarnessPreflightOwner } from "./harness/errors.js";
 import {
+  type ModelFallbackStepHandler,
   runFallbackAttempt,
   shouldDiscardDeferredSessionSuspension,
 } from "./model-fallback-attempt.js";
@@ -44,6 +45,17 @@ const fallbackOptions = {
   manifestPlugins: [],
   fallbacksOverride: ["fixture-next/fixture-model"],
 };
+
+it("does not replay an unscoped preflight subclass on another model", async () => {
+  class PolicyRefusal extends AgentHarnessPreflightError {}
+  const error = new PolicyRefusal("handoff refused", {
+    cause: new FailoverError("529 overloaded", { reason: "overloaded", status: 529 }),
+  });
+  const run = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce("unexpected fallback");
+  await expect(runWithModelFallback({ ...fallbackOptions, run })).rejects.toBe(error);
+  expect(run).toHaveBeenCalledOnce();
+  expect(providerHook).not.toHaveBeenCalled();
+});
 
 const wrappers = [
   { name: "direct", wrap: (error: FailoverError): unknown => error },
@@ -158,6 +170,33 @@ it("honors cancellation in the failure callback before starting another candidat
   expect(onError).toHaveBeenCalledTimes(1);
   expect(providerHook).not.toHaveBeenCalled();
 });
+
+it.each(["throw", "reject"] as const)(
+  "preserves recovery when its fallback observer fails by %s",
+  async (observerFailure) => {
+    const observerError = new Error("fallback observer failed");
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(new FailoverError("provider overloaded", { reason: "overloaded" }))
+      .mockResolvedValueOnce("recovered");
+    const onError = vi.fn();
+    const onFallbackStep = vi.fn<ModelFallbackStepHandler>(() => {
+      if (observerFailure === "throw") {
+        throw observerError;
+      }
+      return Promise.reject(observerError);
+    });
+    await expect(
+      runWithModelFallback({ ...fallbackOptions, run, onError, onFallbackStep }),
+    ).resolves.toMatchObject({ outcome: "completed", result: "recovered" });
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(onError).toHaveBeenCalledOnce();
+    expect(onFallbackStep.mock.calls.map(([step]) => step.fallbackStepFinalOutcome)).toEqual([
+      "next_fallback",
+      "succeeded",
+    ]);
+  },
+);
 
 it("does not replay a terminal failure returned by result classification", async () => {
   const error = new AggregateError([maxTurns()], "wrapper");

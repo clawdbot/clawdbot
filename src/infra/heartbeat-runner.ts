@@ -70,7 +70,7 @@ export async function runHeartbeatOnce(
   }
   const getReplyFromConfig =
     opts.deps?.getReplyFromConfig ??
-    (await import("./heartbeat-runner.runtime.js")).getReplyFromConfig;
+    (await import("./heartbeat-runner.runtime.js")).getHeartbeatReplyFromConfig;
   return await runSplitHeartbeatOnce({
     ...opts,
     deps: {

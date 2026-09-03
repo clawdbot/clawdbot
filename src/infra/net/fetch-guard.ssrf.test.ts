@@ -2523,25 +2523,31 @@ describe("fetchWithSsrFGuard hardening", () => {
     await result.release();
   });
 
-  it("enforces hostnameAllowlist in trusted env proxy mode before dispatch", async () => {
-    clearProxyEnv();
-    vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
-    const lookupFn = vi.fn() as unknown as LookupFn;
-    const fetchImpl = vi.fn(async () => okResponse());
+  it.each([
+    { policy: { hostnameAllowlist: ["*.permitted.example"] }, reason: /allowlist/i },
+    { policy: { blockedHostnames: ["not-allowed.example"] }, reason: /configured blocklist/i },
+  ])(
+    "enforces hostname policy $policy in trusted env proxy mode before dispatch",
+    async ({ policy, reason }) => {
+      clearProxyEnv();
+      vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
+      const lookupFn = vi.fn() as unknown as LookupFn;
+      const fetchImpl = vi.fn(async () => okResponse());
 
-    await expect(
-      fetchWithSsrFGuard({
-        url: "https://not-allowed.example/resource",
-        fetchImpl,
-        lookupFn,
-        mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
-        policy: { hostnameAllowlist: ["*.permitted.example"] },
-      }),
-    ).rejects.toThrow(/allowlist/i);
+      await expect(
+        fetchWithSsrFGuard({
+          url: "https://not-allowed.example/resource",
+          fetchImpl,
+          lookupFn,
+          mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
+          policy,
+        }),
+      ).rejects.toThrow(reason);
 
-    expect(lookupFn).not.toHaveBeenCalled();
-    expect(fetchImpl).not.toHaveBeenCalled();
-  });
+      expect(lookupFn).not.toHaveBeenCalled();
+      expect(fetchImpl).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     "http://localhost.../resource",

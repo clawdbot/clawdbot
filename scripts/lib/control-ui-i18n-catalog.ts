@@ -4,9 +4,12 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { registerActivityEnglish } from "../../ui/src/i18n/locales/en-activity.ts";
+import { registerMeetingsEnglish } from "../../ui/src/i18n/locales/en-meetings.ts";
 import { registerPluginConsentEnglish } from "../../ui/src/i18n/locales/en-plugin-consent.ts";
 import { registerSessionPlacementEnglish } from "../../ui/src/i18n/locales/en-session-placement.ts";
 import { registerSettingsEnglish } from "../../ui/src/i18n/locales/en-settings.ts";
+import { registerSkillLibraryEnglish } from "../../ui/src/i18n/locales/en-skill-library.ts";
+import { registerUpdateActionsEnglish } from "../../ui/src/i18n/locales/en-update-actions.ts";
 import { en } from "../../ui/src/i18n/locales/en.ts";
 import type { TranslationMap, TranslationMemoryEntry } from "./control-ui-i18n-sync-plan.ts";
 
@@ -20,20 +23,26 @@ const sourceFiles = [
   "en.ts",
   "en-agents.ts",
   "en-activity.ts",
+  "en-meetings.ts",
   "en-session-placement.ts",
   "en-plugin-consent.ts",
   "en-settings.ts",
+  "en-skill-library.ts",
+  "en-update-actions.ts",
 ];
 
 export function loadControlUiSourceCatalog(): TranslationMap {
   // Read fragment data without registering it into the shared runtime catalog.
   // en.ts's empty anchors retain source order for extracted whole subtrees.
   return mergeControlUiTranslationMaps(
+    registerSkillLibraryEnglish.catalog,
     en,
     registerActivityEnglish.catalog,
+    registerMeetingsEnglish.catalog,
     registerSessionPlacementEnglish.catalog,
     registerPluginConsentEnglish.catalog,
     registerSettingsEnglish.catalog,
+    registerUpdateActionsEnglish.catalog,
   );
 }
 

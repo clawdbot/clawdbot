@@ -500,16 +500,13 @@ function mergeImportedAuthProfiles(params: {
 }): AuthProfileStore {
   const profiles = { ...params.store.profiles };
   for (const [profileId, credential] of Object.entries(params.profiles)) {
-    if (!params.existingProfileIds.has(profileId)) {
-      profiles[profileId] = credential;
-      continue;
-    }
     const existing = profiles[profileId];
     if (
-      params.replaceExistingWithoutCredential &&
-      existing &&
-      !hasUsableAuthProfileCredential(existing) &&
-      hasUsableAuthProfileCredential(credential)
+      !params.existingProfileIds.has(profileId) ||
+      (params.replaceExistingWithoutCredential &&
+        existing &&
+        !hasUsableAuthProfileCredential(existing) &&
+        hasUsableAuthProfileCredential(credential))
     ) {
       profiles[profileId] = credential;
     }
@@ -551,19 +548,11 @@ function formatMissingAuthProfileSqliteVerification(params: {
     (profileId) => !params.loaded?.profiles[profileId],
   );
   const missingStateFields: string[] = [];
-  for (const [provider, profileIds] of Object.entries(params.expected.order ?? {})) {
-    const loadedProfileIds = params.loaded?.order?.[provider];
-    if (
-      !loadedProfileIds ||
-      loadedProfileIds.length !== profileIds.length ||
-      loadedProfileIds.some((profileId, index) => profileId !== profileIds[index])
-    ) {
-      missingStateFields.push(`order.${provider}`);
-    }
-  }
-  for (const [provider, profileId] of Object.entries(params.expected.lastGood ?? {})) {
-    if (params.loaded?.lastGood?.[provider] !== profileId) {
-      missingStateFields.push(`lastGood.${provider}`);
+  for (const field of ["order", "lastGood"] as const) {
+    for (const [provider, expected] of Object.entries(params.expected[field] ?? {})) {
+      if (!isDeepStrictEqual(params.loaded?.[field]?.[provider], expected)) {
+        missingStateFields.push(`${field}.${provider}`);
+      }
     }
   }
   for (const profileId of Object.keys(params.expected.usageStats ?? {})) {
@@ -606,14 +595,6 @@ function hasImportableAuthProfileStore(store: AuthProfileStore | null): store is
   return Boolean(store && (Object.keys(store.profiles).length > 0 || hasAuthProfileState(store)));
 }
 
-function hasLegacyAuthProfileSource(candidate: AuthProfileSqliteMigrationCandidate): boolean {
-  return (
-    fs.existsSync(candidate.authPath) ||
-    fs.existsSync(candidate.statePath) ||
-    fs.existsSync(candidate.legacyPath)
-  );
-}
-
 function prepareAuthProfileSourceReceipt(params: {
   pathname: string;
   targetDatabasePath: string;
@@ -640,14 +621,6 @@ function prepareAuthProfileSourceReceipt(params: {
     now: new Date(params.now()),
     ...(params.env ? { env: params.env } : {}),
   });
-}
-
-function archiveVerifiedAuthProfileSource(
-  receipt: AuthProfileMigrationSourceReceipt,
-  sourceLocked = false,
-): string {
-  finalizeAuthProfileMigrationSource(receipt, "completed", { sourceLocked });
-  return receipt.archivePath;
 }
 
 function assertAuthProfileMigrationSourcesUnchanged(
@@ -903,54 +876,96 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
   const env = params.env ?? process.env;
   const loadMigratedStore =
     params.deps?.loadPersistedAuthProfileStore ?? loadPersistedAuthProfileStore;
-  let resumedChanges: string[] = [];
-  let resumeWarning: string | undefined;
-  try {
-    resumedChanges = resumePendingAuthProfileMigrationArchives(env);
-  } catch (err) {
-    resumeWarning = `Could not finalize an interrupted auth profile archive; legacy sources were left for recovery: ${String(err)}`;
-  }
   const candidates = listAuthProfileSqliteMigrationCandidates(params.cfg, env);
-  const configStore = coerceLegacyConfigAuthProfileStore(params.cfg);
   const oauthPath = resolveLegacyOAuthPath(env);
-  const hasLegacyOAuth = fs.existsSync(oauthPath);
-  const detected = candidates.filter(
-    (candidate) =>
-      hasLegacyAuthProfileSource(candidate) ||
-      (configStore && isDefaultAgentCandidate(candidate, params.cfg, env)),
-  );
+  const recoverableSources = new Set<string>();
+  let recoveryApproved = false;
+  const recoverCompleted = (receipt: AuthProfileMigrationSourceReceipt): boolean => {
+    const candidate = candidates.find((entry) =>
+      [
+        entry.authPath,
+        entry.legacyPath,
+        ...(entry.agentDir === undefined ? [oauthPath] : []),
+      ].includes(receipt.sourcePath),
+    );
+    if (!candidate) {
+      return false;
+    }
+    const raw = parseAuthProfileMigrationSource(receipt);
+    normalizeLegacyApiKeyAliasesForImport(raw);
+    const imported =
+      receipt.sourcePath === oauthPath
+        ? coerceLegacyOAuthFile(raw).store
+        : (coercePersistedAuthProfileStore(raw) ?? coerceLegacyFlatAuthProfileStore(raw));
+    if (!imported || !Object.values(imported.profiles).some(hasUsableAuthProfileCredential)) {
+      return false;
+    }
+    // Current ownership wins over the receipt's historical database path.
+    // Legacy provider aliases are ambiguous without fingerprints; any surviving
+    // credential for that provider prevents replay under a newly allocated id.
+    const inspection = candidate.agentDir
+      ? inspectPersistedAuthProfileStoreRaw(candidate.agentDir)
+      : inspectPersistedSharedAuthProfileStoreRaw(env);
+    const rawTarget =
+      inspection.status === "missing"
+        ? { profiles: {} }
+        : inspection.status === "readable"
+          ? inspection.raw
+          : null;
+    if (!isRecord(rawTarget) || !isRecord(rawTarget.profiles)) {
+      return false;
+    }
+    const existing = rawTarget.profiles;
+    if (
+      Object.entries(imported.profiles).some(
+        ([id, credential]) =>
+          Object.hasOwn(existing, id) ||
+          ((isLegacyOpenAICodexProfileId(id) || isLegacyOpenAICodexProvider(credential.provider)) &&
+            Object.entries(existing).some(
+              ([key, entry]) =>
+                key.startsWith("openai:") ||
+                (isRecord(entry) && entry.provider === OPENAI_PROVIDER_ID),
+            )),
+      )
+    ) {
+      return false;
+    }
+    recoverableSources.add(receipt.sourcePath);
+    return recoveryApproved;
+  };
+  const warnings: string[] = [];
+  const resume = () => {
+    try {
+      return resumePendingAuthProfileMigrationArchives(env, recoverCompleted);
+    } catch (err) {
+      warnings.push(
+        `Could not finalize an interrupted auth profile archive; legacy sources were left for recovery: ${String(err)}`,
+      );
+      return [];
+    }
+  };
+  const resumedChanges = resume();
+  const configStore = coerceLegacyConfigAuthProfileStore(params.cfg);
+  const hasLegacyOAuth = fs.existsSync(oauthPath) || recoverableSources.has(oauthPath);
+  const candidateSources = (candidate: AuthProfileSqliteMigrationCandidate) =>
+    [candidate.authPath, candidate.statePath, candidate.legacyPath].filter(
+      (pathname) =>
+        fs.existsSync(pathname) ||
+        recoverableSources.has(pathname) ||
+        (configStore &&
+          isDefaultAgentCandidate(candidate, params.cfg, env) &&
+          pathname === candidate.authPath),
+    );
+  const detected = candidates.filter((candidate) => candidateSources(candidate).length > 0);
   const result: LegacyFlatAuthProfileRepairResult = {
-    detected: [
-      ...detected.flatMap((candidate) =>
-        [
-          candidate.authPath,
-          candidate.statePath,
-          candidate.legacyPath,
-          ...(configStore && isDefaultAgentCandidate(candidate, params.cfg, env)
-            ? [candidate.authPath]
-            : []),
-        ]
-          .filter((pathname, index, entries) => entries.indexOf(pathname) === index)
-          .filter(
-            (pathname) =>
-              fs.existsSync(pathname) ||
-              (configStore &&
-                isDefaultAgentCandidate(candidate, params.cfg, env) &&
-                pathname === candidate.authPath),
-          ),
-      ),
-      ...(hasLegacyOAuth ? [oauthPath] : []),
-    ],
+    detected: [...detected.flatMap(candidateSources), ...(hasLegacyOAuth ? [oauthPath] : [])],
     changes: resumedChanges,
     configOwnerMigrationApplied: false,
-    warnings: resumeWarning ? [resumeWarning] : [],
+    warnings,
   };
-  if (resumeWarning) {
+  if (warnings.length > 0 || (detected.length === 0 && !hasLegacyOAuth)) {
     // A pending imported receipt owns its source until recovery succeeds.
     // Starting a new hash-based run would orphan that crash-recovery record.
-    return result;
-  }
-  if (detected.length === 0 && !hasLegacyOAuth) {
     return result;
   }
 
@@ -972,6 +987,13 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
   });
   if (!shouldRepair) {
     return result;
+  }
+  if (recoverableSources.size > 0) {
+    recoveryApproved = true;
+    result.changes.push(...resume());
+    if (warnings.length > 0) {
+      return result;
+    }
   }
 
   // Config, credential import, and session repair must share one collision
@@ -1112,64 +1134,41 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
       let next: AuthProfileStore = { ...existing };
       let verifiedStore = existing;
       const importedProfileIds = new Set<string>();
+      const legacyAsStore: AuthProfileStore = { version: AUTH_STORE_VERSION, profiles: {} };
       if (legacyStore) {
-        const legacyAsStore: AuthProfileStore = { version: AUTH_STORE_VERSION, profiles: {} };
         applyLegacyAuthStore(legacyAsStore, legacyStore);
-        for (const profileId of Object.keys(legacyAsStore.profiles)) {
-          importedProfileIds.add(profileId);
-        }
-        next = mergeImportedAuthProfiles({
-          store: next,
-          profiles: legacyAsStore.profiles,
-          existingProfileIds,
-        });
       }
-      if (canonicalStore) {
-        for (const profileId of Object.keys(canonicalStore.profiles)) {
-          importedProfileIds.add(profileId);
+      for (const imported of [legacyAsStore, canonicalStore, configCanonicalStore]) {
+        if (!imported) {
+          continue;
         }
-        next = {
-          ...next,
-          version: Math.max(next.version, canonicalStore.version),
-        };
+        Object.keys(imported.profiles).forEach((id) => importedProfileIds.add(id));
+        const fromConfig = imported === configCanonicalStore;
+        // Config fills missing credentials; canonical JSON overrides auth.json,
+        // but neither replaces credentials already held by SQLite.
         next = mergeImportedAuthProfiles({
           store: next,
-          profiles: canonicalStore.profiles,
-          existingProfileIds,
+          profiles: imported.profiles,
+          existingProfileIds: fromConfig ? new Set(Object.keys(next.profiles)) : existingProfileIds,
+          replaceExistingWithoutCredential: fromConfig,
         });
-        next = mergeImportedAuthProfileState({
-          store: next,
-          state: coerceAuthProfileState(canonicalStore),
-          existingState,
-        });
-      }
-      if (configCanonicalStore) {
-        for (const profileId of Object.keys(configCanonicalStore.profiles)) {
-          importedProfileIds.add(profileId);
+        if (imported === canonicalStore) {
+          next.version = Math.max(next.version, imported.version);
+          next = mergeImportedAuthProfileState({
+            store: next,
+            state: coerceAuthProfileState(imported),
+            existingState,
+          });
         }
-        // Config imports fill missing SQLite credentials only; when both exist,
-        // the canonical per-agent SQLite store wins over legacy config secrets.
-        next = mergeImportedAuthProfiles({
-          store: next,
-          profiles: configCanonicalStore.profiles,
-          existingProfileIds: new Set(Object.keys(next.profiles)),
-          replaceExistingWithoutCredential: true,
-        });
       }
       if (hasAuthProfileState(state)) {
         next = mergeImportedAuthProfileState({ store: next, state, existingState });
       }
 
       if (canonicalStore || configCanonicalStore || legacyStore || hasAuthProfileState(state)) {
-        const stateProfileIds = [
-          ...collectAuthProfileStateProfileIds(state),
-          ...(canonicalStore
-            ? collectAuthProfileStateProfileIds(coerceAuthProfileState(canonicalStore))
-            : []),
-          ...(configCanonicalStore
-            ? collectAuthProfileStateProfileIds(coerceAuthProfileState(configCanonicalStore))
-            : []),
-        ];
+        const stateProfileIds = [state, canonicalStore, configCanonicalStore].flatMap((store) =>
+          store ? collectAuthProfileStateProfileIds(coerceAuthProfileState(store)) : [],
+        );
         try {
           assertAuthProfileMigrationSourcesUnchanged(candidate, sourceReceipts);
           verifiedStore = runAuthProfileWriteTransaction(
@@ -1295,9 +1294,10 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
         }
       }
       assertAuthProfileMigrationSourcesUnchanged(candidate, sourceReceipts);
-      const archives = sourceReceipts.map((receipt) =>
-        archiveVerifiedAuthProfileSource(receipt, true),
-      );
+      const archives = sourceReceipts.map((receipt) => {
+        finalizeAuthProfileMigrationSource(receipt, "completed", { sourceLocked: true });
+        return receipt.archivePath;
+      });
       const archiveText =
         archives.length > 0
           ? `archive${archives.length === 1 ? "" : "s"}: ${archives.map(shortenHomePath).join(", ")}`

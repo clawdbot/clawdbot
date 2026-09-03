@@ -20,8 +20,8 @@ import {
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import { createOpenAIProviderAcceptanceHook } from "../transports/openai-transport-shared.js";
 import {
-  assignTransportErrorDetails,
-  transportAbortError,
+  failTransportStream,
+  finalizeTransportStream,
   withProviderResponseHook,
 } from "../transports/transport-stream-shared.js";
 import type {
@@ -332,21 +332,15 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
       }),
     });
 
-    if (options?.signal?.aborted) {
-      throw transportAbortError(options.signal);
-    }
-
-    if (output.stopReason === "aborted" || output.stopReason === "error") {
-      throw new Error(output.errorMessage ?? "An unknown error occurred");
-    }
-
-    stream.push({ type: "done", reason: output.stopReason, message: output });
-    stream.end();
+    finalizeTransportStream({ stream, output, signal: options?.signal });
   } catch (error) {
-    const terminal = assignTransportErrorDetails(output, error, options?.signal);
-    cleanStreamingScratchBuffers(output);
-    stream.push({ type: "error", reason: terminal.stopReason, error: output });
-    stream.end();
+    failTransportStream({
+      stream,
+      output,
+      signal: options?.signal,
+      error,
+      cleanup: () => cleanStreamingScratchBuffers(output),
+    });
   } finally {
     firstEventAbort?.dispose();
   }

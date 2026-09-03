@@ -257,6 +257,7 @@ export type FollowupRun = {
     traceparent?: string;
     /** Gateway-private optimistic-concurrency constraint for an operator-requested proposal revision. */
     skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
+    skillLibraryAuthoring?: import("../../../skills/library/authoring.js").SkillLibraryAuthoringCapability;
   };
 };
 

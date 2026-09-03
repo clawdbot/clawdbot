@@ -87,10 +87,11 @@ Non-goals for v1:
 - Confirm the gateway is reachable: local `openclaw status`; remote, SSH tunnel `ssh -N -L 18789:127.0.0.1:18789 user@gateway-host` then open `http://127.0.0.1:18789/`.
 - For `AUTH_TOKEN_MISMATCH`, clients may do one trusted retry with a cached device token when the gateway returns retry hints; that retry reuses the token's cached approved scopes (explicit `deviceToken`/`scopes` callers keep their requested scope set). If auth still fails after that retry, resolve token drift manually.
 - For `AUTH_SCOPE_MISMATCH`, the device token was recognized but does not carry the requested scopes; re-pair or approve the new scope set instead of rotating the shared gateway token.
+- For **Proxy authentication required** or `AUTH_IDENTITY_HEADER_REQUIRED`, open the configured proxy/SSO dashboard URL and sign in there. Ask the Gateway administrator to check identity-header forwarding on WebSocket upgrades and account access. A Gateway token cannot override trusted-proxy mode; see [Trusted proxy troubleshooting](/gateway/trusted-proxy-auth#control-ui-says-proxy-authentication-required).
 - Outside that retry path, the Control UI prefers a pending bootstrap token so a fresh host-issued handoff can create or upgrade the browser credential. Without a pending bootstrap, explicit shared token/password take precedence over the stored device token.
 - On the async Tailscale Serve path, failed attempts for the same `{scope, ip}` are serialized before the failed-auth limiter records them, so a second concurrent bad retry can already show `retry later`.
 - For token drift repair steps, see [Token drift recovery checklist](/cli/devices#token-drift-recovery-checklist).
-- Retrieve or supply the shared secret from the gateway host:
+- For shared-secret authentication, retrieve or supply the configured secret from the gateway host:
   - Token: run `openclaw gateway auth-token --show` in an interactive terminal on the Gateway host
   - Password: resolve the configured `gateway.auth.password` or `OPENCLAW_GATEWAY_PASSWORD`
   - SecretRef-managed token: run `openclaw gateway auth-token --show`; if resolution fails, repair the external secret provider and rerun it

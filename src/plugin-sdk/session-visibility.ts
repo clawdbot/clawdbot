@@ -13,6 +13,10 @@ import {
   renderSessionVisibilityDenial,
   resolveIncognitoSessionAccessDecision,
   sessionOwnershipLookupDenied,
+  type SessionVisibilityDecisionAction,
+  type SessionVisibilityDecisionMode,
+  type SessionVisibilityDecisionPolicy,
+  type SessionVisibilityDecisionRow,
   type SessionVisibilityDecision,
   type SessionOwnershipLookupFailure,
 } from "./session-visibility-internal.js";
@@ -20,17 +24,15 @@ import {
 type GatewayCaller = typeof defaultCallGateway;
 
 /** Configured visibility mode for session tools and session-related commands. */
-export type SessionToolsVisibility = "self" | "tree" | "agent" | "all";
+export type SessionToolsVisibility = SessionVisibilityDecisionMode;
 
 /** Agent-to-agent access policy compiled from `tools.agentToAgent` config. */
-export type AgentToAgentPolicy = {
-  enabled: boolean;
+export type AgentToAgentPolicy = SessionVisibilityDecisionPolicy & {
   matchesAllow: (agentId: string) => boolean;
-  isAllowed: (requesterAgentId: string, targetAgentId: string) => boolean;
 };
 
 /** Session operation whose visibility error copy should be rendered. */
-export type SessionAccessAction = "history" | "send" | "list" | "status";
+export type SessionAccessAction = SessionVisibilityDecisionAction;
 
 /** Result of checking whether one session operation may target a session. */
 export type SessionAccessResult =
@@ -79,13 +81,7 @@ function resolveScopedSessionAccess(
 }
 
 /** Minimal session row metadata needed to evaluate ownership and cross-agent access. */
-export type SessionVisibilityRow = {
-  key: string;
-  agentId?: string;
-  ownerSessionKey?: string;
-  spawnedBy?: string;
-  parentSessionKey?: string;
-};
+export type SessionVisibilityRow = SessionVisibilityDecisionRow;
 
 /** Public compatibility wrapper; direct guards use the richer private result. */
 export async function listSpawnedSessionKeys(params: {

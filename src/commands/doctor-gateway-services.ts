@@ -223,6 +223,10 @@ function isOperatorOwnedEnvironmentIssue(
       return hasGatewayServiceEnvironmentOverride(command, ["OPENCLAW_GATEWAY_TOKEN"], {
         environmentValueSources,
       });
+    case SERVICE_AUDIT_CODES.gatewayPasswordEmbedded:
+      return hasGatewayServiceEnvironmentOverride(command, ["OPENCLAW_GATEWAY_PASSWORD"], {
+        environmentValueSources,
+      });
     case SERVICE_AUDIT_CODES.gatewayManagedEnvEmbedded:
       return hasGatewayServiceEnvironmentOverride(command, issue.environmentKeys ?? [], {
         environmentValueSources,
@@ -525,6 +529,21 @@ export async function maybeRepairGatewayServiceConfig(
     command = null;
   }
   if (!command) {
+    const audit = await auditGatewayServiceConfig({
+      env: process.env,
+      command: null,
+      platform: process.platform,
+    });
+    if (audit.issues.length > 0) {
+      note(
+        audit.issues
+          .map((issue) =>
+            issue.detail ? `- ${issue.message} (${issue.detail})` : `- ${issue.message}`,
+          )
+          .join("\n"),
+        "Gateway service config",
+      );
+    }
     return cfg;
   }
   const managedDefinition = resolveManagedGatewayServiceCommand(command) ?? command;

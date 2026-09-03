@@ -463,6 +463,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       isHeartbeat?: boolean;
       onBlockReply?: (payload: unknown) => Promise<void> | void;
       reasoningPayloadsEnabled?: boolean;
+      onAgentRunTerminalOutcome?: (outcome: "completed" | "failed") => void;
     },
   ) {
     const sessionKey = "main";
@@ -507,11 +508,17 @@ describe("runReplyAgent auto-compaction token update", () => {
       },
       reply: {
         opts:
-          options?.onBlockReply || options?.isHeartbeat || options?.reasoningPayloadsEnabled
+          options?.onBlockReply ||
+          options?.isHeartbeat ||
+          options?.reasoningPayloadsEnabled ||
+          options?.onAgentRunTerminalOutcome
             ? {
                 ...(options.onBlockReply ? { onBlockReply: options.onBlockReply } : {}),
                 ...(options.isHeartbeat ? { isHeartbeat: true } : {}),
                 ...(options.reasoningPayloadsEnabled ? { reasoningPayloadsEnabled: true } : {}),
+                ...(options.onAgentRunTerminalOutcome
+                  ? { onAgentRunTerminalOutcome: options.onAgentRunTerminalOutcome }
+                  : {}),
               }
             : undefined,
         sessionEntry,
@@ -742,6 +749,11 @@ describe("runReplyAgent auto-compaction token update", () => {
 
   it.each([
     ["without side effects", { meta: { agentMeta: {} } }, true],
+    [
+      "with only a reply directive",
+      { payloads: [{ text: "[[reply_to_current]]" }], meta: { agentMeta: {} } },
+      true,
+    ],
     ["after hidden compaction", { meta: { agentMeta: { compactionCount: 1 } } }, true],
     [
       "after an intentional terminal tool batch",
@@ -751,7 +763,9 @@ describe("runReplyAgent auto-compaction token update", () => {
   ] satisfies Array<[string, Record<string, unknown>, boolean]>)(
     "accounts for empty interactive direct replies %s",
     async (_label, agentResult, fallback) => {
-      const result = await runEmptyDirectReply(agentResult);
+      const onAgentRunTerminalOutcome = vi.fn();
+      const result = await runEmptyDirectReply(agentResult, { onAgentRunTerminalOutcome });
+      expect(onAgentRunTerminalOutcome).toHaveBeenLastCalledWith(fallback ? "failed" : "completed");
       if (!fallback) {
         expect(result).toBeUndefined();
         return;

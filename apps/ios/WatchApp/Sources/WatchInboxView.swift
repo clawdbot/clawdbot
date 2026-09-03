@@ -403,6 +403,7 @@ private struct WatchControlSurfaceView: View {
             avatarText: self.avatarText,
             onRefresh: self.onRefreshAppSnapshot,
             onSendMessage: self.onSendChatMessage)
+            .id(self.store.appSnapshot?.chatSessionIdentity)
     }
 
     @ViewBuilder private var primaryDestination: some View {
@@ -1175,6 +1176,7 @@ private struct WatchChatBubble: View {
 }
 
 private struct WatchChatTimelineView: View {
+    @Environment(\.scenePhase) private var scenePhase
     var store: WatchInboxStore
     let items: [WatchChatItem]
     let statusText: String
@@ -1185,6 +1187,7 @@ private struct WatchChatTimelineView: View {
     var onSendMessage: ((String) -> String?)?
     @State private var speechPlayback = WatchSpeechPlayback()
     @State private var voiceReplyTimeout: Task<Void, Never>?
+    @State private var isVisible = false
 
     var body: some View {
         VStack(spacing: 7) {
@@ -1217,6 +1220,10 @@ private struct WatchChatTimelineView: View {
                         }
                     }
 
+                    if let errorText = self.speechPlayback.errorText {
+                        WatchTinyStatus(text: errorText)
+                    }
+
                     WatchSecondaryButton(title: "Refresh") {
                         self.onRefresh?()
                     }
@@ -1229,11 +1236,11 @@ private struct WatchChatTimelineView: View {
             .scrollIndicators(.hidden)
 
             WatchChatComposer(
-                onSendMessage: { text in
-                    _ = self.sendMessage(text)
+                onComposeMessage: {
+                    self.presentMessageInput(spokenReply: false)
                 },
                 onStartVoiceTurn: {
-                    self.startVoiceTurn()
+                    self.presentMessageInput(spokenReply: true)
                 },
                 isAwaitingVoiceReply: self.store.isAwaitingVoiceReply,
                 onCancelVoiceTurn: {
@@ -1248,23 +1255,28 @@ private struct WatchChatTimelineView: View {
         }
         .background(WatchClawStyle.background.ignoresSafeArea())
         .navigationTitle("Chat")
-        .onChange(of: self.store.chatCompletion?.commandId) { _, _ in
+        .onChange(of: self.store.chatCompletion) { _, _ in
             self.handleCompletedVoiceTurn()
         }
+        .onChange(of: self.scenePhase) { _, phase in
+            if phase == .active {
+                self.handleCompletedVoiceTurn()
+                self.scheduleVoiceReplyTimeout()
+            } else if phase == .background {
+                self.voiceReplyTimeout?.cancel()
+                self.speechPlayback.stop()
+            }
+        }
         .onAppear {
+            self.isVisible = true
             self.handleCompletedVoiceTurn()
             self.scheduleVoiceReplyTimeout()
         }
         .onDisappear {
+            self.isVisible = false
             self.voiceReplyTimeout?.cancel()
             self.speechPlayback.stop()
         }
-    }
-
-    private func sendMessage(_ text: String) -> String? {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        return self.onSendMessage?(trimmed)
     }
 
     private var voiceStatusText: String? {
@@ -1277,16 +1289,28 @@ private struct WatchChatTimelineView: View {
         return nil
     }
 
-    private func startVoiceTurn() {
+    private func presentMessageInput(spokenReply: Bool) {
+        let chatSession = self.store.appSnapshot?.chatSessionIdentity
+        self.speechPlayback.stop()
         WatchNativeTextInput.present(suggestions: []) { text in
-            guard let commandId = self.sendMessage(text) else { return }
-            self.store.beginVoiceTurn(commandId: commandId)
-            self.scheduleVoiceReplyTimeout()
+            guard self.store.appSnapshot?.chatSessionIdentity == chatSession else {
+                self.store.markAppCommandBlocked(
+                    .sendChat,
+                    reason: String(localized: "Chat changed on iPhone. Your message was not sent."))
+                return
+            }
+            guard let commandId = self.onSendMessage?(text) else { return }
+            if spokenReply {
+                self.store.beginVoiceTurn(commandId: commandId)
+                self.scheduleVoiceReplyTimeout()
+            }
         }
     }
 
     private func handleCompletedVoiceTurn() {
-        guard let reply = self.store.takeVoiceReply() else { return }
+        guard self.isVisible, self.scenePhase == .active,
+              let reply = self.store.takeVoiceReply()
+        else { return }
         self.voiceReplyTimeout?.cancel()
         self.speechPlayback.speak(reply)
     }
@@ -1302,7 +1326,7 @@ private struct WatchChatTimelineView: View {
         self.voiceReplyTimeout = Task { @MainActor in
             try? await Task.sleep(nanoseconds: delayNanoseconds)
             guard !Task.isCancelled else { return }
-            self.store.cancelVoiceTurn()
+            self.scheduleVoiceReplyTimeout()
         }
     }
 }
@@ -1352,7 +1376,7 @@ private struct WatchMiniUserDot: View {
 }
 
 private struct WatchChatComposer: View {
-    let onSendMessage: (String) -> Void
+    let onComposeMessage: () -> Void
     let onStartVoiceTurn: () -> Void
     let isAwaitingVoiceReply: Bool
     let onCancelVoiceTurn: () -> Void
@@ -1362,9 +1386,7 @@ private struct WatchChatComposer: View {
     var body: some View {
         HStack(spacing: 6) {
             Button {
-                WatchNativeTextInput.present(
-                    suggestions: [],
-                    onSubmit: self.onSendMessage)
+                self.onComposeMessage()
             } label: {
                 HStack(spacing: 5) {
                     Text("Message OpenClaw")
@@ -1428,40 +1450,9 @@ private struct WatchChatComposer: View {
             return String(localized: "Stop speaking")
         }
         if self.isAwaitingVoiceReply {
-            return String(localized: "Cancel voice turn")
+            return String(localized: "Cancel spoken reply")
         }
         return String(localized: "Start voice turn")
-    }
-}
-
-private enum WatchNativeTextInput {
-    @MainActor
-    static func present(
-        suggestions: [String],
-        onSubmit: @escaping (String) -> Void)
-    {
-        WKApplication.shared().visibleInterfaceController?.presentTextInputController(
-            withSuggestions: suggestions,
-            allowedInputMode: .allowEmoji)
-        { results in
-            guard let text = results?.compactMap(stringValue).first?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-                !text.isEmpty
-            else {
-                return
-            }
-            onSubmit(text)
-        }
-    }
-
-    private static func stringValue(_ result: Any) -> String? {
-        if let string = result as? String {
-            return string
-        }
-        if let attributed = result as? NSAttributedString {
-            return attributed.string
-        }
-        return nil
     }
 }
 

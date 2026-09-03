@@ -179,15 +179,16 @@ export function waitForFixtureFile(
       (expected === undefined || fs.readFileSync(filename, "utf8") === expected);
     const check = () => {
       if (matches()) {
-        fs.unwatchFile(filename, check);
+        clearInterval(poll);
         resolve();
       }
     };
-    // Readiness is the file state, including on hosts without native watch events.
-    fs.watchFile(filename, { interval: 50 }, check);
+    // watchFile can adopt a newly created receipt in its first stat without an event.
+    // Poll the persistent state itself so readiness never depends on that race.
+    const poll = setInterval(check, 50);
     void completion.then(
       () => {
-        fs.unwatchFile(filename, check);
+        clearInterval(poll);
         if (matches()) {
           resolve();
         } else {
@@ -195,7 +196,7 @@ export function waitForFixtureFile(
         }
       },
       (error: unknown) => {
-        fs.unwatchFile(filename, check);
+        clearInterval(poll);
         reject(new Error(`Child failed before writing ${filename}`, { cause: error }));
       },
     );
@@ -278,7 +279,8 @@ export function workerProbe(
           expect(snapshot.prepare('SELECT value FROM probe').get()).toEqual({value:'current source'});
           snapshot.close();
           const args = cp.execFile.mock.calls[0][1];
-          const generation = runtimeProcessEntrypoints.sqliteReadOnly.currentModuleUrl;
+          // The executable identifies the generation; its descriptor may live in a shared chunk.
+          const generation = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteReadOnly).href;
           const sourceMode = ${mode === "auto" ? "generation.endsWith('.ts')" : mode === "source"};
           await expect(runSqliteTranscriptArchivePublishWorker([])).resolves.toEqual([]);
           const [archiveUrl] = Worker.mock.calls.at(-1);
@@ -292,12 +294,12 @@ export function workerProbe(
           }
           expect(args.includes('tsx')).toBe(sourceMode);
           expect(args[sourceMode ? 2 : 0]).toMatch(sourceMode ? /\\.ts$/ : /\\.js$/);
-          fs.appendFileSync(${JSON.stringify(path.join(directory, "observations.jsonl"))}, JSON.stringify({args, tuiUrls, setupUrls, value, configValue:inject('configValue'), knn:vectorKnnProcessEntrypoint.currentModuleUrl})+'\\n');
+          fs.appendFileSync(${JSON.stringify(path.join(directory, "observations.jsonl"))}, JSON.stringify({args, tuiUrls, setupUrls, value, configValue:inject('configValue'), knn:resolveRuntimeWorkerUrl(vectorKnnProcessEntrypoint).href})+'\\n');
           fs.appendFileSync(${JSON.stringify(path.join(directory, "generations.jsonl"))}, JSON.stringify(generation)+'\\n');
           const release = inject('releaseFile');
           if (release) await new Promise(resolve => {
-            const check = () => {if(fs.existsSync(release)){fs.unwatchFile(release,check);resolve();}};
-            fs.watchFile(release,{interval:50},check);
+            const check = () => {if(fs.existsSync(release)){clearInterval(poll);resolve();}};
+            const poll=setInterval(check,50);
             check();
           });
         } finally {prepared.cleanup();}

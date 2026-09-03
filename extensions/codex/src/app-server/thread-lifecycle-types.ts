@@ -28,6 +28,8 @@ type CodexAppServerThreadLifecycle = {
 export type CodexAppServerThreadLifecycleBinding = CodexAppServerThreadBinding & {
   lifecycle: CodexAppServerThreadLifecycle;
   liveThreadConfigFingerprint?: string;
+  /** Creation-time policy for a live ephemeral thread; never persisted in the binding. */
+  liveThreadEphemeralPolicy?: string;
   /** Process-local claim proof; never write this callback into durable binding state. */
   liveThreadOwnership?: CodexAppServerLiveThreadOwnership;
   clearInheritedServiceTier?: true;
@@ -133,8 +135,8 @@ export type CodexResumeThreadContext = CodexThreadRequestContext & {
     binding: CodexAppServerThreadBinding,
   ) => Promise<CodexPluginThreadConfig | undefined>;
   prebuiltFinalConfigPatch?: CodexThreadFinalConfigPatchResult;
-  assertResumeConfiguration?: () => void;
-  assertResumeOwnership?: () => void;
+  assertResumeConfiguration: () => void;
+  assertResumeOwnership: () => void;
 };
 
 export type CodexStartThreadContext = CodexThreadRequestContext & {

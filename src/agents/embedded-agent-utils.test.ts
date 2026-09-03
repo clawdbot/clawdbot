@@ -103,11 +103,23 @@ describe("extractThinkingFromTaggedStream", () => {
         let prefix = "";
         for (const chunk of randomChunks(text, seed)) {
           prefix += chunk;
-          expect(extractThinkingFromTaggedStream(prefix, state), `${text} (seed ${seed})`).toBe(
-            extractThinkingFromTaggedStreamReference(prefix),
-          );
+          expect(
+            extractThinkingFromTaggedStream(prefix, state, chunk),
+            `${text} (seed ${seed})`,
+          ).toBe(extractThinkingFromTaggedStreamReference(prefix));
         }
       }
+    }
+  });
+
+  it("resumes from an authoritative checkpoint before consuming later deltas", () => {
+    const state = createThinkingTagStreamState();
+    let text = "<think>Checkpoint";
+    for (const delta of [" continues", "</think>Visible", "", "<think>second</think>"]) {
+      text += delta;
+      expect(extractThinkingFromTaggedStream(text, state, delta)).toBe(
+        extractThinkingFromTaggedStreamReference(text),
+      );
     }
   });
 });

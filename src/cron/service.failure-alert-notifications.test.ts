@@ -116,7 +116,12 @@ describe("CronService failure notification delivery", () => {
     const runner = startHeartbeatRunner({ cfg, readCurrentConfig: () => cfg, runOnce });
     const store = await makeStorePath();
     const resolveOriginDeliveryContext = vi.fn(() => deliveryContext);
-    const sendCronFailureAlert = vi.fn(async () => {
+    const sendCronFailureAlert = vi.fn(async (params) => {
+      await params.onDeliverySettled({
+        delivered: false,
+        status: "not-delivered",
+        error: "failure alert channel unavailable",
+      });
       throw new Error("failure alert channel unavailable");
     });
     const cron = new CronService({

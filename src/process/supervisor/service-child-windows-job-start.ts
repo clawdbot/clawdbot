@@ -28,6 +28,7 @@ export function isWindowsJobServiceStart(value: unknown): value is ServiceChildS
     typeof message.command === "string" &&
     Array.isArray(message.args) &&
     message.args.every((arg) => typeof arg === "string") &&
+    (message.argv0 === undefined || typeof message.argv0 === "string") &&
     (message.cwd === undefined || typeof message.cwd === "string") &&
     (message.env === undefined || isStringRecord(message.env)) &&
     (message.stdinMode === "inherit" ||

@@ -277,8 +277,8 @@ export function startHeartbeatRunnerScheduled(opts: {
         }
       }
 
-      // Persisted monitor ticks use their enrolled config; targeted event and
-      // cron wakes merge overrides through the canonical wake-policy owner.
+      // Persisted ticks use their enrolled config; targeted wakes merge their
+      // destination override before the execution boundary.
       const useEnrolledHeartbeat =
         !targeted ||
         ((isInterval || authoritativeScheduledTick) && !requestedSessionKey && !requestedHeartbeat);
@@ -295,7 +295,6 @@ export function startHeartbeatRunnerScheduled(opts: {
                 configuredHeartbeat: agent?.heartbeat,
                 requestedHeartbeat,
                 source: params.source,
-                mergeRequestedHeartbeat: true,
               }),
           source: params.source,
           intent,

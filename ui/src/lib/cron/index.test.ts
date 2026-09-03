@@ -13,7 +13,6 @@ import {
   addCronJob,
   cancelCronEdit,
   createInitialCronState,
-  getVisibleCronJobs,
   loadCronModelSuggestions,
   toggleCronJob,
   loadCronJobsPage,
@@ -878,7 +877,6 @@ describe("cron controller", () => {
     );
     expect(request).toHaveBeenCalledWith("cron.get", { id: staleJob.id });
     expect(state.cronJobs).toEqual([]);
-    expect(getVisibleCronJobs(state)).toEqual([]);
     expect(state.cronJobsTotal).toBe(0);
     expect(state.cronEditingJobId).toBe(authoritativeJob.id);
     expect(state.cronEditingJob).toEqual(authoritativeJob);

@@ -40,6 +40,7 @@ import {
   recordOpenClawDatabaseQuarantine,
 } from "../state/openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { sessionDeliveryRoute } from "../utils/delivery-context.shared.js";
 import * as migrationArtifact from "./doctor-session-sqlite-artifact.js";
 import { createSessionSqliteMigrationFailureIssue } from "./doctor-session-sqlite-failure.js";
@@ -2879,6 +2880,47 @@ describe("runDoctorSessionSqlite", () => {
       expect(fs.readFileSync(externalStorePath, "utf8")).toBe("{}\n");
     },
   );
+
+  it("preserves the typed maintenance cause when import finalization fails", async () => {
+    const store = createLegacyStore();
+    fs.writeFileSync(store.storePath, "{}\n");
+    openOpenClawAgentDatabase({ agentId: "main", env: store.env });
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    const openDatabase = nodeSqlite.openNodeSqliteDatabase;
+    const sharedPath = resolveOpenClawStateSqlitePath(store.env);
+    const spy = vi
+      .spyOn(nodeSqlite, "openNodeSqliteDatabase")
+      .mockImplementation((file, options) => {
+        if (file === sharedPath && !options?.readOnly) {
+          throw Object.assign(new Error("fixture lease storage failure"), { code: "SQLITE_IOERR" });
+        }
+        return openDatabase(file, options);
+      });
+    try {
+      const report = await runDoctorSessionSqlite({
+        env: store.env,
+        mode: "import",
+        store: store.storePath,
+      });
+      expect(report.targets[0]?.issues).toContainEqual(
+        expect.objectContaining({
+          code: "sqlite_compact_failed",
+          message: expect.stringContaining("fixture lease storage failure | SQLITE_IOERR"),
+        }),
+      );
+      expect(fs.readFileSync(store.storePath, "utf8")).toBe("{}\n");
+      const failureReportPath = expectDefined(
+        report.migrationRun?.failureReportMarkdownPath,
+        "failure report",
+      );
+      expect(fs.readFileSync(failureReportPath, "utf8")).toContain(
+        "fixture lease storage failure | SQLITE_IOERR",
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
 
   it("refuses compaction while this process owns an open agent database handle", async () => {
     const { sqlitePath, store } = await createImportedStoreForCompaction();

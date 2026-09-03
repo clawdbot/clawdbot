@@ -220,6 +220,7 @@ describe("prepareEmbeddedAttemptStream", () => {
           resolveHook = resolve;
         }),
     );
+    const messages = [{ role: "user", content: "Question" }];
     const prepared = prepareEmbeddedAttemptStream({
       attempt: {
         runId: "run-finalize-id",
@@ -231,7 +232,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       activeSession: {
         agent: { hasQueuedMessages: () => false },
         isStreaming: false,
-        messages: [],
+        messages,
         pendingMessageCount: 0,
       } as never,
       hookRunner: { hasHooks: (name: string) => name === "before_agent_finalize" } as never,
@@ -281,6 +282,11 @@ describe("prepareEmbeddedAttemptStream", () => {
     });
 
     await vi.waitFor(() => expect(mocks.runBeforeFinalizeHook).toHaveBeenCalledOnce());
+    const hookMessages = mocks.runBeforeFinalizeHook.mock.calls[0]?.[0].event.messages;
+    expect(hookMessages).not.toBe(messages);
+    expect(hookMessages[0]).toBe(messages[0]);
+    messages.push({ role: "user", content: "Later message" });
+    expect(hookMessages).toHaveLength(1);
     expect(prepared.queueHandle.isStopped?.()).toBe(true);
     await expect(prepared.queueHandle.queueMessage("too late")).rejects.toThrow(
       "active session is finalizing",
@@ -288,6 +294,7 @@ describe("prepareEmbeddedAttemptStream", () => {
 
     resolveHook?.({ action: "revise", reason: "Tighten the answer" });
     await expect(decision).resolves.toEqual({ suppressTerminalDelivery: true });
+    expect(hookMessages).toHaveLength(1);
     expect(prepared.getBeforeAgentFinalizeRevisionEntryId()).toBe("canonical-entry-id");
     expect(prepared.queueHandle.isStopped?.()).toBe(true);
   });

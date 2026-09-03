@@ -81,6 +81,14 @@ The macOS app also asks automatically on your first chat send, but only while pe
 
 If the permission shows **Denied**, macOS will not re-prompt: select **Open System Settings**, allow notifications for OpenClaw there, and switch back — the page rechecks permission when the app regains focus. This permission belongs to macOS, not to Gateway config.
 
+### Background session completion
+
+When you start a session in the background from **New Session**, the macOS app posts a native notification after that run finishes, provided notification permission is already granted. Keep the originating dashboard loaded while it runs; you can minimize its window or work in another app. An in-app completion message also appears. Selecting the session before it finishes suppresses its completion notice.
+
+The native notification uses generic text, without the session title, prompt, or response. Select it to open the session on its originating Gateway, including when that window has since closed. If that Gateway connection changed or the notification expired after an app restart, open the session from the correct Gateway's session list instead.
+
+This is the **New Session** background-start flow, not a native notification for every chat response. Browser **Agent finished** preferences remain separate. Completing a background run never opens a new permission prompt; enable notifications in Settings first.
+
 ## Troubleshooting
 
 ### Enable is unavailable

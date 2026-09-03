@@ -162,6 +162,16 @@
   align-items: flex-start;
 }
 
+/* Compact icon-only actions align with a one-line heading instead of the
+   full-size controls that require top alignment. */
+@media not all and (max-width: 640px) {
+  .settings-section__header:not(:has(.settings-section__desc)):has(
+    .settings-section__actions .btn--xs.btn--icon
+  ) {
+    align-items: center;
+  }
+}
+
 .settings-section__header:has(.settings-section__copy):has(.settings-section__actions) {
   column-gap: var(--space-5);
 }
@@ -565,6 +575,14 @@ wa-switch.settings-toggle {
   > input[type="number"].settings-input {
   width: 110px;
   text-align: center;
+}
+
+/* Time inputs hold HH:MM; the shared 340px text width would stretch the paired
+   quiet-hours window into two bars. */
+.settings-row:not(.settings-row--stacked)
+  .settings-row__control
+  > input[type="time"].settings-input {
+  width: auto;
 }
 
 /* ── Secret input (inset reveal toggle; no trailing button) ── */

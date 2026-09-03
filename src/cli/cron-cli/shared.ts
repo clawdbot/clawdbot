@@ -16,12 +16,10 @@ import type { CronDeliveryPreview, CronJob, CronSchedule } from "../../cron/type
 import { danger } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { formatDurationHuman } from "../../infra/format-time/format-duration.ts";
-import {
-  isOffsetlessIsoDateTime,
-  parseOffsetlessIsoDateTimeInTimeZone,
-} from "../../infra/format-time/parse-offsetless-zoned-datetime.js";
+import { parseOffsetlessIsoDateTimeInTimeZone } from "../../infra/format-time/parse-offsetless-zoned-datetime.js";
 import { formatTimestamp } from "../../logging/timestamps.js";
 import { defaultRuntime, ExitError, type RuntimeEnv } from "../../runtime.js";
+import { isOffsetlessIsoDateTime } from "../../shared/iso-time.js";
 import { formatLookupMiss } from "../error-format.js";
 import { rethrowExpectedCliError } from "../failure-output.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
@@ -409,13 +407,9 @@ const formatCell = (value: unknown, width: number) => {
 };
 
 const formatIsoMinute = (iso: string) => {
-  const parsed = parseAbsoluteTimeMs(iso);
-  const d = new Date(parsed ?? Number.NaN);
-  if (Number.isNaN(d.getTime())) {
-    return "-";
-  }
-  const isoStr = d.toISOString();
-  return `${isoStr.slice(0, 10)} ${isoStr.slice(11, 16)}Z`;
+  const isoStr = timestampMsToIsoString(parseAbsoluteTimeMs(iso));
+  // Date.toISOString() has a fixed :ss.sssZ suffix but variable-width years.
+  return isoStr ? `${isoStr.slice(0, -8).replace("T", " ")}Z` : "-";
 };
 
 const formatSpan = (ms: number) => (ms < 60_000 ? "<1m" : formatDurationHuman(ms));

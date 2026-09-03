@@ -68,6 +68,7 @@ const qaScenarioChannelSchema = z
   });
 
 const qaScenarioTransportPolicySchema = z.object({
+  directMessageOnly: z.literal(true).optional(),
   requireGroupMention: z.literal(true).optional(),
   senderAllowlist: z.array(z.string().trim().min(1)).min(1).optional(),
   topLevelReplies: z.literal(true).optional(),

@@ -7,6 +7,7 @@ import { parseSlashCommand } from "../../lib/chat/commands.ts";
 import { extractCompanionCommandQuestion } from "../../lib/chat/companion-question.ts";
 import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
 import type { ControlUiFollowUpMode } from "../../lib/chat/follow-up-mode.ts";
+import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessions/index.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
@@ -58,7 +59,7 @@ import {
 } from "./chat-send-support.ts";
 import { recordChatSendTiming } from "./chat-send-timing.ts";
 import { getPendingChatPickerPatch } from "./chat-session.ts";
-import { withChatSubmitGuard } from "./chat-submit-guard.ts";
+import { withChatSubmitGuard, yieldChatSubmitToInput } from "./chat-submit-guard.ts";
 import {
   recordNonTranscriptInputHistory,
   resetChatInputHistoryNavigation,
@@ -538,6 +539,12 @@ export async function handleSendChat(
       return;
     }
     const submittedAgentId = scopedAgentIdForSession(host, submittedSessionKey);
+    const submissionOwnerIsCurrent = () =>
+      submittedOwnerIsCurrent() &&
+      host.client === submittedClient &&
+      host.connectionEpoch === submittedEpoch &&
+      host.sessionKey === submittedSessionKey &&
+      visibleSessionMatches(host, submittedSessionKey, submittedAgentId);
     if (!visibleSessionMatches(host, submittedSessionKey, submittedAgentId)) {
       setChatError(host, t("mcpServers.sessionUnavailable"));
       return;
@@ -596,11 +603,7 @@ export async function handleSendChat(
       const payload = await prepareOutboxPayload(host, queued);
       const currentEdit = activeQueuedMessageEdit(host);
       const stillOwnsSubmission =
-        submittedOwnerIsCurrent() &&
-        host.client === submittedClient &&
-        host.connectionEpoch === submittedEpoch &&
-        host.sessionKey === submittedSessionKey &&
-        visibleSessionMatches(host, submittedSessionKey, submittedAgentId) &&
+        submissionOwnerIsCurrent() &&
         (!isInlineEditSubmission ||
           (currentEdit === inlineEdit && currentEdit.revision === submittedInlineEditRevision));
       if (!stillOwnsSubmission) {
@@ -672,20 +675,39 @@ export async function handleSendChat(
       setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
       return;
     }
-    const sendResult = await deliverChatQueueItem(host, queued, {
-      previousDraft: cleared.previousDraft,
-      previousAttachments: cleared.previousAttachments,
-      ...(intent || (directRunActive && followUpMode !== "queue")
-        ? { allowActiveRunSend: true }
-        : {}),
-      ...(expectedLeafEntryId !== undefined ? { expectedLeafEntryId } : {}),
-      ...(pendingSettings ? { pendingSettings } : {}),
-      restoreAttachments: Boolean(messageOverride && opts?.restoreDraft),
-      restoreDraft: Boolean(messageOverride && opts?.restoreDraft),
-      restoreOnTerminalFailure: Boolean(rawParsedCommand || intent),
-      routingSessionKey: submittedSessionKey,
-      storageMode: canSendFromMemory ? "memory" : "durable",
-    });
+    let deliveryItem: typeof queued | null = queued;
+    if (admittedDurably && submissionAction && typeof MessageChannel !== "undefined") {
+      // The outbox now owns the prompt across reloads. Return control before
+      // delivery work so the browser can accept the operator's next input.
+      await yieldChatSubmitToInput();
+      const current =
+        submissionOwnerIsCurrent() &&
+        visibleSessionMatches(host, queued.sessionKey!, queued.agentId)
+          ? readQueuedMessageById(host, queued.id)
+          : null;
+      // Input may retire this admission or another drain may advance it. Only
+      // position changes preserve the handoff; the drain owns ordering/edit holds.
+      deliveryItem =
+        current && sameQueuedDeliveryVersion(queued, { ...current, orderKey: queued.orderKey })
+          ? current
+          : null;
+    }
+    const sendResult = deliveryItem
+      ? await deliverChatQueueItem(host, deliveryItem, {
+          previousDraft: cleared.previousDraft,
+          previousAttachments: cleared.previousAttachments,
+          ...(intent || (directRunActive && followUpMode !== "queue")
+            ? { allowActiveRunSend: true }
+            : {}),
+          ...(expectedLeafEntryId !== undefined ? { expectedLeafEntryId } : {}),
+          ...(pendingSettings ? { pendingSettings } : {}),
+          restoreAttachments: Boolean(messageOverride && opts?.restoreDraft),
+          restoreDraft: Boolean(messageOverride && opts?.restoreDraft),
+          restoreOnTerminalFailure: Boolean(rawParsedCommand || intent),
+          routingSessionKey: submittedSessionKey,
+          storageMode: canSendFromMemory ? "memory" : "durable",
+        })
+      : "pending";
     const pending = readQueuedMessageById(host, queued.id);
     accepted = sendResult !== "failed";
     const pendingBusySend =
@@ -700,8 +722,8 @@ export async function handleSendChat(
     if (
       (sendResult !== "failed" || pending?.sendState === "failed") &&
       replyTarget &&
-      host.chatReplyTarget?.messageId === replyTarget.messageId &&
-      host.sessionKey === submittedSessionKey
+      host.chatReplyTarget === replyTarget &&
+      submissionOwnerIsCurrent()
     ) {
       // The reconnect queue owns the quote; later offline turns must not reuse it.
       host.chatReplyTarget = null;

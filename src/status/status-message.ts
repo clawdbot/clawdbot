@@ -790,6 +790,14 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
 
   const activeModelLabel = formatProviderModelRef(activeProvider, activeModel) || "unknown";
   const runtimeDiffersFromSelected = activeModelLabel !== (modelRefs.selected.label || "unknown");
+  const runtimeAliasModelEquivalent = areRuntimeModelRefsEquivalent(
+    modelRefs.selected.label || "unknown",
+    activeModelLabel,
+    { config: args.config },
+  );
+  const activeModelProvider = runtimeAliasModelEquivalent
+    ? selectedLookupProvider
+    : contextLookupProvider;
   const selectedContextTokens = resolveContextTokensForModel({
     cfg: contextConfig,
     provider: selectedLookupProvider,
@@ -841,15 +849,14 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
     authoredContextTokens: resolveAuthoredModelContextTokens({
       cfg: contextConfig,
       provider: contextLookupProvider,
+      modelProvider: activeModelProvider,
       model: contextLookupModel,
     }),
   });
   const runtimeSnapshotHasFallbackProvenance =
     initialFallbackState.active ||
     hasSessionAutoModelFallbackProvenance(entry) ||
-    areRuntimeModelRefsEquivalent(activeModelLabel, modelRefs.selected.label || "unknown", {
-      config: args.config,
-    });
+    runtimeAliasModelEquivalent;
   // A transcript-derived previous model must not pin a newly selected model to
   // its old window. Once fallback provenance is established, the shared
   // projector owns authored caps, runtime telemetry, and locked-session state.
@@ -969,11 +976,6 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
     .join(" · ");
 
   const selectedModelLabel = modelRefs.selected.label || "unknown";
-  const runtimeAliasModelEquivalent = areRuntimeModelRefsEquivalent(
-    selectedModelLabel,
-    activeModelLabel,
-    { config: args.config },
-  );
   const selectedAuthMode =
     normalizeAuthMode(args.modelAuth) ?? resolveModelAuthMode(selectedLookupProvider, args.config);
   const rawSelectedAuthLabelValue =

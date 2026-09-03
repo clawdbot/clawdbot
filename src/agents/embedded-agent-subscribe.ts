@@ -3,19 +3,12 @@ import { createInlineCodeState } from "../../packages/markdown-core/src/code-spa
  * Subscribes to embedded-agent sessions and streams formatted replies/events.
  */
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
-import { emitAgentRunOutputTokens } from "../infra/agent-events.js";
-import type { AssistantMessage } from "../llm/types.js";
 import { parseInlineDirectives } from "../utils/directive-tags.js";
 import { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
 import { hasCommittedMessagingToolDeliveryEvidence } from "./embedded-agent-runner/delivery-evidence.js";
 import { mergeEmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
 import { consumeEmbeddedToolReceipt } from "./embedded-agent-runner/tool-send-receipts.js";
 import type { EmbeddedRunLivenessState } from "./embedded-agent-runner/types.js";
-import {
-  createUsageAccumulator,
-  mergeUsageIntoAccumulator,
-  toNormalizedUsage,
-} from "./embedded-agent-runner/usage-accumulator.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import { createCompactionRetryTracker } from "./embedded-agent-subscribe.compaction-retry.js";
 import { createEmbeddedAgentSessionEventHandler } from "./embedded-agent-subscribe.handlers.js";
@@ -26,6 +19,7 @@ import type {
   EmbeddedAgentSubscribeState,
 } from "./embedded-agent-subscribe.handlers.types.js";
 import { resolveEmbeddedAgentSessionLogger } from "./embedded-agent-subscribe.logger.js";
+import { createEmbeddedModelState } from "./embedded-agent-subscribe.model-state.js";
 import { createReplyDelivery } from "./embedded-agent-subscribe.reply-delivery.js";
 import { createEmbeddedAgentSubscribeState } from "./embedded-agent-subscribe.run-state.js";
 import { createStreamRendering } from "./embedded-agent-subscribe.stream-rendering.js";
@@ -39,17 +33,20 @@ import { stripDowngradedToolCallText } from "./embedded-agent-utils.js";
 import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { setSessionModelUsageSink } from "./sessions/session-model-usage.js";
-import { hasNonzeroUsage, hasObservedModelUsage, normalizeUsage, type UsageLike } from "./usage.js";
 
 export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSessionParams) {
   const log = resolveEmbeddedAgentSessionLogger(params.messageChannel);
   const toolResultFormat = params.toolResultFormat ?? "markdown";
   const useMarkdown = toolResultFormat === "markdown";
   const state: EmbeddedAgentSubscribeState = createEmbeddedAgentSubscribeState(params);
-  const usageTotals = createUsageAccumulator();
-  let lastAssistantUsage: ReturnType<typeof normalizeUsage>;
+  const {
+    captureModelEvent,
+    recordAuxiliaryUsage,
+    getUsageTotals,
+    getLastAssistantUsage,
+    getCurrentAttemptAssistant,
+  } = createEmbeddedModelState(params, log);
   let compactionCount = 0;
-  let currentAttemptAssistant: AssistantMessage | undefined;
   const assistantTexts = state.assistantTexts;
   const toolMetas = state.toolMetas;
   const toolMetaById = state.toolMetaById;
@@ -63,12 +60,12 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   const pendingMessagingTargets = state.pendingMessagingTargets;
   const replyDelivery = createReplyDelivery({ params, state, log });
   const {
-    clearDeferredAssistantEvents,
+    clearAssistantStream,
     clearDeferredBlockReplies,
     emitAssistantStreamData,
     emitBlockReply,
     finalizeAssistantTexts,
-    flushDeferredAssistantEvents,
+    flushAssistantStream,
     flushDeferredBlockReplies,
   } = replyDelivery;
 
@@ -147,102 +144,6 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   const maybeResolveCompactionWait = () => {
     resolveCompactionPromiseIfIdle();
   };
-  const resolveAssistantUsage = (usageLike: unknown) => {
-    const candidates: unknown[] = [usageLike];
-    if (usageLike && typeof usageLike === "object") {
-      const record = usageLike as Record<string, unknown>;
-      const partial =
-        record.partial && typeof record.partial === "object"
-          ? (record.partial as Record<string, unknown>)
-          : undefined;
-      const message =
-        record.message && typeof record.message === "object"
-          ? (record.message as Record<string, unknown>)
-          : undefined;
-      candidates.push(
-        record.usage,
-        record.timings,
-        record.partial,
-        record.message,
-        partial?.usage,
-        partial?.timings,
-        message?.usage,
-        message?.timings,
-      );
-    }
-    for (const candidate of candidates) {
-      const usage = normalizeUsage((candidate ?? undefined) as UsageLike | undefined);
-      if (hasObservedModelUsage(usage)) {
-        return usage;
-      }
-    }
-    return undefined;
-  };
-  const emitRunUsage = (outputTokens: number) => {
-    const lifecycleGeneration = params.lifecycleGeneration;
-    if (!lifecycleGeneration) {
-      return;
-    }
-    const data = emitAgentRunOutputTokens({
-      runId: params.runId,
-      lifecycleGeneration,
-      outputTokens,
-    });
-    if (!data || !params.onAgentEvent) {
-      return;
-    }
-    runBestEffortCallback({
-      label: "usage agent event",
-      log,
-      callback: () => params.onAgentEvent?.({ stream: "usage", data }),
-    });
-  };
-  const commitAssistantUsage = () => {
-    if (state.assistantUsageCommitted || !state.pendingAssistantUsage) {
-      return;
-    }
-    const usage = state.pendingAssistantUsage;
-    mergeUsageIntoAccumulator(usageTotals, usage);
-    state.assistantUsageCommitted = true;
-    // Billing alone cannot replace the latest prompt snapshot or invent output tokens.
-    if (hasNonzeroUsage(usage)) {
-      lastAssistantUsage = { ...usage };
-      emitRunUsage(usage.output ?? 0);
-    }
-  };
-  const recordAssistantUsage = (usageLike: unknown) => {
-    if (state.assistantUsageCommitted) {
-      return;
-    }
-    const usage = resolveAssistantUsage(usageLike);
-    if (!usage) {
-      return;
-    }
-    const pending = state.pendingAssistantUsage;
-    const cost = usage.cost;
-    const next = pending && !hasNonzeroUsage(usage) ? { ...pending, cost } : usage;
-    // Within one call, billing may arrive separately from token counters and
-    // remains authoritative when a later snapshot carries only a catalog estimate.
-    if (
-      pending?.cost?.totalOrigin === "provider-billed" &&
-      cost?.totalOrigin !== "provider-billed"
-    ) {
-      next.cost = pending.cost;
-    }
-    state.pendingAssistantUsage = next;
-  };
-  const recordModelUsage = (usageLike: UsageLike) => {
-    const usage = resolveAssistantUsage(usageLike);
-    if (!usage) {
-      return;
-    }
-    mergeUsageIntoAccumulator(usageTotals, usage);
-    if (hasNonzeroUsage(usage)) {
-      emitRunUsage(usage.output ?? 0);
-    }
-  };
-  const getUsageTotals = () => toNormalizedUsage(usageTotals);
-  const getLastAssistantUsage = () => normalizeUsage(lastAssistantUsage);
   const incrementCompactionCount = () => {
     compactionCount += 1;
   };
@@ -254,7 +155,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   };
 
   const blockChunking = params.blockReplyChunking;
-  const blockChunker = blockChunking ? new EmbeddedBlockChunker(blockChunking) : null;
+  const blockChunker = new EmbeddedBlockChunker(blockChunking);
   // KNOWN: Provider streams are not strictly once-only or perfectly ordered.
   // `text_end` can repeat full content; late `text_end` can arrive after `message_end`.
   // Tests: `src/agents/embedded-agent-subscribe.test.ts` (e.g. late text_end cases).
@@ -349,6 +250,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     log,
     blockChunker,
     emitBlockReply: replyDelivery.emitBlockReply,
+    flushAssistantStream,
     settleBlockReplyDeliveries: replyDelivery.settleBlockReplyDeliveries,
     currentPendingBlockReplyTasks: replyDelivery.currentPendingBlockReplyTasks,
     pushAssistantText: replyDelivery.pushAssistantText,
@@ -361,6 +263,8 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     emitReasoningStream,
     flushBlockReplyBuffer,
     resetAssistantMessageState,
+    resetBlockReplyDirectives,
+    resetPartialReplyDirectives,
     stripBlockTags,
   } = streamRendering;
 
@@ -390,6 +294,11 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       state.acceptedSessionSpawns.length > 0 ||
       state.visibleBlockReplyCount > 0;
     assistantTexts.length = 0;
+    state.lastAssistantTextMessageIndex = -1;
+    state.lastAssistantTextContentIndex = undefined;
+    state.lastAssistantTextItemId = undefined;
+    state.lastAssistantTextNormalized = undefined;
+    state.lastAssistantTextTrimmed = undefined;
     toolMetas.length = 0;
     toolMetaById.clear();
     toolSummaryById.clear();
@@ -419,7 +328,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.pendingToolMediaDeliveryFailed = false;
     state.visibleBlockReplyCount = 0;
     state.deferBlockReplyDelivery = typeof params.onBeforeTerminalDelivery === "function";
-    clearDeferredAssistantEvents();
+    clearAssistantStream();
     clearDeferredBlockReplies();
     state.pendingAssistantReplyDirectives = undefined;
     state.deferredAssistantReplyDirectives = undefined;
@@ -431,10 +340,6 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.attemptedBlockReplyTexts = [];
     state.deferredBlockReplyTexts = [];
     state.toolExecutionSinceLastBlockReply = false;
-    // Keep prior usage until the retry records its own call or terminal error.
-    currentAttemptAssistant = undefined;
-    state.retryUsage = lastAssistantUsage ?? state.retryUsage;
-    lastAssistantUsage = undefined;
     state.replayState = mergeEmbeddedRunReplayState(state.replayState, params.initialReplayState);
     state.livenessState = "working";
     resetAssistantMessageState(0);
@@ -443,15 +348,6 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   const noteLastAssistant = (msg: AgentMessage) => {
     if (msg?.role === "assistant") {
       state.lastAssistant = msg;
-    }
-  };
-  const noteCompletedAssistant = (msg: AgentMessage) => {
-    if (msg?.role === "assistant") {
-      // Context-engine projection may later replace or mutate transcript
-      // objects. Final delivery needs the model event owned by this run.
-      currentAttemptAssistant = structuredClone(msg) as AssistantMessage;
-      lastAssistantUsage ??= msg.stopReason === "error" ? state.retryUsage : undefined;
-      state.retryUsage = undefined;
     }
   };
 
@@ -501,7 +397,6 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     builtinToolNames: params.builtinToolNames,
     trustedLocalMediaToolNames: params.trustedLocalMediaToolNames,
     noteLastAssistant,
-    noteCompletedAssistant,
     shouldEmitToolResult,
     shouldEmitToolOutput,
     emitToolSummary,
@@ -512,13 +407,15 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     settleBlockReplyDeliveries: replyDelivery.settleBlockReplyDeliveries,
     emitAssistantStreamData,
     emitBlockReply,
-    flushDeferredAssistantEvents,
+    flushAssistantStream,
     flushDeferredBlockReplies,
-    clearDeferredAssistantEvents,
+    clearAssistantStream,
     clearDeferredBlockReplies,
     emitReasoningStream,
-    consumeReplyDirectives,
     consumePartialReplyDirectives,
+    consumeReplyDirectives,
+    resetBlockReplyDirectives,
+    resetPartialReplyDirectives,
     resetAssistantMessageState,
     getBlockReplyDeliveryGeneration: replyDelivery.getBlockReplyDeliveryGeneration,
     invalidateBlockReplyDeliveriesForCompactionRetry,
@@ -532,8 +429,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     noteCompactionReplacementActivity,
     resolveCompactionRetry,
     maybeResolveCompactionWait,
-    recordAssistantUsage,
-    commitAssistantUsage,
+    captureModelEvent,
     incrementCompactionCount,
     noteCompactionTokensAfter,
     getUsageTotals,
@@ -544,7 +440,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
 
   const runToolLifecycle = createEmbeddedToolLifecycleRunner(ctx);
   const sessionUnsubscribe = params.session.subscribe(createEmbeddedAgentSessionEventHandler(ctx));
-  setSessionModelUsageSink(params.session.sessionManager, recordModelUsage);
+  setSessionModelUsageSink(params.session.sessionManager, recordAuxiliaryUsage);
 
   const unsubscribe = () => {
     if (state.unsubscribed) {
@@ -553,6 +449,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     // Mark as unsubscribed FIRST to prevent waitForCompactionRetry from creating
     // new un-resolvable promises during teardown.
     state.unsubscribed = true;
+    clearAssistantStream();
     cleanupRunToolStartData(params.runId);
     state.liveEditDiffStateById.clear();
     // Reject pending compaction wait to unblock awaiting code.
@@ -584,8 +481,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
 
   return {
     assistantTexts,
-    getCurrentAttemptAssistant: () =>
-      currentAttemptAssistant ? structuredClone(currentAttemptAssistant) : undefined,
+    getCurrentAttemptAssistant,
     getLastAssistantTextMessageIndex: () =>
       state.lastAssistantTextMessageIndex >= 0 ? state.lastAssistantTextMessageIndex : undefined,
     toolMetas,

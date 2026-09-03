@@ -499,6 +499,13 @@ it("deduplicates participants in order, excludes the owner, and filters sessions
       { identity: { type: "profile", id: "profile-dana" }, label: "Bob" },
       { identity: { type: "profile", id: "profile-erin" }, label: "Bob" },
     ],
+    expandedParticipants: [
+      { identity: { type: "agent", id: "research" }, label: "Research" },
+      { identity: { type: "profile", id: "profile-carol" }, label: "Bob" },
+      { identity: { type: "profile", id: "profile-dana" }, label: "Bob" },
+      { identity: { type: "profile", id: "profile-erin" }, label: "Bob" },
+      { identity: { type: "profile", id: "profile-ada" }, label: "Ada" },
+    ],
     participantCount: 5,
   });
 

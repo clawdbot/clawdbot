@@ -50,7 +50,6 @@ suite.define(() => {
     };
     const gateway = await installMockGateway(page, {
       sessionKey: session.key,
-      sessionInfo: session,
       models: [
         { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" },
         { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", provider: "openai" },
@@ -76,7 +75,7 @@ suite.define(() => {
         'openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker',
       );
       await picker.locator('[data-chat-model-select="true"]').tap();
-      await picker.getByText("Selection target: Global default", { exact: true }).waitFor();
+      await picker.getByText("Global default", { exact: true }).waitFor();
       await screenshot(page, "05-global-target-before-touch-selection.png");
 
       await picker.getByRole("option", { name: "GPT-5.6 Terra", exact: true }).tap();
@@ -92,7 +91,7 @@ suite.define(() => {
         .toBe("openai/gpt-5.6-terra");
       await screenshot(page, "06-global-target-after-touch-selection.png");
 
-      await gateway.setMethodResponse("sessions.list", {
+      await gateway.setSessionsListResponse({
         ts: 2,
         path: "",
         count: 1,
@@ -115,14 +114,35 @@ suite.define(() => {
       await page.reload();
       picker = page.locator('openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker');
       await picker.locator('[data-chat-model-select="true"]').tap();
-      await picker.getByText("Selection target: Global default", { exact: true }).waitFor();
-      await picker.getByText("Only for this session", { exact: true }).waitFor();
+      await picker.getByText("Global default", { exact: true }).waitFor();
+      await picker.getByRole("button", { name: "Reset session model", exact: true }).waitFor();
       await expect
         .poll(() =>
           picker.locator('[data-chat-model-select="true"]').getAttribute("data-chat-select-value"),
         )
         .toBe("openai/gpt-5.6-terra");
       await screenshot(page, "07-global-target-after-reload.png");
+      await page.setViewportSize({ height: 900, width: 400 });
+      const footer = picker.locator(".chat-controls__model-provenance");
+      await expect
+        .poll(() =>
+          footer.evaluate((element) => {
+            const bounds = element.getBoundingClientRect();
+            return Array.from(element.children).every((child) => {
+              const childBounds = child.getBoundingClientRect();
+              const range = document.createRange();
+              range.selectNodeContents(child);
+              const lines = new Set(Array.from(range.getClientRects(), (rect) => rect.top));
+              return (
+                lines.size === 1 &&
+                childBounds.left >= bounds.left &&
+                childBounds.right <= bounds.right
+              );
+            });
+          }),
+        )
+        .toBe(true);
+      await screenshot(page, "08-compact-footer-mobile.png");
     } finally {
       await context.close();
     }
@@ -172,7 +192,7 @@ suite.define(() => {
         'openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker',
       );
       await picker.locator('[data-chat-model-select="true"]').click();
-      await picker.getByText("Only for this session", { exact: true }).waitFor();
+      await picker.getByRole("button", { name: "Reset session model", exact: true }).waitFor();
       await screenshot(page, "03-pin-matching-default.png");
       await picker.getByRole("option", { name: "Proof Model", exact: true }).click();
       const request = await gateway.waitForRequest("sessions.patch");

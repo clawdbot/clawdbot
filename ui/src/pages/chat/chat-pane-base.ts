@@ -1,7 +1,6 @@
 import { consume } from "@lit/context";
 import { property, state as litState } from "lit/decorators.js";
 import type {
-  SessionGitHubPublicationResult,
   SessionCatalogHost,
   SessionCatalogSession,
   SessionDiscussionState,
@@ -47,6 +46,7 @@ import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import type { BoardChatDockSize } from "./board-session-surface.ts";
 import { ChatComposerCapabilityHost } from "./chat-composer-capability-host.ts";
+import { GitHubPublicationController } from "./chat-github-publication.ts";
 import { sendSessionObserverVisibility } from "./chat-observer.ts";
 import {
   boardChatDockLayout,
@@ -292,6 +292,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   } | null = null;
   @litState() protected headerPlacementMovingKey: string | null = null;
   @litState() protected headerPlacementReclaimingKey: string | null = null;
+  @litState() protected headerPlacementRestartingKey: string | null = null;
   @litState() protected presencePayload: PresencePayload | undefined;
   @litState() protected sessionSharingStates = new Map<string, ChatSessionSharingState>();
   protected readonly sessionParticipationTracker = new SessionParticipationTracker();
@@ -463,11 +464,9 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected sessionPullRequestsBranch: ControlUiSessionBranch | undefined;
   protected sessionPullRequestsRateLimited = false;
   protected sessionPullRequestsExpanded = false;
-  protected githubPublicationBusy = false;
-  protected githubPublicationResult: SessionGitHubPublicationResult | null = null;
-  protected githubPublicationError: string | null = null;
-  protected githubPublicationIdempotencyKey: string | null = null;
-  protected githubPublicationRequestVersion = 0;
+  protected readonly githubPublication = new GitHubPublicationController(() =>
+    this.requestUpdate(),
+  );
   protected dismissedSessionPullRequestIds: ReadonlySet<string> = new Set();
   protected readonly dismissedWorkspaceConflictRefs = new Map<string, string>();
   @litState() protected catalogMessages: unknown[] = [];

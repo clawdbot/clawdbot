@@ -117,6 +117,29 @@ describe("printCronList", () => {
     expectLogsToInclude(logs, "isolated");
   });
 
+  it.each(
+    [
+      { at: "2027-01-15T12:34:56.789Z", expected: "2027-01-15 12:34Z" },
+      { at: "+010000-01-15T12:34:56.789Z", expected: "+010000-01-15 12:34Z" },
+      { at: "-000001-01-15T12:34:56.789Z", expected: "-000001-01-15 12:34Z" },
+      { at: "not-a-time", expected: "-" },
+    ].flatMap((entry) => [
+      { ...entry, output: "list" },
+      { ...entry, output: "show" },
+    ]),
+  )("preserves one-shot ISO year in cron $output for $at", ({ at, expected, output }) => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const job = createBaseJob({ schedule: { kind: "at", at }, state: {} });
+
+    if (output === "list") {
+      printCronList([job], runtime);
+    } else {
+      printCronShow(job, runtime);
+    }
+
+    expectLogsToInclude(logs, `${output === "show" ? "schedule: " : ""}at ${expected}`);
+  });
+
   it.each([
     [59_999, "<1m"],
     [60_000, "1m"],

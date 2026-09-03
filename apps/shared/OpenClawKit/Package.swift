@@ -65,6 +65,9 @@ let package = Package(
                 .product(name: "SwiftMath", package: "SwiftMath"),
             ],
             path: "Sources/OpenClawChatUI",
+            resources: [
+                .copy("Resources/Mermaid"),
+            ],
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
             ]),

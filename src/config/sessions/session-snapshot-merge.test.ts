@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { mergeSessionEntry } from "./session-entry-runtime.js";
 import {
   mergeSessionSnapshotChanges,
   projectSessionSnapshotChanges,
   sessionSnapshotTouchedFieldsConflict,
 } from "./session-snapshot-merge.js";
+import { mergeSessionEntry } from "./types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 const initial: SessionEntry = {

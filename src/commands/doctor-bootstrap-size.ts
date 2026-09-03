@@ -16,8 +16,13 @@ import {
 } from "../agents/embedded-agent-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
+// Every warning uses the same locale; silent checks never need a formatter.
+let integerFormatter: Intl.NumberFormat | undefined;
+
 function formatInt(value: number): string {
-  return new Intl.NumberFormat("en-US").format(Math.max(0, Math.floor(value)));
+  return (integerFormatter ??= new Intl.NumberFormat("en-US")).format(
+    Math.max(0, Math.floor(value)),
+  );
 }
 
 function formatPercent(numerator: number, denominator: number): string {

@@ -41,7 +41,7 @@ import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { mergeSessionEntry } from "./session-entry-runtime.js";
+import { mergeSessionEntry } from "./types.js";
 import type { SessionEntry, SessionGoal } from "./types.js";
 
 export type { SessionGoalOperation, SessionGoalOperationResult } from "./goals-operations.types.js";

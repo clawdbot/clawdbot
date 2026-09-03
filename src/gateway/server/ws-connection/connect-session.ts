@@ -470,15 +470,12 @@ export async function attachAuthenticatedGatewayConnect(
     });
   }
 
-  // Version mismatch: kick the local node host so the OS supervisor restarts it.
-  // Only applies when the connecting node is the same-install local node (verified by
-  // matching instanceId against the local node-host config row). SSH-tunneled remote
-  // nodes also appear as loopback but have different instanceIds, so they are exempt.
-  // Placed before setClient/presence to avoid phantom online state on rejection.
+  // Only an exact cryptographic device match proves the same install; independent
+  // SSH-tunneled or separate-state nodes are exempt even when they appear local.
+  // Reject before registration/presence so supervisor restarts leave no phantom online state.
   if (role === "node" && isLocalClient) {
     const localNodeId = await resolveLocalNodeId();
-    const clientInstanceId = connectParams.client.instanceId?.trim();
-    if (localNodeId && clientInstanceId && clientInstanceId === localNodeId) {
+    if (localNodeId && device?.id === localNodeId) {
       const gatewayVersion = resolveRuntimeServiceVersion(process.env);
       const clientVersion = connectParams.client.version;
       if (

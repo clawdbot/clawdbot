@@ -133,6 +133,7 @@ async function handleChatMetadataRequest({
     // The router authorizes the session selector; only the persisted entry supplies auth profiles.
     const session = loadGatewaySessionEntryReadOnly(metadataParams.sessionKey, {
       agentId: requested.agentId,
+      projection: "list",
     });
     respond(
       true,
@@ -244,6 +245,7 @@ async function handleChatHistoryRequest({
         // Exact reads own their nested JSON; history only projects that snapshot.
         clone: false,
         includeStoreChildEntries: true,
+        projection: "list",
       }),
     {
       config: requestConfig,
@@ -398,13 +400,13 @@ async function handleChatHistoryRequest({
     maxSingleMessageBytes: perMessageHardCap,
   });
   const capped = messageId
-    ? (capChatHistoryAroundMessage({
+    ? capChatHistoryAroundMessage({
         messages: replaced.messages,
         messageId,
         // A nonempty JSON array costs one framing byte plus each message and its separator.
         maxCost: maxHistoryBytes - 1,
         messageCost: (message) => byteCounter.messageBytes(message) + 1,
-      }) ?? capArrayByJsonBytes(replaced.messages, maxHistoryBytes, byteCounter.messageBytes).items)
+      })
     : capArrayByJsonBytes(replaced.messages, maxHistoryBytes, byteCounter.messageBytes).items;
   const historyBudgetPreserved =
     replaced.replacedCount === 0 &&

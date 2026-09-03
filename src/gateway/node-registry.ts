@@ -1136,6 +1136,11 @@ export class NodeRegistry {
     this.invokeStreams.sendInput(invokeId, payload);
   }
 
+  /** Synchronous effect fence for callbacks retained across awaited host work. */
+  isInvokeCurrent(invokeId: string, nodeId: string, connId: string): boolean {
+    return this.invokeStreams.isPending(invokeId, nodeId, connId);
+  }
+
   handleInvokeProgress(params: NodeInvokeProgressParams): boolean {
     return this.invokeStreams.handleProgress(params);
   }

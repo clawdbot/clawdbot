@@ -189,7 +189,6 @@ describe("artifacts RPC handlers", () => {
         storePath: "/tmp/sessions.json",
       },
       expect.any(Function),
-      expect.objectContaining({ cache: "skip" }),
     );
   });
 
@@ -534,7 +533,7 @@ describe("artifacts RPC handlers", () => {
     mockedMessages([
       {
         role: "assistant",
-        content: [{ type, artifactId, url, openUrl: url, fileName, mimeType, sizeBytes: 10 }],
+        openclawDisplayContent: [{ type, artifactId, url, openUrl: url, fileName, mimeType }],
         __openclaw: { seq: 2 },
       },
     ]);

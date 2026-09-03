@@ -198,6 +198,8 @@ export function createCodexNativeHookRelay(params: {
   sessionId: string;
   sessionKey: string | undefined;
   config: EmbeddedRunAttemptParams["config"];
+  autoApproveMcpTools?: boolean;
+  projectedMcpServers?: Parameters<typeof registerNativeHookRelay>[0]["projectedMcpServers"];
   runId: string;
   channelId?: string;
   requester?: NonNullable<PluginHookToolContext["requester"]>;
@@ -247,6 +249,8 @@ export function createCodexNativeHookRelay(params: {
     sessionId: params.sessionId,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     ...(params.config ? { config: params.config } : {}),
+    autoApproveMcpTools: params.autoApproveMcpTools,
+    projectedMcpServers: params.projectedMcpServers,
     runId: params.runId,
     ...(params.channelId ? { channelId: params.channelId } : {}),
     ...(params.requester ? { requester: params.requester } : {}),

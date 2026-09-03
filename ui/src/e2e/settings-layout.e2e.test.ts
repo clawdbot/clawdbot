@@ -153,6 +153,15 @@ function createCronLayoutMethodResponses() {
     },
   ];
   return {
+    "agents.list": {
+      agents: [
+        { id: "main", identity: { name: "Molty" }, name: "Molty" },
+        { id: "writer", identity: { name: "Writer" }, name: "Writer" },
+      ],
+      defaultId: "main",
+      mainKey: "main",
+      scope: "agent",
+    },
     "cron.list": {
       jobs,
       snapshotRevision: "settings-layout",
@@ -453,6 +462,7 @@ suite.define(() => {
         ).toEqual(["All", "Active", "Paused", "Run history"]);
         expect(await page.locator(".cron-toolbar__filters wa-radio-group").count()).toBe(0);
         expect(await page.locator(".cron-stats").count()).toBe(0);
+        expect(await page.locator(".agent-scope-control__label").count()).toBe(0);
         expect(await page.locator(".cron-table__name-text").allTextContents()).toEqual([
           "Failing automation",
           "Healthy automation",
@@ -467,6 +477,27 @@ suite.define(() => {
             path: path.join(proofDir, `automations-toolbar-${viewport.width}.png`),
           });
         }
+        await page.locator(".agent-select__trigger").click();
+        const pickerTitle = page.locator(".agent-select__menu-title");
+        await pickerTitle.waitFor();
+        expect(await pickerTitle.textContent()).toBe("Agent");
+        expect(
+          await page
+            .locator('.agent-select [part="menu"]')
+            .evaluate((menu) => getComputedStyle(menu).opacity),
+        ).toBe("1");
+        if (proofEnabled) {
+          await page.screenshot({
+            animations: "disabled",
+            fullPage: true,
+            path: path.join(
+              suite.artifactDir,
+              "settings-layout-audit",
+              `automations-agent-picker-${viewport.width}.png`,
+            ),
+          });
+        }
+        await page.keyboard.press("Escape");
       }
     } finally {
       await context.close();

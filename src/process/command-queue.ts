@@ -34,7 +34,11 @@ import {
   type QueueEntry,
   type QueuePriority,
 } from "./command-queue.state.js";
-import type { CommandLaneSnapshot, CommandQueueEnqueueOptions } from "./command-queue.types.js";
+import type {
+  CommandLaneSnapshot,
+  CommandQueueEnqueueOptions,
+  CommandQueueTaskDeadline,
+} from "./command-queue.types.js";
 import {
   GatewayDrainingError,
   isGatewaySubordinateWorkAdmissionClosed,
@@ -69,6 +73,7 @@ class CommandLaneTaskTimeoutError extends Error {
     lane: string,
     details:
       | { cause: "task-budget"; elapsedMs: number; taskBudgetMs: number }
+      | { cause: "owner-deadline"; elapsedMs: number; taskBudgetMs: number }
       | { cause: "progress-idle"; elapsedMs: number; idleMs: number; taskBudgetMs: number }
       | { cause: "abort-grace"; elapsedMs: number; graceMs: number; taskBudgetMs: number }
       | { cause: "release-signal"; elapsedMs: number; taskBudgetMs: number },
@@ -77,6 +82,8 @@ class CommandLaneTaskTimeoutError extends Error {
       switch (details.cause) {
         case "task-budget":
           return `elapsed ${details.elapsedMs}ms reached task budget ${details.taskBudgetMs}ms`;
+        case "owner-deadline":
+          return `owner deadline reached after ${details.elapsedMs}ms`;
         case "progress-idle":
           return `no progress for ${details.idleMs}ms (task budget ${details.taskBudgetMs}ms, elapsed ${details.elapsedMs}ms)`;
         case "abort-grace":
@@ -231,12 +238,16 @@ async function runQueueEntryTask(
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   let removeAbortListener: (() => void) | undefined;
   let removeReleaseListener: (() => void) | undefined;
+  let removeDeadlineListener: (() => void) | undefined;
+  let ownerDeadline: CommandQueueTaskDeadline | undefined;
+  let closed = false;
   let timedOut = false;
   const timeoutPromise = new Promise<never>((_, reject) => {
     const elapsedSinceStartMs = () => Math.max(0, Date.now() - startedAtMs);
     const rejectForTimeout = (
       details:
         | { cause: "task-budget" }
+        | { cause: "owner-deadline" }
         | { cause: "progress-idle"; idleMs: number }
         | { cause: "abort-grace"; graceMs: number }
         | { cause: "release-signal" },
@@ -258,17 +269,24 @@ async function runQueueEntryTask(
         onTimeout();
         return;
       }
-      timeoutHandle = setTimeout(onTimeout, delayMs);
+      timeoutHandle = setTimeout(onTimeout, clampPositiveTimerTimeoutMs(delayMs));
       timeoutHandle.unref?.();
     };
     const armProgressTimeout = () => {
+      if (ownerDeadline?.kind === "unlimited") {
+        return;
+      }
       const elapsedMs = Math.max(0, Date.now() - readLastProgressAtMs());
-      const remainingMs = taskTimeoutMs - elapsedMs;
+      const remainingMs = ownerDeadline
+        ? ownerDeadline.deadlineAtMs - Date.now()
+        : taskTimeoutMs - elapsedMs;
       if (remainingMs <= 0) {
         rejectForTimeout(
-          entry.taskTimeoutProgressAtMs
-            ? { cause: "progress-idle", idleMs: elapsedMs }
-            : { cause: "task-budget" },
+          ownerDeadline
+            ? { cause: "owner-deadline" }
+            : entry.taskTimeoutProgressAtMs
+              ? { cause: "progress-idle", idleMs: elapsedMs }
+              : { cause: "task-budget" },
         );
         return;
       }
@@ -293,6 +311,10 @@ async function runQueueEntryTask(
       onRelease();
       return;
     }
+    if (releaseSignal) {
+      releaseSignal.addEventListener("abort", onRelease, { once: true });
+      removeReleaseListener = () => releaseSignal.removeEventListener("abort", onRelease);
+    }
     if (abortSignal?.aborted) {
       armAbortTimeout();
       return;
@@ -306,10 +328,17 @@ async function runQueueEntryTask(
       abortSignal.addEventListener("abort", onAbort, { once: true });
       removeAbortListener = () => abortSignal.removeEventListener("abort", onAbort);
     }
-    if (releaseSignal) {
-      releaseSignal.addEventListener("abort", onRelease, { once: true });
-      removeReleaseListener = () => releaseSignal.removeEventListener("abort", onRelease);
-    }
+    removeDeadlineListener = entry.taskTimeoutSubscribe?.((deadline) => {
+      // The exact queue entry owns this handoff. Cancellation and cleanup always win.
+      if (closed || timedOut || abortSignal?.aborted || releaseSignal?.aborted) {
+        return;
+      }
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
+      ownerDeadline = deadline;
+      armProgressTimeout();
+    });
   });
 
   try {
@@ -324,11 +353,13 @@ async function runQueueEntryTask(
     }
     throw err;
   } finally {
+    closed = true;
     if (timeoutHandle) {
       clearTimeout(timeoutHandle);
     }
     removeAbortListener?.();
     removeReleaseListener?.();
+    removeDeadlineListener?.();
   }
 }
 
@@ -557,6 +588,7 @@ export function enqueueCommandInLane<T>(
       activeAheadAtEnqueue: 0,
       taskTimeoutMs: normalizeTaskTimeoutMs(opts?.taskTimeoutMs),
       taskTimeoutProgressAtMs: opts?.taskTimeoutProgressAtMs,
+      taskTimeoutSubscribe: opts?.taskTimeoutSubscribe,
       taskTimeoutAbortSignal: opts?.taskTimeoutAbortSignal,
       taskTimeoutAbortGraceMs: normalizeTaskTimeoutMs(opts?.taskTimeoutAbortGraceMs),
       taskTimeoutReleaseSignal: opts?.taskTimeoutReleaseSignal,

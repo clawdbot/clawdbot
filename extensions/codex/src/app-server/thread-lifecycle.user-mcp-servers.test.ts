@@ -15,6 +15,7 @@ import {
 } from "./session-binding.test-helpers.js";
 import {
   createAppServerOptions,
+  createLeasedCodexLifecycleHarness,
   createParams,
   resetThreadLifecycleTestFixtures,
   startOrResumeThread,
@@ -195,9 +196,13 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       }
       throw new Error(`unexpected method: ${method}`);
     });
+    let wire = await createLeasedCodexLifecycleHarness({
+      agentDir: path.join(tempDir, "agent"),
+      respond: request,
+    });
     const run = async () =>
       await startOrResumeThread({
-        client: { request } as never,
+        client: wire.client,
         params: createParams(sessionFile, workspaceDir, config),
         cwd: workspaceDir,
         dynamicTools: [],
@@ -205,7 +210,19 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       });
 
     await run();
+    await wire.client.closeAndWait();
+    wire = await createLeasedCodexLifecycleHarness({
+      agentDir: path.join(tempDir, "agent"),
+      respond: request,
+      persistedThreads: ["thread-policy"],
+    });
     await run();
+
+    expect(wire.request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/read",
+      "thread/resume",
+      "thread/inject_items",
+    ]);
 
     for (const method of ["thread/start", "thread/resume"]) {
       const call = request.mock.calls.find(([candidate]) => candidate === method);
@@ -376,9 +393,13 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
         }
         throw new Error(`unexpected method: ${method}`);
       });
+      let wire = await createLeasedCodexLifecycleHarness({
+        agentDir: path.join(tempDir, "agent"),
+        respond: request,
+      });
       const run = () =>
         startOrResumeThread({
-          client: { request } as never,
+          client: wire.client,
           params: createParams(sessionFile, workspaceDir, config),
           cwd: workspaceDir,
           dynamicTools: [],
@@ -419,9 +440,20 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
         hashCodexAppServerBindingFingerprint(legacyFingerprint),
       );
 
+      await wire.client.closeAndWait();
+      wire = await createLeasedCodexLifecycleHarness({
+        agentDir: path.join(tempDir, "agent"),
+        respond: request,
+        persistedThreads: ["thread-beta5"],
+      });
       request.mockClear();
       await run();
       expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/resume"]);
+      expect(wire.request.mock.calls.map(([method]) => method)).toEqual([
+        "thread/read",
+        "thread/resume",
+        "thread/inject_items",
+      ]);
     },
   );
 
@@ -922,24 +954,39 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       throw new Error(`unexpected method: ${method}`);
     });
 
+    let wire = await createLeasedCodexLifecycleHarness({
+      agentDir: path.join(tempDir, "agent"),
+      respond: request,
+    });
     await startOrResumeThread({
-      client: { request } as never,
+      client: wire.client,
       params: createParams(sessionFile, workspaceDir, config),
       cwd: workspaceDir,
       dynamicTools: [],
       appServer: createAppServerOptions(),
     });
 
+    await wire.client.closeAndWait();
+    wire = await createLeasedCodexLifecycleHarness({
+      agentDir: path.join(tempDir, "agent"),
+      respond: request,
+      persistedThreads: ["thread-with-user-mcp"],
+    });
     request.mockClear();
 
     await startOrResumeThread({
-      client: { request } as never,
+      client: wire.client,
       params: createParams(sessionFile, workspaceDir, config),
       cwd: workspaceDir,
       dynamicTools: [],
       appServer: createAppServerOptions(),
     });
 
+    expect(wire.request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/read",
+      "thread/resume",
+      "thread/inject_items",
+    ]);
     const resumeCall = request.mock.calls.find(([method]) => method === "thread/resume");
     const resumeParams = resumeCall?.[1] as {
       config?: { mcp_servers?: Record<string, unknown> };

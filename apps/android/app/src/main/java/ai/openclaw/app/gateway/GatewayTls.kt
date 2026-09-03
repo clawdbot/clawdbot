@@ -432,23 +432,35 @@ internal suspend fun probeGatewayTlsFingerprint(
         when (err) {
           is SSLException,
           is EOFException,
-          -> GatewayTlsProbeFailure.TLS_UNAVAILABLE
-          is SocketTimeoutException ->
+          -> {
+            GatewayTlsProbeFailure.TLS_UNAVAILABLE
+          }
+
+          is SocketTimeoutException -> {
             if (connected) {
               GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT
             } else {
               GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE
             }
+          }
+
           is ConnectException,
           is UnknownHostException,
-          -> GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE
-          is SocketException ->
+          -> {
+            GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE
+          }
+
+          is SocketException -> {
             if (connected) {
               GatewayTlsProbeFailure.TLS_UNAVAILABLE
             } else {
               GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE
             }
-          else -> GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE
+          }
+
+          else -> {
+            GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE
+          }
         }
       GatewayTlsProbeResult(failure = failure)
     } finally {

@@ -6,6 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-helpers/schtasks-base-mocks.js";
 import {
+  gatewayServiceProbeHostsMock,
   inspectPortUsageMock,
   killProcessTreeMock,
   resetSchtasksBaseMocks,
@@ -119,7 +120,7 @@ function expectGatewayTermination(pid: number) {
 }
 
 function setTaskStateProbeResult(state: number) {
-  const stdout = String(state);
+  const stdout = JSON.stringify({ state });
   spawnSync.mockReturnValueOnce({
     pid: 0,
     output: [null, stdout, ""],
@@ -488,6 +489,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
       await expect(resolveScheduledTaskOwnedGatewayPids(env)).resolves.toEqual([]);
 
       expect(inspectPortUsageMock).not.toHaveBeenCalled();
+      expect(gatewayServiceProbeHostsMock).not.toHaveBeenCalled();
     });
   });
 
@@ -568,12 +570,8 @@ describe("Scheduled Task stop/restart cleanup", () => {
         { ...SUCCESS_RESPONSE },
         { ...SUCCESS_RESPONSE },
         { ...SUCCESS_RESPONSE },
-        { ...SUCCESS_RESPONSE },
-        {
-          ...SUCCESS_RESPONSE,
-          stdout: "Status: Running\r\nLast Run Result: 0x41301\r\n",
-        },
       );
+      setTaskStateProbeResult(4);
       const write = vi.fn();
       const onMutation = vi.fn(() => {
         throw new Error("audit failed");
@@ -701,8 +699,6 @@ describe("Scheduled Task stop/restart cleanup", () => {
         ["/Query", "/TN", "OpenClaw Gateway"],
         ["/End", "/TN", "OpenClaw Gateway"],
         ["/Run", "/TN", "OpenClaw Gateway"],
-        ["/Query"],
-        ["/Query", "/TN", "OpenClaw Gateway", "/V", "/FO", "LIST"],
       ]);
     });
   });
@@ -727,8 +723,6 @@ describe("Scheduled Task stop/restart cleanup", () => {
         ["/Query", "/TN", "OpenClaw Node"],
         ["/End", "/TN", "OpenClaw Node"],
         ["/Run", "/TN", "OpenClaw Node"],
-        ["/Query"],
-        ["/Query", "/TN", "OpenClaw Node", "/V", "/FO", "LIST"],
       ]);
     });
   });

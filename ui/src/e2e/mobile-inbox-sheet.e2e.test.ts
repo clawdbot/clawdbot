@@ -72,15 +72,31 @@ suite.define(() => {
       await panel.waitFor({ state: "attached" });
 
       const result = await panel.evaluate(async (element) => {
-        const animation = element.getAnimations().find((candidate) => {
-          const effect = candidate.effect;
-          return effect instanceof KeyframeEffect && effect.target === element;
-        });
+        const findEntrance = () =>
+          element.getAnimations().find((candidate) => {
+            const effect = candidate.effect;
+            return effect instanceof KeyframeEffect && effect.target === element;
+          });
+        let animation = findEntrance();
+        if (!animation) {
+          // A loaded runner can sample after the CSS entrance already finished, and
+          // getAnimations() drops finished animations. Replay it so the geometry is
+          // measured from the real keyframes instead of depending on scheduling luck.
+          element.style.animation = "none";
+          void element.getBoundingClientRect();
+          element.style.removeProperty("animation");
+          animation = findEntrance();
+        }
         if (!animation?.effect) {
           throw new Error("Expected the mobile Inbox sheet entrance animation");
         }
         const timing = animation.effect.getComputedTiming();
+        // Playwright can reach this sample after the entrance animation has advanced.
+        // Rewind the real effect so start geometry does not depend on runner load.
+        animation.pause();
+        animation.currentTime = 0;
         const startTop = element.getBoundingClientRect().top;
+        animation.play();
         await animation.finished;
         const close = element.querySelector<HTMLElement>(".sidebar-issues-panel__mobile-close")!;
         const header = element.querySelector<HTMLElement>(".sidebar-issues-panel__header")!;

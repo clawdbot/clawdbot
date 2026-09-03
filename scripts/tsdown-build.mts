@@ -16,6 +16,7 @@ import { isPathInside } from "@openclaw/fs-safe/path";
 import { decodeMountInfoPath } from "../packages/normalization-core/src/mountinfo-path.ts";
 import { BUNDLED_PLUGIN_BUILD_ENV_NAMES } from "./lib/bundled-plugin-build-entries.mjs";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
+import { CLAUDE_AGENT_SDK_ASSET_DIR } from "./lib/claude-agent-sdk-assets.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {
   resolveDistArtifactLockPath,
@@ -105,6 +106,7 @@ export const TSDOWN_DECLARATION_TOOL_INPUTS = [
   "scripts/lib/build-artifact-cache.mts",
   "scripts/lib/dist-artifact-ownership.mts",
   "scripts/lib/managed-child-process.mts",
+  "scripts/lib/vitest-resource-ownership.mts",
   "scripts/lib/direct-run.mjs",
   "scripts/lib/repo-root.mjs",
   "scripts/lib/local-check-runtime.mts",
@@ -267,7 +269,7 @@ export function cleanTsdownOutputRoots(params: OutputRootParams = {}) {
   const rootPaths = assertTsdownCleanOutputRoots({ cwd, fs: fsImpl, pathImpl, roots });
   const protectedDeclarationPaths =
     env[RUN_NODE_SKIP_DTS_BUILD_ENV] === "1"
-      ? listExistingDeclarationOutputPaths(cwd, fsImpl, roots)
+      ? listExistingGeneratedDeclarationOutputPaths(cwd, fsImpl, roots)
       : new Set<string>();
   const protectedPaths = new Set([
     ...protectedDeclarationPaths,
@@ -323,12 +325,25 @@ function cleanOutputRootExcept(rootPath: string, protectedPaths: Set<string>, fs
   }
 }
 
-function listExistingDeclarationOutputPaths(cwd: string, fsImpl: typeof fs, roots: string[]) {
+function listExistingGeneratedDeclarationOutputPaths(
+  cwd: string,
+  fsImpl: typeof fs,
+  roots: string[],
+) {
   const protectedPaths = new Set<string>();
   for (const root of roots) {
     collectDeclarationOutputPaths(path.resolve(cwd, root), protectedPaths, fsImpl);
   }
-  return protectedPaths;
+  // Copied SDK types belong to the runtime package: JS builds replace them,
+  // while declaration publication (including cache restores) must leave them intact.
+  const runtimeAssetRoots = roots.map((root) =>
+    path.resolve(cwd, root, CLAUDE_AGENT_SDK_ASSET_DIR),
+  );
+  return new Set(
+    [...protectedPaths].filter(
+      (file) => !runtimeAssetRoots.some((root) => isPathInside(root, file)),
+    ),
+  );
 }
 
 function listExistingPreservedOutputPaths(cwd: string, env: NodeJS.ProcessEnv, fsImpl: typeof fs) {
@@ -370,7 +385,7 @@ function listExistingPreservedOutputPaths(cwd: string, env: NodeJS.ProcessEnv, f
   return protectedPaths;
 }
 
-/** Full declaration publication shares the runtime cleaner's protected subtrees. */
+/** Publish generated declarations without claiming runtime assets or protected subtrees. */
 export function listReplaceableTsdownDeclarationOutputs(params: OutputRootParams = {}) {
   const cwd = path.resolve(params.cwd ?? process.cwd());
   const fsImpl = params.fs ?? fs;
@@ -379,7 +394,7 @@ export function listReplaceableTsdownDeclarationOutputs(params: OutputRootParams
   const protectedPaths = [
     ...listExistingPreservedOutputPaths(cwd, params.env ?? process.env, fsImpl),
   ];
-  return [...listExistingDeclarationOutputPaths(cwd, fsImpl, roots)]
+  return [...listExistingGeneratedDeclarationOutputPaths(cwd, fsImpl, roots)]
     .filter(
       (file) =>
         !protectedPaths.some(

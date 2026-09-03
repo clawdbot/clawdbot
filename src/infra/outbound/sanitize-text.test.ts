@@ -245,6 +245,33 @@ describe("sanitizeForPlainText", () => {
     expect(sanitizeForPlainText("See <https://example.com/path?q=1> now")).toBe(
       "See https://example.com/path?q=1 now",
     );
+    expect(sanitizeForPlainText("<https://example.com/a.pdf|Manual>")).toBe(
+      "https://example.com/a.pdf|Manual",
+    );
+  });
+
+  it.each([
+    ["<https://example.com/a.pdf|User Manual>", "User Manual"],
+    ["See <http://example.com/a.pdf|User Manual> now", "See User Manual now"],
+    ["<mailto:support@example.com|Contact Support>", "Contact Support"],
+    ["<mailto:a/b@example.com|Contact Support>", "Contact Support"],
+  ])("keeps the visible label from spaced angle links in %s", (input, expected) => {
+    expect(sanitizeForPlainText(input)).toBe(expected);
+  });
+
+  it.each([
+    "<https://example.com/a.pdf title=hidden>",
+    "<https://example.com/a.pdf\nsecret>",
+    "<https://example.com/a.pdf|   >",
+    "<ftp://example.com/a.pdf|File Manual>",
+    "</https://example.com/a.pdf>",
+  ])("does not broaden URL-shaped angle handling for %s", (input) => {
+    expect(sanitizeForPlainText(input)).toBe("");
+  });
+
+  it("keeps labeled angle text literal inside code", () => {
+    const link = "<https://example.com/a.pdf|User Manual>";
+    expect(sanitizeForPlainText(`\`${link}\` ${link}`)).toBe(`\`${link}\` User Manual`);
   });
 
   it("preserves angle-addr email addresses", () => {

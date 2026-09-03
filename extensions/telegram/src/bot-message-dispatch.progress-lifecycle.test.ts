@@ -132,21 +132,20 @@ describeTelegramDispatch("dispatchTelegramMessage progress-lifecycle", () => {
     expectWindowRetiredAfterFinal(answerDraftStream, deliverReplies);
   });
 
-  it("keeps CLI pre-tool commentary after the progress window retires", async () => {
-    const markers = "Test markers: caribou-lampion-473, fromage-quantique, satellite-en-tricot";
-    setupDraftStreams({ answerMessageId: 2001 });
+  it("keeps verbose CLI commentary bounded in the progress window so the final wins", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
         expect(replyOptions?.commentaryPayloadsEnabled).toBe(true);
-        expect(replyOptions?.shouldDeliverCommentaryPayloads).toBeUndefined();
-        await replyOptions?.onItemEvent?.({
-          kind: "preamble",
-          itemId: "commentary-1",
-          progressText: markers,
-          suppressDurableProgress: true,
-        });
-        await replyOptions?.onBlockReplyQueued?.({ text: markers, isCommentary: true });
-        await dispatcherOptions.deliver({ text: markers, isCommentary: true }, { kind: "block" });
+        replyOptions?.onVerboseProgressVisibility?.(() => true);
+        expect(replyOptions?.shouldDeliverCommentaryPayloads?.()).toBe(false);
+        for (let index = 1; index <= 10; index += 1) {
+          await replyOptions?.onItemEvent?.({
+            kind: "preamble",
+            itemId: `commentary-${index}`,
+            progressText: `Commentary ${index}`,
+          });
+        }
         await replyOptions?.onToolStart?.({ name: "Bash", phase: "start" });
         await dispatcherOptions.deliver({ text: "TEST DONE" }, { kind: "final" });
         return { queuedFinal: true };
@@ -156,10 +155,15 @@ describeTelegramDispatch("dispatchTelegramMessage progress-lifecycle", () => {
     await dispatchWithContext({
       context: createContext(),
       streamMode: "progress",
-      telegramCfg: { streaming: { mode: "progress" } },
+      telegramCfg: { streaming: { mode: "progress", progress: { commentary: true } } },
     });
 
-    expect(allDeliveredReplyTexts()).toEqual([markers, "TEST DONE"]);
+    const lastPreview = answerDraftStream.updatePreview.mock.calls.at(-1)?.[0].text ?? "";
+    expect(lastPreview).not.toContain("Commentary 1\n");
+    expect(lastPreview).not.toContain("Commentary 2\n");
+    expect(lastPreview).toContain("Commentary 3");
+    expect(lastPreview).toContain("Commentary 10");
+    expect(allDeliveredReplyTexts()).toEqual(["TEST DONE"]);
   });
 
   it("never streams an interim answer block into the progress window (Discord parity)", async () => {

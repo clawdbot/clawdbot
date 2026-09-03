@@ -4,16 +4,14 @@ import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import { t } from "../../../i18n/index.ts";
 import type { MessageContentItem } from "../../../lib/chat/chat-types.ts";
 import { readTranscriptMediaEntries } from "../../../lib/chat/message-extract.ts";
+import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import {
-  getMediaFileExtension,
-  getMediaFileName,
-  hasVideoMediaFileExtension,
+  isAudioTranscriptMediaPath,
+  isImageMediaPath,
+  isSvgImageMediaPath,
+  isVideoTranscriptMediaPath,
+  labelForMediaPath,
 } from "../../../lib/media-file-extension.ts";
-
-export type PairingQrExpiryNotice = {
-  title: string;
-  reason: string;
-};
 
 export type ImageBlock = {
   url: string;
@@ -34,6 +32,7 @@ export type ArtifactDownloadResolver = (params: {
 
 export type ImageRenderOptions = {
   canonicalMessageKey?: string;
+  localSubmission?: boolean;
   connectionEpoch?: number;
   localMediaPreviewRoots?: readonly string[];
   resourceBasePath?: string;
@@ -42,10 +41,6 @@ export type ImageRenderOptions = {
   onRequestOpenImage?: () => number;
   onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
   resolveArtifactDownload?: ArtifactDownloadResolver;
-};
-
-export type RenderableImageBlock = ImageBlock & {
-  displayUrl: string;
 };
 
 export type AttachmentItem = Extract<MessageContentItem, { type: "attachment" }>;
@@ -341,160 +336,74 @@ function appendImageBlock(images: ImageBlock[], block: ImageBlock) {
   }
 }
 
-function buildBase64ImageUrl(params: { data: string; mediaType?: string }): string {
-  return params.data.startsWith("data:")
-    ? params.data
-    : `data:${params.mediaType ?? "image/png"};base64,${params.data}`;
+function buildBase64ImageUrl(data: string, mediaType: unknown): string {
+  return data.startsWith("data:")
+    ? data
+    : `data:${typeof mediaType === "string" ? mediaType : "image/png"};base64,${data}`;
 }
 
-export function isImageMediaPath(path: string, mediaType: unknown): boolean {
-  if (typeof mediaType === "string" && mediaType.trim()) {
-    const normalized = mediaType.trim().toLowerCase();
-    if (normalized.startsWith("image/")) {
-      return true;
+export function projectMessageMedia(
+  message: unknown,
+  content: readonly MessageContentItem[],
+  nowMs = Date.now(),
+) {
+  const record = asNonArrayRecord(message);
+  const blocks = Array.isArray(record.content) ? record.content : [];
+  const images: ImageBlock[] = [];
+  const attachments: AssistantAttachmentItem[] = [];
+  const attachmentUrls = new Set<string>();
+  let expiredPairingQrCount = 0;
+  let nextPairingQrExpiresAt: number | undefined;
+  const appendAttachment = (item: AssistantAttachmentItem) => {
+    if (item.type === "attachment_error" || !attachmentUrls.has(item.attachment.url)) {
+      attachments.push(item);
+      if (item.type === "attachment") {
+        attachmentUrls.add(item.attachment.url);
+      }
     }
-    if (normalized !== "application/octet-stream") {
+  };
+  for (const item of content) {
+    if (item.type === "attachment" || item.type === "attachment_error") {
+      appendAttachment(item);
+    }
+  }
+  const appendSvgAttachment = (
+    source: unknown,
+    mediaType?: unknown,
+    metadata?: Record<string, unknown>,
+  ): boolean => {
+    if (typeof source !== "string" || !isSvgImageMediaPath(source, mediaType)) {
       return false;
     }
-  }
-  const ext = getMediaFileExtension(path);
-  return (
-    ext !== undefined &&
-    ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "heic", "heif", "avif"].includes(ext)
-  );
-}
-
-export function isSvgImageMediaPath(path: string, mediaType: unknown): boolean {
-  const normalizedMediaType =
-    typeof mediaType === "string" ? mediaType.split(";", 1)[0]?.trim().toLowerCase() : "";
-  return normalizedMediaType === "image/svg+xml" || getMediaFileExtension(path) === "svg";
-}
-
-function isAudioTranscriptMediaPath(path: string, mediaType: unknown): boolean {
-  if (typeof mediaType === "string" && mediaType.trim().toLowerCase().startsWith("audio/")) {
+    try {
+      const url = new URL(source, window.location.href);
+      if (
+        (url.protocol !== "http:" && url.protocol !== "https:") ||
+        url.origin === window.location.origin
+      ) {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+    const sizeBytes = asFiniteNumber(metadata?.sizeBytes);
+    appendAttachment({
+      type: "attachment",
+      attachment: {
+        url: source,
+        kind: "image",
+        label:
+          (typeof metadata?.fileName === "string" && metadata.fileName.trim()) ||
+          (typeof metadata?.alt === "string" && metadata.alt.trim()) ||
+          labelForMediaPath(source),
+        mimeType: typeof mediaType === "string" ? mediaType : "image/svg+xml",
+        ...(typeof metadata?.artifactId === "string" ? { artifactId: metadata.artifactId } : {}),
+        ...(sizeBytes !== undefined ? { sizeBytes } : {}),
+      },
+    });
     return true;
-  }
-  const ext = getMediaFileExtension(path);
-  return (
-    ext !== undefined &&
-    ["aac", "flac", "m2a", "m4a", "mp3", "oga", "ogg", "opus", "wav"].includes(ext)
-  );
-}
-
-function isVideoTranscriptMediaPath(path: string, mediaType: unknown): boolean {
-  if (typeof mediaType === "string" && mediaType.trim().toLowerCase().startsWith("video/")) {
-    return true;
-  }
-  return hasVideoMediaFileExtension(path);
-}
-
-// Collision-safe managed inbound URIs store the original filename plus a
-// terminal "---<uuid>" storage suffix in the basename
-// (e.g. media://inbound/report---<uuid>.pdf). Restore the original filename by
-// removing only that final generated segment, so an original name that itself
-// contains a "---<uuid>"-shaped part is preserved; the stored URI is unchanged.
-const MANAGED_INBOUND_MEDIA_PREFIX = "media://inbound/";
-const MANAGED_INBOUND_UUID_SUFFIX_PATTERN =
-  /---[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?=\.[^./]*$|$)/i;
-
-function labelForMediaPath(mediaPath: string): string {
-  const trimmed = mediaPath.trim();
-  if (trimmed.startsWith(MANAGED_INBOUND_MEDIA_PREFIX)) {
-    const basename = trimmed.split("/").pop()?.trim() || trimmed;
-    return basename.replace(MANAGED_INBOUND_UUID_SUFFIX_PATTERN, "") || basename;
-  }
-  try {
-    if (/^https?:\/\//i.test(trimmed)) {
-      const parsed = new URL(trimmed);
-      return getMediaFileName(trimmed)?.trim() || parsed.hostname || trimmed;
-    }
-  } catch {}
-  return trimmed.split(/[\\/]/).pop()?.trim() || trimmed;
-}
-
-function crossOriginStructuredSvgAttachment(
-  source: unknown,
-  mediaType: unknown,
-  metadata: Record<string, unknown> = {},
-): AttachmentItem | null {
-  if (typeof source !== "string" || !isSvgImageMediaPath(source, mediaType)) {
-    return null;
-  }
-  try {
-    const url = new URL(source, window.location.href);
-    if (
-      (url.protocol !== "http:" && url.protocol !== "https:") ||
-      url.origin === window.location.origin
-    ) {
-      return null;
-    }
-  } catch {
-    return null;
-  }
-  const sizeBytes = asFiniteNumber(metadata.sizeBytes);
-  return {
-    type: "attachment",
-    attachment: {
-      url: source,
-      kind: "image",
-      label:
-        (typeof metadata.fileName === "string" && metadata.fileName.trim()) ||
-        (typeof metadata.alt === "string" && metadata.alt.trim()) ||
-        labelForMediaPath(source),
-      mimeType: typeof mediaType === "string" ? mediaType : "image/svg+xml",
-      ...(typeof metadata.artifactId === "string" ? { artifactId: metadata.artifactId } : {}),
-      ...(sizeBytes !== undefined ? { sizeBytes } : {}),
-    },
   };
-}
-
-export function extractStructuredSvgAttachments(message: unknown): AttachmentItem[] {
-  const content = asNonArrayRecord(message).content;
-  if (!Array.isArray(content)) {
-    return [];
-  }
-  const attachments: AttachmentItem[] = [];
-  const append = (attachment: AttachmentItem | null) => {
-    if (
-      attachment &&
-      !attachments.some((item) => item.attachment.url === attachment.attachment.url)
-    ) {
-      attachments.push(attachment);
-    }
-  };
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const entry = asNonArrayRecord(block);
-    if (entry.type === "image") {
-      const source = asOptionalRecord(entry.source);
-      append(
-        crossOriginStructuredSvgAttachment(entry.url, entry.mimeType ?? source?.media_type, entry),
-      );
-    } else if (entry.type === "image_url") {
-      const imageUrl = asOptionalRecord(entry.image_url);
-      append(crossOriginStructuredSvgAttachment(imageUrl?.url, undefined));
-    } else if (entry.type === "input_image") {
-      const imageUrl = entry.image_url;
-      const source = asOptionalRecord(entry.source);
-      append(
-        crossOriginStructuredSvgAttachment(
-          typeof imageUrl === "string" ? imageUrl : asOptionalRecord(imageUrl)?.url,
-          undefined,
-        ),
-      );
-      append(crossOriginStructuredSvgAttachment(source?.url, source?.media_type));
-    }
-  }
-  return attachments;
-}
-
-export function extractImages(message: unknown): ImageBlock[] {
-  const m = message as Record<string, unknown>;
-  const content = m.content;
-  const images: ImageBlock[] = [];
-  const layout = asNonArrayRecord(asNonArrayRecord(m["__openclaw"]).mediaImageLayout);
+  const layout = asNonArrayRecord(asNonArrayRecord(record["__openclaw"]).mediaImageLayout);
   const slots = Array.isArray(layout.slots) ? layout.slots.map(asNonArrayRecord) : [];
   const factIndexes = slots.length > 0 ? new Set(slots.map((slot) => slot.factIndex)) : undefined;
   // Reject ambiguous layouts before deduplication: fact positions, including
@@ -511,201 +420,139 @@ export function extractImages(message: unknown): ImageBlock[] {
     ) &&
     factIndexes.size === slots.length;
   const inlineSlots = validLayout ? slots.filter((slot) => slot.kind === "inline") : [];
-  const alignedInline =
-    inlineSlots.length > 0 &&
-    Array.isArray(content) &&
-    content.filter((block) => asNonArrayRecord(block).type === "image").length ===
-      inlineSlots.length;
   let inlineIndex = 0;
 
-  if (Array.isArray(content)) {
-    for (const block of content) {
-      if (typeof block !== "object" || block === null) {
-        continue;
-      }
-      const b = block as Record<string, unknown>;
-
-      if (b.type === "image") {
-        // Handle source object format from optimistic user sends.
-        const source = b.source as Record<string, unknown> | undefined;
-        const factIndex = alignedInline ? inlineSlots[inlineIndex]?.factIndex : undefined;
-        const imageMeta = {
+  for (const value of blocks) {
+    const block = asOptionalRecord(value);
+    if (!block) {
+      continue;
+    }
+    const source = asOptionalRecord(block.source);
+    if (block.type === "image") {
+      const factIndex = inlineSlots[inlineIndex++]?.factIndex;
+      // The structured SVG reference is independent of inline data in the same block.
+      const svg = appendSvgAttachment(block.url, block.mimeType ?? source?.media_type, block);
+      const base64Source =
+        source?.type === "base64" && typeof source.data === "string" ? source : undefined;
+      const data = base64Source ? base64Source.data : block.data;
+      const url =
+        typeof data === "string"
+          ? buildBase64ImageUrl(data, base64Source ? base64Source.media_type : block.mimeType)
+          : !svg && typeof block.url === "string"
+            ? block.url
+            : undefined;
+      if (url !== undefined) {
+        images.push({
+          url,
           ...(typeof factIndex === "number" ? { factIndex } : {}),
-          artifactId: typeof b.artifactId === "string" ? b.artifactId : undefined,
-          alt: typeof b.alt === "string" ? b.alt : undefined,
-          fileName: typeof b.fileName === "string" ? b.fileName : undefined,
-          openUrl: typeof b.openUrl === "string" ? b.openUrl : undefined,
-          sizeBytes: asFiniteNumber(b.sizeBytes),
-          width: typeof b.width === "number" ? b.width : undefined,
-          height: typeof b.height === "number" ? b.height : undefined,
-        };
-        inlineIndex += 1;
-        if (source?.type === "base64" && typeof source.data === "string") {
-          appendImageBlock(images, {
-            url: buildBase64ImageUrl({
-              data: source.data,
-              mediaType: typeof source.media_type === "string" ? source.media_type : undefined,
-            }),
-            ...imageMeta,
-          });
-        } else if (typeof b.data === "string") {
-          // Direct tool-result image block from imageResult() / read tool.
-          appendImageBlock(images, {
-            url: buildBase64ImageUrl({
-              data: b.data,
-              mediaType: typeof b.mimeType === "string" ? b.mimeType : undefined,
-            }),
-            ...imageMeta,
-          });
-        } else if (
-          typeof b.url === "string" &&
-          !crossOriginStructuredSvgAttachment(b.url, b.mimeType ?? source?.media_type, b)
-        ) {
-          appendImageBlock(images, { url: b.url, ...imageMeta });
-        }
-      } else if (b.type === "image_url") {
-        // OpenAI format
-        const imageUrl = b.image_url as Record<string, unknown> | undefined;
-        if (
-          typeof imageUrl?.url === "string" &&
-          !crossOriginStructuredSvgAttachment(imageUrl.url, undefined)
-        ) {
-          appendImageBlock(images, { url: imageUrl.url });
-        }
-      } else if (b.type === "input_image") {
-        const imageUrl = b.image_url;
-        if (
-          typeof imageUrl === "string" &&
-          !crossOriginStructuredSvgAttachment(imageUrl, undefined)
-        ) {
-          appendImageBlock(images, { url: imageUrl });
-        } else if (imageUrl && typeof imageUrl === "object") {
-          const url = (imageUrl as Record<string, unknown>).url;
-          if (typeof url === "string" && !crossOriginStructuredSvgAttachment(url, undefined)) {
-            appendImageBlock(images, { url });
-          }
-        }
-        const source = b.source as Record<string, unknown> | undefined;
-        if (
-          typeof source?.url === "string" &&
-          !crossOriginStructuredSvgAttachment(source.url, source.media_type)
-        ) {
-          appendImageBlock(images, { url: source.url });
-        } else if (typeof source?.data === "string") {
-          appendImageBlock(images, {
-            url: buildBase64ImageUrl({
-              data: source.data,
-              mediaType: typeof source.media_type === "string" ? source.media_type : undefined,
-            }),
-          });
-        }
-      } else if (b.type === "openclaw_pairing_qr") {
-        if (isExpiredPairingQrBlock(b)) {
+          artifactId: typeof block.artifactId === "string" ? block.artifactId : undefined,
+          alt: typeof block.alt === "string" ? block.alt : undefined,
+          fileName: typeof block.fileName === "string" ? block.fileName : undefined,
+          openUrl: typeof block.openUrl === "string" ? block.openUrl : undefined,
+          sizeBytes: asFiniteNumber(block.sizeBytes),
+          width: typeof block.width === "number" ? block.width : undefined,
+          height: typeof block.height === "number" ? block.height : undefined,
+        });
+      }
+    } else if (block.type === "image_url") {
+      const url = asOptionalRecord(block.image_url)?.url;
+      if (typeof url === "string" && !appendSvgAttachment(url)) {
+        images.push({ url });
+      }
+    } else if (block.type === "input_image") {
+      const blockImages: ImageBlock[] = [];
+      const url =
+        typeof block.image_url === "string"
+          ? block.image_url
+          : asOptionalRecord(block.image_url)?.url;
+      if (typeof url === "string" && !appendSvgAttachment(url)) {
+        blockImages.push({ url });
+      }
+      const svg = appendSvgAttachment(source?.url, source?.media_type);
+      if (typeof source?.url === "string" && !svg) {
+        appendImageBlock(blockImages, { url: source.url });
+      } else if (typeof source?.data === "string") {
+        appendImageBlock(blockImages, {
+          url: buildBase64ImageUrl(source.data, source.media_type),
+        });
+      }
+      // Separate blocks are separate attachments, including identical uploads.
+      images.push(...blockImages);
+    } else if (block.type === "openclaw_pairing_qr") {
+      const expiresAt = asFiniteNumber(block.expiresAtMs);
+      if (expiresAt !== undefined) {
+        if (expiresAt <= nowMs) {
+          expiredPairingQrCount += 1;
           continue;
         }
-        const imageUrl = b.image_url;
-        if (typeof imageUrl === "string") {
-          appendImageBlock(images, {
-            url: imageUrl,
-            alt: typeof b.alt === "string" ? b.alt : undefined,
-          });
-        }
+        nextPairingQrExpiresAt = Math.min(nextPairingQrExpiresAt ?? expiresAt, expiresAt);
+      }
+      if (typeof block.image_url === "string") {
+        images.push({
+          url: block.image_url,
+          alt: typeof block.alt === "string" ? block.alt : undefined,
+        });
       }
     }
   }
-
+  // Only a complete inline layout may lend its fact positions to mounted previews.
+  if (inlineIndex !== inlineSlots.length) {
+    for (const image of images) {
+      delete image.factIndex;
+    }
+  }
   for (const {
     path: mediaPath,
     mediaType,
     fileName,
     sizeBytes,
+    durationMs,
+    width,
+    height,
     factIndex,
   } of readTranscriptMediaEntries(message)) {
-    if (!isImageMediaPath(mediaPath, mediaType) || isSvgImageMediaPath(mediaPath, mediaType)) {
-      continue;
-    }
-    appendImageBlock(images, {
-      url: mediaPath,
-      fileName,
-      sizeBytes,
-      ...(validLayout && factIndexes.has(factIndex) ? { factIndex } : {}),
-    });
-  }
-
-  return images;
-}
-
-function readPairingQrExpiresAtMs(block: Record<string, unknown>): number | undefined {
-  return asFiniteNumber(block.expiresAtMs);
-}
-
-function isExpiredPairingQrBlock(block: Record<string, unknown>, nowMs = Date.now()): boolean {
-  const expiresAtMs = readPairingQrExpiresAtMs(block);
-  return expiresAtMs !== undefined && expiresAtMs <= nowMs;
-}
-
-export function extractPairingQrExpiryNotices(
-  message: unknown,
-  nowMs = Date.now(),
-): PairingQrExpiryNotice[] {
-  const m = message as Record<string, unknown>;
-  const content = m.content;
-  if (!Array.isArray(content)) {
-    return [];
-  }
-  const notices: PairingQrExpiryNotice[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const b = block as Record<string, unknown>;
-    if (b.type === "openclaw_pairing_qr" && isExpiredPairingQrBlock(b, nowMs)) {
-      notices.push({
-        title: t("chat.pairingQrExpired.title"),
-        reason: t("chat.pairingQrExpired.reason"),
+    const image = isImageMediaPath(mediaPath, mediaType);
+    const svg = image && isSvgImageMediaPath(mediaPath, mediaType);
+    if (image && !svg) {
+      appendImageBlock(images, {
+        url: mediaPath,
+        fileName,
+        sizeBytes,
+        ...(validLayout && factIndexes.has(factIndex) ? { factIndex } : {}),
+      });
+    } else {
+      appendAttachment({
+        type: "attachment",
+        attachment: {
+          url: mediaPath,
+          kind: svg
+            ? "image"
+            : isAudioTranscriptMediaPath(mediaPath, mediaType)
+              ? "audio"
+              : isVideoTranscriptMediaPath(mediaPath, mediaType)
+                ? "video"
+                : "document",
+          label: fileName?.trim() || labelForMediaPath(mediaPath),
+          ...(typeof mediaType === "string" ? { mimeType: mediaType } : {}),
+          ...(sizeBytes !== undefined ? { sizeBytes } : {}),
+          ...(durationMs !== undefined ? { durationMs } : {}),
+          ...(width !== undefined ? { width } : {}),
+          ...(height !== undefined ? { height } : {}),
+        },
       });
     }
   }
-  return notices;
-}
-
-function resolveNearestFuturePairingQrExpiresAtMs(
-  message: unknown,
-  nowMs = Date.now(),
-): number | undefined {
-  const m = message as Record<string, unknown>;
-  const content = m.content;
-  if (!Array.isArray(content)) {
-    return undefined;
-  }
-  let nearestExpiresAtMs: number | undefined;
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const b = block as Record<string, unknown>;
-    if (b.type !== "openclaw_pairing_qr") {
-      continue;
-    }
-    const expiresAtMs = readPairingQrExpiresAtMs(b);
-    if (expiresAtMs === undefined || expiresAtMs <= nowMs) {
-      continue;
-    }
-    nearestExpiresAtMs =
-      nearestExpiresAtMs === undefined ? expiresAtMs : Math.min(nearestExpiresAtMs, expiresAtMs);
-  }
-  return nearestExpiresAtMs;
+  return { images, attachments, expiredPairingQrCount, nextPairingQrExpiresAt };
 }
 
 export function schedulePairingQrExpiryRefresh(
   messageKey: string,
-  message: unknown,
+  refreshAt: number | undefined,
   onRequestUpdate: (() => void) | undefined,
 ) {
   if (!onRequestUpdate) {
     return;
   }
-  const refreshAt = resolveNearestFuturePairingQrExpiresAtMs(message);
   if (refreshAt === undefined) {
     const subscriber = chatMediaSubscribers.get(onRequestUpdate);
     const resourceKey = chatMediaResourceKey("pairing-qr", messageKey);
@@ -723,42 +570,18 @@ export function schedulePairingQrExpiryRefresh(
   );
 }
 
-export function extractTranscriptAttachments(message: unknown): AttachmentItem[] {
-  const attachments: AttachmentItem[] = [];
-  for (const {
-    path: mediaPath,
-    mediaType,
-    fileName,
-    sizeBytes,
-    durationMs,
-    width,
-    height,
-  } of readTranscriptMediaEntries(message)) {
-    const image = isImageMediaPath(mediaPath, mediaType);
-    const svg = image && isSvgImageMediaPath(mediaPath, mediaType);
-    if (image && !svg) {
-      continue;
-    }
-    const kind = svg
-      ? "image"
-      : isAudioTranscriptMediaPath(mediaPath, mediaType)
-        ? "audio"
-        : isVideoTranscriptMediaPath(mediaPath, mediaType)
-          ? "video"
-          : "document";
-    attachments.push({
-      type: "attachment",
-      attachment: {
-        url: mediaPath,
-        kind,
-        label: fileName?.trim() || labelForMediaPath(mediaPath),
-        ...(typeof mediaType === "string" ? { mimeType: mediaType } : {}),
-        ...(sizeBytes !== undefined ? { sizeBytes } : {}),
-        ...(durationMs !== undefined ? { durationMs } : {}),
-        ...(width !== undefined ? { width } : {}),
-        ...(height !== undefined ? { height } : {}),
-      },
-    });
-  }
-  return attachments;
+// Reply previews and completed-run actions describe the media the bubble renders.
+export function extractMessageMediaText(
+  message: unknown,
+  content = normalizeMessage(message).content,
+): string {
+  const { images, attachments } = projectMessageMedia(message, content);
+  return [
+    ...images.map(
+      (image) => image.fileName?.trim() || image.alt?.trim() || t("chat.imageLightbox.untitled"),
+    ),
+    ...attachments.map(
+      (item) => item.attachment.label.trim() || t("chat.attachments.attachedFile"),
+    ),
+  ].join("\n");
 }

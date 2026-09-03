@@ -37,7 +37,6 @@ import {
   renderMessageActionButtons,
   renderReplyButton,
   resolveMessageActionDetails,
-  type AssistantMessageDisclosure,
   type MessageActionDetails,
   type MessageReplyTarget,
 } from "./chat-message-markdown.ts";
@@ -47,6 +46,7 @@ import {
   type StreamGroupOptions,
   type StreamGroupPart,
 } from "./chat-message-stream.ts";
+import type { AssistantMessageDisclosure } from "./chat-message-text.ts";
 import { extractGroupMeta, renderMessageMeta } from "./chat-message-timestamp.ts";
 import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar.ts";
 import {
@@ -73,7 +73,7 @@ type RenderMessageGroupOptions = Omit<
   | "isStreaming"
   | "duplicateCount"
   | "assistantMessageDisclosure"
-  | "actionMarkdown"
+  | "messageActions"
   | "entryId"
   | "entryAnimated"
   | "resolveReplyPreview"
@@ -112,23 +112,31 @@ type RenderMessageGroupOptions = Omit<
 // this bounds auto-retries to 3 before the manual retry affordance takes over.
 const FULL_MESSAGE_RETRY_REVISION_LIMIT = 6;
 
-function requestMissingFullMessage(
-  details: MessageActionDetails | null,
+function prepareMessageActions(
+  group: MessageGroup,
+  item: MessageGroup["messages"][number],
   opts: RenderMessageGroupOptions,
-) {
+): MessageActionDetails | null {
+  const details = resolveMessageActionDetails({
+    ...opts,
+    message: item.message,
+    messageId: item.key,
+    canFetchFullMessage: Boolean(opts.loadFullAssistantMessage && opts.sessionKey),
+    senderLabel: resolveMessageGroupSenderLabel(group, opts),
+  });
   const messageId = details?.fullMessage?.messageId;
-  if (!messageId) {
-    return;
+  if (messageId) {
+    // Projected rows can share a source ID; a preceding row may have started its load.
+    const expansion = opts.getAssistantMessageExpansion?.(messageId);
+    // Retry transient failures on later renders, bounded so a dead loader cannot hot-loop.
+    if (
+      !expansion ||
+      (expansion.status === "error" && expansion.revision < FULL_MESSAGE_RETRY_REVISION_LIMIT)
+    ) {
+      opts.onToggleAssistantMessageExpanded?.(messageId);
+    }
   }
-  // Projected rows can share a source ID; a preceding row may have started its load.
-  const expansion = opts.getAssistantMessageExpansion?.(messageId);
-  // Retry transient failures on later renders, bounded so a dead loader cannot hot-loop.
-  if (
-    !expansion ||
-    (expansion.status === "error" && expansion.revision < FULL_MESSAGE_RETRY_REVISION_LIMIT)
-  ) {
-    opts.onToggleAssistantMessageExpanded?.(messageId);
-  }
+  return details;
 }
 
 function buildGroupedMessageRenderOptions(
@@ -136,7 +144,7 @@ function buildGroupedMessageRenderOptions(
   item: MessageGroup["messages"][number],
   index: number,
   opts: RenderMessageGroupOptions,
-  actionDetails?: MessageActionDetails | null,
+  actionDetails: MessageActionDetails | null = prepareMessageActions(group, item, opts),
 ): GroupedMessageRenderOptions {
   let assistantMessageDisclosure: AssistantMessageDisclosure | undefined;
   const fullMessage = actionDetails?.fullMessage;
@@ -164,11 +172,14 @@ function buildGroupedMessageRenderOptions(
     showToolCalls: opts.showToolCalls ?? true,
     autoExpandToolCalls: opts.autoExpandToolCalls ?? false,
     assistantMessageDisclosure,
-    actionMarkdown: actionDetails?.markdown,
+    messageActions: actionDetails,
   };
 }
 
-function isPeerSenderGroup(group: MessageGroup, userId: string | null | undefined): boolean {
+function isPeerSenderGroup(
+  group: Pick<MessageGroup, "sender">,
+  userId: string | null | undefined,
+): boolean {
   const identity = group.sender?.identity;
   return Boolean(
     group.sender && !(userId && identity?.type === "profile" && identity.id === userId),
@@ -278,7 +289,7 @@ export function renderActivityGroup(
 }
 
 export function resolveMessageGroupSenderLabel(
-  group: MessageGroup,
+  group: Pick<MessageGroup, "role" | "sender" | "senderLabel" | "messages">,
   opts: Pick<RenderMessageGroupOptions, "assistantName" | "userId" | "userName" | "userAvatar">,
 ): string {
   const normalizedRole = normalizeRoleForGrouping(group.role);
@@ -321,23 +332,14 @@ export function renderMessageGroupContent(group: MessageGroup, opts: RenderMessa
   if (isActivityMessageGroup(group)) {
     return renderActivityGroup([group], opts, "continuation");
   }
-  const who = resolveMessageGroupSenderLabel(group, opts);
-  const messages = group.messages.map((item, index) => {
-    const actionDetails = resolveMessageActionDetails({
-      ...opts,
-      message: item.message,
-      messageId: item.key,
-      canFetchFullMessage: Boolean(opts.loadFullAssistantMessage && opts.sessionKey),
-      senderLabel: who,
-    });
-    requestMissingFullMessage(actionDetails, opts);
-    return renderGroupedMessage(
+  const messages = group.messages.map((item, index) =>
+    renderGroupedMessage(
       item.message,
       item.key,
-      buildGroupedMessageRenderOptions(group, item, index, opts, actionDetails),
+      buildGroupedMessageRenderOptions(group, item, index, opts),
       opts.onOpenSidebar,
-    );
-  });
+    ),
+  );
   return html`${messages}${opts.showToolCalls === false
     ? nothing
     : renderBrowserTabPreviews([group], opts)}`;
@@ -384,18 +386,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
       ? [opts.frameActionOwner]
       : []
     : group.messages;
-  const messageActionDetails = actionOwners.map((item) =>
-    resolveMessageActionDetails({
-      ...opts,
-      message: item.message,
-      messageId: item.key,
-      canFetchFullMessage: Boolean(opts.loadFullAssistantMessage && opts.sessionKey),
-      senderLabel: who,
-    }),
-  );
-  for (const details of messageActionDetails) {
-    requestMissingFullMessage(details, opts);
-  }
+  const messageActionDetails = actionOwners.map((item) => prepareMessageActions(group, item, opts));
   const lastMessageIndex = group.messages.length - 1;
   const footerActionDetails = ownsRunFrame
     ? (messageActionDetails[0] ?? null)
@@ -407,7 +398,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     normalizedRole === "user" &&
     Boolean(
       (footerActionDetails?.replyTarget && opts.onReply) ||
-      opts.onRewind ||
+      (opts.onRewind && !opts.rewindDisabled) ||
       footerActionDetails?.markdown,
     );
   const userFooterActions = hasUserFooterActions
@@ -419,9 +410,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
           ${footerActionDetails?.replyTarget && opts.onReply
             ? renderReplyButton(footerActionDetails.replyTarget, opts.onReply)
             : nothing}
-          ${opts.onRewind
-            ? renderRewindButton(opts.onRewind, Boolean(opts.rewindDisabled))
-            : nothing}
+          ${opts.onRewind && !opts.rewindDisabled ? renderRewindButton(opts.onRewind) : nothing}
           ${footerActionDetails?.markdown
             ? renderMessageActionButtons(footerActionDetails, {})
             : nothing}

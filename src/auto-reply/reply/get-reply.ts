@@ -515,6 +515,7 @@ export async function getReplyFromConfig(
         provider,
         model,
         workspaceDir: workspaceDirForNativeCommand,
+        preparedModelCatalog,
         typing,
         opts: optsWithSkillFilter,
         skillFilter: mergedSkillFilter,

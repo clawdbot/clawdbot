@@ -188,7 +188,7 @@ export function prepareEmbeddedAttemptStream(input: {
           return;
         }
         const hookMessages = projectNestedToolActivityForHooks(
-          input.activeSession.messages.slice(),
+          input.activeSession.messages,
           input.nestedToolActivities,
         );
         const reportedModelRef = resolveReportedModelRef({

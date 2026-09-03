@@ -20,7 +20,7 @@ export const ASK_USER_TOOL_DISPLAY_SUMMARY = "Ask the user and wait for an answe
 export const SUGGEST_TASK_TOOL_DISPLAY_SUMMARY = "Suggest follow-up work for operator approval.";
 export const DISMISS_TASK_TOOL_DISPLAY_SUMMARY = "Withdraw a pending task suggestion.";
 export const SKILL_WORKSHOP_TOOL_DISPLAY_SUMMARY =
-  "Manage reusable-skill proposals; inspect can select one stored artifact and returns complete content only when it fits the model budget.";
+  "Author reusable skills under the available tool's publication and review policy. Read one complete artifact when it fits the model budget.";
 
 export function describeAgentsListTool(sessionsSpawnAvailable: boolean): string {
   return sessionsSpawnAvailable
@@ -133,24 +133,17 @@ export function describeSessionsSpawnTool(options?: {
     options?.acpAvailable === false
       ? 'Spawn child session; default `runtime="subagent"`.'
       : 'Spawn child session; default `runtime="subagent"`; ACP needs explicit `runtime="acp"`.';
-  const sessionCompletionGuidance =
-    options?.acpAvailable === false
-      ? "After spawn, do non-overlap work. Run result returns; session output stays thread."
-      : 'After spawn, do non-overlap work. Run result returns; session output stays thread unless ACP `streamTo="parent"`.';
-  const completionGuidance = options?.threadAvailable
-    ? sessionCompletionGuidance
-    : "After spawn, do non-overlap work while run result returns.";
   return [
     runtimeDescription,
     options?.threadAvailable
       ? '`mode="run"` one-shot; `mode="session"` persistent/thread-bound only on supporting requester channel.'
       : '`mode="run"` one-shot background.',
     "`agentId` targets a configured agent; `model` overrides its model; `cleanup` delete|keep hidden child session; `sandbox` inherit|require.",
-    '`visible=true`: durable visible session. Default for coding, multi-step work, or results user may revisit/steer/keep — not only when a thread is requested. Shows in web UI sidebar; works without UI: completion announces back, progress checkable. `group` places it in a custom sidebar group (a new name creates the group); omission or an empty string leaves it ungrouped. Subagent only; omit `mode` (`mode="run"` is also accepted), `thread`, `thinking`, and `lightContext`; `attachments=[]` and omitted/blank `attachAs.mountPath` are accepted, but nonempty attachment staging is unsupported; inherits the caller tool-policy ceiling; may check out a git worktree via `worktree`/`worktreeName`/`worktreeBaseRef`. When its accepted result includes `sessionUrl`, channel acknowledgements put the session URL on the first line and `Owner: <label>` on the second line.',
+    '`visible=true`: durable visible session. Default for coding, multi-step work, or results user may revisit/steer/keep — not only when a thread is requested. Shows in web UI sidebar; works without UI: announcing runs report back, progress checkable. `group` places it in a custom sidebar group (a new name creates the group); omission or an empty string leaves it ungrouped. Subagent only; omit `mode` (`mode="run"` is also accepted), `thread`, `thinking`, and `lightContext`; `attachments=[]` and omitted/blank `attachAs.mountPath` are accepted, but nonempty attachment staging is unsupported; inherits the caller tool-policy ceiling; may check out a git worktree via `worktree`/`worktreeName`/`worktreeBaseRef`. When its accepted result includes `sessionUrl`, channel acknowledgements put the session URL on the first line and `Owner: <label>` on the second line.',
     visibilityLine,
     ...(options?.swarmEnabled
       ? [
-          "`collect=true` (swarm): parallel fan-out collector children; structured result per `outputSchema`; `groupId` groups a batch.",
+          "`collect=true` (swarm): parallel fan-out collector children with no completion notification; explicitly collect their results; structured result per `outputSchema`; `groupId` groups a batch.",
         ]
       : []),
     "Inherits parent workspace. Native task arrives in the child's initial `[Subagent Task]` message.",
@@ -159,7 +152,7 @@ export function describeSessionsSpawnTool(options?: {
       : ['`runtime="acp"` ids: codex, claude, gemini, opencode, or configured ACP.']),
     describeSubagentSpawnContext(options?.subagentThreadAvailable === true),
     "Hidden child: research, parallel/batch reads, throwaway side tasks. Coding, PRs, long builds, anything worth keeping: `visible=true`. No spawn for quick lookup/single read.",
-    completionGuidance,
+    "After spawn, do non-overlap work; follow the receipt's completion mode.",
   ].join(" ");
 }
 

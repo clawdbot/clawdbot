@@ -44,6 +44,7 @@ export {
 } from "./config-runtime.js";
 export {
   assertCodexAppServerConnectionSecurity,
+  hasCodexMcpToolApprovalOverrides,
   shouldAutoApproveCodexAppServerApprovals,
   withMcpElicitationsApprovalPolicy,
 } from "./config-security.js";

@@ -1,11 +1,17 @@
 // Sms tests cover webhook plugin behavior.
 import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { Socket } from "node:net";
 import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SmsDeliveryRecorder } from "./delivery-observations.js";
 import type { ResolvedSmsAccount } from "./types.js";
 import { createSmsWebhookHandler } from "./webhook.js";
+import {
+  advanceSmsTestAccountId,
+  createSmsTestAccount,
+  createSmsTestDeliveryRecorder,
+} from "./webhook.test-support.js";
 
 const assertSmsCredentialOwnerAvailable = vi.hoisted(() => vi.fn());
 const enqueueSmsIngress = vi.hoisted(() =>
@@ -14,7 +20,6 @@ const enqueueSmsIngress = vi.hoisted(() =>
 
 vi.mock("./credential-availability.js", () => ({ assertSmsCredentialOwnerAvailable }));
 
-let testAccountSequence = 0;
 let activeAccountId = "test-0";
 
 function createIngress() {
@@ -41,31 +46,12 @@ function computeTestTwilioSignature(params: {
   return createHmac("sha1", params.authToken).update(data).digest("base64");
 }
 
-function createAccount(overrides: Partial<ResolvedSmsAccount> = {}): ResolvedSmsAccount {
-  return {
-    accountId: activeAccountId,
-    enabled: true,
-    accountSid: "AC123",
-    authToken: "secret",
-    fromNumber: "+15557654321",
-    messagingServiceSid: "",
-    defaultTo: "",
-    webhookPath: "/webhooks/sms",
-    publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
-    dangerouslyDisableSignatureValidation: false,
-    dmPolicy: "pairing",
-    allowFrom: [],
-    textChunkLimit: 1500,
-    ...overrides,
-  };
-}
-
 function createSignedBody(params?: {
   account?: ResolvedSmsAccount;
   body?: string;
   messageSid?: string;
 }): { body: string; signature: string } {
-  const account = params?.account ?? createAccount();
+  const account = params?.account ?? createSmsTestAccount();
   const body =
     params?.body ??
     `AccountSid=${encodeURIComponent(account.accountSid)}&From=%2B15551234567&To=%2B15557654321&Body=hello&MessageSid=${encodeURIComponent(params?.messageSid ?? "SM123")}`;
@@ -77,6 +63,12 @@ function createSignedBody(params?: {
       form: parseTestTwilioForm(body),
     }),
   };
+}
+
+function createLoopbackSocket(remoteAddress = "127.0.0.1"): Socket {
+  const socket = new Socket();
+  Object.defineProperty(socket, "remoteAddress", { value: remoteAddress });
+  return socket;
 }
 
 function createRequest(
@@ -92,7 +84,7 @@ function createRequest(
     ...options?.headers,
   };
   Object.defineProperty(req, "socket", {
-    value: { remoteAddress: options?.remoteAddress ?? "127.0.0.1" },
+    value: createLoopbackSocket(options?.remoteAddress),
   });
   return req;
 }
@@ -100,9 +92,9 @@ function createRequest(
 function configureRequest(req: IncomingMessage): IncomingMessage {
   req.method = "POST";
   req.headers = {};
-  Object.defineProperty(req, "socket", {
-    value: { remoteAddress: "127.0.0.1" },
-  });
+  // A real socket: the reader hands a limited request to the connection-level
+  // rejection owner, which subscribes to socket events before the caller answers.
+  Object.defineProperty(req, "socket", { value: createLoopbackSocket() });
   return req;
 }
 
@@ -168,7 +160,7 @@ function createSignedDeliveryPayload(params: {
   account?: ResolvedSmsAccount;
   accountSid?: string;
 }): { body: string; signature: string; form: Record<string, string> } {
-  const account = params.account ?? createAccount();
+  const account = params.account ?? createSmsTestAccount();
   const form = {
     AccountSid: params.accountSid ?? account.accountSid,
     From: account.fromNumber,
@@ -188,23 +180,6 @@ function createSignedDeliveryPayload(params: {
   };
 }
 
-function createDeliveryRecorder(
-  record = vi.fn<SmsDeliveryRecorder["record"]>(async ({ account, form }) => ({
-    duplicate: false,
-    record: {
-      accountId: account.accountId,
-      accountSidHash: "account-sid-hash",
-      messageSid: form.MessageSid ?? form.SmsSid ?? form.SmsMessageSid ?? "",
-      status: form.MessageStatus ?? form.SmsStatus ?? "",
-      firstObservedAt: 1,
-      lastObservedAt: 1,
-      observations: [],
-    },
-  })),
-): SmsDeliveryRecorder & { record: typeof record } {
-  return { record };
-}
-
 function createMessageSid(index: number): string {
   return `SM${index.toString(16).padStart(32, "0")}`;
 }
@@ -214,7 +189,7 @@ describe("createSmsWebhookHandler", () => {
     assertSmsCredentialOwnerAvailable.mockReset();
     enqueueSmsIngress.mockReset();
     enqueueSmsIngress.mockResolvedValue({ kind: "accepted", duplicate: false });
-    activeAccountId = `test-${++testAccountSequence}`;
+    activeAccountId = advanceSmsTestAccountId();
   });
 
   it("rechecks the owner after parsing and before authentication or durable admission", async () => {
@@ -226,7 +201,7 @@ describe("createSmsWebhookHandler", () => {
     const { body, signature } = createSignedBody();
     const handler = createSmsWebhookHandler({
       cfg: {},
-      account: createAccount(),
+      account: createSmsTestAccount(),
       ingress: createIngress(),
     });
     const res = createResponse();
@@ -249,7 +224,7 @@ describe("createSmsWebhookHandler", () => {
     const { body, signature } = createSignedSmsPayload(createMessageSid(1));
     const handler = createSmsWebhookHandler({
       cfg: {},
-      account: createAccount({
+      account: createSmsTestAccount({
         publicWebhookUrl: "https://gateway.example.com/webhooks/sms#rp=4xx",
       }),
       ingress: createIngress(),
@@ -263,57 +238,10 @@ describe("createSmsWebhookHandler", () => {
     expect(enqueueSmsIngress).toHaveBeenCalledWith(parseTestTwilioForm(body));
   });
 
-  it("returns terminal HTTP 413 for an oversized callback body", async () => {
-    const delivery = createDeliveryRecorder();
-    const handler = createSmsWebhookHandler({
-      cfg: {},
-      account: createAccount(),
-      ingress: createIngress(),
-      delivery,
-    });
-    const res = createResponse();
-
-    await handler(
-      createRequest("x", "unused", {
-        headers: { "content-length": String(32 * 1024 + 1) },
-      }),
-      res,
-    );
-
-    expect(res.statusCode).toBe(413);
-    expect(res.body).toBe("Payload too large");
-    expect(delivery.record).not.toHaveBeenCalled();
-    expect(enqueueSmsIngress).not.toHaveBeenCalled();
-  });
-
-  it("rethrows request body timeouts for Gateway-owned retry responses", async () => {
-    vi.useFakeTimers();
-    try {
-      const handler = createSmsWebhookHandler({
-        cfg: {},
-        account: createAccount(),
-        ingress: createIngress(),
-      });
-      const res = createResponse();
-      const handling = handler(createPendingRequest(), res);
-      const expected = expect(handling).rejects.toMatchObject({
-        code: "REQUEST_BODY_TIMEOUT",
-      });
-
-      await vi.advanceTimersByTimeAsync(5_000);
-      await expected;
-
-      expect(res.endMock).not.toHaveBeenCalled();
-      expect(enqueueSmsIngress).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("rethrows unexpected request read failures for Gateway-owned retry responses", async () => {
     const handler = createSmsWebhookHandler({
       cfg: {},
-      account: createAccount(),
+      account: createSmsTestAccount(),
       ingress: createIngress(),
     });
     const res = createResponse();
@@ -328,7 +256,7 @@ describe("createSmsWebhookHandler", () => {
   it("rethrows a closed request body for Gateway-owned retry responses", async () => {
     const handler = createSmsWebhookHandler({
       cfg: {},
-      account: createAccount(),
+      account: createSmsTestAccount(),
       ingress: createIngress(),
     });
     const res = createResponse();
@@ -345,10 +273,10 @@ describe("createSmsWebhookHandler", () => {
       messageSid: createMessageSid(20),
       status: "delivered",
     });
-    const delivery = createDeliveryRecorder();
+    const delivery = createSmsTestDeliveryRecorder();
     const handler = createSmsWebhookHandler({
       cfg: {},
-      account: createAccount(),
+      account: createSmsTestAccount(),
       ingress: createIngress(),
       delivery,
     });
@@ -366,7 +294,7 @@ describe("createSmsWebhookHandler", () => {
   });
 
   it("accepts legacy SmsSid and SmsStatus delivery callbacks", async () => {
-    const account = createAccount();
+    const account = createSmsTestAccount();
     const form = {
       AccountSid: account.accountSid,
       From: account.fromNumber,
@@ -380,7 +308,7 @@ describe("createSmsWebhookHandler", () => {
       authToken: account.authToken,
       form,
     });
-    const delivery = createDeliveryRecorder();
+    const delivery = createSmsTestDeliveryRecorder();
     const handler = createSmsWebhookHandler({
       cfg: {},
       account,
@@ -399,7 +327,7 @@ describe("createSmsWebhookHandler", () => {
   it.each(["receiving", "received"])(
     "keeps legacy inbound SmsStatus=%s on the durable ingress path",
     async (status) => {
-      const account = createAccount();
+      const account = createSmsTestAccount();
       const form = {
         AccountSid: account.accountSid,
         From: "+15551234567",
@@ -414,7 +342,7 @@ describe("createSmsWebhookHandler", () => {
         authToken: account.authToken,
         form,
       });
-      const delivery = createDeliveryRecorder();
+      const delivery = createSmsTestDeliveryRecorder();
       const handler = createSmsWebhookHandler({
         cfg: {},
         account,
@@ -436,10 +364,10 @@ describe("createSmsWebhookHandler", () => {
       messageSid: createMessageSid(26),
       status: "delivered",
     });
-    const delivery = createDeliveryRecorder();
+    const delivery = createSmsTestDeliveryRecorder();
     const handler = createSmsWebhookHandler({
       cfg: {},
-      account: createAccount(),
+      account: createSmsTestAccount(),
       ingress: createIngress(),
       delivery,
     });
@@ -457,14 +385,14 @@ describe("createSmsWebhookHandler", () => {
       messageSid: createMessageSid(21),
       status: "sent",
     });
-    const delivery = createDeliveryRecorder(
+    const delivery = createSmsTestDeliveryRecorder(
       vi.fn<SmsDeliveryRecorder["record"]>(async () => {
         throw new Error("sqlite unavailable");
       }),
     );
     const handler = createSmsWebhookHandler({
       cfg: {},
-      account: createAccount(),
+      account: createSmsTestAccount(),
       ingress: createIngress(),
       delivery,
     });
@@ -479,14 +407,14 @@ describe("createSmsWebhookHandler", () => {
   });
 
   it("waits for the durable delivery commit before returning HTTP 200", async () => {
-    const account = createAccount();
+    const account = createSmsTestAccount();
     const payload = createSignedDeliveryPayload({
       account,
       messageSid: createMessageSid(22),
       status: "sent",
     });
     let releaseCommit: (() => void) | undefined;
-    const delivery = createDeliveryRecorder(
+    const delivery = createSmsTestDeliveryRecorder(
       vi.fn<SmsDeliveryRecorder["record"]>(async ({ form }) => {
         await new Promise<void>((resolve) => {
           releaseCommit = resolve;
@@ -535,10 +463,10 @@ describe("createSmsWebhookHandler", () => {
       status: "failed",
       accountSid: "AC-other",
     });
-    const delivery = createDeliveryRecorder();
+    const delivery = createSmsTestDeliveryRecorder();
     const handler = createSmsWebhookHandler({
       cfg: {},
-      account: createAccount(),
+      account: createSmsTestAccount(),
       ingress: createIngress(),
       delivery,
     });
@@ -558,7 +486,7 @@ describe("createSmsWebhookHandler", () => {
     ["whitespace", "   "],
     ["padded", " AC123 "],
   ])("acknowledges but does not store a delivery callback with %s AccountSid", async (_, sid) => {
-    const account = createAccount();
+    const account = createSmsTestAccount();
     const form: Record<string, string> = {
       MessageSid: createMessageSid(27),
       MessageStatus: "failed",
@@ -572,7 +500,7 @@ describe("createSmsWebhookHandler", () => {
       authToken: account.authToken,
       form,
     });
-    const delivery = createDeliveryRecorder();
+    const delivery = createSmsTestDeliveryRecorder();
     const handler = createSmsWebhookHandler({
       cfg: {},
       account,
@@ -594,7 +522,7 @@ describe("createSmsWebhookHandler", () => {
     enqueueSmsIngress.mockRejectedValueOnce(new Error("sqlite unavailable"));
     const handler = createSmsWebhookHandler({
       cfg: {},
-      account: createAccount(),
+      account: createSmsTestAccount(),
       ingress: createIngress(),
     });
     const res = createResponse();
@@ -618,7 +546,7 @@ describe("createSmsWebhookHandler", () => {
     );
     const handler = createSmsWebhookHandler({
       cfg: {},
-      account: createAccount(),
+      account: createSmsTestAccount(),
       ingress: createIngress(),
     });
     const res = createResponse();
@@ -642,7 +570,7 @@ describe("createSmsWebhookHandler", () => {
     enqueueSmsIngress.mockResolvedValueOnce({ kind: "accepted", duplicate: true });
     const handler = createSmsWebhookHandler({
       cfg: {},
-      account: createAccount(),
+      account: createSmsTestAccount(),
       ingress: createIngress(),
     });
     const res = createResponse();
@@ -662,7 +590,7 @@ describe("createSmsWebhookHandler", () => {
     });
     const handler = createSmsWebhookHandler({
       cfg: {},
-      account: createAccount(),
+      account: createSmsTestAccount(),
       ingress: createIngress(),
     });
     const res = createResponse();
@@ -683,7 +611,7 @@ describe("createSmsWebhookHandler", () => {
     });
     const handler = createSmsWebhookHandler({
       cfg: {},
-      account: createAccount(),
+      account: createSmsTestAccount(),
       ingress: createIngress(),
     });
     const res = createResponse();
@@ -704,7 +632,7 @@ describe("createSmsWebhookHandler", () => {
     });
     const handler = createSmsWebhookHandler({
       cfg: {},
-      account: createAccount(),
+      account: createSmsTestAccount(),
       ingress: createIngress(),
     });
 
@@ -734,7 +662,7 @@ describe("createSmsWebhookHandler", () => {
     });
     const handler = createSmsWebhookHandler({
       cfg: {},
-      account: createAccount(),
+      account: createSmsTestAccount(),
       ingress: createIngress(),
     });
 
@@ -748,7 +676,7 @@ describe("createSmsWebhookHandler", () => {
   });
 
   it("does not let unsigned proxy traffic consume the same client's signed webhook rate limit", async () => {
-    const account = createAccount();
+    const account = createSmsTestAccount();
     const handler = createSmsWebhookHandler({
       cfg: { gateway: { trustedProxies: ["127.0.0.1"] } },
       account,
@@ -789,13 +717,13 @@ describe("createSmsWebhookHandler", () => {
   });
 
   it("scopes signed webhook rate limits to one SMS account and route", async () => {
-    const supportAccount = createAccount({
+    const supportAccount = createSmsTestAccount({
       accountId: "support",
       accountSid: "AC-support",
       webhookPath: "/webhooks/sms/support",
       publicWebhookUrl: "https://gateway.example.com/webhooks/sms/support",
     });
-    const defaultAccount = createAccount();
+    const defaultAccount = createSmsTestAccount();
     const supportHandler = createSmsWebhookHandler({
       cfg: {},
       account: supportAccount,
@@ -836,8 +764,8 @@ describe("createSmsWebhookHandler", () => {
 
   it("meters inbound dispatch per sender without throttling signed delivery callbacks", async () => {
     const warn = vi.fn();
-    const account = createAccount();
-    const delivery = createDeliveryRecorder();
+    const account = createSmsTestAccount();
+    const delivery = createSmsTestDeliveryRecorder();
     const handler = createSmsWebhookHandler({
       cfg: {},
       account,
@@ -900,8 +828,8 @@ describe("createSmsWebhookHandler", () => {
   });
 
   it("bounds aggregate inbound fan-out without throttling signed delivery callbacks", async () => {
-    const account = createAccount();
-    const delivery = createDeliveryRecorder();
+    const account = createSmsTestAccount();
+    const delivery = createSmsTestDeliveryRecorder();
     const handler = createSmsWebhookHandler({
       cfg: {},
       account,
@@ -946,7 +874,7 @@ describe("createSmsWebhookHandler", () => {
     try {
       const handler = createSmsWebhookHandler({
         cfg: {},
-        account: createAccount(),
+        account: createSmsTestAccount(),
         ingress: createIngress(),
       });
 
@@ -974,7 +902,7 @@ describe("createSmsWebhookHandler", () => {
   it("shares one quota for invalid signed senders without throttling a valid sender", async () => {
     const handler = createSmsWebhookHandler({
       cfg: {},
-      account: createAccount(),
+      account: createSmsTestAccount(),
       ingress: createIngress(),
     });
 
@@ -1005,7 +933,7 @@ describe("createSmsWebhookHandler", () => {
   });
 
   it("keeps validation-disabled webhook dispatches on the stricter callback budget", async () => {
-    const account = createAccount({ dangerouslyDisableSignatureValidation: true });
+    const account = createSmsTestAccount({ dangerouslyDisableSignatureValidation: true });
     const handler = createSmsWebhookHandler({
       cfg: { gateway: { trustedProxies: ["127.0.0.1"] } },
       account,
@@ -1042,8 +970,8 @@ describe("createSmsWebhookHandler", () => {
   });
 
   it("rate limits unsigned delivery callbacks by client address before persistence", async () => {
-    const account = createAccount({ dangerouslyDisableSignatureValidation: true });
-    const delivery = createDeliveryRecorder();
+    const account = createSmsTestAccount({ dangerouslyDisableSignatureValidation: true });
+    const delivery = createSmsTestDeliveryRecorder();
     const handler = createSmsWebhookHandler({
       cfg: { gateway: { trustedProxies: ["127.0.0.1"] } },
       account,

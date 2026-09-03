@@ -12,6 +12,7 @@ import {
   readPluginInstallRecords,
   writePluginInstallIndexForE2E,
 } from "../plugin-index-sqlite.mjs";
+import { isExplicitPluginDisableMarker } from "../plugin-uninstall-assertions.mjs";
 import { readTextFileTail } from "../text-file-utils.mjs";
 
 const command = process.argv[2];
@@ -147,6 +148,19 @@ function readRequiredOpenClawConfig() {
   }
 }
 
+function assertPluginUninstallConfigState(config, pluginId, label = pluginId) {
+  const entry = config.plugins?.entries?.[pluginId];
+  if (process.env.OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS === "1") {
+    if (entry) {
+      throw new Error(`${label} config entry still present after uninstall`);
+    }
+    return;
+  }
+  if (!isExplicitPluginDisableMarker(config, pluginId)) {
+    throw new Error(`${label} exact disabled uninstall marker missing`);
+  }
+}
+
 function assertPluginRemoved(params) {
   const list = readJson(params.listFile);
   if ((list.plugins || []).some((entry) => entry.id === params.pluginId)) {
@@ -159,9 +173,7 @@ function assertPluginRemoved(params) {
   }
 
   const config = readOpenClawConfig();
-  if (config.plugins?.entries?.[params.pluginId]) {
-    throw new Error(`${params.pluginId} config entry still present after uninstall`);
-  }
+  assertPluginUninstallConfigState(config, params.pluginId);
   if ((config.plugins?.allow || []).includes(params.pluginId)) {
     throw new Error(`${params.pluginId} allowlist entry still present after uninstall`);
   }
@@ -1011,9 +1023,7 @@ function assertClawHubRemoved() {
   const configAfterUninstall = fs.existsSync(configAfterUninstallPath)
     ? readJson(configAfterUninstallPath)
     : {};
-  if (configAfterUninstall.plugins?.entries?.[pluginId]) {
-    throw new Error(`ClawHub config entry still present after uninstall: ${pluginId}`);
-  }
+  assertPluginUninstallConfigState(configAfterUninstall, pluginId, `ClawHub ${pluginId}`);
   if ((configAfterUninstall.plugins?.allow || []).includes(pluginId)) {
     throw new Error(`ClawHub allowlist entry still present after uninstall: ${pluginId}`);
   }

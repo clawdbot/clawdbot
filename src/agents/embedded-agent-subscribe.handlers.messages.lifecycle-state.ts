@@ -1,98 +1,12 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import type { AssistantMessage } from "../llm/types.js";
 import { coerceChatContentText } from "../shared/chat-content.js";
-import { isSubscribeTranscriptOnlyOpenClawAssistantMessage } from "./embedded-agent-subscribe.handlers.messages.stream.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import {
   createThinkingTagStreamState,
   extractEmbeddedAssistantText,
 } from "./embedded-agent-utils.js";
-import type { AgentEvent, AgentMessage } from "./runtime/index.js";
 import { hasRawToolValidationOutput } from "./tool-error-summary.js";
-import {
-  hasBillableUsage,
-  hasNonzeroUsage,
-  makeZeroUsageSnapshot,
-  normalizeUsage,
-  type NormalizedUsage,
-} from "./usage.js";
-
-export function preservePendingAssistantUsage(
-  message: AssistantMessage,
-  pendingUsage: NormalizedUsage | undefined,
-): AssistantMessage {
-  if (
-    isSubscribeTranscriptOnlyOpenClawAssistantMessage(message) ||
-    !hasBillableUsage(pendingUsage)
-  ) {
-    return message;
-  }
-  const messageUsage = normalizeUsage(message.usage);
-  if (hasNonzeroUsage(messageUsage)) {
-    if (
-      pendingUsage.cost?.totalOrigin === "provider-billed" &&
-      messageUsage.cost?.totalOrigin !== "provider-billed"
-    ) {
-      message.usage.cost = {
-        ...makeZeroUsageSnapshot().cost,
-        ...message.usage.cost,
-        ...pendingUsage.cost,
-      };
-    }
-    return message;
-  }
-
-  // Pending usage resets at each assistant-message boundary, so it belongs to
-  // this final snapshot. Only replace missing/zero usage; provider totals win.
-  const input = pendingUsage.input ?? 0;
-  const output = pendingUsage.output ?? 0;
-  const cacheRead = pendingUsage.cacheRead ?? 0;
-  const cacheWrite = pendingUsage.cacheWrite ?? 0;
-  message.usage = {
-    ...makeZeroUsageSnapshot(),
-    input,
-    output,
-    cacheRead,
-    cacheWrite,
-    ...(pendingUsage.cacheWrite1h !== undefined ? { cacheWrite1h: pendingUsage.cacheWrite1h } : {}),
-    ...(pendingUsage.contextUsage ? { contextUsage: { ...pendingUsage.contextUsage } } : {}),
-    totalTokens: pendingUsage.total ?? input + output + cacheRead + cacheWrite,
-    ...(pendingUsage.reasoningTokens !== undefined
-      ? { reasoningTokens: pendingUsage.reasoningTokens }
-      : {}),
-  };
-  if (pendingUsage.cost) {
-    Object.assign(message.usage.cost, pendingUsage.cost);
-  }
-  return message;
-}
-
-export function capturePendingAssistantUsage(
-  ctx: EmbeddedAgentSubscribeContext,
-  evt: AgentEvent & { message: AgentMessage; assistantMessageEvent?: unknown },
-): void {
-  const msg = evt.message;
-  if (msg?.role !== "assistant" || isSubscribeTranscriptOnlyOpenClawAssistantMessage(msg)) {
-    return;
-  }
-  const assistantRecord = asOptionalRecord(evt.assistantMessageEvent);
-  const evtType = typeof assistantRecord?.type === "string" ? assistantRecord.type : "";
-  if (evtType === "text_end" || evtType === "done" || evtType === "error") {
-    ctx.recordAssistantUsage(assistantRecord);
-  }
-}
-
-export function resetPendingAssistantUsage(
-  ctx: EmbeddedAgentSubscribeContext,
-  message: AgentMessage,
-): void {
-  if (message?.role !== "assistant" || isSubscribeTranscriptOnlyOpenClawAssistantMessage(message)) {
-    return;
-  }
-  ctx.state.pendingAssistantUsage = undefined;
-  ctx.state.assistantUsageCommitted = false;
-}
 
 /**
  * A tool-validation loop can echo the raw validation error back as assistant text.
@@ -124,31 +38,15 @@ export function shouldSuppressValidationLoopAssistantOutput(params: {
 
 export function resetMessageEndStreamingState(ctx: EmbeddedAgentSubscribeContext): void {
   ctx.state.deltaBuffer = "";
+  ctx.state.streamBlockText = "";
+  ctx.state.streamBlockOffset = 0;
   ctx.state.thinkingTagStream = createThinkingTagStreamState();
   ctx.state.deltaBufferIsCommentary = false;
   ctx.state.hasFlushedPartialText = false;
-  ctx.state.blockBuffer = "";
-  ctx.blockChunker?.reset();
-  ctx.state.blockState.thinking = false;
-  ctx.state.blockState.final = false;
-  ctx.state.blockState.inlineCode = createInlineCodeState();
-  ctx.state.blockState.fence = undefined;
-  ctx.state.blockState.reasoningInlineCode = undefined;
-  ctx.state.blockState.reasoningFence = undefined;
-  ctx.state.blockState.reasoningPendingFenceFragment = undefined;
-  ctx.state.blockState.finalInlineCode = undefined;
-  ctx.state.blockState.finalFence = undefined;
-  ctx.state.blockState.pendingFenceFragment = undefined;
-  ctx.state.blockState.pendingTagFragment = undefined;
-  ctx.state.partialBlockState.fence = undefined;
-  ctx.state.partialBlockState.reasoningInlineCode = undefined;
-  ctx.state.partialBlockState.reasoningFence = undefined;
-  ctx.state.partialBlockState.reasoningPendingFenceFragment = undefined;
-  ctx.state.partialBlockState.finalInlineCode = undefined;
-  ctx.state.partialBlockState.finalFence = undefined;
-  ctx.state.partialBlockState.pendingFenceFragment = undefined;
-  ctx.state.partialBlockState.pendingTagFragment = undefined;
-  ctx.state.lastStreamedAssistant = undefined;
-  ctx.state.lastStreamedAssistantCleaned = undefined;
+  ctx.blockChunker.reset();
+  ctx.state.blockState = { thinking: false, final: false, inlineCode: createInlineCodeState() };
+  const { thinking, final, inlineCode } = ctx.state.partialBlockState;
+  ctx.state.partialBlockState = { thinking, final, inlineCode };
+  ctx.state.assistantStream = undefined;
   ctx.state.reasoningStreamOpen = false;
 }

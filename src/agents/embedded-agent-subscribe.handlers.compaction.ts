@@ -25,6 +25,7 @@ type CompactionStartEvent =
   | {
       type: "compaction_start";
       reason?: unknown;
+      itemId?: string;
     };
 
 // Compaction-retry fence facts ride alongside the session event: a delivery
@@ -46,9 +47,10 @@ function normalizeCompactionReason(reason: unknown): CompactionReason {
 function emitCompactionAgentEvent(
   ctx: EmbeddedAgentSubscribeContext,
   data:
-    | { phase: "start"; trigger: string; sessionKey?: string }
+    | { phase: "start"; itemId?: string }
     | {
         phase: "end";
+        itemId?: string;
         completed: boolean;
         willRetry: boolean;
         outcome: SessionCompactionEndEvent["outcome"]["status"];
@@ -124,8 +126,7 @@ export function handleCompactionStart(
   ctx.log.debug(`embedded run compaction start: runId=${ctx.params.runId} trigger=${trigger}`);
   emitCompactionAgentEvent(ctx, {
     phase: "start",
-    trigger,
-    sessionKey: ctx.params.sessionKey,
+    ...(evt.itemId ? { itemId: evt.itemId } : {}),
   });
 
   // Hooks are fire-and-forget so compaction state updates and liveness pauses
@@ -263,6 +264,7 @@ export function handleCompactionEnd(ctx: EmbeddedAgentSubscribeContext, evt: Com
   }
   emitCompactionAgentEvent(ctx, {
     phase: "end",
+    ...(evt.itemId ? { itemId: evt.itemId } : {}),
     completed,
     willRetry,
     outcome: outcome.status,

@@ -44,6 +44,7 @@ it("plays every frame of a burst through the real Opus encoder before releasing 
     player,
     playbackQueue: Promise.resolve(),
     processingQueue: Promise.resolve(),
+    audioInputBudget: { enabled: false },
     ttsStreamFallbackWarned: false,
     capture: createVoiceCaptureState(),
     realtimeLifecycle: { status: "inactive", generation: 0 },

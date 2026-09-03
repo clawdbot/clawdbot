@@ -216,7 +216,7 @@ html.openclaw-native-macos .new-session-page__incognito-rail {
 /* Sits after the model and reasoning pickers: the footer row reads as the
    settings for the next turn, and how the session is recorded is the last of
    them, not the first thing between "+" and the model. The model control claims
-   order 3 in chat/layout.css, so this follows it.
+   order 3 in chat/composer.css, so this follows it.
    Box, type and rhythm come from the composer's chip family tokens rather than
    numbers of its own: this control is a peer of the pickers beside it, and it
    used to announce itself as a different component — smaller text, shorter box,
@@ -826,11 +826,6 @@ wa-popover.new-session-page__project-popover::part(body) {
   border-radius: var(--radius-md);
 }
 
-.new-session-page__start-split {
-  display: inline-flex;
-  align-items: center;
-}
-
 .new-session-page__start-submit[aria-busy="true"] svg {
   animation: new-session-start-spin 2.25s linear infinite;
 }
@@ -839,25 +834,6 @@ wa-popover.new-session-page__project-popover::part(body) {
   to {
     transform: rotate(1turn);
   }
-}
-
-.new-session-page__start-primary {
-  width: 34px;
-  min-width: 34px;
-  border-radius: var(--radius-full) 0 0 var(--radius-full);
-}
-
-.new-session-page__start-menu-trigger {
-  width: 34px;
-  min-width: 34px;
-  padding: 0;
-  border-left: 1px solid color-mix(in srgb, var(--primary-foreground) 28%, transparent);
-  border-radius: 0 var(--radius-full) var(--radius-full) 0;
-}
-
-.new-session-page__start-menu-trigger svg {
-  width: 15px;
-  height: 15px;
 }
 
 .new-session-page__start-submit--blocked {
@@ -1275,4 +1251,16 @@ wa-popover.new-session-page__project-popover::part(body) {
   .new-session-page__incognito-notice--visible {
     max-height: 48px;
   }
+}
+
+.new-session-page__title-notice {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.new-session-page__prepared-title {
+  color: var(--text);
 }

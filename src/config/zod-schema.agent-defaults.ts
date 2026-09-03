@@ -82,6 +82,7 @@ export const AgentDefaultsSchema = z
     models: AgentModelMapSchema.optional(),
     modelPolicy: AgentModelPolicySchema.optional(),
     workspace: z.string().optional(),
+    cwd: z.string().optional(),
     skills: z.array(z.string()).optional(),
     silentReply: SilentReplyPolicyConfigSchema.optional(),
     repoRoot: z.string().optional(),

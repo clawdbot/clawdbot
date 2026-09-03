@@ -35,6 +35,7 @@ import { resetToolStream, resetToolStreamRun } from "./tool-stream.ts";
 export const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
 
 export type ChatRunError = {
+  kind?: "auth_refresh";
   summary: string;
   /** Display ownership only; the session reducer retains each run's diagnostic. */
   runId?: string;
@@ -194,9 +195,14 @@ export function setChatRunError(
   state: { chatRunError?: ChatRunError | null },
   summary: string,
   runId?: string,
+  kind?: ChatRunError["kind"],
 ) {
   setChatRunOwner(state, runId);
-  state.chatRunError = { summary: formatUiExternalText(summary), ...(runId ? { runId } : {}) };
+  state.chatRunError = {
+    ...(kind ? { kind } : {}),
+    summary: formatUiExternalText(summary),
+    ...(runId ? { runId } : {}),
+  };
 }
 
 type SessionRunHost = {
@@ -422,7 +428,10 @@ function clearRunIndicators(host: RunLifecycleHost, runId?: string | null) {
   if (!runId || host.chatRunStartup?.runId === runId) {
     host.chatRunStartup = null;
   }
-  if (!runId || host.compactionStatus?.runId === runId) {
+  if (
+    (!runId || host.compactionStatus?.runId === runId) &&
+    host.compactionStatus?.phase !== "complete"
+  ) {
     clearTimer(host.compactionClearTimer);
     host.compactionClearTimer = null;
     host.compactionStatus = null;

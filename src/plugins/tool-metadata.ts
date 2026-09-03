@@ -14,7 +14,7 @@ export type PluginToolMcpMeta = {
   excludedFromOpenClawCatalog?: true;
   deniedBySession?: true;
   codexApproval?: {
-    mode: McpCodexToolApprovalMode;
+    mode?: McpCodexToolApprovalMode;
     annotations?: McpCodexToolAnnotations;
   };
   node?: {

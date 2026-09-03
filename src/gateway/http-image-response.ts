@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
+import { normalizeMimeType } from "@openclaw/media-core/mime";
 import { fileTypeFromBuffer } from "file-type";
 import { matchesHttpIfNoneMatch } from "./http-conditional.js";
 
@@ -12,12 +13,13 @@ export const HTTP_SVG_MAX_BYTES = 64 * 1024;
 const SVG_MIME_TYPE = "image/svg+xml";
 const ICO_MIME_TYPE = "image/x-icon";
 
-/** Sniffable raster types the Control UI can render inside an <img> element. */
+/** Image types accepted by the authenticated Control UI image routes. */
 const ALLOWED_HTTP_IMAGE_MIME_TYPES = new Set([
   "image/avif",
   "image/gif",
   "image/jpeg",
   "image/png",
+  SVG_MIME_TYPE,
   "image/webp",
   ICO_MIME_TYPE,
 ]);
@@ -27,6 +29,24 @@ export type HttpImageRepresentation = {
   contentType: string;
   etag: string;
 };
+
+export function resolveHttpImageMimeType(value: string | undefined): string | undefined {
+  const normalized = normalizeMimeType(value);
+  const contentType = normalized === "image/vnd.microsoft.icon" ? ICO_MIME_TYPE : normalized;
+  return contentType && ALLOWED_HTTP_IMAGE_MIME_TYPES.has(contentType) ? contentType : undefined;
+}
+
+/** Hash final, validated response bytes once when their cached representation is created. */
+export function createHttpImageRepresentation(
+  body: Buffer,
+  contentType: string,
+): HttpImageRepresentation {
+  return {
+    body,
+    contentType,
+    etag: `"${createHash("sha256").update(body).digest("base64url")}"`,
+  };
+}
 
 /**
  * SVG images stay self-contained: no script, document expansion, embedded
@@ -58,19 +78,12 @@ export async function resolveHttpImageRepresentation(
   if (path.extname(sourceName).toLowerCase() === ".svg") {
     contentType = isRenderableHttpSvg(body) ? SVG_MIME_TYPE : undefined;
   } else {
-    const sniffed = (await fileTypeFromBuffer(body))?.mime;
-    const normalized = sniffed === "image/vnd.microsoft.icon" ? ICO_MIME_TYPE : sniffed;
-    contentType =
-      normalized && ALLOWED_HTTP_IMAGE_MIME_TYPES.has(normalized) ? normalized : undefined;
+    contentType = resolveHttpImageMimeType((await fileTypeFromBuffer(body))?.mime);
   }
   if (!contentType) {
     return undefined;
   }
-  return {
-    body,
-    contentType,
-    etag: `"${createHash("sha256").update(body).digest("base64url")}"`,
-  };
+  return createHttpImageRepresentation(body, contentType);
 }
 
 /** Writes the shared private-cache and document-sandbox policy for image bytes. */

@@ -19,6 +19,10 @@ type ReleaseTrain =
 
 export function parseReleaseVersion(version: string): ParsedReleaseVersion | null;
 export function classifyReleaseTrain(parsedVersion: ParsedReleaseVersion): ReleaseTrain;
+export function resolveReleaseTagPackageIdentity(
+  releaseTag: string,
+  packageVersion: string,
+): { releaseTag: string; baseTag: string | null };
 export function collectReleaseVersionFloorErrors(
   version: string | ParsedReleaseVersion | null,
 ): string[];

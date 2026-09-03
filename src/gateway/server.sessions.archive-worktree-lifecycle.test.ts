@@ -377,6 +377,7 @@ test.each(["checkout-failed", "expired", "source-missing"] as const)(
         error: { code: "UNAVAILABLE", retryable: true },
       });
       expect(restored.error?.message).toContain("worktree");
+      expect(restored.error?.message).not.toMatch(/worktree slot/i);
       expect(restored.error?.message).toContain(
         failure === "checkout-failed" ? "Free disk space" : "new worktree task",
       );

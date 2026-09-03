@@ -8,14 +8,21 @@ function buildAnnounceReplyInstruction(params: {
   requesterIsSubagent: boolean;
   announceType: SubagentAnnounceType;
   expectsCompletionMessage?: boolean;
+  modelRouteChange?: string;
+  preserveModelRouteNotice?: boolean;
 }): string {
+  const modelRouteInstruction = !params.modelRouteChange
+    ? ""
+    : params.preserveModelRouteNotice
+      ? " Preserve any runtime-authored model-route change notice in your update."
+      : " Keep runtime-authored model-route change notices internal on this shared surface.";
   if (params.requesterIsSubagent) {
-    return `Convert this completion into a concise internal orchestration update for your parent agent in your own words. Keep this internal context private (don't mention system/log/stats/session details or announce type). If this result is duplicate or no update is needed, reply ONLY: ${SILENT_REPLY_TOKEN}.`;
+    return `Convert this completion into a concise internal orchestration update for your parent agent in your own words.${modelRouteInstruction} Keep this internal context private (don't mention system/log/stats/session details or announce type). If this result is duplicate or no update is needed, reply ONLY: ${SILENT_REPLY_TOKEN}.`;
   }
   if (params.expectsCompletionMessage) {
-    return `A completed ${params.announceType} is ready for parent review. Review/verify the result above before deciding whether the original task is done. If additional action is required, continue the task or record a follow-up; otherwise send a truthful user-facing update. Keep this internal context private (don't mention system/log/stats/session details or announce type). Reply ONLY: ${SILENT_REPLY_TOKEN} only when this exact result is already visible to the user in this same turn.`;
+    return `A completed ${params.announceType} is ready for parent review. Review/verify the result above before deciding whether the original task is done.${modelRouteInstruction} If additional action is required, continue the task or record a follow-up; otherwise send a truthful user-facing update. Keep this internal context private (don't mention system/log/stats/session details or announce type). Reply ONLY: ${SILENT_REPLY_TOKEN} only when this exact result is already visible to the user in this same turn.`;
   }
-  return `A completed ${params.announceType} is ready for parent review. Review/verify the result above before deciding whether the original task is done. If additional action is required, continue the task or record a follow-up; otherwise send a truthful user-facing update. Keep this internal context private (don't mention system/log/stats/session details or announce type), and do not copy the internal event text verbatim. Reply ONLY: ${SILENT_REPLY_TOKEN} if this exact result was already delivered to the user in this same turn.`;
+  return `A completed ${params.announceType} is ready for parent review. Review/verify the result above before deciding whether the original task is done.${modelRouteInstruction} If additional action is required, continue the task or record a follow-up; otherwise send a truthful user-facing update. Keep this internal context private (don't mention system/log/stats/session details or announce type), and do not copy the internal event text verbatim. Reply ONLY: ${SILENT_REPLY_TOKEN} if this exact result was already delivered to the user in this same turn.`;
 }
 
 function buildAnnounceSteerMessage(events: AgentInternalEvent[]): string {
@@ -36,6 +43,8 @@ export function buildSubagentAnnounceMessages(params: {
   outcome: SubagentRunOutcome;
   findings: string;
   statsLine?: string;
+  modelRouteChange?: string;
+  preserveModelRouteNotice?: boolean;
   artifactProjections?: Map<string, DelegateArtifactRecipientProjectionV1>;
 }): {
   internalEvents: AgentInternalEvent[];
@@ -63,6 +72,7 @@ export function buildSubagentAnnounceMessages(params: {
     status: params.outcome.status,
     statusLabel,
     result: params.findings,
+    modelRouteChange: params.modelRouteChange,
     statsLine: params.statsLine,
     replyInstruction,
   };

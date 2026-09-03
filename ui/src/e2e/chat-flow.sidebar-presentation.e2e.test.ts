@@ -207,7 +207,7 @@ suite.define(() => {
           ),
         });
       }
-      await gateway.setMethodResponse("sessions.list", completed);
+      await gateway.setSessionsListResponse(completed);
       const listCount = (await gateway.getRequests("sessions.list")).length;
       await gateway.emitGatewayEvent("session.message", {
         activeRunIds: [],

@@ -143,10 +143,12 @@ async function readQaGatewayCliCommand(
     child.stderr?.destroy();
   }
   const stdoutText = readQaChildOutput(stdout);
-  if (exitCode !== 0 && !failure) {
+  if (failure || exitCode !== 0) {
+    // Preserve the first failure's reason, but include output drained during shutdown.
+    const reason = failure?.message ?? `OpenClaw CLI exited ${exitCode}`;
     const stderrText = formatQaChildOutputTail(stderr, "stderr");
     failure = createQaGatewayCliError(
-      `OpenClaw CLI exited ${exitCode}: ${[stderrText, stdoutText].filter(Boolean).join("\n")}`,
+      `${reason}: ${[stderrText, stdoutText].filter(Boolean).join("\n")}`,
     );
   }
   if (stopped.errors.length) {

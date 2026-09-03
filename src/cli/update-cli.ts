@@ -4,7 +4,7 @@ import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { POST_CORE_UPDATE_ENV } from "../infra/update-post-core-context.js";
-import { defaultRuntime } from "../runtime.js";
+import { defaultRuntime, ExitError } from "../runtime.js";
 import { inheritOptionFromParent } from "./command-options.js";
 import { formatHelpExamples } from "./help-format.js";
 import { isJsonOutputModeActive } from "./json-output-mode.js";
@@ -27,7 +27,7 @@ function inheritedUpdateJson(command?: Command): boolean {
 }
 
 function handleUpdateCommandError(error: unknown): void {
-  if (isJsonOutputModeActive(process.argv)) {
+  if (error instanceof ExitError || isJsonOutputModeActive(process.argv)) {
     throw error;
   }
   defaultRuntime.error(formatErrorMessage(error));

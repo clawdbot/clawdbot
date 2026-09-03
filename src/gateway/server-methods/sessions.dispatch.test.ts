@@ -295,35 +295,44 @@ describe("sessions.dispatch", () => {
     );
   });
 
-  it("rejects worker-turn before allocation when its profile supports only remote-exec", async () => {
-    mocks.resolveTarget.mockReturnValue(
-      targetWithEntry({
-        sessionId,
-        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
-      }),
-    );
-    const dispatch = vi.fn();
-    const respond = await invoke(
-      makeContext({
-        workerEnvironmentService: {
-          supportsExecutionMode: (_profileId: string, mode: "worker-turn" | "remote-exec") =>
-            mode === "remote-exec",
-        } as never,
-        workerPlacementDispatchService: { dispatch },
-        workerSessionPlacementService: { getMany: () => new Map() },
-      }),
-    );
+  it.each([
+    ["openclaw", "anthropic", "worker-turn"],
+    ["codex", "openai", "remote-exec"],
+  ] as const)(
+    "rejects %s before allocation when its profile does not support the selected mode",
+    async (runtime, provider, executionMode) => {
+      mocks.resolveTarget.mockReturnValue(
+        targetWithEntry({
+          sessionId,
+          agentRuntimeOverride: runtime,
+          providerOverride: provider,
+          modelOverride: "model-test",
+          worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
+        }),
+      );
+      const dispatch = vi.fn();
+      const respond = await invoke(
+        makeContext({
+          workerEnvironmentService: {
+            supportsExecutionMode: (_profileId: string, mode: "worker-turn" | "remote-exec") =>
+              mode !== executionMode,
+          } as never,
+          workerPlacementDispatchService: { dispatch },
+          workerSessionPlacementService: { getMany: () => new Map() },
+        }),
+      );
 
-    expect(dispatch).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: ErrorCodes.INVALID_REQUEST,
-        message: expect.stringContaining("supports worker-turn"),
-      }),
-    );
-  });
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: ErrorCodes.INVALID_REQUEST,
+          message: `runtime ${runtime} requires a cloud worker provider that supports ${executionMode}; choose a compatible provider, or select an agent/model route with agentRuntime.id "openclaw"`,
+        }),
+      );
+    },
+  );
 
   it("treats a whitespace-only profile as an omitted dispatch target", async () => {
     mocks.resolveTarget.mockReturnValue(targetWithEntry({ sessionId }));
@@ -445,40 +454,6 @@ describe("sessions.dispatch", () => {
       expect.objectContaining({
         code: ErrorCodes.UNAVAILABLE,
         message: "remote dispatch reached",
-      }),
-    );
-  });
-
-  it.each([
-    ["node-only", { supportsExecutionMode: () => false }],
-    ["undeclared", { supportsExecutionMode: undefined }],
-  ])("rejects remote-exec before allocation when the profile is %s", async (_name, service) => {
-    mocks.resolveTarget.mockReturnValue(
-      targetWithEntry({
-        sessionId,
-        agentRuntimeOverride: "codex",
-        providerOverride: "openai",
-        modelOverride: "gpt-test",
-        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
-      }),
-    );
-    const dispatch = vi.fn();
-    const respond = await invoke(
-      makeContext({
-        workerEnvironmentService: service as never,
-        workerPlacementDispatchService: { dispatch },
-        workerSessionPlacementService: { getMany: () => new Map() },
-      }),
-    );
-
-    expect(dispatch).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: ErrorCodes.INVALID_REQUEST,
-        message:
-          'runtime codex requires a cloud worker provider that supports remote-exec; choose a compatible provider, or select an agent/model route with agentRuntime.id "openclaw"',
       }),
     );
   });
@@ -785,7 +760,10 @@ describe("sessions.dispatch", () => {
 
     const respond = await invoke(
       makeContext({
-        workerEnvironmentService: { get: getEnvironment } as never,
+        workerEnvironmentService: {
+          get: getEnvironment,
+          supportsExecutionMode: () => true,
+        } as never,
         workerPlacementDispatchService: { dispatch },
         workerSessionPlacementService: {
           getMany: () => new Map([[sessionId, failedPlacementRecord()]]),
@@ -810,6 +788,7 @@ describe("sessions.dispatch", () => {
       makeContext({
         workerEnvironmentService: {
           get: vi.fn(() => ({ state: "failed", leaseId: "lease-previous" })),
+          supportsExecutionMode: () => true,
         } as never,
         workerPlacementDispatchService: { dispatch },
         workerSessionPlacementService: {
@@ -842,6 +821,7 @@ describe("sessions.dispatch", () => {
           get: vi.fn(() => {
             throw new Error("environment inventory unavailable");
           }),
+          supportsExecutionMode: () => true,
         } as never,
         workerPlacementDispatchService: { dispatch },
         workerSessionPlacementService: {

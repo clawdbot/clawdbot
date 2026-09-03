@@ -38,12 +38,19 @@ struct LicenseDocumentLoaderTests {
         #expect(LicenseDocumentLoader.title(from: "010-WebRTC.txt") == "010 WebRTC")
     }
 
-    @Test func `bundles the waveform attribution`() {
-        let waveform = LicenseDocumentLoader.bundledDocuments()
-            .first { $0.filename == "SwiftUI Siri Waveform.txt" }
-
-        #expect(waveform?.body.contains("Copyright (c) 2019 Noah Chalifour") == true)
-        #expect(waveform?.body.contains("MIT License") == true)
+    @Test func `bundles third party attributions`() throws {
+        let documents = LicenseDocumentLoader.bundledDocuments()
+        let expected = [
+            ("SwiftUI Siri Waveform.txt", "Copyright (c) 2019 Noah Chalifour", "MIT License"),
+            ("Mermaid.txt", "Copyright (c) 2014 - 2022 Knut Sveidqvist", "MIT License"),
+            ("DOMPurify.txt", "Mozilla Public License Version 2.0", "Apache License"),
+            ("JamaJS.txt", "https://github.com/dragonfly-ai/JamaJS", "Apache License"),
+        ]
+        for (filename, attribution, license) in expected {
+            let document = try #require(documents.first { $0.filename == filename })
+            #expect(document.body.contains(attribution))
+            #expect(document.body.contains(license))
+        }
     }
 
     private static func makeTemporaryDirectory() throws -> URL {

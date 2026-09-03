@@ -78,6 +78,20 @@ afterEach(() => {
 });
 
 describe("broadcast serialization failures", () => {
+  it("delivers public suspension state to connected operators without read scope", () => {
+    const peer = makeClient("suspension-viewer");
+    peer.client.connect.scopes = [];
+    const { broadcast } = createGatewayBroadcaster({ clients: new Set([peer.client]) });
+    broadcast("gateway.suspension", { phase: "prepared" });
+    expect(peer.socket.send).toHaveBeenCalledOnce();
+    expect(JSON.parse(peer.socket.send.mock.calls[0]![0])).toMatchObject({
+      type: "event",
+      event: "gateway.suspension",
+      seq: 1,
+      payload: { phase: "prepared" },
+    });
+  });
+
   it("never sends raw presence when its owner projection is missing", () => {
     const peer = makeClient("unprepared");
     const { broadcast } = createGatewayBroadcaster({ clients: new Set([peer.client]) });

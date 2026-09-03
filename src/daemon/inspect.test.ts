@@ -283,6 +283,49 @@ describe("findExtraGatewayServices (linux / scanSystemdDir) — real filesystem"
     },
   );
 
+  it.skipIf(!isLinux)("reports an orphaned legacy systemd backup", async () => {
+    const tmpHome = tempDirs.make("openclaw-test-", os.tmpdir());
+    const systemdDir = path.join(tmpHome, ".config", "systemd", "user");
+    const backupPath = path.join(systemdDir, "clawdbot-gateway.service.bak");
+    await fs.mkdir(systemdDir, { recursive: true });
+    await fs.writeFile(backupPath, CLAWDBOT_GATEWAY_CONTENTS);
+
+    const result = await findExtraGatewayServices({ HOME: tmpHome });
+
+    expect(result).toEqual([
+      {
+        platform: "linux",
+        label: "clawdbot-gateway.service",
+        detail: `unit backup: ${backupPath}`,
+        scope: "user",
+        marker: "clawdbot",
+        legacy: true,
+      },
+    ]);
+  });
+
+  it.skipIf(!isLinux)("reports a legacy systemd unit and its backup once", async () => {
+    const tmpHome = tempDirs.make("openclaw-test-", os.tmpdir());
+    const systemdDir = path.join(tmpHome, ".config", "systemd", "user");
+    const unitPath = path.join(systemdDir, "clawdbot-gateway.service");
+    await fs.mkdir(systemdDir, { recursive: true });
+    await fs.writeFile(unitPath, CLAWDBOT_GATEWAY_CONTENTS);
+    await fs.writeFile(`${unitPath}.bak`, CLAWDBOT_GATEWAY_CONTENTS);
+
+    const result = await findExtraGatewayServices({ HOME: tmpHome });
+
+    expect(result).toEqual([
+      {
+        platform: "linux",
+        label: "clawdbot-gateway.service",
+        detail: `unit: ${unitPath}`,
+        scope: "user",
+        marker: "clawdbot",
+        legacy: true,
+      },
+    ]);
+  });
+
   it.skipIf(!isLinux)(
     "does not report companion units that only depend on the gateway",
     async () => {

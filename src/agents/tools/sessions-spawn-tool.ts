@@ -217,6 +217,12 @@ function createSessionsSpawnToolSchema(params: {
     cleanup: optionalStringEnum(["delete", "keep"] as const, {
       description: "Hidden session cleanup; visible=true always keeps the session.",
     }),
+    expectsCompletionMessage: Type.Optional(
+      Type.Boolean({
+        description:
+          "false: fire-and-forget; requester gets no completion handoff when the child finishes. collect=true forces false.",
+      }),
+    ),
     sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES, {
       description: '"inherit" parent sandbox policy; "require" fails unless child is sandboxed.',
     }),
@@ -474,6 +480,7 @@ export function createSessionsSpawnTool(
           requestedAgentId,
           runTimeoutSeconds,
           sandbox,
+          expectsCompletionMessage,
           options: opts,
         });
       const visibleResult = opts?.expectedParentSessionId
@@ -636,6 +643,7 @@ export function createSessionsSpawnTool(
           {
             agentSessionKey: opts?.agentSessionKey,
             requesterTurnRunId: opts?.requesterTurnRunId,
+            requesterThinkingLevel: opts?.requesterThinkingLevel,
             completionOwnerKey: opts?.completionOwnerKey,
             agentChannel: opts?.agentChannel,
             agentAccountId: opts?.agentAccountId,

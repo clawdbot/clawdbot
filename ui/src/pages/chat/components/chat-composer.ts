@@ -1,7 +1,6 @@
 // Chat-owned composer orchestration.
 import { nothing } from "lit";
 import {
-  loadSettings,
   normalizeChatSendShortcut,
   patchSettings,
   type ChatFollowUpMode,
@@ -456,7 +455,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     }
     startRealtimeTalk();
   };
-  const selectedMicrophoneId = loadSettings().realtimeTalkInputDeviceId?.trim() ?? "";
+  const selectedMicrophoneId = props.realtimeTalkInputDeviceId?.trim() ?? "";
   const microphonePicker = props.onToggleRealtimeTalk
     ? renderMicrophonePicker({
         devices: devicePicker.devices,

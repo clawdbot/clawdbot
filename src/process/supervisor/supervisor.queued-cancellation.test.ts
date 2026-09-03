@@ -27,6 +27,7 @@ function createStubProcessAdapter(pid = 1234): StubProcessAdapter {
   const killMock = vi.fn();
   return {
     pid,
+    supportsRawOutput: false,
     onStdout: () => undefined,
     onStderr: () => undefined,
     wait: async () => completion.promise,

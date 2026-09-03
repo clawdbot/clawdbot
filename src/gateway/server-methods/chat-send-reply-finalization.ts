@@ -135,7 +135,7 @@ function buildChatSendBtwSideResult(deliveredReplies: readonly DeliveredReply[])
   };
 }
 
-/** Finalize settled reply payloads, retaining a runtime's successful transcript ownership. */
+/** Finalize settled reply payloads, retaining the runtime's transcript ownership and outcome. */
 export async function finalizeChatSendDispatchedReplies(params: {
   accountId: string | undefined;
   context: GatewayRequestContext;
@@ -165,6 +165,7 @@ export async function finalizeChatSendDispatchedReplies(params: {
     suppressReplies,
   } = params;
   const { agentId, backingSessionId, cfg, clientRunId, sessionKey, sessionLoadOptions } = session;
+  const stopReason = params.state === "aborted" ? "aborted" : "stop";
   const btwResult = buildChatSendBtwSideResult(deliveredReplies);
   if (btwResult) {
     broadcastSideResult({
@@ -353,6 +354,7 @@ export async function finalizeChatSendDispatchedReplies(params: {
       agentId: transcriptAgentId,
       createIfMissing: true,
       idempotencyKey: clientRunId,
+      stopReason,
       ttsSupplement: ttsSupplementMarker,
       cfg,
     });
@@ -387,8 +389,7 @@ export async function finalizeChatSendDispatchedReplies(params: {
         ...(fallbackText ? { text: fallbackText } : {}),
         timestamp: Date.now(),
         ...(ttsSupplementMarker ? { openclawTtsSupplement: ttsSupplementMarker } : {}),
-        // Keep compatible with runner stopReason enums when transcript persistence fails.
-        stopReason: "stop",
+        stopReason,
         usage: { input: 0, output: 0, totalTokens: 0 },
       };
     }
@@ -398,7 +399,7 @@ export async function finalizeChatSendDispatchedReplies(params: {
       content: broadcastAssistantContent,
       text: extractAssistantDisplayText(broadcastAssistantContent) ?? "",
       timestamp: Date.now(),
-      stopReason: "stop",
+      stopReason,
       usage: { input: 0, output: 0, totalTokens: 0 },
     };
   }

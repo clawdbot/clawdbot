@@ -649,6 +649,7 @@ function requiresIndividualCollectDrain(item: FollowupRun): boolean {
   return (
     item.disableCollectBatching === true ||
     item.run.skillWorkshopProposalRevision !== undefined ||
+    item.run.skillLibraryAuthoring !== undefined ||
     hasRuntimeOnlyFollowupMetadata(item)
   );
 }

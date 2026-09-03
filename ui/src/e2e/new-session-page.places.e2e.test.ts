@@ -187,8 +187,8 @@ suite.define(() => {
       await page.getByRole("heading", { name: "Main" }).waitFor();
       await page.locator(".new-session-page__message").waitFor();
 
-      // Incognito is a page-level choice on the far end of the same top rail
-      // as the shell controls, rather than an option inside the composer.
+      // Incognito is a page-level choice on the far end of the shell-control
+      // centerline, rather than an option inside the composer.
       const incognitoToggle = page.getByRole("switch", { name: "Incognito" });
       const incognitoBox = await incognitoToggle.boundingBox();
       const commandPaletteBox = await page
@@ -196,7 +196,10 @@ suite.define(() => {
         .boundingBox();
       expect(incognitoBox).not.toBeNull();
       expect(commandPaletteBox).not.toBeNull();
-      expect(incognitoBox?.y).toBeCloseTo(commandPaletteBox?.y ?? 0, 0);
+      const incognitoCenterY = (incognitoBox?.y ?? 0) + (incognitoBox?.height ?? 0) / 2;
+      const commandPaletteCenterY =
+        (commandPaletteBox?.y ?? 0) + (commandPaletteBox?.height ?? 0) / 2;
+      expect(Math.abs(Math.round(incognitoCenterY - commandPaletteCenterY))).toBeLessThanOrEqual(2);
       expect(incognitoBox?.x ?? 0).toBeGreaterThan((commandPaletteBox?.x ?? 0) + 100);
       expect(
         await page

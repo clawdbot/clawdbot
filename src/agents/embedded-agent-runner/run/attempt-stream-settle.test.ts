@@ -31,6 +31,7 @@ const MP4 = Buffer.from("0000001c6674797069736f6d0000000069736f6d000000000000000
 
 function createSettleFixture(overrides?: Partial<SettleInput>): SettleInput {
   const sessionManager = SessionManager.inMemory();
+  const runAbortDeadlineAtMs = Date.now() + 600_000;
   return {
     attempt: {
       runId: "run-settle-1",
@@ -71,7 +72,7 @@ function createSettleFixture(overrides?: Partial<SettleInput>): SettleInput {
       timedOutDuringCompaction: false,
     }),
     markTimedOutDuringCompaction: vi.fn(),
-    runAbortDeadlineAtMs: Date.now() + 600_000,
+    getRunAbortDeadlineAtMs: () => runAbortDeadlineAtMs,
     runAbortSignal: new AbortController().signal,
     isProbeSession: true,
     abortable: async <T>(promise: Promise<T>) => await promise,

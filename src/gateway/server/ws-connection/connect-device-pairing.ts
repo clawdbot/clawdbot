@@ -7,6 +7,7 @@ import {
   buildPairingConnectCloseReason,
   buildPairingConnectErrorDetails,
   buildPairingConnectErrorMessage,
+  ConnectErrorDetailCodes,
   type ConnectPairingRequiredReason,
 } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes, errorShape } from "../../../../packages/gateway-protocol/src/index.js";
@@ -85,7 +86,9 @@ export async function authorizeGatewayConnectDevice(
   } = state;
   const failPairingHandshake = (params: {
     message: string;
-    details?: ReturnType<typeof buildPairingConnectErrorDetails>;
+    details?:
+      | ReturnType<typeof buildPairingConnectErrorDetails>
+      | { code: typeof ConnectErrorDetailCodes.AUTH_VERIFIED_USER_REQUIRED };
     closeCause?: { cause: string; meta: Record<string, unknown> };
     closeReason?: string;
   }) => {
@@ -105,7 +108,11 @@ export async function authorizeGatewayConnectDevice(
   const roleConfiguredHumanOperator = role === "operator" && Boolean(configSnapshot.gateway?.roles);
   const sharedSecretOwner = authMethod === "token" || authMethod === "password";
   if (roleConfiguredHumanOperator && !sharedSecretOwner && !authResult.user?.trim()) {
-    failPairingHandshake({ message: "operator role policies require a verified user identity" });
+    failPairingHandshake({
+      message:
+        "operator role policies require a verified user identity for this authentication method; reconnect through the trusted proxy or Tailscale, or use the shared gateway token/password",
+      details: { code: ConnectErrorDetailCodes.AUTH_VERIFIED_USER_REQUIRED },
+    });
     return undefined;
   }
   let hasServerApprovedDeviceTokenBaseline = false;

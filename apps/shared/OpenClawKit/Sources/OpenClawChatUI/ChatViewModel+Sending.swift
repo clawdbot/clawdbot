@@ -16,6 +16,7 @@ extension OpenClawChatViewModel {
             !isSending &&
             self.attachmentStagingCount == 0 &&
             !self.hasBlockingRunActivity &&
+            self.composerModelAvailabilityMessage == nil &&
             self.hasDraftToSend
     }
 
@@ -380,6 +381,10 @@ extension OpenClawChatViewModel {
         }
 
         guard await self.prepareLiveRoute(for: draft) else { return }
+        guard self.composerModelAvailabilityMessage == nil else {
+            logDiagnostic("chat.ui send ignored reason=model-auth sessionKey=\(sessionKey)")
+            return
+        }
         let attempt = self.beginLiveSend(draft)
         await self.deliverLiveSend(attempt)
     }

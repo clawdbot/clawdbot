@@ -373,6 +373,8 @@ describe("sessions.usage", () => {
 
   it("keeps explicit gateway response date labels on DST-short days", async () => {
     await withEnvAsync({ TZ: "America/New_York" }, async () => {
+      expect(new Date("2026-03-08T05:00:00.000Z").getTimezoneOffset()).toBe(300);
+      expect(new Date("2026-03-09T04:00:00.000Z").getTimezoneOffset()).toBe(240);
       const respond = await runSessionsUsage({
         ...BASE_USAGE_RANGE,
         startDate: "2026-03-08",
@@ -382,6 +384,13 @@ describe("sessions.usage", () => {
 
       expect(respond).toHaveBeenCalledTimes(1);
       expect(mockArg(respond, 0, 0)).toBe(true);
+      expect(vi.mocked(loadSessionCostSummariesFromCache)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          startMs: Date.parse("2026-03-08T05:00:00.000Z"),
+          endMs: Date.parse("2026-03-09T04:00:00.000Z") - 1,
+          dayBucket: undefined,
+        }),
+      );
       const result = mockArg(respond, 0, 1) as { startDate: string; endDate: string };
       expect(result.startDate).toBe("2026-03-08");
       expect(result.endDate).toBe("2026-03-08");

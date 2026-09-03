@@ -4,6 +4,7 @@ import {
 } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { readFiniteNumberParam, readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
@@ -31,16 +32,16 @@ import { MemoryDB, type MemoryEntry, type MemorySearchResult } from "./lancedb-s
 import { sanitizeForMemoryCapture } from "./memory-capture-sanitization.js";
 import { registerMemoryCli } from "./memory-cli.js";
 import {
-  type AutoCaptureCursor,
+  type AutoCaptureMessageProgress,
+  captureFingerprint,
   cleanMemorySearchResults,
   detectCategory,
   extractUserTextContent,
   findCleanDuplicateMemory,
   formatRecalledMemoryForModel,
   looksLikePromptInjection,
-  messageFingerprint,
   normalizeRecallQuery,
-  resolveAutoCaptureStartIndex,
+  prepareAutoCaptureMessages,
   shouldCapture,
 } from "./memory-policy.js";
 
@@ -51,6 +52,15 @@ const loadMemoryHostCoreModule = createLazyRuntimeModule(
 const DEFAULT_TOOL_RECALL_TIMEOUT_MS = 15_000;
 const DEFAULT_RECALL_COOLDOWN_MS = 60_000;
 const DEFAULT_TOOL_RECALL_OVERFETCH_EXTRA = 10;
+const MAX_AUTO_CAPTURE_TEXTS_PER_TURN = 3;
+// Keep recent material outcomes across compaction, sized for twenty three-text turns.
+// Older retained occurrences are still protected by their visited progress.
+const MAX_RECENT_AUTO_CAPTURE_TEXTS = 20 * MAX_AUTO_CAPTURE_TEXTS_PER_TURN;
+
+type AutoCaptureSession = {
+  messages: AutoCaptureMessageProgress[];
+  completedTexts: Set<string>;
+};
 
 export { normalizeEmbeddingVector, testing } from "./embeddings.js";
 export { parseMemoryCliFilter } from "./memory-cli.js";
@@ -110,7 +120,9 @@ export default definePluginEntry({
 
     const vectorDim = dimensions ?? vectorDimsForModel(model);
     const db = new MemoryDB(resolvedDbPath, vectorDim, cfg.storageOptions);
-    const autoCaptureCursors = new Map<string, AutoCaptureCursor>();
+    const autoCaptureSessions = new Map<string, AutoCaptureSession>();
+    const autoCaptureTasks = new Map<string, Promise<void>>();
+    let captureStopped = false;
     const memoryRecallCooldowns = new Map<string, { until: number; error: string }>();
     const resolveRuntimeConfig = (): OpenClawConfig =>
       (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
@@ -520,98 +532,128 @@ export default definePluginEntry({
     );
 
     api.on("agent_end", async (event, ctx) => {
-      const currentCfg = resolveCurrentHookConfig();
-      if (!currentCfg.autoCapture || isIncognitoSessionKey(ctx.sessionKey)) {
+      if (
+        captureStopped ||
+        !ctx.agentId?.trim() ||
+        !event.success ||
+        !event.messages?.length ||
+        isIncognitoSessionKey(ctx.sessionKey)
+      ) {
         return;
       }
-      const agentId = resolveEnabledAgentId(ctx.agentId);
-      if (!agentId) {
-        return;
-      }
-      if (!event.success || !event.messages || event.messages.length === 0) {
-        return;
-      }
-
+      const agentId = normalizeAgentId(ctx.agentId);
+      const rawCursorKey = ctx.sessionKey ?? ctx.sessionId;
+      const cursorKey = rawCursorKey ? `${agentId}:${rawCursorKey}` : undefined;
       try {
-        const rawCursorKey = ctx.sessionKey ?? ctx.sessionId;
-        const cursorKey = rawCursorKey ? `${agentId}:${rawCursorKey}` : undefined;
-        const startIndex = resolveAutoCaptureStartIndex(
-          event.messages,
-          cursorKey ? autoCaptureCursors.get(cursorKey) : undefined,
-        );
-        let stored = 0;
-        let capturableSeen = 0;
-        for (let index = startIndex; index < event.messages.length; index++) {
-          const message = event.messages[index];
-          const fingerprint = messageFingerprint(message);
-          if (fingerprint === undefined) {
-            continue;
-          }
-          let messageProcessed = false;
-
-          try {
-            for (const text of extractUserTextContent(message)) {
-              // Sanitize envelope metadata before checking and storing
-              const sanitized = sanitizeForMemoryCapture(text);
-              if (
-                !sanitized ||
-                !shouldCapture(sanitized, {
-                  customTriggers: currentCfg.customTriggers,
-                  maxChars: currentCfg.captureMaxChars,
-                })
-              ) {
-                continue;
-              }
-              capturableSeen++;
-              if (capturableSeen > 3) {
-                continue;
-              }
-
-              const category = detectCategory(sanitized);
-              const vector = await embeddings.embed(agentId, sanitized, currentCfg.embedding);
-
-              const existing = await findCleanDuplicateMemory(db, agentId, vector);
-              if (existing) {
-                continue;
-              }
-
-              await db.store(agentId, {
-                text: sanitized,
-                vector,
-                importance: 0.7,
-                category,
-              });
-              stored++;
+        await enqueueKeyedTask({
+          tails: autoCaptureTasks,
+          key: cursorKey ?? agentId,
+          task: async () => {
+            const currentCfg = resolveCurrentHookConfig();
+            if (captureStopped || !currentCfg.autoCapture || !resolveEnabledAgentId(agentId)) {
+              return;
             }
-            messageProcessed = true;
-          } finally {
-            if (messageProcessed && cursorKey) {
-              autoCaptureCursors.set(cursorKey, {
-                nextIndex: index + 1,
-                lastMessageFingerprint: fingerprint,
-              });
+            const session: AutoCaptureSession = (cursorKey
+              ? autoCaptureSessions.get(cursorKey)
+              : undefined) ?? {
+              messages: [],
+              completedTexts: new Set<string>(),
+            };
+            const progress = prepareAutoCaptureMessages(event.messages, session.messages);
+            session.messages = progress.filter((entry) => entry !== undefined);
+            const { completedTexts } = session;
+            if (cursorKey) {
+              autoCaptureSessions.set(cursorKey, session);
             }
-          }
-        }
+            let stored = 0;
+            let capturableSeen = 0;
+            for (const [index, message] of event.messages.entries()) {
+              const entry = progress[index];
+              if (!entry || entry.visited) {
+                continue;
+              }
+              for (const text of extractUserTextContent(message)) {
+                const sanitized = sanitizeForMemoryCapture(text);
+                if (
+                  !sanitized ||
+                  !shouldCapture(sanitized, {
+                    customTriggers: currentCfg.customTriggers,
+                    maxChars: currentCfg.captureMaxChars,
+                  })
+                ) {
+                  continue;
+                }
+                const textFingerprint = captureFingerprint(sanitized);
+                if (!completedTexts.has(textFingerprint)) {
+                  if (++capturableSeen > MAX_AUTO_CAPTURE_TEXTS_PER_TURN) {
+                    continue;
+                  }
+                  if (captureStopped) {
+                    return;
+                  }
+                  const vector = await embeddings.embed(agentId, sanitized, currentCfg.embedding);
+                  // A host stop deadline may expire while embedding I/O is still in flight.
+                  if (captureStopped) {
+                    return;
+                  }
+                  const existing = await findCleanDuplicateMemory(db, agentId, vector);
+                  if (captureStopped) {
+                    return;
+                  }
+                  if (!existing) {
+                    await db.store(agentId, {
+                      text: sanitized,
+                      vector,
+                      importance: 0.7,
+                      category: detectCategory(sanitized),
+                    });
+                    stored++;
+                  }
+                }
+                // Commit each text outcome so a later failed block retries only unfinished work.
+                completedTexts.add(textFingerprint);
+                if (completedTexts.size > MAX_RECENT_AUTO_CAPTURE_TEXTS) {
+                  completedTexts.delete(completedTexts.values().next().value!);
+                }
+              }
+              // Keep quota-only visits stable when the same transcript is delivered again.
+              entry.visited = true;
+            }
 
-        if (stored > 0) {
-          api.logger.info(`memory-lancedb: auto-captured ${stored} memories`);
-        }
+            if (stored > 0) {
+              api.logger.info(`memory-lancedb: auto-captured ${stored} memories`);
+            }
+          },
+        });
       } catch (err) {
         api.logger.warn(`memory-lancedb: capture failed: ${String(err)}`);
       }
     });
 
-    api.on("session_end", (event, ctx) => {
+    api.on("session_end", async (event, ctx) => {
+      // Compaction rotates the transcript, not the logical conversation's capture ownership.
+      if (event.reason === "compaction") {
+        return;
+      }
       const agentId = ctx.agentId ? normalizeAgentId(ctx.agentId) : undefined;
       const rawCursorKey = ctx.sessionKey ?? event.sessionKey ?? ctx.sessionId ?? event.sessionId;
-      if (agentId && rawCursorKey) {
-        autoCaptureCursors.delete(`${agentId}:${rawCursorKey}`);
-      }
       const nextCursorKey = event.nextSessionKey ?? event.nextSessionId;
-      if (agentId && nextCursorKey) {
-        autoCaptureCursors.delete(`${agentId}:${nextCursorKey}`);
-      }
+      // Queue both clears before yielding so successor captures cannot overtake their reset.
+      await Promise.all(
+        [...new Set([rawCursorKey, nextCursorKey])].map(async (key) => {
+          if (!agentId || !key) {
+            return;
+          }
+          const cursorKey = `${agentId}:${key}`;
+          await enqueueKeyedTask({
+            tails: autoCaptureTasks,
+            key: cursorKey,
+            task: async () => {
+              autoCaptureSessions.delete(cursorKey);
+            },
+          });
+        }),
+      );
     });
 
     api.registerService({
@@ -622,9 +664,12 @@ export default definePluginEntry({
         );
       },
       stop: async () => {
+        captureStopped = true;
         try {
+          await Promise.all(autoCaptureTasks.values());
           await embeddings.close?.();
         } finally {
+          autoCaptureSessions.clear();
           db.close();
           memoryRecallCooldowns.clear();
           api.logger.info("memory-lancedb: stopped");

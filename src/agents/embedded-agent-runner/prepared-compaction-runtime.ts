@@ -609,6 +609,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
         agentId: sessionAgentId,
         workspaceDir: effectiveWorkspace,
         defaultThinkLevel,
+        runtimeCwd: effectiveCwd,
         reasoningLevel: params.reasoningLevel ?? "off",
         extraSystemPrompt: params.extraSystemPrompt,
         ownerNumbers: params.ownerNumbers,

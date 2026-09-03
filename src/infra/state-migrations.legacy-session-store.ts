@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeRestartRecoveryEntryFields } from "../config/sessions/restart-recovery-state.js";
-import { normalizeSessionRuntimeModelFields } from "../config/sessions/session-entry-runtime.js";
 import {
   ensureSessionStorePromptBlobsForPersistence,
   hydrateSessionStoreSkillPromptRefs,
@@ -22,6 +21,7 @@ import { resolveMaintenanceConfig } from "../config/sessions/store-maintenance-r
 import {
   archiveStaleDashboardEntries,
   capEntryCount,
+  countUnarchivedSessionEntries,
   pruneStaleEntries,
   pruneStaleModelRunEntries,
   shouldRunModelRunPrune,
@@ -31,6 +31,7 @@ import {
 } from "../config/sessions/store-maintenance.js";
 import { applySessionStoreMigrations } from "../config/sessions/store-migrations.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
+import { normalizeSessionRuntimeModelFields } from "../config/sessions/types.js";
 import type { SessionEntry, SessionOrigin } from "../config/sessions/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ChannelRouteRef } from "../plugin-sdk/channel-route.js";
@@ -263,7 +264,7 @@ export function loadLegacySessionStore(
   normalizeLegacySessionStore(sessionStore);
   if (options.runMaintenance) {
     const maintenance = options.maintenanceConfig ?? resolveMaintenanceConfig();
-    const beforeCount = Object.keys(sessionStore).length;
+    const beforeCount = countUnarchivedSessionEntries(sessionStore);
     if (maintenance.mode === "enforce") {
       const preserveSessionKeys = collectSessionMaintenancePreserveKeysForStore({
         storePath,
@@ -280,7 +281,7 @@ export function loadLegacySessionStore(
           preserveRecentMs: maintenance.preserveRecentMs,
         });
       }
-      if (Object.keys(sessionStore).length > maintenance.maxEntries) {
+      if (countUnarchivedSessionEntries(sessionStore) > maintenance.maxEntries) {
         pruneStaleEntries(sessionStore, maintenance.pruneAfterMs, {
           log: false,
           preserveKeys: preserveSessionKeys,
@@ -288,7 +289,7 @@ export function loadLegacySessionStore(
         });
         if (
           shouldRunSessionEntryMaintenance({
-            entryCount: Object.keys(sessionStore).length,
+            entryCount: countUnarchivedSessionEntries(sessionStore),
             maxEntries: maintenance.maxEntries,
           })
         ) {

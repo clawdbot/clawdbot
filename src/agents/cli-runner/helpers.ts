@@ -125,7 +125,7 @@ export function buildCliAgentSystemPrompt(params: {
   sessionKey?: string;
   sessionId?: string;
 }) {
-  const runtimeWorkspaceDir = params.cwd?.trim() || params.workspaceDir;
+  const runtimeCwd = params.cwd?.trim() || params.workspaceDir;
   const defaultModelRef = resolveDefaultModelForAgent({
     cfg: params.config ?? {},
     agentId: params.agentId,
@@ -134,8 +134,8 @@ export function buildCliAgentSystemPrompt(params: {
   const { runtimeInfo, userTimezone, userDate } = buildSystemPromptParams({
     config: params.config,
     agentId: params.agentId,
-    workspaceDir: runtimeWorkspaceDir,
-    cwd: runtimeWorkspaceDir,
+    workspaceDir: runtimeCwd,
+    cwd: runtimeCwd,
     runtime: {
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
@@ -154,7 +154,8 @@ export function buildCliAgentSystemPrompt(params: {
   return buildConfiguredAgentSystemPrompt({
     config: params.config,
     agentId: params.agentId,
-    workspaceDir: runtimeWorkspaceDir,
+    workspaceDir: params.workspaceDir,
+    runtimeCwd,
     defaultThinkLevel: params.defaultThinkLevel,
     extraSystemPrompt: params.extraSystemPrompt,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,

@@ -14,6 +14,22 @@ export type PluginApprovalActionView = {
   style?: "primary" | "secondary" | "success" | "danger";
 };
 
+/** Gateway-minted placement identity; plugin and RPC callers never supply this authority. */
+type PluginApprovalPlacementGrantBinding = {
+  pluginId: string;
+  command: string;
+  approvalScope: string;
+  agentId: string;
+  sessionKey: string;
+  sessionId: string;
+  nodeId: string;
+  pairingGeneration: string;
+  environmentId: string;
+  ownerEpoch: number;
+  placementGeneration: number;
+  cwd: string;
+};
+
 /** Request payload supplied by plugin approval callers. */
 export type PluginApprovalRequestPayload = {
   pluginId?: string | null;
@@ -25,6 +41,8 @@ export type PluginApprovalRequestPayload = {
   scope?: ApprovalScope | null;
   toolName?: string | null;
   toolCallId?: string | null;
+  /** Exact MCP persistence intent; the host separately binds live tool-call proof. */
+  mcpTool?: { server: string; tool: string };
   allowedDecisions?: readonly ExecApprovalDecision[] | null;
   /** Trusted in-process metadata; public Gateway callers cannot submit this field. */
   externalResolution?: {
@@ -36,6 +54,8 @@ export type PluginApprovalRequestPayload = {
   sessionKey?: string | null;
   /** Host-derived source run; never accepted from plugin approval RPC params. */
   runId?: string | null;
+  /** Host-derived grant binding; never accepted from plugin approval RPC params. */
+  placementGrant?: PluginApprovalPlacementGrantBinding | null;
   turnSourceChannel?: string | null;
   turnSourceTo?: string | null;
   turnSourceAccountId?: string | null;

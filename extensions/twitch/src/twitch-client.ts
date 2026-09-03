@@ -424,7 +424,7 @@ export class TwitchClientManager {
     message: string,
     cfg?: OpenClawConfig,
     accountId?: string,
-  ): Promise<{ ok: boolean; error?: string; messageId?: string }> {
+  ): Promise<{ ok: true; messageId: string } | { ok: false; error: string }> {
     try {
       const client = await this.getClient(account, cfg, accountId);
 
@@ -438,11 +438,9 @@ export class TwitchClientManager {
 
       return { ok: true, messageId };
     } catch (error) {
-      this.logger.error(`Failed to send message: ${formatErrorMessage(error)}`);
-      return {
-        ok: false,
-        error: formatErrorMessage(error),
-      };
+      const errorMessage = formatErrorMessage(error);
+      this.logger.error(`Failed to send message: ${errorMessage}`);
+      return { ok: false, error: errorMessage };
     }
   }
 
@@ -451,15 +449,5 @@ export class TwitchClientManager {
    */
   public getAccountKey(account: TwitchAccountConfig): string {
     return `${account.username}:${account.channel}`;
-  }
-
-  /**
-   * Clear all clients and handlers (for testing)
-   */
-  clearForTest(): void {
-    this.clients.clear();
-    this.pendingClients.clear();
-    this.connectionPromises.clear();
-    this.messageHandlers.clear();
   }
 }

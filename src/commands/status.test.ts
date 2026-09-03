@@ -585,9 +585,8 @@ vi.mock("../config/sessions/session-accessor.js", () => ({
       entry,
     })),
 }));
-vi.mock("../config/sessions/session-entry-runtime.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../config/sessions/session-entry-runtime.js")>();
+vi.mock("../config/sessions/types.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/sessions/types.js")>();
   return {
     ...actual,
     resolveSessionTotalTokens: vi.fn((entry?: { totalTokens?: number }) =>
@@ -1215,7 +1214,7 @@ describe("statusCommand", () => {
   });
 
   it("mocks the extracted session runtime token resolvers", async () => {
-    const sessionRuntime = await import("../config/sessions/session-entry-runtime.js");
+    const sessionRuntime = await import("../config/sessions/types.js");
     const totalTokensMock = vi.mocked(sessionRuntime.resolveSessionTotalTokens);
     const freshTotalTokensMock = vi.mocked(sessionRuntime.resolveFreshSessionTotalTokens);
 

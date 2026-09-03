@@ -142,7 +142,7 @@ function selectMenuValue(menu: SessionMenuElement, value: string) {
 }
 
 describe("session menu", () => {
-  it("dispatches the same canonical owner from the self shortcut and submenu", async () => {
+  it("puts the self shortcut first in the owner submenu and dispatches canonical owners", async () => {
     const onAction = vi.fn<(action: SessionMenuAction) => void>();
     const onClose = vi.fn();
     const selfOwner = { type: "human", id: "profile-ada", label: "Ada" } as const;
@@ -154,12 +154,17 @@ describe("session menu", () => {
       onClose,
     });
     const selected = menuItem(menu, "Research");
+    const submenu = menuItem(menu, "Assign to…");
+    expect(menuItemLabels(menu).filter((label) => label.startsWith("Assign to"))).toEqual([
+      "Assign to…",
+    ]);
+    expect(menuItemLabels(submenu)).toEqual(["Me", "Research"]);
     expect(selected.getAttribute("role")).toBe("menuitemradio");
     expect(selected.getAttribute("aria-checked")).toBe("true");
     expect(selected.disabled).toBe(true);
     expect(selected.querySelector("[slot='details']")).not.toBeNull();
 
-    for (const label of ["Assign to me", "Ada"]) {
+    for (const label of ["Me", "Research"]) {
       const value = menuItem(menu, label).getAttribute("value");
       menu.querySelector("wa-dropdown")?.dispatchEvent(
         new CustomEvent("wa-select", {
@@ -171,7 +176,7 @@ describe("session menu", () => {
     }
     expect(onAction.mock.calls).toEqual([
       [{ kind: "assign-owner", owner: { type: "human", id: "profile-ada" } }],
-      [{ kind: "assign-owner", owner: { type: "human", id: "profile-ada" } }],
+      [{ kind: "assign-owner", owner: { type: "agent", id: "research:one" } }],
     ]);
     expect(onClose).toHaveBeenCalledTimes(2);
     const closeOrder = onClose.mock.invocationCallOrder[0];
@@ -287,7 +292,7 @@ describe("session menu", () => {
     await menu.updateComplete;
     selectMenuValue(menu, "compact:open-assign-owner");
     await menu.updateComplete;
-    expect(menuItemLabels(menu)).toEqual(["Back", "Ada", "Research owner"]);
+    expect(menuItemLabels(menu)).toEqual(["Back", "Me", "Research owner"]);
 
     selectMenuValue(menu, "compact:back");
     await menu.updateComplete;
@@ -301,7 +306,7 @@ describe("session menu", () => {
     await menu.updateComplete;
     selectMenuValue(menu, "compact:open-group");
     await menu.updateComplete;
-    expect(menuItemLabels(menu)).toEqual(["Back", "Research", "Operations", "New group…"]);
+    expect(menuItemLabels(menu)).toEqual(["Back", "Research", "Operations", "New group"]);
     expect(menu.querySelector("[slot='submenu']")).toBeNull();
   });
 
@@ -495,7 +500,7 @@ describe("session menu", () => {
     expect(menuItemLabels(submenu)).toContain("Projects");
     const research = menuItem(submenu, "Research");
     const remove = menuItem(submenu, "Remove from group");
-    const create = menuItem(submenu, "New group…");
+    const create = menuItem(submenu, "New group");
     await Promise.all([research.updateComplete, remove.updateComplete, create.updateComplete]);
     await Promise.resolve();
     expect(research.getAttribute("role")).toBe("menuitemradio");
@@ -509,7 +514,7 @@ describe("session menu", () => {
     menuItem(menu, "Remove from group").click();
     expect(onAction).toHaveBeenCalledWith({ kind: "move-to-group", category: null });
 
-    menuItem(menu, "New group…").click();
+    menuItem(menu, "New group").click();
     expect(onAction).toHaveBeenCalledWith({ kind: "new-group" });
   });
 
@@ -626,6 +631,7 @@ describe("session menu", () => {
     choices[1]?.click();
     expect(onAction).toHaveBeenCalledWith({ kind: "set-icon", icon: "🚀" });
     const remove = submenu.querySelector<HTMLButtonElement>(".session-menu__icon-remove");
+    expect(remove?.previousElementSibling?.getAttribute("role")).toBe("separator");
     expect(remove?.textContent?.trim()).toBe("Reset to default");
     remove?.click();
     expect(onAction).toHaveBeenCalledWith({ kind: "reset-appearance" });
@@ -770,7 +776,7 @@ describe("session menu", () => {
     const menu = await mountMenu({ groups: [] });
 
     const submenu = menuItem(menu, "Move to group");
-    expect(menuItemLabels(submenu)).toEqual(["New group…"]);
+    expect(menuItemLabels(submenu)).toEqual(["New group"]);
     expect(submenu.querySelector("wa-dropdown-item")?.getAttribute("slot")).toBe("submenu");
   });
 
@@ -778,7 +784,7 @@ describe("session menu", () => {
     const menu = await mountMenu({ groups: ["Research"] });
 
     const submenu = menuItem(menu, "Move to group");
-    expect(menuItemLabels(submenu)).toEqual(["Research", "New group…"]);
+    expect(menuItemLabels(submenu)).toEqual(["Research", "New group"]);
   });
 
   it("numbers group submenu entries and dispatches them from digit keys", async () => {
@@ -799,7 +805,7 @@ describe("session menu", () => {
       "Research",
       "Projects",
       "Remove from group",
-      "New group…",
+      "New group",
     ]);
     const shortcuts = Array.from(
       submenu.querySelectorAll<HTMLElement>("wa-dropdown-item[slot='submenu']"),

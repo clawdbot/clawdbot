@@ -116,6 +116,8 @@ export function resolveGatewayScopedTools(params: {
   gatewayRequestedTools?: string[];
   /** Add the CLI-only, node-forced exec tool before applying the shared policy pipeline. */
   includeNodeExecTool?: boolean;
+  /** Current node inventory predicate; evaluated with the resolved exec binding. */
+  nodeExecAvailable?: (node?: string) => boolean;
   execSession?: ExecSessionDefaults;
   execOverrides?: ExecPolicyOverrides & { mode?: ExecMode };
   bashElevated?: ExecElevatedDefaults;
@@ -379,7 +381,11 @@ export function resolveGatewayScopedTools(params: {
         })
       : undefined;
   const nodeExecDefaults =
-    nodeExecSurface && execDefaults?.canRequestNode === true ? execDefaults : undefined;
+    nodeExecSurface &&
+    execDefaults?.canRequestNode === true &&
+    params.nodeExecAvailable?.(execDefaults.node) === true
+      ? execDefaults
+      : undefined;
   const includeNodeExecTool = nodeExecDefaults !== undefined;
   const execConfig = includeNodeExecTool
     ? resolveExecToolConfig({ cfg: params.cfg, agentId: policyAgentId })
@@ -513,7 +519,7 @@ export function resolveGatewayScopedTools(params: {
           },
           {
             description:
-              "Execute a shell command on a connected OpenClaw node. This tool is node-only; use the CLI native shell for Gateway-local commands. Commands run synchronously. Set node when multiple nodes are available.",
+              "Execute a shell command on a connected OpenClaw node. This tool is node-only; use the CLI native shell for Gateway-local commands when it is available. Commands run synchronously. The sole connected node that can execute commands is selected automatically; set node when several can.",
             displaySummary: "Run commands on a connected node",
             parameters: nodeExecSchema,
           },

@@ -236,7 +236,9 @@ export async function wakeSubagentRunAfterDescendants(
             idempotencyKey: wakeDispatchId,
           },
           {
+            cancelOnDeadline: true,
             operatorRoleActor: { kind: "system" },
+            signal: params.signal,
             timeoutMs: announceTimeoutMs,
             resolveGatewayContext: params.resolveGatewayContext,
           },

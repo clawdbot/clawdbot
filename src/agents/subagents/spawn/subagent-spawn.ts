@@ -38,7 +38,6 @@ import {
 import { removeQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
 import { readParentExecutionIdentity } from "./execution-identity-spawn-context.js";
 import { materializeSubagentAttachments } from "./subagent-attachments.js";
-import { resolveSubagentSpawnAcceptedNote } from "./subagent-spawn-accepted-note.js";
 import { resolveSubagentChildPlan } from "./subagent-spawn-child-plan.js";
 import {
   cleanupFailedSpawnBeforeAgentStart,
@@ -67,11 +66,8 @@ import { resolveSubagentSpawnRequest } from "./subagent-spawn-request.js";
 import { cleanupAcceptedSubagentSpawnFailure } from "./subagent-spawn-rollback.js";
 import { createInitialSubagentSession } from "./subagent-spawn-session-patch.js";
 import { bindThreadForSubagentSpawn } from "./subagent-spawn-thread-binding.js";
-import {
-  buildSubagentSystemPrompt,
-  emitSessionLifecycleEvent,
-  mergeDeliveryContext,
-} from "./subagent-spawn.runtime.js";
+import { emitSessionLifecycleEvent, mergeDeliveryContext } from "./subagent-spawn.runtime.js";
+import { buildSubagentSpawnEnvelope } from "./subagent-system-prompt.js";
 
 export { SUBAGENT_SPAWN_CONTEXT_MODES, SUBAGENT_SPAWN_MODES } from "./subagent-spawn.types.js";
 
@@ -140,7 +136,6 @@ export async function spawnSubagentDirect(
   const childIdem = params.continuationDelegateFlowId
     ? deriveContinuationDelegateChildRunId(params.continuationDelegateFlowId)
     : resolvedChildIdem;
-  let modelApplied = false;
   let threadBindingReady = false;
   let hasBoundThreadDeliveryOrigin = false;
   let childRunId: string = childIdem;
@@ -180,6 +175,7 @@ export async function spawnSubagentDirect(
     const spawnedByKey = requesterInternalKey;
     const { resolvedModel, thinkingOverride } = plan;
     const initialSession = await createInitialSubagentSession({
+      assertActive,
       cfg,
       targetAgentId,
       childSessionKey,
@@ -235,8 +231,7 @@ export async function spawnSubagentDirect(
     }
     const childEntry = preparedSpawnContext.childEntry ?? initialSession.entry;
     if (childEntry) {
-      // Only preparation's committed entry can advance cleanup ownership. A reread
-      // of the key could capture a reset/rebound successor that this spawn does not own.
+      // Only preparation's committed entry can advance cleanup ownership; a reread could capture a reset/rebound successor.
       provisionalSessionIdentity = {
         expectedSessionId: childEntry.sessionId,
         expectedLifecycleRevision: childEntry.lifecycleRevision,
@@ -255,9 +250,6 @@ export async function spawnSubagentDirect(
         error: runtimeStatePersistError,
         childSessionKey,
       };
-    }
-    if (resolvedModel) {
-      modelApplied = true;
     }
     if (requestThreadBinding) {
       const bindResult = await bindThreadForSubagentSpawn({
@@ -291,7 +283,18 @@ export async function spawnSubagentDirect(
     const mountPathHint =
       parsedMountPath.status === "valid" ? parsedMountPath.mountPath : undefined;
 
-    let childSystemPrompt = buildSubagentSystemPrompt({
+    // Binding owns direct delivery; resolve once so launch, child instructions, and requester receipt agree.
+    const completionMode = params.collect
+      ? "collector"
+      : requestThreadBinding && spawnMode === "session" && hasBoundThreadDeliveryOrigin
+        ? "thread-direct"
+        : expectsCompletionMessage
+          ? "announce"
+          : "quiet";
+    const envelope = buildSubagentSpawnEnvelope({
+      completionMode,
+      spawnMode,
+      task: params.task,
       requesterSessionKey,
       requesterOrigin: childSessionOrigin,
       childSessionKey,
@@ -315,6 +318,7 @@ export async function spawnSubagentDirect(
       ],
       continuationEnabled: cfg.agents?.defaults?.continuation?.enabled === true,
     });
+    let childSystemPrompt = envelope.systemPrompt;
     if (params.outputSchema) {
       childSystemPrompt = `${childSystemPrompt}\n\nCall structured_output with {"result": <your final result>} until one payload is accepted, with at most one retry after a rejected attempt. The result value must match the requested JSON Schema. Do not call structured_output again after acceptance.`;
     }
@@ -347,28 +351,22 @@ export async function spawnSubagentDirect(
       childSystemPrompt = `${childSystemPrompt}\n\n${materializedAttachments.systemPromptSuffix}`;
     }
 
-    const deliverInitialChildRunDirectly =
-      requestThreadBinding && spawnMode === "session" && hasBoundThreadDeliveryOrigin;
-    const { childLaunch, queuedLaunch, progressOrigin, shouldAnnounceCompletion, spawnedMetadata } =
+    const { childLaunch, queuedLaunch, progressOrigin, spawnedMetadata } =
       buildSubagentLaunchRequest({
-        childDepth,
-        maxSpawnDepth,
+        completionMode,
         spawnMode,
-        task: params.task,
+        message: envelope.message,
         spawnedByKey,
         toolSpawnMetadata,
         spawnedWorkspaceDir,
         childSessionKey,
-        collect: params.collect === true,
         childSessionOrigin,
         childIdem,
-        deliverInitialChildRunDirectly,
         outputSchema: params.outputSchema,
         childSystemPrompt,
         thinkingOverride,
         runTimeoutSeconds,
         lightContext: params.lightContext === true,
-        expectsCompletionMessage,
         requesterOrigin,
         currentMessagingTarget: ctx.currentMessagingTarget,
         currentChannelId: ctx.currentChannelId,
@@ -441,8 +439,7 @@ export async function spawnSubagentDirect(
         waitForSessionDeletion,
       });
     type SubagentBackendState = { contextEnginePreparation?: SubagentSpawnPreparation };
-    // Set once the gateway accepts the child run, so a later failure can tell an
-    // accepted run apart from one that never started.
+    // Set once the gateway accepts the child run so later failures retain accepted-run ownership.
     let acceptedChildRunId: string | undefined;
     let taskRowOwnership: "required" | "gateway_best_effort" = "required";
     const adapter: SpawnBackendAdapter<SubagentBackendState> = {
@@ -566,7 +563,7 @@ export async function spawnSubagentDirect(
           agentDir: targetAgentDir,
           workspaceDir: spawnedMetadata.workspaceDir,
           runTimeoutSeconds,
-          expectsCompletionMessage: shouldAnnounceCompletion,
+          expectsCompletionMessage: completionMode === "announce",
           spawnMode,
           collect: params.collect === true,
           swarmRequesterSessionKey: params.collect ? requesterInternalKey : undefined,
@@ -687,9 +684,11 @@ export async function spawnSubagentDirect(
       swarmReservationPending = false;
     }
 
-    const acceptedNote = resolveSubagentSpawnAcceptedNote({
-      spawnMode,
-      agentSessionKey: ctx.agentSessionKey,
+    emitSessionLifecycleEvent({
+      sessionKey: childSessionKey,
+      reason: "create",
+      parentSessionKey: requesterInternalKey,
+      label: label || undefined,
     });
     return {
       status: "accepted",
@@ -697,14 +696,14 @@ export async function spawnSubagentDirect(
       ...(collectorAccepted ? { sessionKey: childSessionKey } : {}),
       runId: childRunId,
       mode: spawnMode,
-      expectsCompletionMessage: shouldAnnounceCompletion,
+      expectsCompletionMessage: completionMode === "announce",
       context: preparedSpawnContext.mode,
       taskName,
-      note: preparedSpawnContext.forkFallbackNote
-        ? `${acceptedNote} ${preparedSpawnContext.forkFallbackNote}`
-        : acceptedNote,
+      note:
+        [envelope.acceptedNote, preparedSpawnContext.forkFallbackNote].filter(Boolean).join(" ") ||
+        undefined,
       ...resolvedModelMetadata,
-      modelApplied: resolvedModel ? modelApplied : undefined,
+      modelApplied: resolvedModel ? true : undefined,
       rollbackAccepted: pipelineResult.rollbackAccepted,
       attachments: attachmentsReceipt,
     };

@@ -735,70 +735,180 @@ describe("task-registry", () => {
     });
   });
 
-  it("bounds durable liveness writes for live activity deltas", async () => {
-    await withTaskRegistryTempDir(async () => {
-      const store = createInMemoryTaskRegistryStore();
-      const upsert = vi.spyOn(store, "upsertTaskWithDeliveryState");
-      configureTaskRegistryRuntime({ store });
-      createTaskFixture("subagent", {
-        childSessionKey: "agent:main:subagent:ephemeral",
-        runId: "run-ephemeral-activity",
-        task: "Keep streaming state in memory",
-      });
-      const initialLastEventAt = requireTaskByRunId("run-ephemeral-activity").lastEventAt!;
-      upsert.mockClear();
-
-      emitAgentEvent({
-        runId: "run-ephemeral-activity",
-        stream: "thinking",
-        data: { text: "Planning" },
-      });
-      emitAgentEvent({
-        runId: "run-ephemeral-activity",
-        stream: "assistant",
-        data: { text: "Editing" },
-      });
-      expect(upsert).not.toHaveBeenCalled();
-      const dateNow = vi.spyOn(Date, "now").mockReturnValue(initialLastEventAt + 60_000);
-      try {
-        emitAgentEvent({
-          runId: "run-ephemeral-activity",
-          stream: "assistant",
-          data: { text: "Still editing" },
+  it.each(["cli", "subagent"] as const)(
+    "bounds durable liveness writes for %s live activity",
+    async (runtime) => {
+      await withTaskRegistryTempDir(async () => {
+        const store = createInMemoryTaskRegistryStore();
+        const upsert = vi.spyOn(store, "upsertTaskWithDeliveryState");
+        configureTaskRegistryRuntime({ store });
+        const runId = "run-ephemeral-activity";
+        const task = createTaskFixture(runtime, {
+          childSessionKey: "agent:main:subagent:ephemeral",
+          runId,
+          task: "Keep streaming state in memory",
         });
-      } finally {
-        dateNow.mockRestore();
-      }
-      expect(upsert).toHaveBeenCalledOnce();
-      expect(requireTaskByRunId("run-ephemeral-activity").lastEventAt).toBe(
-        initialLastEventAt + 60_000,
-      );
-      upsert.mockClear();
-      emitAgentEvent({
-        runId: "run-ephemeral-activity",
-        stream: "tool",
-        data: {
-          phase: "start",
-          name: "write",
-          toolCallId: "write-1",
-          args: { path: "src/example.ts", content: "one\ntwo" },
-        },
-      });
-      expect(upsert).toHaveBeenCalledOnce();
-      upsert.mockClear();
-      emitAgentEvent({
-        runId: "run-ephemeral-activity",
-        stream: "tool",
-        data: { phase: "result", name: "write", toolCallId: "write-1", isError: false },
-      });
+        const initialLastEventAt = requireTaskByRunId(runId).lastEventAt!;
+        const emit = (stream: string, data: Record<string, unknown>) =>
+          emitAgentEvent({ runId, stream, data });
+        const emitCandidate = (progressText: string) =>
+          emit("item", {
+            itemId: "answer-1",
+            kind: "answer_candidate",
+            title: "Answer candidate",
+            phase: "update",
+            status: "candidate",
+            progressText,
+            source: "codex-app-server",
+            hideFromChannelProgress: true,
+          });
+        const dateNow = vi.spyOn(Date, "now").mockReturnValue(initialLastEventAt);
+        upsert.mockClear();
+        try {
+          emit("thinking", { text: "Planning" });
+          let text = "";
+          for (let index = 0; index < 128; index += 1) {
+            const delta = `Line ${index + 1}\n`;
+            text += delta;
+            emitCandidate(text.trimEnd());
+            emit("assistant", { text, delta });
+          }
+          emit("item", {
+            itemId: "preamble-1",
+            kind: "preamble",
+            title: "Preamble",
+            phase: "update",
+            progressText: "Preparing the next step",
+          });
+          emit("plan", {
+            phase: "update",
+            steps: [{ step: "Write the result", status: "in_progress" }],
+          });
+          emit("usage", { outputTokens: 128 });
+          emit("codex_app_server.lifecycle", {
+            phase: "thread_ready",
+            threadId: "thread-1",
+            action: "resumed",
+          });
+          expect(upsert).not.toHaveBeenCalled();
+          expect(getTaskActivitySnapshot(task.taskId)?.lastActivity).toBe("Line 128");
 
-      expect(upsert).not.toHaveBeenCalled();
-      emitAgentEvent({
-        runId: "run-ephemeral-activity",
-        stream: "lifecycle",
-        data: { phase: "end", endedAt: 200 },
+          dateNow.mockReturnValue(initialLastEventAt + 60_000);
+          emitCandidate(text.trimEnd());
+          expect(upsert).toHaveBeenCalledOnce();
+          expect(requireTaskByRunId(runId).lastEventAt).toBe(initialLastEventAt + 60_000);
+          upsert.mockClear();
+          emit("assistant", { text: "Still editing" });
+          expect(upsert).not.toHaveBeenCalled();
+          expect(getTaskActivitySnapshot(task.taskId)?.lastActivity).toBe("Still editing");
+
+          emit("error", { error: "Observed diagnostic failure" });
+          expect(upsert).toHaveBeenCalledOnce();
+          expect(requireTaskByRunId(runId).error).toBe("Observed diagnostic failure");
+          upsert.mockClear();
+          emit("tool", {
+            phase: "start",
+            name: "write",
+            toolCallId: "write-1",
+            args: { path: "src/example.ts", content: "one\ntwo" },
+          });
+          expect(upsert).toHaveBeenCalledOnce();
+          expectRecordFields(requireTaskByRunId(runId), {
+            toolUseCount: 1,
+            lastToolName: "write",
+          });
+          upsert.mockClear();
+          emit("tool", {
+            phase: "update",
+            name: "write",
+            toolCallId: "write-1",
+            partialResult: { content: [{ type: "text", text: "Writing" }] },
+          });
+          emit("tool", {
+            phase: "result",
+            name: "write",
+            toolCallId: "write-1",
+            isError: false,
+          });
+          expect(upsert).not.toHaveBeenCalled();
+          emit("lifecycle", { phase: "end", endedAt: initialLastEventAt + 60_000 });
+          expect(upsert).toHaveBeenCalledOnce();
+          expect(requireTaskByRunId(runId).status).toBe("succeeded");
+        } finally {
+          dateNow.mockRestore();
+        }
       });
-      expect(upsert).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([
+    {
+      name: "the beginning of a final line longer than the retained suffix",
+      text: `Earlier\r\n  First\t words ${"x".repeat(8_000)}\r\n \t\r\n`,
+      expected: `First words ${"x".repeat(188)}`,
+    },
+    {
+      name: "CR, LF, and CRLF lines with Unicode whitespace",
+      text: "Earlier\rDiscarded\nDiscarded too\r\n \u00a0Last\u2028line\u2029here\t\r\n\u3000",
+      expected: "Last line here",
+    },
+    {
+      name: "a surrogate pair across the 200-unit boundary",
+      text: `${"x".repeat(199)}🦞after`,
+      expected: "x".repeat(199),
+    },
+    {
+      name: "a surrogate pair ending at the boundary",
+      text: `${"x".repeat(198)}🦞after`,
+      expected: `${"x".repeat(198)}🦞`,
+    },
+    {
+      name: "collapsed whitespace at the boundary",
+      text: `${"x".repeat(199)}\t  after`,
+      expected: `${"x".repeat(199)} `,
+    },
+  ])("preserves live activity from $name", async ({ text, expected }) => {
+    await withTaskRegistryTempDir(async () => {
+      const task = createTaskFixture("subagent", {
+        childSessionKey: "agent:main:subagent:activity-boundary",
+        runId: "run-activity-boundary",
+        task: "Display the current output line",
+      });
+      emitAgentEvent({ runId: task.runId!, stream: "assistant", data: { text } });
+      expect(getTaskActivitySnapshot(task.taskId)?.lastActivity).toBe(expected);
+    });
+  });
+
+  it("preserves snapshot replacement, delta suffixes, and sticky assistant precedence", async () => {
+    await withTaskRegistryTempDir(async () => {
+      const task = createTaskFixture("subagent", {
+        childSessionKey: "agent:main:subagent:activity-streams",
+        runId: "run-activity-streams",
+        task: "Display replacing and incremental output",
+      });
+      const emitActivity = (
+        stream: "assistant" | "thinking",
+        data: Record<string, unknown>,
+        expected: string,
+      ) => {
+        emitAgentEvent({ runId: task.runId!, stream, data });
+        expect(getTaskActivitySnapshot(task.taskId)?.lastActivity).toBe(expected);
+      };
+      emitActivity("thinking", { text: "Planning" }, "Planning");
+      emitActivity("assistant", { text: " \r\n\t" }, "Planning");
+      emitActivity("thinking", { delta: " next" }, "Planning next");
+      emitActivity(
+        "assistant",
+        { text: `Beginning ${"x".repeat(8_000)}` },
+        `Beginning ${"x".repeat(190)}`,
+      );
+      emitActivity("assistant", { delta: " more" }, "x".repeat(200));
+      emitActivity("assistant", { text: "Short", delta: "ignored" }, "Short");
+      emitActivity("assistant", { text: "", delta: "ignored" }, "Short");
+      emitActivity("thinking", { text: "Never replaces assistant output" }, "Short");
+      emitActivity("assistant", { delta: "Fresh" }, "Fresh");
+      emitActivity("assistant", { text: " \r\n\t" }, "Fresh");
+      emitActivity("assistant", { delta: "Next" }, "Next");
     });
   });
 

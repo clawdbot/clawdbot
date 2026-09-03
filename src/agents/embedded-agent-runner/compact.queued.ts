@@ -7,6 +7,7 @@ import {
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
 import { projectPublicSessionEntry } from "../../config/sessions/session-entry-projection.js";
+import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import {
@@ -23,6 +24,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
+import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
@@ -56,6 +58,7 @@ import {
 import type { acceptCompactionSuccessor } from "./compaction-successor.js";
 import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
+import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveTieredModel } from "./model-resolution.js";
 import { resolveModelAsync } from "./model.js";
@@ -292,6 +295,36 @@ export async function compactEmbeddedAgentSession(
   }
 }
 
+async function runPrimaryNativeCompactionInLanes<T>(
+  params: QueuedCompactionParams,
+  expectedEntry: Parameters<typeof acceptCompactionSuccessor>[0]["expectedEntry"],
+  host: QueuedCompactionHostOptions,
+  run: () => Promise<T>,
+): Promise<T> {
+  const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
+  const globalLane = resolveGlobalLane(params.lane);
+  const enqueueGlobal =
+    params.enqueue ?? ((task, opts) => enqueueCommandInLane(globalLane, task, opts));
+  return await enqueueCommandInLane(sessionLane, () =>
+    enqueueGlobal(() => {
+      host.assertActive?.();
+      const currentEntry = loadSessionEntryReadOnly({
+        ...params.sessionTarget,
+        readConsistency: "latest",
+      });
+      if (
+        !currentEntry ||
+        currentEntry.sessionId !== expectedEntry.sessionId ||
+        currentEntry.lifecycleRevision !== expectedEntry.lifecycleRevision ||
+        currentEntry.activeWriterRunId !== expectedEntry.activeWriterRunId
+      ) {
+        throw new SessionTranscriptWriterClaimReboundError();
+      }
+      return run();
+    }),
+  );
+}
+
 async function compactEmbeddedAgentSessionImpl(
   params: QueuedCompactionParams,
   expectedEntry: Parameters<typeof acceptCompactionSuccessor>[0]["expectedEntry"],
@@ -348,6 +381,8 @@ async function compactEmbeddedAgentSessionImpl(
       agentDir,
       workspaceDir: resolvedWorkspaceDir,
     },
+    runControlOperation: (run) =>
+      runPrimaryNativeCompactionInLanes(params, expectedEntry, host, run),
   });
   if (nativeCliResult) {
     return nativeCliResult;
@@ -574,26 +609,31 @@ async function compactResolvedContextEngine(
   let requiredPreflightNativeCapabilityUsed = false;
   const harnessResult =
     attemptNativeHarnessCompaction && (!contextEngineOwnsCompaction || lockedNativeHarness)
-      ? await maybeCompactAgentHarnessSession(
-          {
-            ...preparedParams,
-            runtimeModel: effectiveRuntimeModel,
-            contextEngine,
-            contextTokenBudget,
-            contextEngineRuntimeContext,
-          },
-          {
-            preparedModelRuntime,
-            ...(preparedParams.preflightRequired === true
-              ? {
-                  nativeCompactionRequest: "required_preflight",
-                  onNativeCompactionCapabilityUsed: () => {
-                    requiredPreflightNativeCapabilityUsed = true;
-                  },
-                }
-              : {}),
-          },
-        )
+      ? await runPrimaryNativeCompactionInLanes(preparedParams, expectedEntry, host, async () => {
+          if (params.abortSignal?.aborted) {
+            return createCompactionAbortedResult();
+          }
+          return await maybeCompactAgentHarnessSession(
+            {
+              ...preparedParams,
+              runtimeModel: effectiveRuntimeModel,
+              contextEngine,
+              contextTokenBudget,
+              contextEngineRuntimeContext,
+            },
+            {
+              preparedModelRuntime,
+              ...(preparedParams.preflightRequired === true
+                ? {
+                    nativeCompactionRequest: "required_preflight",
+                    onNativeCompactionCapabilityUsed: () => {
+                      requiredPreflightNativeCapabilityUsed = true;
+                    },
+                  }
+                : {}),
+            },
+          );
+        })
       : undefined;
   // Only the private dispatched native capability may authorize required-preflight
   // fallback for a locked harness; public result fields cannot escape the lock.

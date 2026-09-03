@@ -159,14 +159,18 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     return sink;
   }
 
+  function finishDocumentAnimations(): void {
+    for (const animation of document.getAnimations()) {
+      animation.finish();
+    }
+  }
+
   // Headless CI renderers can stall the animation timeline, leaving the 120ms
   // hide transition permanently mid-flight; finishing transitions asserts the
   // target visibility state instead of the renderer's clock. A genuinely
   // matching reveal selector still fails: its finished end state is visible.
   function expectChromeHidden(widget: HTMLElement, bar: HTMLElement): void {
-    for (const animation of document.getAnimations()) {
-      animation.finish();
-    }
+    finishDocumentAnimations();
     const revealState = JSON.stringify({
       hover: widget.matches(":hover"),
       focusWithin: widget.matches(":focus-within"),
@@ -411,8 +415,10 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     expect(getComputedStyle(cardBody!).paddingTop).toBe("12px");
     expect(second.classList.contains("board-widget--frameless")).toBe(true);
     expect(getComputedStyle(second).backgroundColor).toBe("rgba(0, 0, 0, 0)");
+    finishDocumentAnimations();
     expect(getComputedStyle(second).borderTopColor).toBe("rgba(0, 0, 0, 0)");
     second.focus();
+    finishDocumentAnimations();
     expect(getComputedStyle(second).borderTopColor).not.toBe("rgba(0, 0, 0, 0)");
   });
 

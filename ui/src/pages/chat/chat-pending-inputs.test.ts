@@ -31,7 +31,6 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import { resetChatThreadState } from "./chat-thread.ts";
-import { extractImages } from "./components/chat-message-media.ts";
 import { listStoredChatOutboxes, loadChatComposerSnapshot } from "./composer-persistence.ts";
 import {
   admitChatSubmission,
@@ -462,32 +461,14 @@ describe("server-owned pending input display", () => {
       expect(host.chatStream).toBe("Still working");
       expect(host.chatToolMessages).toEqual([tool]);
       const displayed = getChatPendingInputs(host)?.page;
-      if (source === "initial" && custody !== "consumed") {
-        expect(displayed).toMatchObject({
-          total: acceptedPage.total,
-          items: [
-            { id: input.id, runId: input.runId, state: custody, acceptedAt: input.acceptedAt },
-          ],
-        });
+      expect(displayed).toEqual(acceptedPage);
+      if (custody !== "consumed") {
         const displayedMessage = displayed!.items[0]!.message;
-        expect(displayedMessage).toMatchObject({
-          timestamp: 90,
-          __openclaw: { id: `pending:${input.id}`, senderName: "Authoritative Author" },
-        });
         expect(readSessionMessageIdentity(displayedMessage)).toMatchObject({
           id: `pending:${input.id}`,
           sequence: null,
           sendId: null,
         });
-        expect(extractImages(displayedMessage).map((image) => image.url)).toEqual([
-          "data:image/png;base64,iVBORw0KGgo=",
-        ]);
-        expect(acceptedPage.items[0]?.message).toMatchObject({
-          content: "Keep my accepted input",
-          __openclaw: { media: [{ url: "media://inbound/initial.png" }] },
-        });
-      } else {
-        expect(displayed).toEqual(acceptedPage);
       }
       // Empty later snapshots and a fresh pane must not turn retained image bytes back into input.
       reduceChatSessionProjection(
@@ -504,7 +485,7 @@ describe("server-owned pending input display", () => {
       });
       expect(admitChatSubmission(remounted)).toBe(false);
       expect(remounted.chatMessages).toEqual([]);
-      // Retirement still permits display adoption, but only for the exact source.
+      // Retirement does not hide distinct or uncorrelated server-owned inputs.
       const otherInputs = ["other-accepted-source", undefined].map((runId) => ({
         id: `other-${runId ?? "uncorrelated"}`,
         acceptedAt: input.acceptedAt,
@@ -525,8 +506,7 @@ describe("server-owned pending input display", () => {
       expect(getChatPendingInputs(host)?.page.items.slice(0, -2)).toEqual(displayed?.items);
       applyChatPendingInputs(host, { items: [], total: 0 });
       expect(host.chatMessages).toEqual([...history, unrelated]);
-      if (source === "initial" && custody !== "consumed") {
-        const localContent = chatSubmissions.readInitial(sessionKey, host.client)!.message.content;
+      if (custody !== "consumed") {
         const promoted = {
           role: "user",
           content: "authoritative projection",
@@ -539,16 +519,12 @@ describe("server-owned pending input display", () => {
           },
         };
         reduceChatSessionProjection(host, { type: "messagePersisted", message: promoted });
-        expect(host.chatMessages).toHaveLength(2);
-        expect(host.chatMessages.find((message) => message !== unrelated)).toMatchObject({
-          content: localContent,
-          __openclaw: {
-            id: input.id,
-            seq: 4,
-            runId: "execution-run",
-            senderName: "Authoritative Author",
-          },
-        });
+        expect(host.chatMessages).toHaveLength(history.length + 2);
+        expect(host.chatMessages).toContain(promoted);
+        expect(host.chatMessages.filter((message) => message !== promoted)).toEqual([
+          ...history,
+          unrelated,
+        ]);
         expect(admitChatSubmission(host)).toBe(false);
       }
     },

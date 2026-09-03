@@ -137,42 +137,72 @@ describe("process supervisor scope extinction", () => {
     expect(adapter.killMock).toHaveBeenCalledOnce();
   });
 
-  it("drains cancelled startups and live siblings before reporting ownership failure", async () => {
-    const first = createStubChildAdapter();
-    const sibling = createStubChildAdapter({ pid: 4321 });
-    const [firstExtinction, siblingExtinction] = [createDeferred(), createDeferred()];
-    first.waitForExtinction = async () => await firstExtinction.promise;
-    sibling.waitForExtinction = async () => await siblingExtinction.promise;
+  it.each([false, true])(
+    "drains cancelled startups and live siblings before reporting ownership failure (reused run ID=%s)",
+    async (reuseRunId) => {
+      const first = createStubChildAdapter();
+      const sibling = createStubChildAdapter({ pid: 4321 });
+      const [firstExtinction, siblingExtinction] = [createDeferred(), createDeferred()];
+      first.waitForExtinction = async () => await firstExtinction.promise;
+      sibling.waitForExtinction = async () => await siblingExtinction.promise;
+      const startup = createDeferred<StubChildAdapter>();
+      createChildAdapterMock.mockReturnValueOnce(startup.promise).mockResolvedValueOnce(sibling);
+
+      const supervisor = createProcessSupervisor();
+      const pending = ["failed-owner", "pending-owner"].map((sessionId) =>
+        spawnChild(supervisor, {
+          ...(reuseRunId ? { runId: "same-agent-run" } : {}),
+          sessionId,
+          scopeKey: "scope:failed-drain",
+          argv: createSilentIdleArgv(),
+        }),
+      );
+      supervisor.cancelScope("scope:failed-drain");
+      const drain = supervisor.waitForScope("scope:failed-drain");
+      startup.resolve(first);
+      const runs = await Promise.all(pending);
+      expect(first.killMock).toHaveBeenCalledWith("SIGTERM");
+      expect(sibling.killMock).toHaveBeenCalledWith("SIGTERM");
+      expect(supervisor.getRecord(runs[1]!.runId)).toMatchObject({ pid: sibling.pid });
+      first.settle(0);
+      sibling.settle(0);
+      await Promise.all(runs.map((run) => run.wait()));
+
+      const drained = vi.fn();
+      void drain.then(drained, drained);
+      firstExtinction.reject(new Error("first owner lost authority"));
+      await Promise.resolve();
+      expect(drained).not.toHaveBeenCalled();
+      expect(sibling.disposeMock).not.toHaveBeenCalled();
+
+      siblingExtinction.resolve();
+      await expect(drain).rejects.toThrow("first owner lost authority");
+      expect(sibling.disposeMock).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("does not finalize a newer admission when an older startup with the same run ID fails", async () => {
     const startup = createDeferred<StubChildAdapter>();
+    const sibling = createStubChildAdapter({ pid: 4321 });
     createChildAdapterMock.mockReturnValueOnce(startup.promise).mockResolvedValueOnce(sibling);
-
     const supervisor = createProcessSupervisor();
-    const pending = ["failed-owner", "pending-owner"].map((sessionId) =>
-      spawnChild(supervisor, {
-        sessionId,
-        scopeKey: "scope:failed-drain",
-        argv: createSilentIdleArgv(),
-      }),
-    );
-    supervisor.cancelScope("scope:failed-drain");
-    const drain = supervisor.waitForScope("scope:failed-drain");
-    startup.resolve(first);
-    const runs = await Promise.all(pending);
-    expect(first.killMock).toHaveBeenCalledWith("SIGTERM");
-    expect(sibling.killMock).toHaveBeenCalledWith("SIGTERM");
-    first.settle(0);
-    sibling.settle(0);
-    await Promise.all(runs.map((run) => run.wait()));
-
-    const drained = vi.fn();
-    void drain.then(drained, drained);
-    firstExtinction.reject(new Error("first owner lost authority"));
-    await Promise.resolve();
-    expect(drained).not.toHaveBeenCalled();
-    expect(sibling.disposeMock).not.toHaveBeenCalled();
-
-    siblingExtinction.resolve();
-    await expect(drain).rejects.toThrow("first owner lost authority");
-    expect(sibling.disposeMock).toHaveBeenCalledTimes(1);
+    const input = {
+      runId: "same-agent-run",
+      sessionId: "overlapping-startups",
+      argv: createSilentIdleArgv(),
+    };
+    const pending = spawnChild(supervisor, input);
+    const replacement = await spawnChild(supervisor, input);
+    try {
+      const snapshot = supervisor.getRecord(replacement.runId);
+      const rejected = expect(pending).rejects.toThrow("older startup failed");
+      startup.reject(new Error("older startup failed"));
+      await rejected;
+      expect(supervisor.getRecord(replacement.runId)).toEqual(snapshot);
+    } finally {
+      sibling.settle(0);
+      await replacement.wait();
+      await supervisor.shutdown();
+    }
   });
 });

@@ -49,7 +49,8 @@ export async function invokeHeartbeatAgentRun(
   const replyOperationRunState: ReplyOperationRunState = {};
   const heartbeatModelOverride = normalizeOptionalString(heartbeat?.model);
   const getReplyFromConfig =
-    opts.deps?.getReplyFromConfig ?? (await loadHeartbeatRunnerRuntime()).getReplyFromConfig;
+    opts.deps?.getReplyFromConfig ??
+    (await loadHeartbeatRunnerRuntime()).getHeartbeatReplyFromConfig;
   const heartbeatWakeAbortSignal = getHeartbeatWakeAbortSignal();
   const replyOpts = {
     isHeartbeat: true,

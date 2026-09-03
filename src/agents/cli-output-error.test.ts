@@ -287,35 +287,38 @@ describe("createCliJsonlStreamingParser errors", () => {
     });
   });
 
-  it("keeps plugin-owned terminal errors ahead of later result summaries", () => {
-    const usageEvents: Array<{ usage: unknown; isTerminal: boolean }> = [];
-    const parser = createCliJsonlStreamingParser({
-      backend: { command: "acme", output: "jsonl" },
-      providerId: "acme-cli",
-      parseJsonlEvent: (line) =>
-        line === "failed"
-          ? { kind: "result", errorText: "provider failed" }
-          : {
-              kind: "result",
-              text: "must not replace the provider error",
-              sessionId: "late-successor",
-              usage: { input: 2, output: 1, total: 3 },
-            },
-      onAssistantDelta: () => {},
-      onUsage: (usage, isTerminal) => usageEvents.push({ usage, isTerminal }),
-    });
+  it.each(["", "preserved answer"])(
+    "keeps plugin-owned terminal errors and text %j ahead of later result summaries",
+    (text) => {
+      const usageEvents: Array<{ usage: unknown; isTerminal: boolean }> = [];
+      const parser = createCliJsonlStreamingParser({
+        backend: { command: "acme", output: "jsonl" },
+        providerId: "acme-cli",
+        parseJsonlEvent: (line) =>
+          line === "failed"
+            ? { kind: "result", text, errorText: "provider failed" }
+            : {
+                kind: "result",
+                text: "must not replace the provider error",
+                sessionId: "late-successor",
+                usage: { input: 2, output: 1, total: 3 },
+              },
+        onAssistantDelta: () => {},
+        onUsage: (usage, isTerminal) => usageEvents.push({ usage, isTerminal }),
+      });
 
-    parser.push("failed\nsummary\n");
-    parser.finish();
+      parser.push("failed\nsummary\n");
+      parser.finish();
 
-    expect(parser.getOutput()).toEqual({
-      text: "",
-      sessionId: "late-successor",
-      usage: { input: 2, output: 1, total: 3 },
-      errorText: "provider failed",
-    });
-    expect(usageEvents).toEqual([{ usage: { input: 2, output: 1, total: 3 }, isTerminal: true }]);
-  });
+      expect(parser.getOutput()).toEqual({
+        text,
+        sessionId: "late-successor",
+        usage: { input: 2, output: 1, total: 3 },
+        errorText: "provider failed",
+      });
+      expect(usageEvents).toEqual([{ usage: { input: 2, output: 1, total: 3 }, isTerminal: true }]);
+    },
+  );
 
   it("preserves plugin-owned session ids emitted after terminal errors", () => {
     const sessionIds: string[] = [];
@@ -388,7 +391,11 @@ describe("createCliJsonlStreamingParser errors", () => {
     });
   });
 
-  it("retains built-in fallback text after a plugin handles other lines", () => {
+  it.each([
+    ["without a result", undefined, "delegated answer"],
+    ["with an empty result", "  ", "delegated answer"],
+    ["with an authoritative result", "final answer", "final answer"],
+  ] as const)("retains mixed plugin text precedence %s", (_label, resultText, expectedText) => {
     const parser = createCliJsonlStreamingParser({
       backend: { command: "acme", output: "jsonl" },
       providerId: "acme-cli",
@@ -398,6 +405,9 @@ describe("createCliJsonlStreamingParser errors", () => {
         }
         if (line === "prefix") {
           return { kind: "text", text: "streamed prefix" };
+        }
+        if (line === "result") {
+          return { kind: "result", text: resultText };
         }
         return null;
       },
@@ -412,13 +422,14 @@ describe("createCliJsonlStreamingParser errors", () => {
           type: "item.completed",
           item: { type: "agent_message", text: "delegated answer" },
         }),
+        ...(resultText === undefined ? [] : ["result"]),
         "",
       ].join("\n"),
     );
     parser.finish();
 
     expect(parser.getOutput()).toEqual({
-      text: "delegated answer",
+      text: expectedText,
       sessionId: "custom-session",
       usage: undefined,
     });

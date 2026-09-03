@@ -276,6 +276,14 @@ export const defaultControlUiFeatureMethods = [
   "sessions.reset",
   "sessions.rewind",
   "sessions.search",
+  "users.github.status",
+  "users.github.authorize.start",
+  "users.github.authorize.poll",
+  "users.github.authorize.cancel",
+  "users.github.disconnect",
+  "sessions.github.options",
+  "sessions.github.status",
+  "sessions.github.confirm",
   "tools.github.status",
   "tools.github.configure",
   "tools.github.authorize.start",
@@ -326,6 +334,7 @@ export type ControlUiMockGatewayScenario = {
   serverBuildId?: string;
   /** Exact Gateway lifecycle generation served in hello. */
   gatewayBootId?: string;
+  gatewaySuspensionPhase?: "accepting" | "preparing" | "draining" | "prepared";
   /** Optional startup update snapshot for rich local mock fixtures. */
   updateAvailable?: UpdateAvailable | null;
   /** Optional automatic-update campaign snapshot for rich local mock fixtures. */
@@ -563,6 +572,8 @@ export function setSharedControlUiE2eServerBaseUrl(baseUrl: string | null): void
   sharedControlUiE2eServerBaseUrl = baseUrl;
 }
 
+type MockSessionsListResponse = { sessions: unknown[]; [field: string]: unknown };
+
 export type MockGatewayControls = {
   closeLatest: (code?: number, reason?: string) => Promise<void>;
   deliverLatest: (frame: unknown) => Promise<void>;
@@ -584,6 +595,7 @@ export type MockGatewayControls = {
   setOperatorScopes: (scopes: string[]) => Promise<void>;
   setHistoryMessages: (messages: unknown[]) => Promise<void>;
   setMethodResponse: (method: string, payload: unknown) => Promise<void>;
+  setSessionsListResponse: (payload: MockSessionsListResponse) => Promise<void>;
   setSessionSharingPolicy: (policy: {
     allowedSessionVisibilities: Array<"shared" | "read-only" | "suggest" | "draft">;
     hasMultipleSessionSharingIdentities: boolean;
@@ -963,6 +975,7 @@ function normalizeScenario(
     devGitBranch: scenario.devGitBranch?.trim() || "",
     serverBuildId: scenario.serverBuildId?.trim() || "e2e",
     gatewayBootId: scenario.gatewayBootId?.trim() || "e2e-gateway-boot",
+    gatewaySuspensionPhase: scenario.gatewaySuspensionPhase ?? "accepting",
     updateAvailable: scenario.updateAvailable ?? null,
     updateSchedule: scenario.updateSchedule ?? null,
     controlUiBuildSource: scenario.controlUiBuildSource ?? "bundled",
@@ -1074,6 +1087,7 @@ export type ControlUiMockGateway = {
   setOperatorScopes: (scopes: string[]) => void;
   setHistoryMessages: (messages: unknown[]) => void;
   setMethodResponse: (method: string, payload: unknown) => void;
+  setSessionsListResponse: (payload: MockSessionsListResponse) => void;
   setRequestHandler: (method: string, handler: ControlUiMockRequestHandler) => void;
   setSessionSharingPolicy: (policy: {
     allowedSessionVisibilities: Array<"shared" | "read-only" | "suggest" | "draft">;
@@ -1150,6 +1164,7 @@ function installControlUiMockGateway(
   (window as MockGatewayWindow)["__OPENCLAW_CONTROL_UI_BASE_PATH__"] = scenario.basePath;
   const protocolVersion = input.protocolVersion;
   const methodResponseOverridesStorageKey = "openclaw.control-ui-e2e.method-responses.v1";
+  const canonicalSessionsStorageKey = "openclaw.control-ui-e2e.canonical-sessions.v1";
   const methodResponseOverrides: Record<string, unknown> = {};
   try {
     const storedOverrides = window.sessionStorage.getItem(methodResponseOverridesStorageKey);
@@ -1168,10 +1183,29 @@ function installControlUiMockGateway(
   const requestHandlers = new Map<string, ControlUiMockRequestHandler>();
   const methodResponseSequenceIndexes = new Map<string, number>();
   const pendingApprovals = new Map<string, Map<string, Record<string, unknown>>>();
+  let canonicalSessionRows = scenario.sessions;
+  let hasCanonicalSessionsOverride = false;
+  try {
+    const storedCanonicalSessions = window.sessionStorage.getItem(canonicalSessionsStorageKey);
+    const parsedCanonicalSessions = storedCanonicalSessions
+      ? (JSON.parse(storedCanonicalSessions) as unknown)
+      : null;
+    if (Array.isArray(parsedCanonicalSessions)) {
+      canonicalSessionRows = parsedCanonicalSessions as ControlUiSessionFixture[];
+      hasCanonicalSessionsOverride = true;
+    }
+  } catch {
+    // The scenario remains authoritative when browser storage is unavailable.
+  }
   const sessions = createSessions({
-    rows: scenario.sessions,
+    rows: canonicalSessionRows,
     mainKey: scenario.mainSessionKey,
   });
+  if (hasCanonicalSessionsOverride) {
+    // Persisted explicit snapshots bypass scenario-default enrichment so reload
+    // preserves the same exact owner rows used by CAS, describe, and startup.
+    sessions.replaceCanonicalList(canonicalSessionRows);
+  }
   const terminalSessions = new Map<string, MockTerminalSession>();
   let terminalSessionSequence = 0;
   const sessionMessageSubscriptions = new Set<string>();
@@ -1536,6 +1570,17 @@ function installControlUiMockGateway(
       }
     }
     if (method === "sessions.patch" && isRecord(params) && typeof params.key === "string") {
+      if (
+        typeof params.expectedSessionId === "string" &&
+        sessions.read(params.key).sessionId !== params.expectedSessionId
+      ) {
+        return {
+          __mockError: {
+            code: "INVALID_REQUEST",
+            message: "session identity changed; refresh and retry",
+          },
+        };
+      }
       const result = sessions.patch(params.key, params);
       return "__mockError" in result || (isRecord(response) && Object.keys(response).length === 0)
         ? result
@@ -1838,6 +1883,7 @@ function installControlUiMockGateway(
             hasMultipleSessionSharingIdentities: scenario.hasMultipleSessionSharingIdentities,
           },
           snapshot: {
+            suspension: { phase: scenario.gatewaySuspensionPhase },
             ...presenceSnapshot(params),
             ...(scenario.updateAvailable ? { updateAvailable: scenario.updateAvailable } : {}),
             ...(scenario.updateSchedule ? { updateSchedule: scenario.updateSchedule } : {}),
@@ -1852,6 +1898,74 @@ function installControlUiMockGateway(
           type: "hello-ok",
         };
       }
+      case "sessions.github.options":
+        return {
+          personal: scenario.presenceUsers.some((user) => user.self)
+            ? {
+                state: "disconnected",
+                generation: null,
+                account: null,
+                accessExpiresAtMs: null,
+                refreshState: "not_applicable",
+                pending: null,
+              }
+            : null,
+          shared: { source: "system-configured", accountId: 1, login: "system-bot" },
+          pendingPersonal: null,
+        };
+      case "users.github.status":
+      case "tools.github.status": {
+        const system = {
+          source: "system-detected",
+          credentialKind: "native",
+          credentialState: "unavailable",
+          account: null,
+          gitAuthor: { name: null, email: null },
+          evidence: "none",
+          accessExpiresAtMs: null,
+          refreshState: "not_applicable",
+          oauthScopes: [],
+          repositoryGrants: "unknown",
+        };
+        if (method === "users.github.status") {
+          return scenario.presenceUsers.some((user) => user.self)
+            ? {
+                personal: {
+                  state: "disconnected",
+                  generation: null,
+                  account: null,
+                  accessExpiresAtMs: null,
+                  refreshState: "not_applicable",
+                  pending: null,
+                },
+                system,
+              }
+            : {
+                __mockError: {
+                  code: "FORBIDDEN",
+                  message:
+                    "My GitHub requires a verified durable user profile; sign in and try again.",
+                },
+              };
+        }
+        const selectedScope =
+          isRecord(params) && params.selectedScope === "agent" ? "agent" : "system";
+        return {
+          agentId: isRecord(params) ? params.agentId : scenario.defaultAgentId,
+          selectedScope,
+          selected: {
+            scope: selectedScope,
+            configured: false,
+            identity: selectedScope === "system" ? system : null,
+          },
+          effective: system,
+        };
+      }
+      case "users.github.authorize.cancel":
+      case "tools.github.authorize.cancel":
+        return { cancelled: true };
+      case "users.github.disconnect":
+        return { disconnected: true };
       case "agent.identity.get":
         return {
           agentId: scenario.assistantAgentId,
@@ -1912,7 +2026,9 @@ function installControlUiMockGateway(
         const row = sessions.read(key);
         const info = sessions.sessionInfo(key);
         const override =
-          row.key === sessions.read(scenario.sessionKey).key ? scenario.sessionInfo : null;
+          !hasCanonicalSessionsOverride && row.key === sessions.read(scenario.sessionKey).key
+            ? scenario.sessionInfo
+            : null;
         return {
           messages: scenario.historyMessages,
           sessionId: row.sessionId,
@@ -1932,7 +2048,7 @@ function installControlUiMockGateway(
       case "sessions.describe": {
         const key =
           isRecord(params) && typeof params.key === "string" ? params.key : scenario.sessionKey;
-        return { session: sessions.read(key) };
+        return { session: sessions.sessionInfo(key) ?? null };
       }
       case "chat.metadata":
         return {
@@ -1958,6 +2074,24 @@ function installControlUiMockGateway(
         };
       case "chat.abort":
         return { aborted: true };
+      case "skills.status":
+        return {
+          workspaceDir: "/tmp/control-ui-mock/workspace",
+          managedSkillsDir: "/tmp/control-ui-mock/skills",
+          skills: [],
+        };
+      case "skills.library.list":
+        return {
+          entries: [],
+          profileId: null,
+          multipleProfiles: false,
+          defaultTarget: "workspace",
+          canManageWorkspace: true,
+          defaultSelectionLimit: 64,
+          ...(isRecord(params) && typeof params.sessionKey === "string"
+            ? { session: { sessionKey: params.sessionKey, selections: [], attachable: [] } }
+            : {}),
+        };
       case "commands.list":
         return { commands: [] };
       case "health":
@@ -2467,9 +2601,6 @@ function installControlUiMockGateway(
       requestHandlers.set(method, handler);
     },
     setMethodResponse(method, payload) {
-      if (method === "sessions.list" && isRecord(payload) && Array.isArray(payload.sessions)) {
-        sessions.replaceListSnapshot(payload.sessions);
-      }
       scenario.methodResponses[method] = payload;
       methodResponseSequenceIndexes.delete(method);
       methodResponseOverrides[method] = payload;
@@ -2481,6 +2612,21 @@ function installControlUiMockGateway(
       } catch {
         // Current-document responses still work if browser storage is unavailable.
       }
+    },
+    setSessionsListResponse(payload) {
+      // Generic method responses may be stale or delayed. Only this explicit
+      // owner transition advances the canonical rows used by mutation CAS.
+      sessions.replaceCanonicalList(payload.sessions);
+      hasCanonicalSessionsOverride = true;
+      try {
+        window.sessionStorage.setItem(
+          canonicalSessionsStorageKey,
+          JSON.stringify(payload.sessions),
+        );
+      } catch {
+        // The current document still observes the canonical replacement.
+      }
+      this.setMethodResponse("sessions.list", payload);
     },
     setSessionSharingPolicy(policy) {
       scenario.allowedSessionVisibilities = policy.allowedSessionVisibilities;
@@ -2741,6 +2887,15 @@ function createMockGatewayControls(
         },
         { targetMethod: method, responsePayload: payload },
       );
+    },
+    async setSessionsListResponse(payload) {
+      await page.evaluate((responsePayload) => {
+        const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
+        if (!gateway) {
+          throw new Error("Mock Gateway is not installed");
+        }
+        gateway.setSessionsListResponse(responsePayload);
+      }, payload);
     },
     async setSessionSharingPolicy(policy) {
       await page.evaluate((nextPolicy) => {

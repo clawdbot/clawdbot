@@ -9,6 +9,7 @@ import {
 import { stableStringify } from "@openclaw/normalization-core";
 import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { prepareMediaCapabilityProviders } from "../plugins/capability-provider-runtime.js";
+import { normalizePluginsConfig } from "../plugins/config-state.js";
 import {
   getPreparedMessageToolCatalog,
   getPreparedMessageToolCatalogForRegistry,
@@ -25,6 +26,11 @@ import {
   discoverAuthStorageFacts,
   discoverModelsFromCapturedSources,
 } from "./agent-model-discovery.js";
+import { withAgentRosterFactsBatch } from "./agent-scope-config.js";
+import {
+  getPreparedRuntimeAuthProfileStoreSnapshotCore,
+  getRuntimeAuthProfileStoreCredentialsRevision,
+} from "./auth-profiles/runtime-snapshots.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { buildInlineProviderModels } from "./embedded-agent-runner/model.inline-provider.js";
 import {
@@ -157,6 +163,8 @@ export async function prepareWorkspaceBuildGroup(
     providerDiscoveryProviderIds?: readonly string[];
     preferBuiltPluginArtifacts?: boolean;
     includeCredentialProviders?: boolean;
+    getConfiguredHarnessRuntimes?: () => readonly string[];
+    basePluginIds?: readonly string[];
   } = {},
   loadInboundPluginRegistry?: PreparedInboundRegistryLoader,
   reusablePluginGeneration?: PreparedModelRuntimePluginGeneration,
@@ -197,6 +205,8 @@ export async function prepareWorkspaceBuildGroup(
     loadInboundPluginRegistry,
     preferBuiltPluginArtifacts,
     reusablePluginGeneration,
+    options.getConfiguredHarnessRuntimes,
+    options.basePluginIds,
   );
   const reuseRuntimeFacts =
     reusablePluginGeneration && runtimePluginRegistry === reusablePluginGeneration.pluginRegistry;
@@ -247,16 +257,18 @@ export async function prepareWorkspaceBuildGroup(
     };
     const configuredProviderIds = [
       ...new Set([
-        ...inputs.flatMap(({ config, agentId }) => [
-          ...collectPreparedModelRuntimeProviderIds(
-            config,
-            {},
-            false,
-            collectPreparedModelRuntimeConfiguredRefs(config, agentId),
-            agentId,
-          ),
-          ...parseConfiguredModelVisibilityEntries({ cfg: config, agentId }).providerWildcards,
-        ]),
+        ...inputs.flatMap(({ config, agentId }) =>
+          withAgentRosterFactsBatch(config, () => [
+            ...collectPreparedModelRuntimeProviderIds(
+              config,
+              {},
+              false,
+              collectPreparedModelRuntimeConfiguredRefs(config, agentId),
+              agentId,
+            ),
+            ...parseConfiguredModelVisibilityEntries({ cfg: config, agentId }).providerWildcards,
+          ]),
+        ),
         ...(options.providerDiscoveryProviderIds ?? []).map(normalizeProviderId).filter(Boolean),
       ]),
     ].toSorted((left, right) => left.localeCompare(right));
@@ -343,12 +355,14 @@ export async function prepareWorkspaceBuildGroup(
     const ambientCredentialsMs = performance.now() - ambientCredentialsStartedAt;
     const agentFactsStartedAt = performance.now();
     const agentBaseFacts = inputs.map((candidate) =>
-      prepareAgentFacts(
-        candidate,
-        catalogMode,
-        ambientCredentials,
-        options.providerDiscoveryProviderIds,
-        options.includeCredentialProviders,
+      withAgentRosterFactsBatch(candidate.config, () =>
+        prepareAgentFacts(
+          candidate,
+          catalogMode,
+          ambientCredentials,
+          options.providerDiscoveryProviderIds,
+          options.includeCredentialProviders,
+        ),
       ),
     );
     const agentFactsMs = performance.now() - agentFactsStartedAt;
@@ -475,6 +489,25 @@ function captureModelsJsonContents(agentDir: string): string | null {
 }
 export const fingerprintPreparedRuntimeFacts = (value: unknown): string =>
   sha256Base64Url(stableStringify(value));
+
+/** Record discovery scope before config projection or auth-owner publication can replace it. */
+export function preparedModelInventoryKey(input: PreparedModelRuntimeInput): string {
+  const { models, auth, env } = input.config;
+  const plugins = normalizePluginsConfig(input.config.plugins);
+  for (const entry of Object.values(plugins.entries)) {
+    entry.config ??= {};
+  }
+  return fingerprintPreparedRuntimeFacts({
+    ...input,
+    config: { models, auth, env, plugins },
+    env: input.env ?? process.env,
+    runtimePluginSelections: undefined,
+    credentials: getRuntimeAuthProfileStoreCredentialsRevision(),
+    order:
+      getPreparedRuntimeAuthProfileStoreSnapshotCore(input.agentDir, input.inheritedAuthDir)
+        ?.order ?? {},
+  });
+}
 function hasSameOAuthProviderGeneration(
   left: ReturnType<AuthStorage["getOAuthProviders"]>,
   right: ReturnType<AuthStorage["getOAuthProviders"]>,

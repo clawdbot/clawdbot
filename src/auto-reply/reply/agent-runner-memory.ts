@@ -95,15 +95,6 @@ import { incrementCompactionCount } from "./session-updates.js";
 type EmbeddedAgentRuntime = typeof import("../../agents/embedded-agent.js");
 type ToolResultTruncationRuntime =
   typeof import("../../agents/embedded-agent-runner/tool-result-truncation.js");
-type UpdateSessionEntryParams = {
-  storePath: string;
-  sessionKey: string;
-  skipMaintenance?: boolean;
-  takeCacheOwnership?: boolean;
-  update: (
-    entry: SessionEntry,
-  ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
-};
 
 const MAX_VISIBLE_MEMORY_FLUSH_ERROR_CHARS = 600;
 const MAX_FLUSH_FAILURES = 3;
@@ -117,40 +108,20 @@ const toolResultTruncationRuntimeLoader = createLazyImportLoader<ToolResultTrunc
   () => import("../../agents/embedded-agent-runner/tool-result-truncation.js"),
 );
 
-function loadEmbeddedAgentRuntime(): Promise<EmbeddedAgentRuntime> {
-  return embeddedAgentRuntimeLoader.load();
-}
-
-async function compactEmbeddedAgentSessionDefault(
+async function compactEmbeddedAgentSession(
   ...args: Parameters<typeof import("../../agents/embedded-agent.js").compactEmbeddedAgentSession>
 ): Promise<
   Awaited<ReturnType<typeof import("../../agents/embedded-agent.js").compactEmbeddedAgentSession>>
 > {
-  const { compactEmbeddedAgentSession } = await loadEmbeddedAgentRuntime();
-  return await compactEmbeddedAgentSession(...args);
+  const runtime = await embeddedAgentRuntimeLoader.load();
+  return await runtime.compactEmbeddedAgentSession(...args);
 }
 
-async function runEmbeddedAgentDefault(
+async function runEmbeddedAgent(
   params: RunEmbeddedAgentInternalParams,
 ): Promise<Awaited<ReturnType<typeof import("../../agents/embedded-agent.js").runEmbeddedAgent>>> {
-  const { runEmbeddedAgent } = await loadEmbeddedAgentRuntime();
-  return await runEmbeddedAgent(params);
-}
-
-async function updateSessionEntryDefault(
-  params: UpdateSessionEntryParams,
-): Promise<SessionEntry | null> {
-  return await updateSessionEntry(
-    {
-      storePath: params.storePath,
-      sessionKey: params.sessionKey,
-    },
-    params.update,
-    {
-      skipMaintenance: params.skipMaintenance,
-      takeCacheOwnership: params.takeCacheOwnership,
-    },
-  );
+  const runtime = await embeddedAgentRuntimeLoader.load();
+  return await runtime.runEmbeddedAgent(params);
 }
 
 async function ensureMemoryFlushTargetFile(params: {
@@ -177,20 +148,6 @@ async function ensureMemoryFlushTargetFile(params: {
   await handle.close();
 }
 
-const memoryDeps = {
-  compactEmbeddedAgentSession: compactEmbeddedAgentSessionDefault,
-  runEmbeddedAgentEntry,
-  runEmbeddedAgent: runEmbeddedAgentDefault,
-  ensureMemoryFlushTargetFile,
-  clearAgentRunContext,
-  registerAgentRunContext,
-  refreshQueuedFollowupSession,
-  incrementCompactionCount,
-  updateSessionEntry: updateSessionEntryDefault,
-  randomUUID: () => crypto.randomUUID(),
-  now: () => Date.now(),
-};
-
 function hasMatchingTranscriptByteCompactionLatch(
   entry: SessionEntry,
   activeBytes: number,
@@ -203,30 +160,6 @@ function hasMatchingTranscriptByteCompactionLatch(
     activeBytes >= latch.activeBytes &&
     activeBytes - latch.activeBytes < maxBytes
   );
-}
-
-/** Overrides memory helper dependencies for tests. */
-function setAgentRunnerMemoryTestDeps(overrides?: Partial<typeof memoryDeps>): void {
-  Object.assign(memoryDeps, {
-    runEmbeddedAgentEntry,
-    compactEmbeddedAgentSession: compactEmbeddedAgentSessionDefault,
-    runEmbeddedAgent: runEmbeddedAgentDefault,
-    ensureMemoryFlushTargetFile,
-    clearAgentRunContext,
-    registerAgentRunContext,
-    refreshQueuedFollowupSession,
-    incrementCompactionCount,
-    updateSessionEntry: updateSessionEntryDefault,
-    randomUUID: () => crypto.randomUUID(),
-    now: () => Date.now(),
-    ...overrides,
-  });
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.agentRunnerMemoryTestApi")] = {
-    setAgentRunnerMemoryTestDeps,
-  };
 }
 
 function estimatePromptTokensForMemoryFlush(prompt?: string): number | undefined {
@@ -754,11 +687,6 @@ export async function runSessionCompactionIfNeeded(params: {
   onSessionIdChanged?: (sessionId: string) => void;
   onCompactionNotice?: (phase: CompactionNoticePhase, text?: string) => Promise<void> | void;
 }): Promise<SessionEntry | undefined> {
-  const deps = {
-    compactEmbeddedAgentSession: memoryDeps.compactEmbeddedAgentSession,
-    incrementCompactionCount: memoryDeps.incrementCompactionCount,
-    refreshQueuedFollowupSession: memoryDeps.refreshQueuedFollowupSession,
-  };
   const assertActive = () => {
     params.abortSignal?.throwIfAborted();
     if (params.authorize?.() === false) {
@@ -891,7 +819,7 @@ export async function runSessionCompactionIfNeeded(params: {
       latch.maxBytes !== maxActiveTranscriptBytes ||
       (typeof activeTranscriptBytes === "number" && !transcriptByteCompactionLatched));
   if (shouldClearTranscriptByteCompactionLatch) {
-    const compactionCount = await deps.incrementCompactionCount({
+    const compactionCount = await incrementCompactionCount({
       agentId: compactionAgentId,
       amount: 0,
       expectedSession: entry,
@@ -1023,7 +951,7 @@ export async function runSessionCompactionIfNeeded(params: {
   try {
     await notifyStartCompaction();
     assertActive();
-    const result = await deps.compactEmbeddedAgentSession(
+    const result = await compactEmbeddedAgentSession(
       {
         sessionId: entry.sessionId,
         sessionKey: compactionSessionKey,
@@ -1144,7 +1072,7 @@ export async function runSessionCompactionIfNeeded(params: {
             maxBytes: maxActiveTranscriptBytes,
           }
         : undefined;
-    const compactionCount = await deps.incrementCompactionCount({
+    const compactionCount = await incrementCompactionCount({
       agentId: compactionAgentId,
       sessionEntry: entry,
       sessionStore: compactionStore,
@@ -1191,7 +1119,7 @@ export async function runSessionCompactionIfNeeded(params: {
       const queueKey = params.followupRun.run.sessionKey ?? params.sessionKey;
       if (queueKey) {
         params.followupRun.run.sessionFile = queueKey;
-        deps.refreshQueuedFollowupSession({
+        refreshQueuedFollowupSession({
           key: queueKey,
           previousSessionId,
           nextSessionId: entry.sessionId,
@@ -1279,7 +1207,7 @@ export async function runMemoryFlushIfNeeded(params: {
     return { sessionEntry: entry ?? params.sessionEntry, outcome: "skipped" };
   }
 
-  const flushRunId = memoryDeps.randomUUID();
+  const flushRunId = crypto.randomUUID();
   let flushRunRegistered = false;
   let activeSessionEntry = entry ?? params.sessionEntry;
   const activeSessionStore = params.sessionStore ?? {};
@@ -1479,14 +1407,14 @@ export async function runMemoryFlushIfNeeded(params: {
   const prepareMemoryFlushAttempt = async () => {
     const plan = resolveMemoryFlushPlan({
       cfg: params.cfg,
-      nowMs: memoryDeps.now(),
+      nowMs: Date.now(),
       contextWindowTokens,
     });
     if (!plan) {
       return null;
     }
     const writePath = plan.relativePath;
-    await memoryDeps.ensureMemoryFlushTargetFile({
+    await ensureMemoryFlushTargetFile({
       workspaceDir: params.followupRun.run.workspaceDir,
       relativePath: writePath,
     });
@@ -1542,7 +1470,7 @@ export async function runMemoryFlushIfNeeded(params: {
   // the sole cleanup path so setup, execution, and persistence exits cannot orphan it.
   try {
     if (params.sessionKey) {
-      memoryDeps.registerAgentRunContext(flushRunId, {
+      registerAgentRunContext(flushRunId, {
         sessionKey: params.sessionKey,
         ...(activeSessionEntry?.sessionId ? { sessionId: activeSessionEntry.sessionId } : {}),
         verboseLevel: params.resolvedVerboseLevel,
@@ -1554,7 +1482,7 @@ export async function runMemoryFlushIfNeeded(params: {
       flushRunRegistered = true;
     }
     try {
-      await memoryDeps.runEmbeddedAgentEntry({
+      await runEmbeddedAgentEntry({
         selection: {
           cfg: selection.cfg,
           provider: selection.provider,
@@ -1623,7 +1551,7 @@ export async function runMemoryFlushIfNeeded(params: {
               runId: flushRunId,
               allowTransientCooldownProbe: runOptions.allowTransientCooldownProbe,
             });
-          const result = await memoryDeps.runEmbeddedAgent({
+          const result = await runEmbeddedAgent({
             preparedRunAdmission,
             ...embeddedContext,
             ...senderContext,
@@ -1674,7 +1602,7 @@ export async function runMemoryFlushIfNeeded(params: {
       // Settle the whole fallback chronology once, before the memory admission closes.
       for (const fact of compaction.durable) {
         const previousSessionId = activeSessionEntry?.sessionId ?? params.followupRun.run.sessionId;
-        const count = await memoryDeps.incrementCompactionCount({
+        const count = await incrementCompactionCount({
           agentId: fact.target.agentId,
           sessionEntry: activeSessionEntry,
           sessionStore: activeSessionStore,
@@ -1691,7 +1619,7 @@ export async function runMemoryFlushIfNeeded(params: {
         if (activeSessionEntry?.sessionId === fact.target.sessionId) {
           params.followupRun.run.sessionId = activeSessionEntry.sessionId;
           params.followupRun.run.sessionFile = fact.target.sessionKey;
-          memoryDeps.refreshQueuedFollowupSession({
+          refreshQueuedFollowupSession({
             key: fact.target.sessionKey,
             previousSessionId,
             nextSessionId: activeSessionEntry.sessionId,
@@ -1709,15 +1637,13 @@ export async function runMemoryFlushIfNeeded(params: {
     }
     if (params.storePath && params.sessionKey) {
       try {
-        const updatedEntry = await memoryDeps.updateSessionEntry({
-          storePath: params.storePath,
-          sessionKey: params.sessionKey,
-          skipMaintenance: true,
-          takeCacheOwnership: true,
-          update: async () => ({
+        const updatedEntry = await updateSessionEntry(
+          { storePath: params.storePath, sessionKey: params.sessionKey },
+          async () => ({
             memoryFlush: { kind: "succeeded", compactionCount: flushedCompactionCount },
           }),
-        });
+          { skipMaintenance: true, takeCacheOwnership: true },
+        );
         if (updatedEntry) {
           activeSessionEntry = updatedEntry;
           params.followupRun.run.sessionId = updatedEntry.sessionId;
@@ -1737,7 +1663,7 @@ export async function runMemoryFlushIfNeeded(params: {
   } finally {
     await deferredLifecycle.complete();
     if (flushRunRegistered) {
-      memoryDeps.clearAgentRunContext(flushRunId);
+      clearAgentRunContext(flushRunId);
     }
     preparedRunAdmission.close();
   }
@@ -1762,13 +1688,10 @@ async function recordMemoryFlushFailure(
           }
         }
       };
-      const updateEntry = (update: UpdateSessionEntryParams["update"]) =>
-        memoryDeps.updateSessionEntry({
-          storePath,
-          sessionKey,
+      const updateEntry = (update: Parameters<typeof updateSessionEntry>[1]) =>
+        updateSessionEntry({ storePath, sessionKey }, update, {
           skipMaintenance: true,
           takeCacheOwnership: true,
-          update,
         });
       const failedEntry = await updateEntry(async (currentEntry) => ({
         memoryFlush: {

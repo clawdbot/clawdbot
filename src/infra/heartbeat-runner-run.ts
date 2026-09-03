@@ -43,7 +43,7 @@ async function invokeHeartbeatAgentRun(
 ) {
   const getReplyFromConfig =
     opts.deps?.getReplyFromConfig ??
-    (await import("./heartbeat-runner.runtime.js")).getReplyFromConfig;
+    (await import("./heartbeat-runner.runtime.js")).getHeartbeatReplyFromConfig;
   const trackedGetReplyFromConfig: NonNullable<HeartbeatDeps["getReplyFromConfig"]> = async (
     ...args
   ) => {

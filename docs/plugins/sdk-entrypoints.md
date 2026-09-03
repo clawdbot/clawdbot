@@ -242,13 +242,25 @@ export default definePluginEntry({
   validation messages into `parseReadParams(...)` and `parseListParams(...)`.
 
   `resolveCreateSession({ agentId })` must return a config-derived model/runtime
-  target before OpenClaw advertises creation or calls `startTerminalSession`.
+  target before OpenClaw advertises model-chat creation. Native terminal readiness
+  is independent of this target.
   Use
   [`api.runtime.agent.resolveSessionCatalogCreateTarget(...)`](/plugins/sdk-runtime#api-runtime-agent)
   to apply the host's runtime and model-allowlist policy instead of duplicating
   it.
 
-  `startTerminalSession({ agentId, cwd, initialMessage?, nodeId? })` creates a
+  `startTerminalSession` advertises `capabilities.startTerminal: true` independently
+  of model-chat creation. Return `canStartTerminal: true` on each eligible host
+  from the ordinary catalog `list` callback, including empty hosts. Publish the
+  same flag in progressive `onHost` frames and final results; explicitly return
+  `false` when readiness changes. A failed transcript listing does not revoke
+  an otherwise available CLI. Node hosts require their exact connected, invocable
+  fresh-start command; start-only nodes must not invoke a missing list command.
+  Preserve local source IDs and process-home isolation. The shipped
+  `createSession.startTerminal` field remains model-chat metadata; new terminal
+  callers use the independent capability and raw catalog hosts.
+
+  `startTerminalSession({ agentId, cwd, initialMessage?, nodeId?, hostId? })` creates a
   fresh CLI terminal plan. Return either a local plan (`kind: "local"`, `argv`,
   and the exact `cwd`, plus optional `env`, `pathEnv`, and `title`) or a paired-node
   plan (`kind: "node"`, `nodeId`, `command`, `paramsJSON`, and the exact `cwd`).
@@ -257,7 +269,19 @@ export default definePluginEntry({
   provisions `cwd`; the Gateway requires an existing absolute local directory,
   rejects a changed plan cwd or host, and applies the normal agent-sandbox,
   node-pairing, deadline, and connection-ownership checks before opening the
-  PTY.
+  PTY. `hostId` carries the selected local source; `nodeId` identifies a node.
+  Initial prompts are bounded to 16,384 characters and cwd to 4,096 characters
+  (4,096 UTF-8 bytes on nodes).
+  Fresh node commands use `decodeNodePtyStartParams` from `node-host` and
+  `runNodePtyCommand({ ..., requiredCwd: true }, io)` to require an existing absolute
+  node directory, including a recheck immediately before spawning. Resume retains
+  its existing cwd fallback contract. Node payloads must not accept executable,
+  argv, environment, credentials, or a Gateway agent as native account selection.
+
+  The terminal manager retains the native title and actual connection/agent owner
+  across attach and reconnect. Clients advertise `terminal-session-metadata` to
+  receive attach title/owner and list titles; older closed response shapes stay
+  unchanged.
 
 - `kind` is deprecated: declare an exclusive slot (`"memory"` or
   `"context-engine"`) in the `openclaw.plugin.json` manifest `kind` field

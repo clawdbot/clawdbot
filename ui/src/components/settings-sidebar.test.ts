@@ -537,6 +537,7 @@ describe("settings sidebar search", () => {
       lastError: string | null,
       queuedOutboxCount = 0,
       restartPending = false,
+      suspensionPhase?: Parameters<typeof renderSettingsSidebar>[0]["suspensionPhase"],
     ) =>
       render(
         renderSettingsSidebar({
@@ -544,6 +545,7 @@ describe("settings sidebar search", () => {
           activeRouteId: "appearance",
           offline,
           restartPending,
+          suspensionPhase,
           queuedOutboxCount,
           lastError,
           gatewayVersion: "1.0.0",
@@ -566,7 +568,14 @@ describe("settings sidebar search", () => {
     expect(container.querySelector(".sidebar-footer-bar__status")).toBeNull();
     expect(container.querySelector("openclaw-settings-save-indicator")).not.toBeNull();
 
-    renderSidebar(true, "connection refused?token=settings-secret", 3);
+    renderSidebar(false, null, 0, false, "prepared");
+    expect(container.querySelector(".sidebar-footer-bar__status")?.textContent).toBe("Suspended");
+    expect(container.querySelector("openclaw-settings-save-indicator")).toBeNull();
+    renderSidebar(false, null, 0, false, "accepting");
+    expect(container.querySelector(".sidebar-footer-bar__status")).toBeNull();
+    expect(container.querySelector("openclaw-settings-save-indicator")).not.toBeNull();
+
+    renderSidebar(true, "connection refused?token=settings-secret", 3, false, "prepared");
     expect(container.querySelector("openclaw-settings-save-indicator")).toBeNull();
     const button = container.querySelector<HTMLButtonElement>(".sidebar-footer-bar__status");
     expect(button?.hasAttribute("title")).toBe(false);
@@ -578,7 +587,7 @@ describe("settings sidebar search", () => {
     button?.click();
     expect(onRetryConnect).toHaveBeenCalledOnce();
 
-    renderSidebar(true, null, 3, true);
+    renderSidebar(true, null, 3, true, "prepared");
     expect(container.querySelector(".sidebar-footer-bar__status--restarting")?.textContent).toBe(
       "Restarting…",
     );

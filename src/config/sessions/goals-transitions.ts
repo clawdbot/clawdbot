@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { resolveFreshSessionTotalTokens } from "./session-entry-runtime.js";
+import { resolveFreshSessionTotalTokens } from "./types.js";
 import type { SessionEntry, SessionGoal, SessionGoalStatus } from "./types.js";
 
 export class SessionGoalTransitionError extends Error {

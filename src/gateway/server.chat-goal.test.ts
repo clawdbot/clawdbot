@@ -249,11 +249,13 @@ describe("Goal chat admission and continuation", () => {
         },
         requestClient,
       );
-      expect(started.mock.calls[0]).toEqual([
-        true,
-        expect.objectContaining({ status: "started", runId: sessionId }),
-        undefined,
-        expect.anything(),
+      expect(started.mock.calls).toEqual([
+        [
+          true,
+          expect.objectContaining({ status: "started", runId: sessionId }),
+          undefined,
+          expect.anything(),
+        ],
       ]);
       expect(entryAtAck).toMatchObject({
         sessionId: expect.any(String),

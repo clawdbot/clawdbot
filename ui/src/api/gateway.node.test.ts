@@ -552,12 +552,36 @@ describe("GatewayBrowserClient", () => {
       GATEWAY_CLIENT_CAPS.APPROVALS,
       GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
       GATEWAY_CLIENT_CAPS.TERMINAL_OFFSET_SEQ,
+      GATEWAY_CLIENT_CAPS.TERMINAL_SESSION_METADATA,
       GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
       GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
       GATEWAY_CLIENT_CAPS.UI_COMMANDS,
       GATEWAY_CLIENT_CAPS.USAGE_REFRESHING,
     ]);
     expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
+  });
+
+  it("uses native client metadata and its existing operator scope grant", async () => {
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      clientName: "openclaw-ios",
+      mode: "ui",
+      platform: "iOS 27.0.0",
+      deviceFamily: "iPhone",
+      instanceId: "ios-installation",
+      scopes: ["operator.read", "operator.write"],
+    });
+
+    const { connectFrame } = await startConnect(client);
+
+    expect(connectFrame.params?.client).toMatchObject({
+      id: "openclaw-ios",
+      mode: "ui",
+      platform: "iOS 27.0.0",
+      deviceFamily: "iPhone",
+      instanceId: "ios-installation",
+    });
+    expect(connectFrame.params?.scopes).toEqual(["operator.read", "operator.write"]);
   });
 
   it("surfaces build identity rejection and never retries without build identity", async () => {

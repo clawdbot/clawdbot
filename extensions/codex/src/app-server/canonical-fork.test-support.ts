@@ -224,6 +224,7 @@ export async function createCanonicalForkFixture(params: {
         const startupBinding = await bindingStore.read(session);
         const bundleMcpThreadConfig = await loadCodexBundleMcpThreadConfig({
           workspaceDir,
+          agentId: attempt.agentId,
           cfg: config,
           toolsEnabled: true,
         });
@@ -339,7 +340,7 @@ export async function createCanonicalForkFixture(params: {
           startup?.releaseSharedClientLease();
           runAbortController.abort();
           await preparedTools.scopedMcpTools?.dispose();
-          await preparedTools.scheduledConfiguredMcp?.dispose();
+          await preparedTools.configuredMcp?.dispose();
           for (const cleanup of preparedTools.runCleanups) {
             await cleanup("fixture complete");
           }

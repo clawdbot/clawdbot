@@ -1,9 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
 import type {
-  WorkerGitHubPublishParams,
   WorkerSessionsSpawnParams,
   WorkerSessionToolResult,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { WorkerSkillWorkshopParams } from "../../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
 import { buildSubagentExecutionSessionSpawnContext } from "../../agents/subagents/spawn/subagent-spawn-execution-identity.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import {
@@ -15,14 +15,12 @@ import {
 } from "../../agents/tools/in-process-gateway.js";
 import { runWithScopedSessionAccess } from "../../agents/tools/scoped-session-access.js";
 import { createSessionsSpawnTool } from "../../agents/tools/sessions-spawn-tool.js";
-import { jsonResult } from "../../agents/tools/tool-results.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { inheritSessionCreationPolicy } from "../../config/sessions/session-entry-provenance.js";
 import { sha256Base64Url, sha256HexPrefixCore } from "../../infra/crypto-digest.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { WORKER_TOOL_NAMES } from "../../worker/tool-authority.js";
-import type { GitHubPublicationCoordinator } from "../github-publication.js";
 import type { GatewayContextResolver } from "../server-methods/types.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
@@ -52,14 +50,17 @@ import {
   workerSessionRelationKey as relationKey,
   type WorkerSessionToolSource as ExactSource,
 } from "./worker-session-tool-topology.js";
+import { invokeWorkerSkillAuthoring } from "./worker-skill-authoring.js";
 
 type WorkerSessionToolRequest =
   | WorkerPortalToolRequest
   | WorkerSessionOperationRequest
-  | ({ identity: WorkerConnectionIdentity; signal?: AbortSignal } & {
-      toolName: "github_publish";
-      request: WorkerGitHubPublishParams;
-    });
+  | {
+      identity: WorkerConnectionIdentity;
+      signal?: AbortSignal;
+      toolName: "skill_workshop";
+      request: WorkerSkillWorkshopParams;
+    };
 
 type WorkerSessionToolAuthority = {
   assertSource: () => void;
@@ -90,7 +91,6 @@ export function createWorkerSessionToolExecutor(params: {
   placements: WorkerSessionPlacementStore;
   environments: Pick<WorkerEnvironmentService, "get">;
   dispatchChild: WorkerPlacementDispatchContract["dispatch"];
-  githubPublication: Pick<GitHubPublicationCoordinator, "requestForClaim">;
   portals: WorkerPortalToolExecutorDependencies["portals"];
 }) {
   const inFlight = new Map<string, Promise<string>>();
@@ -461,29 +461,18 @@ export function createWorkerSessionToolExecutor(params: {
 
   return async (request: WorkerSessionToolRequest): Promise<WorkerSessionToolResult> => {
     const source = exactSource({ identity: request.identity, placements: params.placements });
+    if (request.toolName === "skill_workshop") {
+      if (!params.placements.isWorkerTurnToolAuthorized(source.turnClaim, "skill_workshop")) {
+        throw new Error("Worker Workshop is not authorized.");
+      }
+      request.signal?.throwIfAborted();
+      const result = await invokeWorkerSkillAuthoring(source.turnClaim, request.request);
+      exactSource({ identity: request.identity, placements: params.placements });
+      request.signal?.throwIfAborted();
+      return { resultJson: serializeResult(result) };
+    }
     if (request.toolName === "portal") {
       return await executePortal(request);
-    }
-    if (request.toolName === "github_publish") {
-      const assertPublicationAuthority = () => {
-        const current = exactSource({ identity: request.identity, placements: params.placements });
-        if (!params.placements.isWorkerTurnToolAuthorized(current.turnClaim, request.toolName)) {
-          throw new Error("Worker session tool authority changed");
-        }
-      };
-      assertPublicationAuthority();
-      request.signal?.throwIfAborted();
-      const publication = await params.githubPublication.requestForClaim({
-        claim: source.turnClaim,
-        sessionKey: source.sessionKey,
-        agentId: source.agentId,
-        idempotencyKey: request.request.toolCallId,
-        ...(request.request.title ? { title: request.request.title } : {}),
-        ...(request.request.body ? { body: request.request.body } : {}),
-        assertCurrent: assertPublicationAuthority,
-      });
-      assertPublicationAuthority();
-      return { resultJson: serializeResult(jsonResult(publication)) };
     }
     const requestDigest = computeRequestDigest(
       request.toolName === "sessions_spawn"

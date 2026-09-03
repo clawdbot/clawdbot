@@ -316,22 +316,19 @@ describe("tool-card extraction", () => {
   });
 
   it("never exposes redacted tool arguments to any card renderer", () => {
-    const cards = extractToolCards(
-      {
-        role: "assistant",
-        toolCallId: "call-publish",
-        content: [
-          {
-            type: "toolcall",
-            id: "call-publish",
-            name: "delegate_artifacts_publish",
-            arguments: { paths: ["reports/private-quarterly-summary.pdf", "notes/secret.md"] },
-            details: { path: "reports/private-quarterly-summary.pdf" },
-          },
-        ],
-      },
-      "msg:redact",
-    );
+    const cards = extractToolCards({
+      role: "assistant",
+      toolCallId: "call-publish",
+      content: [
+        {
+          type: "toolcall",
+          id: "call-publish",
+          name: "delegate_artifacts_publish",
+          arguments: { paths: ["reports/private-quarterly-summary.pdf", "notes/secret.md"] },
+          details: { path: "reports/private-quarterly-summary.pdf" },
+        },
+      ],
+    });
 
     expect(cards).toHaveLength(1);
     // `args` feeds the key-value list and the collapsed preview; `inputText`

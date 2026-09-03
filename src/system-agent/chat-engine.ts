@@ -215,9 +215,9 @@ export class SystemAgentChatEngine {
 
   async loadOverview(): Promise<SystemAgentOverview> {
     const route = await this.requireVerifiedInference();
-    const overview = this.options.deps?.loadOverview
-      ? await this.options.deps.loadOverview()
-      : await loadSystemAgentOverview();
+    const overview = await (this.options.deps?.loadOverview ?? loadSystemAgentOverview)({
+      agentId: route.agentId,
+    });
     return { ...overview, defaultModel: route.modelLabel };
   }
 

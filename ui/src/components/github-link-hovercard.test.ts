@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { i18n } from "../i18n/index.ts";
 import { GitHubLinkHovercardProvider } from "./github-link-hovercard.runtime.ts";
@@ -287,6 +288,77 @@ describe("openclaw-github-link-hovercard-provider", () => {
     expect(hovercard()).toBeNull();
     await hover(anchor);
     expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["immediate rejection", "late rejection", "late success"])(
+    "reopens an abandoned request without poisoning its replacement cache: %s",
+    async (settlement) => {
+      const abandoned = createDeferred<ReturnType<typeof issuePreviewResponse>>();
+      let requestSignal: AbortSignal | undefined;
+      const request = vi
+        .fn()
+        .mockImplementationOnce(
+          (_method: string, _params: unknown, options: { signal: AbortSignal }) => {
+            requestSignal = options.signal;
+            if (settlement === "immediate rejection") {
+              options.signal.addEventListener(
+                "abort",
+                () => abandoned.reject(new Error("gateway request aborted")),
+                { once: true },
+              );
+            }
+            return abandoned.promise;
+          },
+        )
+        .mockResolvedValue(issuePreviewResponse());
+      const { anchor, provider } = createLink(ISSUE_HREF);
+      provider.client = { request } as unknown as GatewayBrowserClient;
+
+      await hover(anchor);
+      expect(hovercard()?.dataset.loading).toBe("true");
+      leave(anchor);
+      await vi.advanceTimersByTimeAsync(GITHUB_HOVERCARD_CLOSE_DELAY_MS);
+      expect(requestSignal?.aborted).toBe(true);
+      await hover(anchor);
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(hovercard()?.textContent).toContain("Keep hover previews reachable");
+
+      if (settlement === "late success") {
+        abandoned.resolve(issuePreviewResponse({ title: "Abandoned preview" }));
+      } else {
+        abandoned.reject(new Error("gateway request aborted"));
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      expect(hovercard()?.textContent).toContain("Keep hover previews reachable");
+      leave(anchor);
+      await vi.advanceTimersByTimeAsync(GITHUB_HOVERCARD_CLOSE_DELAY_MS);
+      await hover(anchor);
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(hovercard()?.textContent).toContain("Keep hover previews reachable");
+    },
+  );
+
+  it("keeps genuine request failures cached for 30 seconds before retrying on hover", async () => {
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("GitHub preview unavailable"))
+      .mockResolvedValue(issuePreviewResponse());
+    const { anchor, provider } = createLink(ISSUE_HREF);
+    provider.client = { request } as unknown as GatewayBrowserClient;
+
+    await hover(anchor);
+    expect(hovercard()?.dataset.state).toBe("unavailable");
+    leave(anchor);
+    await vi.advanceTimersByTimeAsync(29_000);
+    await hover(anchor);
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(hovercard()?.dataset.state).toBe("unavailable");
+
+    leave(anchor);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await hover(anchor);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(hovercard()?.textContent).toContain("Keep hover previews reachable");
   });
 
   it("stays open while the pointer travels from the link onto the card", async () => {

@@ -188,8 +188,11 @@ describe("subscribeEmbeddedAgentSession lifecycle billing errors", () => {
           onBlockReply: undefined,
           onBlockReplyFlush: undefined,
           sandboxSessionKey: sessionKey,
-          builtinToolNames: new Set(),
-          replaySafeToolNames: new Set(),
+          subscriptionToolTrust: {
+            builtinToolNames: new Set(),
+            replaySafeToolNames: new Set(),
+            trustedLocalMediaToolNames: new Set(),
+          },
         });
         try {
           await session.prompt("exercise terminal provider failure");

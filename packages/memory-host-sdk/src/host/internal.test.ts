@@ -253,7 +253,13 @@ describe("memory host SDK package internals", () => {
       },
     );
 
-    await expect(listMemoryFiles(workspaceDir, extraPaths(workspaceDir))).rejects.toBe(scanError);
+    await expect(listMemoryFiles(workspaceDir, extraPaths(workspaceDir))).rejects.toMatchObject({
+      name: "MemorySourceScanError",
+      path: failedPath,
+      code: "EIO",
+      cause: scanError,
+      message: `memory source scan failed at ${failedPath} (EIO): I/O failure: ${failedPath}`,
+    });
   });
 
   it("propagates operational failures while discovering the canonical memory file", async () => {
@@ -267,7 +273,12 @@ describe("memory host SDK package internals", () => {
       return await realReaddir(...args);
     });
 
-    await expect(listMemoryFiles(workspaceDir)).rejects.toBe(scanError);
+    await expect(listMemoryFiles(workspaceDir)).rejects.toMatchObject({
+      name: "MemorySourceScanError",
+      path: workspaceDir,
+      code: "EIO",
+      cause: scanError,
+    });
   });
 
   it("propagates operational failures while traversing a memory directory", async () => {
@@ -283,7 +294,36 @@ describe("memory host SDK package internals", () => {
       return await realReaddir(...args);
     });
 
-    await expect(listMemoryFiles(workspaceDir)).rejects.toBe(scanError);
+    await expect(listMemoryFiles(workspaceDir)).rejects.toMatchObject({
+      name: "MemorySourceScanError",
+      path: memoryDir,
+      code: "EIO",
+      cause: scanError,
+    });
+  });
+
+  it("names the nested directory that blocks a memory scan", async () => {
+    const workspaceDir = getTmpDir();
+    const memoryDir = path.join(workspaceDir, "memory");
+    const nestedDir = path.join(memoryDir, "nested");
+    await fs.mkdir(nestedDir, { recursive: true });
+    await fs.writeFile(path.join(memoryDir, "ok.md"), "# ok\n");
+    const scanError = Object.assign(new Error("permission denied"), { code: "EACCES" });
+    const realReaddir = fs.readdir;
+    vi.spyOn(fs, "readdir").mockImplementation(async (...args: Parameters<typeof fs.readdir>) => {
+      if (path.resolve(String(args[0])) === nestedDir) {
+        throw scanError;
+      }
+      return await realReaddir(...args);
+    });
+
+    await expect(listMemoryFiles(workspaceDir)).rejects.toMatchObject({
+      name: "MemorySourceScanError",
+      path: nestedDir,
+      code: "EACCES",
+      cause: scanError,
+      message: `memory source scan failed at ${nestedDir} (EACCES): permission denied`,
+    });
   });
 
   it("filters extra directories by glob while preserving symlink skips", async () => {

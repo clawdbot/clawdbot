@@ -37,7 +37,6 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptMessageInTransaction } from "./session-accessor.sqlite-transcript-message-append.js";
 import { rememberCommittedTranscriptMessageSequencesInTransaction } from "./session-accessor.sqlite-transcript-sequences.js";
-import { mergeSessionEntry } from "./session-entry-runtime.js";
 import type {
   SessionLifecycleRevisionExpectation,
   SessionTranscriptTurnExpectedState,
@@ -47,6 +46,7 @@ import {
   buildExpectedTranscriptTurnSessionPatch,
   sessionMatchesExpectedTranscriptTurn,
 } from "./session-transcript-turn-state.js";
+import { mergeSessionEntry } from "./types.js";
 import type { SessionEntry } from "./types.js";
 
 type SqliteExpectedSessionTranscriptTurnResult = {

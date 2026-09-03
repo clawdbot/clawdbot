@@ -417,7 +417,7 @@ describe("Chrome navigation event access", () => {
       return await get(tabId);
     });
 
-    harness.chromeApi.tabGroups.onUpdated.emit({ id: 11, title: "OpenClaw" });
+    harness.chromeApi.tabGroups.onRemoved.emit({ id: 12 });
     await started;
     try {
       harness.update({ url: "https://destination.example/" });

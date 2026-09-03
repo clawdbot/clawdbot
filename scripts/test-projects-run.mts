@@ -4,20 +4,25 @@ import type { SpawnOptions } from "node:child_process";
 import fs from "node:fs";
 import { performance } from "node:perf_hooks";
 import pMap from "p-map";
-import { loadPatternListFromEnv } from "../test/vitest/vitest.pattern-file.ts";
+import { assertTestHomeSelection, combineTestHomeSelections } from "../test/test-home-policy.mts";
 import { formatMs } from "./lib/check-timing-summary.mts";
 import { signalExitCode } from "./lib/managed-child-process.mts";
 import {
   prepareE2eVitestRuntime,
   prepareVitestRuntime,
+  resolveVitestCliEntry,
+  resolveVitestRuntimeCliSelections,
 } from "./lib/vitest-build-prerequisites.mts";
-import { isVitestWorkerMetadataRequest } from "./lib/vitest-cli-mode.mts";
-import type { exitVitestBySignal } from "./lib/vitest-cli.mts";
+import { hasNonRunVitestSubcommand } from "./lib/vitest-cli-mode.mts";
+import { parseVitestExecutionArgs } from "./lib/vitest-cli.mts";
+import { resolveVitestHomeSelection } from "./lib/vitest-home-selection.mts";
 import {
   isCiLikeEnv,
   resolveLocalFullSuiteProfile,
   resolveLocalVitestEnv,
 } from "./lib/vitest-local-scheduling.mts";
+import { resolveVitestNodeArgs } from "./lib/vitest-process-env.mts";
+import type { exitVitestBySignal } from "./lib/vitest-process.mts";
 import { createVitestReportOwner, type VitestReportOwner } from "./lib/vitest-report-owner.mts";
 import {
   createShardTimingSample,
@@ -25,12 +30,7 @@ import {
   writeShardTimings,
 } from "./lib/vitest-shard-timings.mts";
 import { createVitestWorkerRun, type VitestWorkerRun } from "./lib/vitest-worker-run.mts";
-import {
-  resolveVitestCliEntry,
-  resolveVitestNodeArgs,
-  resolveVitestSpawnParams,
-  spawnWatchedVitestProcess,
-} from "./run-vitest.mts";
+import { resolveVitestSpawnParams, spawnWatchedVitestProcess } from "./run-vitest.mts";
 import {
   applyDefaultMultiSpecVitestCachePaths,
   applyDefaultVitestNoOutputTimeout,
@@ -42,6 +42,7 @@ import {
   findUnmatchedExplicitTestTargets,
   formatFailedShardDigest,
   formatNoChangedTestTargetLines,
+  isTestFileTarget,
   listFullExtensionVitestProjectConfigs,
   orderFullSuiteSpecsForParallelRun,
   parseTestProjectsArgs,
@@ -98,11 +99,17 @@ function cleanupVitestRunSpec(spec: VitestRunSpec) {
   }
 }
 
-function runPnpmSpecCommand(spec: VitestRunSpec, pnpmArgs: string[], workerRun?: VitestWorkerRun) {
+function runPnpmSpecCommand(
+  spec: VitestRunSpec,
+  pnpmArgs: string[],
+  workerRun?: VitestWorkerRun,
+  homeMode?: Parameters<typeof spawnWatchedVitestProcess>[0]["homeMode"],
+) {
   let noOutputTimedOut = false;
   return new Promise<VitestCommandOutcome>((resolve, reject) => {
     const { completion, getForwardedSignal } = spawnWatchedVitestProcess({
       workerRun,
+      homeMode,
       pnpmArgs,
       env: spec.env,
       onNoOutputTimeout: () => {
@@ -140,7 +147,12 @@ async function runVitestSpec(spec: VitestRunSpec, reports: VitestReportOwner) {
   try {
     if (spec.preflightPnpmArgs) {
       console.error(`[test] preflight ${spec.config}`);
-      const preflightResult = await runPnpmSpecCommand(spec, spec.preflightPnpmArgs);
+      const preflightResult = await runPnpmSpecCommand(
+        spec,
+        spec.preflightPnpmArgs,
+        undefined,
+        "tooling",
+      );
       if (preflightResult.code !== 0 || preflightResult.signal) {
         return preflightResult;
       }
@@ -282,7 +294,7 @@ export async function runTestProjects(exitBySignal: typeof exitVitestBySignal) {
     return;
   }
   const baseEnv = resolveLocalVitestEnv(process.env);
-  const { targetArgs } = parseTestProjectsArgs(args, process.cwd());
+  const { targetArgs, forwardedArgs } = parseTestProjectsArgs(args, process.cwd());
   const unmatchedExplicitTargets = findUnmatchedExplicitTestTargets(args, process.cwd());
   if (unmatchedExplicitTargets.length > 0) {
     for (const unmatched of unmatchedExplicitTargets) {
@@ -340,9 +352,44 @@ export async function runTestProjects(exitBySignal: typeof exitVitestBySignal) {
     return;
   }
 
+  const { parseCLI } = await import("vitest/node");
+  if (
+    targetArgs.length &&
+    !runSpecs.some((spec) => spec.watchMode) &&
+    !hasNonRunVitestSubcommand(forwardedArgs)
+  ) {
+    // Native parsing stays in the execution owner. Original filters distinguish
+    // explicit files from broad selections that also lower to literal include files.
+    const execution = parseVitestExecutionArgs(["run", ...forwardedArgs], parseCLI);
+    if (
+      execution &&
+      !execution.options.watch &&
+      execution.options.run !== false &&
+      execution.filter.length > 0 &&
+      execution.filter.every(
+        (file) => isTestFileTarget(file) && /[/\\]/u.test(file) && !/[*?[\]{}]|[@+!]\(/u.test(file),
+      ) &&
+      !Object.hasOwn(execution.options, "passWithNoTests")
+    ) {
+      for (const spec of runSpecs) {
+        const separator = spec.pnpmArgs.indexOf("--");
+        spec.pnpmArgs.splice(
+          separator < 0 ? spec.pnpmArgs.length : separator,
+          0,
+          "--passWithNoTests=false",
+        );
+      }
+    }
+  }
+
   runSpecs.forEach((spec, index) => {
     spec.reportIndex = index;
   });
+  const homeMode = combineTestHomeSelections(
+    runSpecs.map((spec) => resolveVitestHomeSelection(spec.pnpmArgs, { env: spec.env })),
+  );
+  // Refuse a mixed real-home run before report setup or runtime preparation imports code.
+  assertTestHomeSelection(baseEnv, homeMode);
   const reports = await createVitestReportOwner(
     runSpecs.map((spec) => ({
       config: spec.config,
@@ -361,7 +408,19 @@ export async function runTestProjects(exitBySignal: typeof exitVitestBySignal) {
   let reportFailure: string | undefined;
   let printCompletedSummary: (() => void) | undefined;
   try {
-    const e2eSpecs = runSpecs.filter((spec) => spec.config === "test/vitest/vitest.e2e.config.ts");
+    const admitted = runSpecs.map((spec) => {
+      const cliArgs = spec.pnpmArgs.slice(spec.pnpmArgs.indexOf(resolveVitestCliEntry()) + 1);
+      const execution = parseVitestExecutionArgs(cliArgs, parseCLI);
+      // Metadata and invalid input must not install browser prerequisites either.
+      if (!execution) {
+        spec.preflightPnpmArgs = null;
+      }
+      return { spec, cliArgs, execution };
+    });
+    const runnable = admitted.filter(({ execution }) => execution !== null);
+    const e2eSpecs = runnable
+      .map(({ spec }) => spec)
+      .filter((spec) => spec.config === "test/vitest/vitest.e2e.config.ts");
     if (e2eSpecs.length > 0) {
       const preparedEnv = await prepareE2eVitestRuntime(baseEnv);
       for (const spec of e2eSpecs) {
@@ -369,13 +428,14 @@ export async function runTestProjects(exitBySignal: typeof exitVitestBySignal) {
       }
     } else {
       const code = await prepareVitestRuntime(
-        runSpecs.map((spec) => ({
-          configs: [spec.config],
-          // Owned lists are written when readers start; inherited lists remain caller-owned.
-          includePatterns:
-            spec.includePatterns ??
-            loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", spec.env),
-        })),
+        runnable.flatMap(({ spec, cliArgs }) => {
+          const selections = resolveVitestRuntimeCliSelections(spec.config, cliArgs, spec.env);
+          // These selections are invocation-owned; their include files are not written yet.
+          for (const selection of selections) {
+            selection.includePatterns = spec.includePatterns;
+          }
+          return selections;
+        }),
         baseEnv,
       );
       if (code !== 0) {
@@ -385,9 +445,12 @@ export async function runTestProjects(exitBySignal: typeof exitVitestBySignal) {
       }
     }
 
-    if (!runSpecs.some((spec) => spec.watchMode) && !isVitestWorkerMetadataRequest(args)) {
+    const compiled = runnable.filter(
+      ({ spec, execution }) => !spec.watchMode && !execution?.options.watch,
+    );
+    if (compiled.length) {
       workers = createVitestWorkerRun();
-      for (const spec of runSpecs) {
+      for (const { spec } of compiled) {
         spec.workerRun = workers;
       }
     }
@@ -466,13 +529,18 @@ export async function runTestProjects(exitBySignal: typeof exitVitestBySignal) {
           async (mergeArgs) => {
             // Replay is source-only: selected configs load after all compiled
             // borrowers close; report blobs own the exact executed selection.
-            const outcome = await runPnpmSpecCommand({ ...runSpecs[0]!, env: baseEnv }, [
-              "exec",
-              "node",
-              ...resolveVitestNodeArgs(baseEnv),
-              resolveVitestCliEntry(),
-              ...mergeArgs,
-            ]);
+            const outcome = await runPnpmSpecCommand(
+              { ...runSpecs[0]!, env: baseEnv },
+              [
+                "exec",
+                "node",
+                ...resolveVitestNodeArgs(baseEnv),
+                resolveVitestCliEntry(),
+                ...mergeArgs,
+              ],
+              undefined,
+              homeMode,
+            );
             termination.signal ??= outcome.signal;
             return outcome;
           },

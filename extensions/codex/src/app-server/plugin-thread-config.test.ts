@@ -7,7 +7,7 @@ import {
   CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
 } from "./config.js";
 import {
-  resolveOwnedAppReadOnlyToolConfigKeys,
+  resolveOwnedAppApprovalOverrideKeys,
   resolveRecoverableCodexPluginConfigKeys,
 } from "./plugin-inventory.js";
 import { CodexPluginMetadataCache } from "./plugin-metadata-cache.js";
@@ -28,7 +28,34 @@ describe("Codex plugin thread config", () => {
     defaultCodexAppInventoryCache.clear();
   });
 
-  it("does not classify keys shared with writable tools as read-only", () => {
+  it("keeps approval checks conservative when tool metadata is absent", () => {
+    expect(resolveOwnedAppApprovalOverrideKeys(appInfo("linear", true))).toStrictEqual({});
+    expect(
+      resolveOwnedAppApprovalOverrideKeys({ ...appInfo("linear", true), toolSummaries: [] }),
+    ).toStrictEqual({ approvalOverrideToolConfigKeys: [] });
+  });
+
+  it("retains disabled writable tools in the approval boundary", () => {
+    expect(
+      resolveOwnedAppApprovalOverrideKeys({
+        ...appInfo("linear", true),
+        toolSummaries: [
+          {
+            name: "save_issue",
+            title: "Save issue",
+            description: "Create or update an issue.",
+            isEnabled: false,
+            disabledReason: "App policy",
+            isReadOnly: false,
+          },
+        ],
+      }),
+    ).toStrictEqual({
+      approvalOverrideToolConfigKeys: ["Save issue", "linear_save_issue", "save_issue"],
+    });
+  });
+
+  it("preserves writable approval checks for keys shared with read-only tools", () => {
     const app: v2.AppInfo = {
       ...appInfo("linear", true),
       toolSummaries: [
@@ -51,8 +78,8 @@ describe("Codex plugin thread config", () => {
       ],
     };
 
-    expect(resolveOwnedAppReadOnlyToolConfigKeys(app)).toStrictEqual({
-      readOnlyToolConfigKeys: ["Fetch", "fetch"],
+    expect(resolveOwnedAppApprovalOverrideKeys(app)).toStrictEqual({
+      approvalOverrideToolConfigKeys: ["Save issue", "linear_fetch", "linear_linear_fetch"],
     });
   });
 
@@ -700,100 +727,122 @@ describe("Codex plugin thread config", () => {
     expect(configPatch).not.toHaveProperty("approvals_reviewer");
   });
 
-  it("keeps ask policy apps when managed approval overrides cover only read-only tools", async () => {
-    const appCache = new CodexAppInventoryCache();
-    const linearApp: v2.AppInfo = {
-      ...appInfo("linear", true),
-      toolSummaries: [
-        {
-          name: "fetch",
-          title: "Fetch",
-          description: "Fetch a Linear issue.",
-          isEnabled: true,
-          disabledReason: null,
-          isReadOnly: true,
-        },
-        {
-          name: "save_issue",
-          title: "linear/save_issue",
-          description: "Create or update a Linear issue.",
-          isEnabled: true,
-          disabledReason: null,
-          isReadOnly: false,
-        },
-      ],
-    };
-    await appCache.refreshNow({
-      key: "runtime",
-      nowMs: 0,
-      request: async (method, params) => codexAppInventoryResponse(method, [linearApp], params),
-    });
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      if (method === "plugin/installed" || method === "plugin/list") {
-        return pluginList([pluginSummary("linear", { installed: true, enabled: true })]);
-      }
-      if (method === "plugin/read") {
-        return pluginDetail("linear", [appSummary("linear")], ["linear"]);
-      }
-      if (method === "config/read") {
-        expect(params).toEqual({ includeLayers: true, cwd: "/repo/project" });
-        return {
-          config: {
-            apps: {
-              linear: {
-                tools: {
-                  linear_fetch: { approval_mode: "approve" },
+  it.each(
+    [false, true].flatMap((allowAllPlugins) =>
+      [
+        { name: "read-only", tools: { linear_fetch: { approval_mode: "approve" } } },
+        { name: "cleared", tools: { linear_save_issue: { approval_mode: null } } },
+        { name: "retired", tools: { linear_retired_tool: { approval_mode: "approve" } } },
+      ].map(({ name, tools }) => ({ name, tools, allowAllPlugins })),
+    ),
+  )(
+    "keeps ask policy apps with $name overrides (account-wide: $allowAllPlugins)",
+    async ({ tools, allowAllPlugins }) => {
+      const appCache = new CodexAppInventoryCache();
+      const linearApp: v2.AppInfo = {
+        ...appInfo("linear", true),
+        toolSummaries: [
+          {
+            name: "fetch",
+            title: "Fetch",
+            description: "Fetch a Linear issue.",
+            isEnabled: true,
+            disabledReason: null,
+            isReadOnly: true,
+          },
+          {
+            name: "save_issue",
+            title: "linear/save_issue",
+            description: "Create or update a Linear issue.",
+            isEnabled: true,
+            disabledReason: null,
+            isReadOnly: false,
+          },
+        ],
+      };
+      await appCache.refreshNow({
+        key: "runtime",
+        nowMs: 0,
+        request: async (method, params) => codexAppInventoryResponse(method, [linearApp], params),
+      });
+      const request = vi.fn(async (method: string, params?: unknown) => {
+        if (method === "app/installed" || method === "app/read") {
+          return codexAppInventoryResponse(
+            method,
+            [linearApp],
+            // SAFETY: the dispatcher supplies the narrowed inventory method's parameters.
+            params as CodexAppServerRequestParams<typeof method>,
+          );
+        }
+        if (method === "plugin/installed" || method === "plugin/list") {
+          return pluginList([pluginSummary("linear", { installed: true, enabled: true })]);
+        }
+        if (method === "plugin/read") {
+          return pluginDetail("linear", [appSummary("linear")], ["linear"]);
+        }
+        if (method === "config/read") {
+          expect(params).toEqual({ includeLayers: true, cwd: "/repo/project" });
+          return {
+            config: {
+              apps: {
+                linear: {
+                  // Managed defaults can outlive a tool or remain after a local
+                  // null/delete. Neither state may make the whole app disappear.
+                  tools,
                 },
               },
             },
-          },
-          layers: [],
-        };
-      }
-      throw new Error(`unexpected request ${method}`);
-    });
+            layers: [],
+          };
+        }
+        throw new Error(`unexpected request ${method}`);
+      });
 
-    const config = await buildCodexPluginThreadConfig({
-      pluginConfig: {
-        codexPlugins: {
-          enabled: true,
-          allow_destructive_actions: "ask",
-          plugins: {
-            linear: {
-              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-              pluginName: "linear",
-            },
+      const config = await buildCodexPluginThreadConfig({
+        pluginConfig: {
+          codexPlugins: {
+            enabled: true,
+            allow_all_plugins: allowAllPlugins,
+            allow_destructive_actions: "ask",
+            plugins: allowAllPlugins
+              ? {}
+              : {
+                  linear: {
+                    marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+                    pluginName: "linear",
+                  },
+                },
           },
         },
-      },
-      appCache,
-      appCacheKey: "runtime",
-      configCwd: "/repo/project",
-      nowMs: 1,
-      request,
-    });
+        appCache,
+        appCacheKey: "runtime",
+        configCwd: "/repo/project",
+        nowMs: 1,
+        request,
+      });
 
-    expect(config.configPatch).toEqual({
-      apps: {
-        _default: {
-          enabled: false,
-          destructive_enabled: false,
-          open_world_enabled: false,
+      expect(config.configPatch).toEqual({
+        apps: {
+          _default: {
+            enabled: false,
+            destructive_enabled: false,
+            open_world_enabled: false,
+          },
+          linear: {
+            enabled: true,
+            approvals_reviewer: "user",
+            destructive_enabled: true,
+            open_world_enabled: true,
+            default_tools_approval_mode: "auto",
+          },
         },
-        linear: {
-          enabled: true,
-          approvals_reviewer: "user",
-          destructive_enabled: true,
-          open_world_enabled: true,
-          default_tools_approval_mode: "auto",
-        },
-      },
-    });
-    expect(config.provisionalAppIds).toEqual(["linear"]);
-    expect(config.diagnostics).toStrictEqual([]);
-    expect(request.mock.calls.filter(([method]) => method === "config/read")).toHaveLength(1);
-    expect(request.mock.calls.map(([method]) => method)).not.toContain("config/batchWrite");
-  });
+      });
+      expect(config.provisionalAppIds).toEqual(["linear"]);
+      expect(config.diagnostics).toStrictEqual([]);
+      expect(request.mock.calls.filter(([method]) => method === "config/read")).toHaveLength(1);
+      expect(request.mock.calls.map(([method]) => method)).not.toContain("config/batchWrite");
+    },
+  );
 
   it("omits ask policy apps when cwd effective approval overrides remain after cleanup", async () => {
     const appCache = new CodexAppInventoryCache();

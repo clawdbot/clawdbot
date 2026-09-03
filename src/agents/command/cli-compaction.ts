@@ -8,7 +8,7 @@ import {
  * This module decides when CLI-backed sessions need context compaction, chooses
  * native harness or context-engine compaction, and records resulting session state.
  */
-import { resolveFreshSessionTotalTokens } from "../../config/sessions/session-entry-runtime.js";
+import { resolveFreshSessionTotalTokens } from "../../config/sessions/types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { AgentCompactionMode } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -27,6 +27,7 @@ import {
   resolveEffectiveCompactionMode,
 } from "../agent-settings.js";
 import { resolveCliBackendConfig as resolveCliBackendConfigImpl } from "../cli-backends.js";
+import { clearCliSessionInStore as clearCliSessionInStoreImpl } from "../cli-session-store.js";
 import {
   isBenignCompactionSkipReason,
   isBenignCompactionSkipResult,
@@ -52,7 +53,6 @@ import { acquireAgentRunPreparedModelRuntime } from "../prepared-model-runtime.j
 import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import {
-  clearCliSessionInStore as clearCliSessionInStoreImpl,
   normalizeSessionTokenCount,
   recordCliCompactionInStore as recordCliCompactionInStoreImpl,
 } from "./session-store.js";
@@ -815,6 +815,7 @@ export async function runCliTurnCompactionLifecycle(
         sessionStore: params.sessionStore,
         storePath: params.storePath,
         expectedSessionId: params.sessionId,
+        assertCommitAllowed: assertActive,
       })) ?? params.sessionEntry
     );
   }

@@ -1,22 +1,20 @@
 import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
 import type { BootstrapContextMode } from "../../bootstrap-files.js";
 import { normalizeSpawnedRunMetadata } from "../../spawned-context.js";
-import { buildSubagentInitialUserMessage } from "./subagent-initial-user-message.js";
 import type { SubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
 import { resolveSubagentAgentGatewayTimeoutMs } from "./subagent-spawn-gateway.js";
 import { AGENT_LANE_SUBAGENT } from "./subagent-spawn.runtime.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
+import type { SubagentCompletionMode } from "./subagent-system-prompt.js";
 
 export function buildSubagentLaunchRequest(params: {
-  childDepth: number;
-  maxSpawnDepth: number;
+  completionMode: SubagentCompletionMode;
   spawnMode: SpawnSubagentMode;
-  task: string;
+  message: string;
   spawnedByKey: string;
   toolSpawnMetadata: Parameters<typeof normalizeSpawnedRunMetadata>[0];
   spawnedWorkspaceDir?: string;
   childSessionKey: string;
-  collect: boolean;
   childSessionOrigin?: {
     channel?: string;
     to?: string;
@@ -24,13 +22,11 @@ export function buildSubagentLaunchRequest(params: {
     threadId?: string | number;
   };
   childIdem: string;
-  deliverInitialChildRunDirectly: boolean;
   outputSchema?: Record<string, unknown>;
   childSystemPrompt: string;
   thinkingOverride?: string;
   runTimeoutSeconds: number;
   lightContext: boolean;
-  expectsCompletionMessage: boolean;
   requesterOrigin?: {
     channel?: string;
     accountId?: string;
@@ -64,18 +60,12 @@ export function buildSubagentLaunchRequest(params: {
     channelId?: string;
     messageId?: string | number;
   };
-  shouldAnnounceCompletion: boolean;
   spawnedMetadata: ReturnType<typeof normalizeSpawnedRunMetadata>;
 } {
   const bootstrapContextMode: BootstrapContextMode | undefined = params.lightContext
     ? "lightweight"
     : undefined;
-  const childTaskMessage = buildSubagentInitialUserMessage({
-    childDepth: params.childDepth,
-    maxSpawnDepth: params.maxSpawnDepth,
-    persistentSession: params.spawnMode === "session",
-    task: params.task,
-  });
+  const collect = params.completionMode === "collector";
   const spawnedMetadata = normalizeSpawnedRunMetadata({
     spawnedBy: params.spawnedByKey,
     ...params.toolSpawnMetadata,
@@ -87,9 +77,9 @@ export function buildSubagentLaunchRequest(params: {
     ...publicSpawnedMetadata
   } = spawnedMetadata;
   const request: Record<string, unknown> = {
-    message: childTaskMessage,
+    message: params.message,
     sessionKey: params.childSessionKey,
-    ...(params.collect
+    ...(collect
       ? {}
       : {
           channel: params.childSessionOrigin?.channel,
@@ -101,10 +91,10 @@ export function buildSubagentLaunchRequest(params: {
               : undefined,
         }),
     idempotencyKey: params.childIdem,
-    deliver: params.deliverInitialChildRunDirectly,
+    deliver: params.completionMode === "thread-direct",
     lane: AGENT_LANE_SUBAGENT,
     disableMessageTool: true,
-    swarmCollector: params.collect,
+    swarmCollector: collect,
     swarmOutputSchema: params.outputSchema,
     cleanupBundleMcpOnRunEnd: params.spawnMode !== "session",
     extraSystemPrompt: params.childSystemPrompt,
@@ -125,7 +115,7 @@ export function buildSubagentLaunchRequest(params: {
     timeoutMs: resolveSubagentAgentGatewayTimeoutMs(params.runTimeoutSeconds),
   };
   const queuedLaunch =
-    params.collect && params.swarmSchedulerGroupKey
+    collect && params.swarmSchedulerGroupKey
       ? {
           ...childLaunch,
           schedulerGroupKey: params.swarmSchedulerGroupKey,
@@ -143,9 +133,6 @@ export function buildSubagentLaunchRequest(params: {
       channelId: params.currentChannelId,
       messageId: params.currentMessageId,
     },
-    shouldAnnounceCompletion: params.deliverInitialChildRunDirectly
-      ? false
-      : params.expectsCompletionMessage,
     spawnedMetadata,
   };
 }

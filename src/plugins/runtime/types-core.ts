@@ -443,6 +443,7 @@ export type PluginRuntimeCore = {
     listVoices: ListSpeechVoices;
   };
   mediaUnderstanding: {
+    resolveAudioInputBudget: MediaUnderstandingRuntime["resolveAudioInputBudget"];
     runFile: MediaUnderstandingRuntime["runMediaUnderstandingFile"];
     describeImageFile: MediaUnderstandingRuntime["describeImageFile"];
     describeImageFileWithModel: MediaUnderstandingRuntime["describeImageFileWithModel"];

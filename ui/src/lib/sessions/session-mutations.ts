@@ -3,11 +3,7 @@ import type {
   SessionsAssignOwnerParams,
   SessionsAssignOwnerResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
-import type {
-  GatewaySessionRow,
-  SessionsListResult,
-  SessionsPatchResult,
-} from "../../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../format-error.ts";
 import {
@@ -16,7 +12,7 @@ import {
   type SessionCreateParams,
   type SessionCreateOutcome,
 } from "./create.ts";
-import type { SessionPatch, SessionPatchOptions } from "./patch.ts";
+import type { SessionPatch, SessionPatchOptions, SessionPatchResult } from "./patch.ts";
 import { createSessionArchiveState } from "./session-archive-state.ts";
 import type {
   SessionConnectionOwner,
@@ -26,7 +22,9 @@ import type {
   SessionResetResult,
   SessionState,
 } from "./session-capability.ts";
+import { areUiSessionKeysEquivalent } from "./session-key.ts";
 import { requestSessionPatch, requestSessionReset } from "./session-requests.ts";
+import type { SessionRefreshOutcome } from "./session-roster-refresh.ts";
 
 /** The Gateway's single pin fact: `pinned` is a projection of `pinnedAt`. */
 type SessionPinFields = { pinned: boolean; pinnedAt: number | undefined };
@@ -36,10 +34,12 @@ type SessionMutationsHost = {
   readState: () => SessionState;
   publish: (state: SessionState, errorSource?: "session-observer" | "operation") => void;
   refreshReplacement: (agentId?: string | null) => Promise<void>;
+  refreshReplacementResult: (agentId?: string | null) => Promise<SessionRefreshOutcome>;
   publishedRow: (key: string) => GatewaySessionRow | undefined;
   redecorateLists: () => void;
   notifyCreated: (key: string, entry?: SessionCreateOutcome["entry"], agentId?: string) => void;
   clearThink: (key: string, agentId?: string | null) => void;
+  claimPermissionProjection: (key: string, agentId?: string | null) => () => boolean;
   retirePullRequestSummary: (key: string) => void;
 };
 
@@ -98,7 +98,11 @@ export function createSessionMutations(host: SessionMutationsHost) {
     host.publish({ ...state, modelOverrides });
   };
 
-  const patchRowLocal = (key: string, patch: Partial<GatewaySessionRow>) => {
+  const patchRowLocal = (
+    key: string,
+    patch: Partial<GatewaySessionRow>,
+    expectedSessionId?: string,
+  ) => {
     const state = host.readState();
     const normalizedKey = key.trim();
     if (!state.result || !normalizedKey) {
@@ -106,7 +110,10 @@ export function createSessionMutations(host: SessionMutationsHost) {
     }
     let changed = false;
     const sessions = state.result.sessions.map((row) => {
-      if (row.key !== normalizedKey) {
+      if (
+        !areUiSessionKeysEquivalent(row.key, normalizedKey) ||
+        (expectedSessionId !== undefined && row.sessionId !== expectedSessionId)
+      ) {
         return row;
       }
       changed = true;
@@ -225,7 +232,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
     key: string,
     patchParams: SessionPatch,
     options: SessionPatchOptions = {},
-  ): Promise<SessionsPatchResult | null> => {
+  ): Promise<SessionPatchResult | null> => {
     const scope = host.connection.capture();
     if (!scope) {
       return null;
@@ -237,6 +244,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
     let modelPatchStarted = false;
     let modelPatchRevision = 0;
     const modelPatchToken = Symbol("session-model-patch");
+    let ownsPermissionProjection = () => true;
     const ownsModelOverride = () => options.ownsModelOverride?.() !== false;
     const startModelPatch = () => {
       if (!managesModelOverride || modelPatchStarted || !ownsModelOverride()) {
@@ -367,6 +375,9 @@ export function createSessionMutations(host: SessionMutationsHost) {
         }
       }
       startOptimisticPatch();
+      if (Object.hasOwn(patchParams, "permissionMode")) {
+        ownsPermissionProjection = host.claimPermissionProjection(key, options.agentId);
+      }
       const result = await requestSessionPatch(scope.client, key, patchParams, options);
       if (!host.connection.isCurrent(scope)) {
         settleOptimisticPatch(false);
@@ -375,12 +386,29 @@ export function createSessionMutations(host: SessionMutationsHost) {
       if (Object.hasOwn(patchParams, "thinkingLevel")) {
         host.clearThink(normalizedKey, options.agentId);
       }
+      if (Object.hasOwn(patchParams, "permissionMode")) {
+        if (!ownsPermissionProjection()) {
+          settleOptimisticPatch(true);
+          return result;
+        }
+        // The successful RPC is the first durable acknowledgement; events may
+        // drop and the follow-up list may fail, so record its fenced fact now.
+        patchRowLocal(
+          key,
+          {
+            permissionMode: result.entry?.permissionMode,
+            ...(result.entry?.updatedAt === undefined ? {} : { updatedAt: result.entry.updatedAt }),
+          },
+          result.entry?.sessionId,
+        );
+      }
       if (archivedPresentationRow) {
         const archivedAt = result.entry?.archivedAt ?? Date.now();
         const archivedSessionId = result.entry?.sessionId ?? archivedPresentationRow.sessionId;
         archiveState.observe(normalizedKey, true, {
           ...archivedPresentationRow,
           archivedAt,
+          archiveReason: result.entry?.archiveReason,
           sessionId: archivedSessionId,
         });
         const state = host.readState();
@@ -389,6 +417,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
             ...archivedPresentationRow,
             archived: true,
             archivedAt,
+            archiveReason: result.entry?.archiveReason,
             updatedAt: result.entry?.updatedAt ?? archivedPresentationRow.updatedAt,
             pinned: false,
             pinnedAt: undefined,
@@ -409,17 +438,30 @@ export function createSessionMutations(host: SessionMutationsHost) {
         archiveState.clear(normalizedKey);
       }
       confirmPinPatch();
+      // Commit and list reconciliation are separate outcomes. Callers must not
+      // turn a failed refresh into an apparent rollback of the committed patch.
+      let refreshOutcome: SessionRefreshOutcome = { status: "refreshed" };
       if (!options.deferListRefresh) {
-        await host.refreshReplacement(options.agentId);
+        if (Object.hasOwn(patchParams, "permissionMode")) {
+          refreshOutcome = await host.refreshReplacementResult(options.agentId);
+        } else {
+          await host.refreshReplacement(options.agentId);
+        }
         if (!host.connection.isCurrent(scope)) {
           settleOptimisticPatch(false);
           return (await reconcileConfirmedPreviousConnection(scope, options.agentId))
             ? result
             : null;
         }
+        if (Object.hasOwn(patchParams, "permissionMode") && !ownsPermissionProjection()) {
+          settleOptimisticPatch(true);
+          return result;
+        }
       }
       settleOptimisticPatch(true);
-      return result;
+      return refreshOutcome.status === "failed"
+        ? { ...result, listRefreshError: refreshOutcome.error }
+        : result;
     } catch (error) {
       settleOptimisticPatch(false);
       if (!host.connection.isCurrent(scope)) {

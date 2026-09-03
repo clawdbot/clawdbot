@@ -354,7 +354,7 @@ export function handleAgentEnd(
       return;
     }
     ctx.state.deferBlockReplyDelivery = false;
-    ctx.flushDeferredAssistantEvents();
+    ctx.flushAssistantStream();
     ctx.flushDeferredBlockReplies();
     const flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer({
       final: true,
@@ -405,7 +405,7 @@ export function handleAgentEnd(
     if (!isCurrentDeliveryGeneration()) {
       return;
     }
-    ctx.clearDeferredAssistantEvents();
+    ctx.clearAssistantStream();
     ctx.clearDeferredBlockReplies();
     finalizeAgentEnd();
   };

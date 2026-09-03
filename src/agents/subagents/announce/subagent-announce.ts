@@ -7,7 +7,11 @@ import {
   type DeliveryContext,
   normalizeDeliveryContext,
 } from "../../../utils/delivery-context.shared.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../../../utils/message-channel.js";
+import {
+  INTERNAL_MESSAGE_CHANNEL,
+  isDeliverableMessageChannel,
+  normalizeMessageChannel,
+} from "../../../utils/message-channel.js";
 import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import {
   buildAnnounceIdFromChildRun,
@@ -73,7 +77,6 @@ import {
 } from "./subagent-announce.runtime.js";
 import type { SubagentRunOutcome } from "./subagent-run-outcome.js";
 
-export { buildSubagentSystemPrompt } from "../spawn/subagent-system-prompt.js";
 export { captureSubagentCompletionReply } from "./subagent-announce-output.js";
 export { hasUsableSessionEntry } from "./subagent-announce-descendant-wake.js";
 export { testing } from "./subagent-announce-deps.js";
@@ -550,6 +553,37 @@ export async function runSubagentAnnounceFlow(params: {
       return "delivered";
     }
     const requesterIsSubagent = requesterIsInternalSession();
+    let directOrigin = targetRequesterOrigin;
+    if (!requesterIsSubagent) {
+      const { entry } = readRequesterSessionEntry(
+        targetRequesterSessionKey,
+        targetRequesterAgentId,
+      );
+      directOrigin = resolveAnnounceOrigin(entry, targetRequesterOrigin);
+    }
+    const candidateCompletionDirectOrigin =
+      expectsCompletionMessage && !requesterIsSubagent
+        ? !childSessionEffectsAllowed()
+          ? targetRequesterOrigin
+          : await resolveSubagentCompletionOrigin({
+              childSessionKey: params.childSessionKey,
+              requesterSessionKey: targetRequesterSessionKey,
+              requesterOrigin: directOrigin,
+              childRunId: params.childRunId,
+              spawnMode: params.spawnMode,
+              expectsCompletionMessage,
+            })
+        : targetRequesterOrigin;
+    const completionDirectOrigin = childSessionEffectsAllowed()
+      ? candidateCompletionDirectOrigin
+      : targetRequesterOrigin;
+    const completionChannel = normalizeMessageChannel(completionDirectOrigin?.channel);
+    const modelRouteChange =
+      params.terminalReply?.disposition === "visible"
+        ? params.terminalReply.modelRouteChange
+        : undefined;
+    const preserveModelRouteNotice =
+      requesterIsSubagent || !completionChannel || !isDeliverableMessageChannel(completionChannel);
 
     const statsLine = childSessionEffectsAllowed()
       ? await buildCompactAnnounceStatsLine({
@@ -593,6 +627,8 @@ export async function runSubagentAnnounceFlow(params: {
         outcome,
         findings,
         statsLine,
+        modelRouteChange,
+        preserveModelRouteNotice,
         artifactProjections,
       });
     const returnRoute = await continuationRuntime.routeSubagentContinuationReturn({
@@ -636,30 +672,6 @@ export async function runSubagentAnnounceFlow(params: {
 
     // Send to the requester session. For nested subagents this is an internal
     // follow-up injection (deliver=false) so the orchestrator receives it.
-    let directOrigin = targetRequesterOrigin;
-    if (!requesterIsSubagent) {
-      const { entry } = readRequesterSessionEntry(
-        targetRequesterSessionKey,
-        targetRequesterAgentId,
-      );
-      directOrigin = resolveAnnounceOrigin(entry, targetRequesterOrigin);
-    }
-    const candidateCompletionDirectOrigin =
-      expectsCompletionMessage && !requesterIsSubagent
-        ? !childSessionEffectsAllowed()
-          ? targetRequesterOrigin
-          : await resolveSubagentCompletionOrigin({
-              childSessionKey: params.childSessionKey,
-              requesterSessionKey: targetRequesterSessionKey,
-              requesterOrigin: directOrigin,
-              childRunId: params.childRunId,
-              spawnMode: params.spawnMode,
-              expectsCompletionMessage,
-            })
-        : targetRequesterOrigin;
-    const completionDirectOrigin = childSessionEffectsAllowed()
-      ? candidateCompletionDirectOrigin
-      : targetRequesterOrigin;
     const directIdempotencyKey = buildAnnounceIdempotencyKey(announceId);
     let deliveryResultReported = false;
     const reportDeliveryResult = (delivery: SubagentAnnounceDeliveryResult) => {

@@ -7,6 +7,7 @@ import {
   installationTargetEnv,
   withInstallationTarget,
 } from "../../infra/installation-target-context.js";
+import { registerMcpToolApprovalBinding } from "../../infra/mcp-tool-approval-binding.js";
 import { prepareSystemRunMutableFileApproval } from "../../infra/system-run-approval-binding.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import {
@@ -56,7 +57,7 @@ import {
   registerAgentHarnessScheduledToolProjectionCapability,
   registerAgentHarnessTtsProvenanceTransferCapability,
 } from "./host-private-capabilities.js";
-import { createSessionNodeInvocation } from "./node-execution-authority.js";
+import { createSessionNodeAuthorities } from "./node-execution-authority.js";
 
 type AgentHarnessHostAttempt = Partial<EmbeddedRunAttemptParams> &
   Pick<EmbeddedRunAttemptParams, "admittedRunContext" | "runId">;
@@ -555,36 +556,54 @@ export function createAgentHarnessHostCapabilities(params: {
     requestApproval: async (request) => {
       assertActive();
       request.signal?.throwIfAborted();
-      const result = await withCaller(
-        async () =>
-          await withGatewayToolApprovalOwner(
-            params.pluginId,
-            async () =>
-              await callGatewayTool(
-                "plugin.approval.request",
-                { timeoutMs: request.transportTimeoutMs ?? request.timeoutMs },
-                {
-                  title: request.title,
-                  description: request.description,
-                  severity: request.severity,
-                  toolName: request.toolName,
-                  toolCallId: request.toolCallId,
-                  timeoutMs: request.timeoutMs,
-                  twoPhase: true,
-                  ...(request.allowedDecisions
-                    ? { allowedDecisions: request.allowedDecisions }
-                    : {}),
-                },
-                { expectFinal: false, requireAgentRuntimeIdentity: true, signal: request.signal },
-              ),
-          ),
-        request.signal,
-      );
-      // Gateway approval calls may outlive their owning attempt. A late
-      // request result must not escape after exact authority has closed.
-      assertActive();
-      request.signal?.throwIfAborted();
-      return result;
+      const releaseMcpBinding =
+        request.mcpTool && request.toolCallId && request.isMcpToolApprovalActive && attempt.agentId
+          ? registerMcpToolApprovalBinding({
+              authority: delegatedAuthority,
+              agentId: attempt.agentId,
+              toolCallId: request.toolCallId,
+              ...request.mcpTool,
+              isActive: () => {
+                assertActive();
+                return !request.signal?.aborted && request.isMcpToolApprovalActive!();
+              },
+            })
+          : undefined;
+      try {
+        const result = await withCaller(
+          async () =>
+            await withGatewayToolApprovalOwner(
+              params.pluginId,
+              async () =>
+                await callGatewayTool(
+                  "plugin.approval.request",
+                  { timeoutMs: request.transportTimeoutMs ?? request.timeoutMs },
+                  {
+                    title: request.title,
+                    description: request.description,
+                    severity: request.severity,
+                    toolName: request.toolName,
+                    toolCallId: request.toolCallId,
+                    ...(request.mcpTool ? { mcpTool: request.mcpTool } : {}),
+                    timeoutMs: request.timeoutMs,
+                    twoPhase: true,
+                    ...(request.allowedDecisions
+                      ? { allowedDecisions: request.allowedDecisions }
+                      : {}),
+                  },
+                  { expectFinal: false, requireAgentRuntimeIdentity: true, signal: request.signal },
+                ),
+            ),
+          request.signal,
+        );
+        // Gateway approval calls may outlive their owning attempt. A late
+        // request result must not escape after exact authority has closed.
+        assertActive();
+        request.signal?.throwIfAborted();
+        return result;
+      } finally {
+        releaseMcpBinding?.();
+      }
     },
     waitForApproval: async (request) => {
       assertActive();
@@ -653,23 +672,25 @@ export function createAgentHarnessHostCapabilities(params: {
   });
   return {
     capabilities,
-    runWithScope: (run) =>
-      withPluginRuntimeGatewayRequestScope(
+    runWithScope: (run) => {
+      const nodeAuthorities = createSessionNodeAuthorities(
+        attempt,
+        params.pluginId,
+        requiredNodeCommands,
+        assertActive,
+        attempt.abortSignal
+          ? AbortSignal.any([attempt.abortSignal, capabilityAbortController.signal])
+          : capabilityAbortController.signal,
+      );
+      return withPluginRuntimeGatewayRequestScope(
         {
           isWebchatConnect: () => false,
           ...getPluginRuntimeGatewayRequestScope(),
-          invokeWithSessionNodeAuthority: createSessionNodeInvocation(
-            attempt,
-            params.pluginId,
-            requiredNodeCommands,
-            assertActive,
-            attempt.abortSignal
-              ? AbortSignal.any([attempt.abortSignal, capabilityAbortController.signal])
-              : capabilityAbortController.signal,
-          ),
+          ...nodeAuthorities,
         },
         run,
-      ),
+      );
+    },
     close: () => {
       if (!active) {
         return;

@@ -198,7 +198,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -1: retire the deprecated messaging-targets subpath.
       // +2: bounded provider streams and read-only SecretRef resolution.
       // +1: diagnostic flag checks without event, trace, or redaction initialization.
-      147,
+      // +1: restore the shipped read-only conversation-binding inspection facade.
+      // +1: canonical node CLI owners for plugin-provided node commands.
+      149,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -334,8 +336,12 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: focused provider-auth routes for shipped auth ordering and provider-map lookup.
       // +2: bounded display-only error diagnostic attachment and rendering.
       // +1: shared presentation delivery policy for core and channel plugins.
+      // +2: shipped conversation-binding inspection function and result type.
+      // +4: canonical node CLI option, envelope, presentation, and error owners.
+      // +1: Gateway caller ownership for standalone browser routing.
+      // +1: canonical temporal context renderer for plugin-owned agent harnesses.
       // Net merge: upstream additions and continuation exports settle at the current surface.
-      4379,
+      4387,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -446,8 +452,12 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: focused provider-auth routes for shipped auth ordering and provider-map lookup.
       // +2: bounded display-only error diagnostic attachment and rendering.
       // +1: shared presentation delivery policy for core and channel plugins.
+      // +1: shipped read-only conversation-binding inspection function.
+      // +4: canonical node CLI option, envelope, presentation, and error owners.
+      // +1: Gateway caller ownership for standalone browser routing.
+      // +1: canonical temporal context renderer for plugin-owned agent harnesses.
       // Net merge: overlapping upstream additions and continuation callables settle here.
-      2602,
+      2609,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

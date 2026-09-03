@@ -368,6 +368,7 @@ export const ModelsProbeResultSchema = closedObject({
 /** Reads installed skill status, optionally for a selected agent. */
 export const SkillsStatusParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
+  sessionKey: Type.Optional(NonEmptyString),
 });
 
 /** Empty request payload for listing available skill bins. */

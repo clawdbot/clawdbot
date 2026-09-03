@@ -279,14 +279,12 @@ export class ConfigPage extends OpenClawLightDomElement {
   @state() private microphoneError: string | null = null;
   private microphoneLoaded = false;
   private microphoneRefreshRequestsPermission = false;
-  private microphonePermissionRefreshPending = false;
   @state() private cameraDevices: RealtimeTalkCameraDevice[] = [];
   @state() private cameraPermissionRequired = true;
   @state() private cameraLoading = false;
   @state() private cameraError: string | null = null;
   private cameraLoaded = false;
   private cameraRefreshRequestsPermission = false;
-  private cameraPermissionRefreshPending = false;
   private cameraSelectionRequest = 0;
   @state() private formModes: Record<ConfigPageId, ConfigFormMode> = {
     communications: "form",
@@ -455,6 +453,11 @@ export class ConfigPage extends OpenClawLightDomElement {
     this.hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
   };
 
+  private retireMediaPermissionRequests() {
+    this.microphoneRefreshRequestsPermission = false;
+    this.cameraRefreshRequestsPermission = false;
+  }
+
   override connectedCallback() {
     super.connectedCallback();
     this.hiddenSessionCatalogsChanged();
@@ -483,6 +486,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.hiddenSessionCatalogsChanged,
     );
     this.customThemeImportOwner.retireImport();
+    this.retireMediaPermissionRequests();
     this.mediaDeviceWatch?.();
     this.mediaDeviceWatch = null;
     this.systemInfoPolling.stop();
@@ -500,6 +504,7 @@ export class ConfigPage extends OpenClawLightDomElement {
   override willUpdate(changed: PropertyValues) {
     if (changed.get("pageId") === "appearance" && this.pageId !== "appearance") {
       this.customThemeImportOwner.retireImport();
+      this.retireMediaPermissionRequests();
     }
     if (changed.has("pageId") || changed.has("routeData")) {
       this.syncRouteData();
@@ -529,16 +534,16 @@ export class ConfigPage extends OpenClawLightDomElement {
 
   private async refreshMicrophones(requestPermission: boolean) {
     if (this.microphoneLoading) {
-      if (requestPermission && !this.microphoneRefreshRequestsPermission) {
-        this.microphonePermissionRefreshPending = true;
-      }
+      this.microphoneRefreshRequestsPermission ||= requestPermission;
       return;
     }
     this.microphoneLoading = true;
     this.microphoneRefreshRequestsPermission = requestPermission;
     this.microphoneError = null;
     try {
-      const result = await discoverRealtimeTalkInputs(requestPermission);
+      const result = await discoverRealtimeTalkInputs(
+        () => this.microphoneRefreshRequestsPermission,
+      );
       this.microphoneDevices = result.devices;
       this.microphonePermissionRequired = result.permissionRequired;
       this.microphoneError = result.issue
@@ -552,24 +557,18 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.microphoneLoading = false;
       this.microphoneRefreshRequestsPermission = false;
     }
-    if (this.microphonePermissionRefreshPending) {
-      this.microphonePermissionRefreshPending = false;
-      await this.refreshMicrophones(true);
-    }
   }
 
   private async refreshCameras(requestPermission: boolean) {
     if (this.cameraLoading) {
-      if (requestPermission && !this.cameraRefreshRequestsPermission) {
-        this.cameraPermissionRefreshPending = true;
-      }
+      this.cameraRefreshRequestsPermission ||= requestPermission;
       return;
     }
     this.cameraLoading = true;
     this.cameraRefreshRequestsPermission = requestPermission;
     this.cameraError = null;
     try {
-      const result = await discoverRealtimeTalkCameras(requestPermission);
+      const result = await discoverRealtimeTalkCameras(() => this.cameraRefreshRequestsPermission);
       this.cameraDevices = result.devices;
       this.cameraPermissionRequired = result.permissionRequired;
       this.cameraError = result.issue
@@ -580,10 +579,6 @@ export class ConfigPage extends OpenClawLightDomElement {
     } finally {
       this.cameraLoading = false;
       this.cameraRefreshRequestsPermission = false;
-    }
-    if (this.cameraPermissionRefreshPending) {
-      this.cameraPermissionRefreshPending = false;
-      await this.refreshCameras(true);
     }
   }
 

@@ -271,6 +271,10 @@ export class NodeInvokeStreamController {
     return isGatewayRestartDraining() && pending.isCompletionAuthorized ? params.run() : null;
   }
 
+  isPending(invokeId: string, nodeId: string, connId: string): boolean {
+    return this.getPending(invokeId, nodeId, connId) !== undefined;
+  }
+
   private getPending(id: string, nodeId: string, connId: string | undefined) {
     const pending = this.options.pendingInvokes.get(id);
     if (
