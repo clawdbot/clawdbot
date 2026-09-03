@@ -5349,7 +5349,7 @@ test "$package_manager" = "pnpm@12.1.0"
       MOCK_GH_DISPATCH_OUTPUT: "https://github.com/openclaw/openclaw/actions/runs/101",
     });
     expect(mismatched.result.status).toBe(1);
-    expect(mismatched.result.stderr).toContain("Refusing to adopt unvalidated");
+    expect(mismatched.result.stderr).toContain("expected parent workflow SHA");
     expect(
       mismatched.calls.filter(({ args }) => args.some((value) => value.endsWith("/runs/101"))),
     ).toHaveLength(1);

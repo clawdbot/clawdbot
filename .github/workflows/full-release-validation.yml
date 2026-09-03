@@ -816,10 +816,8 @@ jobs:
               if ! jq -e \
                 --argjson workflow_id "$expected_workflow_id" \
                 --arg branch "$CHILD_WORKFLOW_REF" \
-                --arg head_sha "$PARENT_WORKFLOW_SHA" \
                 '(.workflow_id == $workflow_id)
                   and (.head_branch == $branch)
-                  and (.head_sha == $head_sha)
                   and (.event == "workflow_dispatch")' \
                 <<< "$candidate_run_json" >/dev/null; then
                 echo "::error::Refusing to adopt unvalidated ${workflow} run ${candidate_run_id}." >&2
