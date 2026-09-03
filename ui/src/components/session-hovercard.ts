@@ -349,8 +349,8 @@ function renderSessionAttribution({
             >
               <button
                 type="button"
-                class="session-hovercard__attribution-others"
-                style="padding: 1px 3px; border: 0; border-radius: var(--radius-sm); background: transparent; font: inherit;"
+                class="session-hovercard__attribution-others btn--ghost"
+                style="padding: 1px 3px; border: 0; border-radius: var(--radius-sm); font: inherit;"
                 aria-label=${t("sessionHovercard.moreParticipantsLabel", {
                   count: String(otherCount),
                 })}

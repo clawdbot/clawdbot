@@ -1503,12 +1503,6 @@ openclaw-session-progress-hovercard-provider {
   color: var(--muted);
 }
 
-.btn--ghost:hover {
-  background: var(--bg-hover);
-  color: var(--text);
-  border-color: transparent;
-}
-
 .btn:is(:disabled, [aria-disabled="true"]) {
   opacity: 0.5;
   cursor: not-allowed;
