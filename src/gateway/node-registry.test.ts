@@ -2068,7 +2068,7 @@ describe("gateway/node-registry", () => {
         params: {
           ...runParams,
           toJSON() {
-            nowSpy.mockReturnValue(startedAtMs + 70);
+            nowSpy.mockReturnValue(startedAtMs + 70.5);
             return runParams;
           },
         },
@@ -2079,6 +2079,7 @@ describe("gateway/node-registry", () => {
       await vi.advanceTimersByTimeAsync(0);
       const request = JSON.parse(frames[0] ?? "{}");
       expect(request.payload.timeoutMs).toBe(30);
+      expect(Number.isInteger(request.payload.timeoutMs)).toBe(true);
       expect(JSON.parse(request.payload.paramsJSON).timeoutMs).toBe(5_000);
       expect(onDispatchReady).toHaveBeenCalledExactlyOnceWith(
         request.payload.id,

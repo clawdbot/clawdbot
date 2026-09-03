@@ -379,11 +379,14 @@ async function invokeNodeRegistryCore(
     };
   }
   if (deadlineAtMs !== undefined) {
-    timeoutMs = Math.max(0, deadlineAtMs - performance.now());
-    if (timeoutMs === 0) {
+    const remainingTimeoutMs = Math.max(0, deadlineAtMs - performance.now());
+    if (remainingTimeoutMs === 0) {
       return { ok: false, error: { code: "TIMEOUT", message: "node invoke timed out" } };
     }
-    payload.timeoutMs = timeoutMs;
+    timeoutMs = remainingTimeoutMs;
+    // Keep the precise monotonic budget for Gateway timers, but satisfy the integer
+    // node-event contract without turning a sub-millisecond budget into "unbounded".
+    payload.timeoutMs = Math.ceil(remainingTimeoutMs);
   }
   const result = new Promise<NodeInvokeResult>((resolve, reject) => {
     const pending: PendingInvoke = {
