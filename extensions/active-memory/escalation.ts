@@ -49,7 +49,7 @@ const LOCALIZED_RECALL_INTENT_PATTERNS = [
     future:
       /(?<![\p{L}\p{N}_])(?:amanh[aã]|depois\s+de\s+amanh[aã]|(?:na|no)\s+pr[oó]xim[ao]|pr[oó]xim[ao]\s+(?:semana|m[eê]s|ano|vez)|mais\s+tarde|daqui\s+a|no\s+futuro)(?![\p{L}\p{N}_])/iu,
     retrospective:
-      /(?<![\p{L}\p{N}_])(?:ontem|anteontem|(?:na|no)\s+semana\s+passad[ao]|(?:na|no)\s+m[eê]s\s+passad[ao]|(?:na|no)\s+ano\s+passad[ao]|(?:da|na)\s+[uú]ltima\s+vez|antes|anteriormente|outro\s+dia)(?![\p{L}\p{N}_])|\b(?:discutiu|discutiram|discutimos|conversou|conversaram|conversamos|decidiu|decidiram|decidimos|falou|falaram|falamos|investigou|investigaram|investigamos)\b/iu,
+      /(?<![\p{L}\p{N}_])(?:ontem|anteontem|(?:na|no)\s+semana\s+passad[ao]|(?:na|no)\s+m[eê]s\s+passad[ao]|(?:na|no)\s+ano\s+passad[ao]|(?:da|na)\s+[uú]ltima\s+vez|anteriormente|outro\s+dia)(?![\p{L}\p{N}_])|\b(?:discutiu|discutiram|discutimos|conversou|conversaram|conversamos|decidiu|decidiram|decidimos|falou|falaram|falamos|investigou|investigaram|investigamos)\b/iu,
   },
 ];
 
