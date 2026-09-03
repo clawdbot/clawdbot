@@ -116,6 +116,8 @@ async function connectRawNode(params: {
         caps: ["system"],
         commands: ["camera.capture"],
         auth: { token: params.token },
+        role: "node",
+        scopes: [],
         device,
       },
     }),
