@@ -365,6 +365,7 @@ export async function executeRemoteExecTurn(params: {
       snapshot: params.turn.skillsSnapshot,
       explicitSelections: params.turn.explicitSkillSelections,
       tunnel,
+      remoteWorkspaceDir: params.placement.remoteWorkspaceDir,
       signal: params.turn.abortSignal,
       assertCurrent: () => {
         const current = params.environments.get(environment.environmentId);
@@ -446,7 +447,11 @@ export async function executeRemoteExecTurn(params: {
   } catch (error) {
     executionError = error;
   } finally {
-    await skillResources?.cleanup().catch(() => undefined);
+    try {
+      await skillResources?.cleanup();
+    } catch (error) {
+      executionError ??= error;
+    }
     executionActive = false;
     params.turn.prompt = originalPrompt;
     params.turn.transcriptPrompt = originalTranscriptPrompt;

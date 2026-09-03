@@ -1366,6 +1366,18 @@ openclaw-settings-save-indicator:empty {
   min-height: 24px;
   padding: 0 10px 0 var(--sidebar-inset);
   color: color-mix(in srgb, var(--muted) 72%, var(--text) 28%);
+  transition: color var(--duration-fast) ease;
+}
+
+.sidebar-recent-sessions__head .sidebar-recent-sessions__label-text {
+  transition: color var(--duration-fast) ease;
+}
+
+/* Label lift only, no fill: section headers toggle rather than navigate. */
+.sidebar-recent-sessions__head:where(:hover, :has(:focus-visible)),
+.sidebar-recent-sessions__head:where(:hover, :has(:focus-visible))
+  .sidebar-recent-sessions__label-text {
+  color: var(--text);
 }
 
 .sidebar-recent-sessions__head--draggable {
@@ -1386,6 +1398,24 @@ openclaw-settings-save-indicator:empty {
   border: none;
   background: transparent;
   color: inherit;
+  text-align: left;
+}
+
+.sidebar-session-group-toggle--lead {
+  flex: 0 0 auto;
+}
+
+.sidebar-session-group-person {
+  display: flex;
+  align-items: center;
+  gap: var(--sidebar-row-gap);
+  min-width: 0;
+  flex: 1 1 auto;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
   text-align: left;
 }
 
@@ -1476,6 +1506,29 @@ openclaw-settings-save-indicator:empty {
   border-radius: 50%;
   background: var(--warn);
   box-shadow: 0 0 6px color-mix(in srgb, var(--warn) 48%, transparent);
+}
+
+/* The wrapper keeps the dot outside the avatar's clipping. Self is excluded as
+   an always-on signal; idle dimming follows the Online roster's presence rule. */
+.sidebar-session-group-toggle__person {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
+
+.sidebar-session-group-presence {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--ok);
+  box-shadow: 0 0 0 1.5px var(--sidebar-bg, var(--bg));
+}
+
+.sidebar-session-group-presence--idle {
+  opacity: 0.45;
 }
 
 .sidebar-session-catalog-load-more {
@@ -1619,7 +1672,8 @@ openclaw-settings-save-indicator:empty {
   color: var(--muted);
 }
 
-.sidebar-session-group-toggle > .sidebar-recent-sessions__label-text {
+.sidebar-session-group-toggle > .sidebar-recent-sessions__label-text,
+.sidebar-session-group-person > .sidebar-recent-sessions__label-text {
   min-width: 0;
   flex: 1 1 0;
 }
@@ -2352,6 +2406,8 @@ openclaw-settings-save-indicator:empty {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .sidebar-recent-sessions__head,
+  .sidebar-recent-sessions__head .sidebar-recent-sessions__label-text,
   .sidebar-online__person,
   .sidebar-online__person-action {
     transition: none;
@@ -3002,18 +3058,18 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
    modifier/middle-click navigation. Match a[href] specificity; real links
    and explicit new-tab actions keep the pointer. */
 a:is(
-  .nav-item,
-  .sidebar-recent-session__link,
-  .sidebar-online__person,
-  .sidebar-brand__new-thread,
-  .sidebar-new-session,
-  .sidebar-session-catalog-new,
-  .settings-sidebar__item,
-  .settings-sidebar__subitem,
-  .sidebar-issues-panel__navigation-link,
-  .sidebar-approval-row__open-session,
-  .sidebar-footer-build
-):where(:not([target="_blank" i], [data-new-tab-action])),
+    .nav-item,
+    .sidebar-recent-session__link,
+    .sidebar-online__person,
+    .sidebar-brand__new-thread,
+    .sidebar-new-session,
+    .sidebar-session-catalog-new,
+    .settings-sidebar__item,
+    .settings-sidebar__subitem,
+    .sidebar-issues-panel__navigation-link,
+    .sidebar-approval-row__open-session,
+    .sidebar-footer-build
+  ):where(:not([target="_blank" i], [data-new-tab-action])),
 .sidebar-more-menu a:where(:not([target="_blank" i], [data-new-tab-action])) {
   cursor: var(--cursor-action);
 }

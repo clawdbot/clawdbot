@@ -116,22 +116,20 @@ describe("listTaskRecordPage", () => {
         endedAt: 200,
         lastEventAt: 200,
       },
-    ].map(
-      ({ taskId, endedAt, lastEventAt }): TaskRecord => ({
-        taskId,
-        runtime: "cli",
-        requesterSessionKey: "agent:main:main",
-        ownerKey: "agent:main:main",
-        scopeKind: "session",
-        task: taskId,
-        status: "succeeded",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "done_only",
-        createdAt: 0,
-        endedAt,
-        lastEventAt,
-      }),
-    );
+    ].map(({ taskId, endedAt, lastEventAt }): TaskRecord => ({
+      taskId,
+      runtime: "cli",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      task: taskId,
+      status: "succeeded",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "done_only",
+      createdAt: 0,
+      endedAt,
+      lastEventAt,
+    }));
     configureTaskSnapshot(tasks);
 
     const page = await readTaskPage({ offset: 0, limit: 2, sortBy: "endedAt" });

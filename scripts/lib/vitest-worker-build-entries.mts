@@ -2,6 +2,7 @@ import { fileURLToPath } from "node:url";
 import { qaGatewayCleanupRuntimeEntrypoint } from "../../extensions/qa-lab/src/gateway-child-artifacts-runtime.test-support.ts";
 import { codeModeRetentionEntrypoint } from "../../src/agents/code-mode-retention-entrypoint.test-support.ts";
 import { cliCompactionBackendEntrypoints } from "../../src/agents/command/cli-compaction-runtime.test-support.ts";
+import { cliRecoveryEntrypoints } from "../../src/cli/cli-entrypoint.test-support.ts";
 import { cronOwnerHardeningEntrypoints } from "../../src/cron/owner-hardening-runtime.test-support.ts";
 import { sessionListCacheRetentionEntrypoint } from "../../src/gateway/server-methods/sessions-list-cache-retention-entrypoint.test-support.ts";
 import { sessionTitleRetentionEntrypoints } from "../../src/gateway/session-title-retention.test-support.ts";
@@ -9,6 +10,7 @@ import { nodeHostConfigRuntimeEntrypoint } from "../../src/node-host/config-runt
 import { persistenceRuntimeEntrypoint } from "../../src/skills/library/persistence-runtime.test-support.ts";
 import { stateLeaseProcessExitRuntimeEntrypoint } from "../../src/state/openclaw-state-lease-runtime.test-support.ts";
 import { tuiPtyRuntimeEntrypoints } from "../../src/tui/tui-pty-runtime-test-support.ts";
+import { channelIngressGatewayRestartEntrypoint } from "../../test/fixtures/channel-ingress-gateway-restart-entrypoint.ts";
 import { runtimeProcessBuildEntries } from "./runtime-process-build-entries.mts";
 
 // Test-only roots share the invocation generation without changing package entries.
@@ -18,11 +20,13 @@ export const vitestWorkerBuildEntries = {
     [
       codeModeRetentionEntrypoint,
       ...cliCompactionBackendEntrypoints,
+      ...Object.values(cliRecoveryEntrypoints),
       ...Object.values(cronOwnerHardeningEntrypoints),
       ...Object.values(tuiPtyRuntimeEntrypoints),
       ...Object.values(sessionTitleRetentionEntrypoints),
       sessionListCacheRetentionEntrypoint,
       nodeHostConfigRuntimeEntrypoint,
+      channelIngressGatewayRestartEntrypoint,
       persistenceRuntimeEntrypoint,
       qaGatewayCleanupRuntimeEntrypoint,
       stateLeaseProcessExitRuntimeEntrypoint,

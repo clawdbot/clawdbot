@@ -1,8 +1,19 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listNodePairing } from "../../infra/device-pairing-node.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
-import { readNodeSessionWithheldCommands } from "../node-registry.js";
+import { NodeRegistry } from "../node-registry.js";
 import { environmentsHandlers } from "./environments.js";
+
+const registries: NodeRegistry[] = [];
+
+afterEach(() => {
+  for (const registry of registries.splice(0)) {
+    for (const node of registry.listConnected()) {
+      registry.unregister(node.connId);
+    }
+  }
+  vi.restoreAllMocks();
+});
 
 vi.mock("../../infra/device-pairing.js", () => ({
   listDevicePairing: vi.fn(),
@@ -11,20 +22,6 @@ vi.mock("../../infra/device-pairing.js", () => ({
 
 vi.mock("../../infra/device-pairing-node.js", () => ({
   listNodePairing: vi.fn(),
-}));
-
-vi.mock("../node-registry-private.js", () => ({
-  collectNodeCatalogRuntimeState: vi.fn(() => ({
-    sessionHostNodeIds: new Set(),
-    issuesByNodeId: new Map(),
-    workerSlotsByNodeId: new Map(),
-    workerBundleByNodeId: new Map(),
-  })),
-}));
-
-vi.mock("../node-registry.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../node-registry.js")>()),
-  readNodeSessionWithheldCommands: vi.fn(() => []),
 }));
 
 vi.mock("../worker-environments/placement-capabilities.js", () => ({
@@ -42,7 +39,6 @@ vi.mock("../worker-environments/placement-capabilities.js", () => ({
 }));
 
 beforeEach(() => {
-  vi.mocked(readNodeSessionWithheldCommands).mockReturnValue([]);
   vi.mocked(listDevicePairing).mockResolvedValue({ paired: [] } as never);
   vi.mocked(listNodePairing).mockResolvedValue({ paired: [] } as never);
 });
@@ -51,9 +47,8 @@ describe("node environment command authority", () => {
   it.each([
     {
       name: "invocable command",
-      withheld: ["system.run"],
       declared: ["system.which", "codex.exec-server.stdio.v1", "system.run", "system.run"],
-      effective: ["system.which", "codex.exec-server.stdio.v1", "system.run"],
+      approved: ["system.which", "codex.exec-server.stdio.v1", "system.run"],
       allow: ["codex.exec-server.stdio.v1"],
       deny: ["system.run"],
       expected: ["codex.exec-server.stdio.v1", "system.which"],
@@ -61,9 +56,8 @@ describe("node environment command authority", () => {
     },
     {
       name: "declared command pending pairing approval",
-      withheld: [],
       declared: ["codex.exec-server.stdio.v1"],
-      effective: [],
+      approved: [],
       allow: ["codex.exec-server.stdio.v1"],
       deny: [],
       expected: [],
@@ -71,9 +65,8 @@ describe("node environment command authority", () => {
     },
     {
       name: "declared command blocked by current Gateway policy",
-      withheld: ["codex.exec-server.stdio.v1"],
       declared: ["codex.exec-server.stdio.v1"],
-      effective: ["codex.exec-server.stdio.v1"],
+      approved: ["codex.exec-server.stdio.v1"],
       allow: ["codex.exec-server.stdio.v1"],
       deny: ["codex.exec-server.stdio.v1"],
       expected: [],
@@ -81,9 +74,9 @@ describe("node environment command authority", () => {
     },
     {
       name: "approved command removed from the effective surface by a hot deny",
-      withheld: ["codex.exec-server.stdio.v1"],
       declared: ["codex.exec-server.stdio.v1"],
-      effective: [],
+      approved: ["codex.exec-server.stdio.v1"],
+      initialPolicy: { allow: ["codex.exec-server.stdio.v1"], deny: [] },
       allow: ["codex.exec-server.stdio.v1"],
       deny: ["codex.exec-server.stdio.v1"],
       expected: [],
@@ -91,9 +84,9 @@ describe("node environment command authority", () => {
     },
     {
       name: "approved command removed from the effective surface after allow removal",
-      withheld: ["codex.exec-server.stdio.v1"],
       declared: ["codex.exec-server.stdio.v1"],
-      effective: [],
+      approved: ["codex.exec-server.stdio.v1"],
+      initialPolicy: { allow: ["codex.exec-server.stdio.v1"], deny: [] },
       allow: [],
       deny: [],
       expected: [],
@@ -101,9 +94,8 @@ describe("node environment command authority", () => {
     },
     {
       name: "required command blocked while an unrelated declaration awaits approval",
-      withheld: ["codex.exec-server.stdio.v1"],
       declared: ["codex.exec-server.stdio.v1", "fixture.unrelated"],
-      effective: ["codex.exec-server.stdio.v1"],
+      approved: ["codex.exec-server.stdio.v1"],
       allow: [],
       deny: [],
       expected: [],
@@ -111,35 +103,51 @@ describe("node environment command authority", () => {
     },
     {
       name: "command not declared by the node",
-      withheld: [],
       declared: [],
-      effective: [],
+      approved: [],
       allow: ["codex.exec-server.stdio.v1"],
       deny: [],
       expected: [],
       state: "undeclared",
     },
-  ])("projects $name", async ({ declared, effective, withheld, allow, deny, expected, state }) => {
-    // The registry records this policy fact on its live session, not on a plain fixture.
-    vi.mocked(readNodeSessionWithheldCommands).mockReturnValue(withheld);
-    const context = {
-      logGateway: { warn: vi.fn() },
-      getRuntimeConfig: () => ({ gateway: { nodes: { commands: { allow, deny } } } }),
-      nodeRegistry: {
-        listConnectedForPairingStates: () => [
-          {
-            nodeId: "node-exec",
-            connId: "conn-exec",
+  ])("projects $name", async (testCase) => {
+    const { declared, approved, allow, deny, expected, state } = testCase;
+    const commandPolicy = { allow, deny };
+    const initialPolicy = "initialPolicy" in testCase ? testCase.initialPolicy : undefined;
+    let config = { gateway: { nodes: { commands: initialPolicy ?? commandPolicy } } };
+    const registry = new NodeRegistry({ getConfig: () => config });
+    registries.push(registry);
+    const node = registry.register(
+      {
+        connId: "conn-exec",
+        socket: { readyState: 1, bufferedAmount: 0, send: vi.fn() },
+        connect: {
+          client: {
+            id: "node-host",
+            mode: "node",
             displayName: "Execution Node",
             platform: "linux",
             deviceFamily: "Linux",
-            caps: ["session.host"],
-            declaredCommands: declared,
-            commands: effective,
-            connectedAtMs: 123,
           },
-        ],
-      },
+          device: { id: "node-exec" },
+          caps: ["session.host"],
+          declaredCommands: declared,
+          commands: approved,
+        },
+      } as never,
+      { pairingIdentity: "node-exec" },
+    );
+    if (initialPolicy) {
+      // Reload the registered connection so withholding comes from its real policy owner.
+      expect(node.commands).toEqual(approved);
+      config = { gateway: { nodes: { commands: commandPolicy } } };
+      registry.refreshRuntimePolicy(config);
+    }
+    vi.spyOn(registry, "listConnectedForPairingStates").mockReturnValue([node]);
+    const context = {
+      logGateway: { warn: vi.fn() },
+      getRuntimeConfig: () => config,
+      nodeRegistry: registry,
     };
 
     const listRespond = vi.fn();
@@ -168,7 +176,7 @@ describe("node environment command authority", () => {
       command: "codex.exec-server.stdio.v1",
       state,
     });
-    for (const command of effective) {
+    for (const command of node.commands) {
       expect(listed?.capabilities).toContain(command);
     }
 

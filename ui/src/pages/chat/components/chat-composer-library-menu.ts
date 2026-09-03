@@ -9,18 +9,24 @@ registerSkillLibraryEnglish();
 
 function renderLibraryStatus(library: ComposerLibraryProps) {
   return html`
-    ${library.loading || library.busy
-      ? html`<div class="agent-chat__capability-menu-state" role="status">
-          ${t("common.loading")}
-        </div>`
-      : nothing}
-    ${library.error
-      ? html`<div class="agent-chat__capability-menu-state" role="alert">${library.error}</div>
-          <wa-dropdown-item value="library-reload">${t("common.retry")}</wa-dropdown-item>`
-      : nothing}
-    ${library.notice
-      ? html`<div class="agent-chat__capability-menu-state" role="status">${library.notice}</div>`
-      : nothing}
+    ${
+      library.loading || library.busy
+        ? html`<div class="agent-chat__capability-menu-state" role="status">
+            ${t("common.loading")}
+          </div>`
+        : nothing
+    }
+    ${
+      library.error
+        ? html`<div class="agent-chat__capability-menu-state" role="alert">${library.error}</div>
+            <wa-dropdown-item value="library-reload">${t("common.retry")}</wa-dropdown-item>`
+        : nothing
+    }
+    ${
+      library.notice
+        ? html`<div class="agent-chat__capability-menu-state" role="status">${library.notice}</div>`
+        : nothing
+    }
   `;
 }
 
@@ -34,42 +40,46 @@ export function renderComposerLibraryMenu(library?: ComposerLibraryProps, skillI
     const pin = session?.selections.find((entry) => entry.skillId === skillId);
     return html`
       ${renderBackRow()} ${renderLibraryStatus(library)}
-      ${pin
-        ? html`
-            <div class="agent-chat__capability-menu-state">
-              <span class="agent-chat__capability-menu-label">
-                <strong>${pin.slug} · ${pin.ownerLabel}</strong>
-                <span class="agent-chat__capability-menu-note"
-                  >${t("skillLibrary.session.pin", { revision: pin.revision.slice(0, 8) })}</span
-                >
-              </span>
-            </div>
-            <wa-dropdown-item
-              class="agent-chat__capability-menu-item"
-              value=${`library-read:${pin.skillId}`}
-              ?disabled=${busy}
-              >${t("skillLibrary.session.read")}</wa-dropdown-item
-            >
-            ${library.canWrite
-              ? html`
-                  <wa-dropdown-item
-                    class="agent-chat__capability-menu-item"
-                    value=${`library-refresh:${pin.skillId}`}
-                    ?disabled=${busy}
-                    >${t("skillLibrary.session.refresh")}</wa-dropdown-item
+      ${
+        pin
+          ? html`
+              <div class="agent-chat__capability-menu-state">
+                <span class="agent-chat__capability-menu-label">
+                  <strong>${pin.slug} · ${pin.ownerLabel}</strong>
+                  <span class="agent-chat__capability-menu-note"
+                    >${t("skillLibrary.session.pin", { revision: pin.revision.slice(0, 8) })}</span
                   >
-                  <wa-dropdown-item
-                    class="agent-chat__capability-menu-item"
-                    value=${`library-detach:${pin.skillId}`}
-                    ?disabled=${busy}
-                    >${t("skillLibrary.session.detach")}</wa-dropdown-item
-                  >
-                `
-              : nothing}
-          `
-        : library.result && !busy
-          ? html`<div class="agent-chat__capability-menu-state">${t("skillsPage.notFound")}</div>`
-          : nothing}
+                </span>
+              </div>
+              <wa-dropdown-item
+                class="agent-chat__capability-menu-item"
+                value=${`library-read:${pin.skillId}`}
+                ?disabled=${busy}
+                >${t("skillLibrary.session.read")}</wa-dropdown-item
+              >
+              ${
+                library.canWrite
+                  ? html`
+                      <wa-dropdown-item
+                        class="agent-chat__capability-menu-item"
+                        value=${`library-refresh:${pin.skillId}`}
+                        ?disabled=${busy}
+                        >${t("skillLibrary.session.refresh")}</wa-dropdown-item
+                      >
+                      <wa-dropdown-item
+                        class="agent-chat__capability-menu-item"
+                        value=${`library-detach:${pin.skillId}`}
+                        ?disabled=${busy}
+                        >${t("skillLibrary.session.detach")}</wa-dropdown-item
+                      >
+                    `
+                  : nothing
+              }
+            `
+          : library.result && !busy
+            ? html`<div class="agent-chat__capability-menu-state">${t("skillsPage.notFound")}</div>`
+            : nothing
+      }
     `;
   }
   if (
@@ -100,45 +110,53 @@ export function renderComposerLibraryMenu(library?: ComposerLibraryProps, skillI
         >
       </wa-dropdown-item>`,
     )}
-    ${session && session.selections.length === 0
-      ? html`<div class="agent-chat__capability-menu-state">
-          ${t("skillLibrary.session.empty")}
-        </div>`
-      : nothing}
-    ${session?.attachable.length
-      ? html`${menuDivider()}
-          <div class="agent-chat__capability-menu-state">
-            ${t("skillLibrary.session.attachable")}
-          </div>
-          ${session.attachable.map(
-            (entry) => html`<wa-dropdown-item
-              class="agent-chat__capability-menu-item"
-              value=${`library-attach:${entry.skillId}`}
-              ?disabled=${busy || !library.canWrite}
-            >
-              <span class="agent-chat__capability-menu-label"
-                ><span title=${`${entry.slug} · ${entry.ownerLabel}`}
-                  >${t("skillLibrary.session.attachNamed", {
-                    name: entry.slug,
-                    owner: entry.ownerLabel,
-                  })}</span
-                ><span class="agent-chat__capability-menu-note" title=${entry.description}
-                  >${entry.description}</span
-                ></span
+    ${
+      session && session.selections.length === 0
+        ? html`<div class="agent-chat__capability-menu-state">
+            ${t("skillLibrary.session.empty")}
+          </div>`
+        : nothing
+    }
+    ${
+      session?.attachable.length
+        ? html`${menuDivider()}
+            <div class="agent-chat__capability-menu-state">
+              ${t("skillLibrary.session.attachable")}
+            </div>
+            ${session.attachable.map(
+              (entry) => html`<wa-dropdown-item
+                class="agent-chat__capability-menu-item"
+                value=${`library-attach:${entry.skillId}`}
+                ?disabled=${busy || !library.canWrite}
               >
-            </wa-dropdown-item>`,
-          )}`
-      : nothing}
-    ${library.result
-      ? html`<div class="agent-chat__capability-menu-state">
-          ${t("skillLibrary.defaultLimit", { count: String(library.result.defaultSelectionLimit) })}
-        </div>`
-      : nothing}
-    ${library.result?.defaultSelectionNotice
-      ? html`<div class="agent-chat__capability-menu-state" role="status">
-          ${library.result.defaultSelectionNotice}
-        </div>`
-      : nothing}
+                <span class="agent-chat__capability-menu-label"
+                  ><span title=${`${entry.slug} · ${entry.ownerLabel}`}
+                    >${t("skillLibrary.session.attachNamed", {
+                      name: entry.slug,
+                      owner: entry.ownerLabel,
+                    })}</span
+                  ><span class="agent-chat__capability-menu-note" title=${entry.description}
+                    >${entry.description}</span
+                  ></span
+                >
+              </wa-dropdown-item>`,
+            )}`
+        : nothing
+    }
+    ${
+      library.result
+        ? html`<div class="agent-chat__capability-menu-state">
+            ${t("skillLibrary.defaultLimit", { count: String(library.result.defaultSelectionLimit) })}
+          </div>`
+        : nothing
+    }
+    ${
+      library.result?.defaultSelectionNotice
+        ? html`<div class="agent-chat__capability-menu-state" role="status">
+            ${library.result.defaultSelectionNotice}
+          </div>`
+        : nothing
+    }
     ${menuDivider()}
     <div class="agent-chat__capability-menu-state">${t("skillLibrary.inventory")}</div>
   `;

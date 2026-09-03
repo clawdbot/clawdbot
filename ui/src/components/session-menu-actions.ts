@@ -346,19 +346,23 @@ export class SessionMenuActions {
     const batch = selectionCount > 1;
     const count = String(selectionCount);
     return html`
-      ${batch || session.isChild
-        ? nothing
-        : this.renderItem(
-            "toggle-pin",
-            t(session.pinned ? "sessionsView.unpinSession" : "sessionsView.pinSession"),
-            session.pinned ? icons.pinOff : icons.pin,
-            { shortcut: "p" },
-          )}
-      ${batch
-        ? nothing
-        : this.renderItem("rename", t("sessionsView.renameSessionMenu"), icons.edit, {
-            shortcut: "r",
-          })}
+      ${
+        batch || session.isChild
+          ? nothing
+          : this.renderItem(
+              "toggle-pin",
+              t(session.pinned ? "sessionsView.unpinSession" : "sessionsView.pinSession"),
+              session.pinned ? icons.pinOff : icons.pin,
+              { shortcut: "p" },
+            )
+      }
+      ${
+        batch
+          ? nothing
+          : this.renderItem("rename", t("sessionsView.renameSessionMenu"), icons.edit, {
+              shortcut: "r",
+            })
+      }
       ${this.renderItem(
         "toggle-unread",
         t(
@@ -396,24 +400,28 @@ export class SessionMenuActions {
     const state = this.readState();
     const batch = state.selectionCount > 1;
     return html`
-      ${batch
-        ? nothing
-        : this.renderSubmenu(
-            "icon",
-            t("sessionsView.setIconColorMenu"),
-            icons.palette,
-            this.actionDisabled("set-icon") && this.actionDisabled("set-color"),
-          )}
+      ${
+        batch
+          ? nothing
+          : this.renderSubmenu(
+              "icon",
+              t("sessionsView.setIconColorMenu"),
+              icons.palette,
+              this.actionDisabled("set-icon") && this.actionDisabled("set-color"),
+            )
+      }
       ${this.renderGroupAction()}
-      ${!batch
-        ? this.renderSubmenu(
-            "assign-owner",
-            t("sessionsView.assignTo"),
-            icons.users,
-            this.actionDisabled("assign-owner"),
-            state.actionDisabledReasons["assign-owner"],
-          )
-        : nothing}
+      ${
+        !batch
+          ? this.renderSubmenu(
+              "assign-owner",
+              t("sessionsView.assignTo"),
+              icons.users,
+              this.actionDisabled("assign-owner"),
+              state.actionDisabledReasons["assign-owner"],
+            )
+          : nothing
+      }
     `;
   }
 
@@ -428,9 +436,11 @@ export class SessionMenuActions {
         title: state.forkFromLastCompleted ? t("sessionsView.forkFromLastCompleted") : undefined,
       })}
       ${this.renderSubmenu("copy", t("common.copy"), icons.copy)}
-      ${state.navigationAllowed || state.worktreePath || state.renderOpenInExtra
-        ? this.renderSubmenu("open-in", t("sessionsView.openInEditorMenu"), icons.externalLink)
-        : nothing}
+      ${
+        state.navigationAllowed || state.worktreePath || state.renderOpenInExtra
+          ? this.renderSubmenu("open-in", t("sessionsView.openInEditorMenu"), icons.externalLink)
+          : nothing
+      }
     `;
   }
 
@@ -496,11 +506,13 @@ export class SessionMenuActions {
   private renderCopySubmenu(inline = false) {
     const state = this.readState();
     return html`
-      ${state.navigationAllowed
-        ? this.renderItem("copy-session-link", t("sessionsView.copySessionLink"), icons.link, {
-            inline,
-          })
-        : nothing}
+      ${
+        state.navigationAllowed
+          ? this.renderItem("copy-session-link", t("sessionsView.copySessionLink"), icons.link, {
+              inline,
+            })
+          : nothing
+      }
       ${this.renderItem("copy-markdown", t("sessionsView.copyMarkdown"), icons.fileText, {
         inline,
       })}
@@ -511,35 +523,46 @@ export class SessionMenuActions {
   private renderOpenSubmenu(inline = false) {
     const state = this.readState();
     return html`
-      ${state.navigationAllowed
-        ? html`
-            ${this.renderItem("open-new-tab", t("sessionsView.openNewTab"), icons.externalLink, {
-              inline,
-            })}
-            ${this.renderItem("open-new-window", t("sessionsView.openNewWindow"), icons.monitor, {
-              inline,
-            })}
-          `
-        : nothing}
-      ${state.splitAllowed
-        ? html`
-            ${this.renderItem("split-right", t("chat.splitView.splitRight"), icons.columns2, {
-              inline,
-            })}
-            ${this.renderItem("split-below", t("sessionsView.splitBelow"), icons.panelBottomOpen, {
-              inline,
-            })}
-          `
-        : nothing}
+      ${
+        state.navigationAllowed
+          ? html`
+              ${this.renderItem("open-new-tab", t("sessionsView.openNewTab"), icons.externalLink, {
+                inline,
+              })}
+              ${this.renderItem("open-new-window", t("sessionsView.openNewWindow"), icons.monitor, {
+                inline,
+              })}
+            `
+          : nothing
+      }
+      ${
+        state.splitAllowed
+          ? html`
+              ${this.renderItem("split-right", t("chat.splitView.splitRight"), icons.columns2, {
+                inline,
+              })}
+              ${this.renderItem(
+                "split-below",
+                t("sessionsView.splitBelow"),
+                icons.panelBottomOpen,
+                {
+                  inline,
+                },
+              )}
+            `
+          : nothing
+      }
       ${state.renderOpenInExtra?.(inline) ?? nothing}
-      ${state.worktreePath
-        ? html`
-            <div slot=${inline ? nothing : "submenu"} class="session-menu__info">
-              ${t("sessionsView.workspaceEditors")}
-            </div>
-            ${renderSessionEditorOptions({ inline, disabled: this.actionDisabled("open-in") })}
-          `
-        : nothing}
+      ${
+        state.worktreePath
+          ? html`
+              <div slot=${inline ? nothing : "submenu"} class="session-menu__info">
+                ${t("sessionsView.workspaceEditors")}
+              </div>
+              ${renderSessionEditorOptions({ inline, disabled: this.actionDisabled("open-in") })}
+            `
+          : nothing
+      }
     `;
   }
 
