@@ -617,7 +617,7 @@ describe("handleAllowlistCommand", () => {
     const result = await handleAllowlistCommand(params, true);
 
     expect(result?.shouldContinue).toBe(false);
-    expect(result?.reply).toBeUndefined();
+    expect(result?.reply?.text).toContain("commands.ownerAllowFrom");
     expect(replaceConfigFileMock).not.toHaveBeenCalled();
     expect(addChannelAllowFromStoreEntryMock).not.toHaveBeenCalled();
   });
@@ -640,7 +640,7 @@ describe("handleAllowlistCommand", () => {
     const result = await handleAllowlistCommand(params, true);
 
     expect(result?.shouldContinue).toBe(false);
-    expect(result?.reply).toBeUndefined();
+    expect(result?.reply?.text).toContain("commands.ownerAllowFrom");
     expect(replaceConfigFileMock).not.toHaveBeenCalled();
     expect(addChannelAllowFromStoreEntryMock).not.toHaveBeenCalled();
   });

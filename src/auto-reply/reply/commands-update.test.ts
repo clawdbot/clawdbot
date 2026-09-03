@@ -75,28 +75,46 @@ describe("handleUpdateCommand", () => {
     expect(dispatch).not.toHaveBeenCalled();
   });
 
-  it.each(["unauthorized", "non-owner"])(
-    "rejects an %s sender before calling the gateway",
-    async (gate) => {
+  it.each([true, false])(
+    "silently rejects unauthorized senders (owner=%s)",
+    async (senderIsOwner) => {
       const params = updateCommandParams();
-      params.command.isAuthorizedSender = gate !== "unauthorized";
-      params.command.senderIsOwner = gate !== "non-owner";
+      params.command.isAuthorizedSender = false;
+      params.command.senderIsOwner = senderIsOwner;
 
       expect(await handleUpdateCommand(params, true)).toEqual({ shouldContinue: false });
       expect(dispatch).not.toHaveBeenCalled();
     },
   );
 
-  it("returns the native owner-gate reply", async () => {
-    const params = updateCommandParams();
-    params.ctx.CommandSource = "native";
-    params.command.senderIsOwner = false;
+  it.each(["text", "native"] as const)(
+    "returns an owner setup hint for an authorized %s sender",
+    async (source) => {
+      const params = updateCommandParams();
+      params.ctx.CommandSource = source;
+      params.command.senderIsOwner = false;
+      params.command.senderId = "123456789";
 
-    expect(await handleUpdateCommand(params, true)).toEqual({
-      shouldContinue: false,
-      reply: { text: "You are not authorized to use this command." },
+      expect(await handleUpdateCommand(params, true)).toEqual({
+        shouldContinue: false,
+        reply: {
+          text: "You are not authorized to use this owner-only command. Ask the operator to run `openclaw config set commands.ownerAllowFrom '[\"telegram:123456789\"]'` in a terminal to make this sender a command owner.",
+        },
+      });
+      expect(dispatch).not.toHaveBeenCalled();
+    },
+  );
+
+  it("relays owner recovery instructions when the gateway revokes an admitted owner", async () => {
+    const message =
+      "Ask the operator to run `openclaw config set commands.ownerAllowFrom '[\"telegram:owner\"]'` in a terminal.";
+    dispatch.mockResolvedValueOnce({
+      ok: false,
+      message,
+      result: { status: "error", reason: "owner_required" },
     });
-    expect(dispatch).not.toHaveBeenCalled();
+    const result = await handleUpdateCommand(updateCommandParams(), true);
+    expect(result?.reply?.text).toContain(message);
   });
 
   it("honors commands.restart=false without starting an update", async () => {
