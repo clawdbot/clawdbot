@@ -594,17 +594,19 @@ describe("qa cli runtime", () => {
     );
   });
 
-  it("runs an explicit external built candidate with its packaged CLI command", async () => {
+  it("runs an explicit external built candidate runtime pair with its packaged CLI command", async () => {
     const candidate = await writeBuiltCandidate();
 
     await runQaSuiteCommand({
       repoRoot: candidate.repoRoot,
       scenarioIds: ["channel-chat-baseline"],
+      runtimePair: "openclaw,codex",
     });
 
     expect(runQaSuite).toHaveBeenCalledWith(
       expect.objectContaining({
         repoRoot: candidate.repoRoot,
+        runtimePair: ["openclaw", "codex"],
         sutOpenClawCommand: {
           executablePath: process.execPath,
           argsPrefix: [candidate.entryPath],
