@@ -302,6 +302,11 @@ export async function restoreLatestSkillCollectionBackup(params: {
         backupId,
         skillsRoot,
       });
+      if (manifest.restoreUnavailableReason) {
+        throw new Error(
+          `Skill collection backup is history-only and cannot be restored: ${manifest.restoreUnavailableReason}`,
+        );
+      }
       // Restoring over user edits made since the cleanup would silently lose them.
       await assertCollectionResultUnchanged(skillsRoot, manifest);
       const affectedDirs = [...new Set([...manifest.skillDirs, ...manifest.resultSkillDirs])];

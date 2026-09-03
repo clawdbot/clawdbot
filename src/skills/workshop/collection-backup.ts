@@ -19,6 +19,7 @@ export type CollectionBackupManifest = {
   skillDirs: string[];
   resultSkillDirs: string[];
   resultSkillHashes: Record<string, string>;
+  restoreUnavailableReason?: string;
 };
 
 export async function createCollectionBackup(params: {
@@ -125,11 +126,13 @@ export async function readCollectionBackupManifest(params: {
     params.skillsRoot,
   );
   const resultSkillHashes = asNullableRecord(record?.resultSkillHashes);
+  const restoreUnavailableReason = record?.restoreUnavailableReason;
   if (
     record?.schema !== BACKUP_SCHEMA ||
     record.id !== params.backupId ||
     typeof record.createdAt !== "string" ||
     !resultSkillHashes ||
+    (restoreUnavailableReason !== undefined && typeof restoreUnavailableReason !== "string") ||
     Object.keys(resultSkillHashes).some((relativeDir) => !resultSkillDirs.includes(relativeDir))
   ) {
     throw new Error(`Invalid skill collection backup: ${params.backupId}`);
@@ -154,6 +157,7 @@ export async function readCollectionBackupManifest(params: {
     skillDirs,
     resultSkillDirs,
     resultSkillHashes: parsedResultSkillHashes,
+    ...(typeof restoreUnavailableReason === "string" ? { restoreUnavailableReason } : {}),
   };
 }
 

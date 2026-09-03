@@ -9,6 +9,7 @@ import { pathExists } from "../infra/fs-safe.js";
 import { isPathStrictlyInside } from "../infra/path-guards.js";
 import type { CollectionBackupManifest } from "../skills/workshop/collection-backup.js";
 import { resolveSkillCollectionBackupRoot } from "../skills/workshop/collection-paths.js";
+import { readSkillProposalTargetTreeSha256 } from "../skills/workshop/proposal-bundle.js";
 
 const LEGACY_COLLECTION_BACKUP_SCHEMA = "openclaw.skill-collection-backup.v1";
 const MAX_BACKUP_MANIFEST_BYTES = 1024 * 1024;
@@ -39,6 +40,8 @@ type LegacyCollectionBackup = {
   convertedSkillDirs: string[];
   convertedResultSkillDirs: string[];
 };
+
+type LegacyWorkshopSkillRelocations = ReadonlyMap<string, string>;
 
 export function inferWorkspaceOwnerAgentId(
   config: OpenClawConfig,
@@ -172,10 +175,25 @@ async function readCurrentCollectionBackupCreatedAt(
     .at(-1);
 }
 
+async function isHistoryOnlyBackup(backupDir: string): Promise<boolean> {
+  try {
+    const record = asNullableRecord(
+      JSON.parse(await fs.readFile(path.join(backupDir, "manifest.json"), "utf8")),
+    );
+    return (
+      record?.schema === "openclaw.skill-collection-backup.v2" &&
+      typeof record.restoreUnavailableReason === "string"
+    );
+  } catch {
+    return false;
+  }
+}
+
 async function migrateLegacyCollectionBackup(
   backup: LegacyCollectionBackup,
   destinationRoot: string,
-): Promise<void> {
+  workshopSkillRelocations: LegacyWorkshopSkillRelocations,
+): Promise<{ preserveLegacyRoot: boolean }> {
   const destination = path.join(destinationRoot, backup.manifest.id);
   if (await pathExists(destination)) {
     throw new Error(`destination backup already exists: ${destination}`);
@@ -185,6 +203,45 @@ async function migrateLegacyCollectionBackup(
     `.pending-legacy-${backup.manifest.id}-${randomUUID()}`,
   );
   try {
+    const affectedDirs = [
+      ...new Set([...backup.manifest.skillDirs, ...backup.manifest.resultSkillDirs]),
+    ];
+    const unownedDirs = affectedDirs.filter(
+      (relativeDir) =>
+        !workshopSkillRelocations.has(path.resolve(backup.manifest.workspaceDir, relativeDir)),
+    );
+    if (unownedDirs.length > 0) {
+      await fs.cp(
+        path.join(backup.backupDir, "workspace"),
+        path.join(staging, "history", "workspace"),
+        { recursive: true, errorOnExist: true, force: false, preserveTimestamps: true },
+      );
+      const manifest: CollectionBackupManifest = {
+        schema: "openclaw.skill-collection-backup.v2",
+        id: backup.manifest.id,
+        createdAt: backup.manifest.createdAt,
+        skillDirs: [],
+        resultSkillDirs: [],
+        resultSkillHashes: {},
+        restoreUnavailableReason: `Legacy collection paths are not proven Workshop-owned: ${unownedDirs.join(", ")}`,
+      };
+      await fs.writeFile(path.join(staging, "manifest.json"), JSON.stringify(manifest, null, 2));
+      await fs.mkdir(destinationRoot, { recursive: true });
+      await fs.rename(staging, destination);
+      return { preserveLegacyRoot: true };
+    }
+    for (const relativeDir of backup.manifest.resultSkillDirs) {
+      const workshopSkillDir = workshopSkillRelocations.get(
+        path.resolve(backup.manifest.workspaceDir, relativeDir),
+      );
+      if (!workshopSkillDir) {
+        throw new Error(`legacy collection result path conversion failed: ${relativeDir}`);
+      }
+      const resultHash = await readSkillProposalTargetTreeSha256(workshopSkillDir);
+      if (resultHash !== backup.manifest.resultSkillHashes[relativeDir]) {
+        throw new Error(`legacy collection result changed after cleanup: ${relativeDir}`);
+      }
+    }
     await fs.mkdir(path.join(staging, "skills"), { recursive: true });
     for (const [index, relativeDir] of backup.manifest.skillDirs.entries()) {
       const source = path.join(backup.backupDir, "workspace", relativeDir);
@@ -221,6 +278,7 @@ async function migrateLegacyCollectionBackup(
     await fs.writeFile(path.join(staging, "manifest.json"), JSON.stringify(manifest, null, 2));
     await fs.mkdir(destinationRoot, { recursive: true });
     await fs.rename(staging, destination);
+    return { preserveLegacyRoot: false };
   } catch (error) {
     await fs.rm(staging, { recursive: true, force: true });
     throw error;
@@ -230,6 +288,7 @@ async function migrateLegacyCollectionBackup(
 export async function migrateLegacyCollectionBackups(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
+  workshopSkillRelocations: LegacyWorkshopSkillRelocations = new Map(),
 ): Promise<{ migrated: number; warnings: string[] }> {
   const { backupRoot, names } = await listLegacyCollectionBackupRoots(env);
   if (names.length === 0) {
@@ -251,6 +310,16 @@ export async function migrateLegacyCollectionBackups(
         throw new Error("workspace does not map to exactly one configured agent");
       }
       const destinationRoot = resolveSkillCollectionBackupRoot(config, ownerAgentId, env);
+      const alreadyArchived = await Promise.all(
+        backups.map(
+          async (backup) =>
+            (await pathExists(path.join(destinationRoot, backup.manifest.id))) &&
+            (await isHistoryOnlyBackup(path.join(destinationRoot, backup.manifest.id))),
+        ),
+      );
+      if (alreadyArchived.every(Boolean)) {
+        continue;
+      }
       const currentCreatedAt = await readCurrentCollectionBackupCreatedAt(destinationRoot);
       const newestLegacy = backups.toSorted((left, right) =>
         right.manifest.createdAt.localeCompare(left.manifest.createdAt),
@@ -271,11 +340,19 @@ export async function migrateLegacyCollectionBackups(
       ) {
         throw new Error(`destination backup already exists at ${destinationRoot}`);
       }
+      let preserveLegacyRoot = false;
       for (const backup of backups) {
-        await migrateLegacyCollectionBackup(backup, destinationRoot);
-        await fs.rm(backup.backupDir, { recursive: true, force: false });
+        const migration = await migrateLegacyCollectionBackup(
+          backup,
+          destinationRoot,
+          workshopSkillRelocations,
+        );
+        preserveLegacyRoot ||= migration.preserveLegacyRoot;
+        if (!migration.preserveLegacyRoot) {
+          await fs.rm(backup.backupDir, { recursive: true, force: false });
+        }
       }
-      if ((await fs.readdir(legacyRoot)).length === 0) {
+      if (!preserveLegacyRoot && (await fs.readdir(legacyRoot)).length === 0) {
         await fs.rmdir(legacyRoot);
       }
       migrated += 1;
