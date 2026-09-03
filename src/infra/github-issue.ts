@@ -10,7 +10,7 @@ export type PreparedGithubIssue = {
   title: string;
 };
 
-export type GithubIssueBrowserFallback =
+type GithubIssueBrowserFallback =
   | { status: "available"; url: string }
   | { reason: "url-too-long"; status: "unavailable" };
 
@@ -71,7 +71,7 @@ function buildPrefilledUrl(title: string, body: string): string {
 }
 
 /** Builds an exact browser fallback when its encoded request stays within a safe bound. */
-export function prepareGithubIssueBrowserFallback(
+function prepareGithubIssueBrowserFallback(
   title: string,
   body: string,
 ): GithubIssueBrowserFallback {

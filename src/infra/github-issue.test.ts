@@ -1,11 +1,6 @@
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  prepareGithubIssue,
-  prepareGithubIssueBrowserFallback,
-  submitGithubIssue,
-  type RunGithubCli,
-} from "./github-issue.js";
+import { prepareGithubIssue, submitGithubIssue, type RunGithubCli } from "./github-issue.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 
@@ -96,20 +91,23 @@ describe("GitHub issue transport", () => {
     { label: "heavily escaped", prefix: "&=?%".repeat(100) },
   ])("enforces the exact encoded browser URL byte bound for $label input", ({ prefix }) => {
     const title = "t";
-    const encodedPrefix = `https://github.com/openclaw/openclaw/issues/new?${new URLSearchParams({
-      body: prefix,
-      title,
-    }).toString()}`;
-    const bodyAtLimit = `${prefix}${"a".repeat(8_000 - Buffer.byteLength(encodedPrefix, "utf8"))}`;
+    const prefixIssue = prepareGithubIssue({ body: prefix, title });
+    if (prefixIssue.browserFallback.status !== "available") {
+      throw new Error("expected prefix fallback to be available");
+    }
+    const remaining = 8_000 - Buffer.byteLength(prefixIssue.browserFallback.url, "utf8");
+    const inputAtLimit = `${prefix}${"a".repeat(remaining)}`;
+    const issueAtLimit = prepareGithubIssue({ body: inputAtLimit, title });
 
-    const atLimit = prepareGithubIssueBrowserFallback(title, bodyAtLimit);
-    expect(atLimit.status).toBe("available");
-    if (atLimit.status !== "available") {
+    expect(issueAtLimit.browserFallback.status).toBe("available");
+    if (issueAtLimit.browserFallback.status !== "available") {
       throw new Error("expected exact-bound fallback to be available");
     }
-    expect(Buffer.byteLength(atLimit.url, "utf8")).toBe(8_000);
-    expect(new URL(atLimit.url).searchParams.get("body")).toBe(bodyAtLimit);
-    expect(prepareGithubIssueBrowserFallback(title, `${bodyAtLimit}a`)).toEqual({
+    expect(Buffer.byteLength(issueAtLimit.browserFallback.url, "utf8")).toBe(8_000);
+    expect(new URL(issueAtLimit.browserFallback.url).searchParams.get("body")).toBe(
+      issueAtLimit.body,
+    );
+    expect(prepareGithubIssue({ body: `${inputAtLimit}a`, title }).browserFallback).toEqual({
       reason: "url-too-long",
       status: "unavailable",
     });
