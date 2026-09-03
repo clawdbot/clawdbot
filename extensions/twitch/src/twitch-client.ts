@@ -1,7 +1,7 @@
 // Twitch plugin module implements twitch client behavior.
 import { RefreshingAuthProvider, StaticAuthProvider } from "@twurple/auth";
 import { ChatClient, LogLevel } from "@twurple/chat";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
@@ -155,15 +155,13 @@ export class TwitchClientManager {
     });
 
     if (!tokenResolution.token) {
-      const resolvedAccountId = normalizeAccountId(accountId);
-      const tokenConfigPath =
-        resolvedAccountId === DEFAULT_ACCOUNT_ID && !cfg?.channels?.twitch?.accounts
-          ? "channels.twitch.accessToken"
-          : `channels.twitch.accounts.${resolvedAccountId}.accessToken`;
-      this.logger.error(
+      const resolvedAccountId = accountId ?? DEFAULT_ACCOUNT_ID;
+      const tokenConfigPath = cfg?.channels?.twitch?.accounts
+        ? `channels.twitch.accounts.${resolvedAccountId}.accessToken`
+        : "channels.twitch.accessToken";
+      throw new Error(
         `Missing Twitch token for account ${resolvedAccountId} (set ${tokenConfigPath} or OPENCLAW_TWITCH_ACCESS_TOKEN for default)`,
       );
-      throw new Error("Missing Twitch token");
     }
 
     this.logger.debug?.(`Using ${tokenResolution.source} token source for ${account.username}`);
