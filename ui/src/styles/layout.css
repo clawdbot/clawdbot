@@ -2560,27 +2560,6 @@ wa-dropdown.session-menu::part(menu) {
   box-shadow: var(--overlay-shadow);
 }
 
-.session-menu--compact .session-menu__back {
-  z-index: 1;
-  position: sticky;
-  top: 0;
-  background: var(--wa-color-surface-raised);
-}
-
-.session-menu--compact .session-menu__chevron {
-  display: inline-flex;
-}
-
-html[dir="rtl"] .session-menu__chevron,
-html[dir="rtl"] .session-menu__back > .session-menu__icon {
-  transform: scaleX(-1);
-}
-
-wa-dropdown.session-menu--compact::part(menu) {
-  max-height: calc(100dvh - 16px);
-  overflow-y: auto;
-}
-
 /* Popover hosts live in the top layer so menus escape in-page stacking
    contexts (e.g. the sidebar resizer above the nav); the host itself must
    stay a zero-size shell around its fixed-position menu. */
