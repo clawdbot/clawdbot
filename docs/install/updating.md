@@ -141,6 +141,12 @@ recovery stops and reports the error without retrying with weaker options. Repai
 the reported failure, rerun `openclaw update`, and check `openclaw gateway status --deep`.
 See [Failed update recovery](/gateway/restart-recovery#recovery-after-a-failed-update).
 
+On macOS, if Doctor reports an installed but unloaded and disabled Gateway
+LaunchAgent after an interrupted update, finish update verification or Doctor and
+triage first. Then use the printed `openclaw gateway start` command, preserving
+its profile and state/config or custom-label overrides. `doctor --fix` diagnoses
+the disabled label but leaves an already-stopped Gateway stopped.
+
 Use channels to change the install type. The updater keeps your state, config,
 credentials, and workspace in `~/.openclaw`; it only changes which OpenClaw
 code install the CLI and gateway use.
