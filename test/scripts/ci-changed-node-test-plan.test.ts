@@ -197,8 +197,14 @@ describe("CI changed Node test plan", () => {
     ]);
   });
 
-  it("keeps an exact default-unit change focused while retaining boundary coverage", () => {
-    const target = "src/node-host/node-worker-bundle-installer.test.ts";
+  it.each([
+    "src/node-host/node-worker-bundle-installer.test.ts",
+    "src/plugin-sdk/config-runtime.test.ts",
+    "src/plugins/contracts/registry.retry.test.ts",
+    "src/channels/plugins/config-schema.test.ts",
+  ])("keeps exact test leaf %s focused while retaining boundary coverage", (target) => {
+    expect(hasCoreExtensionImpact([target])).toBe(false);
+    expect(createChangedExtensionFallbackShards([target])).toEqual([]);
     expect(createChangedNodeTestShards([target])).toEqual([
       {
         checkName: "checks-node-changed",
@@ -216,6 +222,94 @@ describe("CI changed Node test plan", () => {
         shardName: "changed-boundary",
       },
     ]);
+  });
+
+  it.each([
+    ["src/plugins/contracts/registry.retry.test.ts", "contracts-plugins"],
+    [
+      "src/channels/plugins/contracts/session-binding.registry-backed.contract.test.ts",
+      "contracts-channels",
+    ],
+  ])("leaves covered contract target %s to its dedicated matrix", (target, task) => {
+    const before = createChangedNodeTestShards([target]);
+    const dedicatedContractShards = [{ task, includePatterns: [target] }];
+    expect(createChangedNodeTestShards([target], { dedicatedContractShards })).toEqual(
+      before?.filter((shard) => !shard.targets),
+    );
+    // The same path is still a direct local target; CI coverage is opt-in.
+    expect(buildVitestRunPlans([target]).flatMap((plan) => plan.includePatterns ?? [])).toEqual([
+      target,
+    ]);
+    for (const coverage of [
+      [],
+      [{ task, includePatterns: [] }],
+      [{ task, includePatterns: ["src/plugins/contracts/other.test.ts"] }],
+      [{ task: "unrelated-task", includePatterns: [target] }],
+    ]) {
+      expect(createChangedNodeTestShards([target], { dedicatedContractShards: coverage })).toEqual(
+        before,
+      );
+    }
+  });
+
+  it("keeps uncovered and deleted-path coverage beside a dedicated contract target", () => {
+    const target = "src/plugins/contracts/registry.retry.test.ts";
+    const remaining = [
+      "src/plugin-sdk/config-runtime.test.ts",
+      "src/channels/plugins/config-schema.test.ts",
+      "src/plugins/contracts/deleted.test.ts",
+    ];
+    const options = {
+      dedicatedContractShards: [{ task: "contracts-plugins", includePatterns: [target] }],
+    };
+    expect(createChangedNodeTestShards([target, ...remaining], options)).toEqual(
+      createChangedNodeTestShards(remaining),
+    );
+    expect(createChangedNodeTestShards([target, "src/deleted.ts"], options)).toBeNull();
+    expect(createChangedNodeTestShards([target, "tsconfig.json"], options)).toBeNull();
+  });
+
+  it("requires dedicated config ownership and preserves an empty precise build plan", () => {
+    const cwd = mkdtempSync(path.join(tmpdir(), "openclaw-contract-coverage-"));
+    const target = "src/plugins/contracts/fixture.test.ts";
+    const source = "src/fixture.ts";
+    const unrelated = [
+      "src/plugins/contracts/fixture.e2e.test.ts",
+      "src/channels/plugins/contracts/unowned.test.ts",
+    ];
+    try {
+      for (const file of [target, source, ...unrelated]) {
+        mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
+        writeFileSync(
+          path.join(cwd, file),
+          file === target ? 'import "../../fixture.js";\nexport {};\n' : "export {};\n",
+        );
+      }
+      for (const file of unrelated) {
+        const before = createChangedNodeTestShards([file], { cwd });
+        // E2E configs require full-suite metadata; an unknown channel pattern
+        // keeps its exact target rather than claiming dedicated coverage.
+        expect(before?.flatMap((shard) => shard.targets ?? []) ?? null).toEqual(
+          file.endsWith(".e2e.test.ts") ? null : [file],
+        );
+        expect(
+          createChangedNodeTestShards([file], {
+            cwd,
+            dedicatedContractShards: [
+              { task: "contracts-plugins", includePatterns: [file] },
+              { task: "contracts-channels", includePatterns: [file] },
+            ],
+          }),
+        ).toEqual(before);
+      }
+      const dedicatedContractShards = [{ task: "contracts-plugins", includePatterns: [target] }];
+      expect(
+        createChangedNodeTestShards([source], { cwd })?.flatMap((shard) => shard.targets ?? []),
+      ).toEqual([target]);
+      expect(createChangedNodeTestShards([source], { cwd, dedicatedContractShards })).toEqual([]);
+    } finally {
+      rmSync(cwd, { force: true, recursive: true });
+    }
   });
 
   it("keeps boundary coverage on test-only diffs without the build-artifacts lane", () => {
@@ -415,10 +509,16 @@ describe("CI changed Node test plan", () => {
     expect(targets).toContain("src/agents/live-model-filter.test.ts");
   });
 
-  it("runs only the boundary shard when a diff deletes test files", () => {
+  it.each([
+    "src/gone.test.ts",
+    "src/plugin-sdk/gone.test.ts",
+    "src/plugins/contracts/gone.test.ts",
+    "src/channels/plugins/gone.test.ts",
+  ])("runs only the boundary shard when a diff deletes %s", (target) => {
     const cwd = mkdtempSync(path.join(tmpdir(), "openclaw-ci-deleted-test-"));
     try {
-      expect(createChangedNodeTestShards(["src/gone.test.ts"], { cwd })).toEqual([
+      expect(createChangedExtensionFallbackShards([target], { cwd })).toEqual([]);
+      expect(createChangedNodeTestShards([target], { cwd })).toEqual([
         {
           checkName: "checks-node-changed-boundary",
           configs: ["test/vitest/vitest.boundary.config.ts"],
@@ -438,9 +538,28 @@ describe("CI changed Node test plan", () => {
     ).toBeNull();
   });
 
-  it("fails safe when public SDK changes affect extension imports", () => {
-    expect(createChangedNodeTestShards(["src/plugin-sdk/core.ts"])).toBeNull();
-  });
+  it.each([
+    { changedPaths: ["src/plugin-sdk/core.ts"] },
+    { changedPaths: ["src/plugin-sdk/core.ts", "src/plugin-sdk/config-runtime.test.ts"] },
+    {
+      changedPaths: [
+        "src/plugins/contracts/registry.ts",
+        "src/plugins/contracts/registry.retry.test.ts",
+      ],
+    },
+    {
+      changedPaths: [
+        "src/channels/plugins/config-schema.ts",
+        "src/channels/plugins/config-schema.test.ts",
+      ],
+    },
+  ])(
+    "fails safe when public contracts affect extension imports: $changedPaths",
+    ({ changedPaths }) => {
+      expect(createChangedNodeTestShards(changedPaths)).toBeNull();
+      expectAllExtensionConfigs(createChangedExtensionFallbackShards(changedPaths));
+    },
+  );
 
   it("fails safe when a core change reaches package consumers through the public SDK", () => {
     expect(createChangedNodeTestShards(["src/shared/text/strip-markdown.ts"])).toBeNull();

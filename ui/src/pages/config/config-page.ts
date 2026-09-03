@@ -807,7 +807,9 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.isConnected &&
       this.systemInfoGatewaySource === gatewaySource &&
       this.context.gateway.snapshot.client === client &&
-      this.context.agentSelection.state.selectedId === agentId;
+      this.context.agentSelection.state.selectedId === agentId &&
+      // Agent selection can cycle A -> B -> A while the first A load is still pending.
+      this.sessionObserverModelsRequest?.promise === promise;
     const promise = loadModelCatalog(client, { agentId, preparedOnly: true, rejectOnFailure: true })
       .then(({ models }) => {
         if (isCurrent()) {

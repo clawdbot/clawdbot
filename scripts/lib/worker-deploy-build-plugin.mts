@@ -9,8 +9,13 @@ const PLAYWRIGHT_PACKAGE_INIT = `    packageRoot = import_path9.default.join(__d
     binPath = import_path9.default.join(packageRoot, "bin");`;
 const PLAYWRIGHT_BROWSER_REGISTRY_INIT =
   '    registry = new Registry(require(import_path20.default.join(packageRoot, "browsers.json")));';
-const WORKER_BROWSER_RUNTIME_COMPOSITION = `import { createAttachedBrowserToolRuntime } from "../../extensions/browser/runtime-api.js";
-export default { createAttachedBrowserToolRuntime };`;
+// Keep Browser and Playwright initialization behind the admitted Browser factory.
+const WORKER_BROWSER_RUNTIME_COMPOSITION = `export default {
+  async createAttachedBrowserToolRuntime(params) {
+    const { createAttachedBrowserToolRuntime } = await import("../../extensions/browser/runtime-api.js");
+    return createAttachedBrowserToolRuntime(params);
+  }
+};`;
 const WORKER_PLAYWRIGHT_RUNTIME = `import * as playwrightCore from "playwright-core";
 import { getUserAgent } from "playwright-core/lib/coreBundle";
 export function getPlaywrightCore() { return playwrightCore; }

@@ -27,6 +27,7 @@ import {
   type ControlUiMockGatewayScenario,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../ui/src/test-helpers/control-ui-session-fixtures.ts";
+import { createOfflineDeviceNode } from "../ui/src/test-helpers/devices-fixtures.ts";
 import {
   resolveExternalPackageAliasesForVite,
   resolveSourcePackageAliasesForVite,
@@ -2744,6 +2745,7 @@ async function createChatPickerScenario(
       },
       "node.list": {
         nodes: [
+          createOfflineDeviceNode(),
           {
             nodeId: "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
             displayName: "Mac Studio",

@@ -15,6 +15,7 @@ import { loadCliSessionHistoryMessages } from "../agents/cli-runner/session-hist
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import { shouldSkipLiveProviderDrift } from "../agents/live-test-provider-drift.js";
 import { parseModelRef } from "../agents/model-selection.js";
+import { listSubagentRunsForRequester } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { clearRuntimeConfigSnapshot, type OpenClawConfig } from "../config/config.js";
 import { resolveSessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -138,6 +139,17 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+async function waitFor<T>(resolve: () => T | undefined): Promise<T> {
+  for (let attempt = 0; attempt < 480; attempt += 1) {
+    const value = resolve();
+    if (value !== undefined) {
+      return value;
+    }
+    await sleep(1_000);
+  }
+  throw new Error("timed out waiting for live CLI announce proof");
 }
 
 type CliBackendAgentAttemptTimeouts = {
@@ -513,14 +525,11 @@ describeLive("gateway live (cli backend)", () => {
                 },
               }
             : cfg.models,
-        ...(useMinimalToolsProfile
-          ? {
-              tools: {
-                ...cfg.tools,
-                profile: "minimal" as const,
-              },
-            }
-          : {}),
+        tools: {
+          ...cfg.tools,
+          alsoAllow: ["sessions_spawn", "bash"],
+          ...(useMinimalToolsProfile ? { profile: "minimal" as const } : {}),
+        },
         agents: {
           ...cfg.agents,
           defaults: {
@@ -666,6 +675,54 @@ describeLive("gateway live (cli backend)", () => {
             }
           }
         }
+
+        const announceNonce = randomBytes(3).toString("hex").toUpperCase();
+        const announceSessionKey = `agent:dev:cli-announce-${announceNonce.toLowerCase()}`;
+        const announceChildToken = `CLI_ANNOUNCE_CHILD_${announceNonce}`;
+        const announceParentToken = `CLI_ANNOUNCE_PARENT_${announceNonce}`;
+        let announceParentObservedAt: number | undefined;
+        const announceRequest = activeClient.request(
+          "agent",
+          {
+            sessionKey: announceSessionKey,
+            idempotencyKey: `cli-announce-order-${randomUUID()}`,
+            deliver: false,
+            timeout: 240,
+            message: [
+              "Run this exact OpenClaw CLI-backed completion announcement scenario. Use tool calls, not prose.",
+              `Call sessions_spawn exactly once with taskName=cli_announce_${announceNonce.toLowerCase()} and task=${JSON.stringify(`Reply exactly ${announceChildToken} and nothing else.`)}.`,
+              `After sessions_spawn returns status=accepted, call bash with exactly: sleep 35; printf CLI_ANNOUNCE_PARENT_TOOL_DONE_${announceNonce}.`,
+              `After the bash call completes, reply exactly ${announceParentToken}.`,
+            ].join("\n"),
+          },
+          { expectFinal: true, timeoutMs: CLI_BACKEND_REQUEST_TIMEOUT_MS },
+        );
+        void announceRequest.then(() => (announceParentObservedAt = Date.now()));
+
+        const completedAnnounceChild = await waitFor(() => {
+          return listSubagentRunsForRequester(announceSessionKey).find(
+            (run) =>
+              run.taskName === `cli_announce_${announceNonce.toLowerCase()}` &&
+              run.completion?.resultText?.includes(announceChildToken) === true &&
+              run.execution.outcome?.status === "ok",
+          );
+        });
+        const announceParent = await announceRequest;
+        announceParentObservedAt ??= Date.now();
+        expect(extractPayloadText(announceParent.result)).toContain(announceParentToken);
+
+        const deliveredAnnounceChild = await waitFor(() =>
+          listSubagentRunsForRequester(announceSessionKey).find(
+            (run) =>
+              run.runId === completedAnnounceChild.runId &&
+              typeof run.delivery?.enqueuedAt === "number" &&
+              typeof run.delivery?.deliveredAt === "number" &&
+              typeof run.delivery?.announcedAt === "number",
+          ),
+        );
+        expect(deliveredAnnounceChild.delivery?.announcedAt).toBeGreaterThanOrEqual(
+          announceParentObservedAt,
+        );
 
         if (modelSwitchTarget) {
           const switchNonce = randomBytes(3).toString("hex").toUpperCase();

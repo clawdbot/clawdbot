@@ -578,6 +578,7 @@ export function resolveRequiredNodeCommandAuthority(params: {
 }): RequiredNodeCommandAuthority | undefined {
   const declaredCommands = new Set(params.declaredCommands);
   const effectiveCommands = new Set(params.effectiveCommands);
+  // A denial anywhere in the required set takes precedence over pairing approval.
   const denied = params.requiredCommands.find((cmd) => params.withheldCommands.includes(cmd));
   if (denied) {
     return { command: denied, state: "unauthorized" };

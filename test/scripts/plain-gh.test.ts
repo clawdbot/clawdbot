@@ -359,7 +359,8 @@ describe("plain gh subprocess contracts", () => {
         killSignal: "SIGKILL" as const,
       };
       const output = execute(["--version"], options);
-      expect(output).toEqual(Buffer.alloc(2 * 1024 * 1024, 0xff));
+      expect(Buffer.isBuffer(output)).toBe(true);
+      expect(Buffer.alloc(2 * 1024 * 1024, 0xff).equals(output)).toBe(true);
       expect(() => execute(["--version"], { ...options, maxBuffer: 1024 })).toThrow(
         expect.objectContaining({ code: "ENOBUFS" }),
       );
@@ -370,7 +371,7 @@ describe("plain gh subprocess contracts", () => {
       } finally {
         closeSync(fd);
       }
-      expect(readFileSync(destination)).toEqual(output);
+      expect(readFileSync(destination).equals(output)).toBe(true);
     },
   );
 

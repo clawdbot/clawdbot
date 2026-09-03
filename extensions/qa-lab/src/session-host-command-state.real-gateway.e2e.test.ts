@@ -17,6 +17,7 @@ const NODE_WORKER_ENVIRONMENT_SESSION_VERSION = 1;
 const NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE = "node-worker-supervisor-v6";
 const REQUEST_TIMEOUT_MS = 20_000;
 const TEST_TIMEOUT_MS = 180_000;
+const helloCounts = new WeakMap<GatewayClient, number>();
 
 const gatewayOwners: ReturnType<typeof createQaGatewayChild>[] = [];
 type DeviceIdentity = {
@@ -78,7 +79,7 @@ suite.define(() => {
                 sshVerify: false,
               },
             },
-            reload: { mode: "hot" },
+            reload: { mode: "hybrid" },
           },
           agents: {
             ...config.agents,
@@ -196,6 +197,7 @@ suite.define(() => {
             await page.keyboard.press("Escape");
 
             const beforeConfig = await operator.request<{ hash: string }>("config.get", {});
+            const unauthorizedHelloCount = helloCounts.get(unauthorizedNode) ?? 0;
             await operator.request("config.patch", {
               raw: JSON.stringify({
                 gateway: { nodes: { commands: { allow: [], deny: [COMMAND] } } },
@@ -212,7 +214,8 @@ suite.define(() => {
               },
               { interval: 250, timeout: 60_000 },
             );
-            // Command policy reloads in place; the existing host publication must survive.
+            expect(helloCounts.get(unauthorizedNode)).toBe(unauthorizedHelloCount);
+
             await page.reload();
             await page.locator("#new-session-where-trigger").click();
             await row(unauthorizedIdentity.deviceId).waitFor();
@@ -226,6 +229,7 @@ suite.define(() => {
               fullPage: true,
               path: path.join(suite.artifactDir, "02-unauthorized-after-hot-reload.png"),
             });
+            expect(helloCounts.get(unauthorizedNode)).toBe(unauthorizedHelloCount);
           },
         );
       } finally {
@@ -357,7 +361,10 @@ async function connectClient(params: {
       commands: params.commands,
       deviceIdentity: params.deviceIdentity,
       requestTimeoutMs: REQUEST_TIMEOUT_MS,
-      onHelloOk: () => finish(client),
+      onHelloOk: () => {
+        helloCounts.set(client, (helloCounts.get(client) ?? 0) + 1);
+        finish(client);
+      },
       onConnectError: (error) => finish(client, error),
       onClose: (code, reason) => finish(client, new Error(`Gateway closed (${code}): ${reason}`)),
     });

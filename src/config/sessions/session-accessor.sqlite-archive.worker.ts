@@ -10,6 +10,10 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
+  settleOpenClawAgentDatabaseWorkerClose,
+  type OpenClawAgentDatabaseWorkerCloseResult,
+} from "../../state/openclaw-agent-db.js";
+import {
   hashSessionArchiveBytes,
   MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES,
   publishEncodedSessionTranscriptArchive,
@@ -26,11 +30,38 @@ import {
   sqliteSessionStateDeleteSnapshotsEqual,
 } from "./session-accessor.sqlite-delete-snapshot.js";
 import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
+import {
+  reclaimSqliteSessionInTransaction,
+  type SqliteSessionReclamationWorkerData,
+  type SqliteSessionReclamationWorkerResult,
+} from "./session-accessor.sqlite-reclamation.js";
 
 type TranscriptArchiveDatabase = Pick<
   OpenClawAgentKyselyDatabase,
   "session_transcript_archives" | "transcript_events"
 >;
+
+const WORKER_CLOSE_MAX_ATTEMPTS = 3;
+
+async function settleReclamationDatabase(
+  pathname: string,
+): Promise<{ cleanupWarnings: string[]; settled: boolean }> {
+  const warnings = new Set<string>();
+  let outcome: OpenClawAgentDatabaseWorkerCloseResult = { errors: [], settled: false };
+  for (let attempt = 0; attempt < WORKER_CLOSE_MAX_ATTEMPTS; attempt += 1) {
+    outcome = settleOpenClawAgentDatabaseWorkerClose(pathname);
+    outcome.errors.forEach((error) => warnings.add(error.message));
+    if (outcome.settled) {
+      break;
+    }
+    if (attempt + 1 < WORKER_CLOSE_MAX_ATTEMPTS) {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 25 * 2 ** attempt);
+      });
+    }
+  }
+  return { cleanupWarnings: [...warnings], settled: outcome.settled };
+}
 
 function isSqliteTranscriptArchiveWorkerData(value: unknown): boolean {
   return (
@@ -375,6 +406,34 @@ function runPublishWorkerPort(
   port.close();
 }
 
+async function runReclamationWorkerPort(
+  port: NonNullable<typeof parentPort>,
+  data: SqliteSessionReclamationWorkerData,
+): Promise<void> {
+  let result: ReturnType<typeof reclaimSqliteSessionInTransaction>;
+  try {
+    result = reclaimSqliteSessionInTransaction(data.plan);
+  } catch (error) {
+    const cleanup = await settleReclamationDatabase(data.plan.databaseOptions.path);
+    if (!cleanup.settled) {
+      throw new AggregateError(
+        [error, ...cleanup.cleanupWarnings.map((warning) => new Error(warning))],
+        "SQLite session reclamation failed and Worker cleanup is incomplete; restart OpenClaw before deleting the owning agent",
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+  const cleanup = await settleReclamationDatabase(data.plan.databaseOptions.path);
+  const workerResult: SqliteSessionReclamationWorkerResult = {
+    result,
+    ...(cleanup.cleanupWarnings.length > 0 ? { cleanupWarnings: cleanup.cleanupWarnings } : {}),
+    ...(!cleanup.settled ? { cleanupIncomplete: true } : {}),
+  };
+  port.postMessage({ type: "reclaimed", results: [workerResult] });
+  port.close();
+}
+
 if (isSqliteTranscriptArchiveWorkerData(workerData)) {
   if (!parentPort) {
     throw new Error("SQLite transcript archive worker requires a parent port");
@@ -392,6 +451,9 @@ if (isSqliteTranscriptArchiveWorkerData(workerData)) {
       throw new Error("SQLite transcript archive worker requires valid publication data");
     }
     runPublishWorkerPort(parentPort, plans);
+  } else if (operation === "reclaim") {
+    // SAFETY: the parent creates this internal structured-clone payload from the typed plan.
+    await runReclamationWorkerPort(parentPort, workerData as SqliteSessionReclamationWorkerData);
   } else {
     throw new Error("SQLite transcript archive worker requires a supported operation");
   }

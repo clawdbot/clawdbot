@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
@@ -11,6 +12,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveConfigDir } from "../utils.js";
+import { resolveCronJobConfigRevision } from "./config-revision.js";
 import { readCronStoreStatePath } from "./store/config-state.js";
 import { cronStoreKey } from "./store/key.js";
 import {
@@ -19,11 +21,13 @@ import {
 } from "./store/quarantine.js";
 import {
   assertCronStoreCanPersist,
+  deleteCronJobRowInDatabase,
   deleteStaleCronJobFamilyRows,
   loadedCronStoreFromRows,
   loadCronRows,
   readCronJobsFingerprint,
   replaceCronRows,
+  upsertCronJobRow,
   updateCronRuntimeRows,
 } from "./store/row-codec.js";
 import type { CronJobFamilyIdentity } from "./store/row-codec.js";
@@ -38,7 +42,7 @@ import type {
   LoadedCronStore,
   QuarantinedCronConfigJob,
 } from "./store/types.js";
-import type { CronStoreFile } from "./types.js";
+import type { CronJobState, CronStoredJob, CronStoreFile } from "./types.js";
 export type {
   CronConfigJobRuntimeEntry,
   CronQuarantinedJob,
@@ -278,6 +282,143 @@ type CronStoreReplacementOptions = Pick<
 type SaveCronJobsStoreInternalOptions = SaveCronJobsStoreOptions & {
   transactionHooks?: CronStoreTransactionHooks;
 };
+
+function mergeCronRuntimeChanges(
+  previous: CronJobState,
+  next: CronJobState,
+  current: CronJobState,
+): CronJobState {
+  const merged = structuredClone(current);
+  for (const key of new Set([...Object.keys(previous), ...Object.keys(next)])) {
+    if (isDeepStrictEqual(Reflect.get(previous, key), Reflect.get(next, key))) {
+      continue;
+    }
+    if (Object.hasOwn(next, key)) {
+      Reflect.set(merged, key, structuredClone(Reflect.get(next, key)));
+    } else {
+      Reflect.deleteProperty(merged, key);
+    }
+  }
+  return merged;
+}
+
+function mergeCronRuntimeAuthority(
+  previous: CronStoredJob,
+  next: CronStoredJob,
+  current: CronStoredJob,
+): CronStoredJob {
+  const merged = { ...next };
+  const source =
+    !isDeepStrictEqual(previous.runtimeAuthority, next.runtimeAuthority) ||
+    previous.runtimeAuthorityRecoveryRequired !== next.runtimeAuthorityRecoveryRequired
+      ? next
+      : current;
+  if (source.runtimeAuthority) {
+    merged.runtimeAuthority = source.runtimeAuthority;
+  } else {
+    delete merged.runtimeAuthority;
+  }
+  if (source.runtimeAuthorityRecoveryRequired === true) {
+    merged.runtimeAuthorityRecoveryRequired = true;
+  } else {
+    delete merged.runtimeAuthorityRecoveryRequired;
+  }
+  return merged;
+}
+
+/** Commits only scheduler-disabled CRUD rows against authoritative SQLite state. */
+export async function saveCronJobsStoreChanges(
+  storePath: string,
+  previous: CronStoreFile,
+  next: CronStoreFile,
+  opts?: {
+    preserveConcurrentAdds?: boolean;
+    transactionHooks?: CronStoreTransactionHooks;
+  },
+): Promise<CronStoreFile> {
+  assertCronStoreCanPersist(next);
+  const resolvedStorePath = path.resolve(storePath);
+  const storeKey = cronStoreKey(resolvedStorePath);
+  const previousById = new Map(previous.jobs.map((job) => [job.id, job] as const));
+  const nextById = new Map(next.jobs.map((job) => [job.id, job] as const));
+  const changedIds = new Set(
+    [...new Set([...previousById.keys(), ...nextById.keys()])].filter(
+      (jobId) => !isDeepStrictEqual(previousById.get(jobId), nextById.get(jobId)),
+    ),
+  );
+  if (changedIds.size === 0) {
+    return previous;
+  }
+  const committed = runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const rows = loadCronRows(db, storeKey);
+      const rowsById = new Map(rows.map((row) => [row.job_id, row] as const));
+      const currentJobs = loadedCronStoreFromRows(rows).store.jobs;
+      const authority = loadCronRuntimeAuthorities({ db, storeKey, jobs: currentJobs });
+      if (authority.repairJobIds.length > 0) {
+        repairCronRuntimeAuthorityRows({
+          db,
+          storeKey,
+          jobs: currentJobs,
+          jobIds: authority.repairJobIds,
+        });
+      }
+      const currentById = new Map(currentJobs.map((job) => [job.id, job] as const));
+      opts?.transactionHooks?.beforeWrite?.(db);
+      let nextSortOrder = rows.reduce((max, row) => Math.max(max, row.sort_order), -1) + 1;
+      for (const jobId of changedIds) {
+        const before = previousById.get(jobId);
+        const after = nextById.get(jobId);
+        const current = currentById.get(jobId);
+        if (
+          before &&
+          current &&
+          resolveCronJobConfigRevision(current) !== resolveCronJobConfigRevision(before)
+        ) {
+          throw new CronJobsStoreChangedError(resolvedStorePath);
+        }
+        if (!after) {
+          if (current) {
+            deleteCronJobRowInDatabase(db, storeKey, jobId);
+          }
+          currentById.delete(jobId);
+          continue;
+        }
+        if (before) {
+          if (!current) {
+            throw new CronJobsStoreChangedError(resolvedStorePath);
+          }
+        } else if (current && opts?.preserveConcurrentAdds) {
+          continue;
+        } else if (current) {
+          throw new CronJobsStoreChangedError(resolvedStorePath);
+        }
+        const merged: CronStoredJob = current
+          ? {
+              ...mergeCronRuntimeAuthority(before ?? after, after, current),
+              state: mergeCronRuntimeChanges(before?.state ?? {}, after.state, current.state),
+              updatedAtMs: Math.max(after.updatedAtMs, current.updatedAtMs),
+            }
+          : after;
+        const persisted = upsertCronJobRow(
+          db,
+          storeKey,
+          merged,
+          rowsById.get(jobId)?.sort_order ?? nextSortOrder++,
+        );
+        replaceCronRuntimeAuthorityRows({ db, storeKey, jobs: [persisted] });
+        currentById.set(jobId, persisted);
+      }
+      opts?.transactionHooks?.afterWrite?.(db);
+      return { version: 1, jobs: [...currentById.values()] } satisfies CronStoreFile;
+    },
+    {},
+    { operationLabel: "cron.config-mutation" },
+  );
+  opts?.transactionHooks?.afterCommit?.();
+  noteCronJobsStoreCommit(storeKey);
+  return committed;
+}
 
 function replaceCronStoreRows(
   db: DatabaseSync,

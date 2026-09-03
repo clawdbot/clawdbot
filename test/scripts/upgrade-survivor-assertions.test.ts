@@ -4,6 +4,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   cpSync,
+  existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -1237,6 +1238,51 @@ process.stdout.write(sessionDir + "\\n");
       }
     },
   );
+
+  it("keeps the watch direct-node seed free of unrelated migration specimens", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-watch-seed-"));
+    try {
+      const stateDir = join(root, "state");
+      const workspace = join(root, "workspace");
+      mkdirSync(stateDir, { recursive: true });
+      mkdirSync(workspace, { recursive: true });
+      const env = {
+        ...process.env,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_TEST_WORKSPACE_DIR: workspace,
+        OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "watchos-direct-node",
+      };
+
+      execFileSync(process.execPath, [ASSERTIONS_PATH, "seed"], { env, stdio: "pipe" });
+
+      expect(existsSync(join(workspace, "IDENTITY.md"))).toBe(true);
+      expect(existsSync(join(workspace, ".openclaw", "workspace-state.json"))).toBe(true);
+      for (const relative of [
+        "sessions/sessions.json",
+        "agents/main/sessions/legacy-session.json",
+        "exec-approvals.json",
+        "plugin-runtime-deps",
+      ]) {
+        expect(existsSync(join(stateDir, relative)), relative).toBe(false);
+      }
+      for (const stage of ["baseline", "survival"]) {
+        const stageEnv = {
+          ...env,
+          OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE: stage,
+        };
+        execFileSync(process.execPath, [ASSERTIONS_PATH, "assert-state"], {
+          env: stageEnv,
+          stdio: "pipe",
+        });
+        execFileSync(process.execPath, [ASSERTIONS_PATH, "assert-exec-approvals"], {
+          env: stageEnv,
+          stdio: "pipe",
+        });
+      }
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
 
   it("requires every seeded legacy cron specimen before update", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-cron-"));

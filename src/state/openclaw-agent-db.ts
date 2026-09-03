@@ -620,6 +620,68 @@ export function closeOpenClawAgentDatabaseByPath(pathname: string): boolean {
   return true;
 }
 
+export type OpenClawAgentDatabaseWorkerCloseResult = {
+  errors: Error[];
+  settled: boolean;
+};
+
+/**
+ * Converge a terminating worker's cached handle and durable lease without
+ * turning an already committed worker result into an operation failure.
+ * Callers own a bounded retry policy and must surface an unsettled result.
+ */
+export function settleOpenClawAgentDatabaseWorkerClose(
+  pathname: string,
+): OpenClawAgentDatabaseWorkerCloseResult {
+  const resolvedPath = path.resolve(pathname);
+  const errors: Error[] = [];
+  const database = cachedDatabases.get(resolvedPath);
+  if (database) {
+    try {
+      database.walMaintenance.close();
+    } catch (error) {
+      errors.push(error instanceof Error ? error : new Error(String(error)));
+    }
+    if (database.db.isOpen) {
+      try {
+        database.db.close();
+      } catch (error) {
+        errors.push(error instanceof Error ? error : new Error(String(error)));
+      }
+    }
+    if (!database.db.isOpen) {
+      const incognito = incognitoDatabases.has(database);
+      cachedDatabases.delete(resolvedPath);
+      cachedDatabaseOpenFailures.delete(resolvedPath);
+      if (incognito) {
+        incognitoDatabaseGeneration += 1;
+      }
+      if (cachedDatabases.size === 0) {
+        unregisterExitClose?.();
+        unregisterExitClose = null;
+      }
+    }
+  }
+
+  if (!cachedDatabases.get(resolvedPath)?.db.isOpen) {
+    const lease = cachedDatabaseLeases.get(resolvedPath);
+    if (lease) {
+      try {
+        releaseOpenClawAgentDatabaseLease(lease.leaseId, { env: lease.env });
+        cachedDatabaseLeases.delete(resolvedPath);
+      } catch (error) {
+        errors.push(error instanceof Error ? error : new Error(String(error)));
+      }
+    }
+  }
+
+  return {
+    errors,
+    settled:
+      !cachedDatabases.get(resolvedPath)?.db.isOpen && !cachedDatabaseLeases.has(resolvedPath),
+  };
+}
+
 /** Close and unregister one unambiguous transient agent database by filesystem identity. */
 export function disposeOpenClawAgentDatabaseByPath(
   pathname: string,

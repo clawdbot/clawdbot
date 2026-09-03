@@ -4,7 +4,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { assertPathInside, findPackageJson, readJson } from "./codex-install-utils.mjs";
 
-const EXPECTED_CODEX_VERSION = "0.153.0";
 const CODEX_PLATFORM_TARGETS = new Map([
   ["linux:x64", { alias: "@openai/codex-linux-x64", os: "linux", cpu: "x64" }],
   ["linux:arm64", { alias: "@openai/codex-linux-arm64", os: "linux", cpu: "arm64" }],
@@ -18,12 +17,6 @@ function exactStringArray(value, expected) {
   return Array.isArray(value) && value.length === 1 && value[0] === expected;
 }
 
-function recordEvidence(evidence) {
-  for (const [key, value] of Object.entries(evidence)) {
-    process.stdout.write(`[codex-release] ${key}=${value}\n`);
-  }
-}
-
 export function assertCodexReleasePackageContract(params) {
   const platform = params.platform ?? process.platform;
   const arch = params.arch ?? process.arch;
@@ -32,11 +25,14 @@ export function assertCodexReleasePackageContract(params) {
     throw new Error(`unsupported Codex release platform: ${platform}/${arch}`);
   }
 
+  // The lane mounts candidate metadata separately from the trusted harness checkout.
+  const candidate = readJson("/tmp/openclaw-candidate-codex-package.json");
+  const expectedVersion = candidate.dependencies?.["@openai/codex"];
   const pluginPackage = readJson(params.pluginPackageJson);
-  const expectedDependency = pluginPackage.dependencies?.["@openai/codex"];
-  if (expectedDependency !== EXPECTED_CODEX_VERSION) {
+  const dependency = pluginPackage.dependencies?.["@openai/codex"];
+  if (!/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/u.test(expectedVersion) || dependency !== expectedVersion) {
     throw new Error(
-      `@openclaw/codex must depend on @openai/codex ${EXPECTED_CODEX_VERSION}; found ${String(expectedDependency)}`,
+      `@openclaw/codex must depend on @openai/codex ${expectedVersion}; found ${String(dependency)}`,
     );
   }
   const requiredPlatformPackages = pluginPackage.openclaw?.install?.requiredPlatformPackages;
@@ -51,12 +47,12 @@ export function assertCodexReleasePackageContract(params) {
 
   assertPathInside(params.managedRoot, params.codexPackageJson, "@openai/codex dependency");
   const codexPackage = readJson(params.codexPackageJson);
-  if (codexPackage.version !== EXPECTED_CODEX_VERSION) {
+  if (codexPackage.version !== expectedVersion) {
     throw new Error(
-      `installed @openai/codex version mismatch: expected ${EXPECTED_CODEX_VERSION}, got ${String(codexPackage.version)}`,
+      `installed @openai/codex version mismatch: expected ${expectedVersion}, got ${String(codexPackage.version)}`,
     );
   }
-  const expectedAliasSpec = `npm:@openai/codex@${EXPECTED_CODEX_VERSION}-${platform}-${arch}`;
+  const expectedAliasSpec = `npm:@openai/codex@${expectedVersion}-${platform}-${arch}`;
   if (codexPackage.optionalDependencies?.[target.alias] !== expectedAliasSpec) {
     throw new Error(
       `@openai/codex current platform alias mismatch: expected ${target.alias}=${expectedAliasSpec}`,
@@ -69,7 +65,7 @@ export function assertCodexReleasePackageContract(params) {
   }
   assertPathInside(params.managedRoot, platformPackageJson, "Codex platform package");
   const platformPackage = readJson(platformPackageJson);
-  const expectedPlatformVersion = `${EXPECTED_CODEX_VERSION}-${platform}-${arch}`;
+  const expectedPlatformVersion = `${expectedVersion}-${platform}-${arch}`;
   if (platformPackage.version !== expectedPlatformVersion) {
     throw new Error(
       `installed ${target.alias} version mismatch: expected ${expectedPlatformVersion}, got ${String(platformPackage.version)}`,
@@ -115,9 +111,9 @@ export function assertCodexReleasePackageContract(params) {
     );
   }
   const versionMatch = /^codex-cli\s+(\S+)$/u.exec(stdout);
-  if (versionMatch?.[1] !== EXPECTED_CODEX_VERSION) {
+  if (versionMatch?.[1] !== expectedVersion) {
     throw new Error(
-      `managed Codex CLI version mismatch: expected ${EXPECTED_CODEX_VERSION}, got ${JSON.stringify(stdout)}`,
+      `managed Codex CLI version mismatch: expected ${expectedVersion}, got ${JSON.stringify(stdout)}`,
     );
   }
 
@@ -130,7 +126,9 @@ export function assertCodexReleasePackageContract(params) {
     platformCpu: target.cpu,
   };
   if (params.recordEvidence !== false) {
-    recordEvidence(evidence);
+    for (const [key, value] of Object.entries(evidence)) {
+      process.stdout.write(`[codex-release] ${key}=${value}\n`);
+    }
   }
   return { codexBin, evidence };
 }
