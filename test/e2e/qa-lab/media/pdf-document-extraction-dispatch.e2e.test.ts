@@ -86,6 +86,16 @@ describe("PDF document extraction dispatch", () => {
     ).resolves.toEqual({
       text: SENTINEL,
       images: [],
+      metadata: {
+        pages: {
+          processed: [1],
+          total: 1,
+          truncated: false,
+          selection: "automatic",
+        },
+        textTruncated: false,
+        imagesTruncated: false,
+      },
     });
 
     await expect(
