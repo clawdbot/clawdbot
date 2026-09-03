@@ -2080,7 +2080,10 @@ describe("gateway/node-registry", () => {
       const request = JSON.parse(frames[0] ?? "{}");
       expect(request.payload.timeoutMs).toBe(30);
       expect(JSON.parse(request.payload.paramsJSON).timeoutMs).toBe(5_000);
-      expect(onDispatchReady).toHaveBeenCalledExactlyOnceWith(request.payload.id, startedAtMs + 100);
+      expect(onDispatchReady).toHaveBeenCalledExactlyOnceWith(
+        request.payload.id,
+        startedAtMs + 100,
+      );
       await vi.advanceTimersByTimeAsync(30);
       await expect(invoke).resolves.toMatchObject({ ok: false, error: { code: "TIMEOUT" } });
       expect(

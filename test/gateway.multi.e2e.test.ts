@@ -7,6 +7,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { GatewayClient } from "../src/gateway/client.js";
 import { connectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
 import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../src/utils/message-channel.js";
 import {
   type GatewayInstance,
   connectNode,
@@ -17,7 +18,6 @@ import {
   waitForNodeStatus,
 } from "./helpers/gateway-e2e-harness.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../src/utils/message-channel.js";
 
 const E2E_TIMEOUT_MS = 120_000;
 
