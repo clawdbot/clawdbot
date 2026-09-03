@@ -2931,7 +2931,7 @@ src/gateway/server-methods/terminal.ts	7
 src/gateway/server-methods/tools-catalog.ts	2
 src/gateway/server-methods/ui-command.ts	1
 src/gateway/server-methods/update.ts	2
-src/gateway/server-methods/web.ts	3
+src/gateway/server-methods/web.ts	1
 src/gateway/server-methods/wizard.ts	1
 src/gateway/server-methods/workspace-fs.ts	2
 src/gateway/server-node-events.ts	3
