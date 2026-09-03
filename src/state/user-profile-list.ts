@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
@@ -210,4 +211,50 @@ export function getUserProfileDisplay(
     avatarRevision,
     hasAvatar: profile.has_avatar === 1,
   };
+}
+
+/** Activity references are display navigation, never authentication identifiers. */
+export function resolveUserProfileReference(
+  reference: string,
+  options: OpenClawStateDatabaseOptions = {},
+): Result<string | undefined, "ambiguous"> {
+  return (
+    withExistingOpenClawStateDatabaseReadOnly(({ db }): Result<string | undefined, "ambiguous"> => {
+      if (!tableExists(db, "user_profiles")) {
+        return ok(undefined);
+      }
+      const profiles = userProfilesDb(db).selectFrom("user_profiles");
+      const exact = selectResolvedUserProfile(
+        db,
+        reference,
+        profiles.select(["id", "merged_into"]),
+      );
+      if (exact) {
+        return ok(exact.id);
+      }
+      if (!/^[0-9a-f]{8,32}$/.test(reference)) {
+        return ok(undefined);
+      }
+      const uuidPrefix = [
+        reference.slice(0, 8),
+        reference.slice(8, 12),
+        reference.slice(12, 16),
+        reference.slice(16, 20),
+        reference.slice(20),
+      ]
+        .filter(Boolean)
+        .join("-");
+      // Tombstones retain old links; aliases of one merge head are one match.
+      // Resolve over durable profiles so time, search, and facet caps cannot choose a person.
+      const matches = executeSqliteQuerySync(
+        db,
+        profiles
+          .select((eb) => eb.fn.coalesce("merged_into", "id").as("id"))
+          .where("id", "like", `${uuidPrefix}%`)
+          .distinct()
+          .limit(2),
+      ).rows;
+      return matches.length > 1 ? err("ambiguous") : ok(matches[0]?.id);
+    }, options) ?? ok(undefined)
+  );
 }

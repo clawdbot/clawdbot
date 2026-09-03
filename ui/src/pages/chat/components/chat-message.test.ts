@@ -2053,9 +2053,9 @@ describe("grouped chat rendering", () => {
     const peer = renderSender("profile-alice");
     const link = peer.querySelector<HTMLAnchorElement>("a.chat-sender-name");
     expect(link?.textContent).toBe("Alice Example");
-    expect(link?.getAttribute("href")).toBe("/activity?person=profile-alice");
+    expect(link?.getAttribute("href")).toBe("/activity/profile-alice");
     link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-    expect(navigate).toHaveBeenCalledWith("profile-alice");
+    expect(navigate).toHaveBeenCalledWith("profile-alice", "Alice Example");
 
     const own = renderSender("me");
     expect(own.querySelector("a.chat-sender-name")).toBeNull();

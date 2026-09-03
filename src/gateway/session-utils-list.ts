@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -15,7 +16,10 @@ import {
 import { shouldKeepSubagentRunChildLink } from "../agents/subagents/registry/subagent-run-liveness.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import type { SessionEntry } from "../config/sessions.js";
-import { MAX_SESSION_PARTICIPANTS } from "../config/sessions/session-entry-provenance.js";
+import {
+  MAX_SESSION_PARTICIPANTS,
+  sessionCreatorProfileId,
+} from "../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPinnedActivePluginRegistryWorkspaceDir } from "../plugins/runtime-workspace-state.js";
 import {
@@ -27,6 +31,7 @@ import {
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { SESSIONS_LIST_OWNER_LIMIT } from "../shared/session-list-limits.js";
 import type { SessionOwnerFacetIdentity } from "../shared/session-types.js";
+import { resolveUserProfileReference } from "../state/user-profile-list.js";
 import {
   projectSessionOwner,
   addSessionOwnerFacetIdentity,
@@ -34,7 +39,7 @@ import {
   projectSessionParticipants,
   projectSessionPeople,
   projectSessionPeopleFacet,
-  projectSessionActor,
+  projectSessionParticipant,
 } from "./session-identity-projection.js";
 import { type SessionEntryPair, sortAndLimitSessionEntries } from "./session-list-order.js";
 import {
@@ -160,6 +165,45 @@ function resolveSessionsListWindowLimit(limit: number | undefined, offset: numbe
   return Number.isFinite(windowLimit) ? Math.min(windowLimit, Number.MAX_SAFE_INTEGER) : undefined;
 }
 
+function resolveSessionListProfileReference(
+  reference: string,
+  store: Record<string, SessionEntry>,
+  identities: Map<string, SessionActorProfileIdentity | undefined>,
+): Result<string | undefined, "ambiguous"> {
+  const exact = projectSessionParticipant({ type: "profile", id: reference }, identities);
+  if (identities.get(reference)) {
+    return ok(exact.identity.id);
+  }
+  const prefix = /^[0-9a-f]{8,32}$/.test(reference);
+  const matches = new Set<string>();
+  // Qualified associations outlive profile rows. Resolve over retained identities
+  // before filters so an orphan cannot disappear or borrow another person's prefix.
+  for (const entry of Object.values(store)) {
+    const ids = [
+      sessionCreatorProfileId(entry.createdActor),
+      ...(entry.participants ?? []).flatMap(({ identity }) =>
+        identity.type === "profile" ? [identity.id] : [],
+      ),
+    ];
+    for (const id of ids) {
+      if (id === reference) {
+        return ok(exact.identity.id);
+      }
+      if (id && prefix && id.replaceAll("-", "").toLowerCase().startsWith(reference)) {
+        matches.add(projectSessionParticipant({ type: "profile", id }, identities).identity.id);
+      }
+    }
+  }
+  const durable = resolveUserProfileReference(reference);
+  if (!durable.ok) {
+    return durable;
+  }
+  if (durable.value) {
+    matches.add(durable.value);
+  }
+  return matches.size > 1 ? err("ambiguous") : ok(matches.values().next().value);
+}
+
 function filterSessionEntries(params: {
   cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
@@ -203,10 +247,16 @@ function filterSessionEntries(params: {
   const people = new Map<string, NonNullable<SessionsListResult["people"]>[number]>();
   let peopleSessionCount = 0;
   let peopleIncomplete = false;
-  let selectedProfileId: string | undefined;
   const configuredAgentIds = params.configuredAgentIds ?? new Set(listAgentIds(cfg));
   const identities =
     params.userProfileIdentityById ?? new Map<string, SessionActorProfileIdentity | undefined>();
+  const profileReference = opts.involvingProfileId
+    ? resolveSessionListProfileReference(opts.involvingProfileId, store, identities)
+    : undefined;
+  if (profileReference && !profileReference.ok) {
+    throw new Error("Person link is ambiguous. Use a longer profile ID in the Activity URL.");
+  }
+  const selectedProfileId = profileReference?.value;
 
   for (const [key, entry] of Object.entries(store)) {
     if (params.entryFilter && !params.entryFilter(key, entry)) {
@@ -346,11 +396,6 @@ function filterSessionEntries(params: {
         });
       }
       if (opts.involvingProfileId) {
-        selectedProfileId ??= projectSessionActor(
-          { type: "human", id: opts.involvingProfileId },
-          identities,
-          cfg,
-        )?.identity?.id;
         if (!associated.some((person) => person.identity.id === selectedProfileId)) {
           continue;
         }
@@ -365,16 +410,16 @@ function filterSessionEntries(params: {
     entries.push([key, entry]);
   }
 
-  const {
-    people: visiblePeople,
-    selected,
-    overflow,
-  } = projectSessionPeopleFacet(people.values(), selectedProfileId);
+  const { people: visiblePeople, overflow } = projectSessionPeopleFacet(
+    people.values(),
+    selectedProfileId,
+  );
   return {
     entries,
     ownerEntries,
     ownerFacet: sortSessionOwnerFacet(ownerFacet),
-    involvingProfileId: selected?.identity.id,
+    // Empty time/search windows do not invalidate a resolved person link.
+    involvingProfileId: selectedProfileId,
     ...(opts.includePeople
       ? {
           people: visiblePeople,

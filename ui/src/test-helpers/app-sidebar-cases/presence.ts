@@ -107,9 +107,9 @@ describe("AppSidebar viewer presence", () => {
       .querySelector<HTMLAnchorElement>(".person-activity-card footer a")!
       .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     expect(onNavigate).toHaveBeenCalledWith("activity", {
-      href: "/activity?person=alice",
-      pathname: "/activity",
-      search: "?person=alice",
+      href: "/activity/alice",
+      pathname: "/activity/alice",
+      search: "",
     });
   });
 
