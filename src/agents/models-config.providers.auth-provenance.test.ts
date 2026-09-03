@@ -403,7 +403,9 @@ describe("models-config provider auth provenance", () => {
         expect(fixture.authorization).toEqual([]);
         expect(fixture.errors).toHaveLength(1);
         expect(fixture.errors[0]).toBeInstanceOf(SecretSurfaceUnavailableError);
-        expect(fixture.outcomes).toEqual([{ provider: "openai", status: "unavailable" }]);
+        expect(fixture.outcomes).toEqual([
+          { provider: "openai", profileId: fixture.profileId, status: "unavailable" },
+        ]);
         expect(providers?.openai).toBeUndefined();
         expect(providers?.healthy).toBeDefined();
         expect(JSON.stringify([providers, fixture.outcomes])).not.toMatch(

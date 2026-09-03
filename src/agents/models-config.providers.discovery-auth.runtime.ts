@@ -11,6 +11,23 @@ import type {
   ProviderAuthResolver,
 } from "./models-config.providers.secret-helpers.js";
 
+const unavailableDiscoveryAuthProfiles = new WeakMap<object, string>();
+
+function throwUnavailableDiscoveryAuthProfile(profileId: string, error: unknown): never {
+  if (typeof error === "object" && error !== null) {
+    // Preserve the selected account across the fail-closed throw so the catalog
+    // outcome can retain profile provenance without exposing secret details.
+    unavailableDiscoveryAuthProfiles.set(error, profileId);
+  }
+  throw error;
+}
+
+export function resolveUnavailableDiscoveryAuthProfileId(error: unknown): string | undefined {
+  return typeof error === "object" && error !== null
+    ? unavailableDiscoveryAuthProfiles.get(error)
+    : undefined;
+}
+
 /** Prepares transient auth facts without changing synchronous catalog callback contracts. */
 export async function prepareProviderDiscoveryAuth(
   {
@@ -64,9 +81,7 @@ export async function prepareProviderDiscoveryAuth(
     } catch (error) {
       // An unused account must not break another provider. Surface its failure
       // only when a callback selects that exact profile, before HTTP can run.
-      profiles.set(profileId, () => {
-        throw error;
-      });
+      profiles.set(profileId, () => throwUnavailableDiscoveryAuthProfile(profileId, error));
     }
   }
   const enrich = <T extends { profileId?: string }>(auth: T): T => {
