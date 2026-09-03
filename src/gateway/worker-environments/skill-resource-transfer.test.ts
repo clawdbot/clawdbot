@@ -154,6 +154,61 @@ describe("remote-exec skill resources", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "omits a stale discovered skill from the transferred snapshot and prompt",
+    async () => {
+      const { workspace } = await createSource();
+      const staleBaseDir = path.join(workspace, "skills", "stale");
+      await fs.mkdir(staleBaseDir, { recursive: true });
+      await fs.writeFile(
+        path.join(staleBaseDir, "SKILL.md"),
+        "---\ndescription: Stale resource\n---\n# Stale\n",
+      );
+      const snapshot = buildSkillSnapshot(workspace, {
+        entries: loadWorkspaceSkills(workspace, { workspaceOnly: true }),
+      });
+      await fs.rm(staleBaseDir, { recursive: true });
+      await fs.symlink(path.join(workspace, "missing-stale-target"), staleBaseDir, "dir");
+
+      const resources = await transferSkillResources({
+        tunnel,
+        assertCurrent: () => {},
+        snapshot,
+      });
+      const remoteRoot = path.dirname(resources!.mounts[0]!.containerPath);
+      try {
+        expect(resources!.mounts).toHaveLength(1);
+        expect(resources!.snapshot.resolvedSkills?.map((skill) => skill.name)).toEqual(["source"]);
+        expect(resources!.snapshot.prompt).not.toContain("stale");
+      } finally {
+        await fs.rm(remoteRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "removes every stale skill from the transferred snapshot when no bundles remain",
+    async () => {
+      const { filePath, snapshot } = await createSource();
+      const baseDir = path.dirname(filePath);
+      await fs.rm(baseDir, { recursive: true });
+      await fs.symlink(path.join(path.dirname(baseDir), "missing-source-target"), baseDir, "dir");
+
+      const resources = await transferSkillResources({
+        tunnel,
+        assertCurrent: () => {},
+        snapshot,
+      });
+      try {
+        expect(resources?.mounts).toEqual([]);
+        expect(resources?.snapshot.resolvedSkills).toEqual([]);
+        expect(resources?.snapshot.prompt).not.toContain("source");
+      } finally {
+        await resources?.cleanup();
+      }
+    },
+  );
+
   it("cleans the accepted remote directory when cancellation arrives with initialization", async () => {
     const { snapshot } = await createSource();
     const controller = new AbortController();
