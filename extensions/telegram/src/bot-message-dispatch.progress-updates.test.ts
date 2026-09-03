@@ -788,7 +788,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     ["active", true],
     ["inactive", false],
   ])(
-    "freezes the durable commentary owner to verbose visibility %s",
+    "keeps the draft as commentary owner when verbose visibility becomes %s",
     async (_label, verboseActive) => {
       const draftStream = createSequencedDraftStream(2001);
       createTelegramDraftStream.mockReturnValue(draftStream);
@@ -797,7 +797,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
         expect(replyOptions?.commentaryPayloadsEnabled).toBe(true);
         expect(replyOptions?.shouldDeliverCommentaryPayloads?.()).toBe(false);
         replyOptions?.onVerboseProgressVisibility?.(() => verboseActive);
-        expect(replyOptions?.shouldDeliverCommentaryPayloads?.()).toBe(verboseActive);
+        expect(replyOptions?.shouldDeliverCommentaryPayloads?.()).toBe(false);
         await replyOptions?.onItemEvent?.({
           kind: "preamble",
           itemId: "preamble-1",
@@ -820,13 +820,8 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
       const updates = draftStream.updatePreview.mock.calls
         .map(([preview]) => preview.text)
         .join("\n");
-      if (verboseActive) {
-        // The durable lane owns commentary: the draft must not repeat it.
-        expect(updates).not.toContain("Checking recent context");
-      } else {
-        // The draft owns commentary: exactly one visible copy per preamble.
-        expect(updates.split("Checking recent context")).toHaveLength(2);
-      }
+      // The draft owns commentary: exactly one visible copy per preamble.
+      expect(updates.split("Checking recent context")).toHaveLength(2);
     },
   );
 

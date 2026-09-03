@@ -328,6 +328,7 @@ describe("scripts/test-projects changed-target routing", () => {
         for (const result of parsed) {
           expect(result).toStrictEqual({
             forwardedArgs: ["--changed", "origin/main"],
+            nonTargetArgs: ["--changed", "origin/main"],
             targetArgs: [],
             watchMode: false,
           });

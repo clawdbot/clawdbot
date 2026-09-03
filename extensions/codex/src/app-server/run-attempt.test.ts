@@ -118,6 +118,7 @@ import {
   testCodexAppServerBindingStore,
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
+import * as settledTurnContext from "./settled-turn-context.js";
 import * as sharedClientModule from "./shared-client.js";
 import type { CodexAppServerClientOptions } from "./shared-client.js";
 import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
@@ -4931,6 +4932,12 @@ describe("runCodexAppServerAttempt", () => {
     [
       { label: "completed turn", failure: undefined, expectedContext: true },
       {
+        label: "preserve-only host-auth turn",
+        failure: undefined,
+        expectedContext: true,
+        preserveNativeModel: true,
+      },
+      {
         label: "provider overload after the tool result",
         failure: {
           message: "Selected model is at capacity. Please try a different model.",
@@ -4959,14 +4966,42 @@ describe("runCodexAppServerAttempt", () => {
     ),
   )(
     "preserves settled finalization eligibility for a $scenario.label (oversized history: $oversizedHistory)",
-    async ({ scenario: { failure, expectedContext }, oversizedHistory }) => {
+    async ({ scenario, oversizedHistory }) => {
+      const { failure, expectedContext } = scenario;
+      const preserveNativeModel = "preserveNativeModel" in scenario;
       const storePath = path.join(tempDir, "settled-finalization-context.sqlite");
       const sessionId = "session-settled-finalization-context";
       const sessionFile = `agent:main:${sessionId}`;
       const workspaceDir = path.join(tempDir, "workspace-settled-finalization-context");
-      const harness = createStartedThreadHarness();
+      const sourceSelection = { model: "gpt-5.6-luna", modelProvider: "openai" };
+      const onStart = vi.fn();
+      const harness = createStartedThreadHarness(
+        async (method) =>
+          method === "thread/start" || method === "thread/resume"
+            ? { ...threadStartResult(), ...sourceSelection }
+            : undefined,
+        { onStart, ...(preserveNativeModel ? { persistedThreads: ["thread-1"] } : {}) },
+      );
       const params = createParams(sessionFile, workspaceDir);
+      params.modelId = "synthetic-outer-model";
+      params.authProfileStore = {
+        version: 1,
+        order: { openai: ["openai:ordered"] },
+        profiles: {
+          "openai:ordered": { type: "api_key", provider: "openai", key: "synthetic-ordered-key" },
+          "openai:binding": { type: "api_key", provider: "openai", key: "synthetic-binding-key" },
+        },
+      };
       await attachSqliteSessionTarget(params, storePath, sessionId);
+      if (preserveNativeModel) {
+        registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
+        await writeExistingBinding(sessionFile, workspaceDir, {
+          threadId: "thread-1",
+          model: "synthetic-previous-model",
+          preserveNativeModel: true,
+          authProfileId: "openai:binding",
+        });
+      }
       if (oversizedHistory) {
         for (let index = 0; index < 201; index += 1) {
           await appendSqliteHistoryMessage(
@@ -5017,7 +5052,22 @@ describe("runCodexAppServerAttempt", () => {
         await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
       }
       const result = await run;
+      const selectedProfile = preserveNativeModel ? "openai:binding" : "openai:ordered";
+      expect(onStart).toHaveBeenCalledWith(selectedProfile, expect.anything(), expect.anything());
+      if (preserveNativeModel) {
+        expectResumeRequest(harness.requests, { threadId: "thread-1" });
+        const resume = harness.requests.find((request) => request.method === "thread/resume");
+        expect(resume?.params).not.toHaveProperty("model");
+        await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+          preserveNativeModel: true,
+          authProfileId: selectedProfile,
+          ...sourceSelection,
+        });
+      }
       expect(Boolean(readAttemptTerminal(result).promptError)).toBe(Boolean(failure));
+      if (!failure) {
+        expect(result.terminal).toEqual({ kind: "ok" });
+      }
       expect(Boolean(result.settledTurnFinalizationContext)).toBe(expectedContext);
       expect(result.currentAttemptAssistant).toBeDefined();
       expect(result.replayMetadata).toMatchObject({
@@ -5035,6 +5085,7 @@ describe("runCodexAppServerAttempt", () => {
       } else if (result.settledTurnFinalizationContext) {
         expect(result.settledTurnFinalizationContext).toMatchObject({
           source: "harness",
+          selection: { ...sourceSelection, authProfileId: selectedProfile },
           data: [
             expect.objectContaining({ role: "user" }),
             expect.objectContaining({ type: "function_call" }),
@@ -7313,6 +7364,15 @@ describe("runCodexAppServerAttempt", () => {
       params.modelId = "claude-opus-4-6";
       params.model = createCodexTestModel("anthropic");
       params.fastMode = true;
+      await attachSqliteSessionTarget(
+        params,
+        path.join(tempDir, "supervised-settlement.sqlite"),
+        params.sessionId,
+      );
+      await appendSqliteHistoryMessage(params, userMessage("Preserve the prior conversation.", 1));
+      const priorTranscript = await readTranscriptMessagesByIdentity(params);
+      const capture = vi.spyOn(settledTurnContext, "captureCodexSettledTurnFinalizationContext");
+      const warn = vi.spyOn(embeddedAgentLog, "warn");
       setCodexTestModelSupportsTools(params, false);
       params.config = {
         ...params.config,
@@ -7338,15 +7398,64 @@ describe("runCodexAppServerAttempt", () => {
             throw new Error("Codex attempt ended before turn/start", { cause: result });
           }),
         ]);
+        for (const method of ["item/started", "item/completed"]) {
+          harness.send({
+            method,
+            params: {
+              threadId: "thread-existing",
+              turnId: "turn-1",
+              item: {
+                type: "commandExecution",
+                id: "settled-supervised-command",
+                command: "printf synthetic-completed-work",
+                cwd: workspaceDir,
+                status: method === "item/started" ? "inProgress" : "completed",
+                ...(method === "item/completed"
+                  ? { aggregatedOutput: "synthetic-completed-work", exitCode: 0 }
+                  : {}),
+              },
+            },
+          });
+        }
         harness.send({
           method: "turn/completed",
           params: { threadId: "thread-existing", turn: { id: "turn-1", status: "completed" } },
         });
-        expect(readAttemptTerminal(await run)).toMatchObject({
-          aborted: false,
-          timedOut: false,
-          promptError: null,
+        const result = await run;
+        expect(result.terminal).toEqual({ kind: "ok" });
+        expect(result.settledTurnFinalizationContext).toEqual({ source: "unavailable" });
+        expect(Object.isFrozen(result.settledTurnFinalizationContext)).toBe(true);
+        expect(capture).not.toHaveBeenCalled();
+        expect(warn).toHaveBeenCalledWith(
+          "codex settled-turn finalization context is unavailable",
+          expect.objectContaining({
+            runId: params.runId,
+            threadId: "thread-existing",
+            turnId: "turn-1",
+            reason: "native_auth_finalization_unsupported",
+          }),
+        );
+        expect(result.messagesSnapshot).toContainEqual(
+          expect.objectContaining({
+            role: "toolResult",
+            toolCallId: "settled-supervised-command",
+            isError: false,
+            content: expect.arrayContaining([
+              expect.objectContaining({
+                type: "toolResult",
+                text: "synthetic-completed-work",
+              }),
+            ]),
+          }),
+        );
+        expect(result.replayMetadata).toMatchObject({
+          hadPotentialSideEffects: true,
+          replaySafe: false,
         });
+        const transcript = await readTranscriptMessagesByIdentity(params);
+        expect(transcript.slice(0, priorTranscript.length)).toEqual(priorTranscript);
+        expect(transcript).toContainEqual(expect.objectContaining({ role: "toolResult" }));
+        expect(requests.filter(({ method }) => method === "turn/start")).toHaveLength(1);
       } finally {
         start.mockRestore();
         await harness.client.closeAndWait();

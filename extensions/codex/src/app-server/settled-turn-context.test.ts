@@ -66,6 +66,9 @@ async function captureContext(params: {
   mirroredMessages: AgentMessage[];
   settledMessages: AgentMessage[];
   turnId?: string;
+  model?: string;
+  modelProvider?: string;
+  authProfileId?: string;
 }) {
   mocks.readHistory.mockImplementation(
     (_target, read: (messages: Iterable<AgentMessage>) => unknown) => read(params.historyMessages),
@@ -76,6 +79,9 @@ async function captureContext(params: {
     mirroredMessages: params.mirroredMessages,
     settledMessages: params.settledMessages,
     turnId: params.turnId ?? "turn-2",
+    model: params.model ?? "gpt-5.6-luna",
+    modelProvider: params.modelProvider,
+    authProfileId: params.authProfileId,
   });
 }
 
@@ -84,34 +90,67 @@ describe("captureCodexSettledTurnFinalizationContext", () => {
     mocks.readHistory.mockReset();
   });
 
-  it("freezes the complete active branch exactly through the current tool-result boundary", async () => {
-    const prior = message({ role: "user", content: "Alice is the recipient." }, "turn-1:prompt");
-    const settledMessages = settledTurn();
-    const later = message({ role: "user", content: "later message" }, "turn-3:prompt");
-    const historyMessages = [prior, ...settledMessages, later];
+  it.each([undefined, "openai"])(
+    "freezes source selection and the exact settled branch (provider: %s)",
+    async (modelProvider) => {
+      const prior = message({ role: "user", content: "Alice is the recipient." }, "turn-1:prompt");
+      const settledMessages = settledTurn();
+      const later = message({ role: "user", content: "later message" }, "turn-3:prompt");
+      const historyMessages = [prior, ...settledMessages, later];
+      const selection = { model: "gpt-5.6-luna", modelProvider, authProfileId: "openai:captured" };
 
-    const context = await captureContext({
-      historyMessages,
-      mirroredMessages: settledMessages,
-      settledMessages,
-      turnId: "turn-2",
-    });
+      const context = await captureContext({
+        historyMessages,
+        mirroredMessages: settledMessages,
+        settledMessages,
+        turnId: "turn-2",
+        ...selection,
+      });
 
-    Object.assign(prior, { content: "changed after capture" });
-    expect(context?.data).toEqual([
-      {
-        type: "message",
-        role: "user",
-        content: [{ type: "input_text", text: "Alice is the recipient." }],
-      },
-      { type: "message", role: "user", content: [{ type: "input_text", text: "Send it." }] },
-      { type: "function_call", call_id: "call-2", name: "message", arguments: "{}" },
-      { type: "function_call_output", call_id: "call-2", output: "sent" },
-    ]);
-    expect(Object.isFrozen(context)).toBe(true);
-    expect(Object.isFrozen(context?.data)).toBe(true);
-    expect(Object.isFrozen(context?.data[0])).toBe(true);
-  });
+      Object.assign(prior, { content: "changed after capture" });
+      Object.assign(selection, { model: "changed-model", authProfileId: "openai:changed" });
+      expect(context?.data).toEqual([
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Alice is the recipient." }],
+        },
+        { type: "message", role: "user", content: [{ type: "input_text", text: "Send it." }] },
+        { type: "function_call", call_id: "call-2", name: "message", arguments: "{}" },
+        { type: "function_call_output", call_id: "call-2", output: "sent" },
+      ]);
+      expect(context?.selection).toEqual({
+        model: "gpt-5.6-luna",
+        modelProvider,
+        authProfileId: "openai:captured",
+      });
+      expect(Object.isFrozen(context)).toBe(true);
+      expect(Object.isFrozen(context?.data)).toBe(true);
+      expect(Object.isFrozen(context?.data[0])).toBe(true);
+      expect(Object.isFrozen(context?.selection)).toBe(true);
+    },
+  );
+
+  it.each([undefined, ""])(
+    "refuses missing model %j without reading transcript evidence",
+    async (model) => {
+      const messages = settledTurn();
+      mocks.readHistory.mockImplementation(
+        (_target, read: (messages: Iterable<AgentMessage>) => unknown) => read(messages),
+      );
+      await expect(
+        captureCodexSettledTurnFinalizationContext({
+          sessionFile: "/tmp/session.jsonl",
+          sessionId: "session-1",
+          mirroredMessages: messages,
+          settledMessages: messages,
+          turnId: "turn-2",
+          model,
+        }),
+      ).resolves.toBeUndefined();
+      expect(mocks.readHistory).not.toHaveBeenCalled();
+    },
+  );
 
   it("refuses unannotated host prompts even with the same durable key and adjacent native messages", async () => {
     const turn = settledHostPromptTurn();
@@ -200,6 +239,7 @@ describe("captureCodexSettledTurnFinalizationContext", () => {
       captureCodexSettledTurnFinalizationContext({
         sessionFile: "/tmp/session.jsonl",
         sessionId: "session-1",
+        model: "gpt-5.6-luna",
         mirroredMessages: settledTurn(),
         settledMessages: settledTurn(),
         turnId: "turn-2",
@@ -238,6 +278,7 @@ describe("captureCodexSettledTurnFinalizationContext", () => {
       captureCodexSettledTurnFinalizationContext({
         sessionFile: "/tmp/session.jsonl",
         sessionId: "session-1",
+        model: "gpt-5.6-luna",
         mirroredMessages: settledMessages,
         settledMessages,
         turnId: "turn-2",
