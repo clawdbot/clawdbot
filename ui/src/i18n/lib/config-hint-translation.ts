@@ -6,7 +6,7 @@ function encodeConfigHintPath(hintPath: string): string {
   return encodeURIComponent(hintPath).replaceAll(".", "%2E");
 }
 
-export function configHintTranslationDigest(sourceText: string): string {
+function configHintTranslationDigest(sourceText: string): string {
   const normalizedSource = sourceText.trim().split(/\s+/).join(" ");
   return `v1-${fnv1aUtf16(normalizedSource).toString(36)}-${normalizedSource.length.toString(36)}`;
 }

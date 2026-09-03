@@ -3,7 +3,6 @@ import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { configHintTranslationDigest } from "../../ui/src/i18n/lib/config-hint-translation.ts";
 import { registerActivityEnglish } from "../../ui/src/i18n/locales/en-activity.ts";
 import { registerDebugEnglish } from "../../ui/src/i18n/locales/en-debug.ts";
 import { registerDevicesEnglish } from "../../ui/src/i18n/locales/en-devices.ts";
@@ -133,15 +132,7 @@ export function materializeControlUiLocaleCatalog(
   for (const entry of memory.values()) {
     for (const key of [entry.segment_id, ...(entry.segment_ids ?? [])]) {
       const source = sourceFlat.get(key);
-      const sourceMatches =
-        source !== undefined && entry.text_hash === hashControlUiTranslationText(source);
-      const contentAddressedHintMatches =
-        source === undefined &&
-        key.startsWith("configHints.") &&
-        typeof entry.text === "string" &&
-        key.endsWith(`.${configHintTranslationDigest(entry.text)}`) &&
-        entry.text_hash === hashControlUiTranslationText(entry.text);
-      if (!sourceMatches && !contentAddressedHintMatches) {
+      if (source === undefined || entry.text_hash !== hashControlUiTranslationText(source)) {
         continue;
       }
       translations.set(key, entry.translated);
@@ -152,11 +143,6 @@ export function materializeControlUiLocaleCatalog(
   for (const key of sourceFlat.keys()) {
     const translated = translations.get(key);
     if (translated !== undefined) {
-      setControlUiCatalogValue(catalog, key, translated);
-    }
-  }
-  for (const [key, translated] of translations) {
-    if (key.startsWith("configHints.")) {
       setControlUiCatalogValue(catalog, key, translated);
     }
   }
