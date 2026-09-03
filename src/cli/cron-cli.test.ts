@@ -174,6 +174,17 @@ const CRON_GATEWAY_COMMANDS = [
   { name: "edit", args: ["job-1"] },
 ] as const;
 
+const CRON_AT_TIME_ZONE_CASES = [
+  ["2026-03-23T23:00:00", "Europe/Oslo", "2026-03-23T22:00:00.000Z"],
+  ["2027-01-15T12:00:00", "America/New_York", "2027-01-15T17:00:00.000Z"],
+  ["+002027-01-15T12:00:00", "America/New_York", "2027-01-15T17:00:00.000Z"],
+  ["2027-01-15", "America/New_York", "2027-01-15T05:00:00.000Z"],
+  ["+002027-01-15", "America/New_York", "2027-01-15T05:00:00.000Z"],
+  ["+002027-01-15T12:00:00+02:00", "America/New_York", "2027-01-15T10:00:00.000Z"],
+  ["+002027-01-15T12:00:00", undefined, "2027-01-15T12:00:00.000Z"],
+  ["+002027-01-15", undefined, "2027-01-15T00:00:00.000Z"],
+] as const;
+
 function findCronCommand(program: Command, name: string): Command {
   const cron = program.commands.find((command) => command.name() === "cron");
   const command = cron?.commands.find((candidate) => candidate.name() === name);
@@ -1865,27 +1876,24 @@ describe("cron cli", () => {
     ]);
   });
 
-  it("applies --tz to --at for offset-less datetimes on cron add", async () => {
-    await runCronCommand([
-      "cron",
-      "add",
-      "--name",
-      "tz-at-test",
-      "--at",
-      "2026-03-23T23:00:00",
-      "--tz",
-      "Europe/Oslo",
-      "--session",
-      "isolated",
-      "--message",
-      "test",
-    ]);
+  it.each(CRON_AT_TIME_ZONE_CASES)(
+    "normalizes one-shot --at %s with --tz %s on cron add",
+    async (at, tz, expected) => {
+      const params = await runCronAddAndGetParams([
+        "--name",
+        "tz-at-test",
+        "--at",
+        at,
+        ...(tz === undefined ? [] : ["--tz", tz]),
+        "--session",
+        "isolated",
+        "--message",
+        "test",
+      ]);
 
-    const params = getGatewayCallParams<{ schedule: { kind: string; at: string } }>("cron.add");
-    // 2026-03-23 is CET (+01:00), so 23:00 Oslo = 22:00 UTC
-    expect(params.schedule.kind).toBe("at");
-    expect(params.schedule.at).toBe("2026-03-23T22:00:00.000Z");
-  });
+      expect(params.schedule).toEqual({ kind: "at", at: expected });
+    },
+  );
 
   it.each([
     ["2027-02-28T24:00:00", "UTC", "2027-03-01T00:00:00.000Z"],
@@ -2071,20 +2079,19 @@ describe("cron cli", () => {
     await expectCronEditWithScheduleLookupExit({ kind: "every", everyMs: 60_000 }, ["--exact"]);
   });
 
-  it("applies --tz to --at for offset-less datetimes on cron edit", async () => {
-    const patch = await runCronEditAndGetPatch([
-      "--at",
-      "2026-03-23T23:00:00",
-      "--tz",
-      "Europe/Oslo",
-    ]);
+  it.each(CRON_AT_TIME_ZONE_CASES)(
+    "normalizes one-shot --at %s with --tz %s on cron edit",
+    async (at, tz, expected) => {
+      const patch = await runCronEditAndGetPatch([
+        "--at",
+        at,
+        ...(tz === undefined ? [] : ["--tz", tz]),
+      ]);
 
-    expect(patch?.patch?.schedule).toEqual({
-      kind: "at",
-      at: "2026-03-23T22:00:00.000Z",
-    });
-    expect(patch?.patch).not.toHaveProperty("deleteAfterRun");
-  });
+      expect(patch.patch?.schedule).toEqual({ kind: "at", at: expected });
+      expect(patch.patch).not.toHaveProperty("deleteAfterRun");
+    },
+  );
 
   it.each([
     ["2027-02-28T24:00:00", "UTC", "2027-03-01T00:00:00.000Z"],

@@ -16,8 +16,6 @@ import { SessionManagerCore } from "./session-manager-core.js";
 import type { AppendPersistenceOptions, SessionEntry } from "./session-manager-types.js";
 
 type PersistRecordResult =
-  | string
-  | null
   | undefined
   | {
       anchor?: TranscriptEntryAnchor;
@@ -255,6 +253,8 @@ export class SessionManagerPersistence extends SessionManagerCore {
     if (!result) {
       throw new Error(`Session transcript message was not persisted: ${entry.id}`);
     }
+    // Carry the canonical storage bytes even when adopting a context-excluded row.
+    entry.message = result.message;
     if (result.messageId !== entry.id) {
       const idempotencyKey =
         entry.message.role === "user" &&
@@ -286,9 +286,6 @@ export class SessionManagerPersistence extends SessionManagerCore {
     if (result.effectiveParentId === undefined) {
       throw new Error(`Session transcript append parent was not returned: ${entry.id}`);
     }
-    // appendEntry owns this JSON copy. Cache the final storage projection: a
-    // second credential mask can differ from the guard's diagnostic hint.
-    entry.message = result.message;
     return {
       ...(result.anchor ? { anchor: result.anchor } : {}),
       effectiveParentId: result.effectiveParentId,

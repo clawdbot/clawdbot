@@ -1,5 +1,5 @@
 ---
-summary: "Android app (node): connection runbook + Connect/Chat/OpenClaw/Voice command surface"
+summary: "Android app (node): pairing, connection recovery, chat, voice, and device commands"
 read_when:
   - Pairing or reconnecting the Android node
   - Debugging Android gateway discovery or auth
@@ -20,6 +20,10 @@ The official Android app is available on [Google Play](https://play.google.com/s
 - Gateway: [Runbook](/gateway) + [Configuration](/gateway/configuration).
   - Protocols: [Gateway protocol](/gateway/protocol) (nodes + control plane).
 - **Settings → OpenClaw** opens a dedicated Gateway settings assistant when the operator connection has `operator.admin` and the Gateway supports `openclaw.chat`. Its setup conversation stays separate from ordinary Chat, redacts secret replies locally, and moves to Chat only after you tap **Open Chat**.
+
+Its reply field switches to masked input for secret prompts. Tap it again if a prompt change closes the keyboard. Android sends sensitive replies without trimming them and clears unsent drafts when you leave this page or background the app.
+
+New replies stay in view while you are at the end of the settings conversation. Scroll up to read earlier steps without being pulled away, then tap **Jump to latest** to resume following. Following also resumes if resizing the window makes the whole conversation visible. **Restart**, when offered after an error, opens a new conversation at its latest reply.
 
 System control (launchd/systemd) lives on the Gateway host — see [Gateway](/gateway).
 
@@ -232,11 +236,15 @@ Details and example CoreDNS config: [Bonjour](/gateway/bonjour).
 In the Android app:
 
 - The app keeps its gateway connection alive via a **foreground service** (persistent notification).
-- Open the **Connect** tab.
-- Use **Setup Code** or **Manual** mode.
-- If discovery is blocked, use manual host/port in **Advanced controls**. For private LAN hosts, `ws://` still works. For Tailscale/public hosts, turn on TLS and use a `wss://` / Tailscale Serve endpoint.
+- During first-run setup, choose **Scan QR or setup code** or **Set up manually**.
+- After setup, open **Settings → Gateway**. **Add Gateway** lets you scan or paste a setup code, or connect to a discovered Gateway.
+- If discovery is blocked, use **Manual Gateway** on that page: enter the host and port, select **Connection security**, and tap **Save & Connect**. Private LAN hosts support `ws://`; for Tailscale/public hosts, use **Secure (TLS)** with a `wss://` / Tailscale Serve endpoint.
+
+Gateway tokens, bootstrap tokens, passwords, and setup codes are masked and accept paste. The app requests password input with autocorrection disabled, but cannot guarantee how a third-party keyboard stores or learns from input.
 
 After the first successful pairing, Android auto-reconnects on launch to the active paired gateway (best-effort for discovered gateways, which must be visible on the network).
+
+Android retries temporary connection losses automatically. For a fresh attempt with the saved endpoint, open **Settings → Gateway** and tap **Reconnect**. **Disconnect** stops the connections and suppresses automatic reconnect for the current app session; it does not forget the pairing. Authentication or pairing errors can pause retries until you address the reported problem.
 
 Official setup codes connect Android as a node and grant full Gateway operator
 access by default over `wss://`. Plaintext non-loopback `ws://` setup
@@ -251,11 +259,12 @@ who want the reduced profile can select **Limited access** in Control UI or run
 
 The app keeps a registry of every gateway it has paired with, so you can keep operator sessions connected and change focus without pairing again:
 
-- **Settings → Gateway** lists paired gateways with the focused one marked. Tap an entry to focus it; the other enabled operator sessions remain connected.
+- **Settings → Gateway** lists paired gateways in the **Gateways** section, with a checkmark beside the focused one. Tap another entry to focus it; the other enabled operator sessions remain connected.
 - Each switch controls whether that non-focused Gateway stays connected while the app is in the foreground. The focused Gateway remains enabled and owns the phone's node connection and device capabilities.
-- The **Connect** tab shows a quick switcher when more than one gateway is paired.
 - Credentials, device tokens, TLS trust, chat history, and queued offline messages are stored per Gateway. Changing focus never mixes state between Gateways, and messages queued while offline are delivered only to the Gateway they were written for.
 - **Forget** removes a gateway's registry entry together with its credentials, device tokens, TLS pin, and cached chats.
+
+The **Channels**, **Dreaming**, **Health** logs, **Skills**, and **Usage** pages keep their last loaded data while refreshing. When refreshes overlap, only the latest request updates the page's data, error, and progress. Disconnecting clears the displayed summaries.
 
 ### Presence alive beacons
 
@@ -300,15 +309,36 @@ openclaw gateway call node.list --params "{}"
 
 ### 6. Chat + history
 
-The Android Chat tab supports session selection (default `main`, plus other existing sessions):
+The draft has its own full-width row above the attachment and voice/send controls,
+so larger text and narrow screens do not squeeze it between buttons. The empty
+hint stays on one line; drafts show up to four lines and scroll when space is limited.
+The composer has narrower side gutters than the transcript, with readable draft
+text and 48dp action targets. Typography still follows system text scaling.
+Model and thinking controls sit together, opposite the microphone and primary
+action. The model name stays on one line and follows system text scaling;
+long names use a middle ellipsis to keep both ends visible. The full name remains
+in the model sheet and accessibility text. The thinking dial opens a menu without
+expanding the composer.
+Context usage is available in the model sheet and the model control's
+accessibility value, leaving more room for the model name in the toolbar.
+During Talk, the live waveform replaces the microphone and remains tappable to
+end Talk. If a run is also active, a separate, softly tinted Stop button stays at
+the trailing edge to abort that run.
+
+Open **Home** from the sidebar's **Pages** menu to chat, or select an existing session from the sidebar:
 
 - History: `chat.history` (display-normalized — inline directive tags, plain-text tool-call XML payloads (`<tool_call>`, `<function_call>`, `<tool_calls>`, `<function_calls>`, and truncated variants), and leaked ASCII/full-width model control tokens are stripped; silent-token assistant rows such as exact `NO_REPLY` / `no_reply` are omitted; oversized rows can be replaced with placeholders)
 - Long replies: tap **View all** on a capped assistant reply to load the full formatted text inline. Attachments stay in the conversation, and message actions use the expanded text. Tap **Show less** or press Back to restore the preview; reopening reuses the loaded reply. Loading, retryable failures, unavailable messages, and required reconnects or Gateway updates appear in the message rather than an alert. Synthetic message-tool and commentary previews retain their existing display and actions but do not offer **View all**, because their copied transcript ID cannot retrieve that synthesized text. This also recognizes the older capped-preview format from released Gateways such as v2026.7.1-2. Android requests up to 1,000,000 characters per text field, matching the Gateway's default retrieval limit; oversized or still-capped results show **The full message is too large to display.** instead of an incomplete reply.
 - Large code blocks scroll within a bounded viewport, with **Start of code**, **End of code**, and **Copy code** controls. Selection stays within the displayed text segment; **Copy code** copies the entire block. Reading within the code pauses automatic transcript following; **Jump to latest** resumes it. The separate message **Select text** action opens a plain-text selection reader; long answers use bounded pages, and selection applies to the displayed page.
-- Archiving the open session returns to the app's main chat only if that same session is still selected. Switching sessions, agents, or Gateways while the archive finishes preserves your newer selection.
+- Mermaid code blocks render as diagrams after the closing fence arrives or the reply finishes. Tap a diagram to open a full-screen view with pinch-to-zoom and panning. The small corner controls copy the source or open a menu to switch between diagram and source. Rendering works offline with bundled assets. Failed diagrams keep their readable source, and temporary failures offer retry. Other code block languages remain code.
+- Session selection: while the app is running, each Gateway and agent remembers the last chat you explicitly selected. Returning to an agent checks an older chat directly if it is outside the recent page; temporary lookup failures show an error without forgetting that choice.
+- Archiving the open session returns to the app's main chat only if that same session is still selected. Switching sessions, agents, or Gateways while the archive finishes preserves your newer selection. A successful archive also retires the archived chat's remembered selection even if its push notification is missed.
+- **New** in the sidebar creates and selects a fresh chat from any page without clearing the previous session. The sidebar and chat header show progress during creation and initial loading, and duplicate New actions are disabled. History refreshes do not cancel creation; selecting another session, agent, or Gateway while it finishes preserves that newer selection.
 - Offline history: cached transcripts update in the order live histories are accepted, so a delayed reconnect health check cannot restore an older snapshot. Switching sessions preserves queued cache updates for the session you left.
+- **Refresh chat** in chat actions reloads history and rechecks Gateway health without clearing pending messages. A failed health check marks chat offline even if history still loads; refresh again once the Gateway recovers. History failures do not stop subsequent health checks.
 - Send: `chat.send`
-- Durable sending: every send (text, picked images, and voice notes) is journaled to a per-gateway on-device outbox before any network attempt, so app termination cannot lose submitted input. Sends queued while offline deliver in order on reconnect with stable idempotency keys, and a send is retired only after the turn is visible in canonical `chat.history` — an acknowledgement alone is not treated as proof of delivery. Ambiguous outcomes (lost acknowledgement, app killed mid-send, gateway restart before the transcript write) surface as visible rows with explicit **Retry**/**Delete** instead of auto-resending. If refreshed history changes branches, earlier queued input keeps its text and attachments but requires explicit retry; input admitted after that history is displayed can send normally when reconnecting to the same branch. Slash commands never auto-replay across a reconnect; they park for explicit retry. The queue is bounded (50 messages and 48 MB of attachment bytes per gateway) and unsent rows expire after 48 hours. Composer drafts that were never submitted are not process-durable.
+- Queued message controls: **Delete** removes the local queued copy, including when a reconnect refresh is still finishing. It does not undo a message already accepted by the Gateway; use **Stop** to cancel an active turn.
+- Durable sending: every send (text, picked images, and voice notes) is journaled to a per-gateway on-device outbox before any network attempt, so app termination cannot lose submitted input. Sends queued while offline deliver in order on reconnect with stable idempotency keys, and a send is retired only after the turn is visible in canonical `chat.history` — an acknowledgement alone is not treated as proof of delivery. Acknowledged reconnect sends show the same streaming progress as online sends; requests that never reach the socket queue remain queued for the next connection. Ambiguous outcomes (lost acknowledgement, app killed mid-send, gateway restart before the transcript write) surface as visible rows with explicit **Retry**/**Delete** instead of auto-resending. If refreshed history changes branches, earlier queued input keeps its text and attachments but requires explicit retry; input admitted after that history is displayed can send normally when reconnecting to the same branch. Slash commands never auto-replay across a reconnect; they park for explicit retry. The queue is bounded (50 messages and 48 MB of attachment bytes per gateway) and unsent rows expire after 48 hours. Composer drafts that were never submitted are not process-durable.
 - Image input works through the picker and Android Sharesheet. Assistant-generated images resolve through the paired Gateway connection, render inline with a full-screen preview, and retain only their small artifact references in the offline transcript cache. Downloads are capped at 12 MiB and decoded to bounded display bitmaps.
 - Push updates (best-effort): `chat.subscribe` -> `event:"chat"`
 - Listen: long-press an assistant message and choose **Listen** to hear it; audio renders via gateway `tts.speak` with the configured TTS provider chain, and on-device system TTS is used when the gateway cannot render audio. Playback stops on session switch, new chat, app backgrounding, or chat close.
@@ -319,20 +349,25 @@ Camera commands (foreground only; permission-gated): `camera.snap` (jpg), `camer
 
 ### 8. Voice + expanded Android command surface
 
-- Android's shell navigation is **Home**, **Chat**, and **Settings**. Voice input
-  belongs to the Chat composer; there is no separate Voice tab.
+- Navigate through the sidebar's **Pages** menu. Voice input belongs to the Chat
+  composer; there is no separate Voice tab.
 - Tap the composer microphone for on-device speech recognition that inserts a
   transcript into the draft. Long-press the microphone to record a voice-note
   attachment. The UI reports unavailable recognition, missing permission,
   busy/network failures, and no-speech outcomes instead of silently dropping
-  the attempt.
+  the attempt. If dictation is unavailable and a gateway is selected,
+  **Record voice note** offers a new recording while keeping the draft. It does
+  not recover speech from the failed dictation attempt or send anything
+  automatically.
 - Start continuous **Talk** from the Chat waveform. Dictation, voice-note
   recording, and Talk are mutually exclusive microphone paths.
 - Talk Mode promotes the existing foreground service from `connectedDevice` to `connectedDevice|microphone` before capture starts, then demotes it when Talk Mode stops. The node service declares `FOREGROUND_SERVICE_CONNECTED_DEVICE` with `CHANGE_NETWORK_STATE`; Android 14+ also requires the `FOREGROUND_SERVICE_MICROPHONE` declaration, the `RECORD_AUDIO` runtime grant, and the microphone service type at runtime.
 - By default, Android Talk uses native speech recognition, Gateway chat, and `talk.speak` through the configured gateway Talk provider. Local system TTS is used only when `talk.speak` is unavailable.
 - Android Talk uses realtime Gateway relay only when `talk.realtime.mode` is `realtime` and `talk.realtime.transport` is `gateway-relay`.
-- Android does not advertise the `voiceWake` capability. Use Chat dictation,
-  a voice note, or Talk for voice input.
+- Enable **Settings → Voice → Listen for wake words** for foreground on-device
+  Voice Wake. Android advertises `voiceWake` only when enabled, on-device
+  recognition and microphone permission are available, and wake words are
+  synchronized with the current Gateway.
 - Additional Android command families (availability depends on device, permissions, and user settings):
   - `device.status`, `device.info`, `device.permissions`, `device.health`
   - `device.apps` only when **Settings > Phone Capabilities > Installed Apps** is enabled; it lists launcher-visible apps by default (pass `includeNonLaunchable` for the full list).
@@ -346,7 +381,7 @@ Camera commands (foreground only; permission-gated): `camera.snap` (jpg), `camer
 
 ### 9. Workspace files (read-only)
 
-The Home overview includes a **Files** card that browses the active agent's workspace through the read-only `agents.workspace.list` / `agents.workspace.get` gateway RPCs: directory drill-down, text and image previews, and export through the Android share sheet. There are no write operations, and previews are size-capped by the gateway.
+Open **Work** from the sidebar's **Pages** menu to find the **Files** card. It browses the active agent's workspace through the read-only `agents.workspace.list` / `agents.workspace.get` gateway RPCs: directory drill-down, text and image previews, and export through the Android share sheet. There are no write operations, and previews are size-capped by the gateway.
 
 ## Review command approvals
 
@@ -375,6 +410,8 @@ multi-select options, option descriptions, free-text **Other** answers, and an
 expiry countdown. Reconnects reload pending questions from the Gateway. A card
 locks when this device answers it, another surface answers it first, or the
 question expires or is cancelled.
+
+Secret answer fields mask typed or pasted values and request password input with autocorrection disabled. Android submits secret answers without trimming leading or trailing whitespace.
 
 ## Assistant entrypoints
 

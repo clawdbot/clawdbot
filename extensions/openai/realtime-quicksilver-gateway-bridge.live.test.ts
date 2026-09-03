@@ -163,7 +163,7 @@ describeLive("OpenAI GPT-Live gateway WebRTC peer", () => {
       let lateAudioBytes = 0;
       const bridge = new OpenAIQuicksilverGatewayBridge({
         providerConfig: {},
-        model: "gpt-live-1-boulder-alpha",
+        model: "gpt-live-1-codex",
         voice: "spruce",
         instructions: "Listen to the user. Do not speak or delegate.",
         audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },

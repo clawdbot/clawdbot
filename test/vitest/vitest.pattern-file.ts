@@ -1,47 +1,9 @@
 // Vitest pattern file helper reads include and exclude patterns from files.
 import fs from "node:fs";
 import path from "node:path";
+import { collectVitestFileFilters } from "../../scripts/lib/vitest-cli-mode.mts";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
-
-const VITEST_OPTION_VALUE_FLAGS = new Set([
-  "-c",
-  "-r",
-  "-t",
-  "--browser",
-  "--changed",
-  "--config",
-  "--coverage.all",
-  "--coverage.exclude",
-  "--coverage.extension",
-  "--coverage.include",
-  "--coverage.provider",
-  "--coverage.reporter",
-  "--coverage.reportsDirectory",
-  "--dir",
-  "--environment",
-  "--environmentOptions",
-  "--exclude",
-  "--hookTimeout",
-  "--inspect",
-  "--inspectBrk",
-  "--maxConcurrency",
-  "--maxWorkers",
-  "--minWorkers",
-  "--mode",
-  "--name",
-  "--outputFile",
-  "--pool",
-  "--project",
-  "--reporter",
-  "--retry",
-  "--root",
-  "--sequence",
-  "--shard",
-  "--testNamePattern",
-  "--testTimeout",
-  "--workspace",
-]);
 
 function normalizeCliPattern(value: string): string {
   let normalized = value
@@ -226,6 +188,10 @@ export function intersectIncludePatterns(
   const result: string[] = [];
   for (const candidate of candidatePatterns) {
     if (!isPlainRepoRelativePath(candidate)) {
+      if (literalIncludes) {
+        result.push(...includePatterns.filter((include) => path.matchesGlob(include, candidate)));
+        continue;
+      }
       // Watch directory targets retain their glob so newly added tests appear.
       // Only generated directory globs have a provable ownership intersection.
       const intersection = intersectDirectoryTestPattern(includePatterns, candidate);
@@ -266,38 +232,29 @@ export function loadPatternListFromEnv(
   return loadPatternListFile(filePath, envKey);
 }
 
-function collectVitestFileFilters(args: string[]): string[] {
-  const values: string[] = [];
-  let skipNext = false;
-  for (const value of args) {
-    if (skipNext) {
-      skipNext = false;
-      continue;
+export function collectVitestExcludePatterns(args: string[]): string[] {
+  const patterns: string[] = [];
+  for (const [index, arg] of args.entries()) {
+    if (arg === "--") {
+      break;
     }
-    if (value === "run" || value === "watch" || value === "bench") {
-      continue;
+    const value =
+      arg === "--exclude"
+        ? args[index + 1]
+        : arg.startsWith("--exclude=")
+          ? arg.slice("--exclude=".length)
+          : undefined;
+    if (value) {
+      patterns.push(value);
     }
-    if (VITEST_OPTION_VALUE_FLAGS.has(value)) {
-      skipNext = true;
-      continue;
-    }
-    if (value.startsWith("-")) {
-      continue;
-    }
-    values.push(value);
   }
-  return values;
+  return patterns;
 }
 
-export function collectVitestExcludePatterns(args: string[]): string[] {
-  return args
-    .flatMap((arg, index) => {
-      if (arg === "--exclude") {
-        return args[index + 1] ? [args[index + 1]!] : [];
-      }
-      return arg.startsWith("--exclude=") ? [arg.slice("--exclude=".length)] : [];
-    })
-    .filter(Boolean);
+function normalizeCliFileFilter(filter: string): string {
+  // Line qualifiers belong to native task selection, not physical discovery or wrapper routing.
+  const file = filter.replace(/:\d+$/u, "");
+  return process.platform === "win32" ? file.replaceAll("\\", "/") : file;
 }
 
 function loadPatternListFromArgvForScope(
@@ -306,6 +263,7 @@ function loadPatternListFromArgvForScope(
 ): string[] | null {
   const scopedDir = normalizeScopedDir(options.scopedDir);
   const patterns = collectVitestFileFilters(argv.slice(2))
+    .map(normalizeCliFileFilter)
     .map((value) => applyScopedDir(value, scopedDir))
     .filter(looksLikeCliIncludePattern)
     .map(normalizeCliPattern);
@@ -326,12 +284,16 @@ export function narrowIncludePatternsForCli(
   return narrowIncludePatterns(includePatterns, cliPatterns);
 }
 
-export function relativizeScopedPatterns(values: string[], dir = ""): string[] {
+export function relativizeScopedPatterns(values: readonly string[], dir = ""): string[] {
   const normalizedDir = dir.replaceAll("\\", "/").replace(/\/+$/u, "");
   return values.map((value) => {
     const normalized = value.replaceAll("\\", "/");
-    if (!normalizedDir) return normalized;
-    if (normalized === normalizedDir) return ".";
+    if (!normalizedDir) {
+      return normalized;
+    }
+    if (normalized === normalizedDir) {
+      return ".";
+    }
     const prefix = `${normalizedDir}/`;
     return normalized.startsWith(prefix) ? normalized.slice(prefix.length) : normalized;
   });
@@ -344,8 +306,10 @@ export function matchesVitestCliSelection(
   args: string[],
   scopedDir: string,
   env: NodeJS.ProcessEnv,
+  selectedPatterns?: readonly string[] | null,
 ): boolean {
   const patterns =
+    selectedPatterns ??
     loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env) ??
     narrowIncludePatternsForCli(include, ["node", "vitest", ...args], { scopedDir }) ??
     include;
@@ -361,9 +325,7 @@ export function matchesVitestCliSelection(
   ) {
     return false;
   }
-  const filters = collectVitestFileFilters(args).map((filter) =>
-    process.platform === "win32" ? filter.replaceAll("\\", "/") : filter,
-  );
+  const filters = collectVitestFileFilters(args).map(normalizeCliFileFilter);
   const dir = path.resolve(repoRoot, scopedDir);
   // Vitest filterFiles uses OR/substring matching, not glob matching, after discovery.
   return (

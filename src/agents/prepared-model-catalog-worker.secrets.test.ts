@@ -6,6 +6,7 @@ import { readConfigFileSnapshotFromContext } from "../config/io.snapshot.js";
 import {
   getAuthoredConfigSecretRef,
   getConfigResolutionFacts,
+  getResolvedConfigEnvSecretRef,
 } from "../config/resolution-facts.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -52,7 +53,7 @@ describe("serialized catalog credential provenance", () => {
     owner: "config" | "profile";
     label: string;
     value: string;
-    loader?: { authored: string; env?: NodeJS.ProcessEnv; pending?: boolean };
+    loader?: { authored: string; env?: NodeJS.ProcessEnv; pending?: boolean; resolved?: boolean };
   }>([
     { owner: "config", label: "literal bytes", value: "synthetic-worker-config-key" },
     { owner: "config", label: "marker bytes", value: NON_ENV_SECRETREF_MARKER },
@@ -62,7 +63,11 @@ describe("serialized catalog credential provenance", () => {
       owner: "config",
       label: "loader-substituted literal",
       value: "${LITERAL_KEY}",
-      loader: { authored: "${SOURCE_KEY}", env: { SOURCE_KEY: "${LITERAL_KEY}" } },
+      loader: {
+        authored: "${SOURCE_KEY}",
+        env: { SOURCE_KEY: "${LITERAL_KEY}" },
+        resolved: true,
+      },
     },
     {
       owner: "config",
@@ -306,7 +311,6 @@ module.exports = {
         );
         const result = await runPreparedModelCatalogWorkerRequest(serialized, {
           kind: "catalog",
-          requestId: 1,
         });
         expect(result.status).toBe("ok");
         const runtimeFacts = getConfigResolutionFacts(serialized.input.config);
@@ -332,12 +336,19 @@ module.exports = {
               serialized.input.config,
               `models.providers.${provider}.apiKey`,
             ),
+            resolvedEnvRef: getResolvedConfigEnvSecretRef(
+              serialized.input.config,
+              `models.providers.${provider}.apiKey`,
+            ),
           }).toEqual({
             nativeAuthMatches: true,
             nativeRequests: loader.pending ? [] : [true],
             workerAuthMatches: true,
             workerRequests: loader.pending ? [] : [true],
             authoredRef: expectedRef,
+            resolvedEnvRef: loader.resolved
+              ? { source: "env", provider: "default", id: "SOURCE_KEY" }
+              : null,
           });
           if (loader.pending) {
             return;

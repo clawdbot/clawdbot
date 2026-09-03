@@ -108,9 +108,3 @@ export async function bindThreadForSubagentSpawn(params: {
     };
   }
 }
-
-export function hasRoutableDeliveryOrigin(
-  origin?: DeliveryContext,
-): origin is DeliveryContext & { channel: string; to: string } {
-  return Boolean(origin?.channel && origin.to);
-}

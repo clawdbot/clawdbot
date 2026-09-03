@@ -149,7 +149,9 @@ describe("parseClawHubPromotionsFeed", () => {
   it.each([
     { field: "generatedAt", value: "2026-02-30T00:00:00.000Z" },
     { field: "expiresAt", value: "2026-11-31T00:00:00.000Z" },
-  ])("rejects a calendar-invalid $field", ({ field, value }) => {
+    { field: "generatedAt", value: "-000000-01-01" },
+    { field: "expiresAt", value: "+275760-09-13T00:00:00.001Z" },
+  ])("rejects an invalid ISO timestamp in $field", ({ field, value }) => {
     expect(() => parseClawHubPromotionsFeed({ ...validFeed, [field]: value })).toThrow(/ISO dates/);
   });
 

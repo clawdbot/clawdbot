@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import type { CliToolResultDelta, CliToolUseStartDelta } from "./cli-output-contracts.js";
+import type {
+  CliCompactionDelta,
+  CliToolResultDelta,
+  CliToolUseStartDelta,
+} from "./cli-output-contracts.js";
 import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
 
 function joinJsonlFrames(...frames: unknown[]) {
@@ -282,6 +286,47 @@ describe("createCliJsonlStreamingParser events", () => {
     } finally {
       parseSpy.mockRestore();
     }
+  });
+
+  it("projects lifecycle events without dropping fork-successor session metadata", () => {
+    const compactionEvents: CliCompactionDelta[] = [];
+    const sessionIds: string[] = [];
+    const parseJsonlEvent = vi.fn(() => ({ kind: "result" as const, text: "done" }));
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "acme", output: "jsonl", sessionIdFields: ["session_id"] },
+      providerId: "acme-cli",
+      parseJsonlLifecycleEvent: (line) => {
+        const event = JSON.parse(line) as { type?: string; completed?: boolean };
+        return event.type === "compaction"
+          ? event.completed === undefined
+            ? { kind: "compaction", phase: "start" }
+            : { kind: "compaction", phase: "end", completed: event.completed }
+          : null;
+      },
+      parseJsonlEvent,
+      onAssistantDelta: () => {},
+      onCompaction: (event) => compactionEvents.push(event),
+      onSessionId: (sessionId) => sessionIds.push(sessionId),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "compaction", session_id: "fork-successor" }),
+        JSON.stringify({ type: "compaction", completed: true }),
+        JSON.stringify({ type: "result" }),
+        "",
+      ].join("\n"),
+    );
+    parser.finish();
+
+    expect(compactionEvents).toEqual([{ phase: "start" }, { phase: "end", completed: true }]);
+    expect(sessionIds).toEqual(["fork-successor"]);
+    expect(parseJsonlEvent).toHaveBeenCalledOnce();
+    expect(parser.getOutput()).toEqual({
+      text: "done",
+      sessionId: "fork-successor",
+      usage: undefined,
+    });
   });
 
   it("streams detailed Gemini error events over generic result errors", () => {

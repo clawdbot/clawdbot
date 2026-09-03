@@ -109,6 +109,7 @@ export function createChatSendReplyDispatch(params: {
   isAgentRunStarted: () => boolean;
   isRunCurrent?: () => boolean;
   getReplyDispatchRun?: () => ReplyDispatchRun | undefined;
+  prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
   logGateway: GatewayRequestContext["logGateway"];
   session: Pick<
     PreparedChatSendSession,
@@ -117,7 +118,9 @@ export function createChatSendReplyDispatch(params: {
   userTurnRecorder: Pick<UserTurnTranscriptRecorder, "markBlocked">;
 }) {
   const { accountId, isAgentRunStarted, logGateway, session, userTurnRecorder } = params;
-  const { backingSessionId, cfg, clientRunId, sessionLoadOptions } = session;
+  const { backingSessionId, cfg, clientRunId } = session;
+  // Extract scalar transcript bindings from borrowed entries; reread after asynchronous work.
+  const sessionLoadOptions = { ...session.sessionLoadOptions, clone: false };
   let assistantTranscriptRewriteState = {
     sessionId: undefined as string | undefined,
     generation: null as string | null,
@@ -159,7 +162,11 @@ export function createChatSendReplyDispatch(params: {
     }
     // Record delivery ownership before publication, while preserving raw refs for
     // the exact-row materializer. This is display provenance, never local-file trust.
-    return recordAssistantManagedMediaUrls(message, splitMediaFromOutput(sourceText).mediaUrls);
+    const prepared = recordAssistantManagedMediaUrls(
+      message,
+      splitMediaFromOutput(sourceText).mediaUrls,
+    );
+    return params.prepareAssistantTranscriptMessage?.(prepared, sourceText) ?? prepared;
   };
   const needsAgentMediaTranscriptFinalization = (payload: ReplyPayload): boolean =>
     isMediaBearingPayload(payload) ||

@@ -333,6 +333,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
               proposalReviewCompletion: attempt.skillWorkshopProposalReviewCompletion,
               collectionReconcile: attempt.skillWorkshopCollectionReconcile,
               proposalRevision: attempt.skillWorkshopProposalRevision,
+              libraryAuthoring: attempt.skillLibraryAuthoring,
             },
             modelCompat: extractModelCompat(attempt.model),
             modelApi: attempt.model.api,
@@ -345,14 +346,6 @@ export function prepareEmbeddedAttemptToolBase(params: {
             currentMessagingTarget: attempt.currentMessagingTarget,
             currentThreadTs: attempt.currentThreadTs,
             currentMessageId: attempt.currentMessageId,
-            currentInboundAudio: attempt.currentInboundAudio,
-            ...(attempt.replyOperation
-              ? {
-                  hasCurrentInboundAudio: () =>
-                    attempt.currentInboundAudio === true ||
-                    attempt.replyOperation?.acceptedSteeredInboundAudio === true,
-                }
-              : {}),
             includeCoreTools: toolConstructionPlan.includeCoreTools,
             includeToolSearchControls: toolSearchControlsEnabledForRun,
             toolSearchCatalogExecutor: params.toolSearchCatalogExecutor,

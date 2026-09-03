@@ -36,6 +36,10 @@ import {
   fingerprintPluginDiscoveryContext,
   resolvePluginDiscoveryContext,
 } from "./plugin-control-plane-context.js";
+import {
+  resolvePluginRuntimeArtifactPreference,
+  type PluginRuntimeArtifactPreference,
+} from "./plugin-runtime-artifact-selection.js";
 import { normalizePluginIdScope, serializePluginIdScope } from "./plugin-scope.js";
 import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
 
@@ -129,17 +133,19 @@ function buildActivationMetadataHash(params: {
   activationSource: PluginActivationConfigSource;
   autoEnabledReasons: Readonly<Record<string, string[]>>;
 }): string {
-  const enabledSourceChannels = Object.entries(
+  // Both sides of channels.<id>.enabled steer activation, so an added or flipped
+  // flag must miss the cache instead of reusing a registry built without it.
+  const sourceChannelEnablement = Object.entries(
     (params.activationSource.rootConfig?.channels as Record<string, unknown>) ?? {},
   )
-    .filter(([, value]) => {
+    .flatMap(([channelId, value]) => {
       if (!value || typeof value !== "object" || Array.isArray(value)) {
-        return false;
+        return [];
       }
-      return (value as { enabled?: unknown }).enabled === true;
+      const enabled = (value as { enabled?: unknown }).enabled;
+      return typeof enabled === "boolean" ? [[channelId, enabled] as const] : [];
     })
-    .map(([channelId]) => channelId)
-    .toSorted((left, right) => left.localeCompare(right));
+    .toSorted(([left], [right]) => left.localeCompare(right));
   // Source config selects validation and defaults even when resolved values match.
   // Object fields keep an absent config distinct from an explicit null source.
   const pluginEntryInputs = Object.entries(params.activationSource.plugins.entries)
@@ -157,7 +163,7 @@ function buildActivationMetadataHash(params: {
         deny: params.activationSource.plugins.deny,
         memorySlot: params.activationSource.plugins.slots.memory,
         entries: pluginEntryInputs,
-        enabledChannels: enabledSourceChannels,
+        channelEnablement: sourceChannelEnablement,
         autoEnabledReasons: autoEnableReasonEntries,
       }),
     )
@@ -176,7 +182,7 @@ function buildCacheKey(params: {
   forceSetupOnlyChannelPlugins?: boolean;
   requireSetupEntryForSetupOnlyChannelPlugins?: boolean;
   channelPluginLoadIntent: ChannelPluginLoadIntent;
-  preferBuiltPluginArtifacts?: boolean;
+  artifactPreference: PluginRuntimeArtifactPreference;
   resolveRawConfigEnvVars?: boolean;
   toolDiscovery?: boolean;
   loadModules?: boolean;
@@ -217,8 +223,6 @@ function buildCacheKey(params: {
     params.requireSetupEntryForSetupOnlyChannelPlugins === true
       ? "require-setup-entry"
       : "allow-full-fallback";
-  const bundledArtifactMode =
-    params.preferBuiltPluginArtifacts === true ? "prefer-built-artifacts" : "source-default";
   const rawConfigEnvMode =
     params.resolveRawConfigEnvVars === true ? "resolve-raw-env" : "runtime-config";
   const moduleLoadMode = params.loadModules === false ? "manifest-only" : "load-modules";
@@ -235,7 +239,7 @@ function buildCacheKey(params: {
       activationMetadataKey: params.activationMetadataKey ?? "",
       allowProcessHomeSessionCatalogs: params.allowProcessHomeSessionCatalogs !== false,
     },
-  )}::${serializePluginIdScope(params.onlyPluginIds)}::${setupOnlyKey}::${setupOnlyModeKey}::${setupOnlyRequirementKey}::${params.channelPluginLoadIntent}::${bundledArtifactMode}::${rawConfigEnvMode}::${moduleLoadMode}::${discoveryMode}::${params.runtimeSubagentMode ?? "default"}::${params.runtimeBindingIdentity ?? "{}"}::${params.pluginSdkResolution ?? "auto"}::${JSON.stringify(params.coreGatewayMethodNames ?? [])}::${activationMode}`;
+  )}::${serializePluginIdScope(params.onlyPluginIds)}::${setupOnlyKey}::${setupOnlyModeKey}::${setupOnlyRequirementKey}::${params.channelPluginLoadIntent}::${params.artifactPreference}::${rawConfigEnvMode}::${moduleLoadMode}::${discoveryMode}::${params.runtimeSubagentMode ?? "default"}::${params.runtimeBindingIdentity ?? "{}"}::${params.pluginSdkResolution ?? "auto"}::${JSON.stringify(params.coreGatewayMethodNames ?? [])}::${activationMode}`;
   return createHash("sha256").update(cacheIdentity).digest("hex");
 }
 
@@ -253,7 +257,8 @@ function resolveCoreGatewayMethodNames(options: PluginLoadOptions): string[] {
   for (const name of Object.keys(options.coreGatewayHandlers ?? {})) {
     names.add(name);
   }
-  return Array.from(names).toSorted();
+  // oxlint-disable-next-line unicorn/no-array-sort -- Array.from creates a private array.
+  return Array.from(names).sort();
 }
 
 function mergePluginTrustList(runtimeList: string[], sourceList: readonly string[]): string[] {
@@ -323,7 +328,9 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const requireSetupEntryForSetupOnlyChannelPlugins =
     options.requireSetupEntryForSetupOnlyChannelPlugins === true;
   const channelPluginLoadIntent = options.channelPluginLoadIntent ?? "full";
-  const preferBuiltPluginArtifacts = options.preferBuiltPluginArtifacts === true;
+  const artifactPreference = resolvePluginRuntimeArtifactPreference(
+    options.preferBuiltPluginArtifacts,
+  );
   const runtimeSubagentMode = resolveRuntimeSubagentMode(options.runtimeOptions);
   const coreGatewayMethodNames = resolveCoreGatewayMethodNames(options);
   // Config identity cannot prove a custom profile's environment. Only borrow
@@ -376,7 +383,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     forceSetupOnlyChannelPlugins,
     requireSetupEntryForSetupOnlyChannelPlugins,
     channelPluginLoadIntent,
-    preferBuiltPluginArtifacts,
+    artifactPreference,
     resolveRawConfigEnvVars: options.resolveRawConfigEnvVars,
     toolDiscovery: options.toolDiscovery,
     loadModules: options.loadModules,
@@ -400,7 +407,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     forceSetupOnlyChannelPlugins,
     requireSetupEntryForSetupOnlyChannelPlugins,
     channelPluginLoadIntent,
-    preferBuiltPluginArtifacts,
+    artifactPreference,
     shouldActivate: options.activate !== false,
     shouldLoadModules: options.loadModules !== false,
     runtimeSubagentMode,

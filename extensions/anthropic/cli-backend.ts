@@ -8,8 +8,7 @@ import type {
   CliBackendPlugin,
   CliBackendPreparedExecution,
 } from "openclaw/plugin-sdk/cli-backend";
-import { resolveClaudeCliContextWindowModelId } from "./cli-catalog.js";
-import { parseClaudeCliJsonlEvent } from "./cli-output.js";
+import { parseClaudeCliJsonlEvent, parseClaudeCliJsonlLifecycleEvent } from "./cli-output.js";
 import {
   CLAUDE_CLI_BACKEND_ID,
   CLAUDE_CLI_DEFAULT_MODEL_REF,
@@ -229,8 +228,10 @@ export function buildAnthropicCliBackend(
       serialize: true,
     },
     normalizeConfig: normalizeClaudeBackendConfig,
+    // Bare ids keep the CLI default; an explicit 1M selection must override
+    // Claude's settings.json 200K limit. The 200K choice is enforced by env below.
     resolveModelId: ({ modelId, contextWindow }) =>
-      resolveClaudeCliContextWindowModelId(modelId, contextWindow),
+      contextWindow === "1m" ? `${modelId}[1m]` : modelId,
     authEpochMode: "profile-only",
     autoSelectAuthProfile: false,
     prepareExecution: (context) => {
@@ -275,6 +276,7 @@ export function buildAnthropicCliBackend(
       return supportProbe ? supportProbe.then(prepare) : prepare();
     },
     parseJsonlEvent: parseClaudeCliJsonlEvent,
+    parseJsonlLifecycleEvent: parseClaudeCliJsonlLifecycleEvent,
     resolveExecutionArgs: (context) =>
       resolveClaudeCliExecutionArgs(context, {
         excludeDynamicSystemPromptSections: options.supportsDynamicSystemPromptSections?.(),

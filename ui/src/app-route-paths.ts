@@ -34,6 +34,7 @@ const APP_ROUTE_DEFINITIONS = {
   custodian: { path: "/custodian" },
   "new-session": { path: "/new" },
   activity: { path: "/activity" },
+  meetings: { path: "/meetings" },
   apps: { path: "/apps" },
   portals: { path: "/portals" },
   agents: { path: "/settings/agents", aliases: ["/agents"] },

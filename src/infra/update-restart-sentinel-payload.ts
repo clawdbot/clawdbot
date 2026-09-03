@@ -36,6 +36,14 @@ export function normalizeControlPlaneUpdateResult(result: UpdateRunResult): Upda
     : result;
 }
 
+function resolvePersistedRecovery(result: UpdateRunResult): UpdateRunResult["recovery"] {
+  const recovery = result.recovery;
+  // Restored runtimes parse this object strictly, so persist only the pre-update shape.
+  return recovery?.serviceRestartSafe === false
+    ? { serviceRestartSafe: false, reason: recovery.reason }
+    : recovery;
+}
+
 /** Build the restart sentinel payload written after update runs. */
 export function buildUpdateRestartSentinelPayload(params: {
   result: UpdateRunResult;
@@ -43,6 +51,7 @@ export function buildUpdateRestartSentinelPayload(params: {
   nowMs?: number;
 }): RestartSentinelPayload {
   const result = normalizeControlPlaneUpdateResult(params.result);
+  const recovery = resolvePersistedRecovery(result);
   const { meta } = params;
   const continuation =
     result.status === "ok"
@@ -65,6 +74,7 @@ export function buildUpdateRestartSentinelPayload(params: {
       mode: result.mode,
       ...(meta.root || result.root ? { root: meta.root ?? result.root } : {}),
       ...(meta.handoffId ? { handoffId: meta.handoffId } : {}),
+      ...(recovery ? { recovery } : {}),
       before: result.before ?? null,
       after: result.after ?? null,
       steps: result.steps.map((step) => ({

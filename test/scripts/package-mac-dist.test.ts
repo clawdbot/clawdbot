@@ -7,6 +7,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -25,7 +26,13 @@ function makeDistributionFixture(layout: "native" | "xcode", missingArch?: strin
   const tools = path.join(root, "tools");
   mkdirSync(path.join(scripts, "lib"), { recursive: true });
   mkdirSync(tools);
-  for (const file of ["package-mac-dist.sh", "lib/plistbuddy.sh", "lib/swift-toolchain.sh"]) {
+  for (const file of [
+    "package-mac-dist.sh",
+    "notarize-mac-artifact.sh",
+    "lib/mac-notarization-recovery.py",
+    "lib/plistbuddy.sh",
+    "lib/swift-toolchain.sh",
+  ]) {
     copyFileSync(path.join("scripts", file), path.join(scripts, file));
   }
   const executable = (file: string, body: string) => {
@@ -76,22 +83,30 @@ function makeDistributionFixture(layout: "native" | "xcode", missingArch?: strin
   return {
     root,
     expectedUUIDs,
-    run: () =>
-      spawnSync("bash", [path.join(scripts, "package-mac-dist.sh")], {
-        cwd: root,
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          PATH: `${tools}:/usr/bin:/bin`,
-          APP_VERSION: "2026.8.2",
-          APP_BUILD: "2608000290",
-          BUILD_CONFIG: "release",
-          BUILD_ARCHS: "all",
-          SKIP_NOTARIZE: "1",
-          SKIP_DMG: "1",
-          SKIP_DSYM: "0",
+    run: (options: { resume?: boolean; notarize?: boolean } = {}) =>
+      spawnSync(
+        "bash",
+        [
+          path.join(scripts, "package-mac-dist.sh"),
+          ...(options.resume ? ["--resume-notarization"] : []),
+        ],
+        {
+          cwd: root,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PATH: `${tools}:/usr/bin:/bin`,
+            APP_VERSION: "2026.8.2",
+            APP_BUILD: "2608000290",
+            BUILD_CONFIG: "release",
+            BUILD_ARCHS: "all",
+            SKIP_NOTARIZE: options.notarize ? "0" : "1",
+            NOTARYTOOL_PROFILE: "test-profile",
+            SKIP_DMG: "1",
+            SKIP_DSYM: "0",
+          },
         },
-      }),
+      ),
   };
 }
 
@@ -211,10 +226,10 @@ describe("package-mac-dist plist validation", () => {
 
   it("checks Swift before Sparkle metadata or dependency bootstrap work", () => {
     const script = readFileSync(scriptPath, "utf8");
-    const swiftIndex = script.indexOf("\nrequire_swift_toolchain\n");
+    const swiftIndex = script.indexOf("  require_swift_toolchain\n");
     const versionIndex = script.indexOf('if [[ -z "$APP_VERSION_INPUT" ]]');
     const appBuildIndex = script.indexOf(
-      'if [[ -z "${APP_BUILD:-}" && "$BUILD_CONFIG" == "release" ]]',
+      'if [[ "$RESUME_NOTARIZATION" == "0" && -z "${APP_BUILD:-}" && "$BUILD_CONFIG" == "release" ]]',
     );
     const packageAppIndex = script.indexOf('"$ROOT_DIR/scripts/package-mac-app.sh"');
     const preSwiftBlock = script.slice(0, swiftIndex);
@@ -468,23 +483,97 @@ describe("package-mac-dist plist validation", () => {
     expect(result.stderr).not.toContain("node reran after failed install");
   });
 
-  it("cleans the temporary notary zip when notarization exits early", () => {
-    const script = readFileSync(scriptPath, "utf8");
-    const notaryBlock = script.slice(
-      script.indexOf('if [[ "$NOTARIZE" == "1" ]]'),
-      script.indexOf('if [[ "$SKIP_DMG" != "1" ]]'),
-    );
-
-    expect(script).toContain("cleanup_notary_zip()");
-    expect(notaryBlock).toContain("NOTARY_ZIP_PENDING_CLEANUP=1");
-    expect(notaryBlock).toContain("trap cleanup_notary_zip EXIT");
-    expect(notaryBlock).toContain(
-      'STAPLE_APP_PATH="$APP" "$ROOT_DIR/scripts/notarize-mac-artifact.sh" "$NOTARY_ZIP"',
-    );
-    expect(notaryBlock).toContain('rm -f "$NOTARY_ZIP"');
-    expect(notaryBlock).toContain("NOTARY_ZIP_PENDING_CLEANUP=0");
-    expect(notaryBlock).toContain("trap - EXIT");
-  });
+  it.runIf(process.platform === "darwin")(
+    "resumes without build products and allows the next fresh package after success",
+    () => {
+      const fixture = makeDistributionFixture("native");
+      const app = path.join(fixture.root, "dist/OpenClaw.app");
+      const plist = path.join(app, "Contents/Info.plist");
+      writeFileSync(
+        plist,
+        readFileSync(plist, "utf8").replace(
+          "</dict>",
+          "<key>CFBundleExecutable</key><string>OpenClaw</string></dict>",
+        ),
+      );
+      mkdirSync(path.join(app, "Contents/MacOS"));
+      copyFileSync(
+        path.join(fixture.root, "apps/macos/.build/arm64/release/OpenClaw"),
+        path.join(app, "Contents/MacOS/OpenClaw"),
+      );
+      const signed = spawnSync("/usr/bin/codesign", ["--force", "--sign", "-", app], {
+        encoding: "utf8",
+      });
+      expect(signed.status, signed.stderr).toBe(0);
+      for (const args of [
+        ["init", "--quiet"],
+        [
+          "-c",
+          "user.name=Fixture",
+          "-c",
+          "user.email=fixture@example.com",
+          "-c",
+          "commit.gpgsign=false",
+          "commit",
+          "--allow-empty",
+          "-m",
+          "fixture",
+        ],
+      ]) {
+        const result = spawnSync("git", args, { cwd: fixture.root, encoding: "utf8" });
+        expect(result.status, result.stderr).toBe(0);
+      }
+      const tools = path.join(fixture.root, "tools");
+      const jq = spawnSync("sh", ["-c", "command -v jq"], { encoding: "utf8" });
+      expect(jq.status).toBe(0);
+      symlinkSync(jq.stdout.trim(), path.join(tools, "jq"));
+      writeFileSync(
+        path.join(tools, "xcrun"),
+        `#!/bin/bash
+set -eu
+root="$(dirname "$0")/.."
+if [[ "$1" != notarytool ]]; then echo 'Xcode 26.4'; exit 0; fi
+if [[ "$2" == submit ]]; then
+  echo submit >> "$root/submissions"
+  if [[ "$*" == *" --wait "* ]]; then echo 'network disconnected' >&2; exit 7; fi
+  echo '{"id":"11111111-2222-3333-4444-555555555555"}'
+elif [[ ! -f "$root/wait-failed" ]]; then
+  touch "$root/wait-failed"
+  echo 'network disconnected' >&2
+  exit 7
+else
+  echo '{"id":"11111111-2222-3333-4444-555555555555","status":"Accepted"}'
+fi
+`,
+        { mode: 0o755 },
+      );
+      const failed = fixture.run({ notarize: true });
+      expect(failed.status).not.toBe(0);
+      expect(failed.stderr).toContain("network disconnected");
+      const checkpoint = path.join(fixture.root, "dist/macos-notarization-recovery");
+      expect(existsSync(path.join(checkpoint, "app.zip"))).toBe(true);
+      expect(existsSync(path.join(checkpoint, "symbols.zip"))).toBe(true);
+      renameSync(path.join(fixture.root, "apps"), path.join(fixture.root, "saved-build-products"));
+      writeFileSync(
+        path.join(fixture.root, "scripts/package-mac-app.sh"),
+        "#!/bin/bash\necho 'unexpected rebuild' >&2\nexit 97\n",
+      );
+      const resumed = fixture.run({ resume: true, notarize: true });
+      expect(resumed.status, resumed.stderr).toBe(0);
+      expect(readFileSync(path.join(fixture.root, "submissions"), "utf8")).toBe("submit\n");
+      expect(existsSync(path.join(fixture.root, "dist/OpenClaw-2026.8.2.zip"))).toBe(true);
+      expect(existsSync(path.join(fixture.root, "dist/OpenClaw-2026.8.2.dSYM.zip"))).toBe(true);
+      renameSync(path.join(fixture.root, "saved-build-products"), path.join(fixture.root, "apps"));
+      writeFileSync(
+        path.join(fixture.root, "scripts/package-mac-app.sh"),
+        "#!/bin/bash\ntouch fresh-build-started\n",
+      );
+      const fresh = fixture.run({ notarize: true });
+      expect(fresh.status, fresh.stderr).toBe(0);
+      expect(existsSync(path.join(fixture.root, "fresh-build-started"))).toBe(true);
+      expect(readFileSync(path.join(fixture.root, "submissions"), "utf8")).toBe("submit\nsubmit\n");
+    },
+  );
 
   it("fails closed when required dSYM outputs are missing", () => {
     const script = readFileSync(scriptPath, "utf8");

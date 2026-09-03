@@ -221,9 +221,9 @@ type BedrockEmbeddingResponseJson = {
   data?: unknown;
 };
 
-function parseBedrockEmbeddingResponseJson(raw: string): BedrockEmbeddingResponseJson {
+function parseEmbeddingResponseJson(raw: Uint8Array | undefined): BedrockEmbeddingResponseJson {
   try {
-    const parsed = JSON.parse(raw) as unknown;
+    const parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(raw)) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       throw new Error("Amazon Bedrock embedding response returned malformed JSON");
     }
@@ -256,8 +256,8 @@ function asNumberArrayBatch(value: unknown): number[][] {
   return value.map((entry) => asNumberArray(entry));
 }
 
-function parseSingle(family: Family, raw: string): number[] {
-  const data = parseBedrockEmbeddingResponseJson(raw);
+function parseSingle(family: Family, raw: Uint8Array | undefined): number[] {
+  const data = parseEmbeddingResponseJson(raw);
   switch (family) {
     case "nova":
       return asNumberArray(Array.isArray(data.embeddings) ? data.embeddings[0]?.embedding : null);
@@ -276,8 +276,8 @@ function parseSingle(family: Family, raw: string): number[] {
   }
 }
 
-function parseCohereBatch(family: Family, raw: string): number[][] {
-  const data = parseBedrockEmbeddingResponseJson(raw);
+function parseCohereBatch(family: Family, raw: Uint8Array | undefined): number[][] {
+  const data = parseEmbeddingResponseJson(raw);
   const embeddings = data.embeddings;
   if (!embeddings) {
     throw malformedBedrockEmbeddingResponse();
@@ -311,7 +311,7 @@ export async function createBedrockEmbeddingProvider(
     family,
   });
 
-  const invoke = async (body: string, signal?: AbortSignal): Promise<string> => {
+  const invoke = async (body: string, signal?: AbortSignal): Promise<Uint8Array | undefined> => {
     await refreshAwsSharedConfigCacheForBedrock();
     const sdk = new BedrockRuntimeClient({
       region: client.region,
@@ -329,7 +329,7 @@ export async function createBedrockEmbeddingProvider(
         }),
         signal ? { abortSignal: signal } : undefined,
       );
-      return new TextDecoder().decode(res.body);
+      return res.body;
     } finally {
       sdk.destroy();
     }

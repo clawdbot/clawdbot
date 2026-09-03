@@ -40,6 +40,7 @@ function sessionPage(face: BoardFace) {
         import("./route-view.ts"),
         import("../../styles/chat/composer-progress.css"),
         import("../../styles/chat/composer-queue.css"),
+        import("../../styles/chat/composer-status.css"),
       ]).then(([, { renderChatRoute, sessionRenderOwnerKey }]) => ({
         header: true,
         // ChatPage's bounded inner cache owns per-session teardown, so session

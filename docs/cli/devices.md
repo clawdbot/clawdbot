@@ -41,6 +41,8 @@ Paired device display names use this precedence: operator label (`operatorLabel`
 
 Approve a pending pairing request by exact `requestId`. Omitting `requestId`, or passing `--latest`, only previews the newest pending request and exits (code 1); rerun with the exact request ID to approve.
 
+The printed approval command keeps your active profile or container, explicit Gateway URL, nondefault timeout, and JSON output mode. Token and password option values are omitted; supply the same credentials again when the preview asks you to reuse those options.
+
 ```bash
 openclaw devices approve
 openclaw devices approve <requestId>

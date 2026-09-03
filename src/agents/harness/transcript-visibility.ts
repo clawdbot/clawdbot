@@ -1,7 +1,7 @@
 import type { AgentMessage } from "../runtime/index.js";
 
 /**
- * Keep internal memory-maintenance turns in the audit/model transcript without
+ * Keep internal messages in the audit/model transcript without
  * projecting them into user-facing chat history.
  */
 export function projectAgentHarnessTranscriptMessageForDisplay<T extends AgentMessage>(params: {

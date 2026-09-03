@@ -357,6 +357,54 @@ describe("SystemAgentChatEngine operations", () => {
     expect(reply.text).toContain("[openclaw] done: config.set");
   });
 
+  it("proves delegated config persistence stops when async preparation closes authority", async () => {
+    const persisted: string[] = [];
+    let closeDuringPreparation = false;
+    let authorityOpen = true;
+    const beforePersistentApply = vi.fn(() => {
+      if (!authorityOpen) {
+        throw new Error("authority closed");
+      }
+    });
+    const runConfigSet = vi.fn(
+      async (params: {
+        path?: string;
+        value?: string;
+        cliOptions: object;
+        beforePersistentApply?: () => void;
+      }) => {
+        await Promise.resolve();
+        if (closeDuringPreparation) {
+          authorityOpen = false;
+        }
+        params.beforePersistentApply?.();
+        persisted.push(`${params.path}=${params.value}`);
+      },
+    );
+    const operation = { kind: "config-set" as const, path: "gateway.port", value: "19001" };
+    const engine = new SystemAgentChatEngine({
+      runAgentTurn: async () => null,
+      deps: { runConfigSet, loadOverview: fakeOverviewLoader() },
+    });
+    const approve = async () => {
+      engine.propose(operation);
+      const proposal = expectDefined(engine.getPendingOperatorProposal(), "delegated proposal");
+      return await engine.resolveOperatorApproval(
+        "allow-once",
+        proposal.hash,
+        beforePersistentApply,
+      );
+    };
+
+    await expect(approve()).resolves.toMatchObject({ action: "none" });
+    expect(persisted).toEqual(["gateway.port=19001"]);
+
+    closeDuringPreparation = true;
+    const rejected = await approve();
+    expect(rejected?.text).toContain("authority closed");
+    expect(persisted).toEqual(["gateway.port=19001"]);
+  });
+
   it("prefers the real agent loop for fuzzy messages", async () => {
     const runAgentTurn = vi.fn(
       async (_params: {
@@ -732,6 +780,7 @@ describe("SystemAgentChatEngine CLI loop backends", () => {
     expect(call.provider).toBe("claude-cli");
     expect(call.model).toBe("claude-opus-4-8");
     expect(call.systemAgentTool).toEqual({
+      agentId: "main",
       surface: "cli",
       approvalArmed: false,
       proposalRef: {},

@@ -8,7 +8,40 @@ import {
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
 import type { CodexAppServerClient } from "./client.js";
-import type { v2 } from "./protocol.js";
+import type { JsonObject, v2 } from "./protocol.js";
+import type { CodexThreadLifecycleTimingTracker } from "./thread-lifecycle-timing.js";
+import { attestCodexRestrictedToolSurfaceMcpServersDisabled } from "./thread-mcp-attestation.js";
+
+/** Every admission path checks the same surface; its lifecycle owner keeps the claim fenced. */
+export async function attestCodexThreadToolSurface(
+  params: Parameters<typeof attestCodexPluginThreadApps>[0] & {
+    threadConfig?: JsonObject;
+    restrictedToolSurface: boolean;
+    lifecycleTiming: CodexThreadLifecycleTimingTracker;
+    assertCurrent: () => void;
+  },
+): Promise<void> {
+  params.assertCurrent();
+  if (params.appIds.length > 0) {
+    await params.lifecycleTiming.measure("plugin-app-attestation", () =>
+      attestCodexPluginThreadApps(params),
+    );
+    params.assertCurrent();
+  }
+  if (params.restrictedToolSurface) {
+    // Codex exposes admitted account apps through its built-in codex_apps server.
+    await params.lifecycleTiming.measure("restricted-tool-surface-mcp-attestation", () =>
+      attestCodexRestrictedToolSurfaceMcpServersDisabled(
+        params.client,
+        params.threadId,
+        params.threadConfig,
+        params.signal,
+        params.appIds.length > 0 ? ["codex_apps"] : [],
+      ),
+    );
+    params.assertCurrent();
+  }
+}
 
 class CodexPluginThreadAppAttestationError extends Error {
   constructor(message: string, options?: ErrorOptions) {

@@ -4,6 +4,26 @@ import Testing
 
 @MainActor
 struct MacNodePresenceReporterTests {
+    @Test(arguments: [false, true])
+    func `disabled reporting releases its sampling task`(afterOptOut: Bool) async {
+        weak var releasedReporter: MacNodePresenceReporter?
+        do {
+            let reporter = MacNodePresenceReporter(reportingEnabled: false, idleSecondsProvider: { 0 })
+            releasedReporter = reporter
+            reporter.start(sender: { _, _ in true }, clearer: { .cleared }, onUnsupportedClear: {})
+            if afterOptOut {
+                await reporter.setReportingEnabled(true)
+                await reporter.setReportingEnabled(false)
+            }
+        }
+        for _ in 0..<1000 {
+            if releasedReporter == nil { break }
+            await Task.yield()
+        }
+        #expect(releasedReporter == nil)
+        releasedReporter?.stop()
+    }
+
     @Test func `active computer presence defaults off and honors explicit opt in`() throws {
         let suiteName = "MacNodePresenceReporterTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
@@ -46,7 +66,9 @@ struct MacNodePresenceReporterTests {
             sender: sender.send,
             clearer: clear.clear,
             onUnsupportedClear: clear.handleUnsupported)
-        for _ in 0..<20 { await Task.yield() }
+        for _ in 0..<20 {
+            await Task.yield()
+        }
         reporter.stop()
 
         #expect(idleProbe.calls == 0)
@@ -107,16 +129,17 @@ struct MacNodePresenceReporterTests {
             onUnsupportedClear: clear.handleUnsupported)
         await reporter.setReportingEnabled(true)
         await reporter.setReportingEnabled(false)
-        await reporter.setReportingEnabled(false)
+        await clear.waitForCallCount(2)
         reporter.stop()
 
         #expect(clear.calls == 2)
         #expect(clear.unsupportedCalls == 0)
     }
 
-    @Test func `activity crossing opt out is followed by a clear`() async {
+    @Test(arguments: [false, true])
+    func `activity crossing opt out is followed by a clear`(retryClear: Bool) async {
         let sender = SuspendingPresenceSender()
-        let clear = PresenceClearRecorder()
+        let clear = PresenceClearRecorder(outcomes: retryClear ? [.retry, .cleared] : [.cleared])
         let reporter = MacNodePresenceReporter(
             reportingEnabled: true,
             idleSecondsProvider: { 0 })
@@ -128,10 +151,11 @@ struct MacNodePresenceReporterTests {
 
         await reporter.setReportingEnabled(false)
         sender.finishActivitySend()
-        await clear.waitForCallCount(1)
+        let expectedClears = retryClear ? 2 : 1
+        await clear.waitForCallCount(expectedClears)
         reporter.stop()
 
-        #expect(clear.calls == 1)
+        #expect(clear.calls == expectedClears)
         #expect(clear.unsupportedCalls == 0)
     }
 
@@ -176,7 +200,9 @@ struct MacNodePresenceReporterTests {
             sender: sender.send,
             clearer: clear.clear,
             onUnsupportedClear: clear.handleUnsupported)
-        for _ in 0..<20 { await Task.yield() }
+        for _ in 0..<20 {
+            await Task.yield()
+        }
         reporter.stop()
 
         #expect(sender.payloadObjects.filter { $0["idleSeconds"] != nil }.count == 1)
@@ -205,7 +231,9 @@ struct MacNodePresenceReporterTests {
             clearer: freshClear.clear,
             onUnsupportedClear: freshClear.handleUnsupported)
         staleSender.finishActivitySend()
-        for _ in 0..<20 { await Task.yield() }
+        for _ in 0..<20 {
+            await Task.yield()
+        }
         reporter.stop()
 
         #expect(freshSender.payloads.isEmpty)
@@ -306,9 +334,11 @@ private final class PresenceClearRecorder {
     }
 
     func waitForCallCount(_ expected: Int) async {
-        for _ in 0..<1000 {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(4))
+        while clock.now < deadline {
             if self.calls >= expected { return }
-            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(10))
         }
         Issue.record("timed out waiting for \(expected) presence clear calls")
     }

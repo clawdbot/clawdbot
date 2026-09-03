@@ -40,7 +40,8 @@
     "defaults": {
       "heartbeat": {
         "every": "30m"
-      }
+      },
+      "userTimezone": "UTC"
     },
     "entries": {
       "main": {
@@ -143,6 +144,10 @@
     "openclaw_current_sender": {
       "kind": "untrusted",
       "value": "{\"sender\":{\"id\":\"1000001\",\"name\":\"Pash\",\"username\":\"pash\"}}"
+    },
+    "openclaw_temporal_context": {
+      "kind": "application",
+      "value": "## Temporal Context\nCurrent date: 2026-01-01\nTime zone: UTC\nFor the exact current time, use `session_status`."
     }
   },
   "approvalPolicy": "never",
@@ -234,20 +239,20 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 56195,
-    "roughTokens": 14049
+    "chars": 56652,
+    "roughTokens": 14163
   },
   "openClawDeveloperInstructions": {
-    "chars": 3393,
-    "roughTokens": 849
+    "chars": 3462,
+    "roughTokens": 866
   },
   "totalTextOnly": {
-    "chars": 27339,
-    "roughTokens": 6835
+    "chars": 27408,
+    "roughTokens": 6852
   },
   "totalWithDynamicToolsJson": {
-    "chars": 83536,
-    "roughTokens": 20884
+    "chars": 84062,
+    "roughTokens": 21016
   },
   "userInputText": {
     "chars": 863,
@@ -467,7 +472,7 @@ When explicitly_mentioned_bot is true, the incoming message mentions your channe
 ```
 
 
-You are in a Telegram direct conversation. In this conversation, message(action=send) is the only delivery path for a visible text reply; the target defaults to this conversation. Reactions and other non-text message actions remain visible outcomes when appropriate. Your normal final answer is private and is never posted to this conversation. If this turn needs no visible direct text reply, do not call message(action=send) and end the turn. If it does, deliver it with message(action=send) before the turn ends; a reply left in your final answer reaches nobody.
+You are in a Telegram direct conversation. In this conversation, message(action=send) is the only delivery path for a visible text reply; the target defaults to this conversation. Reactions and other non-text message actions remain visible outcomes when appropriate. Your normal final answer is private and is never posted to this conversation. If this turn needs no visible direct text reply, use an appropriate non-text message action when warranted; otherwise do not call message(action=send) and end the turn. If it does, deliver it with message(action=send) before the turn ends; a reply left in your final answer reaches nobody.
 ````
 
 ### Developer: Codex Collaboration Mode Instructions

@@ -41,7 +41,7 @@ export type PluginLoadOptions = {
   requireSetupEntryForSetupOnlyChannelPlugins?: boolean;
   /** Select full runtime registration or the lightweight unconfigured-channel setup path. */
   channelPluginLoadIntent?: ChannelPluginLoadIntent;
-  /** Prefer bundled JavaScript artifacts over source TypeScript entrypoints. */
+  /** Built hosts prefer canonical checkout artifacts by default; false retains source execution. */
   preferBuiltPluginArtifacts?: boolean;
   toolDiscovery?: boolean;
   activate?: boolean;

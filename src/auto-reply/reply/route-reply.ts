@@ -310,6 +310,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       replyToIsExplicit: Boolean(
         payloadMetadata?.replyToIdExplicit || normalized.replyToTag || normalized.replyToCurrent,
       ),
+      replyToCurrent: normalized.replyToCurrent,
       replyDelivery,
     }) ?? null;
   const resolvedReplyToId =

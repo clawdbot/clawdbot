@@ -4,6 +4,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
 import { asFiniteNumber as toFiniteCostNumber } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { stripInternalMetadataForDisplay } from "../../auto-reply/reply/display-text-sanitize.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -57,6 +58,7 @@ import {
   providerRequiresSignedThinking,
   resolveTranscriptPolicy,
   shouldAllowProviderOwnedThinkingReplay,
+  shouldMergeConsecutiveUserTurns,
 } from "../transcript-policy.js";
 import {
   hasNonzeroUsage,
@@ -74,6 +76,13 @@ import {
 } from "./thinking.js";
 
 const MODEL_SNAPSHOT_CUSTOM_TYPE = "model-snapshot";
+const MANAGED_DISPLAY_BLOCK_TYPES = new Set([
+  "attachment",
+  "attachment_error",
+  "audio",
+  "image",
+  "video",
+]);
 type CustomEntryLike = { type?: unknown; customType?: unknown; data?: unknown };
 type ModelSnapshotEntry = {
   timestamp: number;
@@ -242,11 +251,17 @@ function normalizeAssistantReplayBlockContent(
   let removedSilentText = false;
   const sanitizedContent: unknown[] = [];
   for (const block of replayContent) {
-    if (!block || typeof block !== "object") {
+    const record = asOptionalRecord(block);
+    if (!record) {
       sanitizedContent.push(block);
       continue;
     }
-    const text = (block as { text?: unknown }).text;
+    const type = record.type;
+    if (typeof type === "string" && MANAGED_DISPLAY_BLOCK_TYPES.has(type)) {
+      touched = true;
+      continue;
+    }
+    const text = record.text;
     if (typeof text !== "string") {
       sanitizedContent.push(block);
       continue;
@@ -266,7 +281,7 @@ function normalizeAssistantReplayBlockContent(
     const isSilentText =
       trimmed.length > 0 && isSilentReplyPayloadText(trimmed, SILENT_REPLY_TOKEN);
     if (trimmed && !isSilentText) {
-      sanitizedContent.push({ ...block, text: strippedText });
+      sanitizedContent.push({ ...record, text: strippedText });
     }
     removedSilentText ||= isSilentText;
   }
@@ -990,6 +1005,10 @@ export async function validateReplayTurns(params: {
   const validatedGemini = policy.validateGeminiTurns
     ? validateGeminiTurns(params.messages)
     : params.messages;
-  return policy.validateAnthropicTurns ? validateAnthropicTurns(validatedGemini) : validatedGemini;
+  return policy.validateAnthropicTurns
+    ? validateAnthropicTurns(validatedGemini, {
+        mergeConsecutiveUserTurns: shouldMergeConsecutiveUserTurns(policy, params.modelApi),
+      })
+    : validatedGemini;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

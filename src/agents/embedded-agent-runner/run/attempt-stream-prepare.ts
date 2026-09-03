@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 /**
  * Prepares stream subscription, tool execution, and the active run queue.
  */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { runWithOwnedSessionTranscriptWrite } from "../../../config/sessions/transcript-write-context.js";
@@ -20,6 +21,7 @@ import {
   buildAgentHookContextIdentityFields,
 } from "../../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+import { getModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import {
   createNestedToolActivity,
   readNestedToolActivity,
@@ -39,7 +41,10 @@ import {
   isAgentRunRestartAbortReason,
 } from "../../run-termination.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import { getInternalToolExecutionPreparer } from "../../runtime/internal-hooks.js";
+import {
+  copyInternalToolResultState,
+  getInternalToolExecutionPreparer,
+} from "../../runtime/internal-hooks.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { hashToolCall } from "../../tool-loop-detection.js";
 import { normalizeToolPolicyName } from "../../tool-policy.js";
@@ -180,7 +185,7 @@ export function prepareEmbeddedAttemptStream(input: {
           return;
         }
         const hookMessages = projectNestedToolActivityForHooks(
-          input.activeSession.messages.slice(),
+          input.activeSession.messages,
           input.nestedToolActivities,
         );
         const reportedModelRef = resolveReportedModelRef({
@@ -346,6 +351,7 @@ export function prepareEmbeddedAttemptStream(input: {
     silentExpected: attempt.silentExpected,
     suppressLiveStreamOutput: attempt.suppressLiveStreamOutput,
     config: attempt.config,
+    providerOwner: getModelProviderRuntimePluginHandle(attempt.model)?.plugin,
     compactionCountOwner: attempt.compactionCountOwner,
     onContextAccountingEvent: attempt.onContextAccountingEvent,
     sessionPersistence: attempt.sessionPersistence,
@@ -395,20 +401,23 @@ export function prepareEmbeddedAttemptStream(input: {
           "hideFromChannelProgress" in toolParams.tool &&
           toolParams.tool.hideFromChannelProgress === true,
         onTerminal: async (terminal) => {
-          const activity = createNestedToolActivity({
-            runId: attempt.runId,
-            scopeId: activityScope,
-            afterEntryId,
-            startOrder,
-            parentToolCallId: toolParams.parentToolCallId,
-            toolCallId: toolParams.toolCallId,
-            toolName: toolParams.toolName,
-            input: terminal.executedArguments,
-            result: sanitizeToolResult(terminal.result),
-            isError: terminal.isError,
-            startedAt,
-            timestamp: Date.now(),
-          });
+          const message = {
+            ...createNestedToolActivity({
+              runId: attempt.runId,
+              scopeId: activityScope,
+              afterEntryId,
+              startOrder,
+              parentToolCallId: toolParams.parentToolCallId,
+              toolCallId: toolParams.toolCallId,
+              toolName: toolParams.toolName,
+              input: terminal.executedArguments,
+              result: sanitizeToolResult(terminal.result),
+              isError: terminal.isError,
+              startedAt,
+              timestamp: Date.now(),
+            }),
+            idempotencyKey: `${activityScope}:${toolParams.toolCallId}`,
+          };
           await runWithOwnedSessionTranscriptWrite(
             { sessionTarget: manager.getSessionTarget(), sessionKey: attempt.sessionKey },
             () => {
@@ -419,13 +428,12 @@ export function prepareEmbeddedAttemptStream(input: {
               ) {
                 return;
               }
-              const message = {
-                ...activity,
-                idempotencyKey: `${activityScope}:${toolParams.toolCallId}`,
-              };
+              if (isRecord(terminal.result)) {
+                copyInternalToolResultState(terminal.result, message);
+              }
               manager.appendMessage(message);
               const recorded = readNestedToolActivity(
-                redactTranscriptMessage(activity, attempt.config),
+                redactTranscriptMessage(message, attempt.config),
               );
               if (!recorded) {
                 throw new Error("Nested activity became invalid during transcript redaction");
@@ -598,7 +606,13 @@ export function prepareEmbeddedAttemptStream(input: {
     queueHandle,
     attempt.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(attempt.runId),
   );
-  setActiveEmbeddedRun(attempt.sessionId, queueHandle, attempt.sessionKey, attempt.sessionFile);
+  setActiveEmbeddedRun(
+    attempt.sessionId,
+    queueHandle,
+    attempt.sessionKey,
+    attempt.sessionFile,
+    input.hookAgentId,
+  );
   if (attempt.deferTerminalLifecycle && attempt.onDeferredLifecycleOwner) {
     deferredLifecycleOwner = createEmbeddedAttemptDeferredLifecycleOwner({
       runId: attempt.runId,

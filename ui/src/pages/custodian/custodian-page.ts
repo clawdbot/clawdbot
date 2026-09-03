@@ -246,6 +246,9 @@ export class CustodianPage extends OpenClawLightDomElement {
                 </div>
               </div>`}
           <div class="custodian__header-actions">
+            ${this.onboarding
+              ? html`<openclaw-sidebar-attention></openclaw-sidebar-attention>`
+              : nothing}
             ${this.historyAvailable
               ? html`<button
                   class="btn btn--ghost custodian__history-toggle"

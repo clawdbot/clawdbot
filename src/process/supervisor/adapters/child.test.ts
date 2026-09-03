@@ -17,6 +17,9 @@ import {
   mockLinuxOomWrapperShell,
 } from "./test-support.js";
 
+type CreateWindowsOutputDecoder =
+  typeof import("../../../infra/windows-encoding.js").createWindowsOutputDecoder;
+
 const {
   spawnWithFallbackMock,
   signalProcessTreeMock,
@@ -29,7 +32,7 @@ const {
       opts?.onComplete?.();
     },
   ),
-  createWindowsOutputDecoderMock: vi.fn(() => ({
+  createWindowsOutputDecoderMock: vi.fn<CreateWindowsOutputDecoder>(() => ({
     decode: (chunk: Buffer | string) => (Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk),
     flush: () => "",
   })),
@@ -71,7 +74,7 @@ async function createAdapterHarness(params?: {
     env: params?.env,
     stdinMode: "pipe-open",
   });
-  return { adapter, killMock };
+  return { adapter, child, killMock };
 }
 
 function expectedTrustedCmdExe(): string {
@@ -633,13 +636,56 @@ describe("createChildAdapter", () => {
     expect(adapter.stdin?.writableEnded).toBe(true);
   });
 
-  it("wait does not settle immediately on SIGKILL", async () => {
+  it("disposes only decoder-owned output listeners after the SIGKILL fallback", async () => {
     vi.useFakeTimers();
-    const { adapter } = await createAdapterHarness({ pid: 4567 });
+    const flush = vi.fn(() => "flushed tail");
+    createWindowsOutputDecoderMock.mockImplementation(() => ({
+      decode: (chunk: Buffer | string) => (Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk),
+      flush,
+    }));
+    const { adapter, child } = await createAdapterHarness({ pid: 4567 });
+    const stdout = vi.fn();
+    const stderr = vi.fn();
+    const stdoutClose = vi.fn();
+    const stderrClose = vi.fn();
+    const stdoutPipe = child.stdout as PassThrough;
+    const stderrPipe = child.stderr as PassThrough;
+    stdoutPipe.on("close", stdoutClose);
+    stderrPipe.on("close", stderrClose);
+    adapter.onStdout(stdout);
+    adapter.onStderr(stderr);
+
+    stdoutPipe.write("drained stdout");
+    stderrPipe.write("drained stderr");
+    expect(stdout).toHaveBeenCalledExactlyOnceWith("drained stdout");
+    expect(stderr).toHaveBeenCalledExactlyOnceWith("drained stderr");
 
     await expectWaitStaysPendingUntilSigkillFallback(adapter.wait(), () => {
       adapter.kill();
     });
+
+    const stdoutCloseListeners = stdoutPipe.listenerCount("close");
+    const stderrCloseListeners = stderrPipe.listenerCount("close");
+    const queuedError = new Error("queued output stream error");
+    expect(stderrPipe.destroy(queuedError)).toBe(stderrPipe);
+    expect(adapter.dispose()).toBeUndefined();
+
+    expect(stdoutPipe.destroyed).toBe(true);
+    expect(stderrPipe.destroyed).toBe(true);
+    expect(stderrPipe.errored).toBe(queuedError);
+    expect(stderrPipe.listenerCount("error")).toBe(1);
+    expect(stdoutPipe.listenerCount("close")).toBe(stdoutCloseListeners - 1);
+    expect(stderrPipe.listenerCount("close")).toBe(stderrCloseListeners - 1);
+
+    stdoutPipe.emit("data", Buffer.from("late stdout"));
+    stderrPipe.emit("data", Buffer.from("late stderr"));
+    await vi.runAllTimersAsync();
+
+    expect(stdout).toHaveBeenCalledOnce();
+    expect(stderr).toHaveBeenCalledOnce();
+    expect(flush).not.toHaveBeenCalled();
+    expect(stdoutClose).toHaveBeenCalledOnce();
+    expect(stderrClose).toHaveBeenCalledOnce();
   });
 
   it("prefers real child close over the SIGKILL fallback settle", async () => {

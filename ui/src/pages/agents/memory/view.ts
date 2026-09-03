@@ -632,7 +632,9 @@ function renderWikiPreviewOverlay(props: DreamingProps) {
             </div>
             <div class="dreams-diary__preview-meta">
               ${state.wikiPreviewPath}
-              ${state.wikiPreviewUpdatedAt ? ` · ${state.wikiPreviewUpdatedAt}` : ""}
+              ${state.wikiPreviewUpdatedAt
+                ? ` · ${formatCompactDateTime(state.wikiPreviewUpdatedAt)}`
+                : ""}
             </div>
           </div>
           <button

@@ -23,7 +23,12 @@ import {
   prepareAgentRunAdmission,
   type AdmittedRunContext,
 } from "../../agents/admitted-run-context.js";
-import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../../agents/agent-run-terminal-outcome.js";
+import {
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  resolveSessionAgentId,
+} from "../../agents/agent-scope.js";
 import { claimPendingAgentQuestionAnswer } from "../../agents/harness/gateway-question.js";
 import { toolPolicyRestrictsTools } from "../../agents/tool-policy.js";
 import { recordRuntimeActionDecision } from "../../audit/runtime-action-decision.js";
@@ -484,6 +489,11 @@ export async function tryDispatchAcpReplyCore(params: {
   const acpResolution = acpManager.resolveSession({
     cfg: params.cfg,
     sessionKey,
+    agentId: resolveSessionAgentId({
+      config: params.cfg,
+      sessionKey,
+      fallbackAgentId: params.ctx.AgentId,
+    }),
   });
   if (acpResolution.kind === "none") {
     return null;
@@ -491,7 +501,7 @@ export async function tryDispatchAcpReplyCore(params: {
   const canonicalSessionKey = acpResolution.sessionKey;
   const transcriptSessionId =
     acpResolution.kind === "ready" ? acpResolution.entry?.sessionId : undefined;
-  const acpAgentId = resolveAgentIdFromSessionKey(canonicalSessionKey);
+  const acpAgentId = acpResolution.agentId;
   const participantTarget = {
     agentId: acpAgentId,
     sessionKey: canonicalSessionKey,
@@ -647,6 +657,13 @@ export async function tryDispatchAcpReplyCore(params: {
   let runtimeTurnWasCancelled = false;
   let assistantTranscript: ReplyDispatchAssistantTranscript | undefined;
   let terminalOutcome: ReturnType<ReplyDispatchRun["getResult"]>["terminalOutcome"];
+  let auditEndFields: ReturnType<typeof auditRuntime.resolveAcpLifecycleEndFields> | undefined;
+  const resolveAuditEndFields = () =>
+    (auditEndFields ??= auditRuntime.resolveAcpLifecycleEndFields(
+      params.abortSignal,
+      auditStopReason,
+      auditResultStatus,
+    ));
   const emitAuditStart = () => {
     if (auditStarted) {
       return;
@@ -679,9 +696,7 @@ export async function tryDispatchAcpReplyCore(params: {
       toolTracker: auditToolTracker,
       sessionKey: canonicalSessionKey,
       agentId: acpAgentId,
-      ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
-      ...(auditStopReason ? { stopReason: auditStopReason } : {}),
-      ...(auditResultStatus ? { resultStatus: auditResultStatus } : {}),
+      endFields: resolveAuditEndFields(),
       auditOnly,
       completionSource,
     });
@@ -718,13 +733,20 @@ export async function tryDispatchAcpReplyCore(params: {
       return;
     }
     transcriptPersistenceAttempted = true;
+    // Capture before any persistence await so a later abort cannot rewrite the completed execution.
+    terminalOutcome ??= buildAgentRunTerminalOutcomeFromLifecycleEvent({
+      phase: "end",
+      data: resolveAuditEndFields(),
+    });
     const { persistAcpDispatchTranscript } = await loadDispatchAcpTranscriptRuntime();
     assistantTranscript = await persistAcpDispatchTranscript({
       cfg: params.cfg,
       sessionKey: canonicalSessionKey,
+      agentId: acpAgentId,
       expectedSessionId: transcriptSessionId,
       promptText: transcriptPromptText,
       finalText,
+      terminalOutcome,
       meta: acpResolution.kind === "ready" ? acpResolution.meta : undefined,
       threadId: params.ctx.MessageThreadId,
       userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
@@ -772,7 +794,7 @@ export async function tryDispatchAcpReplyCore(params: {
       auditTerminalOutcome = "blocked";
       throw new AcpRuntimeError(
         "ACP_DISPATCH_DISABLED",
-        "This session's bound runtime cannot enforce its tool policy; use an embedded runtime for this restricted conversation.",
+        "This session's bound runtime cannot enforce its permission or tool policy; use an embedded runtime for this restricted conversation.",
       );
     }
     if (acpResolution.kind === "stale") {
@@ -930,6 +952,7 @@ export async function tryDispatchAcpReplyCore(params: {
       admittedRunContext,
       cfg: params.cfg,
       sessionKey: canonicalSessionKey,
+      agentId: acpAgentId,
       provenance: classifySessionStateActor({
         inputProvenance: params.ctx.InputProvenance,
         sessionEffects: params.ctx.InboundEventKind === "room_event" ? "internal" : "visible",

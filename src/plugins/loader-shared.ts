@@ -170,6 +170,7 @@ export function createPluginCandidatesFromManifestRegistry(
         source: record.source,
         ...(record.setupSource !== undefined ? { setupSource: record.setupSource } : {}),
         origin: record.origin,
+        ...(record.sourcePreferred ? { sourcePreferred: true as const } : {}),
         ...(record.workspaceDir !== undefined ? { workspaceDir: record.workspaceDir } : {}),
         ...(record.format !== undefined ? { format: record.format } : {}),
         ...(record.bundleFormat !== undefined ? { bundleFormat: record.bundleFormat } : {}),

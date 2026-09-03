@@ -43,6 +43,7 @@ describe("archiveStaleDashboardEntries", () => {
       }),
     ).toBe(1);
     expect(store[staleKey]?.archivedAt).toBe(now);
+    expect(store[staleKey]?.archiveReason).toBe("stale-dashboard");
     expect(store[activeKey]?.archivedAt).toBeUndefined();
     expect(store[preservedKey]?.archivedAt).toBeUndefined();
   });
@@ -99,6 +100,7 @@ describe("dashboard archive maintenance ordering", () => {
     });
 
     expect(store[dashboardKey]?.archivedAt).toEqual(expect.any(Number));
+    expect(store[dashboardKey]?.archiveReason).toBe("stale-dashboard");
   });
 
   it("does not archive in warn mode", async () => {

@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { listAgentEntries } from "../../agents/agent-scope.js";
 import { redactChannelStatusSummaryBaseUrl } from "../../channels/account-snapshot-fields.js";
 import { buildChannelAccountSnapshotFromInspection } from "../../channels/account-summary.js";
@@ -17,6 +18,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveHeartbeatSummaryForAgent } from "../../infra/heartbeat-summary.js";
+import { redactToolPayloadTextWithConfig } from "../../logging/redact.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   degradedPluginMatchesRoot,
@@ -69,19 +71,6 @@ const debugHealth = (
 const resolveHeartbeatSummary = (cfg: OpenClawConfig, agentId: string) =>
   resolveHeartbeatSummaryForAgent(cfg, agentId);
 
-function attachPluginActivation(
-  plugin: NonNullable<ReturnType<typeof getActivePluginRegistry>>["plugins"][number] | undefined,
-  error: PluginHealthErrorSummary,
-): PluginHealthErrorSummary {
-  if (plugin?.activationSource) {
-    error.activationSource = plugin.activationSource;
-  }
-  if (plugin?.activationReason) {
-    error.activationReason = plugin.activationReason;
-  }
-  return error;
-}
-
 export function resolveHealthAgentOrder(cfg: OpenClawConfig) {
   const defaultAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
   const entries = listAgentEntries(cfg);
@@ -110,65 +99,52 @@ export function resolveHealthAgentOrder(cfg: OpenClawConfig) {
   return { defaultAgentId, ordered };
 }
 
-async function createHealthSessionStoreReader() {
+async function createHealthSessionStoreReader(agentIds: readonly string[]) {
   const { createStatusSessionStoreReader } = await import("../../status/session-stores.js");
-  const { listSessionEntriesReadOnly } = await import("../../config/sessions/session-accessor.js");
+  const { readSessionStoreSummaryReadOnly } =
+    await import("../../config/sessions/session-accessor.js");
   const { isTransientSqliteError } = await import("../../infra/unhandled-rejections.js");
-  return createStatusSessionStoreReader((scope) => {
+  return createStatusSessionStoreReader(agentIds, HEALTH_RECENT_SESSION_LIMIT, (scope, options) => {
     try {
-      return listSessionEntriesReadOnly({ ...scope, clone: false, projection: "list" });
+      return readSessionStoreSummaryReadOnly(scope, options);
     } catch (error) {
       if (!isTransientSqliteError(error)) {
         throw error;
       }
       // Health is best-effort: one empty snapshot beats repeated transient lock failures.
-      return [];
+      return { count: 0, recent: [], byAgent: new Map() };
     }
   });
 }
 
-function projectHealthSessions(path: string, sessions: SessionEntrySummary[]) {
-  const recentSessions: Array<{ key: string; updatedAt: number }> = [];
-  for (const { sessionKey: key, entry } of sessions) {
-    const session = { key, updatedAt: entry.updatedAt ?? 0 };
-    const insertAt = recentSessions.findIndex(
-      (recentSession) => session.updatedAt > recentSession.updatedAt,
-    );
-    // Health returns only five rows. Keep the projection bounded while scanning
-    // so refreshes never sort the complete session snapshot.
-    if (insertAt >= 0) {
-      recentSessions.splice(insertAt, 0, session);
-      if (recentSessions.length > HEALTH_RECENT_SESSION_LIMIT) {
-        recentSessions.pop();
-      }
-    } else if (recentSessions.length < HEALTH_RECENT_SESSION_LIMIT) {
-      recentSessions.push(session);
-    }
-  }
-  const recent = recentSessions.map((session) => ({
-    key: session.key,
-    updatedAt: session.updatedAt || null,
-    age: session.updatedAt ? Date.now() - session.updatedAt : null,
+function projectHealthSessions(
+  path: string,
+  summary: { count: number; recent: SessionEntrySummary[] },
+) {
+  const recent = summary.recent.map(({ sessionKey: key, entry }) => ({
+    key,
+    updatedAt: entry.updatedAt || null,
+    age: entry.updatedAt ? Date.now() - entry.updatedAt : null,
   }));
   return {
     path,
-    count: sessions.length,
+    count: summary.count,
     recent,
   } satisfies HealthSummary["sessions"];
 }
 
 async function buildHealthSessionSummary(storePath: string, agentId?: string) {
-  const reader = await createHealthSessionStoreReader();
+  const reader = await createHealthSessionStoreReader(agentId ? [agentId] : []);
   const store = reader.read(storePath, agentId);
-  return projectHealthSessions(store.path, store.sessions);
+  return projectHealthSessions(store.path, store);
 }
 
-/** Projects borrowed rows synchronously before returning the owned health summaries. */
+/** Shares one bounded session snapshot across every configured agent in this collection. */
 export async function buildHealthAgentSummaries(
   cfg: OpenClawConfig,
   { defaultAgentId, ordered }: ReturnType<typeof resolveHealthAgentOrder>,
 ): Promise<AgentHealthSummary[]> {
-  const reader = await createHealthSessionStoreReader();
+  const reader = await createHealthSessionStoreReader(ordered.map((entry) => entry.id));
   return ordered.map((entry) => {
     const store = reader.read(
       resolveSessionStorePathCore(cfg.session?.store, { agentId: entry.id }),
@@ -179,12 +155,24 @@ export async function buildHealthAgentSummaries(
       name: entry.name,
       isDefault: entry.id === defaultAgentId,
       heartbeat: resolveHeartbeatSummary(cfg, entry.id),
-      sessions: projectHealthSessions(store.path, store.sessions),
+      sessions: projectHealthSessions(store.path, store),
     };
   });
 }
 
-function buildPluginHealthSummary(): PluginHealthSummary | undefined {
+function buildPluginHealthSummary(cfg: OpenClawConfig): PluginHealthSummary | undefined {
+  // Keep full internal diagnostics, but sanitize both load and service errors before public caching.
+  function projectError(
+    plugin: NonNullable<ReturnType<typeof getActivePluginRegistry>>["plugins"][number] | undefined,
+    error: PluginHealthErrorSummary,
+  ): PluginHealthErrorSummary {
+    return {
+      ...error,
+      activationSource: plugin?.activationSource,
+      activationReason: plugin?.activationReason,
+      error: truncateUtf16Safe(redactToolPayloadTextWithConfig(error.error, cfg.logging), 1_000),
+    };
+  }
   const registry = getActivePluginRegistry();
   const degradedPlugins = listActiveDegradedPlugins();
   const unavailable = degradedPlugins
@@ -212,7 +200,7 @@ function buildPluginHealthSummary(): PluginHealthSummary | undefined {
         ),
     )
     .map((plugin) =>
-      attachPluginActivation(plugin, {
+      projectError(plugin, {
         id: plugin.id,
         origin: plugin.origin,
         activated: plugin.activated === true,
@@ -222,7 +210,7 @@ function buildPluginHealthSummary(): PluginHealthSummary | undefined {
     );
   const serviceErrors = registry
     ? listPluginServiceHealthFailures(registry).map((failure) =>
-        attachPluginActivation(
+        projectError(
           registry.plugins.find((entry) => entry.id === failure.pluginId),
           {
             id: failure.pluginId,
@@ -371,7 +359,7 @@ async function buildHealthAccountRecord(params: {
     (params.accountId === params.defaultAccountId
       ? params.runtimeSnapshot?.channels[params.plugin.id]
       : undefined);
-  const unavailable = resolveUnavailableChannelAccountSnapshot({
+  const unavailable = resolveUnavailableChannelAccountSnapshot(params.cfg, {
     channelId: params.plugin.id,
     accountId: params.accountId,
     runtime: runtimeSnapshot,
@@ -577,6 +565,9 @@ export async function collectGatewayHealthSnapshot(params: {
   const channels: Record<string, ChannelHealthSummary> = {};
   const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
     includeSetupFallbackPlugins: false,
+    // Health reports admitted/configured channels; dormant credentials are migration evidence.
+    // Loading their checkers here can synchronously stall the Gateway after hello.
+    includePersistedAuthState: false,
   });
   const channelOrder = plugins.map((plugin) => plugin.id);
   const channelLabels: Record<string, string> = {};
@@ -673,7 +664,7 @@ export async function collectGatewayHealthSnapshot(params: {
     }
   }
 
-  const pluginHealth = buildPluginHealthSummary();
+  const pluginHealth = buildPluginHealthSummary(cfg);
   const contextEngineHealth = buildContextEngineHealthSummary();
   const deliveryQueueHealth = buildDeliveryQueueHealthSummary();
   return {

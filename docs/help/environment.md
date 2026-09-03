@@ -174,6 +174,8 @@ failures can affect OpenClaw startup. Other shells use noninteractive login star
 This interactive Bash mode is limited to explicit shell env imports; automatic executable PATH
 discovery during ordinary Gateway commands remains noninteractive.
 
+Successful probes are cached. If a probe fails, the next shell environment or PATH lookup tries again.
+
 ## Exec shell snapshots
 
 On non-Windows Gateway hosts, bash and zsh `exec` commands use a startup snapshot by default.

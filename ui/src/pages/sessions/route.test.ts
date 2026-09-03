@@ -51,7 +51,11 @@ async function loadSessionsRoute(options: {
   expect(refreshList).toHaveBeenCalledWith({ ...options.expectedQuery, force: true });
   expect(listSnapshot).toHaveBeenLastCalledWith(options.expectedQuery);
   expect(list).not.toHaveBeenCalled();
-  expect(data).toMatchObject({ result, loading: false, error: null });
+  expect(snapshot).toMatchObject({ result, loading: false, error: null });
+  expect(data).toEqual({
+    expandedSessionKey: options.expectedQuery.search ?? null,
+    statusFilter: options.expectedQuery.archivedFilter,
+  });
 }
 
 describe("sessions route", () => {

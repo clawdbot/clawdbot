@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentConfig } from "../../agents/agent-scope-config.js";
+import { resolveAgentConfig, resolveAgentRunCwd } from "../../agents/agent-scope-config.js";
 import {
   hasLegacyAutoFallbackWithoutOrigin,
   hasSessionAutoModelFallbackProvenance,
@@ -351,6 +351,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
   if (queuedToolsAllow && queuedToolIntersections) {
     attachToolAllowlistIntersection(queuedToolsAllow, queuedToolIntersections);
   }
+  const admittedSessionSettings = opts?.admittedSessionSettings;
   const followupRun = {
     prompt: queuedBody,
     transcriptPrompt: transcriptCommandBody,
@@ -435,11 +436,16 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       approvalReviewerDeviceId: normalizeOptionalString(ctx.ApprovalReviewerDeviceId),
       sessionFile: preparedSessionState.sessionFile,
       workspaceDir,
-      cwd: normalizeOptionalString(state.sessionEntry?.spawnedCwd),
-      permissionMode: preparedSessionState.sessionEntry?.permissionMode,
+      cwd:
+        normalizeOptionalString(state.sessionEntry?.spawnedCwd) ?? resolveAgentRunCwd(cfg, agentId),
+      permissionMode: admittedSessionSettings
+        ? admittedSessionSettings.permissionMode
+        : preparedSessionState.sessionEntry?.permissionMode,
       sessionRoot: normalizeOptionalString(preparedSessionState.sessionEntry?.sessionRoot),
       config: cfg,
-      toolOverrides: preparedSessionState.sessionEntry?.toolOverrides,
+      toolOverrides: admittedSessionSettings
+        ? admittedSessionSettings.toolOverrides
+        : preparedSessionState.sessionEntry?.toolOverrides,
       skillsSnapshot,
       provider,
       model,
@@ -514,6 +520,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
             skillWorkshopProposalRevision: { ...opts.skillWorkshopProposalRevision },
           }
         : {}),
+      ...(opts?.skillLibraryAuthoring ? { skillLibraryAuthoring: opts.skillLibraryAuthoring } : {}),
       ...(!useFastReplyRuntime &&
       isReasoningTagProvider(provider, { config: cfg, workspaceDir, modelId: model })
         ? { enforceFinalTag: true }

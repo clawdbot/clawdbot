@@ -14,6 +14,8 @@ import {
   resolveSqliteScope,
   runExclusiveSqliteSessionWrite,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { withInstallationTarget } from "../infra/installation-target-context.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
   createUserTurnTranscriptRecorder,
   type UserTurnTranscriptRecorder,
@@ -83,6 +85,7 @@ const state = vi.hoisted(() => ({
   gatewayCallMock: vi.fn(),
   persistCliTurnTranscriptMock: vi.fn(),
   persistAcpTurnTranscriptMock: vi.fn(),
+  resolveAcpLifecycleEndFieldsMock: vi.fn(),
   appendExactAssistantMessageMock: vi.fn(),
   runCliTurnCompactionLifecycleMock: vi.fn(),
   runMemoryFlushIfNeededMock: vi.fn(
@@ -133,7 +136,6 @@ const state = vi.hoisted(() => ({
   resolveSupportedThinkingLevelMock: vi.fn(({ level }: { level?: string }) => level),
   resolveThinkingDefaultMock: vi.fn((_args: unknown) => "low"),
   loadManifestModelCatalogMock: vi.fn((): ModelCatalogSnapshot["entries"] => []),
-  manifestMetadataSnapshot: { plugins: [] },
   resolvePluginMetadataSnapshotMock: vi.fn(),
   listSkillCommandsForWorkspaceMock: vi.fn((_params: unknown) => []),
   loadProviderScopedThinkingCatalogMock: vi.fn(
@@ -164,6 +166,8 @@ const state = vi.hoisted(() => ({
   trajectoryRecorderParamsMock: vi.fn(),
   enqueueExecutionIdentityContextAtAdmissionMock: vi.fn(),
 }));
+
+const manifestMetadataSnapshot = createPluginMetadataSnapshotFixture();
 
 vi.mock("../sessions/session-diff-baseline.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../sessions/session-diff-baseline.js")>();
@@ -204,6 +208,8 @@ vi.mock("./command/attempt-execution.runtime.js", () => ({
   emitAcpRuntimeEvent: (...args: unknown[]) => state.emitAcpRuntimeEventMock(...args),
   persistCliTurnTranscript: (...args: unknown[]) => state.persistCliTurnTranscriptMock(...args),
   persistAcpTurnTranscript: (...args: unknown[]) => state.persistAcpTurnTranscriptMock(...args),
+  resolveAcpLifecycleEndFields: (...args: unknown[]) =>
+    state.resolveAcpLifecycleEndFieldsMock(...args),
   persistSessionEntry: vi.fn(),
   prependInternalEventContext: (body: string) => body,
   resolveCliTranscriptReplyText: (result: { payloads?: Array<{ text?: string }> }) =>
@@ -406,11 +412,16 @@ vi.mock("./agent-runtime-config.js", () => {
   };
 });
 
-vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
-  isPluginMetadataSnapshotCompatible: () => false,
-  resolvePluginMetadataSnapshot: (...args: unknown[]) =>
-    state.resolvePluginMetadataSnapshotMock(...args),
-}));
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
+  const { rebasePluginMetadataSnapshotManifestRegistry } =
+    await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>();
+  return {
+    isPluginMetadataSnapshotCompatible: () => false,
+    rebasePluginMetadataSnapshotManifestRegistry,
+    resolvePluginMetadataSnapshot: (...args: unknown[]) =>
+      state.resolvePluginMetadataSnapshotMock(...args),
+  };
+});
 
 vi.mock("../skills/discovery/chat-commands.runtime.js", () => ({
   expandExplicitSkillReferences: ({ text }: { text: string }) => ({ body: text, skills: [] }),
@@ -1021,7 +1032,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.resolveThinkingDefaultMock.mockReturnValue("low");
     state.resolveAgentSkillsFilterMock.mockReturnValue(undefined);
     state.loadManifestModelCatalogMock.mockReturnValue([]);
-    state.resolvePluginMetadataSnapshotMock.mockReturnValue(state.manifestMetadataSnapshot);
+    state.resolvePluginMetadataSnapshotMock.mockReturnValue(manifestMetadataSnapshot);
     state.loadProviderScopedThinkingCatalogMock.mockReset().mockResolvedValue(undefined);
     state.loadFullModelCatalogMock.mockClear();
     state.loadPreparedModelCatalogSnapshotMock.mockResolvedValue({
@@ -1089,6 +1100,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         sessionEntry: params.sessionEntry,
       }),
     );
+    state.resolveAcpLifecycleEndFieldsMock.mockReset().mockReturnValue({});
     state.appendExactAssistantMessageMock.mockReset().mockResolvedValue({
       ok: true,
       target: {
@@ -1206,7 +1218,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
   it("uses Gateway command metadata without resolving the agent workspace", async () => {
     const pluginGeneration = {
-      pluginMetadataSnapshot: state.manifestMetadataSnapshot,
+      pluginMetadataSnapshot: manifestMetadataSnapshot,
     } as never;
 
     const prepared = await prepareAgentCommandExecution(
@@ -1215,10 +1227,10 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       { config: {}, pluginGeneration },
     );
 
-    expect(prepared.manifestMetadataSnapshot).toBe(state.manifestMetadataSnapshot);
+    expect(prepared.manifestMetadataSnapshot).toBe(manifestMetadataSnapshot);
     expect(prepared.commandRuntimeContext?.pluginGeneration).toBe(pluginGeneration);
     expect(state.listSkillCommandsForWorkspaceMock).toHaveBeenCalledWith(
-      expect.objectContaining({ pluginMetadataSnapshot: state.manifestMetadataSnapshot }),
+      expect.objectContaining({ pluginMetadataSnapshot: manifestMetadataSnapshot }),
     );
     expect(state.resolvePluginMetadataSnapshotMock).not.toHaveBeenCalled();
   });
@@ -1305,6 +1317,26 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         ingress: { kind: "system", boundary: "gateway.boot", state: "present" },
       }),
       expect.objectContaining({ enabled: true }),
+    );
+  });
+
+  it("applies the configured run cwd to ordinary (non-ACP) command sessions", async () => {
+    state.runtimeConfigMock = {
+      ...state.defaultRuntimeConfig,
+      agents: {
+        ...state.defaultRuntimeConfig.agents,
+        defaults: { ...state.defaultRuntimeConfig.agents.defaults, cwd: "/tmp/task-repo" },
+      },
+    };
+    // Ordinary sessions resolve to a truthy { kind: "none" }; only a real ACP
+    // placement may keep the configured cwd away from the run.
+    state.acpResolveSessionMock.mockReturnValue({ kind: "none" });
+    setupAdmittedSuccessfulAttempt();
+
+    await runBasicAgentCommand();
+
+    expect(state.runAgentAttemptMock).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: "/tmp/task-repo", workspaceDir: "/tmp/workspace" }),
     );
   });
 
@@ -4176,7 +4208,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     if (allowlisted) {
       expect(state.loadManifestModelCatalogMock).toHaveBeenCalledTimes(1);
       expect(state.loadManifestModelCatalogMock).toHaveBeenCalledWith(
-        expect.objectContaining({ metadataSnapshot: state.manifestMetadataSnapshot }),
+        expect.objectContaining({ metadataSnapshot: manifestMetadataSnapshot }),
       );
     }
     const thinkingArgs = requireRecord(
@@ -5087,7 +5119,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
           data: expect.objectContaining({
             phase: "error",
             error: "All fallback candidates ended incomplete",
-            fallbackExhaustedFailure: true,
+            executionSettled: true,
           }),
         }),
       ]),
@@ -5150,6 +5182,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
           data: expect.objectContaining({
             phase: "error",
             error: "Command may have changed state",
+            executionSettled: true,
             replayInvalid: true,
           }),
         }),
@@ -5240,6 +5273,24 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(transcriptParams.transcriptBody).toContain("A background task completed.");
     expect(transcriptParams.transcriptBody).not.toContain(INTERNAL_RUNTIME_CONTEXT_BEGIN);
     expect(transcriptParams.transcriptBody).not.toContain(INTERNAL_RUNTIME_CONTEXT_END);
+  });
+
+  it("refuses a local installation target only when dispatching an ACP turn", async () => {
+    setupAcpSession();
+    await expect(
+      withInstallationTarget(
+        {
+          stateDir: "/fixture/diagnosed",
+          configPath: "/fixture/custom.json",
+          defaultWorkspaceDir: "/fixture/default-workspace",
+        },
+        runBasicAgentCommand,
+      ),
+    ).rejects.toThrow("saved prompt");
+    expect(state.acpRunTurnMock).not.toHaveBeenCalled();
+    expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
+    await runBasicAgentCommand();
+    expect(state.acpRunTurnMock).toHaveBeenCalledOnce();
   });
 
   it("marks ACP execution start before prompt submission", async () => {
@@ -5447,6 +5498,11 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
   it("preserves ACP cancelled results without a stop reason", async () => {
     setupAcpSession();
+    state.resolveAcpLifecycleEndFieldsMock.mockReturnValueOnce({
+      aborted: true,
+      stopReason: "stop",
+      status: "cancelled",
+    });
     state.acpRunTurnMock.mockImplementationOnce(async (params: unknown) => {
       const onEvent = (params as { onEvent?: (event: unknown) => void }).onEvent;
       onEvent?.({ type: "done", status: "cancelled" });
@@ -5458,10 +5514,25 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
 
     expect(state.emitAcpLifecycleEndMock).toHaveBeenCalledWith(
-      expect.objectContaining({ resultStatus: "cancelled", stopReason: undefined }),
+      expect.objectContaining({
+        endFields: { aborted: true, stopReason: "stop", status: "cancelled" },
+      }),
     );
     expect(state.buildAcpResultMock).toHaveBeenCalledWith(
       expect.objectContaining({ resultStatus: "cancelled", stopReason: undefined }),
+    );
+    const signal = requireRecord(mockCallArg(state.acpRunTurnMock), "ACP turn").signal;
+    expect(signal).toHaveProperty("aborted", false);
+    expect(mockCallArg(state.resolveAcpLifecycleEndFieldsMock)).toBe(signal);
+    expect(state.resolveAcpLifecycleEndFieldsMock).toHaveBeenCalledWith(
+      signal,
+      undefined,
+      "cancelled",
+    );
+    expect(state.persistAcpTurnTranscriptMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        terminalOutcome: expect.objectContaining({ reason: "cancelled", status: "error" }),
+      }),
     );
   });
 });

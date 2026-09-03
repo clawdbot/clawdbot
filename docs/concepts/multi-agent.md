@@ -234,6 +234,22 @@ Bindings are deterministic and most-specific wins. See [Channel routing](/channe
 
 For existing multi-agent configs, `openclaw doctor --fix` materializes legacy ambient default routing into channel-wide bindings plus explicit heartbeat, Custodian, and Talk targets. Single-agent configs are unchanged.
 
+For a multi-agent roster defined directly in the main config file without a
+legacy `default: true` marker, Doctor adds `agents.ownership: "explicit"` for
+both keyed `agents.entries` and older `agents.list` rosters, including with
+`--fix --non-interactive`. Existing bindings and per-surface owners remain
+unchanged. If an account has no fallback route but its matchable narrower bindings
+all explicitly name one configured agent, Doctor adds an account-scoped binding for that
+agent. It does not borrow ownership from another account or channel, choose
+between conflicting owners, or assign other unowned surfaces.
+
+When migrating a legacy `agents.list` roster without a default marker, Doctor
+also pins the first agent's inherited workspace to `agents.entries.<id>.workspace`. Its customized instructions
+and historical `memory/` notes remain in their original directory. Explicit
+workspaces stay authoritative. If an earlier upgrade already left two edited
+workspaces, select the intended per-agent workspace and reconcile their contents
+from your backups; Doctor does not merge directories.
+
 ## Multiple accounts / phone numbers
 
 Channels that support multiple accounts (e.g. WhatsApp) use `accountId` to identify each login. Each `accountId` routes to its own agent, so one server can host multiple phone numbers without mixing sessions.

@@ -75,6 +75,11 @@ export default { id: "${id}", register(api) {
   const builtDir = path.join(root, "dist", "extensions", id);
   mkdirSafe(builtDir);
   fs.writeFileSync(path.join(builtDir, "index.js"), body("built"));
+  // Artifact selection follows the entry format declared by emitted package metadata.
+  fs.writeFileSync(
+    path.join(builtDir, "package.json"),
+    JSON.stringify({ openclaw: { extensions: ["./index.js"] } }),
+  );
   const seed = writePlugin({
     id: "fixture-seed",
     dir: path.join(root, "extensions", "fixture-seed"),

@@ -281,9 +281,11 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     }
 
     private func registerBackgroundWakeRefreshTask() {
+        // The launch handler inherits this delegate's main-actor isolation, so it must run on
+        // the main queue; a nil queue would invoke it on the scheduler's background queue.
         BGTaskScheduler.shared.register(
             forTaskWithIdentifier: Self.wakeRefreshTaskIdentifier,
-            using: nil)
+            using: .main)
         { [weak self] task in
             guard let refreshTask = task as? BGAppRefreshTask else {
                 task.setTaskCompleted(success: false)
@@ -501,14 +503,17 @@ enum WatchPromptNotificationBridge {
         invokeID: String,
         params: OpenClawWatchNotifyParams,
         gatewayStableID: String?,
-        sendResult: WatchNotificationSendResult) async
+        sendResult: WatchNotificationSendResult,
+        notificationCenter: NotificationCentering) async
     {
         guard sendResult.queuedForDelivery || !sendResult.deliveredImmediately else { return }
 
         let title = params.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let body = params.body.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty || !body.isEmpty else { return }
-        guard await self.isNotificationAuthorizationAllowed() else { return }
+        guard await self.isNotificationAuthorizationAllowed(notificationCenter: notificationCenter),
+              !Task.isCancelled
+        else { return }
 
         let normalizedActions = (params.actions ?? []).compactMap { action -> OpenClawWatchAction? in
             let id = action.id.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -518,7 +523,6 @@ enum WatchPromptNotificationBridge {
         }
         let displayedActions = Array(normalizedActions.prefix(4))
 
-        let center = UNUserNotificationCenter.current()
         var categoryIdentifier = ""
         if !displayedActions.isEmpty {
             let categoryID = "\(categoryPrefix)\(invokeID)"
@@ -527,7 +531,7 @@ enum WatchPromptNotificationBridge {
                 actions: categoryActions(displayedActions),
                 intentIdentifiers: [],
                 options: [])
-            await upsertNotificationCategory(category, center: center)
+            await upsertNotificationCategory(category, center: .current())
             categoryIdentifier = categoryID
         }
 
@@ -580,7 +584,7 @@ enum WatchPromptNotificationBridge {
             identifier: "watch.prompt.\(invokeID)",
             content: content,
             trigger: nil)
-        try? await addNotificationRequest(request, center: center)
+        try? await notificationCenter.add(request)
     }
 
     static func actionIDKey(index: Int) -> String {
@@ -620,31 +624,15 @@ enum WatchPromptNotificationBridge {
         }
     }
 
-    private static func isNotificationAuthorizationAllowed() async -> Bool {
+    private static func isNotificationAuthorizationAllowed(
+        notificationCenter: NotificationCentering) async -> Bool
+    {
         guard NotificationServingPreference.isEnabled() else { return false }
-        let center = UNUserNotificationCenter.current()
-        let status = await notificationAuthorizationStatus(center: center)
-        return self.isAuthorizationStatusAllowed(status)
-    }
-
-    private static func isAuthorizationStatusAllowed(_ status: UNAuthorizationStatus) -> Bool {
-        switch status {
+        switch await notificationCenter.authorizationStatus() {
         case .authorized, .provisional, .ephemeral:
             return true
         case .denied, .notDetermined:
             return false
-        @unknown default:
-            return false
-        }
-    }
-
-    private static func notificationAuthorizationStatus(
-        center: UNUserNotificationCenter) async -> UNAuthorizationStatus
-    {
-        await withCheckedContinuation { continuation in
-            center.getNotificationSettings { settings in
-                continuation.resume(returning: settings.authorizationStatus)
-            }
         }
     }
 
@@ -658,17 +646,6 @@ enum WatchPromptNotificationBridge {
                 updated.update(with: category)
                 center.setNotificationCategories(updated)
                 continuation.resume()
-            }
-        }
-    }
-
-    private static func addNotificationRequest(
-        _ request: UNNotificationRequest,
-        center: UNUserNotificationCenter) async throws
-    {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            center.add(request) { error in
-                ThrowingContinuationSupport.resumeVoid(continuation, error: error)
             }
         }
     }

@@ -133,6 +133,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
 }): Promise<EmbeddedAttemptPromptAssembly> {
   const { attempt } = input;
   const isSettledTurnFinalization = attempt.operation === "settled-tool-finalization";
+  const preserveExactPrompt = input.isRawModelRun || isSettledTurnFinalization;
   let systemPromptText = input.systemPromptText;
   const setSystemPrompt = (next: string) => {
     systemPromptText = next;
@@ -161,17 +162,16 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   const promptBuildMessages =
     pruneProcessedHistoryImages(input.activeSession.messages) ?? input.activeSession.messages;
   const promptEvent = { prompt: attempt.prompt, messages: promptBuildMessages };
-  const hookResult =
-    input.isRawModelRun || isSettledTurnFinalization
-      ? undefined
-      : await resolvePromptBuildHookResult({
-          config: attempt.config ?? getRuntimeConfig(),
-          prompt: attempt.prompt,
-          messages: promptBuildMessages,
-          hookCtx,
-          hookRunner: input.hookRunner,
-          bootstrapContextRunKind: attempt.bootstrapContextRunKind,
-        });
+  const hookResult = preserveExactPrompt
+    ? undefined
+    : await resolvePromptBuildHookResult({
+        config: attempt.config ?? getRuntimeConfig(),
+        prompt: attempt.prompt,
+        messages: promptBuildMessages,
+        hookCtx,
+        hookRunner: input.hookRunner,
+        bootstrapContextRunKind: attempt.bootstrapContextRunKind,
+      });
   const promptCacheToolNames = input.applyPromptBuildToolsAllow(hookResult?.toolsAllow);
   const hookRunner = input.hookRunner;
   const assertHostActive = resolveAdmittedRunActiveAssertion(
@@ -179,11 +179,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     attempt.abortSignal,
   );
   const authorizedHookResult =
-    input.isRawModelRun ||
-    isSettledTurnFinalization ||
-    !hookRunner ||
-    !attempt.toolAuthorityFingerprint ||
-    !assertHostActive
+    preserveExactPrompt || !hookRunner || !attempt.toolAuthorityFingerprint || !assertHostActive
       ? undefined
       : await hookRunner.runAuthorizedPromptBuild(promptEvent, hookCtx, {
           toolAuthorityFingerprint: attempt.toolAuthorityFingerprint,
@@ -359,7 +355,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   }
 
   let leasedSteering: EmbeddedAttemptSteeringLease | undefined;
-  if (attempt.sessionKey && !input.isRawModelRun && !isSettledTurnFinalization) {
+  if (attempt.sessionKey && !preserveExactPrompt) {
     const leaseId = `${attempt.runId}:agent-steering`;
     const leased = leasePendingAgentSteeringItems({
       requesterSessionKey: attempt.sessionKey,
@@ -392,14 +388,21 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
 
   const promptForModelBeforeRuntimeContextSplit = effectivePrompt;
   const promptForRuntimeContextBeforeAnnotation = promptForRuntimeContextSplit;
-  if (!input.isRawModelRun && !isSettledTurnFinalization) {
+  if (!preserveExactPrompt) {
     promptForRuntimeContextSplit = annotateInterSessionPromptText(
       promptForRuntimeContextSplit,
       attempt.inputProvenance,
     );
   }
-  const transcriptLeafId =
-    (input.sessionManager.getLeafEntry() as { id?: string } | null | undefined)?.id ?? null;
+  const currentUserAdmission =
+    !preserveExactPrompt && !attempt.skipPreparedUserTurnMessage
+      ? attempt.userTurnTranscriptRecorder?.getAdmissionReceipt()
+      : undefined;
+  // Preparation can hide the current runtime message while preserving its durable leaf.
+  // Pin BTW to that exact admission's parent; null intentionally means no prior history.
+  const transcriptLeafId = currentUserAdmission
+    ? currentUserAdmission.effectiveParentId
+    : input.sessionManager.getLeafId();
   const heartbeatSummary =
     !isSettledTurnFinalization && attempt.config && input.sessionAgentId
       ? resolveHeartbeatSummaryForAgent(attempt.config, input.sessionAgentId)
@@ -476,6 +479,7 @@ type EmbeddedAttemptPromptContext = {
 };
 
 export function prepareEmbeddedAttemptPromptContext(input: {
+  appendOnlyRuntimeContext?: boolean;
   attempt: PromptContextAttempt;
   boundaryTimezone?: string;
   includeBoundaryTimestamp: boolean;
@@ -631,6 +635,7 @@ export function prepareEmbeddedAttemptPromptContext(input: {
     ? [...sessionMessages, runtimeContextMessageForCurrentTurn]
     : sessionMessages;
   const hookMessagesForCurrentPrompt = normalizeMessagesForCurrentPromptBoundary({
+    appendOnlyRuntimeContext: input.appendOnlyRuntimeContext,
     messages: messagesForCurrentPrompt,
     prompt: promptForModel,
     ...(input.boundaryTimezone ? { timezone: input.boundaryTimezone } : {}),
@@ -652,6 +657,7 @@ export function prepareEmbeddedAttemptPromptContext(input: {
     };
   }
   const llmBoundaryPromptForPrecheck = normalizeCurrentPromptTextForLlmBoundary({
+    appendOnlyRuntimeContext: input.appendOnlyRuntimeContext,
     prompt: promptForModel,
     ...(input.boundaryTimezone ? { timezone: input.boundaryTimezone } : {}),
     ...(input.includeBoundaryTimestamp ? {} : { includeTimestamp: false }),

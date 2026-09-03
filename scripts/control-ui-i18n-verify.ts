@@ -5,15 +5,13 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import * as ts from "typescript";
 import {
-  loadControlUiTranslationMemory,
-  loadControlUiLocaleCatalog,
   loadControlUiSourceCatalog,
+  loadControlUiTranslationMemory,
   materializeControlUiLocaleCatalog,
   readControlUiSourceCatalog,
 } from "./lib/control-ui-i18n-catalog.ts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
 import { syncControlUiRawCopyBaseline } from "./lib/control-ui-i18n-raw-copy.ts";
-import type { TranslationMap } from "./lib/control-ui-i18n-sync-plan.ts";
 import { collectSourceFileContents } from "./lib/source-file-scan-cache.mts";
 
 export type CatalogFallbackBaseline = {
@@ -23,16 +21,14 @@ export type CatalogFallbackBaseline = {
 };
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const LOCALES_DIR = path.join(ROOT, "ui", "src", "i18n", "locales");
 const I18N_ASSETS_DIR = path.join(ROOT, "ui", "src", "i18n", ".i18n");
-const SOURCE_LOCALE_PATH = path.join(LOCALES_DIR, "en.ts");
-const ACTIVITY_SOURCE_LOCALE_PATH = path.join(LOCALES_DIR, "en-activity.ts");
-const SESSION_PLACEMENT_SOURCE_LOCALE_PATH = path.join(LOCALES_DIR, "en-session-placement.ts");
-const PLUGIN_CONSENT_SOURCE_LOCALE_PATH = path.join(LOCALES_DIR, "en-plugin-consent.ts");
 const FALLBACK_BASELINE_PATH = path.join(I18N_ASSETS_DIR, "catalog-fallbacks.json");
 const FALLBACK_BASELINE_VERSION = 1;
 const CONTROL_UI_TEST_FILE_PATTERN = /\.(?:test|browser\.test|node\.test)\.tsx?$/u;
-
+const AUTOMATIONS_FEATURE_KEYS =
+  `sessionsView.showCronSessions sessionsView.subagentPrefix sessionsView.automationPrefix agents.cronPanel.schedulerSubtitle agents.cronPanel.agentJobsTitle configForm.sections.cron.label configView.sections.cron subtitles.tasks subtitles.automation memoryPage.dreaming.intro tasksPage.runtime.cron attention.cronFailed attention.cronOverdue palette.items.scheduled`.split(
+    " ",
+  );
 function compareStringArrays(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
@@ -46,24 +42,6 @@ export function formatControlUiCatalogFallbackDriftError(): string {
     "control-ui catalog fallback baseline drift detected.",
     "Run `pnpm ui:i18n:sync` (included in `pnpm release:prep`) and commit the generated locale artifacts.",
   ].join("\n");
-}
-
-async function loadSourceLocaleMap(): Promise<TranslationMap> {
-  return await loadControlUiSourceCatalog(
-    SOURCE_LOCALE_PATH,
-    ACTIVITY_SOURCE_LOCALE_PATH,
-    SESSION_PLACEMENT_SOURCE_LOCALE_PATH,
-    PLUGIN_CONSENT_SOURCE_LOCALE_PATH,
-  );
-}
-
-async function readSourceLocaleRaw(): Promise<string> {
-  return await readControlUiSourceCatalog(
-    SOURCE_LOCALE_PATH,
-    ACTIVITY_SOURCE_LOCALE_PATH,
-    SESSION_PLACEMENT_SOURCE_LOCALE_PATH,
-    PLUGIN_CONSENT_SOURCE_LOCALE_PATH,
-  );
 }
 
 function extractPlaceholders(text: string): string[] {
@@ -215,8 +193,8 @@ async function buildCatalogFallbackBaseline(
     allowCatalogDrift?: boolean;
   } = {},
 ): Promise<CatalogFallbackBaseline> {
-  const sourceRaw = await readSourceLocaleRaw();
-  const sourceMap = await loadSourceLocaleMap();
+  const sourceRaw = await readControlUiSourceCatalog();
+  const sourceMap = loadControlUiSourceCatalog();
   const sourceFlat = flattenControlUiCatalog(sourceMap, "en");
   const localeFlats = new Map<string, Map<string, string>>();
   for (const entry of CONTROL_UI_LOCALE_ENTRIES) {
@@ -224,11 +202,19 @@ async function buildCatalogFallbackBaseline(
     if (!existsSync(memoryPath)) {
       throw new Error(`${toRepoPath(memoryPath)} does not contain ${entry.locale} translations`);
     }
+    // Match the source + translation-memory materialization served by the runtime Vite module.
     const localeMap = materializeControlUiLocaleCatalog(
       sourceFlat,
       loadControlUiTranslationMemory(memoryPath),
     );
-    localeFlats.set(entry.locale, flattenControlUiCatalog(localeMap, entry.locale));
+    const localeFlat = flattenControlUiCatalog(localeMap, entry.locale);
+    const invalid = AUTOMATIONS_FEATURE_KEYS.slice(1, 3).filter((key) =>
+      /\bcron\b/i.test(localeFlat.get(key) ?? ""),
+    );
+    if (invalid.length > 0) {
+      throw new Error(`${entry.locale}: ${invalid.join(", ")}`);
+    }
+    localeFlats.set(entry.locale, localeFlat);
   }
 
   const analysis = analyzeControlUiCatalogs(sourceFlat, localeFlats);
@@ -267,8 +253,13 @@ function printCatalogFallbackSummary(baseline: CatalogFallbackBaseline) {
 }
 
 async function verifyControlUiSourceCatalogShape() {
-  const sourceMap = await loadSourceLocaleMap();
-  const sourceFlat = flattenControlUiCatalog(sourceMap, "en");
+  const sourceFlat = flattenControlUiCatalog(loadControlUiSourceCatalog(), "en");
+  const invalidRenamedValues = AUTOMATIONS_FEATURE_KEYS.filter((key) =>
+    /\bcron\b/i.test(sourceFlat.get(key) ?? "cron"),
+  );
+  if (invalidRenamedValues.length > 0) {
+    throw new Error(`automations terminology drift: ${invalidRenamedValues.join(", ")}`);
+  }
   const sourceFiles = (
     await collectSourceFileContents({
       ignoredDirNames: new Set(["test-helpers"]),
@@ -317,8 +308,7 @@ export async function verifyRuntimeLocaleConfig() {
     );
   }
 
-  const enMap = (await loadControlUiLocaleCatalog(SOURCE_LOCALE_PATH, "en")) ?? {};
-  const languageMap = enMap.languages;
+  const languageMap = loadControlUiSourceCatalog().languages;
   const languageKeys =
     languageMap && typeof languageMap === "object"
       ? Object.keys(languageMap).toSorted((left, right) => left.localeCompare(right))

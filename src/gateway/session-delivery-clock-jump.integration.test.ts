@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getDeliveryQueueEntryStatus } from "../infra/delivery-queue-sqlite.js";
 import { scheduleSessionDelivery } from "../infra/session-delivery-queue-runtime.js";
-import { testing } from "../infra/session-delivery-queue-runtime.test-support.js";
 import {
   enqueueClaimedSessionDelivery,
   loadPendingSessionDeliveries,
@@ -84,7 +83,6 @@ async function closeProofProvider(server: http.Server): Promise<void> {
 }
 
 afterEach(() => {
-  testing.reset();
   resetGatewayTestState();
   vi.restoreAllMocks();
 });
@@ -101,6 +99,7 @@ describe("session delivery clock-jump integration", () => {
       });
       let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
       let providerServer: http.Server | undefined;
+      let deliveryId = "";
       const providerRequests: string[] = [];
 
       try {
@@ -161,6 +160,7 @@ describe("session delivery clock-jump integration", () => {
           60_000,
         );
 
+        deliveryId = id;
         gateway = await startGatewayWithClient({
           cfg,
           configPath,
@@ -200,6 +200,7 @@ describe("session delivery clock-jump integration", () => {
               await disconnectGatewayClient(gateway.client);
             } finally {
               await gateway.server.close({ reason: "session delivery clock-jump proof complete" });
+              await expect(scheduleSessionDelivery(deliveryId)).resolves.toBe(false);
             }
           }
         } finally {

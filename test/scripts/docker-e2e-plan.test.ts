@@ -658,6 +658,16 @@ describe("scripts/lib/docker-e2e-plan", () => {
         weight: 3,
       },
       {
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:skill-install",
+        imageKind: "bare",
+        live: false,
+        name: "skill-install",
+        resources: ["docker", "npm"],
+        stateScenario: "empty",
+        timeoutMs: 600_000,
+        weight: 2,
+      },
+      {
         command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-channel-switch",
         imageKind: "bare",
         live: false,
@@ -668,14 +678,17 @@ describe("scripts/lib/docker-e2e-plan", () => {
         weight: 3,
       },
       {
-        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:skill-install",
+        command: trustedUpgradeSurvivorCommand(
+          "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1",
+          'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s}"',
+        ),
         imageKind: "bare",
         live: false,
-        name: "skill-install",
+        name: "published-upgrade-survivor",
         resources: ["docker", "npm"],
-        stateScenario: "empty",
-        timeoutMs: 600_000,
-        weight: 2,
+        stateScenario: "upgrade-survivor",
+        timeoutMs: 1_500_000,
+        weight: 3,
       },
       {
         command: trustedUpgradeSurvivorCommand(),
@@ -688,14 +701,12 @@ describe("scripts/lib/docker-e2e-plan", () => {
         weight: 3,
       },
       {
-        command: trustedUpgradeSurvivorCommand(
-          "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1",
-          'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s}"',
-        ),
+        command:
+          "OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP=1 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-first-hop-compat",
         imageKind: "bare",
         live: false,
-        name: "published-upgrade-survivor",
-        resources: ["docker", "npm"],
+        name: "update-first-hop-compat",
+        resources: ["docker", "npm", "service"],
         stateScenario: "upgrade-survivor",
         timeoutMs: 1_500_000,
         weight: 3,
@@ -830,6 +841,27 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(missing).toStrictEqual([]);
   });
 
+  it.each(["minimum", "beta", "stable", "full"] as const)(
+    "partitions package/update core across three jobs without losing or duplicating %s proof",
+    (releaseProfile) => {
+      const options = { profile: RELEASE_PATH_PROFILE, releaseProfile };
+      const aggregate = planFor({ ...options, releaseChunk: "package-update-core" });
+      const partitions = [
+        "package-update-onboarding",
+        "package-update-migrations",
+        "package-update-self-upgrade",
+      ].map((releaseChunk) => planFor({ ...options, releaseChunk }));
+      const lanes = partitions.flatMap((partition) => partition.lanes);
+
+      expect(partitions.map((partition) => partition.lanes.length)).toEqual([5, 2, 3]);
+      expect(new Set(lanes.map((lane) => lane.name)).size).toBe(10);
+      expect(lanes.map(summarizeLane)).toEqual(aggregate.lanes.map(summarizeLane));
+      const complete = planFor({ ...options, planReleaseAll: true });
+      const packageNames = new Set(lanes.map((lane) => lane.name));
+      expect(complete.lanes.filter((lane) => packageNames.has(lane.name))).toEqual(lanes);
+    },
+  );
+
   it("keeps legacy release chunk names as aggregate aliases", () => {
     const packageUpdate = planFor({
       includeOpenWebUI: true,
@@ -863,10 +895,11 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "npm-onboard-discord-channel-agent",
       "npm-onboard-slack-channel-agent",
       "doctor-switch",
-      "update-channel-switch",
       "skill-install",
-      "upgrade-survivor",
+      "update-channel-switch",
       "published-upgrade-survivor",
+      "upgrade-survivor",
+      "update-first-hop-compat",
       "update-run-package-self-upgrade",
     ]);
     expect(pluginsRuntime.lanes.map((lane) => lane.name)).toEqual([

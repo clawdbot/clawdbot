@@ -6,9 +6,14 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { extractText } from "../../ui/src/lib/chat/message-extract.ts";
 import { buildChatMarkdown } from "../../ui/src/pages/chat/export.ts";
 import * as embeddedAgent from "../agents/embedded-agent.js";
+import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper.js";
+import { SessionManager } from "../agents/sessions/session-manager.js";
+import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
-import { clearConfigCache, getRuntimeConfig } from "../config/config.js";
+import { clearConfigCache, getRuntimeConfig, setRuntimeConfigSnapshot } from "../config/config.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
+  listSessionEntriesReadOnly,
   listSessionParticipantsReadOnly,
   loadTranscriptEventsSync,
 } from "../config/sessions/session-accessor.js";
@@ -45,11 +50,16 @@ import {
 
 const runEmbeddedAgent = vi.spyOn(embeddedAgent, "runEmbeddedAgent");
 installGatewayTestHooks({ scope: "suite" });
-const sessionKey = "agent:main:main";
+let agentId = "main";
+let sessionKey = "agent:main:main";
+let canonicalKey = sessionKey;
 let sessionId: string;
 const connectionId = "talk-consult-history-ui";
 const spoken = "SPOKEN_133855: Keep the literal labels Context: and Spoken style: in my note.";
 const answer = "ANSWER_133855: Both labels are preserved.";
+const consultAnswer = "INTERNAL_FINAL_133855: The note contains both requested labels.";
+const consultCommentary = "COMMENTARY_133855: Checking the saved note.";
+const consultToolResult = "TOOL_RESULT_133855: Context: and Spoken style: are present.";
 const args = {
   question: "GENERATED_QUESTION_133855: Check the note requested by the speaker.",
   context: "GENERATED_CONTEXT_133855: The call already has a finalized human transcript.",
@@ -75,6 +85,8 @@ afterAll(async () => {
   await harness.close();
 });
 beforeEach(async () => {
+  agentId = "main";
+  sessionKey = canonicalKey = "agent:main:main";
   sessionId = randomUUID();
   // Voice transcripts use the canonical agent store, not a custom chat-store locator.
   storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
@@ -171,7 +183,7 @@ afterEach(async () => {
 });
 
 function scope() {
-  return { agentId: "main", sessionKey, sessionId, storePath };
+  return { agentId, sessionKey: canonicalKey, sessionId, storePath };
 }
 async function rpc(method: string, params: Record<string, unknown>) {
   const respond = vi.fn<RespondFn>();
@@ -188,7 +200,7 @@ async function rpc(method: string, params: Record<string, unknown>) {
   return expectDefined(asOptionalRecord(result), "Gateway RPC result");
 }
 async function waitForDispatchEnd() {
-  await getSessionWorkAdmissionRelease({ scope: storePath, identities: [sessionKey, sessionId] });
+  await getSessionWorkAdmissionRelease({ scope: storePath, identities: [canonicalKey, sessionId] });
   expect(context.chatAbortControllers.size).toBe(0);
 }
 async function drainPublications() {
@@ -217,17 +229,6 @@ function expectNoGeneratedInput(messages: unknown[], surface: string) {
     )
     .toEqual([]);
 }
-function expectNoConsultUserFrames(surface: string) {
-  const messages = liveMessages();
-  // Browser Talk renders speech locally; the consult must not publish a second human turn.
-  expect
-    .soft(
-      messages.filter((message) => asOptionalRecord(message)?.role === "user"),
-      surface,
-    )
-    .toEqual([]);
-  expectNoGeneratedInput(messages, surface);
-}
 function expectVisibleSpeechOnly(messages: unknown[], surface: string, hasAnswer: boolean) {
   const users = messages.filter((message) => asOptionalRecord(message)?.role === "user");
   expect.soft(users.map(extractText), surface).toEqual([spoken]);
@@ -235,12 +236,20 @@ function expectVisibleSpeechOnly(messages: unknown[], surface: string, hasAnswer
   expect.soft(markdown, `${surface} Markdown`).toContain(spoken);
   expect.soft(markdown?.match(/^## You(?: \(|$)/gm), `${surface} human headings`).toHaveLength(1);
   expectNoGeneratedInput(messages, surface);
-  if (hasAnswer) {
-    expect.soft(markdown, `${surface} spoken answer`).toContain(answer);
-  }
+  expect
+    .soft(
+      messages.map(extractText).filter((text) => text === answer),
+      `${surface} spoken answer`,
+    )
+    .toHaveLength(hasAnswer ? 1 : 0);
+  expect
+    .soft(markdown?.split(answer).length, `${surface} spoken answer in Markdown`)
+    .toBe(hasAnswer ? 2 : 1);
+  expect.soft(JSON.stringify(messages), `${surface} internal final`).not.toContain(consultAnswer);
+  expect.soft(markdown, `${surface} internal final in Markdown`).not.toContain(consultAnswer);
 }
 async function historyMessages() {
-  const result = await rpc("chat.history", { sessionKey });
+  const result = await rpc("chat.history", { sessionKey: canonicalKey, agentId });
   expect(Array.isArray(result.messages)).toBe(true);
   return result.messages as unknown[];
 }
@@ -257,12 +266,109 @@ async function consult(question: string, callId: string) {
 
 async function startHeldConsult() {
   const ack = await consult("Keep this task running until released.", "held-task");
-  await modelStarted.promise;
+  await Promise.race([
+    modelStarted.promise,
+    getSessionWorkAdmissionRelease({ scope: storePath, identities: [canonicalKey, sessionId] }),
+  ]);
   const run = expectDefined(runEmbeddedAgent.mock.calls[0]?.[0], "held model invocation");
   const abortSignal = expectDefined(run.abortSignal, "admitted model cancellation signal");
   expect(abortSignal.aborted).toBe(false);
   return { ack, run, abortSignal };
 }
+
+describe("Browser Talk consult target handoff", () => {
+  it.each([
+    { name: "bare main", key: "main", expected: "agent:voice:main" },
+    { name: "new session", key: "main", fresh: true, expected: "agent:voice:main" },
+    { name: "custom main", key: "main", mainKey: "home", expected: "agent:voice:home" },
+    { name: "global", key: "main", global: true, expected: "global" },
+    { name: "scoped global", key: "agent:voice:main", global: true, expected: "global" },
+    { name: "fixed store", key: "main", fixed: true, expected: "agent:voice:main" },
+    { name: "explicit other agent", key: "agent:primary:chosen", expected: "agent:primary:chosen" },
+  ])(
+    "executes and cancels the exact $name target without changing voice identity",
+    async (entry) => {
+      await rpc("talk.client.close", { sessionKey, voiceSessionId });
+      voiceSessionId = undefined;
+      const previousConfig = getRuntimeConfig();
+      testState.sessionStorePath = undefined;
+      agentId = entry.key.startsWith("agent:primary:") ? "primary" : "voice";
+      sessionKey = entry.key;
+      canonicalKey = entry.expected;
+      storePath = entry.fixed
+        ? resolveOpenClawAgentSqlitePath({ agentId })
+        : resolveSessionStorePathCore(undefined, { agentId });
+      await writeSessionStore({
+        storePath,
+        agentId,
+        mainKey: entry.mainKey,
+        entries: entry.fresh
+          ? {}
+          : { [canonicalKey]: { sessionId, updatedAt: Date.now(), status: "done" } },
+      });
+      setRuntimeConfigSnapshot({
+        ...previousConfig,
+        agents: {
+          ownership: "explicit",
+          entries: { primary: {}, voice: {} },
+          defaults: {
+            ...previousConfig.agents?.defaults,
+            ...(entry.fixed ? { sessionStore: { agentId } } : {}),
+          },
+        },
+        talk: { agentId: "voice" },
+        session: {
+          ...(entry.mainKey ? { mainKey: entry.mainKey } : {}),
+          ...(entry.global ? { scope: "global" } : {}),
+          ...(entry.fixed ? { store: storePath } : {}),
+        },
+      });
+      await prepareGatewayReplyRuntimeForTest({ force: true });
+      voiceSessionId = createOrResumeClientVoiceSession({ agentId, sessionKey, origin: "client" });
+      if (!entry.fresh) {
+        await rpc("talk.client.transcript", {
+          sessionKey,
+          voiceSessionId,
+          entryId: "spoken-user",
+          role: "user",
+          text: spoken,
+        });
+      }
+      const { ack, run, abortSignal } = await startHeldConsult();
+      expect(run).toMatchObject({
+        agentId,
+        sessionKey: canonicalKey,
+        ...(!entry.fresh ? { sessionId } : {}),
+      });
+      if (entry.fresh) {
+        sessionId = run.sessionId;
+      }
+      expect(ack).toMatchObject({ agentId, agentSessionKey: canonicalKey });
+      expect(clientVoiceSessionTesting.readRecord(agentId, voiceSessionId)).toMatchObject({
+        sessionKey,
+        status: "open",
+        consultRunIds: [ack.runId],
+      });
+      expect(
+        listSessionEntriesReadOnly({ agentId, storePath }).map((row) => row.sessionKey),
+      ).toEqual([canonicalKey]);
+      expect(
+        await rpc("chat.abort", {
+          sessionKey: ack.agentSessionKey,
+          agentId: ack.agentId,
+          runId: ack.runId,
+        }),
+      ).toMatchObject({ aborted: true, runIds: [ack.runId] });
+      expect(abortSignal.aborted).toBe(true);
+      const history = await historyMessages();
+      if (entry.fresh) {
+        expectNoGeneratedInput(history, "new target history");
+      } else {
+        expectVisibleSpeechOnly(history, "canonical target history", false);
+      }
+    },
+  );
+});
 
 describe("Browser Talk literal consult commands", () => {
   it.each(["/stop", "stop"])("dispatches generated %j as literal model input", async (question) => {
@@ -321,16 +427,67 @@ describe("Browser Talk consult input custody", () => {
       tools: ["read", "web_search", "web_fetch", "x_search", "memory_search", "memory_get"],
     },
   ])(
-    "keeps $name consult scaffolding out of live, reloaded, and exported chat",
+    "keeps $name consult scaffolding out of chat and later context but in the raw archive",
     async ({ scopes, tools }) => {
       client.connect.scopes = scopes;
-      await rpc("talk.client.transcript", {
+      const completeModel = expectDefined(
+        runEmbeddedAgent.getMockImplementation(),
+        "held model implementation",
+      );
+      let modelReply = consultAnswer;
+      let modelMessages: Parameters<SessionManager["appendMessage"]>[0][] = [
+        Object.assign(
+          makeAgentAssistantMessage({
+            content: [{ type: "text", text: consultCommentary }],
+          }),
+          {
+            openclawStreamFallback: {
+              replacementText: consultCommentary,
+              source: "segment",
+              itemId: "consult-commentary",
+            },
+          },
+        ),
+        makeAgentAssistantMessage({
+          content: [
+            { type: "toolCall", id: "consult-read", name: "read", arguments: { path: "note.txt" } },
+          ],
+          stopReason: "toolUse",
+        }),
+        {
+          role: "toolResult",
+          toolCallId: "consult-read",
+          toolName: "read",
+          content: [{ type: "text", text: consultToolResult }],
+          isError: false,
+          timestamp: 0,
+        },
+        makeAgentAssistantMessage({ content: [{ type: "text", text: modelReply }] }),
+      ];
+      runEmbeddedAgent.mockImplementation(async (params) => {
+        params.onExecutionPhase?.({ phase: "model_call_started" });
+        const result = await completeModel(params);
+        params.abortSignal?.throwIfAborted();
+        const manager = guardSessionManager(SessionManager.open(scope()), {
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          runId: params.runId,
+          prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
+        });
+        for (const message of modelMessages) {
+          manager.appendMessage(message);
+        }
+        return { ...result, payloads: [{ text: modelReply }] };
+      });
+      const userTranscript = {
         sessionKey,
         voiceSessionId,
         entryId: "spoken-user",
         role: "user",
         text: spoken,
-      });
+      };
+      await rpc("talk.client.transcript", userTranscript);
+      await rpc("talk.client.transcript", userTranscript);
       await drainPublications();
       const participantsBeforeConsult =
         listSessionParticipantsReadOnly(scope()).get(sessionKey) ?? [];
@@ -355,7 +512,7 @@ describe("Browser Talk consult input custody", () => {
         expect(run.prompt).toContain(marker);
       }
       await drainPublications();
-      expectNoConsultUserFrames("before model completion");
+      expectVisibleSpeechOnly(liveMessages(), "before model completion", false);
       expectVisibleSpeechOnly(await historyMessages(), "model-held chat.history", false);
 
       releaseModel.resolve();
@@ -369,7 +526,7 @@ describe("Browser Talk consult input custody", () => {
         text: answer,
       });
       await drainPublications();
-      expectNoConsultUserFrames("live session.message");
+      expectVisibleSpeechOnly(liveMessages(), "live session.message", true);
       expectVisibleSpeechOnly(await historyMessages(), "chat.history", true);
 
       const storedMessages = loadTranscriptEventsSync(scope()).flatMap((event) => {
@@ -379,10 +536,27 @@ describe("Browser Talk consult input custody", () => {
       const generated = storedMessages.filter((message) =>
         extractText(message)?.includes(args.question),
       );
+      expect(
+        storedMessages.filter((message) => extractText(message) === consultAnswer),
+      ).toHaveLength(1);
+      expect(
+        storedMessages.find((message) => extractText(message) === consultCommentary),
+      ).not.toHaveProperty("display", false);
+      expect(
+        storedMessages.find((message) => extractText(message) === consultToolResult),
+      ).toMatchObject({
+        role: "toolResult",
+        toolCallId: "consult-read",
+      });
+      expect(
+        storedMessages.find((message) => extractText(message) === consultToolResult),
+      ).not.toHaveProperty("display", false);
+      expect((await historyMessages()).map(extractText)).toContain(consultCommentary);
       expect(generated).toHaveLength(1);
       expect.soft(generated[0]).toMatchObject({
         role: "user",
         display: false,
+        excludeFromContext: true,
         provenance: { kind: "internal_system" },
       });
       const metadata = asOptionalRecord(generated[0]?.["__openclaw"]);
@@ -399,7 +573,55 @@ describe("Browser Talk consult input custody", () => {
       expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
       clearSessionStoreCacheForTest();
       expectVisibleSpeechOnly(await historyMessages(), "reopened chat.history", true);
-      expect(loadTranscriptEventsSync(scope())).not.toEqual([]);
+      for (const manager of [
+        SessionManager.open(scope()),
+        SessionManager.openModelContext(scope()),
+      ]) {
+        const messages = manager.buildSessionContext().messages;
+        expectNoGeneratedInput(messages, "reopened model context");
+        expect(messages.map(extractText)).toEqual(
+          expect.arrayContaining([
+            spoken,
+            answer,
+            consultCommentary,
+            consultToolResult,
+            consultAnswer,
+          ]),
+        );
+        expect(messages).toContainEqual(
+          expect.objectContaining({
+            role: "assistant",
+            content: expect.arrayContaining([
+              expect.objectContaining({ type: "toolCall", id: "consult-read" }),
+            ]),
+          }),
+        );
+      }
+      expect(loadTranscriptEventsSync(scope())).toEqual(
+        expect.arrayContaining([expect.objectContaining({ message: generated[0] })]),
+      );
+
+      client.connect.scopes = ["operator.read", "operator.write", "operator.admin"];
+      const normalPrompt = "NORMAL_PROMPT_133855: What did you find?";
+      modelReply = "NORMAL_REPLY_133855: The saved note contains both labels.";
+      modelMessages = [
+        makeAgentAssistantMessage({ content: [{ type: "text", text: modelReply }] }),
+      ];
+      await rpc("chat.send", {
+        sessionKey,
+        message: normalPrompt,
+        idempotencyKey: `normal-after-consult-${sessionId}`,
+      });
+      await waitForDispatchEnd();
+      await drainPublications();
+      expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
+      for (const messages of [liveMessages(), await historyMessages()]) {
+        expect(messages.map(extractText).filter((text) => text === modelReply)).toEqual([
+          modelReply,
+        ]);
+        expect(messages.map(extractText)).toContain(normalPrompt);
+        expect(JSON.stringify(messages)).not.toContain(consultAnswer);
+      }
     },
   );
 });

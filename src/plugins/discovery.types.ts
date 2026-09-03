@@ -20,6 +20,8 @@ export type PluginCandidate = {
   origin: PluginOrigin;
   /** Retains explicit load-path precedence when physical aliases merge their provenance. */
   configSelected?: true;
+  /** An intentional source overlay must not execute its packaged peer. */
+  sourcePreferred?: true;
   format?: PluginFormat;
   bundleFormat?: PluginBundleFormat;
   workspaceDir?: string;

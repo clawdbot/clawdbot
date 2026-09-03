@@ -18,7 +18,7 @@ import {
 import { removePluginFromConfig } from "./uninstall-config.js";
 import { pruneManagedNpmPeerDependenciesAfterUninstall } from "./uninstall-managed-npm.js";
 import {
-  prepareConfigForPendingPluginDirectoryRemovalSet,
+  prepareConfigForDisabledPluginSet,
   recordPluginPackageUninstallPlan,
 } from "./uninstall-package-plan.js";
 import {
@@ -268,8 +268,8 @@ function createSingleNpmInstallConfig(installPath: string): OpenClawConfig {
   });
 }
 
-it("stages only runtime child entries while a package directory removal is pending", () => {
-  const staged = prepareConfigForPendingPluginDirectoryRemovalSet(
+it("disables only runtime child entries for a package uninstall", () => {
+  const staged = prepareConfigForDisabledPluginSet(
     {
       plugins: {
         entries: {
@@ -388,7 +388,11 @@ describe("planPluginUninstall package ownership", () => {
     expect(result.directoryRemoval).toBeNull();
     expect(result.config.plugins).toEqual({
       allow: ["other"],
-      entries: { other: { enabled: true } },
+      entries: {
+        other: { enabled: true },
+        "pack/one": { enabled: false },
+        "pack/two": { enabled: false },
+      },
     });
     expect(result.actions).toMatchObject({
       entry: true,
@@ -946,7 +950,9 @@ describe("uninstallPlugin", () => {
     });
 
     const successfulResult = expectSuccessfulUninstall(result);
-    expect(successfulResult.config.plugins).toBeUndefined();
+    expect(successfulResult.config.plugins?.entries).toEqual({
+      constructor: { enabled: false },
+    });
     expect(successfulResult.actions.entry).toBe(true);
     expect(successfulResult.actions.install).toBe(true);
   });
@@ -1028,6 +1034,11 @@ describe("uninstallPlugin", () => {
         directory: false,
       },
       expectedConfig: {
+        plugins: {
+          entries: {
+            "missing-channel-plugin": { enabled: false },
+          },
+        },
         channels: {
           discord: { enabled: true },
         },
@@ -1058,6 +1069,9 @@ describe("uninstallPlugin", () => {
       },
       expectedConfig: {
         plugins: {
+          entries: {
+            "missing-linked-plugin": { enabled: false },
+          },
           load: {
             paths: ["/keep/this/plugin"],
           },
@@ -1110,7 +1124,7 @@ describe("uninstallPlugin", () => {
     },
   );
 
-  it("removes config entries", async () => {
+  it("removes entry settings and keeps an explicit disabled tombstone", async () => {
     const config = createPluginConfig({
       entries: createSinglePluginEntries(),
       installs: {
@@ -1125,7 +1139,9 @@ describe("uninstallPlugin", () => {
     });
 
     const successfulResult = expectSuccessfulUninstall(result);
-    expect(successfulResult.config.plugins?.entries).toBeUndefined();
+    expect(successfulResult.config.plugins?.entries).toEqual({
+      "my-plugin": { enabled: false },
+    });
     expect(successfulResult.config.plugins?.installs).toBeUndefined();
     expect(successfulResult.actions.entry).toBe(true);
     expect(successfulResult.actions.install).toBe(true);
@@ -2121,7 +2137,9 @@ describe("uninstallPlugin", () => {
     });
 
     const successfulResult = expectSuccessfulUninstall(result);
-    expect(successfulResult.config.plugins).toBeUndefined();
+    expect(successfulResult.config.plugins?.entries).toEqual({
+      "missing-plugin": { enabled: false },
+    });
     expect(successfulResult.actions.entry).toBe(true);
     expect(successfulResult.actions.install).toBe(true);
     expect(successfulResult.actions.directory).toBe(false);

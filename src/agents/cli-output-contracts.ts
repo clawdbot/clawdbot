@@ -2,7 +2,9 @@ import type {
   CliBackendConfig,
   CliBackendJsonlUsage,
   CliBackendParseJsonlEvent,
+  CliBackendParseJsonlLifecycleEvent,
 } from "../plugins/cli-backend.types.js";
+import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
@@ -64,6 +66,8 @@ export type CliOutput = {
   toolMediaUrls?: string[];
   toolAudioAsVoice?: boolean;
   toolTrustedLocalMedia?: boolean;
+  /** Child sessions accepted by the turn-scoped loopback tool capture. */
+  acceptedSessionSpawns?: AcceptedSessionSpawn[];
   yielded?: true;
   yieldAcknowledgment?: string;
 };
@@ -92,6 +96,8 @@ export type CliThinkingProgress = {
   progressTokens: number;
 };
 
+export type CliCompactionDelta = { phase: "start" } | { phase: "end"; completed: boolean };
+
 /** Tool-call start event reconstructed from CLI stream output. */
 export type CliToolUseStartDelta = {
   toolCallId: string;
@@ -113,9 +119,11 @@ export type CliJsonlStreamingParserOptions = {
   backend: CliBackendConfig;
   providerId: string;
   parseJsonlEvent?: CliBackendParseJsonlEvent;
+  parseJsonlLifecycleEvent?: CliBackendParseJsonlLifecycleEvent;
   onAssistantDelta: (delta: CliStreamingDelta) => void;
   onThinkingDelta?: (delta: CliThinkingDelta) => void;
   onThinkingProgress?: (progress: CliThinkingProgress) => void;
+  onCompaction?: (delta: CliCompactionDelta) => void;
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
   onDisplayToolUseStart?: (delta: CliToolUseStartDelta) => void;

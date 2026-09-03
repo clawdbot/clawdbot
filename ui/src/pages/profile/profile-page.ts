@@ -29,6 +29,7 @@ import {
   renderLearnMoreLink,
   renderSettingsEmpty,
   renderSettingsGroup,
+  renderSettingsLoadingSkeleton,
   renderSettingsNavRow,
   renderSettingsPage,
   renderSettingsSection,
@@ -42,6 +43,7 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 import { processProfileAvatar, ProfileAvatarError } from "./avatar-processing.ts";
 import "../../styles/profile.css";
+import "../../features/github-connections/github-connections.ts";
 import { renderIdentitySection } from "./identity-section.ts";
 import { userProfileAvatarUrl } from "./profile-avatar-url.ts";
 
@@ -69,11 +71,7 @@ export class ProfilePage extends OpenClawLightDomElement {
   private canWrite = false;
   private heroAvatarAuthCandidates: string[] = [];
   private heroAvatarAuthReady = false;
-  private readonly heroAvatarLoader = new AuthenticatedAvatarRouteLoader(() => {
-    if (this.isConnected) {
-      this.requestUpdate();
-    }
-  });
+  private readonly heroAvatarLoader = new AuthenticatedAvatarRouteLoader(this);
   private identityRequestId = 0;
   private subscriptions: Array<() => void> = [];
 
@@ -93,7 +91,6 @@ export class ProfilePage extends OpenClawLightDomElement {
     }
     this.subscriptions = [];
     this.identityRequestId += 1;
-    this.heroAvatarLoader.reset();
     this.heroAvatarAuthCandidates = [];
     this.heroAvatarAuthReady = false;
     this.client = null;
@@ -368,20 +365,20 @@ export class ProfilePage extends OpenClawLightDomElement {
     if (!this.ownProfile) {
       // users.self is the idempotent gateway-owned profile ensure path. Retrying
       // keeps profile ids and authenticated email linkage authoritative server-side.
-      const emptyState = this.identityLoading
-        ? t("profilePage.identity.loading")
-        : this.identityError
-          ? this.identityError
-          : html`<div class="profile-identity-empty">
-              <span>${t("profilePage.identity.notSet")}</span>
-              <button type="button" class="btn btn--sm" @click=${() => void this.loadIdentity()}>
-                ${t("profilePage.identity.setIdentity")}
-              </button>
-            </div>`;
+      const emptyState = this.identityError
+        ? this.identityError
+        : html`<div class="profile-identity-empty">
+            <span>${t("profilePage.identity.notSet")}</span>
+            <button type="button" class="btn btn--sm" @click=${() => void this.loadIdentity()}>
+              ${t("profilePage.identity.setIdentity")}
+            </button>
+          </div>`;
       return html`<div id=${PROFILE_SETTINGS_TARGET_IDS.identity}>
         ${renderSettingsSection(
           { title: t("profilePage.identity.title") },
-          renderSettingsEmpty(emptyState),
+          this.identityLoading
+            ? renderSettingsLoadingSkeleton({ label: t("profilePage.identity.loading"), rows: 2 })
+            : renderSettingsEmpty(emptyState),
         )}
       </div>`;
     }
@@ -479,6 +476,7 @@ export class ProfilePage extends OpenClawLightDomElement {
     }
     return renderSettingsPage(html`
       ${this.renderHero()} ${this.renderIdentity()}
+      <openclaw-github-connections></openclaw-github-connections>
       ${renderSettingsGroup(
         renderSettingsNavRow({
           title: t("profilePage.usageStatistics"),

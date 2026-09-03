@@ -253,7 +253,10 @@ function collectDiscordTranscriptsAutoStartWarnings(cfg: OpenClawConfig): string
     ) {
       return [];
     }
-    const resolution = ownership.resolveAccountId({ cfg, source: entry });
+    const resolution = ownership.resolveAccountId({
+      cfg,
+      source: { providerId: entry.providerId, accountId: entry.accountId },
+    });
     if (resolution.ok) {
       return [];
     }

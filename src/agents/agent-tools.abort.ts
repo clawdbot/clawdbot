@@ -11,9 +11,10 @@ import {
   attachInternalToolExecutionPreparer,
   getInternalToolExecutionPreparer,
 } from "./runtime/internal-hooks.js";
+import { registerTrustedToolNoStartError } from "./tool-result-error.js";
 
 function throwAbortError(): never {
-  throw createAbortError("Aborted");
+  throw registerTrustedToolNoStartError(createAbortError("Aborted"));
 }
 
 /**

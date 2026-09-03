@@ -12,15 +12,18 @@ export type { ProtocolValidator } from "./protocol-validator.js";
 export * from "./schema/worker-inference.js";
 export * from "./schema/worker-computer.js";
 export * from "./schema/skill-history.js";
+export * from "./schema/skill-library.js";
 export * from "./schema/ui-command.js";
 export * from "./schema/board.js";
 export * from "./schema/progress-card.js";
 export {
   SessionCreatedActorSchema,
+  SessionEntryArchiveReasonSchema,
   SessionPermissionModeSchema,
   SessionOwnerSchema,
   SessionToolOverridesSchema,
   type SessionCreatedActor,
+  type SessionEntryArchiveReason,
   type SessionOwner,
   type SessionPermissionMode,
   type SessionRow,

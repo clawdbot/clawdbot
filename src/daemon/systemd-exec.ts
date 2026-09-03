@@ -315,8 +315,11 @@ export async function disableSystemdUserUnitForRemoval(
   throw new Error(`systemctl disable failed: ${detail || "unknown error"}`);
 }
 
-export async function reloadSystemdUserManager(env: GatewayServiceEnv): Promise<void> {
-  const result = await execSystemctlUser(env, ["daemon-reload"]);
+export async function reloadSystemdUserManager(
+  env: GatewayServiceEnv,
+  timeoutMs?: number,
+): Promise<void> {
+  const result = await execSystemctlUser(env, ["daemon-reload"], timeoutMs);
   if (result.code !== 0) {
     throw new Error(
       `systemctl daemon-reload failed: ${readSystemctlDetail(result) || "unknown error"}`,

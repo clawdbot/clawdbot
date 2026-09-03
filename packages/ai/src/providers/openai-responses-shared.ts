@@ -20,7 +20,8 @@ import {
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import { createOpenAIProviderAcceptanceHook } from "../transports/openai-transport-shared.js";
 import {
-  transportAbortError,
+  failTransportStream,
+  finalizeTransportStream,
   withProviderResponseHook,
 } from "../transports/transport-stream-shared.js";
 import type {
@@ -33,7 +34,6 @@ import type {
   Usage,
 } from "../types.js";
 import type { AssistantMessageEventStream } from "../utils/event-stream.js";
-import { projectProviderError } from "../utils/provider-error.js";
 import {
   createFirstStreamEventAbortController,
   getFirstStreamEventTimeoutHandler,
@@ -92,7 +92,7 @@ type ResponsesStreamClient = {
 
 type ResponsesLifecycleStreamOptions = Pick<
   StreamOptions,
-  "signal" | "timeoutMs" | "maxRetries" | "onPayload" | "onResponse" | "sessionId"
+  "signal" | "timeoutMs" | "onPayload" | "onResponse" | "sessionId"
 > &
   Pick<BaseOpenAIStreamOptions, "authProfileId" | "onCompactionRejected"> &
   FirstStreamEventInternalOptions;
@@ -236,7 +236,7 @@ function buildResponsesRequestOptions(
   return {
     ...(options?.signal ? { signal: options.signal } : {}),
     ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
-    maxRetries: options?.maxRetries ?? 0,
+    maxRetries: 0,
   };
 }
 
@@ -332,22 +332,15 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
       }),
     });
 
-    if (options?.signal?.aborted) {
-      throw transportAbortError(options.signal);
-    }
-
-    if (output.stopReason === "aborted" || output.stopReason === "error") {
-      throw new Error(output.errorMessage ?? "An unknown error occurred");
-    }
-
-    stream.push({ type: "done", reason: output.stopReason, message: output });
-    stream.end();
+    finalizeTransportStream({ stream, output, signal: options?.signal });
   } catch (error) {
-    cleanStreamingScratchBuffers(output);
-    const terminal = projectProviderError(error, options?.signal);
-    Object.assign(output, terminal);
-    stream.push({ type: "error", reason: terminal.stopReason, error: output });
-    stream.end();
+    failTransportStream({
+      stream,
+      output,
+      signal: options?.signal,
+      error,
+      cleanup: () => cleanStreamingScratchBuffers(output),
+    });
   } finally {
     firstEventAbort?.dispose();
   }

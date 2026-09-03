@@ -281,9 +281,11 @@ describe("discordOutbound", () => {
     });
   });
 
-  it("falls back to bot send when webhook send fails", async () => {
+  it("falls back to bot send when Discord rejects the webhook send", async () => {
     mockDiscordBoundThreadManager(hoisted);
-    hoisted.sendWebhookMessageDiscordMock.mockRejectedValueOnce(new Error("rate limited"));
+    hoisted.sendWebhookMessageDiscordMock.mockRejectedValueOnce(
+      Object.assign(new Error("rate limited"), { status: 429 }),
+    );
 
     const result = await discordOutbound.sendText?.({
       cfg: {},
