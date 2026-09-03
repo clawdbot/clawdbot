@@ -173,6 +173,49 @@ describe("createTerminalLaunchPolicy", () => {
     }
   });
 
+  it.each([false, true])(
+    "publishes shell changes only at hot commit with pending restart=%s",
+    (restartPending) => {
+      const initial: OpenClawConfig = {
+        gateway: { terminal: { enabled: true, shell: "/bin/old-shell" } },
+      };
+      const policy = createTerminalLaunchPolicy(initial);
+      const originalLaunch = policy.resolve();
+      if (restartPending) {
+        policy.prepareConfig(
+          { ...initial, gateway: { ...initial.gateway, port: 18790 } },
+          {
+            restartPending: true,
+          },
+        );
+      }
+      const nextConfig: OpenClawConfig = {
+        gateway: { terminal: { enabled: true, shell: "/bin/new-shell" } },
+      };
+      policy.prepareConfig(nextConfig, { restartPending: false });
+      expect(policy.resolve()).toMatchObject({ ok: true, plan: { shell: "/bin/old-shell" } });
+
+      policy.commitConfig();
+      expect(policy.resolve()).toMatchObject({ ok: true, plan: { shell: "/bin/new-shell" } });
+      expect(originalLaunch).toMatchObject({ ok: true, plan: { shell: "/bin/old-shell" } });
+
+      policy.prepareConfig(
+        { gateway: { terminal: { shell: "/bin/rejected-shell" } } },
+        {
+          restartPending: false,
+        },
+      );
+      policy.acceptConfig({ retireRejectedRestart: false });
+      policy.commitConfig();
+      expect(policy.resolve()).toMatchObject({ ok: true, plan: { shell: "/bin/new-shell" } });
+
+      const defaults = createTerminalLaunchPolicy({}).resolve();
+      policy.prepareConfig({}, { restartPending: false });
+      policy.commitConfig();
+      expect(policy.resolve()).toEqual(defaults);
+    },
+  );
+
   it("applies non-restart sandbox policy changes immediately", () => {
     const policy = createTerminalLaunchPolicy({
       gateway: { terminal: { enabled: true } },
@@ -359,7 +402,7 @@ describe("createTerminalLaunchPolicy", () => {
     expect(policy.isEnabled()).toBe(false);
   });
 
-  it("does not promote a terminal setting previously ignored by reload mode", () => {
+  it("preserves restart-owned terminal settings while hot-applying the shell", () => {
     const disabledPolicy = createTerminalLaunchPolicy(disabled);
     disabledPolicy.prepareConfig(
       {
@@ -377,7 +420,7 @@ describe("createTerminalLaunchPolicy", () => {
     });
     enabledPolicy.prepareConfig(
       {
-        gateway: { terminal: { enabled: false, shell: "/bin/ignored-shell" } },
+        gateway: { terminal: { enabled: false, shell: "/bin/hot-shell" } },
         agents: { defaults: { sandbox: { mode: "non-main" } } },
       },
       { restartPending: false },
@@ -387,7 +430,7 @@ describe("createTerminalLaunchPolicy", () => {
     const resolved = enabledPolicy.resolve();
     expect(resolved.ok).toBe(true);
     if (resolved.ok) {
-      expect(resolved.plan.shell).toBe("/bin/current-shell");
+      expect(resolved.plan.shell).toBe("/bin/hot-shell");
     }
 
     enabledPolicy.prepareConfig(disabled, { restartPending: true });

@@ -39,6 +39,7 @@ export {
   SESSION_CREATE_IDEMPOTENCY_RETENTION_MS,
   SESSION_CREATE_RETRY_WINDOW_MS,
 } from "./schema/sessions-create.js";
+export { TASKS_LIST_CURSOR_MAX_LENGTH } from "./schema/tasks.js";
 export * from "./schema/projects.js";
 export * from "./migration-api.js";
 export * from "./restart-unavailable.js";

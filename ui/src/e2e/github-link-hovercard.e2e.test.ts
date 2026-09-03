@@ -1,4 +1,5 @@
 // Control UI tests cover GitHub link hover card behavior.
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
 import { beforeEach, afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -50,11 +51,11 @@ async function expectText(locator: Locator, text: string): Promise<void> {
   await expect.poll(() => locator.textContent()).toContain(text);
 }
 
-async function captureArtifact(page: Page, name: string): Promise<void> {
+async function captureArtifact(target: Page | Locator, name: string): Promise<void> {
   if (!artifactDir) {
     return;
   }
-  await page.screenshot({ path: path.join(artifactDir, `${name}.png`) });
+  await target.screenshot({ path: path.join(artifactDir, `${name}.png`) });
 }
 
 const pullPreviewResponse = {
@@ -95,9 +96,13 @@ const pullPreviewResponse = {
   updatedAt: "2026-07-04T09:53:55Z",
 };
 
-// Shared page setup for lifecycle cases that need only one pull-request link.
+const PULL_HREF = "https://github.com/openclaw/openclaw/pull/99816";
+const PULL_COMMENT_HREF = `${PULL_HREF}#issuecomment-123`;
+
+// Shared page setup for lifecycle cases and cached permalink navigation.
 async function openPullPreviewPage(deferPreview = false): Promise<{
   card: Locator;
+  commentLink: Locator;
   gateway: Awaited<ReturnType<typeof installMockGateway>>;
   page: Page;
   pullLink: Locator;
@@ -106,7 +111,9 @@ async function openPullPreviewPage(deferPreview = false): Promise<{
   await context.route("https://github.com/**", (route) =>
     route.fulfill({
       contentType: "text/html",
-      body: "<!doctype html><title>GitHub item</title>",
+      body: `<!doctype html><title>Synthetic GitHub destination</title>
+        <h1>Synthetic GitHub destination</h1><pre id="destination"></pre>
+        <script>document.getElementById("destination").textContent = location.href;</script>`,
     }),
   );
 
@@ -122,7 +129,10 @@ async function openPullPreviewPage(deferPreview = false): Promise<{
     historyMessages: [
       {
         content: [
-          { type: "text", text: "Review https://github.com/openclaw/openclaw/pull/99816." },
+          {
+            type: "text",
+            text: `Review ${PULL_HREF}, then [the review comment](${PULL_COMMENT_HREF}).`,
+          },
         ],
         role: "assistant",
         timestamp: Date.now(),
@@ -132,9 +142,10 @@ async function openPullPreviewPage(deferPreview = false): Promise<{
   await page.goto(`${server.baseUrl}chat`);
 
   const pullLink = page.locator('a.markdown-github-link[href$="/pull/99816"]');
+  const commentLink = page.getByRole("link", { name: "the review comment", exact: true });
   const card = page.locator(".github-link-hovercard");
   await pullLink.waitFor({ state: "visible" });
-  return { card, gateway, page, pullLink };
+  return { card, commentLink, gateway, page, pullLink };
 }
 
 describeControlUiE2e("GitHub link hover cards", () => {
@@ -158,43 +169,57 @@ describeControlUiE2e("GitHub link hover cards", () => {
 
   it.each([
     { theme: "light", reducedMotion: "no-preference", width: 1180, fails: false },
+    { theme: "light", reducedMotion: "no-preference", width: 1180, fails: true },
     { theme: "dark", reducedMotion: "no-preference", width: 1180, fails: false },
     { theme: "dark", reducedMotion: "reduce", width: 390, fails: true },
-  ] as const)("shimmers while pending ($theme, $reducedMotion, $width)", async (scenario) => {
-    const { card, gateway, page, pullLink } = await openPullPreviewPage(true);
-    await page.emulateMedia({ colorScheme: scenario.theme, reducedMotion: scenario.reducedMotion });
-    await page.setViewportSize({ width: scenario.width, height: 800 });
-    await pullLink.focus();
-    await gateway.waitForRequest("controlUi.githubPreview");
+  ] as const)(
+    "shimmers while pending ($theme, $reducedMotion, $width, fails=$fails)",
+    async (scenario) => {
+      const { card, gateway, page, pullLink } = await openPullPreviewPage(true);
+      await page.emulateMedia({
+        colorScheme: scenario.theme,
+        reducedMotion: scenario.reducedMotion,
+      });
+      await page.setViewportSize({ width: scenario.width, height: 800 });
+      await pullLink.focus();
+      const request = await gateway.waitForRequest("controlUi.githubPreview");
+      expect(request.params).toMatchObject({ agentId: "main" });
 
-    await expect.poll(() => card.getAttribute("aria-label")).toBe("Loading GitHub details…");
-    const skeleton = card.locator('[aria-hidden="true"]');
-    await skeleton.waitFor({ state: "visible" });
-    expect(await card.locator("a").count()).toBe(0);
-    expect(await card.textContent()).toBe("");
-    const placeholder = skeleton.locator(".skeleton").first();
-    await placeholder.waitFor({ state: "visible" });
-    const animating = () =>
-      placeholder.evaluate((element) =>
-        element
-          .getAnimations({ subtree: true })
-          .some((animation) => animation.playState === "running"),
-      );
-    await expect.poll(animating).toBe(scenario.reducedMotion === "no-preference");
-    const bounds = await card.boundingBox();
-    expect(bounds!.x).toBeGreaterThanOrEqual(0);
-    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(scenario.width);
+      await expect.poll(() => card.getAttribute("aria-label")).toBe("Loading GitHub details…");
+      const skeleton = card.locator('[aria-hidden="true"]');
+      await skeleton.waitFor({ state: "visible" });
+      expect(await card.locator("a").count()).toBe(0);
+      expect(await card.textContent()).toBe("");
+      const placeholder = skeleton.locator(".skeleton").first();
+      await placeholder.waitFor({ state: "visible" });
+      const animating = () =>
+        placeholder.evaluate((element) =>
+          element
+            .getAnimations({ subtree: true })
+            .some((animation) => animation.playState === "running"),
+        );
+      await expect.poll(animating).toBe(scenario.reducedMotion === "no-preference");
+      const bounds = await card.boundingBox();
+      expect(bounds!.x).toBeGreaterThanOrEqual(0);
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(scenario.width);
 
-    if (scenario.fails) {
-      await gateway.rejectDeferred("controlUi.githubPreview", { message: "Unavailable" });
-      await expectText(card, "GitHub preview unavailable");
-    } else {
-      await gateway.resolveDeferred("controlUi.githubPreview");
-      await expectText(card, pullPreviewResponse.title);
-    }
-    expect(await card.locator(".skeleton").count()).toBe(0);
-    expect(await card.getAttribute("aria-label")).not.toBe("Loading GitHub details…");
-  });
+      if (scenario.fails) {
+        const error = "GitHub API rate limit exceeded (HTTP 403). Try again in 2 minutes.";
+        await gateway.rejectDeferred("controlUi.githubPreview", { message: error });
+        await expectText(card, "GitHub preview unavailable");
+        const detail = card.locator(".github-link-hovercard__error");
+        await expectText(detail, error);
+        expect(await card.getAttribute("aria-describedby")).toBe(await detail.getAttribute("id"));
+        expect(await detail.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+        await captureArtifact(card, "github-hovercard-error-subtext");
+      } else {
+        await gateway.resolveDeferred("controlUi.githubPreview");
+        await expectText(card, pullPreviewResponse.title);
+      }
+      expect(await card.locator(".skeleton").count()).toBe(0);
+      expect(await card.getAttribute("aria-label")).not.toBe("Loading GitHub details…");
+    },
+  );
 
   it("reloads a dismissed pending preview on rehover and caches the successful response", async () => {
     const proofDir =
@@ -509,8 +534,10 @@ describeControlUiE2e("GitHub link hover cards", () => {
     expect(await card.count()).toBe(0);
   });
 
-  it("opens the linked pull request when the card's title link is clicked", async () => {
-    const { card, page, pullLink } = await openPullPreviewPage();
+  it("opens the current pull request permalink from cached card title and repo links", async () => {
+    const proofDir =
+      artifactDir ?? createControlUiE2eArtifactDir("github-link-hovercard-navigation");
+    const { card, commentLink, gateway, page, pullLink } = await openPullPreviewPage();
 
     await pullLink.hover();
     await expectText(card, "openclaw/openclaw #99816");
@@ -529,19 +556,53 @@ describeControlUiE2e("GitHub link hover cards", () => {
       "underline",
     );
 
-    // Mirrors the source-link popup assertion above: the title anchor reuses
-    // the same validated href, target="_blank", and safe rel.
-    const popupPromise = page.waitForEvent("popup");
-    await titleLink.click();
-    const popup = await popupPromise;
-    await popup.waitForLoadState("domcontentloaded");
-    expect(popup.url()).toBe("https://github.com/openclaw/openclaw/pull/99816");
+    for (const { state, anchor, href } of [
+      { state: "base", anchor: pullLink, href: PULL_HREF },
+      { state: "cached-comment", anchor: commentLink, href: PULL_COMMENT_HREF },
+    ]) {
+      const observations = [];
+      for (const clickedLink of ["title", "repo"]) {
+        await anchor.hover();
+        await expectText(card, pullPreviewResponse.title);
+        const actual = {
+          titleHref: await card.locator(".github-link-hovercard__title").getAttribute("href"),
+          repoHref: await card.locator(".github-link-hovercard__repo").getAttribute("href"),
+          authorHref: await card.locator(".github-link-hovercard__author").getAttribute("href"),
+          requestCount: (await gateway.getRequests("controlUi.githubPreview")).length,
+        };
+        const stage = `${state}-${clickedLink}`;
+        await page.screenshot({ path: path.join(proofDir, `${stage}-card.png`) });
+        const popupPromise = page.waitForEvent("popup");
+        await card.locator(`.github-link-hovercard__${clickedLink}`).click();
+        const popup = await popupPromise;
+        await popup.waitForLoadState("domcontentloaded");
+        const observation = {
+          state,
+          clickedLink,
+          actual: { ...actual, popupHref: popup.url() },
+          expected: {
+            titleHref: href,
+            repoHref: href,
+            authorHref: "https://github.com/steipete",
+            requestCount: 1,
+            popupHref: href,
+          },
+        };
+        await popup.screenshot({ path: path.join(proofDir, `${stage}-popup.png`) });
+        await writeFile(path.join(proofDir, `${stage}.json`), JSON.stringify(observation, null, 2));
+        observations.push(observation);
 
-    // The click focused the title link inside the card; leaving the card still
-    // dismisses it with no click-outside required (github-link-hovercard.runtime.ts
-    // clears cardFocusInside for a pointer-opened card once the pointer leaves).
-    await popup.close();
-    await page.mouse.move(1, 1);
-    await expect.poll(() => card.count()).toBe(0);
+        // A pointer-opened card still dismisses after its clicked link gains focus.
+        await popup.close();
+        await page.mouse.move(1, 1);
+        await expect.poll(() => card.count()).toBe(0);
+      }
+      // Retain both actual destinations before failing on a lost comment hash.
+      for (const { actual, expected, clickedLink } of observations) {
+        expect(actual.popupHref, `${state} ${clickedLink} navigation`).toBe(expected.popupHref);
+        expect(actual).toEqual(expected);
+      }
+    }
+    expect((await gateway.getRequests("controlUi.githubPreview")).length).toBe(1);
   });
 });

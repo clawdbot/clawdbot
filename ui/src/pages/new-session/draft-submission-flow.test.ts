@@ -257,7 +257,7 @@ describe("DraftSubmissionFlow", () => {
             : { sessionId: "native-worktree" },
     });
     await vi.waitFor(() => expect(place.repository.kind).toBe("git"));
-    place.toggleWorktree();
+    place.selectWorktree(true);
     place.setWorktreeName("native");
     place.setBaseRef("main");
     await flow.submit();
@@ -453,7 +453,7 @@ describe("DraftSubmissionFlow", () => {
       cloneUrl: "https://github.com/openclaw/openclaw.git",
     });
     if (worktree) {
-      place.toggleWorktree();
+      place.selectWorktree(true);
       flow.setMessage("start in a worktree");
     }
 
@@ -484,7 +484,7 @@ describe("DraftSubmissionFlow", () => {
       cloneUrl: "https://github.com/openclaw/openclaw.git",
     });
     if (worktree) {
-      place.toggleWorktree();
+      place.selectWorktree(true);
     }
     flow.setMessage(message);
     // Empty-draft button gating is independent from the remote-project submission contract.
@@ -555,7 +555,7 @@ describe("DraftSubmissionFlow", () => {
       cloneUrl: "https://github.com/openclaw/openclaw.git",
     });
     if (worktree) {
-      place.toggleWorktree();
+      place.selectWorktree(true);
     }
     flow.setMessage(message);
     flow.attachmentDraft.replace([
@@ -731,6 +731,7 @@ describe("DraftSubmissionFlow", () => {
           recoveryScope: "",
         },
         agentsHydrated: place?.agentsHydrated ?? false,
+        runtimeId: place?.devicePlacementRuntime()?.id ?? "",
       }),
       {
         requestUpdate: vi.fn(),

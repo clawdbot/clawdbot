@@ -92,7 +92,7 @@ describe("listTaskRecordPage", () => {
 
       sortedInputLengths.length = 0;
       const emptyPage = await readTaskPage({ offset: total + 1, limit: 1 });
-      expect(emptyPage).toEqual({ tasks: [], hasMore: false });
+      expect(emptyPage).toMatchObject({ tasks: [], hasMore: false });
       expect(sortedInputLengths).toEqual([]);
     } finally {
       sortSpy.mockRestore();

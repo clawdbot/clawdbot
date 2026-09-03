@@ -231,7 +231,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
         {
           value: "local",
           label: t("sessionsView.groupDefaultsLocal"),
-          description: t("newSession.runsDirectlyNote"),
+          description: t("newSession.checkoutCurrentNote"),
           icon: icons.monitor,
         },
         {
@@ -431,7 +431,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                                 : html`<small
                                     >${repositoryStatus === "unavailable"
                                       ? t("newSession.gitCheckUnavailable")
-                                      : t("newSession.runsDirectlyNote")}</small
+                                      : t("newSession.checkoutCurrentNote")}</small
                                   >`}
                             </span>
                           </div>

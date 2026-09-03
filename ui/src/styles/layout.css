@@ -2567,10 +2567,6 @@ wa-dropdown.session-menu::part(menu) {
   background: var(--wa-color-surface-raised);
 }
 
-.session-menu--compact .session-menu__chevron {
-  display: inline-flex;
-}
-
 html[dir="rtl"] .session-menu__chevron,
 html[dir="rtl"] .session-menu__back > .session-menu__icon {
   transform: scaleX(-1);

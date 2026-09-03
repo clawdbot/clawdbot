@@ -35,6 +35,7 @@ openclaw health --debug
 - An unconfigured preferred account does not hide probe results from other active accounts. Ordinary output still follows the default agent's account bindings; `--verbose` includes all accounts.
 - `--json` always returns the full snapshot: channels, per-account probes, plugin load state, context-engine quarantine state, model-pricing cache state, event-loop health, delivery-queue warnings, and per-agent session stores.
 - Session ages in text and JSON use the Gateway's clock.
+- Heartbeat intervals in text show the resolved cadence without rounding away milliseconds; week units are retained for long intervals.
 - Top-level `ok: true` means the health RPC succeeded and the Gateway produced a snapshot. Queue warnings do not change it to `false`.
 - When outbound or session deliveries, or inbound channel events, are dead-lettered, text output reports their counts and oldest failure age. Inbound counts are grouped by channel account; inspect or recover individual events with [`openclaw channels dead-letters`](/cli/channels#inbound-dead-letters).
 - Optional `deliveryQueues.ingressPressure` summarizes durable inbound lanes that may be blocking later events. It is grouped by channel account and never exposes event, lane, payload, error, owner, token, session, or target identifiers. See [Gateway health](/gateway/health#queue-warnings) for the exact qualification and counting semantics.

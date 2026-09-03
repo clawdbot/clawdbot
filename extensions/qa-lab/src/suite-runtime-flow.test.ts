@@ -318,7 +318,7 @@ describe("qa suite runtime flow", () => {
         };
       }
     ).deps;
-    const scenarioStep = vi.fn(async () => "not reached");
+    const scenarioStep = vi.fn(async () => ({ details: "not reached" }));
     await expect(
       capturedDeps.runScenario("Matrix preparation", [{ name: "Scenario", run: scenarioStep }]),
     ).resolves.toEqual({

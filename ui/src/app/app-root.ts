@@ -116,7 +116,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
         (config, notify) => config.subscribe(notify),
       )
       .watch(
-        () => (this.terminalOnly ? this.context?.agentSelection : undefined),
+        () => this.context?.agentSelection,
         (selection, notify) => selection.subscribe(notify),
       )
       .watch(
@@ -642,7 +642,12 @@ export class OpenClawApp extends OpenClawLightDomElement {
     }
     return html`
       <openclaw-tooltip-provider>
-        <openclaw-github-link-hovercard-provider .client=${gatewaySnapshot.client}>
+        <openclaw-github-link-hovercard-provider
+          .client=${gatewaySnapshot.client}
+          .agentId=${context.agentSelection.state.selectedId ??
+          gatewaySnapshot.assistantAgentId ??
+          undefined}
+        >
           <openclaw-session-progress-hovercard-provider
             .client=${gatewaySnapshot.client}
             .context=${context}

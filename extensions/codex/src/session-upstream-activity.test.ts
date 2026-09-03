@@ -72,7 +72,7 @@ function createActivityChecker(params: {
     },
   } as unknown as OpenClawPluginApi;
   const bindingStore = {
-    read: vi.fn(async () => params.binding),
+    read: vi.fn(() => params.binding),
   } as unknown as CodexAppServerBindingStore;
   return createChecker({
     api,

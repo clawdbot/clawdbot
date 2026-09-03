@@ -288,10 +288,11 @@ you can attach, without changing the session. `read --session <session-key>`
 also requires `--revision <hash>` and reads only that exact selected revision;
 it does not expose other private revisions or grant permission to edit them.
 
-Personal operations require an authenticated Gateway profile. A shared token
-or password alone does not identify a person; use the existing workspace
-commands when operating a solo Gateway without a profile. An explicitly
-selected remote Gateway never falls back to a client-local personal library.
+Personal operations require an authenticated Gateway profile. The Control UI on a
+single-user Gateway uses a durable owner profile, but ephemeral CLI connections
+do not inherit it. A CLI shared token or password alone still has no personal
+profile; use the existing workspace commands in that case. An explicitly selected
+remote Gateway never falls back to a client-local personal library.
 
 Sharing makes a skill available to teammates but does not grant edit access.
 Transfer to team ownership requires administrator authority. Saving affects

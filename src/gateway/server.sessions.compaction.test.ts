@@ -38,7 +38,11 @@ import {
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import {
+  ensureGatewayOwnerProfile,
+  ensureProfileForEmail,
+  setUserProfileRole,
+} from "../state/user-profiles.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   embeddedRunMock,
@@ -448,9 +452,19 @@ test("sessions.compaction.* lists checkpoints and branches or restores from comp
   ws.close();
 });
 
-test.each([false, true])(
-  "sessions.compaction.branch uses the branching creator's sandbox requirement (%s), not its source's",
-  async (required) => {
+test.each([
+  { identity: "operator", required: false },
+  { identity: "operator", required: true },
+  { identity: "system", required: false },
+  { identity: "system", required: true },
+  { identity: "owner", required: false },
+  { identity: "owner", required: true },
+  { identity: "identityless", required: false },
+  { identity: "identityless", required: true },
+] as const)(
+  "sessions.compaction.branch preserves $identity isolation (profile requirement: $required)",
+  async ({ identity, required }) => {
+    const systemActor = identity !== "operator";
     const { dir, storePath } = await createSessionStoreDir();
     const fixture = await createCheckpointFixture(dir, { legacyPreCompactionSnapshot: false });
     const sessionKey = "agent:main:main";
@@ -482,8 +496,15 @@ test.each([false, true])(
     const sourceScope = { sessionId: fixture.sessionId, sessionKey, storePath };
     await seedTranscriptRows({ ...sourceScope, totalLines: 2 });
     await alignCheckpointBoundaryWithSqliteRows(sourceScope);
-    const profile = ensureProfileForEmail("checkpoint-requester@example.test");
-    setUserProfileRole(profile.id, "requester");
+    const profile =
+      identity === "identityless"
+        ? undefined
+        : systemActor
+          ? ensureGatewayOwnerProfile("Gateway Owner")
+          : ensureProfileForEmail("checkpoint-requester@example.test");
+    if (profile && !systemActor) {
+      setUserProfileRole(profile.id, "requester");
+    }
     const runtimeConfig = (await getGatewayConfigModule()).getRuntimeConfig();
     const cfg = {
       ...runtimeConfig,
@@ -508,6 +529,9 @@ test.each([false, true])(
       { key: "main", checkpointId: checkpoint.checkpointId },
       {
         client: {
+          ...(systemActor && identity !== "owner"
+            ? { internal: { operatorRoleActor: { kind: "system" as const } } }
+            : {}),
           connect: {
             minProtocol: 3,
             maxProtocol: 3,
@@ -515,25 +539,38 @@ test.each([false, true])(
             role: "operator",
             scopes: ["operator.read", "operator.write"],
           },
-          authenticatedUserProfile: {
-            profileId: profile.id,
-            displayName: profile.displayName,
-            hasAvatar: false,
-            updatedAt: profile.updatedAt,
-          },
+          ...(profile
+            ? {
+                authenticatedUserProfile: {
+                  profileId: profile.id,
+                  displayName: profile.displayName,
+                  hasAvatar: false,
+                  updatedAt: profile.updatedAt,
+                },
+              }
+            : {}),
         },
-        context: { getRuntimeConfig: () => cfg },
+        context: {
+          getRuntimeConfig: () =>
+            identity === "owner" ? { ...cfg, gateway: { ...cfg.gateway, roles: undefined } } : cfg,
+        },
       },
     );
     expect(branched.ok, JSON.stringify(branched.error)).toBe(true);
     const branch = loadSessionEntry({ sessionKey: branched.payload?.key ?? "", storePath });
     expect(branch).toMatchObject({
       createdVia: "operator",
-      createdActor: { type: "human", source: "profile", id: profile.id },
       createdAt: expect.any(Number),
     });
-    expect(branch?.createdAt).not.toBe(sourceStamp.createdAt);
-    expect(branch?.sandbox).toBe(required ? "required" : undefined);
+    expect(branch?.createdActor).toEqual(
+      profile ? { type: "human", source: "profile", id: profile.id } : sourceStamp.createdActor,
+    );
+    if (profile) {
+      expect(branch?.createdAt).not.toBe(sourceStamp.createdAt);
+    } else {
+      expect(branch?.createdAt).toBe(sourceStamp.createdAt);
+    }
+    expect(branch?.sandbox).toBe((systemActor ? !required : required) ? "required" : undefined);
     const source = loadSessionEntry(sourceScope);
     expect(source).toMatchObject(sourceStamp);
     expect(source?.sandbox).toBe(required ? undefined : "required");

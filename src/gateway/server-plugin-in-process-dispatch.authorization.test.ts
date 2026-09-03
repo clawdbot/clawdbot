@@ -185,49 +185,54 @@ describe("typed in-process agent authorization", () => {
     },
   );
 
-  it("preserves verified operator identity and never widens a synthetic tool caller's scopes", async () => {
-    const owner = createOperatorClient({
-      profileId: "tool-owner",
-      scopes: ["operator.read"],
-    });
-    let dispatched: GatewayRequestOptions["client"] = null;
-    const context = createContext();
-    context.getGatewayMethodRegistry = () =>
-      createGatewayMethodRegistry([
-        {
-          name: "sessions.list",
-          scope: "operator.read",
-          owner: { kind: "core", area: "sessions" },
-          handler: ({ client, respond }: GatewayRequestHandlerOptions) => {
-            dispatched = client;
-            respond(true, { sessions: [] });
-          },
-        },
-      ]);
-
-    await withOperatorToolGatewayAuthority(
-      {
-        authenticatedUserProfile: owner.authenticatedUserProfile!,
-        scopes: owner.connect.scopes ?? [],
-      },
-      async () =>
-        await dispatchGatewayMethodInProcess(
-          "sessions.list",
-          {},
+  it.each(["operator", "system"] as const)(
+    "preserves %s attribution and never widens a synthetic tool caller's scopes",
+    async (actorKind) => {
+      const operatorRoleActor = actorKind === "system" ? { kind: "system" as const } : undefined;
+      const owner = createOperatorClient({
+        profileId: "tool-owner",
+        scopes: ["operator.read"],
+      });
+      let dispatched: GatewayRequestOptions["client"] = null;
+      const context = createContext();
+      context.getGatewayMethodRegistry = () =>
+        createGatewayMethodRegistry([
           {
-            forceSyntheticClient: true,
-            syntheticScopes: ["operator.read", "operator.admin"],
-            resolveGatewayContext: () => context,
+            name: "sessions.list",
+            scope: "operator.read",
+            owner: { kind: "core", area: "sessions" },
+            handler: ({ client, respond }: GatewayRequestHandlerOptions) => {
+              dispatched = client;
+              respond(true, { sessions: [] });
+            },
           },
-        ),
-    );
+        ]);
 
-    expect(dispatched).toMatchObject({
-      authenticatedUserProfile: { profileId: "tool-owner" },
-      connect: { scopes: ["operator.read"] },
-      internal: { syntheticClient: true },
-    });
-  });
+      await withOperatorToolGatewayAuthority(
+        {
+          authenticatedUserProfile: owner.authenticatedUserProfile!,
+          operatorRoleActor,
+          scopes: owner.connect.scopes ?? [],
+        },
+        async () =>
+          await dispatchGatewayMethodInProcess(
+            "sessions.list",
+            {},
+            {
+              forceSyntheticClient: true,
+              syntheticScopes: ["operator.read", "operator.admin"],
+              resolveGatewayContext: () => context,
+            },
+          ),
+      );
+
+      expect(dispatched).toMatchObject({
+        authenticatedUserProfile: { profileId: "tool-owner" },
+        connect: { scopes: ["operator.read"] },
+        internal: { syntheticClient: true, ...(operatorRoleActor ? { operatorRoleActor } : {}) },
+      });
+    },
+  );
 
   it.each(["explicit", "scoped"])(
     "does not fall back to ambient scope when a %s Gateway binding is retired",
@@ -429,62 +434,69 @@ describe("typed in-process agent authorization", () => {
     await expect(retained).rejects.toThrow("operator tool invocation authority expired");
   });
 
-  it("keeps a spawned agent host-owned and clears human authority before autonomous work", async () => {
-    const owner = createOperatorClient({
-      profileId: "spawn-owner",
-      scopes: ["operator.write"],
-    });
-    const context = createContext();
-    let autonomousClient: GatewayRequestOptions["client"] = null;
-    context.getGatewayMethodRegistry = () =>
-      createGatewayMethodRegistry([
-        {
-          name: "sessions.list",
-          scope: "operator.write",
-          owner: { kind: "core", area: "sessions" },
-          handler: ({ client, respond }: GatewayRequestHandlerOptions) => {
-            autonomousClient = client;
-            respond(true, { sessions: [] });
-          },
-        },
-      ]);
-    startTurn.mockImplementation(async ({ principal, io }) => {
-      expect(principal.authenticatedUserProfile).toBeUndefined();
-      expect(principal.internal).toMatchObject({
-        operatorRoleActor: { kind: "operator", profileId: "spawn-owner" },
+  it.each(["operator", "system"] as const)(
+    "keeps a %s-owned spawned agent host-owned before autonomous work",
+    async (actorKind) => {
+      const operatorRoleActor = actorKind === "system" ? { kind: "system" as const } : undefined;
+      const owner = createOperatorClient({
+        profileId: "spawn-owner",
+        scopes: ["operator.write"],
       });
-      await dispatchGatewayMethodInProcess(
-        "sessions.list",
-        {},
-        { forceSyntheticClient: true, resolveGatewayContext: () => context },
-      );
-      io.emitAcceptance([true, { runId: "autonomous-run", status: "accepted" }, undefined]);
-    });
-
-    await withOperatorToolGatewayAuthority(
-      {
-        authenticatedUserProfile: owner.authenticatedUserProfile!,
-        scopes: owner.connect.scopes ?? [],
-      },
-      async () =>
-        await dispatchGatewayMethodInProcess(
-          "agent",
-          { message: "run child", idempotencyKey: "autonomous-run" },
+      const context = createContext();
+      let autonomousClient: GatewayRequestOptions["client"] = null;
+      context.getGatewayMethodRegistry = () =>
+        createGatewayMethodRegistry([
           {
-            forceSyntheticClient: true,
-            agentRunTracking: "native_subagent",
-            syntheticScopes: ["operator.write"],
-            resolveGatewayContext: () => context,
+            name: "sessions.list",
+            scope: "operator.write",
+            owner: { kind: "core", area: "sessions" },
+            handler: ({ client, respond }: GatewayRequestHandlerOptions) => {
+              autonomousClient = client;
+              respond(true, { sessions: [] });
+            },
           },
-        ),
-    );
+        ]);
+      startTurn.mockImplementation(async ({ principal, io }) => {
+        expect(principal.authenticatedUserProfile).toBeUndefined();
+        expect(principal.internal).toMatchObject({
+          operatorRoleActor: operatorRoleActor ?? { kind: "operator", profileId: "spawn-owner" },
+        });
+        await dispatchGatewayMethodInProcess(
+          "sessions.list",
+          {},
+          { forceSyntheticClient: true, resolveGatewayContext: () => context },
+        );
+        io.emitAcceptance([true, { runId: "autonomous-run", status: "accepted" }, undefined]);
+      });
 
-    expect(autonomousClient).toMatchObject({
-      connect: { scopes: ["operator.write"] },
-      internal: { operatorRoleActor: { kind: "operator", profileId: "spawn-owner" } },
-    });
-    expect(autonomousClient).not.toHaveProperty("authenticatedUserProfile");
-  });
+      await withOperatorToolGatewayAuthority(
+        {
+          authenticatedUserProfile: owner.authenticatedUserProfile!,
+          operatorRoleActor,
+          scopes: owner.connect.scopes ?? [],
+        },
+        async () =>
+          await dispatchGatewayMethodInProcess(
+            "agent",
+            { message: "run child", idempotencyKey: "autonomous-run" },
+            {
+              forceSyntheticClient: true,
+              agentRunTracking: "native_subagent",
+              syntheticScopes: ["operator.write"],
+              resolveGatewayContext: () => context,
+            },
+          ),
+      );
+
+      expect(autonomousClient).toMatchObject({
+        connect: { scopes: ["operator.write"] },
+        internal: {
+          operatorRoleActor: operatorRoleActor ?? { kind: "operator", profileId: "spawn-owner" },
+        },
+      });
+      expect(autonomousClient).not.toHaveProperty("authenticatedUserProfile");
+    },
+  );
 
   it("explicitly marks profile-less host-owned agent launches as system actors", async () => {
     const context = createContext();

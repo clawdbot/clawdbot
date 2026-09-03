@@ -582,7 +582,7 @@ describe("Codex app-server startup retry", () => {
       sessionKey: "agent:agent-1:session-1",
     };
     try {
-      const binding = await testCodexAppServerBindingStore.read(identity);
+      const binding = testCodexAppServerBindingStore.read(identity);
       expect(binding?.threadId).toBe("thread-recovered");
       const requestsBeforeResume = await fs.readFile(fixture.requestLogPath, "utf8");
 
@@ -596,7 +596,7 @@ describe("Codex app-server startup retry", () => {
       expect(new Set(requests.slice(requestsBeforeResume.length).trim().split("\n"))).toEqual(
         new Set(["thread/read", "thread/resume"]),
       );
-      await expect(testCodexAppServerBindingStore.read(identity)).resolves.toEqual(binding);
+      expect(testCodexAppServerBindingStore.read(identity)).toEqual(binding);
 
       await expect(
         sibling.client.request("thread/read", {
