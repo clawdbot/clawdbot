@@ -78,13 +78,13 @@ if (
 ) {
   throw new Error("Invalid OpenClaw generation entrypoint");
 }
+const generationsRoot = path.join(launcherRoot, "generations");
 const generationRoot = path.join(
-  launcherRoot,
-  "generations",
+  generationsRoot,
   selector.generationId,
 );
 const payloadRoot = path.join(generationRoot, "payload");
-for (const ownedDirectory of [generationRoot, payloadRoot]) {
+for (const ownedDirectory of [generationsRoot, generationRoot, payloadRoot]) {
   const stat = fs.lstatSync(ownedDirectory);
   if (!stat.isDirectory() || stat.isSymbolicLink()) {
     throw new Error(\`Selected OpenClaw generation path is not an owned directory: \${ownedDirectory}\`);
@@ -280,6 +280,7 @@ export async function materializeUpdateGeneration(params: {
   }
 
   const existing = await fs.lstat(paths.generationRoot).catch(() => null);
+  const incomingRoot = path.join(paths.generationsRoot, `.incoming-${params.generationId}`);
   if (existing) {
     if (!existing.isDirectory() || existing.isSymbolicLink()) {
       throw new Error(`Update generation path is not a directory: ${paths.generationRoot}`);
@@ -291,6 +292,7 @@ export async function materializeUpdateGeneration(params: {
       label: "Existing update generation",
     });
     await assertGenerationEntrypoint(paths.payloadRoot, entrypointRelativePath);
+    await removeUpdateGenerationTree(incomingRoot);
     return {
       generation: {
         formatVersion: 1,
@@ -310,12 +312,11 @@ export async function materializeUpdateGeneration(params: {
     actual: sourceBefore,
     label: "Update generation source",
   });
-  const incomingRoot = path.join(
-    paths.generationsRoot,
-    `.incoming-${params.generationId}-${randomBytes(8).toString("hex")}`,
-  );
   const incomingPayload = path.join(incomingRoot, "payload");
   try {
+    // The authoritative ledger serializes one namespace. A deterministic name
+    // lets a retry discard a partial copy left by process death.
+    await removeUpdateGenerationTree(incomingRoot);
     await fs.mkdir(incomingRoot, { mode: 0o700 });
     await fs.cp(sourceRoot, incomingPayload, {
       recursive: true,
@@ -531,6 +532,17 @@ export async function ensureUpdateGenerationLauncher(namespaceRoot: string): Pro
   }
   const root = namespace.root;
   const launcherPath = path.join(root, UPDATE_GENERATION_LAUNCHER_FILE_NAME);
+  const verifyLauncher = async (): Promise<void> => {
+    const stat = await fs.lstat(launcherPath);
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      throw new Error(`Refusing to use an invalid generation launcher: ${launcherPath}`);
+    }
+    const contents = await fs.readFile(launcherPath, "utf8");
+    if (contents !== UPDATE_GENERATION_LAUNCHER_SOURCE) {
+      throw new Error(`Refusing to use an unknown generation launcher: ${launcherPath}`);
+    }
+    await fs.chmod(launcherPath, 0o500);
+  };
   const existingStat = await fs.lstat(launcherPath).catch((error: unknown) => {
     if (hasErrnoCode(error, "ENOENT")) {
       return null;
@@ -538,14 +550,7 @@ export async function ensureUpdateGenerationLauncher(namespaceRoot: string): Pro
     throw error;
   });
   if (existingStat) {
-    if (!existingStat.isFile() || existingStat.isSymbolicLink()) {
-      throw new Error(`Refusing to replace an invalid generation launcher: ${launcherPath}`);
-    }
-    const existing = await fs.readFile(launcherPath, "utf8");
-    if (existing !== UPDATE_GENERATION_LAUNCHER_SOURCE) {
-      throw new Error(`Refusing to replace an unknown generation launcher: ${launcherPath}`);
-    }
-    await fs.chmod(launcherPath, 0o500);
+    await verifyLauncher();
     return launcherPath;
   }
   const temporaryPath = path.join(root, `.launcher-${randomBytes(8).toString("hex")}.tmp`);
@@ -562,11 +567,12 @@ export async function ensureUpdateGenerationLauncher(namespaceRoot: string): Pro
     return launcherPath;
   } catch (error) {
     await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
-    const raced = await fs.readFile(launcherPath, "utf8").catch(() => null);
-    if (raced === UPDATE_GENERATION_LAUNCHER_SOURCE) {
+    try {
+      await verifyLauncher();
       return launcherPath;
+    } catch {
+      throw error;
     }
-    throw error;
   }
 }
 
@@ -598,17 +604,28 @@ export async function removeObsoleteUpdateGeneration(params: {
     throw new Error(`Refusing to remove active update generation ${params.generationId}`);
   }
   const paths = generationPaths(namespace, params.generationId);
+  const retiredRoot = path.join(paths.generationsRoot, `.retired-${params.generationId}`);
   const existing = await fs.lstat(paths.generationRoot).catch(() => null);
   if (!existing) {
-    return false;
+    const retired = await fs.lstat(retiredRoot).catch(() => null);
+    if (!retired) {
+      return false;
+    }
+    if (!retired.isDirectory() || retired.isSymbolicLink()) {
+      throw new Error(`Refusing to remove invalid retired generation ${retiredRoot}`);
+    }
+    await removeUpdateGenerationTree(retiredRoot);
+    await syncUpdateGenerationPath(paths.generationsRoot);
+    return true;
   }
   if (!existing.isDirectory() || existing.isSymbolicLink()) {
     throw new Error(`Refusing to remove invalid update generation ${paths.generationRoot}`);
   }
-  const retiredRoot = path.join(
-    paths.generationsRoot,
-    `.retired-${params.generationId}-${randomBytes(8).toString("hex")}`,
-  );
+  if (await fs.lstat(retiredRoot).catch(() => null)) {
+    throw new Error(
+      `Update generation has conflicting active and retired paths: ${params.generationId}`,
+    );
+  }
   await fs.rename(paths.generationRoot, retiredRoot);
   const rechecked = await readUpdateGenerationSelectorAtRoot(namespace.root);
   if (rechecked?.generationId === params.generationId) {

@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import type { UpdateGenerationSelection } from "./update-generation-contract.js";
+import { updateGenerationPathIsEqualOrNested } from "./update-generation-manifest.js";
 import {
   captureUpdateGenerationManifest,
   createUpdateGenerationId,
@@ -14,6 +15,8 @@ import {
   replaceUpdateGenerationSelector,
   resolveSelectedUpdateGeneration,
   resolveUpdateGenerationSelectorPath,
+  UPDATE_GENERATION_LAUNCHER_FILE_NAME,
+  UPDATE_GENERATION_LAUNCHER_SOURCE,
 } from "./update-generation-store.js";
 
 async function writeRuntime(root: string, version: string): Promise<void> {
@@ -257,6 +260,26 @@ describe("immutable update generation activation", () => {
 });
 
 describe("update generation fail-closed boundaries", () => {
+  it("treats descendant names beginning with two dots as contained", async () => {
+    await withGenerationTestDir("openclaw-generation-dotdot-name-", async (base) => {
+      const sourceRoot = path.join(base, "stage");
+      const nestedNamespace = path.join(sourceRoot, "..managed");
+      await writeRuntime(sourceRoot, "1.0.0");
+
+      expect(updateGenerationPathIsEqualOrNested(sourceRoot, nestedNamespace)).toBe(true);
+      expect(updateGenerationPathIsEqualOrNested(sourceRoot, path.join(base, "..managed"))).toBe(
+        false,
+      );
+      await expect(
+        materializeRuntime({
+          namespaceRoot: nestedNamespace,
+          sourceRoot,
+          version: "1.0.0",
+        }),
+      ).rejects.toThrow("namespace cannot be inside its source");
+    });
+  });
+
   it("rejects symlinks that escape disposable staging", async () => {
     await withGenerationTestDir("openclaw-generation-symlink-", async (base) => {
       const stageRoot = path.join(base, "stage");
@@ -391,6 +414,59 @@ describe("update generation fail-closed boundaries", () => {
     });
   });
 
+  it("rejects a selected generation reached through a symlinked generations root", async () => {
+    await withGenerationTestDir("openclaw-generation-launcher-symlink-", async (base) => {
+      const namespaceRoot = path.join(base, "managed");
+      const stageRoot = path.join(base, "stage");
+      await writeRuntime(stageRoot, "1.0.0");
+      const generation = await materializeRuntime({
+        namespaceRoot,
+        sourceRoot: stageRoot,
+        version: "1.0.0",
+      });
+      await replaceUpdateGenerationSelector({
+        namespaceRoot,
+        expected: null,
+        next: selectionOf(generation),
+      });
+      const launcher = await ensureUpdateGenerationLauncher(namespaceRoot);
+      const generationsRoot = path.join(namespaceRoot, "generations");
+      const redirectedRoot = path.join(base, "redirected-generations");
+      await fs.rename(generationsRoot, redirectedRoot);
+      await fs.symlink(
+        redirectedRoot,
+        generationsRoot,
+        process.platform === "win32" ? "junction" : undefined,
+      );
+
+      const result = await runCommandWithTimeout([process.execPath, launcher], {
+        timeoutMs: 10_000,
+      });
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain("not an owned directory");
+    });
+  });
+
+  it("does not accept a symlink installed during launcher creation", async () => {
+    await withGenerationTestDir("openclaw-generation-launcher-race-", async (base) => {
+      const namespaceRoot = path.join(base, "managed");
+      const attackerLauncher = path.join(base, "attacker-launcher.mjs");
+      await fs.writeFile(attackerLauncher, UPDATE_GENERATION_LAUNCHER_SOURCE);
+      const rename = vi.spyOn(fs, "rename").mockImplementationOnce(async () => {
+        await fs.symlink(
+          attackerLauncher,
+          path.join(namespaceRoot, UPDATE_GENERATION_LAUNCHER_FILE_NAME),
+        );
+        throw Object.assign(new Error("injected launcher race"), { code: "EEXIST" });
+      });
+
+      await expect(ensureUpdateGenerationLauncher(namespaceRoot)).rejects.toThrow(
+        "injected launcher race",
+      );
+      rename.mockRestore();
+    });
+  });
+
   it("never cleans the active or rollback generation", async () => {
     await withGenerationTestDir("openclaw-generation-cleanup-", async (base) => {
       const namespaceRoot = path.join(base, "managed");
@@ -442,6 +518,56 @@ describe("update generation fail-closed boundaries", () => {
       await expect(fs.stat(previous.generationRoot)).resolves.toBeDefined();
       await expect(fs.stat(candidate.generationRoot)).resolves.toBeDefined();
       await expect(fs.stat(obsolete.generationRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
+  it("replaces an interrupted deterministic incoming tree on retry", async () => {
+    await withGenerationTestDir("openclaw-generation-incoming-recovery-", async (base) => {
+      const namespaceRoot = path.join(base, "managed");
+      const stageRoot = path.join(base, "stage");
+      const generationId = createUpdateGenerationId();
+      await writeRuntime(stageRoot, "1.0.0");
+      const interruptedRoot = path.join(namespaceRoot, "generations", `.incoming-${generationId}`);
+      await fs.mkdir(path.join(interruptedRoot, "payload"), { recursive: true });
+      await fs.writeFile(path.join(interruptedRoot, "payload", "partial"), "partial");
+
+      const generation = await materializeRuntime({
+        namespaceRoot,
+        sourceRoot: stageRoot,
+        generationId,
+        version: "1.0.0",
+      });
+
+      await expect(fs.stat(generation.generationRoot)).resolves.toBeDefined();
+      await expect(fs.stat(interruptedRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
+  it("finishes an interrupted deterministic retired-tree cleanup", async () => {
+    await withGenerationTestDir("openclaw-generation-retired-recovery-", async (base) => {
+      const namespaceRoot = path.join(base, "managed");
+      const stageRoot = path.join(base, "stage");
+      await writeRuntime(stageRoot, "1.0.0");
+      const generation = await materializeRuntime({
+        namespaceRoot,
+        sourceRoot: stageRoot,
+        version: "1.0.0",
+      });
+      const retiredRoot = path.join(
+        namespaceRoot,
+        "generations",
+        `.retired-${generation.generation.generationId}`,
+      );
+      await fs.rename(generation.generationRoot, retiredRoot);
+
+      await expect(
+        removeObsoleteUpdateGeneration({
+          namespaceRoot,
+          generationId: generation.generation.generationId,
+          protectedGenerationIds: [],
+        }),
+      ).resolves.toBe(true);
+      await expect(fs.stat(retiredRoot)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
 });

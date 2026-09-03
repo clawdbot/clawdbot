@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseUpdateGenerationTransactionRecord } from "./update-generation-contract-schema.js";
 import {
-  adjudicateUpdateGenerationTransaction,
   appendUpdateGenerationReceipt,
   buildUpdateGenerationReceiptId,
   persistUpdateGenerationReceipt,
@@ -14,6 +13,7 @@ import {
   type UpdateGenerationTransactionRecord,
   type UpdateGenerationTransactionSnapshot,
 } from "./update-generation-contract.js";
+import { adjudicateUpdateGenerationTransaction } from "./update-generation-recovery.js";
 
 const TRANSACTION_ID = "update-transaction-1";
 const NAMESPACE_KEY = "openclaw-global-owner";
@@ -185,6 +185,25 @@ describe("durable update generation transaction contract", () => {
         bindingConverged: true,
       }),
     ).toEqual({ action: "complete", reason: "completion receipt and selector agree" });
+    expect(
+      adjudicateUpdateGenerationTransaction(roundTrip, {
+        selector: candidate,
+        generations: [
+          { generationId: previous.generationId, manifestSha256: previous.manifestSha256 },
+        ],
+        bindingConverged: true,
+      }),
+    ).toMatchObject({ action: "inconsistent" });
+    expect(
+      adjudicateUpdateGenerationTransaction(roundTrip, {
+        selector: candidate,
+        generations: [
+          { generationId: previous.generationId, manifestSha256: previous.manifestSha256 },
+          { generationId: candidate.generationId, manifestSha256: candidate.manifestSha256 },
+        ],
+        bindingConverged: false,
+      }),
+    ).toMatchObject({ action: "inconsistent" });
   });
 
   it("adjudicates every mutation boundary from durable intent and physical state", () => {
@@ -266,6 +285,12 @@ describe("durable update generation transaction contract", () => {
             identity: "/manager/bin/openclaw",
             priorFingerprint: "old",
             fingerprint: "stable",
+          },
+          {
+            kind: "service",
+            identity: "gateway",
+            priorFingerprint: "old-service",
+            fingerprint: "stable-service",
           },
         ],
       }),
@@ -352,6 +377,26 @@ describe("durable update generation transaction contract", () => {
       }),
     );
 
+    expect(
+      adjudicateUpdateGenerationTransaction(record, {
+        selector: previous,
+        generations: [
+          { generationId: previous.generationId, manifestSha256: previous.manifestSha256 },
+          { generationId: candidate.generationId, manifestSha256: candidate.manifestSha256 },
+        ],
+        bindingConverged: true,
+      }),
+    ).toMatchObject({ action: "complete" });
+    expect(
+      adjudicateUpdateGenerationTransaction(record, {
+        selector: previous,
+        generations: [
+          { generationId: previous.generationId, manifestSha256: previous.manifestSha256 },
+        ],
+        bindingConverged: true,
+      }),
+    ).toMatchObject({ action: "inconsistent" });
+
     expect(() =>
       append(
         record,
@@ -370,6 +415,24 @@ describe("durable update generation transaction contract", () => {
         }),
       ),
     ).toThrow("Cleanup must protect the durable active and rollback generations");
+
+    const obsolete = "d".repeat(32);
+    record = append(
+      record,
+      receipt("cleanup-intent", 7, {
+        generationIds: [obsolete],
+        protectedGenerationIds: [previous.generationId, candidate.generationId],
+      }),
+    );
+    expect(() =>
+      append(
+        record,
+        receipt("cleanup-completed", 8, {
+          removedGenerationIds: [],
+          deferred: [],
+        }),
+      ),
+    ).toThrow("Cleanup completion differs from its durable intent");
   });
 
   it("requires CAS and makes receipt replay idempotent", async () => {
@@ -392,6 +455,14 @@ describe("durable update generation transaction contract", () => {
       receipt: firstReceipt,
     });
     expect(replayedAfterRead).toEqual(first);
+    const conflictingReplay = { ...firstReceipt, manager: "bun" as const };
+    await expect(
+      persistUpdateGenerationReceipt({
+        ledger,
+        snapshot: null,
+        receipt: conflictingReplay,
+      }),
+    ).rejects.toThrow("replayed different receipt content");
 
     const candidateIntent = receipt("generation-materialization-intent", 1, {
       role: "candidate",
@@ -422,7 +493,82 @@ describe("durable update generation transaction contract", () => {
           serviceRunning: true,
         }),
       ),
-    ).toThrow("Completion requires a selected candidate generation");
+    ).toThrow("completion cannot follow intent");
+  });
+
+  it("requires materialization and binding acknowledgements to match their intents", () => {
+    const previous = selection("a");
+    const candidate = selection("b");
+    let record = append(null, intent(previous, true));
+    record = append(
+      record,
+      receipt("generation-materialization-intent", 1, {
+        role: "candidate",
+        sourceRoot: "/stage/candidate",
+        generationId: candidate.generationId,
+        manifest: manifest("b"),
+        packageVersion: "2.0.0",
+        entrypointRelativePath: candidate.entrypointRelativePath,
+      }),
+    );
+    expect(() =>
+      append(
+        record,
+        receipt("generation-materialized", 2, {
+          role: "candidate",
+          generation: { ...candidate, packageVersion: "2.0.1" },
+        }),
+      ),
+    ).toThrow("descriptor does not match its intent");
+
+    let bindingRecord = append(null, intent(null, false));
+    bindingRecord = append(
+      bindingRecord,
+      receipt("generation-materialization-intent", 1, {
+        role: "previous",
+        sourceRoot: "/live/previous",
+        generationId: previous.generationId,
+        manifest: manifest("a"),
+        packageVersion: "1.0.0",
+        entrypointRelativePath: previous.entrypointRelativePath,
+      }),
+    );
+    bindingRecord = append(
+      bindingRecord,
+      receipt("generation-materialized", 2, {
+        role: "previous",
+        generation: { ...previous, packageVersion: "1.0.0" },
+      }),
+    );
+    bindingRecord = append(
+      bindingRecord,
+      receipt("baseline-selection-intent", 3, { selection: previous }),
+    );
+    bindingRecord = append(bindingRecord, receipt("baseline-selected", 4, { selection: previous }));
+    bindingRecord = append(
+      bindingRecord,
+      receipt("binding-intent", 5, {
+        bindings: [
+          { kind: "launcher", identity: "/manager/bin/openclaw", priorFingerprint: "old" },
+          { kind: "service", identity: "gateway", priorFingerprint: "old-service" },
+        ],
+      }),
+    );
+    expect(() =>
+      append(
+        bindingRecord,
+        receipt("binding-completed", 6, {
+          bindings: [
+            {
+              kind: "launcher",
+              identity: "/manager/bin/openclaw",
+              priorFingerprint: "old",
+              fingerprint: "stable",
+            },
+          ],
+        }),
+      ),
+    ).toThrow("Binding completion differs from its durable intent");
   });
 
   it("rejects corrupt durable records before adjudication", () => {

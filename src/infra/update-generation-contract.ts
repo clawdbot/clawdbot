@@ -186,38 +186,6 @@ export type UpdateGenerationProjection = {
   cleanupCompleted: boolean;
 };
 
-export type UpdateGenerationPhysicalState = {
-  selector: UpdateGenerationSelection | null;
-  generations: Array<{ generationId: string; manifestSha256: string }>;
-  bindingConverged: boolean;
-};
-
-export type UpdateGenerationRecoveryAction =
-  | "resume-materialization"
-  | "record-materialized"
-  | "persist-baseline-selection-intent"
-  | "select-baseline"
-  | "record-baseline-selected"
-  | "persist-binding-intent"
-  | "resume-binding"
-  | "record-binding-completed"
-  | "persist-candidate-selection-intent"
-  | "select-candidate"
-  | "record-candidate-selected"
-  | "verify-completion"
-  | "select-previous"
-  | "record-rolled-back"
-  | "resume-cleanup"
-  | "complete"
-  | "adjudicate-failure"
-  | "inconsistent";
-
-export type UpdateGenerationRecoveryDecision = {
-  action: UpdateGenerationRecoveryAction;
-  reason: string;
-  role?: UpdateGenerationRole;
-};
-
 const RECEIPT_ID_SAFE = /^[A-Za-z0-9._:@/-]+$/u;
 const SHA256 = /^[a-f0-9]{64}$/u;
 
@@ -270,6 +238,45 @@ function assertSelection(selection: UpdateGenerationSelection): void {
   }
 }
 
+function assertReceiptFollowsLatest(
+  projection: UpdateGenerationProjection,
+  receipt: UpdateGenerationTransactionReceipt,
+): void {
+  if (receipt.kind === "failure") {
+    if (["completion", "rolled-back", "cleanup-completed"].includes(projection.latest.kind)) {
+      throw new Error(`Failure cannot follow terminal ${projection.latest.kind} receipt`);
+    }
+    return;
+  }
+  const latest = projection.latest;
+  const follows =
+    (latest.kind === "intent" &&
+      receipt.kind === "generation-materialization-intent" &&
+      receipt.role === (latest.stableBindingAlreadyVerified ? "candidate" : "previous")) ||
+    (latest.kind === "generation-materialization-intent" &&
+      receipt.kind === "generation-materialized" &&
+      receipt.role === latest.role) ||
+    (latest.kind === "generation-materialized" &&
+      ((latest.role === "previous" && receipt.kind === "baseline-selection-intent") ||
+        (latest.role === "candidate" && receipt.kind === "candidate-selection-intent"))) ||
+    (latest.kind === "baseline-selection-intent" && receipt.kind === "baseline-selected") ||
+    (latest.kind === "baseline-selected" && receipt.kind === "binding-intent") ||
+    (latest.kind === "binding-intent" && receipt.kind === "binding-completed") ||
+    (latest.kind === "binding-completed" &&
+      receipt.kind === "generation-materialization-intent" &&
+      receipt.role === "candidate") ||
+    (latest.kind === "candidate-selection-intent" && receipt.kind === "candidate-selected") ||
+    (latest.kind === "candidate-selected" &&
+      (receipt.kind === "completion" || receipt.kind === "rollback-intent")) ||
+    (latest.kind === "rollback-intent" && receipt.kind === "rolled-back") ||
+    ((latest.kind === "completion" || latest.kind === "rolled-back") &&
+      receipt.kind === "cleanup-intent") ||
+    (latest.kind === "cleanup-intent" && receipt.kind === "cleanup-completed");
+  if (!follows) {
+    throw new Error(`Update generation ${receipt.kind} cannot follow ${latest.kind}`);
+  }
+}
+
 function assertReceiptTransition(
   record: UpdateGenerationTransactionRecord | null,
   receipt: UpdateGenerationTransactionReceipt,
@@ -294,6 +301,7 @@ function assertReceiptTransition(
     throw new Error("Update generation intent cannot be appended twice");
   }
   const projection = projectUpdateGenerationTransaction(record);
+  assertReceiptFollowsLatest(projection, receipt);
   if (projection.cleanupCompleted) {
     throw new Error("Cannot append to a cleaned update generation transaction");
   }
@@ -303,8 +311,12 @@ function assertReceiptTransition(
       throw new Error(`No matching ${receipt.role} generation materialization intent`);
     }
     assertSelection(receipt.generation);
-    if (planned.manifest.digest !== receipt.generation.manifestSha256) {
-      throw new Error(`${receipt.role} generation manifest does not match its intent`);
+    if (
+      planned.manifest.digest !== receipt.generation.manifestSha256 ||
+      planned.entrypointRelativePath !== receipt.generation.entrypointRelativePath ||
+      planned.packageVersion !== receipt.generation.packageVersion
+    ) {
+      throw new Error(`${receipt.role} generation descriptor does not match its intent`);
     }
   }
   if (receipt.kind === "baseline-selection-intent") {
@@ -322,6 +334,27 @@ function assertReceiptTransition(
     }
     if (!selectionsEqual(pending.selection, receipt.selection)) {
       throw new Error("Baseline selection receipt differs from its intent");
+    }
+  }
+  if (receipt.kind === "binding-completed") {
+    const pending = [...record.receipts]
+      .toReversed()
+      .find((entry) => entry.kind === "binding-intent");
+    const completedBindings = receipt.bindings.map(
+      ({ fingerprint: _fingerprint, ...binding }) => binding,
+    );
+    if (
+      !pending ||
+      pending.kind !== "binding-intent" ||
+      !isDeepStrictEqual(pending.bindings, completedBindings)
+    ) {
+      throw new Error("Binding completion differs from its durable intent");
+    }
+  }
+  if (receipt.kind === "binding-intent") {
+    const identities = receipt.bindings.map((binding) => `${binding.kind}:${binding.identity}`);
+    if (identities.length === 0 || new Set(identities).size !== identities.length) {
+      throw new Error("Binding intent must name distinct managed bindings");
     }
   }
   if (receipt.kind === "candidate-selection-intent") {
@@ -347,8 +380,16 @@ function assertReceiptTransition(
     }
   }
   if (receipt.kind === "completion") {
-    if (!projection.candidateSelection) {
+    const candidate = projection.generations.candidate;
+    if (!projection.candidateSelection || !candidate) {
       throw new Error("Completion requires a selected candidate generation");
+    }
+    if (
+      receipt.packageVersion !== candidate.packageVersion ||
+      receipt.launcherVersion !== candidate.packageVersion ||
+      receipt.serviceRunning !== projection.intent.serviceBefore.running
+    ) {
+      throw new Error("Completion does not prove candidate and service convergence");
     }
   }
   if (receipt.kind === "rollback-intent") {
@@ -371,9 +412,18 @@ function assertReceiptTransition(
     if (!selectionsEqual(pending.to, receipt.selection)) {
       throw new Error("Rollback completion differs from its intent");
     }
+    if (receipt.serviceRunning !== projection.intent.serviceBefore.running) {
+      throw new Error("Rollback completion does not restore the prior service intent");
+    }
   }
   if (receipt.kind === "cleanup-intent") {
     const protectedIds = new Set(receipt.protectedGenerationIds);
+    if (
+      protectedIds.size !== receipt.protectedGenerationIds.length ||
+      new Set(receipt.generationIds).size !== receipt.generationIds.length
+    ) {
+      throw new Error("Cleanup intent contains duplicate generation ids");
+    }
     const requiredProtectedIds = [
       projection.baselineSelection?.generationId,
       projection.candidateSelection?.generationId ?? projection.generations.candidate?.generationId,
@@ -383,6 +433,22 @@ function assertReceiptTransition(
     }
     if (receipt.generationIds.some((generationId) => protectedIds.has(generationId))) {
       throw new Error("Cleanup cannot include a protected generation");
+    }
+  }
+  if (receipt.kind === "cleanup-completed") {
+    const pending = [...record.receipts]
+      .toReversed()
+      .find((entry) => entry.kind === "cleanup-intent");
+    const removedIds = receipt.removedGenerationIds;
+    const deferredIds = receipt.deferred.map((entry) => entry.generationId);
+    const completedIds = [...removedIds, ...deferredIds];
+    if (
+      !pending ||
+      pending.kind !== "cleanup-intent" ||
+      new Set(completedIds).size !== completedIds.length ||
+      !isDeepStrictEqual(completedIds.toSorted(), pending.generationIds.toSorted())
+    ) {
+      throw new Error("Cleanup completion differs from its durable intent");
     }
   }
 }
@@ -436,6 +502,15 @@ export async function persistUpdateGenerationReceipt(params: {
   if (result.status === "conflict") {
     throw new Error("Authoritative update ledger revision changed during generation transaction");
   }
+  const persistedReceipt = result.snapshot.record.receipts.find(
+    (receipt) => receipt.receiptId === params.receipt.receiptId,
+  );
+  if (!persistedReceipt || !isDeepStrictEqual(persistedReceipt, params.receipt)) {
+    throw new Error("Authoritative update ledger replayed different receipt content");
+  }
+  if (result.status === "stored" && !isDeepStrictEqual(result.snapshot.record, nextRecord)) {
+    throw new Error("Authoritative update ledger stored an unexpected transaction record");
+  }
   return result.snapshot;
 }
 
@@ -479,134 +554,4 @@ export function projectUpdateGenerationTransaction(
     }
   }
   return projection;
-}
-
-function observedGenerationMatches(
-  state: UpdateGenerationPhysicalState,
-  generationId: string,
-  manifestSha256: string,
-): boolean {
-  return state.generations.some(
-    (generation) =>
-      generation.generationId === generationId && generation.manifestSha256 === manifestSha256,
-  );
-}
-
-export function adjudicateUpdateGenerationTransaction(
-  record: UpdateGenerationTransactionRecord,
-  physical: UpdateGenerationPhysicalState,
-): UpdateGenerationRecoveryDecision {
-  const state = projectUpdateGenerationTransaction(record);
-  const latest = state.latest;
-  if (latest.kind === "cleanup-completed") {
-    return { action: "complete", reason: "cleanup receipt is durable" };
-  }
-  if (latest.kind === "cleanup-intent") {
-    const active = physical.selector?.generationId;
-    if (active && latest.generationIds.includes(active)) {
-      return { action: "inconsistent", reason: "cleanup intent includes the active selector" };
-    }
-    return { action: "resume-cleanup", reason: "cleanup intent is durable but incomplete" };
-  }
-  if (latest.kind === "rollback-intent") {
-    if (selectionsEqual(physical.selector, latest.to)) {
-      return {
-        action: "record-rolled-back",
-        reason: "selector already names the prior generation",
-      };
-    }
-    if (selectionsEqual(physical.selector, latest.from)) {
-      return { action: "select-previous", reason: "rollback intent precedes selector replacement" };
-    }
-    return { action: "inconsistent", reason: "selector matches neither rollback generation" };
-  }
-  if (latest.kind === "rolled-back") {
-    return selectionsEqual(physical.selector, latest.selection)
-      ? { action: "complete", reason: "rollback selection and receipt agree" }
-      : { action: "inconsistent", reason: "rolled-back receipt disagrees with selector" };
-  }
-  if (latest.kind === "failure") {
-    return { action: "adjudicate-failure", reason: latest.reason };
-  }
-  if (latest.kind === "generation-materialization-intent") {
-    return observedGenerationMatches(physical, latest.generationId, latest.manifest.digest)
-      ? {
-          action: "record-materialized",
-          role: latest.role,
-          reason: "generation exists with the durable intended manifest",
-        }
-      : {
-          action: "resume-materialization",
-          role: latest.role,
-          reason: "generation materialization intent has no matching generation",
-        };
-  }
-  if (latest.kind === "baseline-selection-intent") {
-    return selectionsEqual(physical.selector, latest.selection)
-      ? { action: "record-baseline-selected", reason: "baseline selector replacement completed" }
-      : { action: "select-baseline", reason: "baseline selector replacement is pending" };
-  }
-  if (latest.kind === "baseline-selected") {
-    return physical.bindingConverged
-      ? { action: "record-binding-completed", reason: "stable bindings already converge" }
-      : {
-          action: "persist-binding-intent",
-          reason: "baseline is selected before binding migration",
-        };
-  }
-  if (latest.kind === "binding-intent") {
-    return physical.bindingConverged
-      ? { action: "record-binding-completed", reason: "stable binding migration completed" }
-      : { action: "resume-binding", reason: "stable binding intent is durable but incomplete" };
-  }
-  if (latest.kind === "candidate-selection-intent") {
-    if (selectionsEqual(physical.selector, latest.to)) {
-      return {
-        action: "record-candidate-selected",
-        reason: "candidate selector replacement completed",
-      };
-    }
-    if (selectionsEqual(physical.selector, latest.from)) {
-      return { action: "select-candidate", reason: "candidate selector replacement is pending" };
-    }
-    return { action: "inconsistent", reason: "selector matches neither activation generation" };
-  }
-  if (latest.kind === "candidate-selected") {
-    return selectionsEqual(physical.selector, latest.selection)
-      ? {
-          action: "verify-completion",
-          reason: "candidate is selected but completion is not proven",
-        }
-      : { action: "inconsistent", reason: "candidate selection receipt disagrees with selector" };
-  }
-  if (latest.kind === "completion") {
-    return state.candidateSelection && selectionsEqual(physical.selector, state.candidateSelection)
-      ? { action: "complete", reason: "completion receipt and selector agree" }
-      : { action: "inconsistent", reason: "completion receipt disagrees with selector" };
-  }
-  if (latest.kind === "generation-materialized") {
-    return latest.role === "previous"
-      ? {
-          action: "persist-baseline-selection-intent",
-          role: "previous",
-          reason: "previous generation is durable and ready for baseline selection",
-        }
-      : {
-          action: "persist-candidate-selection-intent",
-          role: "candidate",
-          reason: "candidate generation is durable and ready for selection",
-        };
-  }
-  if (latest.kind === "binding-completed") {
-    return {
-      action: "resume-materialization",
-      role: "candidate",
-      reason: "candidate is not ready",
-    };
-  }
-  return {
-    action: "resume-materialization",
-    role: "previous",
-    reason: "transaction intent is durable",
-  };
 }
