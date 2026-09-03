@@ -269,7 +269,7 @@ describe("persistent upstream fork continuation", () => {
       const developerInstructions = "Follow the child agent's current instructions.";
       const continueFork = async (store: CodexAppServerBindingStore, nativeClient = native) => {
         const connection = resolveCodexBindingAppServerConnection({
-          binding: await store.read(identity),
+          binding: store.read(identity),
           pluginConfig,
           config,
           agentDir,

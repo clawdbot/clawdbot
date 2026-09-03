@@ -10,7 +10,6 @@ import {
   captureCodeModeOutput,
   captureCodeModeValue,
   EMPTY_CODE_MODE_OUTPUT,
-  toCodeModeJsonSafe as toJsonSafe,
 } from "./code-mode-json.js";
 import type { CodeModeApiVirtualFile } from "./code-mode-namespaces.js";
 import { prepareSource } from "./code-mode-source.js";
@@ -208,6 +207,7 @@ async function createVm(input: CodeModeWorkerPayload, bridge: BridgeState): Prom
         ["__openclawNamespaces", input.namespaces],
         ["__openclawApiFiles", input.apiFiles ?? []],
         ["__openclawSwarmEnabled", input.swarmEnabled === true],
+        ["__openclawMaxPendingToolCalls", input.config.maxPendingToolCalls],
       ] as const) {
         vm.hostToHandle(value).consume((handle) => vm.global.setProp(name, handle));
       }
@@ -320,9 +320,7 @@ function serializeCompletedCatalogHandles(vm: QuickJS, value: JSValueHandle): un
   return vm.global
     .getProp("__openclawSerializeCatalogHandles")
     .consume((serialize) =>
-      vm
-        .callFunction(serialize, vm.undefined, value)
-        .consume((serialized) => toJsonSafe(vm.dump(serialized))),
+      vm.callFunction(serialize, vm.undefined, value).consume((serialized) => vm.dump(serialized)),
     );
 }
 

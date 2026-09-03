@@ -16,6 +16,105 @@ describe("restart health", () => {
   beforeEach(resetRestartHealthMocks);
   afterEach(restoreRestartHealthMocks);
 
+  it.each([
+    {
+      name: "waits for consecutive healthy probes",
+      pids: [8000, 8000, 8000],
+      reachable: [true, true, true],
+      attempts: 6,
+      outcome: "healthy",
+      elapsedMs: 1_000,
+    },
+    {
+      name: "restarts settling after an unhealthy probe",
+      pids: [8000, 8000, 8000, 8000, 8000, 8000],
+      reachable: [true, true, false, true, true, true],
+      attempts: 6,
+      outcome: "healthy",
+      elapsedMs: 2_500,
+    },
+    {
+      name: "restarts settling when the healthy process changes",
+      pids: [8000, 8000, 9000, 9000, 9000],
+      reachable: [true, true, true, true, true],
+      attempts: 6,
+      outcome: "healthy",
+      elapsedMs: 2_000,
+    },
+    {
+      name: "keeps the full settle window after the standard readiness deadline",
+      pids: [8000, 8000, 8000, 8000, 8000],
+      reachable: [false, false, true, true, true],
+      attempts: 2,
+      outcome: "healthy",
+      elapsedMs: 2_000,
+    },
+    {
+      name: "does not report an unsettled healthy snapshot as recovered at timeout",
+      pids: [8000, 8000, 8000, 8000, 8000],
+      reachable: [false, false, false, true, true],
+      attempts: 2,
+      outcome: "timeout",
+      elapsedMs: 2_000,
+    },
+    ...(["linux", "darwin"] as const).map((platform) => ({
+      name: `times out without a runtime PID on ${platform}`,
+      platform,
+      pids: [undefined, undefined, undefined, undefined, undefined],
+      reachable: [true, true, true, true, true],
+      attempts: 2,
+      outcome: "timeout",
+      elapsedMs: 2_000,
+    })),
+    {
+      name: "settles without a runtime PID on win32",
+      platform: "win32",
+      pids: [undefined, undefined, undefined],
+      reachable: [true, true, true],
+      attempts: 2,
+      outcome: "healthy",
+      elapsedMs: 1_000,
+    },
+  ])("$name", async ({ platform, pids, reachable, attempts, outcome, elapsedMs }) => {
+    if (platform) {
+      Object.defineProperty(process, "platform", { value: platform, configurable: true });
+    }
+    const service = makeGatewayService({ status: "running", pid: 8000 });
+    for (const pid of pids) {
+      vi.mocked(service.readRuntime).mockResolvedValueOnce({ status: "running", pid });
+    }
+    for (const ok of reachable) {
+      probeGateway.mockResolvedValueOnce({
+        ok,
+        close: null,
+        ...(ok ? { server: { version: "2026.8.1", connId: "settling" } } : {}),
+      });
+    }
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 8000 }, { pid: 9000 }],
+      hints: [],
+    });
+
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyRestart({
+      service,
+      port: 18789,
+      expectedVersion: "2026.8.1",
+      requireRunningService: true,
+      attempts,
+      delayMs: 500,
+      settle: { probes: 3 },
+    });
+
+    expect(snapshot.waitOutcome).toBe(outcome);
+    expect(snapshot.healthy).toBe(outcome === "healthy");
+    expect(snapshot.runtime.pid).toBe(pids.at(-1));
+    expect(snapshot.elapsedMs).toBe(elapsedMs);
+    expect(probeGateway).toHaveBeenCalledTimes(reachable.length);
+  });
+
   it("waits for the managed service when running service proof is required", async () => {
     probeGateway.mockResolvedValue({
       ok: true,

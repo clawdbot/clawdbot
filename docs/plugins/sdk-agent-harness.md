@@ -31,9 +31,10 @@ WebSocket model APIs, build a [provider plugin](/plugins/sdk-provider-plugins).
 
 ## What core still owns
 
-Before a harness is selected, OpenClaw has already resolved:
+For ordinary concrete-model turns, OpenClaw prepares these inputs before
+calling `runAttempt`:
 
-- provider and model
+- provider and model, including discovery and concrete request parameters
 - runtime auth state, unless the harness declares that it owns auth bootstrap
 - thinking level and context budget
 - the OpenClaw transcript/session file
@@ -42,7 +43,11 @@ Before a harness is selected, OpenClaw has already resolved:
 - model fallback and live model switching policy
 
 A harness runs a prepared attempt; it does not pick providers, replace channel
-delivery, or silently switch models.
+delivery, or silently switch models. Locking a concrete model chat does not skip
+model discovery, auth preparation, or Responses parameters. An explicit
+`pluginOwnerId` owns session control; a later producing `agentHarnessId` is an
+observation, not a native ownership claim. Bound native sessions use the separate
+ownership contract below.
 
 ### Native tool-policy enforcement
 
@@ -74,15 +79,84 @@ rejected by core and are not covered by this declaration.
 
 By default, core resolves provider credentials before calling a harness. A
 trusted harness that can authenticate through its own native runtime may set
-`authBootstrap: "harness"` on its static `AgentHarness` registration. Core then
-skips its generic provider credential bootstrap and missing-credential failure
-for every attempt claimed by that harness.
+`authBootstrap: "harness"` on its static `AgentHarness` registration. Core can
+then delegate credential bootstrap instead of rejecting a route merely because
+generic provider credentials are absent. Prepared route and explicit profile
+requirements still apply.
 
 Core still forwards a compatible, explicitly selected or ordered OpenClaw auth
 profile and its scoped store when one exists. The harness must resolve that
 profile or its native credentials before issuing model requests, keep secrets
 scoped to the attempt, and surface actionable authentication failures. Do not
 set this capability on a harness that only sometimes owns authentication.
+This static bootstrap capability is distinct from ownership of an already-bound
+native session's model and connection.
+
+### Bound native session ownership
+
+The optional `resolveSessionRuntimeOwnership({ config, agentId, sessionId,
+sessionKey, assertCurrent })` callback reports private binding ownership. Core
+calls it only on the exact pinned harness after validating the durable session
+identity. `sessionId` and `assertCurrent` are required; `config`, `agentId`, and
+`sessionKey` are optional. Return synchronously:
+
+- `{ model: "native", auth: "native" }` when the binding owns both model selection
+  and authentication through its native connection.
+- `{ model: "native", auth: "host" }` when it owns model selection but still needs
+  host auth preparation.
+- `undefined` when no matching native-model binding exists. For a validated
+  native harness pin, an implemented callback returning `undefined` is an
+  unavailable-owner error: fail visibly, without ordinary discovery or a fresh
+  native thread. Reattach the original native session before retrying.
+
+Omitting the callback preserves normal concrete model/auth preparation for
+third-party harnesses. Concrete plugin-owned chats never query it; a runtime
+request or model lock alone cannot establish native ownership. Paired-node
+Codex sessions use their owning node handler; a missing local binding must not
+turn a misrouted continuation into a local run.
+
+Include `modelRef: { provider, model }` only when both values are known from that
+same binding. Do not infer a missing value from outer configuration, credentials,
+or usage. Host-auth ownership requires this tuple before credential preparation;
+native-auth pending branches may omit it until their native owner selects a model.
+
+Read the existing private binding synchronously. Call `assertCurrent()` before
+and after the read. Do not discover models, reclaim a generation, start a client,
+authenticate, or mutate the binding. The assertion expires when the callback
+returns. This ownership fact is neither execution authority nor credential readiness.
+
+The Codex implementation reports native model ownership from `preserveNativeModel`.
+It reports native auth only for the separate private supervision connection;
+preserving a model on a managed connection leaves auth with the host. A
+native-auth binding uses its verified connection instead of testing irrelevant
+outer model route/auth metadata or forwarding a host profile. Native connection
+policy still applies. Explicit per-run provider stream parameters are rejected
+rather than dropped; use a concrete model chat to apply them.
+
+For host-auth bindings, the actual native tuple controls model, auth, and request
+transport preparation. Explicit profile locks remain strict; automatic profile
+rotation remains available. Authored settings on that tuple and explicit per-run
+parameters must be supported by the pinned runtime, not silently dropped or
+redirected through another runtime.
+
+Core carries optional `expectedSessionRuntimeOwnership` into the attempt, including
+`modelRef` for host-auth bindings. This is a nonauthorizing comparison, not a binding,
+credential, or retained capability. Revalidate during preflight, under the binding
+lease, and against the ready thread after resume before inference. A changed host-auth
+tuple rejects stale prepared credentials while retaining the newly observed binding.
+Native-auth connections may follow their native owner's model changes. Missing or
+changed ownership must never start a replacement thread.
+
+The same synchronous read supplies session rows, events, and session-scoped chat
+metadata. Native-auth metadata omits inapplicable host availability fields only for
+the session's rendered model; it does not set `available: true` or modify the shared
+catalog. Pending native branches may still show a configured placeholder until a
+native tuple exists.
+
+An attempt may report `runtimeModelSelection: { provider, model }` from its ready
+native thread. Core accepts this diagnostic only for a prepared native-owned run.
+It records the selected model separately from response/billing attribution, so a
+host finalizer's model does not overwrite the native session's selection.
 
 ### Verified setup runtime artifacts
 
@@ -236,6 +310,13 @@ route and scoped profiles, or the harness's native account when the plan leaves
 auth to the harness. The harness must not switch routes, reuse a native thread,
 attach tools, invoke agent lifecycle hooks, or deliver output.
 
+When supplied, call `params.assertCurrent()` immediately before each inference
+request or process start, including after preparation awaits and on retries.
+It revalidates the caller's live authority and expires when the completion ends.
+A thrown assertion ends execution; do not treat it as a credential failure or
+retry with another profile. Continue to honor `abortSignal`; cleanup must remain
+available after authority expires.
+
 Return `{ assistant: AssistantMessage }`. Core accepts only terminal text/thinking
 content with a `stop` or `length` stop reason; tool calls, failed stops, and empty
 output are rejected. Title requests set `outputTextPolicy: "strict-visible"`:
@@ -311,14 +392,19 @@ checks. Plugins opt into the scope but never name the harness owner on the
 error. Do not use harness scope after a request or tool action may have produced
 side effects.
 
-Configured runtime policy remains authoritative about the desired runtime. A
-locked session `agentHarnessId` keeps ownership of its native transcript
-while route/auth preparation is still pending. Neither makes an incompatible
-route compatible: once prepared facts exist, the selected or pinned harness
-must support them, declare the exact-request OpenClaw fallback, or the run fails
-closed. Next-turn metadata uses the same registered support decision and retains
-its model/provider/session source. An unlocked historical producer does not pin
-the next turn. Projection never loads a harness or reads credentials.
+Configured runtime policy remains authoritative about the desired runtime.
+A durable native harness pin retains its transcript owner; an observed harness
+on a plugin-owned concrete model chat does not become a pin, even when model
+selection is locked. For concrete-model execution, neither a request nor a pin
+makes an incompatible route compatible: the harness must support the prepared
+facts, declare the exact-request OpenClaw fallback, or fail closed.
+[Bound native session ownership](/plugins/sdk-agent-harness#bound-native-session-ownership) separately
+identifies sessions whose verified native connection owns model and auth, so
+unrelated outer route metadata does not replace that connection.
+
+Next-turn metadata uses the registered support decision and retains its
+model/provider/session source. Historical producer observations do not pin the
+next turn. Projection never loads a harness or reads credentials.
 Prepared status is explicit: missing `runtimePolicy` stays undeclared instead
 of being inferred from whichever transport fields happen to be present.
 When harness-owned auth leaves multiple physical routes unresolved, the
@@ -348,8 +434,8 @@ The bundled Codex plugin follows this pattern:
 - compatibility refs: legacy `codex/gpt-*` refs remain accepted, but new
   configs should not use them as normal provider/model refs
 - harness id: `codex`
-- auth: synthetic provider availability, because the Codex harness owns the
-  native Codex login/session
+- auth: prepared OpenAI route/profile policy for concrete requests; verified
+  native-auth bindings use their native connection
 - app-server request: OpenClaw sends the bare model id to Codex and lets the
   harness talk to the native app-server protocol
 
@@ -446,6 +532,17 @@ the prompt, deliver it through OpenClaw's blocking reply path, and normalize
 choice/free-form answers back into the runtime's native response shape. The
 helper keeps channel/TUI presentation consistent while each harness keeps its
 own protocol parsing and pending-request lifecycle.
+
+OpenClaw's own blocking question tools — `ask_user`, and a `secrets` request —
+are a separate case. They register a Gateway question and then wait, and the
+prompt that lets a person answer it is published by whatever runs the tool. A
+harness whose tools go through the embedded tool lifecycle gets that publication
+from its tool-start handler. A harness that dispatches tools itself passes
+`questionPrompt` to `createOpenClawCodingTools` instead, on every path where it
+builds a tool surface — a side thread is its own such path: `send` is the run's
+`onToolResult`, and `messageChannel` is the conversation the prompt would appear
+in. Leave it out and the question is registered but never shown, so the turn
+waits out its whole timeout and then reports that nobody answered.
 
 For schema-backed forms and literal URL confirmation, use the
 `agentHarnessStructuredInput` runtime surface from the same subpath. It
@@ -691,6 +788,24 @@ The OpenClaw transcript remains the compatibility layer for:
 - transcript search and indexing
 - switching back to the built-in OpenClaw harness on a later turn
 - generic `/new`, `/reset`, and session deletion behavior
+
+For user-message mirrors, use
+`restorePreparedUserTurnOperationalMetaForRuntime({ runtimeMessage, preparedMessage })`
+from `openclaw/plugin-sdk/agent-harness-runtime`. Pass an independent, trusted
+snapshot of the host-prepared input as `preparedMessage`. Clone `content` and
+selected-mention metadata before hooks that can mutate them in place, and keep
+that snapshot unchanged.
+
+The helper restores operational metadata on user messages without replacing
+native or hook-rewritten content. Non-user runtime messages are returned unchanged.
+Human mentions survive only when the entire `content` value exactly matches the
+prepared snapshot; changed text must not inherit the old selections.
+
+Restored metadata neither authorizes actions nor proves a fresh transcript append.
+After the canonical append, pass its committed message, anchor, and actual
+`{ appended }` result to `userTurnTranscriptRecorder.markRuntimePersisted(...)`.
+Only `appended: true` can trigger an original-input commit notification; an
+idempotent history match must report `false`.
 
 Store native bindings in plugin state. Implement `reset(...)` for an in-place
 session reset and `withSessionDeletion(params, run)` for removal of a session

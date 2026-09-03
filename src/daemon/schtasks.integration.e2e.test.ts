@@ -20,8 +20,10 @@ import {
   createGatewayTaskSupervisorProbe,
   expectGatewayTaskSupervisorProcessAlive,
   expectScheduledTaskProbeOrigin,
+  isProcessAlive,
   waitForGatewayTaskSupervisorExit,
   waitForGatewayTaskSupervisorProcesses,
+  waitForProcessExit,
   writeGatewayTaskSupervisorProbe,
 } from "./schtasks.task-supervisor.native-test-support.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
@@ -30,11 +32,12 @@ import { resolveGatewayService } from "./service.js";
 
 const WAIT_INTERVAL_MS = 200;
 const WAIT_TIMEOUT_MS = 30_000;
-const RESTART_ON_FAILURE_WAIT_TIMEOUT_MS = 120_000;
 const DIAGNOSTIC_TEXT_LIMIT = 16_384;
 const DIAGNOSTIC_PROCESS_LIMIT = 32;
 const TASK_LOGON_INTERACTIVE_TOKEN = 3;
 const TASK_RUNLEVEL_LEAST_PRIVILEGE = 0;
+const TASK_STATE_READY = 3;
+const TASK_STATE_RUNNING = 4;
 
 type ScheduledTaskPrincipal = {
   lastRunTime: string;
@@ -102,17 +105,6 @@ async function waitForRuntimeStatus(
   );
 }
 
-async function waitForProcessExit(pid: number): Promise<void> {
-  const deadline = Date.now() + WAIT_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    if (!isProcessAlive(pid)) {
-      return;
-    }
-    await sleep();
-  }
-  throw new Error(`Timed out waiting for Scheduled Task process ${pid} to exit`);
-}
-
 async function reserveLoopbackPort(): Promise<number> {
   const server = createServer();
   await new Promise<void>((resolve, reject) => {
@@ -150,15 +142,6 @@ async function waitForLoopbackPortRelease(port: number): Promise<void> {
     await sleep();
   }
   throw new Error(`Timed out waiting for Scheduled Task loopback port ${port} to be reusable`);
-}
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ESRCH";
-  }
 }
 
 async function readTaskXml(taskName: string): Promise<string | null> {
@@ -382,18 +365,16 @@ function assertInteractiveLeastPrivilegeTask(params: {
   expect(exportedRunLevel === undefined || exportedRunLevel === "LeastPrivilege").toBe(true);
 }
 
-async function waitForSuccessfulScheduledTaskRun(
-  taskName: string,
-  timeoutMs = WAIT_TIMEOUT_MS,
-): Promise<ScheduledTaskPrincipal> {
-  const deadline = Date.now() + timeoutMs;
+async function waitForFailedScheduledTaskRun(taskName: string): Promise<ScheduledTaskPrincipal> {
+  const deadline = Date.now() + WAIT_TIMEOUT_MS;
   let lastPrincipal: ScheduledTaskPrincipal | null = null;
   let lastError: unknown;
   while (Date.now() < deadline) {
     try {
       lastPrincipal = readTaskPrincipal(taskName);
       if (
-        lastPrincipal.lastTaskResult === 0 &&
+        lastPrincipal.taskState === TASK_STATE_READY &&
+        lastPrincipal.lastTaskResult === 23 &&
         !Number.isNaN(Date.parse(lastPrincipal.lastRunTime)) &&
         Date.parse(lastPrincipal.lastRunTime) > 0
       ) {
@@ -405,7 +386,7 @@ async function waitForSuccessfulScheduledTaskRun(
     await sleep();
   }
   throw new Error(
-    `Timed out waiting for Scheduled Task ${taskName} to record a successful run; ${
+    `Timed out waiting for Scheduled Task ${taskName} to finish the intentional exit 23; ${
       lastPrincipal
         ? `observed state=${lastPrincipal.taskState} result=${lastPrincipal.lastTaskResult}`
         : `last inspection failed: ${lastError instanceof Error ? lastError.message : String(lastError)}`
@@ -799,6 +780,8 @@ describe.runIf(nativeIntegrationEnabled)("schtasks Windows integration", () => {
     const scriptPath = resolveTaskScriptPath(env);
     const launcherPath = resolveTaskLauncherScriptPath(env, scriptPath);
 
+    // Source workers resolve tsx from the task cwd; give the isolated fixture its dependencies.
+    await fs.symlink(path.resolve("node_modules"), path.join(rootDir, "node_modules"), "junction");
     await writeGatewayTaskSupervisorProbe({ activePidPath, eventsPath, probe });
 
     let testFailed = false;
@@ -830,9 +813,18 @@ describe.runIf(nativeIntegrationEnabled)("schtasks Windows integration", () => {
           environment: {
             OPENCLAW_GATEWAY_PORT: String(gatewayPort),
             OPENCLAW_SERVICE_KIND: "gateway",
+            // Source aliases belong to the checkout, even when the task runs outside it.
+            TSX_TSCONFIG_PATH: path.resolve("tsconfig.json"),
           },
           description: `OpenClaw CI Scheduled Task integration ${id}`,
         });
+
+        const failedProcesses = await waitForGatewayTaskSupervisorProcesses({
+          probe,
+          failedAttempt: true,
+        });
+        installedPrincipal = await waitForFailedScheduledTaskRun(taskName);
+        await waitForGatewayTaskSupervisorExit(failedProcesses);
 
         expect((await execSchtasks(["/Query", "/TN", taskName])).code).toBe(0);
         const taskXml = await readTaskXml(taskName);
@@ -843,10 +835,7 @@ describe.runIf(nativeIntegrationEnabled)("schtasks Windows integration", () => {
         expect(taskXml.replaceAll("/", "\\").toLowerCase()).toContain(
           launcherPath.replaceAll("/", "\\").toLowerCase(),
         );
-        installedPrincipal = await waitForSuccessfulScheduledTaskRun(
-          taskName,
-          RESTART_ON_FAILURE_WAIT_TIMEOUT_MS,
-        );
+        expect(taskXml).toContain("<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>");
         assertInteractiveLeastPrivilegeTask({
           taskXml,
           principal: installedPrincipal,
@@ -858,24 +847,33 @@ describe.runIf(nativeIntegrationEnabled)("schtasks Windows integration", () => {
         expect(command?.programArguments).toEqual(programArguments);
         expect(command?.environment?.OPENCLAW_GATEWAY_PORT).toBe(String(gatewayPort));
         expect(command?.environment?.OPENCLAW_SERVICE_KIND).toBe("gateway");
-        const installedRun = await proof.waitForExactProbeRun(eventsPath, 1);
-        const installedPid = installedRun.pid;
-        const installedProcesses = await waitForGatewayTaskSupervisorProcesses({
-          probe,
-          requireFailedAttempt: true,
+        // An executed exit 23 need not trigger Scheduler retry. Request recovery only
+        // after failure cleanup; IgnoreNew prevents overlap if Scheduler also retries.
+        const recoveryMutations: string[] = [];
+        await service.start({
+          env,
+          stdout,
+          onMutation: (mutation) => recoveryMutations.push(mutation.mode),
         });
-        expectProbeProcessAlive(installedPid);
-        expectProbeProcessAlive(installedProcesses.childPid);
-        expectGatewayTaskSupervisorProcessAlive(installedProcesses.supervisorPid, probe.probePath);
+        expect(recoveryMutations).toEqual(["schtasks-start"]);
+        const recoveredRun = await proof.waitForExactProbeRun(eventsPath, 1);
+        const recoveredPid = recoveredRun.pid;
+        const recoveredProcesses = await waitForGatewayTaskSupervisorProcesses({ probe });
+        expect(recoveredPid).not.toBe(failedProcesses.childPid);
+        expect(recoveredProcesses.supervisorPid).not.toBe(failedProcesses.supervisorPid);
+        expectProbeProcessAlive(recoveredPid);
+        expectProbeProcessAlive(recoveredProcesses.childPid);
+        expectGatewayTaskSupervisorProcessAlive(recoveredProcesses.supervisorPid, probe.probePath);
         expectScheduledTaskProbeOrigin({
           eventsPath,
           probePath: probe.probePath,
-          run: installedRun,
+          run: recoveredRun,
           scriptPath,
           readRelatedProcessDiagnostics,
         });
         expect(await canBindLoopbackPort(gatewayPort)).toBe(false);
-        await waitForRuntimeStatus(readRuntime, "running", installedPid);
+        await waitForRuntimeStatus(readRuntime, "running", recoveredPid);
+        expect(readTaskPrincipal(taskName).taskState).toBe(TASK_STATE_RUNNING);
 
         const stopMutations: string[] = [];
         await service.stop({
@@ -884,9 +882,9 @@ describe.runIf(nativeIntegrationEnabled)("schtasks Windows integration", () => {
           onMutation: (mutation) => stopMutations.push(mutation.mode),
         });
         expect(stopMutations).toEqual(["schtasks-stop"]);
-        await waitForProcessExit(installedPid);
-        await waitForGatewayTaskSupervisorExit(installedProcesses);
-        await clearActivePid(activePidPath, installedPid);
+        await waitForProcessExit(recoveredPid);
+        await waitForGatewayTaskSupervisorExit(recoveredProcesses);
+        await clearActivePid(activePidPath, recoveredPid);
         await waitForLoopbackPortRelease(gatewayPort);
         await waitForRuntimeStatus(readRuntime, "stopped");
         expect((await execSchtasks(["/Query", "/TN", taskName])).code).toBe(0);
@@ -901,7 +899,7 @@ describe.runIf(nativeIntegrationEnabled)("schtasks Windows integration", () => {
         const startedRun = await proof.waitForExactProbeRun(eventsPath, 2);
         const startedPid = startedRun.pid;
         const startedProcesses = await waitForGatewayTaskSupervisorProcesses({ probe });
-        expect(startedPid).not.toBe(installedPid);
+        expect(startedPid).not.toBe(recoveredPid);
         expectProbeProcessAlive(startedPid);
         expectProbeProcessAlive(startedProcesses.childPid);
         expectGatewayTaskSupervisorProcessAlive(startedProcesses.supervisorPid, probe.probePath);
@@ -914,6 +912,7 @@ describe.runIf(nativeIntegrationEnabled)("schtasks Windows integration", () => {
         });
         expect(await canBindLoopbackPort(gatewayPort)).toBe(false);
         await waitForRuntimeStatus(readRuntime, "running", startedPid);
+        expect(readTaskPrincipal(taskName).taskState).toBe(TASK_STATE_RUNNING);
         await service.start({ env, stdout });
         await proof.waitForExactProbeRun(eventsPath, 2);
 
@@ -928,8 +927,8 @@ describe.runIf(nativeIntegrationEnabled)("schtasks Windows integration", () => {
         const restartedRun = await proof.waitForExactProbeRun(eventsPath, 3);
         const restartedPid = restartedRun.pid;
         const restartedProcesses = await waitForGatewayTaskSupervisorProcesses({ probe });
-        lifecyclePids = [installedPid, startedPid, restartedPid];
-        expect(restartedPid).not.toBe(startedPid);
+        lifecyclePids = [recoveredPid, startedPid, restartedPid];
+        expect(new Set(lifecyclePids).size).toBe(lifecyclePids.length);
         expectProbeProcessAlive(restartedPid);
         expectProbeProcessAlive(restartedProcesses.childPid);
         expectGatewayTaskSupervisorProcessAlive(restartedProcesses.supervisorPid, probe.probePath);
@@ -945,6 +944,7 @@ describe.runIf(nativeIntegrationEnabled)("schtasks Windows integration", () => {
         await clearActivePid(activePidPath, startedPid);
         expect(await canBindLoopbackPort(gatewayPort)).toBe(false);
         await waitForRuntimeStatus(readRuntime, "running", restartedPid);
+        expect(readTaskPrincipal(taskName).taskState).toBe(TASK_STATE_RUNNING);
 
         await service.stop({ env, stdout });
         await waitForProcessExit(restartedPid);
@@ -976,7 +976,21 @@ describe.runIf(nativeIntegrationEnabled)("schtasks Windows integration", () => {
                 head: proofHead,
                 profile,
                 taskName,
-                lifecycle: ["install", "stop", "start", "restart", "stop", "uninstall"],
+                lifecycle: [
+                  "install",
+                  "failed-run",
+                  "recovery-start",
+                  "stop",
+                  "start",
+                  "restart",
+                  "stop",
+                  "uninstall",
+                ],
+                failedRun: {
+                  taskState: installedPrincipal?.taskState,
+                  lastTaskResult: installedPrincipal?.lastTaskResult,
+                  ...failedProcesses,
+                },
                 pids: lifecyclePids,
                 gatewayPort,
                 portReleaseRebind: true,

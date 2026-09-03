@@ -4,7 +4,6 @@ import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
-  iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import { getChildLogger } from "../../logging/logger.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
@@ -47,7 +46,6 @@ import {
   hasValidSessionEntryIdentity,
   parseSessionEntryJson as parseSessionEntryRow,
   sessionEntryMetadataJson,
-  sessionEntryInventoryJson,
   selectSessionEntryRows,
 } from "./session-accessor.sqlite-status.js";
 import { readTranscriptMutationStateInTransaction } from "./session-accessor.sqlite-transcript-state.js";
@@ -64,6 +62,11 @@ import {
 } from "./store-entry.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 export { collectSessionEntryLookupKeys } from "./store-entry.js";
+export {
+  iterateSessionEntryKeys,
+  readSessionEntryCount,
+  readSessionEntryStore,
+} from "./session-accessor.sqlite-entry-inventory.js";
 
 type OpenClawAgentDatabaseReader = Pick<OpenClawAgentDatabase, "agentId" | "db">;
 type SessionEntryRow = Selectable<OpenClawAgentKyselyDatabase["session_nodes"]>;
@@ -211,65 +214,6 @@ export function readExactSessionEntryRowValidated(
 ): ResolvedSessionEntryRow | undefined {
   assertCanonicalSqliteSessionKeysCurrent(database);
   return readExactSessionEntryRow(database, sessionKey, projection);
-}
-
-export function readSessionEntryStore(
-  database: OpenClawAgentDatabase,
-  options: { allowCanonicalRepair?: boolean; sessionKeys?: readonly string[] } = {},
-): Record<string, SessionEntry> {
-  if (options.allowCanonicalRepair !== true) {
-    assertCanonicalSqliteSessionKeysCurrent(database);
-  }
-  if (options.sessionKeys?.length === 0) {
-    return {};
-  }
-  const db = getSessionKysely(database.db);
-  const query = db.selectFrom("session_nodes").selectAll().orderBy("session_key");
-  const rows = iterateSqliteQuerySync(
-    database.db,
-    options.sessionKeys ? query.where("session_key", "in", options.sessionKeys) : query,
-  );
-  const store: Record<string, SessionEntry> = {};
-  for (const row of rows) {
-    // Doctor lifecycle projection supplies its separately hydrated expected entry for rejected
-    // raw rows; ordinary exact reads still fail loud before a write can replace one.
-    const entry = parseSessionEntryRow(row);
-    if (entry) {
-      store[row.session_key] = entry;
-    }
-  }
-  return store;
-}
-
-export function readSessionEntryCount(database: OpenClawAgentDatabase): number {
-  const db = getSessionKysely(database.db);
-  const rows = iterateSqliteQuerySync(
-    database.db,
-    db.selectFrom("session_nodes").select(sessionEntryInventoryJson),
-  );
-  let count = 0;
-  for (const row of rows) {
-    count +=
-      row.entry_json === null || parseSessionEntryRow({ entry_json: row.entry_json }) ? 1 : 0;
-  }
-  return count;
-}
-
-export function* iterateSessionEntryKeys(
-  database: OpenClawAgentDatabaseReader,
-): IterableIterator<string> {
-  const db = getSessionKysely(database.db);
-  for (const row of iterateSqliteQuerySync(
-    database.db,
-    db
-      .selectFrom("session_nodes")
-      .select([sessionEntryInventoryJson, "session_key"])
-      .orderBy("session_key", "asc"),
-  )) {
-    if (row.entry_json === null || parseSessionEntryRow({ entry_json: row.entry_json })) {
-      yield row.session_key;
-    }
-  }
 }
 
 export function resolveLifecyclePrimaryEntry(

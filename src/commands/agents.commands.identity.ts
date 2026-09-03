@@ -8,7 +8,11 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
-import { loadAgentIdentityFromFile } from "../agents/identity-file.js";
+import {
+  type AgentIdentityFile,
+  loadAgentIdentityFromFile,
+  loadAgentIdentityFromWorkspace,
+} from "../agents/identity-file.js";
 import { DEFAULT_IDENTITY_FILENAME } from "../agents/workspace.js";
 import { ExpectedCliError } from "../cli/failure-output.js";
 import { replaceConfigFile } from "../config/config.js";
@@ -20,12 +24,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
-import {
-  type AgentIdentity,
-  findAgentEntryIndex,
-  listAgentEntries,
-  loadAgentIdentity,
-} from "./agents.config.js";
+import { findAgentEntryIndex, listAgentEntries } from "./agents.config.js";
 import { requireValidConfigFileSnapshot } from "./config-validation.js";
 
 type AgentsSetIdentityOptions = {
@@ -130,7 +129,7 @@ export async function agentsSetIdentityCommand(
   const list = listAgentEntries(cfg);
   const index = findAgentEntryIndex(list, resolvedAgentId);
 
-  let identityFromFile: AgentIdentity | null = null;
+  let identityFromFile: AgentIdentityFile | null = null;
   if (wantsIdentityFile) {
     if (identityFilePath) {
       try {
@@ -139,7 +138,7 @@ export async function agentsSetIdentityCommand(
         failAgentIdentity(formatErrorMessage(error));
       }
     } else if (workspaceDir) {
-      identityFromFile = loadAgentIdentity(workspaceDir);
+      identityFromFile = loadAgentIdentityFromWorkspace(workspaceDir);
     }
     if (!identityFromFile) {
       const targetPath =

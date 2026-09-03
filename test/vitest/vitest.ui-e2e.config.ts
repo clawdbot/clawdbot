@@ -10,29 +10,42 @@ import { UiE2eSequencer } from "./vitest.ui-e2e.sequencer.ts";
 
 const mediaTranscriptRealGatewayTest =
   "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts";
-const uiE2eIncludePatterns = ["ui/src/**/*.e2e.test.ts", mediaTranscriptRealGatewayTest];
+const sessionHostCommandStateRealGatewayTest =
+  "extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts";
+const openClawDelegationRealGatewayTest =
+  "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts";
+const uiE2eIncludePatterns = [
+  "ui/src/**/*.e2e.test.ts",
+  mediaTranscriptRealGatewayTest,
+  sessionHostCommandStateRealGatewayTest,
+  openClawDelegationRealGatewayTest,
+];
 export const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
   "ui/src/e2e/control-ui-auth-transports.e2e.test.ts",
+  "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
   "ui/src/e2e/logs-lifecycle.e2e.test.ts",
   "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
+  sessionHostCommandStateRealGatewayTest,
   "ui/src/e2e/session-progress-hovercard.real-gateway.e2e.test.ts",
   "ui/src/e2e/usage-sessions-owner-attribution.e2e.test.ts",
   mediaTranscriptRealGatewayTest,
+  openClawDelegationRealGatewayTest,
 ];
 
-// These files start a private source-module Vite server instead of leasing the
-// global production bundle. Keep their shared optimizer cache under one worker.
+// These files own their server instead of leasing the global production bundle.
+// Keep any shared source-module optimizer cache under one worker.
 export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/approval-bootstrap.e2e.test.ts",
   "ui/src/e2e/build-info-unicode.e2e.test.ts",
   "ui/src/e2e/chat-code-block-fences.e2e.test.ts",
   "ui/src/e2e/chat-export-attribution.e2e.test.ts",
-  "ui/src/e2e/chat-markdown-table-interactions.e2e.test.ts",
   "ui/src/e2e/child-session-load-errors.e2e.test.ts",
+  "ui/src/e2e/community-invite-showing.e2e.test.ts",
   "ui/src/e2e/composer-draft-store.e2e.test.ts",
   "ui/src/e2e/composer-recovery-fences.e2e.test.ts",
   "ui/src/e2e/control-ui-shell-routing.e2e.test.ts",
+  "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
   "ui/src/e2e/cron-loading.e2e.test.ts",
   "ui/src/e2e/gateway-foreground-recovery.e2e.test.ts",
   "ui/src/e2e/initial-connect-splash.e2e.test.ts",

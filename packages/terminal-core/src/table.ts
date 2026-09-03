@@ -1,4 +1,4 @@
-import { splitAnsiSegments } from "./ansi-sequences.js";
+import { iterateAnsiSegments } from "./ansi-sequences.js";
 import { splitGraphemes, truncateToVisibleWidth, visibleWidth } from "./ansi.js";
 import { createDisplayStringFormatter } from "./display-string.js";
 import { sanitizeTerminalText } from "./safe-text.js";
@@ -280,7 +280,7 @@ function wrapLine(text: string, width: number): string[] {
   // Table cells are padded and bordered per physical line, so wrapped lines
   // must not leak styling into padding while the next continuation keeps it.
   const tokens: AnsiToken[] = [];
-  for (const segment of splitAnsiSegments(text)) {
+  for (const segment of iterateAnsiSegments(text)) {
     let value = segment.value;
     if (segment.kind === "ansi") {
       if (segment.controls.includes("\t")) {

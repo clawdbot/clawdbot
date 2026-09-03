@@ -5,7 +5,7 @@ import type {
   Context,
   Model,
 } from "@openclaw/llm-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { bindModelLlmRuntime } from "./model-runtime-binding.js";
 import { completeSimple } from "./stream.js";
 import { createAssistantMessageEventStream } from "./utils/event-stream.js";
@@ -77,4 +77,73 @@ describe("LLM completion transport host", () => {
       completeSimple(bindModelLlmRuntime(model, runtime), { messages: [] }),
     ).resolves.toEqual(message);
   });
+
+  it.each(["expired authority", "aborted caller"] as const)(
+    "rejects an isolated completion with %s during transport setup before provider admission",
+    async (reason) => {
+      const { runHostPreparedIsolatedCompletion } =
+        await import("../agents/host-prepared-isolated-completion.js");
+      const registry = createApiRegistry();
+      const runtime = createLlmRuntime(registry);
+      const model = bindModelLlmRuntime(
+        {
+          api: "test-isolated-host-api",
+          provider: "test-isolated-host",
+          id: "test-isolated-host-model",
+          name: "Test Isolated Host Model",
+          baseUrl: "https://example.test",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 1024,
+          maxTokens: 512,
+        } satisfies Model,
+        runtime,
+      );
+      const providerStream = vi.fn((): AssistantMessageEventStreamContract => {
+        throw new Error("Unexpected provider admission");
+      });
+      registry.registerApiProvider({
+        api: model.api,
+        stream: providerStream,
+        streamSimple: providerStream,
+      });
+      let current = true;
+      const controller = new AbortController();
+      const run = runHostPreparedIsolatedCompletion({
+        authorization: {
+          owner: "host",
+          model,
+          auth: { apiKey: "test", source: "test", mode: "api-key" },
+        },
+        provider: model.provider,
+        modelId: model.id,
+        agentId: "main",
+        agentDir: "/tmp/isolated-host-agent",
+        workspaceDir: "/tmp/isolated-host-workspace",
+        config: {},
+        systemPrompt: "system",
+        prompt: "user",
+        timeoutMs: 1_000,
+        abortSignal: controller.signal,
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("Completion authority expired");
+          }
+        },
+      });
+      if (reason === "expired authority") {
+        current = false;
+      } else {
+        controller.abort(new Error("Completion caller aborted"));
+      }
+
+      await expect(run).rejects.toThrow(
+        reason === "expired authority"
+          ? "Completion authority expired"
+          : "Completion caller aborted",
+      );
+      expect(providerStream).not.toHaveBeenCalled();
+    },
+  );
 });

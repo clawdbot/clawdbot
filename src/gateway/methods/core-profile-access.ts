@@ -1,4 +1,4 @@
-import { isSessionProfileDependentMethod } from "../session-sharing-target-input.js";
+import { isSessionProfileDependentMethod } from "../session-method-policy.js";
 
 const PROFILE_DEPENDENT_CORE_METHODS = new Set([
   "agent.wait",
@@ -8,6 +8,7 @@ const PROFILE_DEPENDENT_CORE_METHODS = new Set([
   "talk.config",
   "ui.command",
   "users.linkEmail",
+  "users.mentionable",
   "users.setAvatar",
   "users.setDisplayName",
   "users.setRole",
@@ -18,6 +19,7 @@ const PROFILE_DEPENDENT_CORE_PREFIXES = [
   "conversations.",
   "controlUi.session",
   "mcp.app.",
+  "mentions.",
   "openclaw.approval.",
   "openclaw.chat",
   "progressCard.",

@@ -19,6 +19,7 @@ type PersistRecordResult =
   | undefined
   | {
       anchor?: TranscriptEntryAnchor;
+      appended: boolean;
       adoptedMessageId?: string;
       effectiveParentId: string | null;
     };
@@ -272,6 +273,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
         return {
           adoptedMessageId: result.messageId,
           anchor: result.anchor,
+          appended: result.appended,
           effectiveParentId: result.effectiveParentId ?? null,
         };
       }
@@ -288,6 +290,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
     }
     return {
       ...(result.anchor ? { anchor: result.anchor } : {}),
+      appended: result.appended,
       effectiveParentId: result.effectiveParentId,
     };
   }

@@ -37,10 +37,12 @@ import {
 } from "../../gateway/server-methods/agent-timestamp.js";
 import { emitAgentAuditEvent, emitAgentEvent } from "../../infra/agent-events.js";
 import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
+import type { StopReason } from "../../llm/types.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
+import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import {
   buildPersistedUserTurnMessage,
@@ -57,7 +59,11 @@ import {
 import { resolveUserPath } from "../../utils.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
 import type { PreparedAgentRunAdmission } from "../admitted-run-context.js";
-import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agent-run-terminal-outcome.js";
+import {
+  buildAgentRunTerminalOutcomeFromLifecycleEvent,
+  classifyAgentRunTerminalOutcome,
+  type AgentRunTerminalOutcome,
+} from "../agent-run-terminal-outcome.js";
 import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { ensureAuthProfileStore } from "../auth-profiles/store.js";
@@ -75,6 +81,7 @@ import { runCliAgent } from "../cli-runner.js";
 import { hasCliLiveSession } from "../cli-runner/cli-live-session-registry.js";
 import { buildCliMcpDelegationCapabilityBinding } from "../cli-runner/mcp-grant-context.js";
 import { resolveCliRuntimeToolsAllow } from "../cli-runner/tool-policy.js";
+import { clearCliSessionInStore, persistCliSessionBindingResult } from "../cli-session-store.js";
 import {
   getCliSessionBinding,
   resolveCliSessionClearReason,
@@ -92,6 +99,7 @@ import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-tu
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
 import { AGENT_LANE_SUBAGENT } from "../lanes.js";
+import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
 import type { ModelFallbackAttemptProvenance } from "../model-fallback.types.js";
 import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
 import { isCliProvider } from "../model-selection.js";
@@ -121,7 +129,6 @@ import {
 } from "./attempt-execution.helpers.js";
 import { resolveAgentRunContext } from "./run-context.js";
 import {
-  clearCliSessionInStore,
   consumeCliSessionForkInStore,
   persistCliSessionForkSuccessorInStore,
   restoreCliSessionForkInStore,
@@ -233,6 +240,7 @@ type PersistTextTurnTranscriptParams = {
     api: string;
     provider: string;
     model: string;
+    stopReason: StopReason;
     usage?: TranscriptUsage;
   };
 };
@@ -395,7 +403,7 @@ async function persistTextTurnTranscript(
         provider: params.assistant.provider,
         model: params.assistant.model,
         usage: resolveTranscriptUsage(params.assistant.usage),
-        stopReason: "stop",
+        stopReason: params.assistant.stopReason,
         timestamp: Date.now(),
       },
       ...(prepareAssistantTranscriptMessage
@@ -445,6 +453,7 @@ async function persistTextTurnTranscript(
       // SAFETY: The typed user-write hook above is the only producer of this batch's user row.
       persistedUser.message as PersistedUserTurnMessage,
       persistedUser.anchor,
+      { appended: persistedUser.appended },
     );
   }
   const assistantTranscript = turn.messages.find(
@@ -483,6 +492,7 @@ export async function persistAcpTurnTranscript(params: {
   assistantIdempotencyKey?: string;
   expectedSessionId?: string;
   finalText: string;
+  terminalOutcome: AgentRunTerminalOutcome;
   sessionId: string;
   sessionKey: string;
   sessionFile?: string;
@@ -494,6 +504,7 @@ export async function persistAcpTurnTranscript(params: {
   sessionCwd: string;
   config: OpenClawConfig;
 }): Promise<PersistTextTurnTranscriptResult> {
+  const outcome = classifyAgentRunTerminalOutcome(params.terminalOutcome);
   return await persistTextTurnTranscript({
     ...params,
     ...(params.userInput ? { userMessage: buildPersistedUserTurnMessage(params.userInput) } : {}),
@@ -501,6 +512,7 @@ export async function persistAcpTurnTranscript(params: {
       api: "openai-responses",
       provider: "openclaw",
       model: "acp-runtime",
+      stopReason: outcome === "success" ? "stop" : outcome === "failure" ? "error" : "aborted",
     },
   });
 }
@@ -539,6 +551,7 @@ export async function persistCliTurnTranscript(params: {
       api: "cli",
       provider,
       model,
+      stopReason: "stop",
       // The marker is terminal for fallback scans: without it, readers could
       // skip this turn and revive an older cumulative usage record as fresh.
       usage: resolveCliTranscriptUsage(result.meta.agentMeta?.lastCallUsage),
@@ -567,6 +580,8 @@ export function runAgentAttempt(params: {
   body: string;
   transcriptBody?: string;
   isFallbackRetry: boolean;
+  preserveCliSessionBinding?: boolean;
+  classifyResult?: (result: EmbeddedAgentRunResult) => ModelFallbackResultClassification;
   modelRoutingProvenance: ModelFallbackAttemptProvenance;
   resolvedThinkLevel: ThinkLevel;
   fastMode?: FastMode;
@@ -743,8 +758,11 @@ export function runAgentAttempt(params: {
     bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
   const requestedAgentHarnessId = isRawModelRun ? "openclaw" : undefined;
   const sessionRuntimeOverride = isRawModelRun ? undefined : params.agentHarnessRuntimeOverride;
+  const pinnedHarnessId = isRawModelRun
+    ? undefined
+    : resolveSessionPinnedHarnessId(params.sessionEntry);
   const locksSessionRuntimeOverride =
-    sessionRuntimeOverride !== undefined && params.sessionEntry?.modelSelectionLocked === true;
+    pinnedHarnessId !== undefined && sessionRuntimeOverride === pinnedHarnessId;
   const sessionCliRuntime =
     sessionRuntimeOverride &&
     !locksSessionRuntimeOverride &&
@@ -876,7 +894,7 @@ export function runAgentAttempt(params: {
         agentId: params.sessionAgentId,
         runId: params.runId,
       },
-      async () => {
+      async (assertSettlementCurrent) => {
         if (params.sessionKey && params.storePath) {
           params.sessionEntry = loadSessionEntry({
             sessionKey: params.sessionKey,
@@ -939,6 +957,8 @@ export function runAgentAttempt(params: {
                 sessionKey: params.sessionKey,
                 sessionStore: params.sessionStore,
                 storePath: params.storePath,
+                expectedSessionId: params.sessionId,
+                assertCommitAllowed: assertSettlementCurrent,
               }
             : undefined;
         const resolveReusableCliSessionBinding = async () => {
@@ -1004,6 +1024,10 @@ export function runAgentAttempt(params: {
                   provider: cliExecutionProvider,
                   expectedCliSessionId: nextCliSessionId,
                   ...mutableCliSessionStore,
+                  assertCommitAllowed: () => {
+                    assertSettlementCurrent();
+                    (params.deferredLifecycle?.signal ?? params.opts.abortSignal)?.throwIfAborted();
+                  },
                 }
               : undefined;
           return await runCliAgent({
@@ -1203,45 +1227,62 @@ export function runAgentAttempt(params: {
               : {}),
           });
         };
-        return resolveReusableCliSessionBinding().then(async (activeCliSessionBinding) => {
-          try {
-            return await runCliWithSession(
-              activeCliSessionBinding?.sessionId,
-              activeCliSessionBinding,
+        const activeCliSessionBinding = await resolveReusableCliSessionBinding();
+        let result: EmbeddedAgentRunResult;
+        try {
+          result = await runCliWithSession(
+            activeCliSessionBinding?.sessionId,
+            activeCliSessionBinding,
+          );
+        } catch (err) {
+          const failedCliSessionBinding = getCliSessionBinding(
+            params.sessionEntry,
+            cliExecutionProvider,
+          );
+          const failedCliSessionId = failedCliSessionBinding?.sessionId;
+          if (
+            isClaudeCliProvider(cliExecutionProvider) &&
+            shouldClearFailedCliSessionBinding({
+              error: err,
+              binding: failedCliSessionBinding,
+              hasNewGeneratedMediaTask: hasNewGeneratedMediaTaskForSessionKey(
+                params.sessionKey,
+                mediaTaskIdsBefore,
+              ),
+            }) &&
+            failedCliSessionId &&
+            mutableCliSessionStore
+          ) {
+            log.warn(
+              `CLI session cleared after failed reused turn: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${mutableCliSessionStore.sessionKey} reason=${sanitizeForLog(resolveCliSessionClearReason(err))}`,
             );
-          } catch (err) {
-            const failedCliSessionBinding = getCliSessionBinding(
-              params.sessionEntry,
-              cliExecutionProvider,
-            );
-            const failedCliSessionId = failedCliSessionBinding?.sessionId;
-            if (
-              isClaudeCliProvider(cliExecutionProvider) &&
-              shouldClearFailedCliSessionBinding({
-                error: err,
-                binding: failedCliSessionBinding,
-                hasNewGeneratedMediaTask: hasNewGeneratedMediaTaskForSessionKey(
-                  params.sessionKey,
-                  mediaTaskIdsBefore,
-                ),
-              }) &&
-              failedCliSessionId &&
-              mutableCliSessionStore
-            ) {
-              log.warn(
-                `CLI session cleared after failed reused turn: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${mutableCliSessionStore.sessionKey} reason=${sanitizeForLog(resolveCliSessionClearReason(err))}`,
-              );
 
-              params.sessionEntry =
-                (await clearCliSessionInStore({
-                  provider: cliExecutionProvider,
-                  expectedCliSessionId: failedCliSessionId,
-                  ...mutableCliSessionStore,
-                })) ?? params.sessionEntry;
-            }
-            throw err;
+            params.sessionEntry =
+              (await clearCliSessionInStore({
+                provider: cliExecutionProvider,
+                expectedCliSessionId: failedCliSessionId,
+                ...mutableCliSessionStore,
+              })) ?? params.sessionEntry;
           }
-        });
+          throw err;
+        }
+        const classification = params.classifyResult?.(result);
+        if (
+          !params.preserveCliSessionBinding &&
+          (!classification || result.meta.agentMeta?.clearCliSessionBinding === true)
+        ) {
+          await persistCliSessionBindingResult({
+            provider: cliExecutionProvider,
+            result,
+            sessionKey: params.sessionKey,
+            storePath: params.storePath,
+            sessionStore: params.sessionStore,
+            expectedSession: params.sessionEntry,
+            assertSettlementCurrent,
+            abortSignal: params.deferredLifecycle?.signal ?? params.opts.abortSignal,
+          });
+        }
+        return result;
       },
       {
         lifecycleGeneration: params.lifecycleGeneration,
@@ -1296,7 +1337,7 @@ export function runAgentAttempt(params: {
     sessionRoot: params.sessionEntry?.sessionRoot,
     config: params.cfg,
     ...(params.pluginGeneration ? { pluginGeneration: params.pluginGeneration } : {}),
-    agentHarnessId: embeddedAgentHarnessOverride,
+    agentHarnessId: pinnedHarnessId,
     modelSelectionLocked: !isRawModelRun && params.sessionEntry?.modelSelectionLocked === true,
     agentHarnessRuntimeOverride: embeddedAgentHarnessOverride,
     agentHarnessRuntimePreparationHint:
@@ -1540,7 +1581,7 @@ function resolveAcpToolTerminalReason(
   return "failed";
 }
 
-function resolveAcpLifecycleEndFields(
+export function resolveAcpLifecycleEndFields(
   signal: AbortSignal | undefined,
   stopReason?: string,
   resultStatus?: Extract<AcpRuntimeEvent, { type: "done" }>["status"],
@@ -1821,9 +1862,7 @@ export function emitAcpLifecycleEnd(params: {
   sessionKey?: string;
   agentId?: string;
   lifecycleGeneration?: string;
-  abortSignal?: AbortSignal;
-  stopReason?: string;
-  resultStatus?: Extract<AcpRuntimeEvent, { type: "done" }>["status"];
+  endFields: ReturnType<typeof resolveAcpLifecycleEndFields>;
   terminalReply?: AgentRunTerminalReplySnapshot;
   auditOnly?: boolean;
   completionSource?: "reply-dispatch";
@@ -1831,17 +1870,16 @@ export function emitAcpLifecycleEnd(params: {
   finalizeAcpToolsForRun(
     params.toolTracker,
     params.runId,
-    resolveAcpToolTerminalReason(
-      params.abortSignal,
-      params.stopReason,
-      undefined,
-      params.resultStatus,
-    ),
+    params.endFields.stopReason === "timeout"
+      ? "timed_out"
+      : params.endFields.aborted
+        ? "cancelled"
+        : "failed",
   );
   return emitAcpTerminalLifecycle(params, {
     phase: "end",
     endedAt: Date.now(),
-    ...resolveAcpLifecycleEndFields(params.abortSignal, params.stopReason, params.resultStatus),
+    ...params.endFields,
     ...(params.terminalReply ? { terminalReply: params.terminalReply } : {}),
   });
 }

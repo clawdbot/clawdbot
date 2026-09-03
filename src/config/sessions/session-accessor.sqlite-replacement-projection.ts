@@ -273,6 +273,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
 }
 
 export async function applySessionEntryExactReplacements<T>(params: {
+  assertCommitAllowed?: () => void;
   activeSessionKey?: string;
   agentId?: string;
   requireWriteSuccess?: boolean;

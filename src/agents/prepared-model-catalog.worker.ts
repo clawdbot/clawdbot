@@ -8,9 +8,11 @@ import {
 } from "../config/resolution-facts.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { serveWorkerTasks } from "../infra/worker-task-pool.js";
+import { listRuntimePluginIdsFromRegistry } from "../plugins/active-runtime-registry.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import { restorePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { planRuntimePluginDiscovery } from "../plugins/provider-discovery.js";
 import { manifestPluginResolvesRuntimeModelCatalogAugment } from "../plugins/providers.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
@@ -27,13 +29,16 @@ import {
   loadAuthProfileStoreWithoutExternalProfiles,
   preserveResolvedSecretBackedCredentials,
 } from "./auth-profiles/store.js";
+import { resolveImplicitProviderDiscoveryScope } from "./models-config.providers.implicit.js";
 import {
   fingerprintPreparedModelCatalogGeneration,
   type PreparedModelCatalogWorkerInput,
   type PreparedModelWorkerRequest,
   type PreparedModelWorkerResult,
 } from "./prepared-model-catalog-worker.js";
+import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import { scopeSyntheticAuthProviderRefs } from "./prepared-model-runtime.synthetic-auth.js";
+import { loadAgentRuntimePluginRegistryHandle } from "./runtime-plugins.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
 
 function refreshAuthStore(params: {
@@ -223,19 +228,56 @@ export async function runPreparedModelCatalogWorkerRequest(
         (left, right) => left.localeCompare(right),
       ),
     };
+    const { pluginMetadataSnapshot, pluginRegistry } = prepared.pluginGeneration;
+    const discoveryScope = resolveImplicitProviderDiscoveryScope({
+      config: value.input.config,
+      env: value.input.env,
+      workspaceDir: value.input.workspaceDir,
+      pluginMetadataSnapshot,
+      providerDiscoveryProviderIds: exactAgentFacts.providerIds,
+    });
+    const discoveryPluginIds = [...(discoveryScope?.keys() ?? [])];
+    const discoveryPlan = await withPluginRuntimeGenerationScope(pluginGenerationScope, () =>
+      planRuntimePluginDiscovery({
+        config: value.input.config,
+        env: value.input.env,
+        workspaceDir: value.input.workspaceDir,
+        pluginMetadataSnapshot,
+        onlyPluginIds: discoveryPluginIds,
+      }),
+    );
+    let catalogGeneration = prepared.pluginGeneration;
+    if (discoveryPlan.kind === "runtime") {
+      // Refresh can reveal credential-only providers absent at startup. Materialize their
+      // catalog owners from the captured metadata before binding the authoritative registry.
+      const catalogRegistry = loadAgentRuntimePluginRegistryHandle({
+        ...value.input,
+        metadataSnapshot: pluginMetadataSnapshot,
+        preferBuiltPluginArtifacts: value.preferBuiltPluginArtifacts,
+        reusableRegistry: pluginRegistry,
+        basePluginIds: [
+          ...(pluginRegistry ? listRuntimePluginIdsFromRegistry(pluginRegistry) : []),
+          ...(discoveryPlan.pluginIds ?? discoveryPluginIds),
+        ],
+      });
+      prepareOwnedPluginLoadContext(
+        value.input,
+        value.input.env ?? process.env,
+        catalogRegistry,
+        pluginMetadataSnapshot,
+        value.preferBuiltPluginArtifacts,
+      );
+      pluginGenerationScope.pluginRegistry = catalogRegistry;
+      catalogGeneration = Object.freeze({ ...catalogGeneration, pluginRegistry: catalogRegistry });
+    }
     const source = await prepareAgentCatalogSource(
       exactAgentFacts,
-      prepared.pluginGeneration,
+      catalogGeneration,
       "live",
       false,
       { authStore },
     );
-    const facts = await prepareFullCatalogFacts(
-      exactAgentFacts,
-      prepared.pluginGeneration,
-      "live",
-      source,
-    );
+    const facts = await prepareFullCatalogFacts(exactAgentFacts, catalogGeneration, "live", source);
     // Full discovery can publish routes absent from startup config. Pair those exact rows with
     // provider-owned synthetic auth before the catalog and auth modes cross the worker boundary.
     const catalogCredentials = resolveSyntheticCredentials(

@@ -178,6 +178,7 @@ export async function deliverCompletionDirect(params: {
       return {
         delivered: false,
         path: "direct",
+        reason: ambiguous ? undefined : "delivery_suppressed",
         error: ambiguous
           ? "text completion direct delivery could not be confirmed: adapter returned no identity"
           : `text completion direct delivery was suppressed: ${sendResult.suppressionReason ?? "unknown reason"}`,

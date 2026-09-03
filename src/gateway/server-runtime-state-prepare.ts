@@ -67,6 +67,7 @@ function listGatewayStartupChannelPlugins(): GatewayStartupChannelPlugin[] {
 
 export async function prepareGatewayKernelState(params: {
   bootstrap: GatewayBootstrap;
+  bootId: string;
   port: number;
   opts: GatewayBootstrap["opts"];
   log: GatewayLogger;
@@ -84,6 +85,7 @@ export async function prepareGatewayKernelState(params: {
 }) {
   const {
     bootstrap,
+    bootId,
     port,
     opts,
     log,
@@ -174,7 +176,6 @@ export async function prepareGatewayKernelState(params: {
     bindDeviceNodeControl,
     bindWorkerNodeDesktopControl,
     bindNodeWorkspaceBindingResolver,
-    bindGitHubPublication,
     handleNodeWorkerBundleTransferRequest,
     handleWorkerBootstrapArtifactTransferRequest,
     handleNodeWorkspaceTransferRequest,
@@ -253,9 +254,6 @@ export async function prepareGatewayKernelState(params: {
       workerPlacementRuntime.dispatchService.dispatch,
     );
   }
-  if (githubPublicationRuntime) {
-    bindGitHubPublication?.(githubPublicationRuntime.coordinator);
-  }
   const bindDeviceNodeRuntime = bindDeviceNodeControl
     ? (transport: Parameters<NonNullable<typeof bindDeviceNodeControl>>[0]) => {
         bindDeviceNodeControl(transport);
@@ -302,8 +300,6 @@ export async function prepareGatewayKernelState(params: {
       bind: opts.bind,
       host: opts.host,
       controlUiEnabled: opts.controlUiEnabled,
-      openAiChatCompletionsEnabled: opts.openAiChatCompletionsEnabled,
-      openResponsesEnabled: opts.openResponsesEnabled,
       auth: resolvedStartupAuthOverride,
       tailscale: startupTailscaleOverride,
     });
@@ -311,11 +307,6 @@ export async function prepareGatewayKernelState(params: {
   const {
     bindHost,
     controlUiEnabled,
-    openAiChatCompletionsEnabled,
-    openAiChatCompletionsConfig,
-    openResponsesEnabled,
-    openResponsesConfig,
-    strictTransportSecurityHeader,
     controlUiBasePath,
     controlUiRoot: controlUiRootOverride,
     resolvedAuth,
@@ -485,6 +476,7 @@ export async function prepareGatewayKernelState(params: {
   log.info("starting HTTP server...");
   const connectionState = await startupTrace.measure("runtime.state", () =>
     createGatewayConnectionState({
+      bootId,
       cfg: cfgAtStart,
       getRuntimeConfig,
     }),
@@ -498,11 +490,8 @@ export async function prepareGatewayKernelState(params: {
     controlUiEnabled,
     controlUiBasePath,
     controlUiRoot: controlUiRootLifecycle.state,
-    openAiChatCompletionsEnabled,
-    openAiChatCompletionsConfig,
-    openResponsesEnabled,
-    openResponsesConfig,
-    strictTransportSecurityHeader,
+    openAiChatCompletionsEnabled: opts.openAiChatCompletionsEnabled,
+    openResponsesEnabled: opts.openResponsesEnabled,
     resolvedAuth,
     rateLimiter: authRateLimiter,
     joinRateLimiter: browserAuthRateLimiter,
@@ -536,6 +525,7 @@ export async function prepareGatewayKernelState(params: {
   });
   const {
     clients,
+    mentionInbox,
     broadcast,
     broadcastToConnIds,
     broadcastPluginEvent,
@@ -555,6 +545,7 @@ export async function prepareGatewayKernelState(params: {
 
   return {
     ...bootstrap,
+    bootId,
     pluginRuntime,
     workerEnvironmentService,
     workerLiveEvents,
@@ -579,11 +570,6 @@ export async function prepareGatewayKernelState(params: {
     bindHost,
     controlUiEnabled,
     controlUiRootLifecycle,
-    openAiChatCompletionsEnabled,
-    openAiChatCompletionsConfig,
-    openResponsesEnabled,
-    openResponsesConfig,
-    strictTransportSecurityHeader,
     controlUiBasePath,
     resolvedAuth,
     tailscaleConfig,
@@ -622,6 +608,7 @@ export async function prepareGatewayKernelState(params: {
     createHttpTransportOptions,
     transportBridge,
     clients,
+    mentionInbox,
     broadcast,
     broadcastToConnIds,
     broadcastPluginEvent,

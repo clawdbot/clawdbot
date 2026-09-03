@@ -10,9 +10,13 @@ export const runtimeProcessDeclarationEntries = {
 };
 export const vitestWorkerDeclarationEntries = {
   ...runtimeProcessDeclarationEntries,
+  "extensions/qa-lab/gateway-child-artifacts-runtime.test-support":
+    "extensions/qa-lab/src/gateway-child-artifacts-runtime.test-support.ts",
   "agents/command/cli-compaction-runtime.test-support":
     "src/agents/command/cli-compaction-runtime.test-support.ts",
   "cron/owner-hardening-runtime.test-support": "src/cron/owner-hardening-runtime.test-support.ts",
+  "gateway/server-methods/sessions-list-cache-retention-entrypoint.test-support":
+    "src/gateway/server-methods/sessions-list-cache-retention-entrypoint.test-support.ts",
   "gateway/session-title-retention.test-support":
     "src/gateway/session-title-retention.test-support.ts",
   "node-host/config-runtime.test-support": "src/node-host/config-runtime.test-support.ts",

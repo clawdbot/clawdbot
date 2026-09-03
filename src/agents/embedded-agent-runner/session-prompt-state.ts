@@ -4,11 +4,15 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { AgentMessage } from "../runtime/index.js";
 
 export type ToolResultPromptProjectionState = {
-  replacements: Map<string, AgentMessage>;
+  replacements: Map<string, { message: AgentMessage; cacheTtl?: "soft" | "hard" }>;
   frozen: Set<string>;
   ambiguousBaseKeys: Set<string>;
   sourceTextByKey: Map<string, string[]>;
+  /** Cache-TTL marks read from the transcript marker; the projection owner materializes them on the next replay. */
+  restoredCacheTtl: Map<string, RestoredCacheTtlMark>;
 };
+
+type RestoredCacheTtlMark = { mode: "soft" } | { mode: "hard"; placeholder: string };
 
 type EmbeddedSessionPromptState = {
   activeProjectKeys: string[];
@@ -26,10 +30,11 @@ const sessionPromptStates = resolveGlobalSingleton(
 
 export function createToolResultPromptProjectionState(): ToolResultPromptProjectionState {
   return {
-    replacements: new Map<string, AgentMessage>(),
+    replacements: new Map(),
     frozen: new Set<string>(),
     ambiguousBaseKeys: new Set<string>(),
     sourceTextByKey: new Map<string, string[]>(),
+    restoredCacheTtl: new Map(),
   };
 }
 
@@ -49,6 +54,26 @@ export function cloneToolResultPromptProjectionState(
     frozen: new Set(state.frozen),
     ambiguousBaseKeys: new Set(state.ambiguousBaseKeys),
     sourceTextByKey: new Map(state.sourceTextByKey),
+    restoredCacheTtl: new Map(state.restoredCacheTtl),
+  };
+}
+
+/** Marker payload stays key-sized: soft trims are recomputed from canonical history, hard clears keep only their placeholder. */
+export function serializeCacheTtlToolResultProjections(state: ToolResultPromptProjectionState) {
+  const marks = new Map(state.restoredCacheTtl);
+  for (const [key, projection] of state.replacements) {
+    if (projection.cacheTtl === "soft") {
+      marks.set(key, { mode: "soft" });
+    } else if (projection.cacheTtl === "hard" && projection.message.role === "toolResult") {
+      const placeholder = projection.message.content
+        .flatMap((block) => (block.type === "text" ? [block.text] : []))
+        .join("\n");
+      marks.set(key, { mode: "hard", placeholder });
+    }
+  }
+  return {
+    prunedToolResults: [...marks].map(([key, mark]) => Object.assign({ key }, mark)),
+    ambiguousToolResultBaseKeys: [...state.ambiguousBaseKeys],
   };
 }
 

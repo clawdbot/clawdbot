@@ -1,4 +1,3 @@
-// Control UI view renders usage query screen content.
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -225,25 +224,6 @@ const applySuggestionToQuery = (query: string, suggestion: string): string => {
 
 const normalizeQueryText = (value: string): string => normalizeLowercaseStringOrEmpty(value);
 
-const addQueryToken = (query: string, token: string): string => {
-  const trimmed = query.trim();
-  if (!trimmed) {
-    return `${token} `;
-  }
-  const tokens = extractQueryTerms(trimmed).map((term) => term.raw);
-  const last = tokens[tokens.length - 1] ?? "";
-  const tokenKey = token.includes(":") ? token.split(":")[0] : null;
-  const lastKey = last.includes(":") ? last.split(":")[0] : null;
-  if (last.endsWith(":") && tokenKey && lastKey === tokenKey) {
-    tokens[tokens.length - 1] = token;
-    return `${tokens.join(" ")} `;
-  }
-  if (tokens.includes(token)) {
-    return `${tokens.join(" ")} `;
-  }
-  return `${tokens.join(" ")} ${token} `;
-};
-
 const removeQueryToken = (query: string, token: string): string => {
   const tokens = extractQueryTerms(query).map((term) => term.raw);
   const next = tokens.filter((entry) => entry !== token);
@@ -252,15 +232,22 @@ const removeQueryToken = (query: string, token: string): string => {
 
 const setQueryTokensForKey = (query: string, key: string, values: string[]): string => {
   const normalizedKey = normalizeQueryText(key);
-  const tokens = extractQueryTerms(query)
-    .filter((term) => normalizeQueryText(term.key ?? "") !== normalizedKey)
-    .map((term) => term.raw);
-  const next = [...tokens, ...values.map((value) => `${key}:${value}`)];
+  const remaining = new Map(values.map((value) => [normalizeQueryText(value), value]));
+  const tokens: string[] = [];
+  // Retained values keep their authored spelling and quotes; serialize only new selections.
+  for (const term of extractQueryTerms(query)) {
+    if (
+      normalizeQueryText(term.key ?? "") !== normalizedKey ||
+      remaining.delete(normalizeQueryText(term.value))
+    ) {
+      tokens.push(term.raw);
+    }
+  }
+  const next = [...tokens, ...Array.from(remaining.values(), (value) => `${key}:${value}`)];
   return next.length ? `${next.join(" ")} ` : "";
 };
 
 export {
-  addQueryToken,
   applySuggestionToQuery,
   buildDailyCsv,
   buildQuerySuggestions,

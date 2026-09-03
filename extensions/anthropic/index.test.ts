@@ -211,6 +211,7 @@ describe("anthropic provider replay hooks", () => {
       sanitizeToolCallIds: true,
       toolCallIdMode: "strict",
       preserveNativeAnthropicToolUseIds: true,
+      appendOnlyRuntimeContext: false,
       preserveSignatures: true,
       repairToolUseResultPairing: true,
       validateAnthropicTurns: true,
@@ -218,25 +219,33 @@ describe("anthropic provider replay hooks", () => {
     });
   });
 
-  it("preserves Fable thinking in its same-model replay policy", async () => {
-    const provider = await registerSingleProviderPlugin(anthropicPlugin);
-    const fableContext = {
-      provider: "anthropic",
-      modelApi: "anthropic-messages",
-      modelId: "claude-fable-5",
-    };
+  it.each([
+    ["claude-fable-5", false],
+    ["claude-fable-5-1", true],
+    ["claude-mythos-5-1", false],
+  ])(
+    "preserves thinking and scopes runtime context for %s",
+    async (modelId, appendOnlyRuntimeContext) => {
+      const provider = await registerSingleProviderPlugin(anthropicPlugin);
+      const fableContext = {
+        provider: "anthropic",
+        modelApi: "anthropic-messages",
+        modelId,
+      };
 
-    expect(provider.buildReplayPolicy?.(fableContext)).toEqual({
-      sanitizeMode: "full",
-      sanitizeToolCallIds: true,
-      toolCallIdMode: "strict",
-      preserveNativeAnthropicToolUseIds: true,
-      preserveSignatures: true,
-      repairToolUseResultPairing: true,
-      validateAnthropicTurns: true,
-      allowSyntheticToolResults: true,
-    });
-  });
+      expect(provider.buildReplayPolicy?.(fableContext)).toEqual({
+        sanitizeMode: "full",
+        sanitizeToolCallIds: true,
+        toolCallIdMode: "strict",
+        preserveNativeAnthropicToolUseIds: true,
+        appendOnlyRuntimeContext,
+        preserveSignatures: true,
+        repairToolUseResultPairing: true,
+        validateAnthropicTurns: true,
+        allowSyntheticToolResults: true,
+      });
+    },
+  );
 
   it.each([
     ["provider", "anthropic"],

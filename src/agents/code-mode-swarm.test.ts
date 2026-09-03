@@ -20,6 +20,7 @@ import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,
 } from "./subagents/swarm/swarm-code-mode.js";
+import { clearToolSearchCatalog } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 
 const swarmMocks = vi.hoisted(() => ({
@@ -470,6 +471,58 @@ describe("Code Mode swarm host bridge", () => {
     expect(swarmMocks.emitSessionLifecycleEvent).not.toHaveBeenCalled();
     expect(harness.spawnTool.execute).not.toHaveBeenCalled();
   });
+
+  it.each(["abort", "catalog"] as const)(
+    "discards queued collector launches after %s closure",
+    async (closure) => {
+      const entered = createDeferred();
+      const release = createDeferred();
+      const launches: Array<Promise<ReturnType<typeof jsonResult>>> = [];
+      const harness = createSwarmHarness(() => {
+        const launch = release.promise.then(() =>
+          jsonResult({ status: "accepted", runId: "late-collector" }),
+        );
+        launches.push(launch);
+        if (launches.length === config.maxPendingToolCalls) {
+          entered.resolve();
+        }
+        return launch;
+      });
+      const controller = new AbortController();
+      const executing = harness.tools[0]!.execute(
+        "queued-collector-closure",
+        {
+          code: `return await Promise.all(Array.from(
+            { length: ${config.maxPendingToolCalls + 4} },
+            (_, index) => agents.run("Research " + index),
+          ));`,
+        },
+        controller.signal,
+      );
+      try {
+        await Promise.race([
+          entered.promise,
+          executing.then(() => {
+            throw new Error("execution ended before the collector frontier started");
+          }),
+        ]);
+        if (closure === "abort") {
+          controller.abort();
+        } else {
+          clearToolSearchCatalog(harness.ctx);
+        }
+        expect(resultDetails(await executing)).toMatchObject({ status: "failed", code: "aborted" });
+      } finally {
+        controller.abort();
+        release.resolve();
+        await Promise.allSettled(launches);
+        await executing;
+      }
+      expect(harness.spawnTool.execute).toHaveBeenCalledTimes(config.maxPendingToolCalls);
+      expect(swarmMocks.waitForCollectorCompletion).not.toHaveBeenCalled();
+      expect(testing.activeRuns.size).toBe(0);
+    },
+  );
 
   it("re-settles a persisted collector after restart without double-spawn", async () => {
     let persisted: SubagentRunRecord | undefined;

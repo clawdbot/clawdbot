@@ -192,22 +192,13 @@ suite.define(() => {
     await page.keyboard.press("Escape");
   });
 
-  it.each([
-    {
-      name: "sidebar",
+  it("closes navigation while the sidebar element is still unregistered", async () => {
+    const testCase = {
       module: /\/assets\/app-sidebar-[A-Za-z0-9_-]{8}\.js(?:\?.*)?$/u,
       pathname: "new",
       readySelector: ".new-session-page__message",
       tag: "openclaw-app-sidebar",
-    },
-    {
-      name: "floating attention",
-      module: /\/assets\/sidebar-attention-[A-Za-z0-9_-]{8}\.js(?:\?.*)?$/u,
-      pathname: "settings/appearance",
-      readySelector: ".shell--settings",
-      tag: "openclaw-sidebar-attention",
-    },
-  ])("closes navigation while the $name element is still unregistered", async (testCase) => {
+    };
     let held!: Awaited<ReturnType<typeof holdModuleResponse>>;
     const errors: string[] = [];
     try {
@@ -461,10 +452,10 @@ suite.define(() => {
       .poll(() =>
         sidebarNewThread.evaluate((element) => {
           const style = getComputedStyle(element);
-          return { borderColor: style.borderTopColor, boxShadow: style.boxShadow };
+          return { borderStyle: style.borderTopStyle, boxShadow: style.boxShadow };
         }),
       )
-      .toEqual({ borderColor: "rgba(0, 0, 0, 0)", boxShadow: "none" });
+      .toEqual({ borderStyle: "none", boxShadow: "none" });
     await page.keyboard.press("Tab");
     await sidebarNewThread.focus();
     await expect

@@ -5,6 +5,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
 import { dirname, join } from "node:path";
 import { runInNewContext } from "node:vm";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import { releaseBranchForTag } from "../../scripts/lib/release-context.mjs";
@@ -60,15 +61,31 @@ async function withGithubApiTimeoutEnv<T>(value: string, fn: () => Promise<T>): 
 }
 
 describe("release candidate checklist", () => {
-  it("runs plugin planners from trusted tooling while retaining candidate inputs", () => {
+  it.each([
+    { warnings: [] },
+    {
+      warnings: [
+        '@openclaw/example@2026.9.1: example-runtime pinned "1.2.3", npm latest is "1.2.4".',
+      ],
+    },
+  ])("keeps plugin plan warnings advisory and visible: $warnings", ({ warnings }) => {
     const source = readFileSync("scripts/release-candidate-checklist.mts", "utf8");
     const owner = source.match(/^function collectPluginPlan\([\s\S]*?^\}/mu)?.[0];
+    const summary = source.match(/^function formatPluginPlanSummary\([\s\S]*?^\}/mu)?.[0];
     expect(owner).toBeDefined();
-    const runPlanner = vi.fn((_command, args, options) => JSON.stringify({ args, options }));
+    expect(summary).toBeDefined();
+    const log = vi.fn();
+    const runPlanner = vi.fn((_command, args, options) =>
+      JSON.stringify({ args, options, all: [{ packageName: "@openclaw/example" }], warnings }),
+    );
     const result = runInNewContext(
-      stripTypeScriptTypes(`${owner}\ncollectPluginPlan("scripts/plugin-npm-release-plan.ts", {})`),
+      stripTypeScriptTypes(
+        `${summary}\n${owner}\ncollectPluginPlan("scripts/plugin-npm-release-plan.ts", {})`,
+      ),
       {
         TOOLING_ROOT: "/trusted/tooling",
+        console: { log },
+        isRecord,
         join,
         pluginPlanArgs: () => ["--selection-mode", "all-publishable"],
         run: runPlanner,
@@ -82,6 +99,14 @@ describe("release candidate checklist", () => {
       "all-publishable",
     ]);
     expect(result.options).not.toHaveProperty("cwd");
+    expect(result.warnings).toEqual(warnings);
+    expect(runPlanner).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledExactlyOnceWith(
+      [
+        "- scripts/plugin-npm-release-plan.ts: 1 packages",
+        ...warnings.map((warning) => `- Warning: ${warning}`),
+      ].join("\n"),
+    );
   });
 
   it("routes a repaired publisher independently from immutable preflight evidence", () => {
@@ -628,19 +653,10 @@ describe("release candidate checklist", () => {
 
   it("infers validation profiles from candidate tags", () => {
     expect(parseArgs(["--tag", "v2026.5.14-beta.3"]).releaseProfile).toBe("beta");
-    expect(parseArgs(["--tag", "v2026.5.14", "--windows-node-tag", "v0.6.3"]).releaseProfile).toBe(
-      "stable",
+    expect(parseArgs(["--tag", "v2026.5.14"]).releaseProfile).toBe("stable");
+    expect(parseArgs(["--tag", "v2026.5.14", "--release-profile", "full"]).releaseProfile).toBe(
+      "full",
     );
-    expect(
-      parseArgs([
-        "--tag",
-        "v2026.5.14",
-        "--windows-node-tag",
-        "v0.6.3",
-        "--release-profile",
-        "full",
-      ]).releaseProfile,
-    ).toBe("full");
   });
 
   it("defaults beta and alpha Parallels to postpublish confidence", () => {
@@ -1490,10 +1506,26 @@ describe("release candidate checklist", () => {
     ).toThrow("8-character lowercase digest");
   });
 
-  it("requires and carries an exact Windows Node tag for stable release candidates", () => {
-    expect(() => parseArgs(["--tag", "v2026.5.14"])).toThrow(
-      "stable release candidates require --windows-node-tag",
-    );
+  it("prints a stable publish command without Windows promotion inputs", () => {
+    const options = parseArgs([
+      "--tag",
+      "v2026.5.14",
+      "--npm-dist-tag",
+      "latest",
+      "--full-release-run",
+      "111",
+      "--npm-preflight-run",
+      "222",
+    ]);
+    const command = buildPublishCommand({ ...options, fullReleaseRunAttempt: 1 });
+
+    expect(command).toContain("'tag=v2026.5.14'");
+    expect(command).toContain("'npm_dist_tag=latest'");
+    expect(command).toContain("'publish_openclaw_npm=true'");
+    expect(command).not.toContain("windows_node_");
+  });
+
+  it("carries the optional exact Windows Node tag and digests for stable candidates", () => {
     expect(() => parseArgs(["--tag", "v2026.5.14", "--windows-node-tag", "latest"])).toThrow(
       "--windows-node-tag must be an explicit version tag, not latest",
     );

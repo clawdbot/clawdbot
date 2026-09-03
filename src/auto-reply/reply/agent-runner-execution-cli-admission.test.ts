@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildPreparedCliRunContext } from "../../agents/cli-runner.test-helpers.js";
+import { buildCliRunResult } from "../../agents/cli-runner/cli-run-settlement.js";
 import { executeDeps } from "../../agents/cli-runner/execute-deps.js";
 import { executePreparedCliRun } from "../../agents/cli-runner/execute.js";
 import { buildCliMcpGrantContext } from "../../agents/cli-runner/mcp-grant-context.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
+import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -12,7 +14,9 @@ import {
   getExecuteAgentTurnForTest,
   createFollowupRun,
   requireMockCall,
+  expectMockCallArgFields,
   initialFallbackAttemptOptions,
+  fallbackAttemptOptions,
   createMinimalRunAgentTurnParams,
   makeTestSessionStorePath,
 } from "./agent-runner-execution.test-support.js";
@@ -25,70 +29,148 @@ function rejectUnexpectedCompactionSuccessor(): never {
 }
 
 describe("executeAgentTurn: CLI admission", () => {
-  it.each(["revised", "revision-established"])(
-    "rejects a %s parent lifecycle before queued CLI execution",
-    async (kind) => {
-      const sessionKey = "agent:main:cli-revision";
-      const storePath = makeTestSessionStorePath();
-      const entry: SessionEntry = {
-        sessionId: "session",
-        updatedAt: 1,
-        ...(kind === "revised" ? { lifecycleRevision: "original" } : {}),
+  it.each([
+    "ordinary",
+    "heartbeat",
+    "preserved",
+    "revised",
+    "revision-established",
+    "rejected",
+    "rejected-clear",
+  ])("settles the %s reply's native binding before releasing placement", async (kind) => {
+    const sessionKey = "agent:main:cli-binding-settlement";
+    const storePath = makeTestSessionStorePath();
+    const entry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      ...(kind === "revised" ? { lifecycleRevision: "original" } : {}),
+    };
+    const rejected = kind === "rejected" || kind === "rejected-clear";
+    const revisionChanged = kind === "revised" || kind === "revision-established";
+    const binding = { sessionId: "admitted-native-session", authProfileId: "anthropic:cli" };
+    const settledBinding = { ...binding, sessionId: "settled-native-session" };
+    await replaceSessionEntry(
+      { sessionKey, storePath },
+      {
+        ...entry,
+        cliSessionBindings: { "claude-cli": binding },
+      },
+    );
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "claude-cli";
+    followupRun.run.model = "claude-sonnet-4-6";
+    if (kind === "preserved") {
+      followupRun.run.inputProvenance = {
+        kind: "inter_session",
+        sourceTool: "exec_approval_followup",
       };
-      const binding = { sessionId: "native-session", authProfileId: "anthropic:cli" };
-      await replaceSessionEntry(
-        { sessionKey, storePath },
-        { ...entry, cliSessionBindings: { "claude-cli": binding } },
+    }
+    state.isCliProviderMock.mockImplementation((provider) => provider === "claude-cli");
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      const first = await params.run(
+        "claude-cli",
+        "claude-sonnet-4-6",
+        initialFallbackAttemptOptions(params),
       );
-      const followupRun = createFollowupRun();
-      followupRun.run.provider = "claude-cli";
-      followupRun.run.model = "claude-sonnet-4-6";
-      state.isCliProviderMock.mockReturnValue(true);
-      state.runWithModelFallbackMock.mockImplementationOnce(
-        async (params: FallbackRunnerParams) => ({
-          result: await params.run(
-            "claude-cli",
-            "claude-sonnet-4-6",
-            initialFallbackAttemptOptions(params),
-          ),
-          provider: "claude-cli",
-          model: "claude-sonnet-4-6",
-          attempts: [],
-        }),
-      );
-      state.runCliAgentMock.mockResolvedValueOnce({ payloads: [{ text: "done" }], meta: {} });
-      const uninstall = installSessionPlacementAdmissionProvider({
-        assertCompactionSuccessorAllowed: rejectUnexpectedCompactionSuccessor,
-        executeLocalTurn: async (_claim, runLocal) => {
+      if (rejected) {
+        expect(first).toMatchObject({
+          classification: { code: "generic_external_run_failure" },
+        });
+        return {
+          result: await params.run("openai", "gpt-5.4", fallbackAttemptOptions(params, "format")),
+          provider: "openai",
+          model: "gpt-5.4",
+          attempts: [{ provider: "claude-cli", model: "claude-sonnet-4-6", reason: "format" }],
+        };
+      }
+      return {
+        result: first,
+        provider: "claude-cli",
+        model: "claude-sonnet-4-6",
+        attempts: [],
+      };
+    });
+    const candidateResult = {
+      payloads: [{ text: "done" }],
+      meta: {
+        agentMeta: { sessionId: settledBinding.sessionId, cliSessionBinding: settledBinding },
+      },
+    };
+    state.runCliAgentMock.mockResolvedValueOnce(
+      rejected
+        ? buildCliRunResult({
+            context: buildPreparedCliRunContext(),
+            output: { text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT },
+            effectiveCliSessionId: settledBinding.sessionId,
+            bindingFlushOk: kind !== "rejected-clear",
+            usedHistoryPrompt: false,
+            userTurnHandled: true,
+            sessionBindingDisabled: false,
+            preparedContextAgentMeta: {},
+          })
+        : candidateResult,
+    );
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "fallback done" }],
+      meta: {},
+    });
+    let observedBinding: unknown;
+    const uninstall = installSessionPlacementAdmissionProvider({
+      assertCompactionSuccessorAllowed: rejectUnexpectedCompactionSuccessor,
+      executeLocalTurn: async (_claim, runLocal) => {
+        if (revisionChanged) {
           // Mutating the prepared object must not change the captured admission revision.
           entry.lifecycleRevision = "replacement";
           await replaceSessionEntry(
             { sessionKey, storePath },
-            { ...entry, cliSessionBindings: { "claude-cli": binding } },
+            {
+              ...entry,
+              cliSessionBindings: { "claude-cli": binding },
+            },
           );
-          return await runLocal();
-        },
-        executeTurn: async (_claim, _params, runLocal) => await runLocal(),
+        }
+        const result = await runLocal();
+        observedBinding = loadSessionEntry({ sessionKey, storePath })?.cliSessionBindings?.[
+          "claude-cli"
+        ];
+        return result;
+      },
+      executeTurn: async (_claim, _params, runLocal) => await runLocal(),
+    });
+    try {
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const result = await executeAgentTurn({
+        ...createMinimalRunAgentTurnParams({ followupRun }),
+        sessionKey,
+        storePath,
+        isHeartbeat: kind === "heartbeat",
+        activeSessionStore: { [sessionKey]: entry },
+        getActiveSessionEntry: () => entry,
       });
-      try {
-        const executeAgentTurn = await getExecuteAgentTurnForTest();
-        const result = await executeAgentTurn({
-          ...createMinimalRunAgentTurnParams({ followupRun }),
-          sessionKey,
-          storePath,
-          activeSessionStore: { [sessionKey]: entry },
-          getActiveSessionEntry: () => entry,
-        });
+      if (revisionChanged) {
         expect(result.kind).toBe("final");
         expect(state.runCliAgentMock).not.toHaveBeenCalled();
         expect(
           loadSessionEntry({ sessionKey, storePath })?.cliSessionBindings?.["claude-cli"],
         ).toEqual(binding);
-      } finally {
-        uninstall();
+        return;
       }
-    },
-  );
+      expect(result.kind).toBe("success");
+      expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
+        cliSessionId: binding.sessionId,
+        cliSessionBinding: binding,
+      });
+      expect(observedBinding).toEqual(
+        kind === "rejected-clear"
+          ? undefined
+          : kind === "preserved" || rejected
+            ? binding
+            : settledBinding,
+      );
+    } finally {
+      uninstall();
+    }
+  });
 
   it("carries the admitted session permission and placement into the CLI grant", async () => {
     state.isCliProviderMock.mockReturnValue(true);

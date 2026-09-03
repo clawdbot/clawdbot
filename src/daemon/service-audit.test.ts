@@ -478,6 +478,24 @@ describe("auditGatewayServiceConfig", () => {
     expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayCommandMissing)).toBe(true);
   });
 
+  it("skips PATH drift checks for semicolon-delimited Windows paths", async () => {
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "C:\\Users\\test" },
+      platform: "win32",
+      expectedServicePath: "C:\\Program Files\\nodejs;C:\\Windows\\System32",
+      command: {
+        programArguments: ["C:\\Program Files\\nodejs\\node.exe", "gateway"],
+        environment: {
+          PATH: "C:\\Users\\test\\.nvm\\current\\bin;C:\\Windows\\System32",
+        },
+      },
+    });
+
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayPathMissing)).toBe(false);
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayPathMissingDirs)).toBe(false);
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayPathNonMinimal)).toBe(false);
+  });
+
   it("flags gateway service port drift from the expected config port", async () => {
     const audit = await auditGatewayServiceConfig({
       env: { HOME: "/tmp" },

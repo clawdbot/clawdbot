@@ -120,6 +120,15 @@ describe("duplicate paragraphs", () => {
     },
     { text: "repeat\n\n    repeat\n\nrepeat", expected: "repeat\n\n    repeat\n\nrepeat" },
     { text: "Run `x`.\n\nRun `x`.", expected: "Run `x`." },
+    {
+      text: 'repeat\n\nrepeat\n\n```js\nfunction replacement() {\n\n  return "$$ $& $` $\'";\n}\n```',
+      expected: 'repeat\n\n```js\nfunction replacement() {\n\n  return "$$ $& $` $\'";\n}\n```',
+    },
+    {
+      text: '    const replacement = "$$ $& $` $\'";\n\nrepeat\n\nrepeat',
+      expected: '    const replacement = "$$ $& $` $\'";\n\nrepeat',
+    },
+    { text: "Use ``$$ $& $` $'``.\n\nUse ``$$ $& $` $'``.", expected: "Use ``$$ $& $` $'``." },
     { text: "repeat\n\nrepeat `x`", expected: "repeat\n\nrepeat `x`" },
     { text: "Do `x` repeat\n\nrepeat", expected: "Do `x` repeat\n\nrepeat" },
   ])("preserves canonical separators and whitespace %#", ({ text, expected }) => {

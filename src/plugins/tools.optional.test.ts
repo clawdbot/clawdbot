@@ -2318,10 +2318,13 @@ describe("resolvePluginTools optional tools", () => {
 
   it("caches plugin tool descriptors and uses the runtime only on execution", async () => {
     const outputSchema = { type: "object", properties: { ok: { type: "boolean" } } };
+    let hideFromChannelProgress = true;
     const factory = vi.fn((rawCtx: unknown) => {
       const ctx = rawCtx as { sessionId?: string };
       return {
         ...makeTool("cached_tool"),
+        displaySummary: "Cached tool summary",
+        hideFromChannelProgress,
         outputSchema,
         async execute() {
           return { content: [{ type: "text", text: ctx.sessionId ?? "missing" }] };
@@ -2355,12 +2358,18 @@ describe("resolvePluginTools optional tools", () => {
     expect(second[0]).not.toBe(first[0]);
     expect(first[0]?.outputSchema).toBe(outputSchema);
     expect(second[0]?.outputSchema).toBe(outputSchema);
+    expect(first[0]?.hideFromChannelProgress).toBe(true);
+    expect(second[0]?.hideFromChannelProgress).toBe(true);
+    expect(second[0]?.displaySummary).toBe("Cached tool summary");
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
 
+    hideFromChannelProgress = false;
     await expect(second[0]?.execute("call", {}, undefined)).resolves.toEqual({
       content: [{ type: "text", text: "same" }],
     });
     expect(factory).toHaveBeenCalledTimes(2);
+    expect(factory.mock.results[1]?.value.hideFromChannelProgress).toBe(false);
+    expect(second[0]?.hideFromChannelProgress).toBe(true);
   });
 
   it("executes cached plugin tools from the published generation without rescanning manifests", async () => {
@@ -2421,6 +2430,8 @@ describe("resolvePluginTools optional tools", () => {
 
     expect(fresh).not.toHaveProperty("resultContentSource");
     expect(cached).not.toHaveProperty("resultContentSource");
+    expect(fresh).not.toHaveProperty("hideFromChannelProgress");
+    expect(cached).not.toHaveProperty("hideFromChannelProgress");
     expect(cached).not.toBe(fresh);
     expect(factory).toHaveBeenCalledTimes(1);
     await expect(cached?.execute("call", {}, undefined)).resolves.toEqual({

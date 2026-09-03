@@ -38,7 +38,7 @@ export type {
   SessionListSnapshot,
   SessionMessageSubscription,
 } from "./session-capability.ts";
-export type { SessionPatch } from "./patch.ts";
+export type { SessionPatch, SessionPatchResult } from "./patch.ts";
 export { DEFAULT_SESSION_LIST_QUERY, SESSIONS_PAGE_DEFAULT_LIMIT } from "./session-requests.ts";
 export { reconcileSessionRunTerminal, type SessionRunTerminal } from "./reconcile.ts";
 export { requestSessionCreate } from "./create.ts";
@@ -106,6 +106,8 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     | readonly [value: string, updatedAt: number]
     | readonly [value: string, updatedAt: undefined, afterRevision: number]
   >();
+  const permissionProjectionRevisions = new Map<string, number>();
+  let permissionProjectionRevision = 0;
   let canonicalListRevision = 0;
   let hydratedClient: SessionGateway["snapshot"]["client"] = null;
   let hydratedSelfUserId: string | null = null;
@@ -113,12 +115,18 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   let sessionEventSubscriptionError: string | null = null;
   let publishedErrorSource: "session-observer" | "operation" | null = null;
 
-  const thinkingClaimKey = (key: string, agentId?: string | null) => {
+  const sessionClaimKey = (key: string, agentId?: string | null) => {
     const ownerAgentId =
       parseAgentSessionKey(key)?.agentId ??
       agentId ??
       resolveUiSelectedGlobalAgentId(gateway.snapshot);
     return `${normalizeSessionKeyForUiComparison(key)}\0agent:${normalizeAgentId(ownerAgentId)}`;
+  };
+  const claimPermissionProjection = (key: string, agentId?: string | null) => {
+    const identity = sessionClaimKey(key, agentId);
+    const revision = ++permissionProjectionRevision;
+    permissionProjectionRevisions.set(identity, revision);
+    return () => permissionProjectionRevisions.get(identity) === revision;
   };
 
   const settleThinkingLevelClaim = (
@@ -126,7 +134,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     requestRevision: number,
     agentId?: string,
   ) => {
-    const key = thinkingClaimKey(row.key, agentId);
+    const key = sessionClaimKey(row.key, agentId);
     const claim = thinkingLevelClaims.get(key);
     const newer =
       claim?.[1] !== undefined
@@ -157,13 +165,13 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
 
   // Canonical Gateway rows are the source of truth for everything except the
   // UI-owned facts the capability keeps beside them, so every published result
-  // passes through the same overlay: swarm notes, then in-flight pin intents.
+  // passes through the same overlay: swarm notes, then in-flight row intents.
   const decorateRows = (
     result: SessionsListResult | null,
     owner = roster.primaryList(),
   ): SessionsListResult | null =>
     deletions.apply(
-      mutations.applyConfirmedArchives(mutations.applyPendingPins(swarmActivity.decorate(result))),
+      mutations.applyConfirmedArchives(mutations.applyPendingRows(swarmActivity.decorate(result))),
       owner,
     );
 
@@ -219,7 +227,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
 
   const notifyCreated = (key: string, entry?: SessionCreateOutcome["entry"], agentId?: string) => {
     if (typeof entry?.thinkingLevel === "string" && typeof entry.updatedAt === "number") {
-      thinkingLevelClaims.set(thinkingClaimKey(key, agentId), [
+      thinkingLevelClaims.set(sessionClaimKey(key, agentId), [
         entry.thinkingLevel,
         entry.updatedAt,
       ]);
@@ -234,10 +242,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     readState: () => state,
     publish,
     refreshReplacement: (agentId) => roster.refreshReplacement(agentId),
+    refreshReplacementResult: (agentId) => roster.refreshReplacementResult(agentId),
     publishedRow: (key) => roster.publishedRow((row) => row.key === key),
     redecorateLists: () => roster.redecorateLists(),
     notifyCreated,
-    clearThink: (key, agentId) => thinkingLevelClaims.delete(thinkingClaimKey(key, agentId)),
+    clearThink: (key, agentId) => thinkingLevelClaims.delete(sessionClaimKey(key, agentId)),
+    claimPermissionProjection,
     retirePullRequestSummary,
   });
 
@@ -377,7 +387,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     const reconciled = reconcileSessionChanged(previous, payload, reconcileOptions);
     let claimChanged = false;
     if (reconciled.applied && reconciled.key && eventInfo) {
-      const claimKey = thinkingClaimKey(reconciled.key, eventInfo.agentId);
+      if (eventInfo.hasPermissionMode) {
+        claimPermissionProjection(reconciled.key, eventInfo.agentId ?? state.agentId);
+        // The pending replacement predates this applied event, including its error outcome.
+        roster.invalidateForegroundPublication();
+      }
+      const claimKey = sessionClaimKey(reconciled.key, eventInfo.agentId);
       const claim = thinkingLevelClaims.get(claimKey);
       const thinkingLevel = eventInfo.thinkingLevel;
       const eventIsCurrent =
@@ -461,6 +476,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       }
       const hadPullRequestSummaries = pullRequestSummaries.size > 0;
       thinkingLevelClaims.clear();
+      permissionProjectionRevisions.clear();
       roster.reset();
       sessionEventSubscription.reset();
       sessionEventSubscriptionError = null;
@@ -628,7 +644,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     setArchivePending: mutations.setArchivePending,
     assignOwner: mutations.assignOwner,
     retireModelOverride: mutations.retireModelOverride,
-    think: (key, agentId) => thinkingLevelClaims.get(thinkingClaimKey(key, agentId))?.[0],
+    think: (key, agentId) => thinkingLevelClaims.get(sessionClaimKey(key, agentId))?.[0],
     patchRowLocal: mutations.patchRowLocal,
     isPreparedWorkSession: mutations.isPreparedWorkSession,
     pullRequestSummary,

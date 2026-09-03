@@ -7,6 +7,7 @@ import {
   createCodexModelCallDiagnosticEmitter,
   utf8JsonByteLength,
 } from "./attempt-diagnostics.js";
+import { assertCodexSessionRuntimeOwnership } from "./binding-connection.js";
 import { isCodexAppServerIndeterminateRequestCancellationError } from "./client.js";
 import { resolveCodexExplicitSkillInputs } from "./explicit-skill-input.js";
 import { assertCodexTurnStartResponse } from "./protocol-validators.js";
@@ -102,6 +103,12 @@ export async function prepareCodexAttemptTurnRequest(
       armTurn(): void;
       cancelTurn(): Promise<void>;
     };
+    // Resume may observe a newer native tuple after host auth was prepared. Keep
+    // that truthful binding, but never infer with credentials selected for the old tuple.
+    assertCodexSessionRuntimeOwnership(
+      resourceState.thread,
+      params.expectedSessionRuntimeOwnership,
+    );
     const turnAppServer = withCodexAppServerFastModeServiceTier(
       connection.mutable.pluginAppServer,
       runtimeParams,

@@ -4,12 +4,19 @@
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
+import type { ScopeUpgradeState } from "../app/device-scope-upgrade-availability.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
-import {
-  SIDEBAR_ATTENTION_DISMISSAL_KINDS,
-  type SidebarAttentionDismissal,
-  type SidebarAttentionKind,
-} from "./sidebar-attention-entries.ts";
+
+const SIDEBAR_ATTENTION_DISMISSAL_KINDS = [
+  "cronFailed",
+  "cronOverdue",
+  "modelAuthExpired",
+  "scopeUpgrade",
+  "updateAvailable",
+] as const;
+
+export type SidebarAttentionKind = (typeof SIDEBAR_ATTENTION_DISMISSAL_KINDS)[number];
+export type SidebarAttentionDismissal = { kind: SidebarAttentionKind; signature: string };
 
 export type SidebarAttentionDismissals = Partial<Record<SidebarAttentionKind, string[]>>;
 
@@ -80,6 +87,19 @@ export function dismissSidebarAttention(
   };
   saveDismissals(gatewayUrl, next);
   return next;
+}
+
+export function resolveScopeUpgradeDismissal(params: {
+  scopes: readonly string[] | undefined;
+  state: ScopeUpgradeState;
+}): SidebarAttentionDismissal | null {
+  // Manual repair and an actionable upgrade are distinct incidents.
+  return (params.state.phase === "guidance" || params.state.phase === "available") && params.scopes
+    ? {
+        kind: "scopeUpgrade",
+        signature: JSON.stringify([params.state.phase, ...params.scopes.toSorted()]),
+      }
+    : null;
 }
 
 export function resolveUpdateAttentionDismissal(params: {

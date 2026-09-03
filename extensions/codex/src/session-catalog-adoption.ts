@@ -126,7 +126,7 @@ export async function listAdoptedSessionEntries(params: {
     if (!sessionId) {
       continue;
     }
-    const binding = await params.bindingStore.read(
+    const binding = params.bindingStore.read(
       sessionBindingIdentity({ sessionId, sessionKey, config: params.config }),
     );
     const sourceThreadId = binding?.supervisionSourceThreadId?.trim();
@@ -228,7 +228,7 @@ async function ensurePendingAdoptionBinding(params: {
   if (!ownsGeneration) {
     throw new Error(`failed to claim the OpenClaw session generation for ${params.sourceThreadId}`);
   }
-  const existing = await params.bindingStore.read(params.identity);
+  const existing = params.bindingStore.read(params.identity);
   params.initialization.assertCurrent();
   if (existing) {
     if (matchesPendingAdoptionBinding(existing, params)) {
@@ -378,7 +378,7 @@ async function continueLocalCodexSessionInner(
         ) {
           throw changedError();
         }
-        return { archivedAt: undefined };
+        return { archivedAt: undefined, archivedBy: undefined, archiveReason: undefined };
       },
     });
     if (!restored) {

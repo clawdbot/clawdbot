@@ -457,7 +457,7 @@ async function compactCodexNativeThread(
     agentId: params.agentId,
     config: params.config,
   });
-  const initialBinding = await options.bindingStore.read(bindingIdentity);
+  const initialBinding = options.bindingStore.read(bindingIdentity);
   if (!initialBinding?.threadId) {
     return failedCodexThreadBindingCompactionResult(params, {
       reason: "no codex app-server thread binding",
@@ -602,7 +602,7 @@ async function compactCodexNativeThread(
             if (bindingCleared) {
               return;
             }
-            const currentBinding = await options.bindingStore.read(bindingIdentity);
+            const currentBinding = options.bindingStore.read(bindingIdentity);
             if (currentBinding?.threadId !== binding.threadId) {
               return;
             }
@@ -642,7 +642,7 @@ async function compactCodexNativeThread(
         };
         try {
           const guardedResult = await options.bindingStore.withLease(bindingIdentity, async () => {
-            const currentBinding = await options.bindingStore.read(bindingIdentity);
+            const currentBinding = options.bindingStore.read(bindingIdentity);
             if (params.abortSignal?.aborted) {
               if (!options.allowNonManualNativeRequest) {
                 params.abortSignal.throwIfAborted();
@@ -802,13 +802,13 @@ async function compactCodexNativeThread(
               retainedThreadOwnership
             ) {
               const ownership = retainedThreadOwnership;
-              const currentBinding = await options.bindingStore.read(bindingIdentity);
+              const currentBinding = options.bindingStore.read(bindingIdentity);
               // Reset uses this same generation lease; without it compaction
               // could return an obsolete subscription after its owner ended.
               const retained =
                 isSameCodexAppServerThreadOwner(currentBinding, binding) &&
                 (await options.bindingStore.withLease(bindingIdentity, async () => {
-                  const leasedBinding = await options.bindingStore.read(bindingIdentity);
+                  const leasedBinding = options.bindingStore.read(bindingIdentity);
                   if (!isSameCodexAppServerThreadOwner(leasedBinding, binding)) {
                     return false;
                   }

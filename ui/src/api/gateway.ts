@@ -460,6 +460,7 @@ export class GatewayBrowserClient {
           "approvals",
           "task-suggestions",
           "terminal-offset-seq",
+          "terminal-session-metadata",
           "tool-events",
           "inline-widgets",
           "ui-commands",

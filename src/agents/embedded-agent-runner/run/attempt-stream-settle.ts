@@ -2,7 +2,10 @@
  * Prepares transport before streaming and settles the completed stream afterward.
  * It may assume session runtime ownership and provider inputs are established.
  */
-import { resolveCompactionReplayEligibility } from "@openclaw/ai/transports";
+import {
+  isAnthropicServerToolClearingEnabled,
+  resolveCompactionReplayEligibility,
+} from "@openclaw/ai/transports";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { createCodexNativeWebSearchWrapper } from "../../../llm/providers/stream-wrappers/openai.js";
 import type { AssistantMessage } from "../../../llm/types.js";
@@ -37,6 +40,7 @@ import {
   type ProviderPromptState,
   wrapStreamFnWithProviderPromptState,
 } from "../provider-prompt-state.js";
+import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   resolveEmbeddedAgentApiKey,
   resolveEmbeddedAgentBaseStreamFn,
@@ -101,6 +105,7 @@ export async function settleEmbeddedAttemptStream(input: {
   attempt: EmbeddedRunAttemptParams;
   activeSession: AgentSession;
   sessionManager: SessionManager;
+  toolResultPromptProjectionState: ToolResultPromptProjectionState;
   withOwnedTranscriptWrite: WithOwnedTranscriptWrite;
   subscription: EmbeddedAttemptSubscription;
   state: {
@@ -293,6 +298,7 @@ export async function settleEmbeddedAttemptStream(input: {
       modelId: attempt.modelId,
       modelApi: attempt.model.api,
       isCacheTtlEligibleProvider,
+      toolResultPromptProjectionState: input.toolResultPromptProjectionState,
     });
 
     if (timedOutDuringCompaction) {
@@ -619,7 +625,21 @@ export async function prepareEmbeddedAttemptTransport(input: {
     );
   }
   session.agent.transport = effectiveAgentTransport;
+  const contextPruning = attempt.config?.agents?.defaults?.contextPruning;
+  const serverToolClearingEnabled =
+    contextPruning?.mode === "cache-ttl" &&
+    isAnthropicServerToolClearingEnabled(attempt.model, transportApiKey);
+  if (serverToolClearingEnabled) {
+    // One owner: the decision that suspends client-side pruning also hands the
+    // clearing request to the transport, so neither can happen without the other.
+    const baseStreamFn = session.agent.streamFn;
+    session.agent.streamFn = (model, context, options) => {
+      const requestOptions = { ...options, cacheTtlPruning: { tools: contextPruning?.tools } };
+      return baseStreamFn(model, context, requestOptions);
+    };
+  }
   return {
+    serverToolClearingEnabled,
     compactionReplayEnabled: resolveCompactionReplayEligibility(attempt.model, {
       extraParams: effectiveExtraParams,
       apiKey: transportApiKey,

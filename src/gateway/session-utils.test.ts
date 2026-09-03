@@ -45,6 +45,7 @@ import {
 } from "./session-utils-model.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import { buildGatewaySessionRow as buildGatewaySessionRowOwner } from "./session-utils-row.js";
+import { resolveSessionListSearchModelFields } from "./session-utils-search.js";
 import {
   type GatewaySessionStoreDiscoveryCache,
   resolveGatewaySessionStoreTarget,
@@ -622,7 +623,12 @@ describe("gateway session utils", () => {
     const store: Record<string, SessionEntry> = {
       recent: { sessionId: "recent", updatedAt: 30 },
       pinned: { sessionId: "pinned", updatedAt: 10, pinnedAt: 40 },
-      archived: { sessionId: "archived", updatedAt: 20, archivedAt: 50 },
+      archived: {
+        sessionId: "archived",
+        updatedAt: 20,
+        archivedAt: 50,
+        archiveReason: "active-session-cap",
+      },
     } satisfies Record<string, SessionEntry>;
 
     const active = await listSessionsFromStoreAsync({ cfg, storePath: "", store, opts: {} });
@@ -640,7 +646,13 @@ describe("gateway session utils", () => {
       opts: { archived: true },
     });
     expect(archived.sessions).toMatchObject([
-      { key: "archived", archived: true, archivedAt: 50, pinned: false },
+      {
+        key: "archived",
+        archived: true,
+        archivedAt: 50,
+        archiveReason: "active-session-cap",
+        pinned: false,
+      },
     ]);
 
     const all = await listSessionsFromStoreAsync({
@@ -1441,6 +1453,108 @@ describe("gateway session utils", () => {
     });
     expect(JSON.stringify(result.entry)).not.toContain("thinkingLevelSelection");
   });
+
+  test.each([true, false])(
+    "projects the private native model instead of outer or observed guesses (lightweight=%s)",
+    (lightweightListRow) => {
+      const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.6-sol" });
+      const entry = (sessionId: string): InternalSessionEntry => ({
+        sessionId,
+        updatedAt: 1,
+        agentHarnessId: "test-native",
+        modelSelectionLocked: true,
+        modelProvider: "stale-provider",
+        model: "stale-model",
+      });
+      const nativeKey = "agent:main:harness:test-native:native";
+      const hostAuthKey = "agent:main:harness:test-native:host-auth";
+      const unprovenKey = "agent:main:harness:test-native:unproven";
+      const concreteKey = "agent:main:concrete";
+      const native = entry("native-model-row");
+      const hostAuth = entry("host-auth-model-row");
+      const unproven = entry("unproven-model-row");
+      const concrete: InternalSessionEntry = {
+        ...entry("concrete-model-row"),
+        pluginOwnerId: "test-native",
+        providerOverride: "openai",
+        modelOverride: "gpt-5.6-sol",
+      };
+      const store = {
+        [nativeKey]: native,
+        [hostAuthKey]: hostAuth,
+        [unprovenKey]: unproven,
+        [concreteKey]: concrete,
+      };
+      const bindings = new Map<
+        string,
+        { sessionId: string; auth: "native" | "host"; model: string }
+      >([
+        [
+          nativeKey,
+          { sessionId: native.sessionId, auth: "native" as const, model: "gpt-5.6-luna" },
+        ],
+        [
+          hostAuthKey,
+          { sessionId: hostAuth.sessionId, auth: "host" as const, model: "gpt-5.6-sol" },
+        ],
+      ]);
+      const registry = createEmptyPluginRegistry();
+      registry.agentHarnesses.push({
+        pluginId: "test-native",
+        source: "test",
+        harness: {
+          id: "test-native",
+          label: "Native session model owner",
+          supports: () => ({ supported: true }),
+          runAttempt: async () => {
+            throw new Error("session rows must not start a model turn");
+          },
+          resolveSessionRuntimeOwnership: (params) => {
+            params.assertCurrent();
+            const binding = params.sessionKey ? bindings.get(params.sessionKey) : undefined;
+            return binding?.sessionId === params.sessionId
+              ? {
+                  model: "native" as const,
+                  auth: binding.auth,
+                  modelRef: { provider: "openai", model: binding.model },
+                }
+              : undefined;
+          },
+        },
+      });
+      setTestActivePluginRegistry(registry);
+      const rowContext = buildSessionListRowMetadataContext({ now: 1 });
+      for (const current of Object.values(store)) {
+        rowContext.acpSessionMetaByEntry.set(current, undefined);
+      }
+      const readRow = (key: keyof typeof store) =>
+        buildGatewaySessionRowOwner({
+          cfg,
+          storePath: "",
+          store,
+          key,
+          entry: store[key],
+          rowContext,
+          lightweightListRow,
+          skipTranscriptUsageFallback: true,
+        });
+      const nativeRow = readRow(nativeKey);
+      expect(nativeRow).toMatchObject({ modelProvider: "openai", model: "gpt-5.6-luna" });
+      expect(
+        resolveSessionListSearchModelFields({ cfg, key: nativeKey, entry: native, rowContext }),
+      ).toContain("openai/gpt-5.6-luna");
+      expect(buildGatewaySessionEventFields({ sessionRow: nativeRow })).toMatchObject({
+        modelProvider: "openai",
+        model: "gpt-5.6-luna",
+      });
+      expect(readRow(hostAuthKey)).toMatchObject({ modelProvider: "openai", model: "gpt-5.6-sol" });
+      expect(readRow(concreteKey)).toMatchObject({ modelProvider: "openai", model: "gpt-5.6-sol" });
+      expect(readRow(unprovenKey)).toMatchObject({ modelProvider: "openai", model: "gpt-5.6-sol" });
+      expect(native.model).toBe("stale-model");
+      bindings.delete(nativeKey);
+      expect(readRow(nativeKey)).toMatchObject({ modelProvider: "openai", model: "gpt-5.6-sol" });
+    },
+  );
 
   test("reports observed locked runtime from agentHarnessId instead of configured intent", () => {
     const cfg = {

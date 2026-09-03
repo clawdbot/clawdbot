@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { splitAnsiSegments } from "../../packages/terminal-core/src/ansi-sequences.js";
+import { iterateAnsiSegments } from "../../packages/terminal-core/src/ansi-sequences.js";
 import {
   objectFieldEquals,
   startTuiFixture,
@@ -9,7 +9,7 @@ import {
 function linkedText(output: string) {
   let target = "";
   const spans: Array<{ target: string; text: string }> = [];
-  for (const segment of splitAnsiSegments(output)) {
+  for (const segment of iterateAnsiSegments(output)) {
     if (segment.kind === "ansi") {
       if (segment.value.startsWith("\x1b]8;;")) {
         const terminatorLength = segment.value.endsWith("\x1b\\") ? 2 : 1;

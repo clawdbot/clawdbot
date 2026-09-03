@@ -8,7 +8,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   isConfiguredAwsSdkAuthProfileForProvider,
   isStoredCredentialCompatibleWithAuthProvider,
-  resolveAuthProfileOrder,
+  resolveAuthProfileOrderWithMetadata,
 } from "../auth-profiles/order.js";
 import { ensureAuthProfileStore, hasAnyAuthProfileStoreSource } from "../auth-profiles/store.js";
 import {
@@ -281,13 +281,15 @@ async function resolveSessionAuthProfileOverride(params: {
 
   const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
   const providers = uniqueProviders(provider, params.acceptedProviderIds);
-  const order = [
-    ...new Set(
-      providers.flatMap((candidateProvider) =>
-        resolveAuthProfileOrder({ cfg, store, provider: candidateProvider }),
-      ),
-    ),
-  ];
+  const orderResolutions = providers.map((candidateProvider) =>
+    resolveAuthProfileOrderWithMetadata({
+      cfg,
+      store,
+      provider: candidateProvider,
+      forModel: sessionEntry.model,
+    }),
+  );
+  const order = [...new Set(orderResolutions.flatMap((resolution) => resolution.profileIds))];
   let current = sessionEntry.authProfileOverride?.trim();
   const source = resolveSessionAuthProfileOverrideSource(sessionEntry);
 
@@ -370,13 +372,34 @@ async function resolveSessionAuthProfileOverride(params: {
     typeof sessionEntry.authProfileOverrideCompactionCount === "number"
       ? sessionEntry.authProfileOverrideCompactionCount
       : compactionCount;
+  // A healthy automatic fallback yields when an explicit preference is eligible to retry,
+  // preventing a metered backup from staying pinned. The real request proves recovery.
+  const retryableHigherPriorityProfile =
+    source === "auto" && !currentUnavailable && compactionCount <= storedCompaction && current
+      ? orderResolutions
+          .filter((resolution) => resolution.hasExplicitOrder)
+          .flatMap((resolution) => {
+            const currentOrderIndex = resolution.profileIds.indexOf(current);
+            return currentOrderIndex > 0 ? resolution.profileIds.slice(0, currentOrderIndex) : [];
+          })
+          .find(
+            (profileId) =>
+              (store.usageStats?.[profileId]?.failureCounts?.rate_limit ?? 0) > 0 &&
+              !isProfileUnavailableForSessionModel(profileId),
+          )
+      : undefined;
   const shouldRotateCurrent =
-    Boolean(current) && !isNewSession && (currentUnavailable || compactionCount > storedCompaction);
+    Boolean(current) &&
+    !isNewSession &&
+    (currentUnavailable ||
+      compactionCount > storedCompaction ||
+      retryableHigherPriorityProfile !== undefined);
 
   // Provider artifacts own persisted route stickiness; runtime planning owns cross-route failover.
-  const routeResolution = shouldRotateCurrent
-    ? resolveProviderModelRoutes({ provider, modelId: params.modelId, config: cfg })
-    : null;
+  const routeResolution =
+    shouldRotateCurrent && !retryableHigherPriorityProfile
+      ? resolveProviderModelRoutes({ provider, modelId: params.modelId, config: cfg })
+      : null;
   const currentAuthRequirement =
     current && routeResolution?.kind === "routes" && routeResolution.routes.length > 1
       ? profileAuthRequirement({ cfg, store, profileId: current })
@@ -398,7 +421,9 @@ async function resolveSessionAuthProfileOverride(params: {
   };
 
   let next = current;
-  if (isNewSession || shouldRotateCurrent) {
+  if (retryableHigherPriorityProfile) {
+    next = retryableHigherPriorityProfile;
+  } else if (isNewSession || shouldRotateCurrent) {
     next = pickAvailable(currentUnavailable ? undefined : current);
   } else if (!current) {
     next = pickAvailable();

@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { splitAnsiSegments } from "../../packages/terminal-core/src/ansi-sequences.js";
+import { iterateAnsiSegments } from "../../packages/terminal-core/src/ansi-sequences.js";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 
 /** Allow one level of balanced parentheses inside a URL so markdown link
@@ -215,7 +215,7 @@ function applyOsc8Ranges(line: string, ranges: UrlRange[]): string {
   let rangeIndex = 0;
   let range = ranges[rangeIndex];
 
-  for (const segment of splitAnsiSegments(line)) {
+  for (const segment of iterateAnsiSegments(line)) {
     if (segment.kind === "ansi") {
       let code = segment.value;
       if (code.startsWith("\x1b]8;")) {

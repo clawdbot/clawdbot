@@ -2767,10 +2767,12 @@ export async function startQaMockOpenAiServer(params?: {
       ...(QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE.test(allInputText)
         ? { previewPauseMs: finalOnlyMarkerPauseMs }
         : {}),
-      ...(repeatedRequestRecovery
+      // Stall one request; later failures let the normal retry budget settle the turn.
+      ...(repeatedRequestRecovery &&
+      scenarioState.repeatedRequestRecoveryAttempts <= QA_REPEATED_REQUEST_STALL_ATTEMPT
         ? {
             responsePauseMs:
-              scenarioState.repeatedRequestRecoveryAttempts >= QA_REPEATED_REQUEST_STALL_ATTEMPT
+              scenarioState.repeatedRequestRecoveryAttempts === QA_REPEATED_REQUEST_STALL_ATTEMPT
                 ? QA_REPEATED_REQUEST_STALLED_RESPONSE_PAUSE_MS
                 : QA_REPEATED_REQUEST_RESPONSE_PAUSE_MS,
           }

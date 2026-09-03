@@ -160,7 +160,7 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
         >
           <button
             type="button"
-            class="sidebar-brand__icon sidebar-brand__desktop-control sidebar-brand__collapse"
+            class="sidebar-brand__icon sidebar-brand__header-control sidebar-brand__desktop-control sidebar-brand__collapse"
             aria-label=${collapseLabel}
             aria-expanded="true"
             ?disabled=${!host.onToggleSidebar}
@@ -174,7 +174,7 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
         >
           <button
             type="button"
-            class="sidebar-brand__icon sidebar-brand__desktop-control sidebar-brand__search"
+            class="sidebar-brand__icon sidebar-brand__header-control sidebar-brand__desktop-control sidebar-brand__search"
             aria-label=${t("chat.openCommandPalette")}
             ?disabled=${!host.onOpenPalette}
             @click=${() => host.onOpenPalette?.()}
@@ -185,7 +185,7 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
         ${renderNewSessionLink({
           basePath: host.basePath,
           agentId: host.expandedAgentId(),
-          className: "shell-chrome-controls__button sidebar-brand__new-thread",
+          className: "sidebar-brand__icon sidebar-brand__header-control sidebar-brand__new-thread",
           label: t("chat.runControls.newSession"),
           disabledReason: newSessionAccess.allowed ? undefined : newSessionAccess.reason,
           onOpen: (agentId, target) => host.requestOpenNewSession(agentId, target),
@@ -376,9 +376,11 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
     presenceEntries: readPresenceEntries(host.sessionData.presencePayload),
     presenceInstanceId: host.sessionData.presenceInstanceId,
   });
-  const selfLabel = selfUser?.name ?? selfUser?.email ?? t("nav.account");
+  const selfLabel = selfUser?.name ?? selfUser?.email ?? t("nav.owner");
   const avatarUser = {
-    ...(selfUser ?? { id: "account", name: selfLabel }),
+    id: "owner",
+    ...selfUser,
+    name: selfLabel,
     watchedSessions: [],
   };
   const gateway = host.offline ? null : readSidebarNativeGateway();

@@ -1,3 +1,4 @@
+import type { WebClient } from "@slack/web-api";
 // Slack delivery trace goldens: replayable wire-level lifecycle recordings.
 //
 // Drives the real dispatch wiring (dispatchPreparedSlackMessage → deliverSlackPayload
@@ -25,6 +26,8 @@ import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { noteSlackDraftConversationMessage } from "./draft-message-boundaries.js";
 import type { PreparedSlackMessage } from "./monitor/message-handler/types.js";
+import { setSlackSessionStatus } from "./session-status.js";
+import { markSlackStreamsStopped } from "./streaming.js";
 
 type RecordedWireCall = {
   method: string;
@@ -81,6 +84,8 @@ type SlackTraceState = {
   /** Scripted benign rejection for the next chat.startStream call (scenario-owned). */
   rejectStartStreamCode: string | undefined;
 };
+
+const traceRuntimeError = vi.fn();
 
 const traceState = vi.hoisted(
   (): SlackTraceState => ({
@@ -471,18 +476,14 @@ function createRecordingSlackClient(): Record<string, unknown> {
         return { ok: true, user: { team_id: TEAM_ID } };
       },
     },
-    assistant: {
-      threads: {
-        setStatus: async (args: Record<string, unknown>) => {
-          record({
-            method: "assistant.threads.setStatus",
-            target: `${asWireString(args.channel_id)}/${asWireString(args.thread_ts)}`,
-            payload: stripToken(args),
-            result: { ok: true },
-          });
-          return { ok: true };
-        },
-      },
+    apiCall: async (method: string, args: Record<string, unknown>) => {
+      record({
+        method,
+        target: `${asWireString(args.channel_id)}/${asWireString(args.thread_ts)}`,
+        payload: stripToken(args),
+        result: { ok: true },
+      });
+      return { ok: true };
     },
     conversations: { open: unexpected("conversations.open") },
     reactions: { add: unexpected("reactions.add"), remove: unexpected("reactions.remove") },
@@ -513,17 +514,10 @@ function createPreparedTraceMessage(scenario: SlackTraceScenarioName): PreparedS
   if (!client) {
     throw new Error("trace Slack client not initialized");
   }
-  const setStatus = (
-    client as {
-      assistant: {
-        threads: { setStatus: (args: Record<string, unknown>) => Promise<unknown> };
-      };
-    }
-  ).assistant.threads.setStatus;
   const prepared = {
     ctx: {
       cfg,
-      runtime: { log: () => {}, error: () => {} },
+      runtime: { log: () => {}, error: traceRuntimeError },
       botToken: "xoxb-trace",
       app: { client },
       teamId: TEAM_ID,
@@ -532,27 +526,12 @@ function createPreparedTraceMessage(scenario: SlackTraceScenarioName): PreparedS
       textLimit: 4000,
       typingReaction: "",
       allowFrom: [],
-      // Mirrors the monitor's setSlackThreadStatus wiring
-      // (extensions/slack/src/monitor/context.ts): typing travels over
-      // assistant.threads.setStatus and is part of the recorded lifecycle.
-      setSlackThreadStatus: async (p: {
+      setSlackSessionStatus: (p: {
         channelId: string;
         threadTs?: string;
-        status: string;
-        loadingMessages?: string[];
-      }) => {
-        if (!p.threadTs) {
-          return;
-        }
-        await setStatus({
-          channel_id: p.channelId,
-          thread_ts: p.threadTs,
-          status: p.status,
-          ...(p.loadingMessages?.length
-            ? { loading_messages: p.loadingMessages.slice(0, 10) }
-            : {}),
-        });
-      },
+        status: "processing" | "active" | "suspended";
+        title?: string;
+      }) => setSlackSessionStatus({ ...p, client: client as unknown as WebClient }),
     },
     account: {
       accountId: "default",
@@ -622,6 +601,7 @@ async function setupSlackTrace(
 ) {
   traceState.recordWireCall = recorder.recordWireCall;
   traceState.tsCounter = 0;
+  traceRuntimeError.mockClear();
   traceState.counts = { tool: 0, block: 0, final: 0 };
   traceState.turn = null;
   traceState.turnStarted = createDeferred<void>();
@@ -841,6 +821,54 @@ describe("slack delivery trace goldens", () => {
       }
     });
   }
+
+  it("discards a Slack-stopped native stream without a duplicate final or stop request", async () => {
+    let streamTs: string | undefined;
+    const events = await runDeliveryTraceScenario({
+      scenario: {
+        name: "slack-stopped-native-stream",
+        steps: [
+          { kind: "reply-start" },
+          { kind: "partial", text: NATIVE_PROGRESS_NARRATION },
+          { kind: "tool-progress", name: "write", phase: "start" },
+          // The progress compositor emits its initial card at 1500ms.
+          { kind: "advance", ms: 2000 },
+          { kind: "cancel" },
+          { kind: "final", text: "Late answer that must not be posted" },
+          { kind: "idle" },
+        ],
+      },
+      setup: async (recorder) => {
+        const handleStep = await setupSlackTrace(
+          {
+            recordWireCall: (call) => {
+              if (call.method === "chat.startStream") {
+                streamTs = (call.result as { ts?: string })?.ts;
+              }
+              recorder.recordWireCall(call);
+            },
+          },
+          "progress-native-unified",
+        );
+        return async (step) => {
+          if (step.kind === "cancel") {
+            expect(streamTs).toBeDefined();
+            markSlackStreamsStopped(traceState.client as unknown as WebClient, CHANNEL_ID, [
+              streamTs!,
+            ]);
+          }
+          await handleStep(step);
+        };
+      },
+      normalize: createSlackTsNormalizer(),
+    });
+    const outMethods = events.filter((event) => event.dir === "out").map((event) => event.kind);
+    expect(outMethods).toContain("chat.startStream");
+    expect(outMethods).not.toContain("chat.stopStream");
+    expect(outMethods).not.toContain("chat.postMessage");
+    expect(collectSlackWireTexts(events).join("\n")).not.toContain("Late answer");
+    expect(traceRuntimeError).not.toHaveBeenCalled();
+  });
 
   it("removes a progress card detached by a later human message", async () => {
     const events = await runDeliveryTraceScenario({

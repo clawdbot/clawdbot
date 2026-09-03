@@ -150,7 +150,7 @@ it.each(
         provenance !== "unqualified" ? `/api/users/${id}/avatar` : undefined,
       );
       expect(facepile.querySelector("a")?.getAttribute("href")).toBe(
-        provenance !== "unqualified" ? `/activity?person=${id}` : undefined,
+        provenance !== "unqualified" ? "/activity/ada-lovelace-c3e324520467" : undefined,
       );
       expect(facepile.querySelector(".viewer-facepile")?.getAttribute("data-viewer-count")).toBe(
         provenance === "mixed" ? "2" : "1",
@@ -419,7 +419,7 @@ it("links faces only when the host opts in, so nested facepiles stay plain", asy
     [...linked.querySelectorAll<HTMLAnchorElement>("a.person-activity-avatar-link")].map((link) =>
       link.getAttribute("href"),
     ),
-  ).toEqual(["/activity?person=profile-ada", "/activity?person=profile-mira"]);
+  ).toEqual(["/activity/profile-ada", "/activity/profile-mira"]);
 
   // Sidebar rows and collapsed group headers render facepiles inside an anchor or button;
   // a nested link there would break the parent's click target.

@@ -5,7 +5,34 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import "./chat-pane.ts";
+import {
+  createInitializationContext,
+  createRenderTestChatPane,
+  createSessionCapabilityFixture,
+} from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+
+export function createRefreshChatPane(client?: GatewayBrowserClient) {
+  const context: ApplicationContext = {
+    ...createInitializationContext(),
+    sessions: createSessionCapabilityFixture({
+      state: { result: null, agentId: "main", modelOverrides: {} },
+      think: () => undefined,
+      reconcile: vi.fn(),
+    }),
+  };
+  if (client) {
+    context.gateway.snapshot.client = client;
+    context.gateway.snapshot.phase = "connected";
+  }
+  const pane = createRenderTestChatPane();
+  const state = pane.initialize(context);
+  if (client) {
+    state.client = client;
+    state.connected = true;
+  }
+  return { pane, state, context };
+}
 
 export type TestChatPane = HTMLElement & {
   catalogCursor: string | undefined;

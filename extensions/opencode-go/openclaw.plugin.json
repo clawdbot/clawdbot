@@ -1,6 +1,5 @@
 {
   "id": "opencode-go",
-  "icon": "https://cdn.simpleicons.org/opencode",
   "activation": {
     "onStartup": false
   },

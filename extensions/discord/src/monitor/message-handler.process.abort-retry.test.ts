@@ -35,7 +35,7 @@ describe("processDiscordMessage deliver-lambda abort logging", () => {
     // the dispatch mock and then queue a single block reply via the captured
     // dispatcher. The mocked createReplyDispatcherWithTyping (see line ~229)
     // routes sendBlockReply straight into the deliver lambda, where the very
-    // first gate is `if (isProcessAborted(abortSignal)) return;` — the line
+    // first gate is `if (abortSignal?.aborted) return;` — the line
     // the PR added the logVerbose call to.
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       abortController.abort();

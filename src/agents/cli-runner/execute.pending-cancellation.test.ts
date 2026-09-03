@@ -122,6 +122,89 @@ describe("local CLI pending process cancellation", () => {
     vi.restoreAllMocks();
   });
 
+  it.each(["process", "plugin"] as const)(
+    "rejects expired authority after CLI preparation before %s execution",
+    async (target) => {
+      const entered = createDeferred();
+      const prepared = createDeferred();
+      const context = createRunContext({
+        runId: `expired-${target}`,
+        beforeExecution: async () => {
+          entered.resolve();
+          await prepared.promise;
+        },
+      });
+      let current = true;
+      context.params.assertCurrent = () => {
+        if (!current) {
+          throw new Error("Completion authority expired");
+        }
+      };
+      const pluginExecute = vi.fn(async function* () {
+        yield { type: "result", result: "unexpected" };
+      });
+      if (target === "plugin") {
+        context.preparedBackend.backend.command = process.execPath;
+        context.executionTarget = { kind: "plugin", execute: pluginExecute };
+      }
+      const adapter = createTestAdapter();
+      adapter.settle(0);
+      createChildAdapterMock.mockResolvedValueOnce(adapter);
+
+      const run = executePreparedCliRun(context);
+      const rejected = expect(run).rejects.toThrow("Completion authority expired");
+      await entered.promise;
+      current = false;
+      prepared.resolve();
+
+      await rejected;
+      expect(createChildAdapterMock).not.toHaveBeenCalled();
+      expect(pluginExecute).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects expired authority behind a supervisor scope fence without replacing its process", async () => {
+    const context = createRunContext({ runId: "expired-replacement" });
+    let current = true;
+    context.params.assertCurrent = () => {
+      if (!current) {
+        throw new Error("Completion authority expired");
+      }
+    };
+    const scopeKey = buildCliSupervisorScopeKey({
+      backend: context.preparedBackend.backend,
+      backendId: context.backendResolved.id,
+      cliSessionId: "resume-1",
+    });
+    const startup = createDeferred<ChildAdapter>();
+    const adapter = createTestAdapter();
+    createChildAdapterMock.mockReturnValueOnce(startup.promise);
+    const spawn = vi.spyOn(supervisor, "spawn");
+    const first = supervisor.spawn({
+      runId: "surviving-process",
+      sessionId: context.params.sessionId,
+      backendId: context.backendResolved.id,
+      scopeKey,
+      mode: "child",
+      argv: ["agent-cli"],
+    });
+    const replacement = executePreparedCliRun(context, "resume-1");
+    const rejected = expect(replacement).rejects.toThrow("Completion authority expired");
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(2));
+    current = false;
+    startup.resolve(adapter);
+
+    const firstRun = await first;
+    try {
+      await rejected;
+      expect(createChildAdapterMock).toHaveBeenCalledOnce();
+      expect(adapter.kill).not.toHaveBeenCalled();
+    } finally {
+      firstRun.cancel();
+      await firstRun.wait();
+    }
+  });
+
   it("preserves the caller run id and cleans up cancellation after normal completion", async () => {
     const controller = new AbortController();
     const adapter = createTestAdapter();
@@ -168,7 +251,7 @@ describe("local CLI pending process cancellation", () => {
 
     startup.resolve(adapter);
     await expect(run).rejects.toMatchObject({ name: "AbortError" });
-    expect(adapter.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(adapter.kill).toHaveBeenCalledWith("SIGKILL");
     expect(supervisor.getRecord("cli-pending")).toMatchObject({
       state: "exited",
       terminationReason: "manual-cancel",

@@ -115,6 +115,7 @@ export function resolveSessionListSearchModelFields(params: {
     : getSessionDisplaySubagentRunByChildSessionKey(params.key);
   const selectedModel = resolveSessionSelectedModelRef({
     cfg: params.cfg,
+    sessionKey: params.key,
     entry: params.entry,
     agentId,
     rowContext: params.rowContext,

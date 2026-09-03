@@ -814,6 +814,7 @@ vi.mock("../../transcript-policy.js", () => ({
 }));
 
 vi.mock("../cache-ttl.js", () => ({
+  readCacheTtlEntries: () => [],
   appendCacheTtlTimestamp: (
     sessionManager: { appendCustomEntry?: (customType: string, data: unknown) => void },
     data: unknown,

@@ -40,20 +40,31 @@ jobs:
             build-essential \
             curl \
             dbus-x11 \
+            ffmpeg \
             file \
             gir1.2-atspi-2.0 \
             gstreamer1.0-libav \
             gstreamer1.0-plugins-bad \
             gstreamer1.0-plugins-good \
+            gstreamer1.0-tools \
             libatk-adaptor \
             libayatana-appindicator3-dev \
+            libegl1 \
+            libgles2 \
             librsvg2-dev \
             libssl-dev \
             libwebkit2gtk-4.1-dev \
             libxdo-dev \
+            mesa-utils \
+            patchelf \
+            pciutils \
+            procps \
+            psmisc \
             python3-gi \
             wget \
+            wmctrl \
             xauth \
+            xdg-utils \
             xvfb
 
       - name: Install Rust
@@ -84,6 +95,13 @@ jobs:
         working-directory: apps/linux/src-tauri
         run: cargo +stable test --locked --all-targets
 
+      - name: Stage AppImage GStreamer plugins
+        run: |
+          plugins="${RUNNER_TEMP}/openclaw-gstreamer-plugins"
+          apps/linux/scripts/stage-appimage-gstreamer.sh "$plugins" \
+            | tee "${RUNNER_TEMP}/openclaw-gstreamer-elements.tsv"
+          echo "GSTREAMER_PLUGINS_DIR=$plugins" >> "$GITHUB_ENV"
+
       - name: Build Linux companion bundles
         working-directory: apps/linux/src-tauri
         env:
@@ -111,6 +129,33 @@ jobs:
           retention-days: 14
           if-no-files-found: error
           path: ${{ runner.temp }}/linux-first-run.log
+
+      - name: Test packaged AppImage runtime
+        id: packaged-runtime
+        shell: bash
+        run: |
+          shopt -s nullglob
+          appimages=(apps/linux/src-tauri/target/release/bundle/appimage/*.AppImage)
+          if [[ ${#appimages[@]} -ne 1 ]]; then
+            echo "Expected one AppImage, found ${#appimages[@]}"
+            exit 1
+          fi
+          xvfb-run -a -s '-screen 0 1280x1024x24' dbus-run-session -- \
+            /usr/bin/python3 apps/linux/tests/packaged_runtime_smoke.py \
+            "${appimages[0]}" \
+            --output "${RUNNER_TEMP}/linux-packaged-runtime" \
+            --require-fuse \
+            --shell-container \
+              "archlinux@sha256:82b1b08faae9d61e3e7e13d562f4d09114d939105b0d59ff34140f3bd418593a"
+
+      - name: Upload packaged runtime failure evidence
+        if: failure() && steps.packaged-runtime.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: linux-packaged-runtime-failure
+          retention-days: 14
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/linux-packaged-runtime
 
       - name: Upload bundles
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

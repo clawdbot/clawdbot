@@ -238,6 +238,7 @@ jobs:
             --plugins "${RELEASE_PLUGINS}" > .local/plugin-clawhub-release-plan.json
 
           cat .local/plugin-clawhub-release-plan.json
+          jq -r '.warnings[]? | "- Warning: \(.)"' .local/plugin-clawhub-release-plan.json >> "$GITHUB_STEP_SUMMARY"
 
           bootstrap_candidate_count="$(jq -r '(.bootstrapCandidates | length) + (.missingTrustedPublisher | length)' .local/plugin-clawhub-release-plan.json)"
           selected_count="$(jq -r '.all | length' .local/plugin-clawhub-release-plan.json)"

@@ -90,11 +90,25 @@ const PLUGIN_INSTALL_TIMESTAMP_KEYS = ["installedAt", "resolvedAt"] as const;
 const BASE_RELOAD_RULES: ReloadRule[] = [
   { prefix: "gateway.remote", kind: "none" },
   { prefix: "gateway.reload", kind: "none" },
-  // gateway.terminal.* deliberately has no rule here: it falls through to the
-  // `gateway` restart rule below. The terminal drives the Control UI CSP (WASM
-  // permissions) and the bootstrap availability flag, both fixed at document
-  // load, plus live PTYs — none can hot-update a connected client, so a change
-  // must restart the gateway (clients reconnect with a fresh page and CSP).
+  // Request policy reads the published config; listeners and startup-owned
+  // resources retain the broad Gateway restart rule below.
+  { prefix: "gateway.http.endpoints", kind: "hot" },
+  { prefix: "gateway.http.securityHeaders.strictTransportSecurity", kind: "hot" },
+  { prefix: "gateway.tools", kind: "hot" },
+  { prefix: "gateway.cliAgents", kind: "hot" },
+  { prefix: "gateway.controlUi.environment", kind: "hot" },
+  { prefix: "gateway.controlUi.communityInvite", kind: "hot" },
+  { prefix: "gateway.controlUi.github", kind: "hot" },
+  { prefix: "gateway.controlUi.toolTitles", kind: "hot" },
+  { prefix: "gateway.controlUi.sessionObserver", kind: "hot" },
+  { prefix: "gateway.controlUi.embedSandbox", kind: "hot" },
+  { prefix: "gateway.controlUi.allowExternalEmbedUrls", kind: "hot" },
+  { prefix: "gateway.controlUi.automaticallyFetchFavicons", kind: "hot" },
+  { prefix: "gateway.nodes.browser", kind: "hot" },
+  { prefix: "gateway.nodes.pairing", kind: "hot" },
+  { prefix: "gateway.push.apns.relay", kind: "hot" },
+  // New PTYs use the committed shell; availability/CSP and detach timers stay startup-owned.
+  { prefix: "gateway.terminal.shell", kind: "hot" },
   { prefix: "hooks.gmail", kind: "hot", actions: ["restart-gmail-watcher"] },
   { prefix: "hooks", kind: "hot", actions: ["reload-hooks"] },
   {
@@ -277,9 +291,7 @@ function listReloadRules(): ReloadRule[] {
   // Narrow config contracts must override broad owner fallbacks. Sort once per
   // registry snapshot so the hot path can retain first-match semantics.
   rules.sort((a, b) => b.prefix.length - a.prefix.length);
-  cachedRefinementPrefixes = [...pluginReloadRules, ...channelReloadRules].map(
-    (rule) => rule.prefix,
-  );
+  cachedRefinementPrefixes = rules.map((rule) => rule.prefix);
   cachedReloadRules = rules;
   return rules;
 }
