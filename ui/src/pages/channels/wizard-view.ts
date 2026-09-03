@@ -256,12 +256,14 @@ export function renderChannelWizard(
     >
       <div class="channels-wizard">
         <div class="channels-wizard__header">
-          ${channel
-            ? renderChannelIcon(channel, label, "tile", {
-                pluginIconUrl: props.channelIconUrl?.(channel),
-                preferPluginIcon: props.channelHasPluginIcon?.(channel),
-              })
-            : nothing}
+          ${
+            channel
+              ? renderChannelIcon(channel, label, "tile", {
+                  pluginIconUrl: props.channelIconUrl?.(channel),
+                  preferPluginIcon: props.channelHasPluginIcon?.(channel),
+                })
+              : nothing
+          }
           <div class="channels-wizard__heading">
             <h2>${t("channels.setup.title", { channel: label })}</h2>
             <div class="muted channels-wizard__subtitle">

@@ -62,9 +62,9 @@ function renderSystemStat(stat: SystemStat) {
   return html`
     <div class="config-host__stat" title=${stat.path ?? stat.title ?? ""}>
       <div class="config-host__stat-label">
-        ${stat.label}${stat.path
-          ? html` <span class="config-host__stat-path">${stat.path}</span>`
-          : nothing}
+        ${stat.label}${
+          stat.path ? html` <span class="config-host__stat-path">${stat.path}</span>` : nothing
+        }
       </div>
       <div class="config-host__stat-value">
         ${stat.value}${
