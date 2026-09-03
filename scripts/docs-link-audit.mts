@@ -7,6 +7,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { createProcessor } from "@mdx-js/mdx";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import MarkdownIt from "markdown-it";
 import type { Nodes } from "mdast";
 import { resolveClawHubRepoPath, syncClawHubDocsTree } from "./docs-sync-publish.mjs";
@@ -474,6 +475,23 @@ export function prepareMirroredDocsDir(
   }
 }
 
+function parseAuditUrl(
+  href: string,
+  base = "https://docs.openclaw.ai",
+): Result<{ hostname: string; pathname: string; hash: string }, string> {
+  try {
+    const url = new URL(href, base);
+    return ok({
+      hostname: url.hostname,
+      pathname:
+        url.hostname === "docs.openclaw.ai" ? decodeURIComponent(url.pathname) : url.pathname,
+      hash: url.hash,
+    });
+  } catch (error) {
+    return err(error instanceof URIError ? "malformed URL path" : "malformed URL");
+  }
+}
+
 /**
  * Audits local docs links against route, file, and redirect indexes.
  */
@@ -500,6 +518,7 @@ function auditDocsLinks(
         sourceFile: abs,
         root: path.dirname(index.docsDir),
         pageRoute: pageRoute(rel),
+        mapLink: (href: string, line: number | undefined) => ({ href, line: line ?? 0 }),
       }),
     );
   }
@@ -518,7 +537,7 @@ function auditDocsLinks(
       }
     }
   }
-  const redirectTargets = new Map<string, string>();
+  const redirectTargets = new Map<string, ReturnType<typeof parseAuditUrl>>();
   if (options.anchors) {
     const records = resolveRedirects({
       redirects: index.docsConfig.redirects ?? [],
@@ -530,8 +549,21 @@ function auditDocsLinks(
         broken.push({ file: "docs.json", line: 0, link: source, reason: error.message }),
     });
     for (const record of records) {
-      redirectTargets.set(record.source, record.destination);
-      const destination = new URL(record.destination, "https://docs.openclaw.ai");
+      const destinationResult = parseAuditUrl(record.destination);
+      redirectTargets.set(record.source, destinationResult);
+      if (!destinationResult.ok) {
+        broken.push({
+          file: "docs.json",
+          line: 0,
+          link: record.source,
+          reason: destinationResult.error,
+        });
+        continue;
+      }
+      const destination = destinationResult.value;
+      if (destination.hostname !== "docs.openclaw.ai") {
+        continue;
+      }
       const page = pages.get(destination.pathname);
       if (page && destination.hash && !resolveDocsFragment(destination.hash, new Set(page.ids))) {
         broken.push({
@@ -545,25 +577,32 @@ function auditDocsLinks(
   }
   for (const abs of index.markdownFiles) {
     const rel = normalizeSlashes(path.relative(index.docsDir, abs));
-    const rawText = fs.readFileSync(abs, "utf8");
     const document = pages.get(pageRoute(rel))!;
-    for (const raw of document.links) {
+    for (const { href: raw, line } of document.links) {
       const local = !/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(raw);
-      const url = new URL(raw, `https://docs.openclaw.ai${pageRoute(rel)}`);
-      if (!local && url.hostname !== "docs.openclaw.ai") {
-        continue;
-      }
       if (!options.anchors && (!local || raw.startsWith("#"))) {
         continue;
       }
-      checked++;
-      const offset = rawText.indexOf(raw);
-      const line = offset < 0 ? 0 : rawText.slice(0, offset).split("\n").length;
-      const route = pageRoute(decodeURIComponent(url.pathname)).replace(/^\/en(?:\/|$)/, "/");
-      let destination = url;
-      if (options.anchors && !pages.has(route) && redirectTargets.has(route)) {
-        destination = new URL(redirectTargets.get(route)!, url);
+      const urlResult = parseAuditUrl(raw, `https://docs.openclaw.ai${pageRoute(rel)}`);
+      if (urlResult.ok && urlResult.value.hostname !== "docs.openclaw.ai") {
+        continue;
       }
+      checked++;
+      if (!urlResult.ok) {
+        broken.push({ file: rel, line, link: raw, reason: urlResult.error });
+        continue;
+      }
+      const url = urlResult.value;
+      const route = pageRoute(url.pathname).replace(/^\/en(?:\/|$)/, "/");
+      const destinationResult =
+        options.anchors && !pages.has(route) && redirectTargets.has(route)
+          ? redirectTargets.get(route)!
+          : urlResult;
+      if (!destinationResult.ok) {
+        broken.push({ file: rel, line, link: raw, reason: destinationResult.error });
+        continue;
+      }
+      const destination = destinationResult.value;
       if (destination.hostname !== "docs.openclaw.ai") {
         continue;
       }
@@ -573,7 +612,7 @@ function auditDocsLinks(
       if (
         !page &&
         (options.anchors || !resolved.ok) &&
-        !index.relAllFiles.has(decodeURIComponent(url.pathname).slice(1))
+        !index.relAllFiles.has(url.pathname.slice(1))
       ) {
         broken.push({
           file: rel,
@@ -655,7 +694,7 @@ function runDocsLinkAuditCli() {
     }
 
     for (const item of broken) {
-      console.log(`${item.file}:${item.line} :: ${item.link} :: ${item.reason}`);
+      console.log(`${item.file}:${item.line || "unknown"} :: ${item.link} :: ${item.reason}`);
     }
 
     return broken.length > 0 ? 1 : 0;

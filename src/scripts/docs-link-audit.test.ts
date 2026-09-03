@@ -5,17 +5,48 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { createDocsMarkdown, parseDocsDocument } from "../../scripts/lib/docs-markdown.mjs";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 
 const { normalizeRoute, prepareExternalLinkAuditTree, prepareMirroredDocsDir, resolveRoute } =
   await import("../../scripts/docs-link-audit.mts");
+
+type AuditCliCase = {
+  name: string;
+  source: string[];
+  broken: number;
+  anchors?: boolean;
+  diagnostics?: string[];
+  files?: Record<string, string>;
+  redirects?: Array<{ source: string; destination: string }>;
+};
 
 describe("docs-link-audit", () => {
   function tempEntries(prefix: string): Set<string> {
     return new Set(fs.readdirSync(os.tmpdir()).filter((entry) => entry.startsWith(prefix)));
   }
 
-  it.each([
+  it.each(["\n", "\r\n"])("preserves code literals with line ending %j", (newline) => {
+    const source = [
+      "Intro",
+      "",
+      "```md",
+      '<Card href="/same" title="Literal" />',
+      "```",
+      "",
+      "[live](/same)",
+    ].join(newline);
+    const md = createDocsMarkdown();
+    const document = parseDocsDocument(source, md, {
+      mapLink: (href: string, line: number | undefined) => ({ href, line }),
+    });
+    expect(document.links).toEqual([{ href: "/same", line: 7 }]);
+    expect(md.renderer.render(document.tokens, md.options, document.env)).toContain(
+      "&lt;Card href=&quot;/same&quot; title=&quot;Literal&quot; /&gt;",
+    );
+  });
+
+  it.each<AuditCliCase>([
     {
       name: "component and list fences",
       source: [
@@ -59,6 +90,119 @@ describe("docs-link-audit", () => {
     },
     { name: "valid prose", source: ["[valid](/page)"], broken: 0 },
     {
+      name: "repeated occurrences beside protected literals",
+      source: [
+        "---",
+        "title: Positions",
+        "---",
+        "```md",
+        "[hidden](/missing-page)",
+        "```",
+        "[first](/missing-page)",
+        "[second](/missing-page)",
+        "",
+        "`[hidden](/missing-page)` [third](/missing-page)",
+        "[valid](/page)",
+      ],
+      broken: 3,
+      diagnostics: [7, 8, 10].map(
+        (line) => `page.mdx:${line} :: /missing-page :: route/file not found`,
+      ),
+    },
+    {
+      name: "reference, HTML, component and normalized relative occurrences",
+      source: [
+        "[reference][missing]",
+        "",
+        "[missing]: /missing-page",
+        "",
+        '<a href="/missing-page">HTML</a>',
+        "",
+        '<Card href="/missing-page" title="Component" />',
+        "",
+        "[relative](./missing-page.md)",
+        "[valid](/page)",
+      ],
+      broken: 4,
+      diagnostics: [1, 5, 7, 9].map(
+        (line) => `page.mdx:${line} :: /missing-page :: route/file not found`,
+      ),
+    },
+    {
+      name: "unmapped expansions",
+      source: [
+        '<Snippet file="./part.txt" />',
+        "",
+        '<div class="maturity-category-docs">',
+        "[embedded](/missing-page)",
+        "</div>",
+        "",
+        "[valid](/page)",
+      ],
+      files: { "docs/part.txt": "[included](/missing-page)\n" },
+      broken: 2,
+      diagnostics: ["page.mdx:unknown :: /missing-page :: route/file not found"],
+    },
+    {
+      name: "decoded direct paths and HTML-alias targets",
+      anchors: true,
+      source: [
+        "[direct](/caf%C3%A9#known)",
+        "[literal percent](/100%25#known)",
+        "[asset](/image%20space.svg)",
+        "[redirect](/via)",
+        "[bad redirect](/invalid)",
+        "[raw Markdown redirect](/raw)",
+        "[after](/missing-page)",
+        "[external](/outside)",
+      ],
+      files: {
+        "docs/café.md": "## Known\n",
+        "docs/100%.md": "## Known\n",
+        "docs/image space.svg": "<svg />",
+      },
+      redirects: [
+        { source: "/via", destination: "https://docs.openclaw.ai/caf%C3%A9#known" },
+        { source: "/invalid", destination: "https://docs.openclaw.ai/bad%" },
+        { source: "/raw", destination: "/café.md#known" },
+        { source: "/outside", destination: "https://example.test/page#external-section" },
+      ],
+      broken: 4,
+      diagnostics: [
+        "docs.json:unknown :: /invalid :: malformed URL path",
+        "page.mdx:5 :: /invalid :: malformed URL path",
+        "page.mdx:6 :: /raw :: fragment requires an HTML page, not raw Markdown",
+        "page.mdx:7 :: /missing-page :: route/file not found",
+      ],
+    },
+    ...[false, true].map((anchors) => ({
+      name: `malformed emitted paths (anchors=${anchors})`,
+      anchors,
+      source: [
+        '<Card href="/bad%" title="Component" />',
+        "",
+        '<a href="/bad%FF">HTML</a>',
+        "",
+        '<img src="/bad%2" />',
+        "",
+        '<CTA primaryHref="/bad%zz" secondaryHref="https://docs.openclaw.ai/bad%" />',
+        "",
+        "[markdown](/bad%FF)",
+        "[reference][bad]",
+        "",
+        "[bad]: /bad%FF",
+        "",
+        "[after](/missing-page)",
+        "[valid](/page)",
+      ],
+      broken: anchors ? 8 : 7,
+      diagnostics: [
+        ":: /bad% :: malformed URL path",
+        ":: /bad%FF :: malformed URL path",
+        ":: /missing-page :: route/file not found",
+      ],
+    })),
+    {
       name: "shared emitted fragments",
       anchors: true,
       broken: 4,
@@ -95,76 +239,88 @@ describe("docs-link-audit", () => {
         '<!-- <a id="phantom" href="/hidden-comment"> -->',
       ],
     },
-  ])("audits real CLI links after $name", ({ source, broken, anchors = false }) => {
-    const tempDirs: string[] = [];
-    const fixtureRoot = makeTempDir(tempDirs, "docs-link-audit-cli-");
-    const docsRoot = path.join(fixtureRoot, "docs");
-    const clawHubRoot = path.join(fixtureRoot, "clawhub");
-    const home = path.join(fixtureRoot, "home");
-    fs.mkdirSync(docsRoot);
-    fs.mkdirSync(path.join(clawHubRoot, "docs"), { recursive: true });
-    fs.mkdirSync(home);
-    fs.writeFileSync(
-      path.join(docsRoot, "docs.json"),
-      JSON.stringify({
-        navigation: [],
-        redirects: anchors
-          ? [
-              { source: "/legacy", destination: "/page#connection" },
-              { source: "/middle", destination: "/legacy#nested" },
-              { source: "/drops", destination: "/next" },
-            ]
-          : [],
-      }),
-    );
-    if (anchors) {
-      fs.writeFileSync(path.join(docsRoot, "index.md"), "## Root\n\n[next](next#target)\n");
-      fs.writeFileSync(path.join(docsRoot, "next.md"), "## Target\n");
-    }
-    const pageSource = anchors ? ["---", "permalink: /unpublished", "---", ...source] : source;
-    fs.writeFileSync(path.join(docsRoot, "page.mdx"), `${pageSource.join("\n")}\n`);
-
-    try {
-      const result = spawnSync(
-        process.execPath,
-        [
-          fileURLToPath(new URL("../../scripts/docs-link-audit.mjs", import.meta.url)),
-          ...(anchors ? ["--anchors"] : []),
-        ],
-        {
-          cwd: fixtureRoot,
-          encoding: "utf8",
-          env: {
-            PATH: process.env.PATH,
-            HOME: home,
-            USERPROFILE: home,
-            TSX_TSCONFIG_PATH: fileURLToPath(new URL("../../tsconfig.json", import.meta.url)),
-            OPENCLAW_DOCS_SYNC_CLAWHUB_REPO: clawHubRoot,
-          },
-          timeout: 30_000,
-        },
+  ])(
+    "audits real CLI links after $name",
+    ({ source, broken, anchors = false, diagnostics, files = {}, redirects }) => {
+      const tempDirs: string[] = [];
+      const fixtureRoot = makeTempDir(tempDirs, "docs-link-audit-cli-");
+      const docsRoot = path.join(fixtureRoot, "docs");
+      const clawHubRoot = path.join(fixtureRoot, "clawhub");
+      const home = path.join(fixtureRoot, "home");
+      fs.mkdirSync(docsRoot);
+      fs.mkdirSync(path.join(clawHubRoot, "docs"), { recursive: true });
+      fs.mkdirSync(home);
+      fs.writeFileSync(
+        path.join(docsRoot, "docs.json"),
+        JSON.stringify({
+          navigation: [],
+          redirects:
+            redirects ??
+            (anchors && !diagnostics
+              ? [
+                  { source: "/legacy", destination: "/page#connection" },
+                  { source: "/middle", destination: "/legacy#nested" },
+                  { source: "/drops", destination: "/next" },
+                ]
+              : []),
+        }),
       );
-      expect(result.error).toBeUndefined();
-      expect(result.stderr).toBe("");
-      expect(result.status).toBe(broken ? 1 : 0);
-      if (!anchors) {
-        expect(result.stdout).toContain(`checked_internal_links=${broken + 1}\n`);
+      for (const [file, content] of Object.entries(files)) {
+        fs.writeFileSync(path.join(fixtureRoot, file), content);
       }
-      expect(result.stdout).toContain(`broken_links=${broken}\n`);
-      expect(result.stdout).not.toContain("/hidden-");
       if (anchors) {
-        expect(result.stdout).toContain("#missing :: fragment not found");
-        expect(result.stdout).toContain("/unpublished#connection :: route/file not found");
+        fs.writeFileSync(path.join(docsRoot, "index.md"), "## Root\n\n[next](next#target)\n");
+        fs.writeFileSync(path.join(docsRoot, "next.md"), "## Target\n");
       }
-      if (broken && !anchors) {
-        expect(result.stdout).toContain(
-          `page.mdx:${source.findIndex((line) => line.includes("/missing-page")) + 1} :: /missing-page :: route/file not found`,
+      const pageSource =
+        anchors && !diagnostics ? ["---", "permalink: /unpublished", "---", ...source] : source;
+      fs.writeFileSync(path.join(docsRoot, "page.mdx"), `${pageSource.join("\n")}\n`);
+
+      try {
+        const result = spawnSync(
+          process.execPath,
+          [
+            fileURLToPath(new URL("../../scripts/docs-link-audit.mjs", import.meta.url)),
+            ...(anchors ? ["--anchors"] : []),
+          ],
+          {
+            cwd: fixtureRoot,
+            encoding: "utf8",
+            env: {
+              PATH: process.env.PATH,
+              HOME: home,
+              USERPROFILE: home,
+              TSX_TSCONFIG_PATH: fileURLToPath(new URL("../../tsconfig.json", import.meta.url)),
+              OPENCLAW_DOCS_SYNC_CLAWHUB_REPO: clawHubRoot,
+            },
+            timeout: 30_000,
+          },
         );
+        expect(result.error).toBeUndefined();
+        expect(result.stderr).toBe("");
+        expect(result.status).toBe(broken ? 1 : 0);
+        if (!anchors) {
+          expect(result.stdout).toContain(`checked_internal_links=${broken + 1}\n`);
+        }
+        expect(result.stdout).toContain(`broken_links=${broken}\n`);
+        expect(result.stdout).not.toContain("/hidden-");
+        if (anchors && !diagnostics) {
+          expect(result.stdout).toContain("#missing :: fragment not found");
+          expect(result.stdout).toContain("/unpublished#connection :: route/file not found");
+        }
+        for (const diagnostic of diagnostics ?? []) {
+          expect(result.stdout).toContain(diagnostic);
+        }
+        if (broken && !anchors && !diagnostics) {
+          expect(result.stdout).toContain(
+            `page.mdx:${source.findIndex((line) => line.includes("/missing-page")) + 1} :: /missing-page :: route/file not found`,
+          );
+        }
+      } finally {
+        cleanupTempDirs(tempDirs);
       }
-    } finally {
-      cleanupTempDirs(tempDirs);
-    }
-  });
+    },
+  );
 
   it("normalizes route fragments away", () => {
     expect(normalizeRoute("/plugins/building-plugins#registering-agent-tools")).toBe(
