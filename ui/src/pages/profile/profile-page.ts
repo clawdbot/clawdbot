@@ -418,11 +418,13 @@ export class ProfilePage extends OpenClawLightDomElement {
     return html`<openclaw-model-accounts
       .identityId=${this.selfUser?.id ?? null}
       .profileId=${this.ownProfile?.id ?? null}
-      .personLabel=${this.ownProfile
-        ? this.ownProfile.displayName?.trim() ||
-          this.ownProfile.emails[0] ||
-          t("profilePage.modelAccounts.currentPerson")
-        : null}
+      .personLabel=${
+        this.ownProfile
+          ? this.ownProfile.displayName?.trim() ||
+            this.ownProfile.emails[0] ||
+            t("profilePage.modelAccounts.currentPerson")
+          : null
+      }
     ></openclaw-model-accounts>`;
   }
 
