@@ -98,7 +98,7 @@ function isPrimarySessionListQuery(options: SessionListScope): boolean {
   return (
     query.archived === undefined &&
     !query.spawnedBy &&
-    !query.boardFace &&
+    (query.boardFace ?? query.hasBoard) === undefined &&
     !query.activeMinutes &&
     !query.search &&
     !query.ownerId &&

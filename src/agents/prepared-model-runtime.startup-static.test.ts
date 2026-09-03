@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import { setPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
 import type { ModelRegistry } from "./sessions/model-registry.js";
 
 type CreateStaticCatalogResolver =
@@ -135,7 +136,15 @@ vi.mock("./prepared-model-catalog-worker.js", () => ({
     input: (agentFacts as { input: unknown }).input,
   }),
   createPreparedModelCatalogWorker: () => ({
-    loadCatalog: mocks.runPreparedModelCatalogWorker,
+    loadCatalog: async () => {
+      const catalog = await mocks.runPreparedModelCatalogWorker();
+      // Real worker replies pair every catalog with its observed auth generation.
+      setPreparedModelFullCatalogAuth(catalog, {
+        authStore: { version: 1, profiles: {} },
+        authModes: {},
+      });
+      return catalog;
+    },
     loadAuth: async () => ({ authStore: { version: 1, profiles: {} }, authModes: {} }),
   }),
 }));

@@ -39,8 +39,7 @@ type SidebarPanelDefinitionParams = {
   desktopRefreshOnPresentation: boolean;
   desktopAvailable: boolean;
   desktopSource: string | null;
-  hasBoard: boolean;
-  chat: TemplateResult;
+  dashboard: TemplateResult | typeof nothing;
   workspace: TemplateResult | typeof nothing;
   tasks: TemplateResult | typeof nothing;
   detailOpen: boolean;
@@ -66,9 +65,9 @@ type SidebarPanelDefinitionParams = {
 };
 
 type SidebarPanelTextKey =
-  | "boardChat"
   | "browser"
   | "companion"
+  | "dashboard"
   | "desktop"
   | "discussion"
   | "files"
@@ -78,8 +77,8 @@ type SidebarPanelTextKey =
 
 const SIDEBAR_PANEL_LOADING_VARIANTS = {
   browser: "browser",
-  chat: "chat",
   companion: "chat",
+  dashboard: "review",
   desktop: "desktop",
   detail: "review",
   discussion: "discussion",
@@ -285,8 +284,8 @@ export function sidebarPanelDefinitions(
           }
         : {}),
     }),
-    definePanel("chat", "boardChat", icons.messageSquare, params?.chat ?? null, {
-      available: params?.hasBoard === true,
+    definePanel("dashboard", "dashboard", icons.layoutDashboard, params?.dashboard ?? null, {
+      available: params?.dashboard !== nothing,
     }),
   ];
 }

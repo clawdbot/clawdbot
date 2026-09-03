@@ -173,7 +173,6 @@
     "native.android.1b95ee4b75f6033b": "सहेजा गया प्रमाणीकरण अमान्य है",
     "native.android.1bbbdb0fb0e3a5a3": "अक्षम करें",
     "native.android.1c35de4d06275916": "OpenClaw में आपका स्वागत है",
-    "native.android.1c3686e1c087e2c8": "प्रदाता कैटलॉग लोड नहीं किया जा सका।",
     "native.android.1c4acd27277544e0": "केवल पढ़ने की पहुँच; नेटिव टूल स्वीकृति नियम फिर भी लागू होते हैं।",
     "native.android.1c4be71b5c3aa079": "कनेक्शन आवश्यक है",
     "native.android.1c62b20321fbbd26": "भूलें",
@@ -1455,7 +1454,6 @@
     "native.android.e5021b83ff593f1e": "वर्तमान",
     "native.android.e502c87002ff73f0": "${seconds} सेकंड",
     "native.android.e50e16c71fc204f1": "कुछ चैनल स्टेटस जाँच पूरी नहीं हुईं।",
-    "native.android.e5387d6aaf34ede8": "खोजा जा रहा है…",
     "native.android.e53f4d638a7fa07e": "ऐप में स्वीकृति अनुरोध लोड करने के लिए Gateway कनेक्ट करें।",
     "native.android.e541942ff77b53eb": "सुन रहा है (PTT)",
     "native.android.e54941cceace936d": "यहाँ तक रिवाइंड करें",
@@ -2243,6 +2241,7 @@
     "native.apple.36797a0a0d370b1c": "अभी Health Check चलाएँ",
     "native.apple.367d222547a7dfa4": "संदर्भ",
     "native.apple.3704f5846ba19f61": "परीक्षण हो रहा है…",
+    "native.apple.3707ddd116730423": "\\(minimum)–\\(maximum)",
     "native.apple.3763e29c884dd87a": "Gateway टोकन अपडेट करें",
     "native.apple.37715ac8050292a6": "%@ द्वारा अपडेट किया गया",
     "native.apple.377a95b3a57b9e32": "क्रेडेंशियल इस प्रोफ़ाइल के साथ आपके Mac Keychain में संग्रहीत किए जाते हैं।",
@@ -2450,6 +2449,7 @@
     "native.apple.4a85eb1605f1ba49": "+%1$lld और काम कर रहे हैं",
     "native.apple.4a999d79dfd4a4e2": "Gateway ने अप्रत्याशित चैनल स्थिति प्रतिक्रिया लौटाई।",
     "native.apple.4aa0a356f580cb09": "unknown gateway error",
+    "native.apple.4adc28ed0e25f735": "बैकग्राउंड सत्र नहीं खोला जा सका",
     "native.apple.4b1707775e3d4ded": "वॉच नोड ऑनलाइन",
     "native.apple.4b1c264d08779b81": "कमज़ोर",
     "native.apple.4b34153a64ea0fbe": "%@, स्वस्थ",
@@ -3657,6 +3657,7 @@
     "native.apple.bb24048d5940285c": "इस Gateway पर एक text-inference प्रदाता प्लगइन सक्षम या इंस्टॉल करें, फिर फिर से जाँचें।",
     "native.apple.bb25a6eb7fab6d0e": "सतह पर आ रहे हैं",
     "native.apple.bb3054116d83e716": "एम्बेडेड CUA डेमन को पुनः प्रयास करने के लिए OpenClaw फिर से खोलें।",
+    "native.apple.bb3b23bb105850ba": "\\(maximum)",
     "native.apple.bb5f5e891aeadb25": "यह युग्मित gateway अब उपलब्ध नहीं है।",
     "native.apple.bb69920e6930860f": "Automation issues",
     "native.apple.bb7347e3399c42ee": "%@ से संदर्भ — %@",
@@ -4298,6 +4299,7 @@
     "native.apple.f4155b853aa86198": "Skills अनुभाग",
     "native.apple.f420de18a586c900": "अपने ब्राउज़र लॉगिन का उपयोग करें",
     "native.apple.f43c1f8049a80f31": "थ्रेड हटाएँ",
+    "native.apple.f4483cba92be9484": "टेक्स्ट चुनें",
     "native.apple.f454890b0dc22cfd": "लोकल (यह Mac)",
     "native.apple.f47dbe72f59ee9cb": "माइक्रोफ़ोन और वाक् पहचान की अनुमति आवश्यक है।",
     "native.apple.f496b5c54219ca5f": "त्वरित कार्रवाइयों के लिए तैयार",
@@ -4428,6 +4430,7 @@
     "native.apple.ff9163dd493d583b": "जगाएँ",
     "native.apple.ffba42bcdc2cc866": "1 टोकन",
     "native.apple.ffcccb2c944378ff": "Speakerphone",
-    "native.apple.ffd5f2e059651aa1": "Gateway सेटिंग्स खोलें"
+    "native.apple.ffd5f2e059651aa1": "Gateway सेटिंग्स खोलें",
+    "native.apple.ffefad3c8b30c36d": "कोड कॉपी करें"
   }
 }

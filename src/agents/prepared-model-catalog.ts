@@ -23,7 +23,7 @@ import {
   setPreparedModelRuntimeAuthStore,
 } from "./prepared-model-runtime-auth.js";
 import {
-  PreparedModelCatalogGenerationInvalidError,
+  PreparedModelCatalogGenerationMismatchError,
   PreparedModelRuntimePublicationSupersededError,
 } from "./prepared-model-runtime.errors.js";
 import { isPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
@@ -94,7 +94,7 @@ async function materializeRequestedModelCatalog(
         : await snapshot.loadFullModelCatalog({ refresh: refreshFullCatalog === true }));
   } catch (error) {
     if (
-      error instanceof PreparedModelCatalogGenerationInvalidError &&
+      error instanceof PreparedModelCatalogGenerationMismatchError &&
       (await replacePreparedModelRuntimeSnapshotAfterCatalogGenerationMismatch(snapshot))
     ) {
       throw new PreparedModelRuntimePublicationSupersededError(

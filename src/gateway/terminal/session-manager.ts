@@ -66,7 +66,7 @@ export class TerminalSessionManager {
   private readonly getBufferedAmount: (connId: string) => number | undefined;
   private readonly spawn?: LocalTerminalBackendSpawner;
   private readonly maxSessions: number;
-  private readonly detachGraceMs: number;
+  private detachGraceMs: number;
   private readonly maxDetachedSessions: number;
   private readonly scrollbackChars: number;
   // Slots reserved by opens that are still awaiting spawn. Counted against the
@@ -490,7 +490,7 @@ export class TerminalSessionManager {
       return undefined;
     }
     if (session.owner?.kind === "agent") {
-      this.markSharedSessionAdopted(session);
+      delete session.unadoptedViewerConnId;
       // Emit pending bytes to existing viewers before the new viewer's replay
       // snapshot. This prevents the newcomer from receiving those bytes twice.
       session.output.prepareViewerAttach();
@@ -543,12 +543,10 @@ export class TerminalSessionManager {
 
   /** Live sessions owned by one agent tool caller. */
   listAgent(owner: AgentTerminalOwner): TerminalSessionSummary[] {
-    const sessionIds = new Set(
-      [...this.sessions.values()]
-        .filter((session) => !session.closed && agentTerminalOwnerMatches(session.owner, owner))
-        .map((session) => session.id),
-    );
-    return this.list().filter((summary) => sessionIds.has(summary.sessionId));
+    return [...this.sessions.values()]
+      .filter((session) => !session.closed && agentTerminalOwnerMatches(session.owner, owner))
+      .map(terminalSessionSummary)
+      .toSorted((a, b) => a.createdAtMs - b.createdAtMs);
   }
 
   private trackPendingOpen(
@@ -671,13 +669,38 @@ export class TerminalSessionManager {
     session.output.resetOwnership();
     session.owner = null;
     session.detachedAtMs = Date.now();
+    this.scheduleDetachedExpiry(session, session.detachedAtMs);
+    this.enforceDetachedCap();
+  }
+
+  updateDetachGraceMs(graceMs: number): void {
+    if (this.detachGraceMs === graceMs) {
+      return;
+    }
+    this.detachGraceMs = graceMs;
+    for (const session of this.sessions.values()) {
+      if (session.detachedAtMs !== null) {
+        this.scheduleDetachedExpiry(session, session.detachedAtMs);
+      }
+    }
+  }
+
+  private scheduleDetachedExpiry(session: TerminalSession, detachedAtMs: number): void {
+    if (session.reaper) {
+      clearTimeout(session.reaper);
+    }
+    // A reload changes the deadline, not the time the terminal disconnected.
+    const remainingMs = detachedAtMs + this.detachGraceMs - Date.now();
+    if (remainingMs <= 0) {
+      this.finalize(session, "disconnected", {}, { silent: true });
+      return;
+    }
     session.reaper = setTimeout(() => {
       // Silent: nobody owns the stream, so there is no socket to notify.
       this.finalize(session, "disconnected", {}, { silent: true });
-    }, this.detachGraceMs);
+    }, remainingMs);
     // Never keep the process alive just to reap an abandoned shell.
     session.reaper.unref?.();
-    this.enforceDetachedCap();
   }
 
   private enforceDetachedCap(): void {
@@ -764,7 +787,7 @@ export class TerminalSessionManager {
     if (session.owner?.kind !== "agent" || !session.viewers.has(connId)) {
       return undefined;
     }
-    this.markSharedSessionAdopted(session);
+    delete session.unadoptedViewerConnId;
     return session;
   }
 
@@ -774,20 +797,11 @@ export class TerminalSessionManager {
     sessionId: string,
   ): TerminalSession | undefined {
     const session = this.sessions.get(sessionId);
-    if (
-      !session ||
-      session.closed ||
-      session.owner?.kind !== "agent" ||
-      !agentTerminalOwnerMatches(session.owner, owner)
-    ) {
+    if (!session || session.closed || !agentTerminalOwnerMatches(session.owner, owner)) {
       return undefined;
     }
-    this.markSharedSessionAdopted(session);
-    return session;
-  }
-
-  private markSharedSessionAdopted(session: TerminalSession): void {
     delete session.unadoptedViewerConnId;
+    return session;
   }
 
   private finalize(

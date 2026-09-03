@@ -173,7 +173,6 @@
     "native.android.1b95ee4b75f6033b": "La autenticación guardada no es válida",
     "native.android.1bbbdb0fb0e3a5a3": "Deshabilitar",
     "native.android.1c35de4d06275916": "Te damos la bienvenida a OpenClaw",
-    "native.android.1c3686e1c087e2c8": "No se pudo cargar el catálogo de proveedores.",
     "native.android.1c4acd27277544e0": "Acceso de solo lectura; las reglas de aprobación de herramientas nativas siguen aplicándose.",
     "native.android.1c4be71b5c3aa079": "Necesita conexión",
     "native.android.1c62b20321fbbd26": "Olvidar",
@@ -1455,7 +1454,6 @@
     "native.android.e5021b83ff593f1e": "Actual",
     "native.android.e502c87002ff73f0": "${seconds}s",
     "native.android.e50e16c71fc204f1": "Algunas comprobaciones de estado de los canales no se completaron.",
-    "native.android.e5387d6aaf34ede8": "Buscando…",
     "native.android.e53f4d638a7fa07e": "Conecta el Gateway para cargar las solicitudes de aprobación en la app.",
     "native.android.e541942ff77b53eb": "Escuchando (PTT)",
     "native.android.e54941cceace936d": "Rebobinar hasta aquí",
@@ -2243,6 +2241,7 @@
     "native.apple.36797a0a0d370b1c": "Ejecutar comprobación de estado ahora",
     "native.apple.367d222547a7dfa4": "Contexto",
     "native.apple.3704f5846ba19f61": "Probando…",
+    "native.apple.3707ddd116730423": "\\(minimum)–\\(maximum)",
     "native.apple.3763e29c884dd87a": "Actualizar token de Gateway",
     "native.apple.37715ac8050292a6": "Actualizado por %@",
     "native.apple.377a95b3a57b9e32": "Las credenciales se almacenan con este perfil en el llavero de tu Mac.",
@@ -2450,6 +2449,7 @@
     "native.apple.4a85eb1605f1ba49": "+%1$lld más trabajando",
     "native.apple.4a999d79dfd4a4e2": "Gateway devolvió una respuesta de estado del canal inesperada.",
     "native.apple.4aa0a356f580cb09": "unknown gateway error",
+    "native.apple.4adc28ed0e25f735": "No se pudo abrir la sesión en segundo plano",
     "native.apple.4b1707775e3d4ded": "Nodo del reloj en línea",
     "native.apple.4b1c264d08779b81": "Degradado",
     "native.apple.4b34153a64ea0fbe": "%@, en buen estado",
@@ -3657,6 +3657,7 @@
     "native.apple.bb24048d5940285c": "Activa o instala un plugin de proveedor de inferencia de texto en este Gateway y vuelve a comprobar.",
     "native.apple.bb25a6eb7fab6d0e": "Saliendo a la superficie",
     "native.apple.bb3054116d83e716": "Vuelve a abrir OpenClaw para reintentar el daemon CUA integrado.",
+    "native.apple.bb3b23bb105850ba": "\\(maximum)",
     "native.apple.bb5f5e891aeadb25": "Este gateway emparejado ya no está disponible.",
     "native.apple.bb69920e6930860f": "Automation issues",
     "native.apple.bb7347e3399c42ee": "Contexto de %@ — %@",
@@ -4298,6 +4299,7 @@
     "native.apple.f4155b853aa86198": "Sección Skills",
     "native.apple.f420de18a586c900": "Usa los inicios de sesión de tu navegador",
     "native.apple.f43c1f8049a80f31": "Eliminar hilos",
+    "native.apple.f4483cba92be9484": "Seleccionar texto",
     "native.apple.f454890b0dc22cfd": "Local (este Mac)",
     "native.apple.f47dbe72f59ee9cb": "Se requieren permisos para usar el micrófono y el reconocimiento de voz.",
     "native.apple.f496b5c54219ca5f": "Listo para acciones rápidas",
@@ -4428,6 +4430,7 @@
     "native.apple.ff9163dd493d583b": "Activar",
     "native.apple.ffba42bcdc2cc866": "1 token",
     "native.apple.ffcccb2c944378ff": "Altavoz",
-    "native.apple.ffd5f2e059651aa1": "Abrir configuración de Gateway"
+    "native.apple.ffd5f2e059651aa1": "Abrir configuración de Gateway",
+    "native.apple.ffefad3c8b30c36d": "Copiar código"
   }
 }

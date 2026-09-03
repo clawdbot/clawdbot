@@ -30,8 +30,7 @@ function isSyntheticCaller(client: GatewayClient | null): boolean {
 
 function hasIneligibleRoleActor(client: GatewayClient): boolean {
   const actor = client.internal?.operatorRoleActor;
-  // A system actor without a person stays ineligible; the owner profile is the person.
-  // Other delegated role actors cannot authorize personal GitHub.
+  // Shared-secret owner profiles can manage personal GitHub; delegated operators cannot.
   return Boolean(actor && (actor.kind !== "system" || !client.authenticatedUserProfile));
 }
 

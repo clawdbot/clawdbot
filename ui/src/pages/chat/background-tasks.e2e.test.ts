@@ -429,7 +429,7 @@ suite.define(() => {
           path: path.join(railFlowDir, "02-task-detail-expanded.png"),
           fullPage: true,
         });
-        await page.getByRole("button", { name: "Restore side panel" }).click();
+        await page.getByRole("button", { name: "Collapse", exact: true }).click();
         await expect
           .poll(() => page.locator(".side-panel__expand").getAttribute("aria-pressed"))
           .toBe("false");

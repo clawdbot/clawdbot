@@ -19,7 +19,7 @@ import {
 } from "./prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
 import {
-  PreparedModelCatalogGenerationInvalidError,
+  PreparedModelCatalogGenerationMismatchError,
   PreparedModelRuntimePublicationSupersededError,
 } from "./prepared-model-runtime.errors.js";
 import { fingerprintPreparedRuntimeFacts } from "./prepared-model-runtime.facts.js";
@@ -63,7 +63,11 @@ export type PreparedModelWorkerResult =
       authStore: AuthProfileStore;
       authModes: PreparedAgentCredentialModes;
     }>
-  | Readonly<{ status: "generation-invalid"; error: string }>
+  | Readonly<{
+      status: "generation-mismatch";
+      generationFingerprint: string;
+      reconstructedFingerprint: string;
+    }>
   | Readonly<{ status: "failed"; error: string }>;
 
 // Cold source/plugin loading can take well over a minute. Three minutes preserves exact full-view
@@ -178,36 +182,57 @@ export function createPreparedModelCatalogWorker(params: {
       throw superseded();
     }
   };
-  const pool = new WorkerTaskPool<PreparedModelWorkerRequest, PreparedModelWorkerResult>({
-    workerUrl: resolveRuntimeWorkerUrl({
-      currentModuleUrl: import.meta.url,
-      sourceWorkerName: "prepared-model-catalog.worker",
-      distWorkerPath: "agents/prepared-model-catalog.worker.js",
-    }),
-    maxWorkers: 1,
-    // Recreating this worker would import changed plugin code under the old generation.
-    // Only the lifecycle owner may retire it; crashes close the generation permanently.
-    idleTimeoutMs: 0,
-    restartOnError: false,
-    workerOptions: {
-      workerData: params.input,
-      // Establish state/config environment before worker module initialization reads process.env.
-      env: { ...process.env, ...params.input.input.env },
-    },
-    validateResult: (message) => {
-      assertCurrent();
-      if (
-        message.status === "ok" &&
-        message.generationFingerprint !== params.input.generationFingerprint
-      ) {
-        throw new Error("prepared model catalog worker returned a stale generation");
-      }
-    },
-  });
+  let pool: WorkerTaskPool<PreparedModelWorkerRequest, PreparedModelWorkerResult> | undefined;
+  const mismatch = (
+    message: Extract<PreparedModelWorkerResult, { status: "generation-mismatch" }>,
+  ) =>
+    new PreparedModelCatalogGenerationMismatchError(
+      params.input.input.agentDir,
+      message.generationFingerprint,
+      message.reconstructedFingerprint,
+    );
+  const createPool = () =>
+    new WorkerTaskPool<PreparedModelWorkerRequest, PreparedModelWorkerResult>({
+      workerUrl: resolveRuntimeWorkerUrl({
+        currentModuleUrl: import.meta.url,
+        sourceWorkerName: "prepared-model-catalog.worker",
+        distWorkerPath: "agents/prepared-model-catalog.worker.js",
+      }),
+      maxWorkers: 1,
+      // Recreating this worker would import changed plugin code under the old generation.
+      // Only the lifecycle owner may retire it; crashes close the generation permanently.
+      idleTimeoutMs: 0,
+      restartOnError: false,
+      workerOptions: {
+        workerData: params.input,
+        // Establish state/config environment before worker module initialization reads process.env.
+        env: { ...process.env, ...params.input.input.env },
+      },
+      validateResult: (message) => {
+        assertCurrent();
+        if (message.status === "generation-mismatch") {
+          // Fence before any successor dispatches: rejecting here closes the pool, so a queued
+          // auth or catalog request never runs on the retired worker and rejects with this
+          // same typed outcome instead of a generic failure.
+          throw mismatch(message);
+        }
+        if (
+          message.status === "ok" &&
+          message.generationFingerprint !== params.input.generationFingerprint
+        ) {
+          throw new Error("prepared model catalog worker returned a stale generation");
+        }
+      },
+    });
+  const retire = (error: Error) => {
+    const closing = pool;
+    pool = undefined;
+    return closing?.close(error) ?? Promise.resolve();
+  };
   const stop = (error: Error) => {
     clearInterval(generationPoll);
     generationPoll = undefined;
-    return pool.close(error);
+    return pool?.close(error) ?? Promise.resolve();
   };
   const request = async (
     value: PreparedModelWorkerRequest,
@@ -221,7 +246,7 @@ export function createPreparedModelCatalogWorker(params: {
         }
       }, PREPARED_MODEL_CATALOG_WORKER_GENERATION_POLL_MS);
       generationPoll.unref();
-      message = await pool.run(
+      message = await (pool ??= createPool()).run(
         () => {
           assertCurrent();
           return value;
@@ -230,18 +255,23 @@ export function createPreparedModelCatalogWorker(params: {
       );
       assertCurrent();
     } catch (error) {
-      await stop(error instanceof Error ? error : new Error(String(error)));
-      throw error;
-    }
-    if (message.status === "generation-invalid") {
-      const error = new PreparedModelCatalogGenerationInvalidError(
-        `prepared model catalog generation was invalid for ${params.input.input.agentDir}`,
-      );
-      await stop(error);
+      const failure = error instanceof Error ? error : new Error(String(error));
+      if (failure instanceof PreparedModelCatalogGenerationMismatchError) {
+        // Facts from another generation are never published as this one, but the generation
+        // itself stays open: drop the fenced pool so the next request rebuilds a worker from
+        // the same lifecycle plan instead of replaying a cached terminal error.
+        await retire(failure);
+        throw failure;
+      }
+      await stop(failure);
       throw error;
     }
     if (message.status === "failed") {
       throw new Error(message.error);
+    }
+    if (message.status === "generation-mismatch") {
+      // validateResult fences this reply before the pool can resolve it.
+      throw mismatch(message);
     }
     return message;
   };

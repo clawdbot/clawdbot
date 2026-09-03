@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { sanitizeEnvVars } from "../agents/sandbox/sanitize-env-vars.js";
-import * as installedPluginIndex from "../plugins/installed-plugin-index.js";
+import * as pluginConfigState from "../plugins/config-state.js";
 import { resolveLocalProviderAuthEvidence } from "./provider-auth-evidence.js";
 import {
   getProviderEnvVars,
@@ -802,13 +802,13 @@ describe("provider env vars dynamic manifest metadata", () => {
       },
     );
 
-    const policy = vi.spyOn(installedPluginIndex, "isInstalledPluginEnabled");
+    const policy = vi.spyOn(pluginConfigState, "resolveEffectivePluginActivationState");
     let lookupMaps: ReturnType<typeof resolveProviderAuthLookupMaps>;
     try {
       lookupMaps = resolveProviderAuthLookupMaps({ config: {} });
       expect(policy.mock.calls.length).toBeLessThanOrEqual(2);
-      expect(policy.mock.calls.map(([, pluginId]) => pluginId)).not.toContain("channel-only");
-      expect(policy.mock.calls.map(([, pluginId]) => pluginId)).not.toContain("metadata-only");
+      expect(policy.mock.calls.map(([{ id }]) => id)).not.toContain("channel-only");
+      expect(policy.mock.calls.map(([{ id }]) => id)).not.toContain("metadata-only");
     } finally {
       policy.mockRestore();
     }

@@ -8,18 +8,23 @@ const MIN_HEIGHT = 220;
 const MAX_WIDTH = 1_200;
 const MAX_HEIGHT = 800;
 
-function isSlotId(value: unknown): value is SidebarSlotId {
-  return (
-    value === "browser" ||
-    value === "chat" ||
+function normalizeSlotId(value: unknown): SidebarSlotId | null {
+  // Stable releases persisted dashboard panels as `chat`; normalize that
+  // storage contract here so upgrades retain the selected panel and layout.
+  if (value === "chat") {
+    return "dashboard";
+  }
+  return value === "browser" ||
     value === "companion" ||
+    value === "dashboard" ||
     value === "desktop" ||
     value === "detail" ||
     value === "discussion" ||
     value === "tasks" ||
     value === "terminal" ||
     value === "workspace"
-  );
+    ? value
+    : null;
 }
 
 function clampWidth(width: number): number {
@@ -64,17 +69,21 @@ export function normalizeSidebarLayout(value: unknown): SidebarLayout {
     const columnPanels: SidebarPanel[] = [];
     const panelIds = new Map<string, string>();
     for (const rawPanel of rawColumn.panels) {
-      if (!isRecord(rawPanel) || !isSlotId(rawPanel.slot) || usedSlots.has(rawPanel.slot)) {
+      if (!isRecord(rawPanel)) {
+        continue;
+      }
+      const slot = normalizeSlotId(rawPanel.slot);
+      if (!slot || usedSlots.has(slot)) {
         continue;
       }
       const rawPanelId = typeof rawPanel.id === "string" ? rawPanel.id.trim() : "";
-      const panelId = uniqueId(rawPanel.id, rawPanel.slot, usedPanelIds);
-      const sourceId = rawPanelId || rawPanel.slot;
+      const panelId = uniqueId(rawPanel.id, slot, usedPanelIds);
+      const sourceId = rawPanelId || (rawPanel.slot === "chat" ? "chat" : slot);
       if (!panelIds.has(sourceId)) {
         panelIds.set(sourceId, panelId);
       }
-      usedSlots.add(rawPanel.slot);
-      columnPanels.push({ id: panelId, slot: rawPanel.slot });
+      usedSlots.add(slot);
+      columnPanels.push({ id: panelId, slot });
     }
     const requestedActiveId =
       typeof rawColumn.activePanelId === "string" ? rawColumn.activePanelId.trim() : "";

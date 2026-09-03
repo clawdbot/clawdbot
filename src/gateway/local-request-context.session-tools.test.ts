@@ -1,8 +1,14 @@
 // Exercises built-in session tools through the real in-process router and SQLite store.
 import { describe, expect, it } from "vitest";
+import type { SessionsCreateResult } from "../../packages/gateway-protocol/src/index.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
-import { callAgentToolGatewayRequest } from "../agents/tools/in-process-gateway.js";
+import {
+  callAgentToolGatewayRequest,
+  type InProcessGatewayCaller,
+  runWithGatewayToolCleanupContext,
+} from "../agents/tools/in-process-gateway.js";
 import { createSessionsListTool } from "../agents/tools/sessions-list-tool.js";
+import { maybeSpawnVisibleSession } from "../agents/tools/sessions-spawn-visible.js";
 import { createSessionsTool } from "../agents/tools/sessions-tool.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
@@ -16,6 +22,7 @@ import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admissi
 import { createDeferredCore } from "../shared/deferred.js";
 import { ensureGatewayOwnerProfile } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { registerChatAbortController } from "./chat-abort.js";
 import { withLocalGatewayRequestScope } from "./local-request-context.js";
 import {
   runWithOperatorToolGatewayCleanupContext,
@@ -68,6 +75,125 @@ async function withSessionToolsFixture(run: (cfg: OpenClawConfig) => Promise<voi
 }
 
 describe("built-in session tool role authority", () => {
+  it.each(["unchanged", "active", "replaced", "reset"] as const)(
+    "visible-spawn rollback protects the admitted child generation (%s)",
+    async (generation) => {
+      await withSessionToolsFixture(async (cfg) => {
+        const context = getPluginRuntimeGatewayRequestScope()?.context;
+        if (!context) {
+          throw new Error("expected local Gateway context");
+        }
+        let current = true;
+        let childKey: string | undefined;
+        let successor: ReturnType<typeof loadSessionEntry>;
+        let registeredRun: ReturnType<typeof registerChatAbortController> | undefined;
+        const callGateway: InProcessGatewayCaller = async <T>(
+          method: string,
+          params: Record<string, unknown>,
+        ): Promise<T> => {
+          if (method !== "sessions.create") {
+            return await runWithGatewayToolCleanupContext(
+              () => callAgentToolGatewayRequest<T>({ method, params, timeoutMs: null }),
+              () => context,
+            );
+          }
+          // Keep real creation with default model selection and its response identity.
+          // Initial task dispatch and explicit-model catalog preparation are outside rollback.
+          const { task: _task, model: _model, ...creation } = params;
+          const created = await callAgentToolGatewayRequest<SessionsCreateResult>({
+            method,
+            params: creation,
+            // Match the worker's lifecycle-owned create and cleanup deadlines.
+            timeoutMs: null,
+          });
+          if (!created.sessionId) {
+            throw new Error("session creation did not return its incarnation");
+          }
+          childKey = created.key;
+          if (generation === "replaced") {
+            await callAgentToolGatewayRequest({
+              method: "sessions.delete",
+              params: { key: childKey },
+            });
+            await callAgentToolGatewayRequest({
+              method: "sessions.create",
+              params: { agentId: "main", key: childKey },
+            });
+          } else if (generation === "reset") {
+            await callAgentToolGatewayRequest({
+              method: "sessions.reset",
+              params: { key: childKey },
+            });
+          }
+          successor = loadSessionEntry({ agentId: "main", sessionKey: childKey });
+          if (!successor) {
+            throw new Error("expected persisted child before rollback");
+          }
+          if (generation === "replaced") {
+            expect(successor.sessionId).not.toBe(created.sessionId);
+          } else if (generation === "reset") {
+            expect(successor.sessionId).toBe(created.sessionId);
+            expect(successor.lifecycleRevision).not.toBe(created.entry?.lifecycleRevision);
+          }
+          if (generation === "reset" || generation === "active") {
+            registeredRun = registerChatAbortController({
+              chatAbortControllers: context.chatAbortControllers,
+              runId: `${generation}-run`,
+              sessionId: successor.sessionId,
+              sessionKey: childKey,
+              agentId: "main",
+              timeoutMs: 60_000,
+            });
+            const run = registeredRun;
+            run.controller.signal.addEventListener("abort", () => run.cleanup(), { once: true });
+          }
+          current = false;
+          return { ...created, runStarted: generation === "reset" || generation === "active" } as T;
+        };
+        try {
+          const result = await withGatewayToolCallerIdentity(
+            {
+              agentId: "main",
+              sessionKey: REQUESTER,
+              operationalRunInstance: { instanceId: "spawn-instance", runId: "spawn-run" },
+              receiptAuthority: () => current,
+              gatewayContextResolver: () => context,
+            },
+            () =>
+              maybeSpawnVisibleSession({
+                raw: { visible: true },
+                task: "inspect",
+                label: "",
+                runtime: "subagent",
+                sandbox: "inherit",
+                expectsCompletionMessage: false,
+                options: { config: cfg, agentSessionKey: REQUESTER, callGateway },
+              }),
+          );
+          expect(result).toMatchObject({
+            status: "error",
+            error: expect.stringContaining(
+              generation === "unchanged" || generation === "active"
+                ? "Session removed."
+                : "Session changed; newer session kept.",
+            ),
+          });
+          if (!childKey) {
+            throw new Error("expected a created child");
+          }
+          if (registeredRun) {
+            expect.soft(registeredRun.controller.signal.aborted).toBe(generation === "active");
+          }
+          expect(loadSessionEntry({ agentId: "main", sessionKey: childKey })).toEqual(
+            generation === "unchanged" || generation === "active" ? undefined : successor,
+          );
+        } finally {
+          registeredRun?.cleanup();
+        }
+      });
+    },
+  );
+
   it.each([false, true])(
     "retains inherited system ownership through deferred cleanup (scoped operator: %s)",
     async (scopedOperator) => {

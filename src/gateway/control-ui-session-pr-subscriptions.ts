@@ -127,8 +127,8 @@ export function parseControlUiSessionPullRequestsSubscribeParams(
 export function createControlUiSessionPullRequestSubscriptions(
   deps: SubscriptionDeps,
 ): ControlUiSessionPullRequestSubscriptions {
+  // Only nonempty replace-sets enter this map; each row also owns its hydration generation.
   const subscriptions = new Map<string, { keys: Set<string>; delivered: Set<string> }>();
-  const replacementTokens = new Map<string, object>();
   const snapshots = new Map<
     string,
     { hash: string; snapshot: ControlUiSessionPullRequestSnapshot }
@@ -217,7 +217,7 @@ export function createControlUiSessionPullRequestSubscriptions(
   };
 
   const schedulePoll = () => {
-    if (stopped || timer !== null || watchedKeys().size === 0) {
+    if (stopped || timer !== null || subscriptions.size === 0) {
       return;
     }
     timer = setTimer(() => {
@@ -273,16 +273,9 @@ export function createControlUiSessionPullRequestSubscriptions(
     if (!normalizedConnId || deps.isConnectionActive?.(normalizedConnId) === false) {
       return;
     }
-    const replacementToken = {};
-    replacementTokens.set(normalizedConnId, replacementToken);
     const next = new Set(sessionKeys);
     if (next.size === 0) {
-      subscriptions.delete(normalizedConnId);
-      pruneOrphans();
-      if (watchedKeys().size === 0 && timer !== null) {
-        clearTimer(timer);
-        timer = null;
-      }
+      unsubscribe(normalizedConnId);
       return;
     }
     const delivered = subscriptions.get(normalizedConnId)?.delivered ?? new Set<string>();
@@ -291,7 +284,8 @@ export function createControlUiSessionPullRequestSubscriptions(
         delivered.delete(sessionKey);
       }
     }
-    subscriptions.set(normalizedConnId, { keys: next, delivered });
+    const subscription = { keys: next, delivered };
+    subscriptions.set(normalizedConnId, subscription);
     pruneOrphans();
     schedulePoll();
 
@@ -311,7 +305,7 @@ export function createControlUiSessionPullRequestSubscriptions(
     }
 
     await loadKeysInParallel(pendingKeys, async (sessionKey) => {
-      if (stopped || replacementTokens.get(normalizedConnId) !== replacementToken) {
+      if (stopped || subscriptions.get(normalizedConnId) !== subscription) {
         return;
       }
       const previous = snapshots.get(sessionKey);
@@ -319,7 +313,7 @@ export function createControlUiSessionPullRequestSubscriptions(
       const snapshot = await loadSnapshot(sessionKey, refresh);
       // A later replace-set owns the connection immediately; an older async
       // initial load must never publish keys after that ownership changed.
-      if (replacementTokens.get(normalizedConnId) !== replacementToken) {
+      if (subscriptions.get(normalizedConnId) !== subscription) {
         return;
       }
       const hash = snapshotHash(snapshot);
@@ -339,10 +333,9 @@ export function createControlUiSessionPullRequestSubscriptions(
     if (!normalizedConnId) {
       return;
     }
-    replacementTokens.delete(normalizedConnId);
     subscriptions.delete(normalizedConnId);
     pruneOrphans();
-    if (watchedKeys().size === 0 && timer !== null) {
+    if (subscriptions.size === 0 && timer !== null) {
       clearTimer(timer);
       timer = null;
     }
@@ -355,7 +348,6 @@ export function createControlUiSessionPullRequestSubscriptions(
       timer = null;
     }
     subscriptions.clear();
-    replacementTokens.clear();
     snapshots.clear();
     inflight.clear();
   };

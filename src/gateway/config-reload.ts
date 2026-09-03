@@ -730,6 +730,7 @@ export function startGatewayConfigReloader(opts: {
       noopPaths: pluginInstallTimestampNoopPaths,
       forceChangedPaths: pluginInstallWholeRecordPaths,
       candidateConfig: nextConfig,
+      previousConfig: currentConfig,
     });
     if (forcePluginMetadataReload && !plan.restartGateway) {
       plan.restartGateway = true;

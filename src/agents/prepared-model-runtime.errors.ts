@@ -1,5 +1,15 @@
 export class PreparedModelRuntimeOwnerNotPublishedError extends Error {}
 
 export class PreparedModelRuntimePublicationSupersededError extends PreparedModelRuntimeOwnerNotPublishedError {}
-
-export class PreparedModelCatalogGenerationInvalidError extends Error {}
+export class PreparedModelCatalogGenerationMismatchError extends Error {
+  constructor(
+    readonly agentDir: string,
+    readonly generationFingerprint: string,
+    readonly reconstructedFingerprint: string,
+  ) {
+    super(
+      `prepared model catalog worker reconstructed a different runtime generation for ${agentDir} (owner=${generationFingerprint} worker=${reconstructedFingerprint})`,
+    );
+    this.name = "PreparedModelCatalogGenerationMismatchError";
+  }
+}

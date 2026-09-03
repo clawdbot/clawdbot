@@ -20,10 +20,7 @@ import {
   attestCodexThreadToolSurface,
   discardUnattestedCodexPluginThread,
 } from "./plugin-thread-attestation.js";
-import {
-  buildCodexPluginAppsConfigPatchFromPolicyContext,
-  mergeCodexThreadConfigs,
-} from "./plugin-thread-config.js";
+import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
 import {
   assertCodexThreadAcceptsDirectInput,
   assertCodexThreadStartResponse,
@@ -114,21 +111,16 @@ export async function resumeExistingCodexThread(
     // resume (including scheduled tool ceilings), then admit the loaded thread below.
     const pluginThreadConfig =
       context.prebuiltPluginThreadConfig ??
-      (params.pluginThreadConfig?.requiresCurrentPolicyCheck
+      (params.pluginThreadConfig?.enabled
         ? await lifecycleTiming.measure("plugin-config-build", () =>
             params.pluginThreadConfig?.build(),
           )
-        : undefined);
-    const pluginAppsConfigPatch =
-      pluginThreadConfig?.configPatch ??
-      (params.pluginThreadConfig?.enabled && resumeBinding.pluginAppPolicyContext
-        ? buildCodexPluginAppsConfigPatchFromPolicyContext(resumeBinding.pluginAppPolicyContext)
         : undefined);
     const resumeConfig = applyCodexNativeSkillIsolation(
       mergeCodexThreadConfigs(
         params.config,
         userMcpServersConfigPatch,
-        pluginAppsConfigPatch,
+        pluginThreadConfig?.configPatch,
         finalConfigPatch.configPatch,
       ),
       nativeSkillIsolation,

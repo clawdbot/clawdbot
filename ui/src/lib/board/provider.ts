@@ -91,6 +91,7 @@ class NullProvider implements BoardProvider {
   readonly canGrant = false;
   readonly canPinWidgets = false;
   readonly canPinMcpApps = false;
+  readonly hasLoadedSnapshot = true;
   readonly loadError$ = new ValueSignal<string | null>(null);
   readonly snapshot$: BoardSnapshotSignal<BoardSnapshot>;
   readonly events: BoardEventStream<BoardCommandEvent> = new EventStream<BoardCommandEvent>();
@@ -132,6 +133,7 @@ class MockBoardProvider implements BoardProvider {
   readonly canGrant = true;
   readonly canPinWidgets = true;
   readonly canPinMcpApps = true;
+  readonly hasLoadedSnapshot = true;
   readonly loadError$ = new ValueSignal<string | null>(null);
   readonly snapshot$: BoardSnapshotSignal<BoardSnapshot>;
   readonly events: BoardEventStream<BoardCommandEvent>;

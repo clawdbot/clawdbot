@@ -1485,7 +1485,13 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
 
   it("mints Cloudflare sync only for the standard trusted-proxy header contract", async () => {
     const assertion = "header.payload.signature";
-    loadConfigMock.mockImplementationOnce(() => ({
+    const previousLoadConfig = loadConfigMock.getMockImplementation();
+    onTestFinished(() => {
+      if (previousLoadConfig) {
+        loadConfigMock.mockImplementation(previousLoadConfig);
+      }
+    });
+    loadConfigMock.mockImplementation(() => ({
       gateway: {
         auth: {
           mode: "trusted-proxy",
@@ -1735,6 +1741,77 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     expect(harness.socketSend).not.toHaveBeenCalled();
     expect(harness.send).not.toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
   });
+
+  it.each(["allowedOrigins", "dangerouslyAllowHostHeaderOriginFallback"] as const)(
+    "rejects a pending handshake after %s stops allowing its browser origin",
+    async (policy) => {
+      const origin = "https://browser.example.test";
+      const previousLoadConfig = loadConfigMock.getMockImplementation();
+      let controlUi = {
+        allowedOrigins: policy === "allowedOrigins" ? [origin] : [],
+        dangerouslyAllowHostHeaderOriginFallback:
+          policy === "dangerouslyAllowHostHeaderOriginFallback",
+      };
+      loadConfigMock.mockImplementation(() => ({
+        gateway: { auth: { mode: "none" }, controlUi },
+      }));
+      const preparationStarted = createDeferred();
+      const releasePreparation = createDeferred();
+      prepareGatewayNodeConnectMock.mockImplementationOnce(async () => {
+        preparationStarted.resolve();
+        await releasePreparation.promise;
+        return true;
+      });
+      const close = createCloseMock();
+      const harness = attachGatewayHarness({
+        connId: `origin-revoked-${policy}`,
+        connectNonce: `origin-revoked-${policy}`,
+        requestOrigin: origin,
+        requestHost: "browser.example.test",
+        remoteAddr: "203.0.113.50",
+        resolvedAuth: { mode: "token", token: "gateway-token", allowTailscale: false },
+        close,
+      });
+
+      try {
+        harness.sendConnect("connect-origin-revoked", {
+          minProtocol: PROTOCOL_VERSION,
+          maxProtocol: PROTOCOL_VERSION,
+          client: { id: "gateway-client", version: "dev", platform: "test", mode: "backend" },
+          role: "operator",
+          caps: [],
+          auth: { token: "gateway-token" },
+        });
+        await preparationStarted.promise;
+        controlUi = {
+          allowedOrigins: ["https://other.example.test"],
+          dangerouslyAllowHostHeaderOriginFallback: false,
+        };
+        releasePreparation.resolve();
+
+        await waitForFast(() => {
+          expect(harness.send).toHaveBeenCalledWith(
+            expect.objectContaining({
+              ok: false,
+              error: expect.objectContaining({
+                details: expect.objectContaining({
+                  code: ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED,
+                }),
+              }),
+            }),
+          );
+        });
+        expect(close).toHaveBeenCalledWith(1008, expect.stringContaining("origin not allowed"));
+        expect(harness.client).toBeNull();
+        expect(harness.socketSend).not.toHaveBeenCalled();
+      } finally {
+        releasePreparation.resolve();
+        if (previousLoadConfig) {
+          loadConfigMock.mockImplementation(previousLoadConfig);
+        }
+      }
+    },
+  );
 
   it("emits a security event for rejected gateway auth", async () => {
     const close = createCloseMock();

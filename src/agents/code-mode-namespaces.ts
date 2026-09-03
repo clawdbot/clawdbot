@@ -150,17 +150,12 @@ function createCodeModeNamespaceCatalogTool(
   };
 }
 
-function createCodeModeNamespaceLocalFunction(
-  toolName: string,
+function createCodeModeNamespaceApi(
   input: CodeModeNamespaceToolInputMapper,
 ): CodeModeNamespaceToolCall {
-  const normalizedToolName = toolName.trim();
-  if (!normalizedToolName) {
-    throw new Error("Code mode namespace local function name must be non-empty.");
-  }
   return {
     [CODE_MODE_NAMESPACE_TOOL_CALL]: true,
-    toolName: normalizedToolName,
+    toolName: "$api",
     local: true,
     input,
   };
@@ -429,19 +424,15 @@ function createMcpNamespaceModel(
       params: buildMcpParamDocs(entry.parameters),
     });
   }
-  const docs = [...serverDocs.values()]
-    .map((server) =>
-      Object.assign({}, server, {
-        tools: server.tools.toSorted((a, b) => a.method.localeCompare(b.method)),
-      }),
-    )
-    .toSorted((a, b) => a.identifier.localeCompare(b.identifier));
-  root.$api = createCodeModeNamespaceLocalFunction("$api", (args) =>
-    buildMcpApiResponse({ servers: docs, args }),
-  );
+  const docs = Array.from(serverDocs.values(), (server) => {
+    // The model owns these rows until namespace/API publication.
+    server.tools = server.tools.toSorted((a, b) => a.method.localeCompare(b.method));
+    return server;
+  }).toSorted((a, b) => a.identifier.localeCompare(b.identifier));
+  root.$api = createCodeModeNamespaceApi((args) => buildMcpApiResponse({ servers: docs, args }));
   for (const server of docs) {
     const serverScope = scopeAtPath(root, [server.identifier]);
-    serverScope.$api = createCodeModeNamespaceLocalFunction("$api", (args) =>
+    serverScope.$api = createCodeModeNamespaceApi((args) =>
       buildMcpApiResponse({ servers: docs, server, args }),
     );
   }
@@ -591,24 +582,16 @@ function serializeNamespaceScopeValue(
   }
 }
 
-function resolveNamespacePath(
-  scope: CodeModeNamespaceScope,
-  path: readonly string[],
-): {
-  target: unknown;
-  parent: unknown;
-} {
+function resolveNamespacePath(scope: CodeModeNamespaceScope, path: readonly string[]): unknown {
   let current: unknown = scope;
-  let parent: unknown = undefined;
   for (const segment of path) {
     assertNamespacePathSegment(segment);
-    parent = current;
     if (!isRecord(current) && !Array.isArray(current)) {
-      return { target: undefined, parent };
+      return undefined;
     }
     current = (current as Record<string, unknown>)[segment];
   }
-  return { target: current, parent };
+  return current;
 }
 
 /** Creates the runtime descriptor/invocation layer for visible namespaces. */
@@ -616,10 +599,11 @@ export function createCodeModeNamespaceRuntime(
   catalog: readonly CodeModeNamespaceCatalogEntry[] = [],
 ): CodeModeNamespaceRuntime {
   const model = createMcpNamespaceModel(catalog);
-  const entries = model ? [createMcpNamespaceEntry(model)] : [];
-  const byId = new Map(entries.map((entry) => [entry.descriptor.id, entry]));
+  const entry = model ? createMcpNamespaceEntry(model) : undefined;
+  // Registration stays stable if a consumer mutates the exposed descriptor.
+  const registeredId = entry?.descriptor.id;
   return {
-    descriptors: entries.map((entry) => entry.descriptor),
+    descriptors: entry ? [entry.descriptor] : [],
     apiFiles: [
       {
         path: "agents.d.ts",
@@ -630,8 +614,7 @@ export function createCodeModeNamespaceRuntime(
       ...createMcpApiVirtualFiles(model?.docs ?? []),
     ],
     async invoke(namespaceId, path, args, executeTool) {
-      const entry = byId.get(namespaceId);
-      if (!entry) {
+      if (!entry || namespaceId !== registeredId) {
         throw new Error(`Unknown code mode namespace: ${namespaceId}`);
       }
       for (const segment of path) {
@@ -640,7 +623,7 @@ export function createCodeModeNamespaceRuntime(
       if (!entry.callablePaths.has(namespacePathKey(path))) {
         throw new Error(`Code mode namespace path is not callable: ${path.join(".")}`);
       }
-      const { target } = resolveNamespacePath(entry.scope, path);
+      const target = resolveNamespacePath(entry.scope, path);
       if (!isCodeModeNamespaceToolCall(target)) {
         throw new Error(`Code mode namespace path is not callable: ${path.join(".")}`);
       }

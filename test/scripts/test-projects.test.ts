@@ -1432,6 +1432,7 @@ describe("scripts/test-projects changed-target routing", () => {
   it("routes shared contract ownership and declarations through every affected lane", () => {
     const targets = [
       "test/scripts/test-projects.test.ts",
+      "test/vitest-projects-config.test.ts",
       "test/vitest/vitest.contracts-channel-surface.config.ts",
       "test/vitest/vitest.contracts-channel-config.config.ts",
       "test/vitest/vitest.contracts-channel-registry.config.ts",

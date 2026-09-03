@@ -173,7 +173,6 @@
     "native.android.1b95ee4b75f6033b": "ข้อมูลยืนยันตัวตนที่บันทึกไว้ไม่ถูกต้อง",
     "native.android.1bbbdb0fb0e3a5a3": "ปิดใช้งาน",
     "native.android.1c35de4d06275916": "ยินดีต้อนรับสู่ OpenClaw",
-    "native.android.1c3686e1c087e2c8": "ไม่สามารถโหลดแค็ตตาล็อกผู้ให้บริการได้",
     "native.android.1c4acd27277544e0": "การเข้าถึงแบบอ่านอย่างเดียว กฎการอนุมัติเครื่องมือแบบเนทีฟยังคงมีผลบังคับใช้",
     "native.android.1c4be71b5c3aa079": "ต้องเชื่อมต่อ",
     "native.android.1c62b20321fbbd26": "ลืม",
@@ -1455,7 +1454,6 @@
     "native.android.e5021b83ff593f1e": "ปัจจุบัน",
     "native.android.e502c87002ff73f0": "${seconds}วินาที",
     "native.android.e50e16c71fc204f1": "การตรวจสอบสถานะช่องทางบางรายการยังไม่เสร็จสมบูรณ์",
-    "native.android.e5387d6aaf34ede8": "กำลังค้นหา…",
     "native.android.e53f4d638a7fa07e": "เชื่อมต่อ Gateway เพื่อโหลดคำขออนุมัติในแอป",
     "native.android.e541942ff77b53eb": "กำลังฟัง (PTT)",
     "native.android.e54941cceace936d": "ย้อนกลับมาที่นี่",
@@ -2243,6 +2241,7 @@
     "native.apple.36797a0a0d370b1c": "เรียกใช้การตรวจสอบสถานะตอนนี้",
     "native.apple.367d222547a7dfa4": "บริบท",
     "native.apple.3704f5846ba19f61": "กำลังทดสอบ…",
+    "native.apple.3707ddd116730423": "\\(minimum)–\\(maximum)",
     "native.apple.3763e29c884dd87a": "อัปเดตโทเค็น Gateway",
     "native.apple.37715ac8050292a6": "อัปเดตโดย %@",
     "native.apple.377a95b3a57b9e32": "ข้อมูลประจำตัวจะถูกจัดเก็บไว้กับโปรไฟล์นี้ในพวงกุญแจ Mac ของคุณ",
@@ -2450,6 +2449,7 @@
     "native.apple.4a85eb1605f1ba49": "+%1$lld กำลังทำงานเพิ่มเติม",
     "native.apple.4a999d79dfd4a4e2": "Gateway ส่งคืนการตอบกลับสถานะช่องทางที่ไม่คาดคิด",
     "native.apple.4aa0a356f580cb09": "unknown gateway error",
+    "native.apple.4adc28ed0e25f735": "ไม่สามารถเปิดเซสชันเบื้องหลังได้",
     "native.apple.4b1707775e3d4ded": "โหนด Watch ออนไลน์",
     "native.apple.4b1c264d08779b81": "ประสิทธิภาพลดลง",
     "native.apple.4b34153a64ea0fbe": "%@, ปกติ",
@@ -3657,6 +3657,7 @@
     "native.apple.bb24048d5940285c": "เปิดใช้งานหรือติดตั้งปลั๊กอินผู้ให้บริการ text-inference บน Gateway นี้ แล้วตรวจสอบอีกครั้ง",
     "native.apple.bb25a6eb7fab6d0e": "กำลังโผล่ขึ้นสู่ผิวน้ำ",
     "native.apple.bb3054116d83e716": "เปิด OpenClaw ใหม่เพื่อลองใช้ CUA daemon แบบฝังตัวอีกครั้ง",
+    "native.apple.bb3b23bb105850ba": "\\(maximum)",
     "native.apple.bb5f5e891aeadb25": "gateway ที่จับคู่ไว้นี้ไม่พร้อมใช้งานอีกต่อไป",
     "native.apple.bb69920e6930860f": "Automation issues",
     "native.apple.bb7347e3399c42ee": "บริบทจาก %@ — %@",
@@ -4298,6 +4299,7 @@
     "native.apple.f4155b853aa86198": "ส่วน Skills",
     "native.apple.f420de18a586c900": "ใช้การเข้าสู่ระบบเบราว์เซอร์ของคุณ",
     "native.apple.f43c1f8049a80f31": "ลบเธรด",
+    "native.apple.f4483cba92be9484": "เลือกข้อความ",
     "native.apple.f454890b0dc22cfd": "ในเครื่อง (Mac เครื่องนี้)",
     "native.apple.f47dbe72f59ee9cb": "ต้องอนุญาตการเข้าถึงไมโครโฟนและการรู้จำเสียงพูด",
     "native.apple.f496b5c54219ca5f": "พร้อมสำหรับการดำเนินการด่วน",
@@ -4428,6 +4430,7 @@
     "native.apple.ff9163dd493d583b": "ปลุก",
     "native.apple.ffba42bcdc2cc866": "1 โทเค็น",
     "native.apple.ffcccb2c944378ff": "สปีกเกอร์โฟน",
-    "native.apple.ffd5f2e059651aa1": "เปิดการตั้งค่า Gateway"
+    "native.apple.ffd5f2e059651aa1": "เปิดการตั้งค่า Gateway",
+    "native.apple.ffefad3c8b30c36d": "คัดลอกโค้ด"
   }
 }

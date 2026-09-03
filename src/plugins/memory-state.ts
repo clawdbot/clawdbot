@@ -20,7 +20,11 @@ import type {
   PreparedMemoryPromptSection,
 } from "./registry-contribution-types.js";
 import type { PluginRegistry } from "./registry-types.js";
-import { requireActivePluginRegistry, resolveDirectPluginRegistrationOwner } from "./runtime.js";
+import {
+  getPluginRegistrationContext,
+  requireActivePluginRegistry,
+  resolveDirectPluginRegistrationOwner,
+} from "./runtime.js";
 
 const log = createSubsystemLogger("plugins/memory-state");
 
@@ -44,10 +48,29 @@ export function resolveMemoryCapabilityRegistration(
 ): MemoryPluginCapabilityRegistration | undefined {
   let effective: MemoryPluginCapabilityRegistration | undefined;
   for (const registration of registrations) {
-    const existing = effective?.capability;
-    // An artifact bridge layers onto the selected memory runtime without taking ownership of it.
+    const existing = effective;
+    if (!existing) {
+      effective = registration;
+      continue;
+    }
+    const existingOwnsSlot = existing.memorySlotSelected === true;
+    const registrationOwnsSlot = registration.memorySlotSelected === true;
+    if (existingOwnsSlot !== registrationOwnsSlot) {
+      // A dreaming sidecar contributes consolidation fields, but the selected
+      // plugin keeps every field it declares regardless of registration order.
+      const owner = existingOwnsSlot ? existing : registration;
+      const contributor = existingOwnsSlot ? registration : existing;
+      effective = {
+        pluginId: owner.pluginId,
+        capability: {
+          ...contributor.capability,
+          ...owner.capability,
+        },
+        memorySlotSelected: true,
+      };
+      continue;
+    }
     const preserveExisting =
-      existing &&
       Boolean(registration.capability.publicArtifacts) &&
       !registration.capability.promptBuilder &&
       !registration.capability.flushPlanResolver &&
@@ -55,9 +78,10 @@ export function resolveMemoryCapabilityRegistration(
     effective = {
       pluginId: registration.pluginId,
       capability: {
-        ...(preserveExisting ? existing : {}),
+        ...(preserveExisting ? existing.capability : {}),
         ...registration.capability,
       },
+      memorySlotSelected: registration.memorySlotSelected,
     };
   }
   return effective;
@@ -84,6 +108,11 @@ export function registerMemoryCapability(
   requestedPluginId: string,
   capability: MemoryPluginCapability,
 ): void {
+  const registrar = getPluginRegistrationContext()?.registerMemoryCapability;
+  if (registrar) {
+    registrar(capability);
+    return;
+  }
   const pluginId = resolveDirectPluginRegistrationOwner(requestedPluginId) ?? requestedPluginId;
   const registry = requireActivePluginRegistry();
   registry.memoryCapabilities.push({ pluginId, capability });
