@@ -1,4 +1,5 @@
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -182,33 +183,32 @@ function readActivatedPluginErrors(health: unknown): PluginHealthErrorSummary[] 
 }
 
 function readChannelProbeErrors(health: unknown): Array<{ id: string; error: string }> {
-  if (!health || typeof health !== "object") {
-    return [];
-  }
-  const channels = (health as { channels?: unknown }).channels;
-  if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
-    return [];
-  }
-  const errors: Array<{ id: string; error: string }> = [];
-  for (const [id, summary] of Object.entries(channels)) {
-    if (!summary || typeof summary !== "object") {
-      continue;
-    }
-    const probe = (summary as { probe?: unknown }).probe;
-    if (!probe || typeof probe !== "object") {
-      continue;
-    }
-    const ok = (probe as { ok?: unknown }).ok;
-    if (ok !== false) {
-      continue;
-    }
-    const error = (probe as { error?: unknown }).error;
-    errors.push({
-      id,
-      error: typeof error === "string" && error.trim() ? error : "probe failed",
+  const channels = asNullableRecord(asNullableRecord(health)?.channels);
+  return Object.entries(channels ?? {}).flatMap(([id, summary]) => {
+    const channel = asNullableRecord(summary);
+    const accounts = asNullableRecord(channel?.accounts);
+    return Object.entries(accounts ?? { [id]: channel }).flatMap(([accountId, value]) => {
+      const account = asNullableRecord(value);
+      const probe = asNullableRecord(account?.probe);
+      if (
+        probe?.ok !== false ||
+        account?.enabled === false ||
+        account?.configured === false ||
+        account?.linked === false ||
+        account?.statusState === "disabled" ||
+        account?.statusState === "unconfigured"
+      ) {
+        return [];
+      }
+      const error = probe.error;
+      return [
+        {
+          id: accounts ? `${id}/${accountId}` : id,
+          error: typeof error === "string" && error.trim() ? error : "probe failed",
+        },
+      ];
     });
-  }
-  return errors;
+  });
 }
 
 export async function confirmGatewayReachable(params: {

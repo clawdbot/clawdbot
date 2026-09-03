@@ -450,7 +450,16 @@ describe("restart health", () => {
     expect(sleep).not.toHaveBeenCalled();
   });
 
-  it("stops waiting once the expected-version gateway reports channel probe errors", async () => {
+  it.each([
+    ["a legacy channel snapshot", undefined, "telegram"],
+    ["an active secondary account", {}, "telegram/work"],
+    ["a disabled secondary account", { enabled: false }, undefined],
+    ["an unconfigured secondary account", { configured: false }, undefined],
+    ["an unlinked secondary account", { linked: false }, undefined],
+    ["a status-disabled secondary account", { statusState: "disabled" }, undefined],
+    ["a status-unconfigured secondary account", { statusState: "unconfigured" }, undefined],
+  ])("reports restart health for %s", async (_label, accountState, expectedAccountId) => {
+    const failedProbe = { ok: false, error: "This operation was aborted" };
     probeGateway.mockResolvedValue({
       ok: true,
       close: null,
@@ -460,7 +469,15 @@ describe("restart health", () => {
         channels: {
           telegram: {
             configured: true,
-            probe: { ok: false, error: "This operation was aborted" },
+            probe: accountState ? { ok: true } : failedProbe,
+            ...(accountState
+              ? {
+                  accounts: {
+                    default: { configured: true, probe: { ok: true } },
+                    work: { enabled: true, configured: true, ...accountState, probe: failedProbe },
+                  },
+                }
+              : {}),
           },
         },
       },
@@ -472,19 +489,27 @@ describe("restart health", () => {
       hints: [],
     });
 
-    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    const { renderRestartDiagnostics, waitForGatewayHealthyRestart } =
+      await import("./restart-health.js");
     const snapshot = await waitForGatewayHealthyRestart({
       service: makeGatewayService({ status: "running", pid: 8000 }),
       port: 18789,
       expectedVersion: "2026.4.24",
     });
 
-    expect(snapshot.healthy).toBe(false);
-    expect(snapshot.waitOutcome).toBe("channel-errors");
+    expect(snapshot.healthy).toBe(!expectedAccountId);
+    expect(snapshot.waitOutcome).toBe(expectedAccountId ? "channel-errors" : "healthy");
     expect(snapshot.elapsedMs).toBe(0);
-    expect(snapshot.channelProbeErrors).toEqual([
-      { id: "telegram", error: "This operation was aborted" },
-    ]);
+    if (expectedAccountId) {
+      expect(snapshot.channelProbeErrors).toEqual([
+        { id: expectedAccountId, error: "This operation was aborted" },
+      ]);
+      expect(renderRestartDiagnostics(snapshot)).toContain(
+        `- ${expectedAccountId}: This operation was aborted`,
+      );
+    } else {
+      expect(snapshot.channelProbeErrors).toBeUndefined();
+    }
     expect(sleep).not.toHaveBeenCalled();
   });
 });
