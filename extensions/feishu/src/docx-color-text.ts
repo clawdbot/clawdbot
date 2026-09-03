@@ -99,12 +99,15 @@ function parseColorMarkup(content: string): Segment[] {
       for (const tag of tags) {
         if (tag.startsWith("bg:")) {
           const color = tag.slice(3);
-          if (BACKGROUND_COLOR[color]) {
+          // Color names come from markup; an unguarded index returns inherited
+          // Object.prototype values (`constructor`, `__proto__`) that are truthy
+          // and would be sent as Feishu background_color.
+          if (Object.hasOwn(BACKGROUND_COLOR, color)) {
             segment.bgColor = BACKGROUND_COLOR[color];
           }
         } else if (tag === "bold") {
           segment.bold = true;
-        } else if (TEXT_COLOR[tag]) {
+        } else if (Object.hasOwn(TEXT_COLOR, tag)) {
           segment.textColor = TEXT_COLOR[tag];
         }
       }
