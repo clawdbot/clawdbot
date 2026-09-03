@@ -1,5 +1,4 @@
 import AppKit
-import CryptoKit
 import Foundation
 import OpenClawIPC
 import OpenClawKit
@@ -296,18 +295,14 @@ final class MacNodeModeCoordinator: NSObject {
 
     func setPreferredGatewayStableID(
         _ stableID: String?,
-        state: AppState = AppStateStore.shared,
-        routeBindingKey: SymmetricKey? = GatewayDiscoveryPreferences.defaultRouteBindingKey())
+        state: AppState = AppStateStore.shared)
     {
         let routeBinding = stableID == nil ? nil : GatewayDiscoveryPreferences.routeBinding(
             connectionMode: .remote,
             remoteTransport: state.remoteTransport,
             remoteURL: state.remoteUrl,
             remoteTarget: state.remoteTarget)
-        GatewayDiscoveryPreferences.setPreferredStableID(
-            stableID,
-            routeBinding: routeBinding,
-            key: routeBindingKey)
+        GatewayDiscoveryPreferences.setPreferredStableID(stableID, routeBinding: routeBinding)
         // Revoke a suspended endpoint attempt before its preference change is
         // reflected back through GatewayEndpointStore's async subscription.
         self.enqueueRouteInvalidation(mode: .reconnectRefresh)
@@ -934,10 +929,13 @@ extension MacNodeModeCoordinator {
         for endpoint: GatewayConnection.EndpointSnapshot) -> GatewayConnectOptions
     {
         var options = base
-        // A route owner is the credential boundary. Ownerless discovery
-        // handoffs must not read the legacy role-global node token.
-        options.allowStoredDeviceAuth = endpoint.deviceAuthGatewayID != nil
-        options.deviceAuthGatewayID = endpoint.deviceAuthGatewayID
+        guard let gatewayID = endpoint.deviceAuthGatewayID,
+              gatewayID.hasPrefix("tls-sha256:")
+        else { return options }
+        // Full-access setup issues both roles to the primary device identity.
+        // Existing local/manual routes keep their released node identity and unscoped token.
+        options.deviceIdentityProfile = .primary
+        options.deviceAuthGatewayID = gatewayID
         return options
     }
 

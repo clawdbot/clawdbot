@@ -1,8 +1,8 @@
 import Foundation
 import OpenClawIPC
+import OpenClawKit
 import Testing
 @testable import OpenClaw
-@testable import OpenClawKit
 
 private actor CoordinatorInvokeLifecycleProbe {
     private var invokeStarted = false
@@ -243,27 +243,29 @@ struct MacNodeModeCoordinatorTests {
             currentGeneration: 8))
     }
 
-    @Test func `node connect does not send stored auth without the endpoint owner`() async throws {
+    @Test func `node connect uses only the prepared endpoint credential owner`() async throws {
         let stateDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: stateDir) }
 
         try await DeviceIdentityStore.withStateDirectory(stateDir) {
-            let identity = DeviceIdentityStore.loadOrCreate()
+            let primaryIdentity = DeviceIdentityStore.loadOrCreate()
+            let nodeIdentity = DeviceIdentityStore.loadOrCreate(profile: .node)
             _ = DeviceAuthStore.storeToken(
-                deviceId: identity.deviceId,
+                deviceId: nodeIdentity.deviceId,
                 role: "node",
-                token: "legacy-unscoped-node-token")
+                token: "legacy-unscoped-node-token",
+                profile: .node)
             _ = DeviceAuthStore.storeToken(
-                deviceId: identity.deviceId,
+                deviceId: primaryIdentity.deviceId,
                 role: "node",
                 token: "bound-node-token",
-                gatewayID: "gateway-a")
+                gatewayID: "tls-sha256:gateway-a")
 
             for (gatewayID, expectedToken) in [
-                (nil, nil),
-                ("gateway-a", "bound-node-token"),
+                (nil, "legacy-unscoped-node-token"),
+                ("tls-sha256:gateway-a", "bound-node-token"),
             ] {
                 let endpoint = try GatewayConnection.EndpointSnapshot(
                     config: (
@@ -282,7 +284,7 @@ struct MacNodeModeCoordinatorTests {
                         clientId: "openclaw-macos",
                         clientMode: "node",
                         clientDisplayName: "macOS Test",
-                        deviceIdentityProfile: .primary),
+                        deviceIdentityProfile: .node),
                     for: endpoint)
                 let probe = CoordinatorConnectAuthProbe()
                 let webSocketSession = GatewayTestWebSocketSession(taskFactory: {

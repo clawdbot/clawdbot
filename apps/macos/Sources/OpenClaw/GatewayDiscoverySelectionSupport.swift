@@ -1,92 +1,84 @@
-import CryptoKit
+import AppKit
 import Foundation
 import OpenClawDiscovery
-import OpenClawKit
 
 @MainActor
 enum GatewayDiscoverySelectionSupport {
-    private static let defaultSshTunnelGatewayUrl = "ws://127.0.0.1:18789"
+    static func requestSetupCode(for gateway: GatewayDiscoveryModel.DiscoveredGateway) -> String? {
+        let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 420, height: 24))
+        field.placeholderString = "Paste the setup code from this Gateway"
+        field.setAccessibilityLabel("Gateway setup code")
 
-    static func applyRemoteSelection(
-        gateway: GatewayDiscoveryModel.DiscoveredGateway,
-        state: AppState)
+        let alert = NSAlert()
+        alert.messageText = "Authenticate \(gateway.displayName)"
+        alert.informativeText =
+            "Bonjour can locate a Gateway, but cannot prove its identity. " +
+            "On that Gateway, open Control UI → Settings → Devices → Pair device, keep Full access, " +
+            "and create a setup code. " +
+            "OpenClaw will verify its TLS certificate before sending the one-time bootstrap credential."
+        alert.alertStyle = .informational
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Authenticate")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        return field.stringValue
+    }
+
+    static func presentError(_ error: Error) {
+        let alert = NSAlert()
+        alert.messageText = "Could Not Authenticate Gateway"
+        alert.informativeText = error.localizedDescription
+        alert.alertStyle = .warning
+        alert.runModal()
+    }
+
+    @discardableResult
+    static func applyAuthenticatedSelection(
+        stableID: String,
+        route: AuthenticatedGatewayRoute,
+        state: AppState) -> Bool
     {
-        self.applyRemoteSelection(
-            gateway: gateway,
-            state: state,
-            routeBindingKey: GatewayDiscoveryPreferences.defaultRouteBindingKey())
-    }
+        let routeURL = route.url.absoluteString
+        guard GatewayDiscoveryPreferences.tlsDeviceAuthGatewayID(route.tlsFingerprint) != nil else { return false }
+        let previousState = (
+            mode: state.connectionMode,
+            transport: state.remoteTransport,
+            url: state.remoteUrl)
+        let previousPreference = (
+            stableID: GatewayDiscoveryPreferences.preferredStableID(),
+            routeBinding: GatewayDiscoveryPreferences.preferredRouteBinding(),
+            tlsFingerprint: GatewayDiscoveryPreferences.authenticatedTLSFingerprint())
+        let previousTLSFingerprint = GatewayRemoteConfig.resolveTLSFingerprint(
+            root: OpenClawConfigFile.loadDict())
 
-    static func applyRemoteSelection(
-        gateway: GatewayDiscoveryModel.DiscoveredGateway,
-        state: AppState,
-        routeBindingKey: SymmetricKey?)
-    {
-        let previousRoute = Self.routeBinding(state: state)
-        let previousRouteWasVerified = GatewayDiscoveryPreferences
-            .preferredGatewayVerifiedForRoute(previousRoute, key: routeBindingKey)
-        let preferredTransport = self.preferredTransport(for: gateway)
-        if preferredTransport != state.remoteTransport {
-            state.remoteTransport = preferredTransport
+        // Publish trust before the route can become observable. Endpoint resolution
+        // then withholds route-external config/environment auth throughout the handoff.
+        GatewayDiscoveryPreferences.setAuthenticatedPreferredGateway(
+            stableID: stableID,
+            tlsFingerprint: route.tlsFingerprint)
+        state.remoteTransport = .direct
+        state.remoteUrl = routeURL
+        state.connectionMode = .remote
+
+        guard state.syncGatewayConfigNow(remoteTLSFingerprint: route.tlsFingerprint) else {
+            state.connectionMode = previousState.mode
+            state.remoteTransport = previousState.transport
+            state.remoteUrl = previousState.url
+            if let stableID = previousPreference.stableID,
+               let fingerprint = previousPreference.tlsFingerprint
+            {
+                GatewayDiscoveryPreferences.setAuthenticatedPreferredGateway(
+                    stableID: stableID,
+                    tlsFingerprint: fingerprint)
+            } else {
+                GatewayDiscoveryPreferences.setPreferredStableID(
+                    previousPreference.stableID,
+                    routeBinding: previousPreference.routeBinding)
+            }
+            _ = state.syncGatewayConfigNow(remoteTLSFingerprint: previousTLSFingerprint)
+            return false
         }
-
-        if preferredTransport == .direct {
-            state.remoteUrl = GatewayDiscoveryHelpers.directUrl(for: gateway) ?? ""
-        } else {
-            state.remoteUrl = self.sshTunnelGatewayUrl(current: state.remoteUrl)
-        }
-        state.remoteTarget = GatewayDiscoveryHelpers.sshTarget(for: gateway) ?? ""
-        MacNodeModeCoordinator.shared.setPreferredGatewayStableID(
-            gateway.stableID,
-            state: state,
-            routeBindingKey: routeBindingKey)
-        guard let selectedRoute = Self.routeBinding(state: state),
-              selectedRoute != previousRoute || !previousRouteWasVerified
-        else { return }
-        // Selection establishes ownership before persistence. A failed atomic
-        // save leaves routing unavailable; retry still removes both auth kinds.
-        state.clearRemoteCredentialsForDiscoverySelection(routeBinding: selectedRoute)
-    }
-
-    private static func routeBinding(state: AppState) -> String? {
-        GatewayDiscoveryPreferences.routeBinding(
-            connectionMode: .remote,
-            remoteTransport: state.remoteTransport,
-            remoteURL: state.remoteUrl,
-            remoteTarget: state.remoteTarget)
-    }
-
-    static func sshTunnelGatewayUrl(current: String) -> String {
-        let trimmed = current.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty,
-              let url = URL(string: trimmed),
-              let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !host.isEmpty,
-              LoopbackHost.isLoopbackHost(host)
-        else {
-            return self.defaultSshTunnelGatewayUrl
-        }
-
-        return "ws://127.0.0.1:\(url.port ?? 18789)"
-    }
-
-    static func preferredTransport(
-        for gateway: GatewayDiscoveryModel.DiscoveredGateway) -> AppState.RemoteTransport
-    {
-        if self.shouldPreferDirectTransport(for: gateway) {
-            return .direct
-        }
-        return .ssh
-    }
-
-    static func shouldPreferDirectTransport(
-        for gateway: GatewayDiscoveryModel.DiscoveredGateway) -> Bool
-    {
-        // Bonjour TXT never decides routing. This fact is minted only by the
-        // dedicated Tailscale Serve source and preserved through deduplication.
-        guard gateway.supportsSecureDirectTransport,
-              let url = GatewayDiscoveryHelpers.directUrl(for: gateway)
-        else { return false }
-        return url.hasPrefix("wss://")
+        MacNodeModeCoordinator.shared.refresh()
+        return true
     }
 }

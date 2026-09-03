@@ -1,5 +1,4 @@
 import AppKit
-import CryptoKit
 import Foundation
 import Observation
 import OpenClawKit
@@ -9,16 +8,6 @@ import SwiftUI
 private enum RemoteTLSFingerprintUpdate {
     case preserve
     case replace(String?)
-}
-
-private enum RemoteGatewayCredential: String, Hashable {
-    case token
-    case password
-}
-
-private struct PendingDiscoveryCredentialReset {
-    let routeBinding: String
-    var credentialsToClear: Set<RemoteGatewayCredential>
 }
 
 @MainActor
@@ -105,8 +94,6 @@ final class AppState {
 
     @ObservationIgnored private var gatewayConfigSyncState = GatewayConfigSyncState.current
     @ObservationIgnored private var gatewayConfigSyncTask: Task<Void, Never>?
-    @ObservationIgnored private let gatewayRouteBindingKey: SymmetricKey?
-    @ObservationIgnored private var pendingDiscoveryCredentialReset: PendingDiscoveryCredentialReset?
     @ObservationIgnored private(set) var gatewayRoutingGeneration: UInt64 = 0
     #if DEBUG
     @ObservationIgnored private var gatewayConfigSyncEnabledForTesting = false
@@ -114,7 +101,6 @@ final class AppState {
     private var configWatcher: ConfigFileWatcher?
     private var lastConfigFingerprint: Data?
     private var lastObservedGatewayConfig: GatewayConfigSnapshot = .empty
-    private var lastObservedGatewayRouteBinding: String?
     private var dirtyGatewayConfigFields: Set<GatewayConfigField> = []
     private var conflictedGatewayConfigFields: Set<GatewayConfigField> = []
     private var suppressVoiceWakeGlobalSync = false
@@ -322,7 +308,6 @@ final class AppState {
         didSet {
             self.ifNotPreview { AppDefaults.standard.set(self.connectionMode.rawValue, forKey: connectionModeKey) }
             if oldValue != self.connectionMode {
-                self.retirePendingDiscoveryCredentialResetForRouteChange()
                 self.markGatewayConfigDirty([.mode])
             }
             syncGatewayConfigIfNeeded()
@@ -332,7 +317,6 @@ final class AppState {
     var remoteTransport: RemoteTransport {
         didSet {
             if oldValue != self.remoteTransport {
-                self.retirePendingDiscoveryCredentialResetForRouteChange()
                 let fields: Set<GatewayConfigField> = switch self.remoteTransport {
                 case .direct:
                     [.remoteTransport, .remoteUrl]
@@ -429,7 +413,6 @@ final class AppState {
         didSet {
             self.ifNotPreview { AppDefaults.standard.set(self.remoteTarget, forKey: remoteTargetKey) }
             if oldValue != self.remoteTarget {
-                self.retirePendingDiscoveryCredentialResetForRouteChange()
                 self.markGatewayConfigDirty([.remoteTarget, .remoteUrl, .remoteHostKeyPolicy])
             }
             syncGatewayConfigIfNeeded()
@@ -439,7 +422,6 @@ final class AppState {
     var remoteUrl: String {
         didSet {
             if oldValue != self.remoteUrl {
-                self.retirePendingDiscoveryCredentialResetForRouteChange()
                 self.markGatewayConfigDirty([.remoteUrl])
             }
             syncGatewayConfigIfNeeded()
@@ -449,7 +431,6 @@ final class AppState {
     var remoteToken: String {
         didSet {
             guard oldValue != self.remoteToken else { return }
-            self.updatePendingDiscoveryTokenResetForManualEdit()
             self.markGatewayConfigDirty([.remoteToken])
             self.remoteTokenUnsupported = false
             syncGatewayConfigIfNeeded()
@@ -497,13 +478,13 @@ final class AppState {
 
     init(
         preview: Bool = false,
-        gatewayConfigSaver: @escaping ([String: Any]) -> Bool = { OpenClawConfigFile.saveDict($0) },
-        gatewayRouteBindingKey: SymmetricKey? = nil)
+        gatewayConfigSaver: @escaping ([String: Any]) -> Bool = { OpenClawConfigFile.saveDict($0) })
     {
         let isPreview = preview || ProcessInfo.processInfo.isRunningTests
         self.isPreview = isPreview
-        self.gatewayRouteBindingKey = gatewayRouteBindingKey ?? Self.defaultGatewayRouteBindingKey(isPreview)
-        self.bundleLocationAllowsPersistentIntegration = Self.allowsPersistentIntegration(isPreview)
+        self.bundleLocationAllowsPersistentIntegration =
+            !AppProfile.current.isActive &&
+            (isPreview || ApplicationRelocator.currentBundleAllowsPersistentIntegration())
         self.gatewayConfigSaver = gatewayConfigSaver
         let onboardingSeen = AppDefaults.standard.bool(forKey: onboardingSeenKey)
         self.isPaused = AppLaunchRuntimePlan.current.resolvePaused(AppDefaults.standard.bool(forKey: pauseDefaultsKey))
@@ -572,11 +553,9 @@ final class AppState {
             AppDefaults.standard.set(IconOverrideSelection.system.rawValue, forKey: iconOverrideKey)
         }
 
-        let startupConfig = Self.prepareGatewayStartup(isPreview, self.gatewayConfigSaver, self.gatewayRouteBindingKey)
-        let configRoot = startupConfig.root
+        let configRoot = OpenClawConfigFile.loadDict()
         self.lastConfigFingerprint = Self.configFingerprint(configRoot)
         self.lastObservedGatewayConfig = Self.gatewayConfigSnapshot(configRoot)
-        self.lastObservedGatewayRouteBinding = GatewayDiscoveryPreferences.routeBinding(root: configRoot)
         let configRemoteToken = GatewayRemoteConfig.resolveTokenValue(root: configRoot)
         let configRemoteResolution = GatewayRemoteConfig.resolveTransportResolution(root: configRoot)
         let configRemoteTransport = configRemoteResolution.transport
@@ -643,11 +622,11 @@ final class AppState {
             Task { await TalkModeController.shared.setEnabled(self.talkEnabled) }
         }
 
-        if !self.isPreview, !startupConfig.migrationPersisted {
-            self.gatewayConfigSyncState = .failed
+        if !self.isPreview {
+            self.reconcilePreferredGatewayRouteBinding()
         }
         self.isInitializing = false
-        if !self.isPreview, startupConfig.migrationPersisted {
+        if !self.isPreview {
             self.startConfigWatcher()
         }
     }
@@ -730,39 +709,6 @@ final class AppState {
 }
 
 extension AppState {
-    /// Discovery can replace the active endpoint. Persist its route and remove
-    /// both credential kinds in one write before reconnecting.
-    func clearRemoteCredentialsForDiscoverySelection(routeBinding: String) {
-        self.pendingDiscoveryCredentialReset = PendingDiscoveryCredentialReset(
-            routeBinding: routeBinding,
-            credentialsToClear: [.token, .password])
-        self.markGatewayConfigDirty([.remoteToken])
-        self.remoteToken = ""
-        _ = self.syncGatewayConfigNow()
-    }
-
-    private func retirePendingDiscoveryCredentialResetForRouteChange() {
-        guard !self.isInitializing, !self.isApplyingGatewayConfig else { return }
-        self.pendingDiscoveryCredentialReset = nil
-    }
-
-    func retireDiscoveryRouteOwnershipForManualEdit() {
-        self.pendingDiscoveryCredentialReset = nil
-        GatewayDiscoveryPreferences.setPreferredStableID(nil)
-    }
-
-    private func updatePendingDiscoveryTokenResetForManualEdit() {
-        guard !self.isInitializing, !self.isApplyingGatewayConfig,
-              var pending = self.pendingDiscoveryCredentialReset
-        else { return }
-        if self.remoteToken.isEmpty {
-            pending.credentialsToClear.insert(.token)
-        } else {
-            pending.credentialsToClear.remove(.token)
-        }
-        self.pendingDiscoveryCredentialReset = pending
-    }
-
     private func markGatewayConfigDirty(_ fields: Set<GatewayConfigField>) {
         guard !self.isInitializing, !self.isApplyingGatewayConfig else { return }
         self.dirtyGatewayConfigFields.formUnion(fields)
@@ -1052,14 +998,17 @@ extension AppState {
 
     private func applyConfigOverrides(_ root: [String: Any]) {
         advanceGatewayRoutingGeneration()
-        let previousRouteBinding = self.lastObservedGatewayRouteBinding
-        let routeBinding = GatewayDiscoveryPreferences.routeBinding(root: root)
+        let previousSelection = self.gatewaySelectionSnapshot()
         let priorConflicts = self.reconcileGatewayConfigOwnership(root)
-        self.lastObservedGatewayRouteBinding = routeBinding
         self.applyGatewayConfigView(root)
-        self.reconcileDiscoveryRouteOwnership(
-            previousRouteBinding: previousRouteBinding,
-            routeBinding: routeBinding)
+
+        if self.gatewaySelectionSnapshot() != previousSelection {
+            // Discovery ids describe one concrete endpoint. An external config
+            // edit has no discovery selection event to update that ownership,
+            // so retaining the old id would apply its activation lease to the
+            // replacement Gateway.
+            GatewayDiscoveryPreferences.setPreferredStableID(nil)
+        }
 
         let newConflicts = self.conflictedGatewayConfigFields.subtracting(priorConflicts)
         if !newConflicts.isEmpty {
@@ -1073,51 +1022,24 @@ extension AppState {
         }
     }
 
-    private func currentGatewayRouteBinding() -> String? {
-        GatewayDiscoveryPreferences.routeBinding(
+    private func gatewaySelectionSnapshot() -> GatewaySelectionSnapshot {
+        let remoteUrl = GatewayRemoteConfig.normalizeGatewayUrlString(self.remoteUrl) ??
+            self.remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        return GatewaySelectionSnapshot(
+            connectionMode: self.connectionMode,
+            remoteTransport: self.remoteTransport,
+            remoteUrl: remoteUrl,
+            remoteTarget: Self.sanitizeSSHTarget(self.remoteTarget))
+    }
+
+    @discardableResult
+    private func reconcilePreferredGatewayRouteBinding() -> Bool {
+        let binding = GatewayDiscoveryPreferences.routeBinding(
             connectionMode: self.connectionMode,
             remoteTransport: self.remoteTransport,
             remoteURL: self.remoteUrl,
             remoteTarget: self.remoteTarget)
-    }
-
-    private func reconcileDiscoveryRouteOwnership(
-        previousRouteBinding: String?,
-        routeBinding: String?)
-    {
-        if self.pendingDiscoveryCredentialReset?.routeBinding != self.currentGatewayRouteBinding() {
-            self.pendingDiscoveryCredentialReset = nil
-        }
-        // A discovery selection owns its receipt through the old-config read and
-        // atomic credential-clearing save. Retiring it here would expose ambient auth.
-        if self.pendingDiscoveryCredentialReset != nil { return }
-        // The authoritative config snapshot has no discovery selection event to
-        // transfer owner authority. Retire it only when that snapshot moved.
-        guard previousRouteBinding == routeBinding else {
-            GatewayDiscoveryPreferences.setPreferredStableID(nil)
-            return
-        }
-    }
-
-    private static func defaultGatewayRouteBindingKey(_ isPreview: Bool) -> SymmetricKey? {
-        isPreview ? nil : GatewayDiscoveryPreferences.defaultRouteBindingKey()
-    }
-
-    private static func allowsPersistentIntegration(_ isPreview: Bool) -> Bool {
-        !AppProfile.current.isActive &&
-            (isPreview || ApplicationRelocator.currentBundleAllowsPersistentIntegration())
-    }
-
-    private static func prepareGatewayStartup(
-        _ isPreview: Bool,
-        _ saver: ([String: Any]) -> Bool,
-        _ key: SymmetricKey?) -> GatewayDiscoveryPreferences.StartupConfig
-    {
-        GatewayDiscoveryPreferences.prepareStartupConfig(
-            isPreview: isPreview,
-            saver: saver,
-            key: key,
-            keyAccessAllowed: AppLaunchRuntimePlan.current.allowsGatewayUIKeychainAccess)
+        return GatewayDiscoveryPreferences.clearPreferredStableIDIfRouteBindingMismatch(binding)
     }
 
     private func updateRemoteTarget(host: String) {
@@ -1253,8 +1175,7 @@ extension AppState {
     private static func syncedGatewayRoot(
         currentRoot: [String: Any],
         draft: GatewayConfigSyncDraft,
-        remoteTLSFingerprintUpdate: RemoteTLSFingerprintUpdate = .preserve,
-        credentialsToClear: Set<RemoteGatewayCredential> = [])
+        remoteTLSFingerprintUpdate: RemoteTLSFingerprintUpdate = .preserve)
         -> (root: [String: Any], changed: Bool)
     {
         var root = currentRoot
@@ -1305,9 +1226,6 @@ extension AppState {
                 &remote,
                 key: "tlsFingerprint",
                 value: fingerprint) || remoteChanged
-        }
-        for credential in credentialsToClear {
-            remoteChanged = remote.removeValue(forKey: credential.rawValue) != nil || remoteChanged
         }
         if remoteChanged {
             if remote.isEmpty {
@@ -1408,24 +1326,13 @@ extension AppState {
             return false
         }
 
-        let routeBinding = GatewayDiscoveryPreferences.routeBinding(
-            connectionMode: draft.connectionMode,
-            remoteTransport: draft.remoteTransport,
-            remoteURL: draft.remoteUrl,
-            remoteTarget: draft.remoteTarget)
-        let credentialsToClear = self.pendingDiscoveryCredentialReset.flatMap { pending in
-            pending.routeBinding == routeBinding ? pending.credentialsToClear : nil
-        } ?? []
-
         // Keep app-only connection settings local to avoid overwriting remote gateway config.
         let synced = Self.syncedGatewayRoot(
             currentRoot: currentRoot,
             draft: draft,
-            remoteTLSFingerprintUpdate: remoteTLSFingerprintUpdate,
-            credentialsToClear: credentialsToClear)
+            remoteTLSFingerprintUpdate: remoteTLSFingerprintUpdate)
         guard synced.changed else {
             self.acknowledgeGatewayConfigPersistence(draft.dirtyFields, root: currentRoot)
-            self.pendingDiscoveryCredentialReset = nil
             self.setGatewayConfigSyncState(.current)
             return true
         }
@@ -1435,7 +1342,6 @@ extension AppState {
             return false
         }
         self.acknowledgeGatewayConfigPersistence(draft.dirtyFields, root: synced.root)
-        self.pendingDiscoveryCredentialReset = nil
         self.lastConfigFingerprint = Self.configFingerprint(synced.root)
         self.setGatewayConfigSyncState(.current)
         NotificationCenter.default.post(name: .openclawConfigDidChange, object: nil)
@@ -1451,41 +1357,28 @@ extension AppState {
         self.dirtyGatewayConfigFields.subtract(persistedFields)
         self.conflictedGatewayConfigFields.subtract(persistedFields)
         self.lastObservedGatewayConfig = Self.gatewayConfigSnapshot(root)
-        self.lastObservedGatewayRouteBinding = GatewayDiscoveryPreferences.routeBinding(root: root)
     }
 
     @discardableResult
     func useFileGatewayConfigConflict() -> Bool {
-        let conflictedFields = self.conflictedGatewayConfigFields
-        guard !conflictedFields.isEmpty else { return true }
+        let fields = self.conflictedGatewayConfigFields
+        guard !fields.isEmpty else { return true }
 
         let priorDraft = self.gatewayConfigDraft()
         let priorRemoteTokenUnsupported = self.remoteTokenUnsupported
-        let priorDirtyFields = self.dirtyGatewayConfigFields
-        let priorConflicts = self.conflictedGatewayConfigFields
-        let priorCredentialReset = self.pendingDiscoveryCredentialReset
-        let previousRouteBinding = self.currentGatewayRouteBinding()
-        // A discovery selection owns one route-and-auth transaction. Accepting
-        // the file abandons that whole transaction so credentials cannot cross routes.
-        let fields = priorCredentialReset == nil ? conflictedFields : Set(GatewayConfigField.allCases)
         let root = OpenClawConfigFile.loadDict()
         self.dirtyGatewayConfigFields.subtract(fields)
         self.conflictedGatewayConfigFields.subtract(fields)
-        self.pendingDiscoveryCredentialReset = nil
         self.applyGatewayConfigView(root, forcing: fields)
 
         guard self.syncGatewayConfigNow() else {
             self.restoreGatewayConfigDraft(priorDraft, fields: fields)
             self.remoteTokenUnsupported = priorRemoteTokenUnsupported
-            self.dirtyGatewayConfigFields = priorDirtyFields
-            self.conflictedGatewayConfigFields = priorConflicts
-            self.pendingDiscoveryCredentialReset = priorCredentialReset
+            self.dirtyGatewayConfigFields.formUnion(fields)
+            self.conflictedGatewayConfigFields.formUnion(fields)
             self.setGatewayConfigSyncState(.failed)
             return false
         }
-        self.reconcileDiscoveryRouteOwnership(
-            previousRouteBinding: previousRouteBinding,
-            routeBinding: self.currentGatewayRouteBinding())
         return true
     }
 
@@ -1649,6 +1542,11 @@ extension AppState {
 
     var _testConflictedGatewayConfigFields: [String] {
         self.conflictedGatewayConfigFields.map(\.rawValue).sorted()
+    }
+
+    @discardableResult
+    func _testReconcilePreferredGatewayRouteBinding() -> Bool {
+        self.reconcilePreferredGatewayRouteBinding()
     }
 }
 #endif

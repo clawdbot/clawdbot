@@ -1,5 +1,4 @@
 import ConcurrencyExtras
-import CryptoKit
 import Foundation
 import OSLog
 
@@ -396,13 +395,11 @@ actor GatewayEndpointStore {
             tailscaleIP: nil)
         let token = deps.token()
         let password = deps.password()
-        let routeBinding = GatewayDiscoveryPreferences.deviceAuthGatewayID(
+        let deviceAuthGatewayID = GatewayDiscoveryPreferences.deviceAuthGatewayID(
             connectionMode: initialMode,
             remoteTransport: .ssh,
             remoteURL: "",
             remoteTarget: "")
-        let deviceAuthGatewayID = GatewayDiscoveryPreferences
-            .authorizedDeviceAuthGatewayID(routeBinding)
         switch initialMode {
         case .local:
             if let reason = self.localUnavailableReason {
@@ -935,7 +932,6 @@ extension GatewayEndpointStore {
                 AppStateStore.shared.gatewayRoutingGeneration == generation
             },
             profile: .current,
-            routeBindingKey: GatewayDiscoveryPreferences.defaultRouteBindingKey(),
             beforeConfigRead: {})
     }
 
@@ -956,7 +952,6 @@ extension GatewayEndpointStore {
         appSnapshot: @escaping @MainActor @Sendable () -> LiveAppSnapshot,
         generationIsCurrent: @escaping @MainActor @Sendable (UInt64) -> Bool,
         profile: AppProfile,
-        routeBindingKey: SymmetricKey?,
         beforeConfigRead: @escaping @Sendable () async -> Void) async -> SourceSnapshot
     {
         // Capture MainActor-owned selection facts before reading config. The
@@ -992,38 +987,40 @@ extension GatewayEndpointStore {
         } else {
             sshRouteIdentity = nil
         }
-        let routeBinding = GatewayDiscoveryPreferences.deviceAuthGatewayID(
+        let remoteURL = remoteResolution.directURL?.absoluteString
+            ?? GatewayRemoteConfig.resolveUrlString(root: root)
+            ?? ""
+        let configuredTLSFingerprint = isRemote ? GatewayRemoteConfig.resolveTLSFingerprint(root: root) : nil
+        let deviceAuthGatewayID = GatewayDiscoveryPreferences.deviceAuthGatewayID(
             connectionMode: mode,
             remoteTransport: remoteResolution.transport,
-            remoteURL: remoteResolution.directURL?.absoluteString
-                ?? GatewayRemoteConfig.resolveUrlString(root: root)
-                ?? "",
-            remoteTarget: sshRouteIdentity?.target ?? "")
-        // Route identity is not credential authority for a discovery selection
-        // until its persisted receipt verifies against this exact route.
-        let routeVerification = GatewayDiscoveryPreferences
-            .preferredRouteBindingVerification(routeBinding, key: routeBindingKey)
-        let deviceAuthGatewayID = GatewayDiscoveryPreferences
-            .authorizedDeviceAuthGatewayID(routeBinding, key: routeBindingKey)
-        // Any unresolved discovery owner fences process-wide environment auth.
-        // Config auth additionally requires no owner or an exact HMAC match.
-        let credentialEnv = isRemote && routeVerification != .noPreference ? [:] : env
-        let configCredentialsAllowed = !isRemote ||
-            routeVerification == .noPreference || routeVerification == .match
+            remoteURL: remoteURL,
+            remoteTarget: sshRouteIdentity?.target ?? "",
+            tlsFingerprint: configuredTLSFingerprint)
+        // A pinned setup handoff issues a route-scoped device token. Keep global
+        // config and environment credentials away from that independently trusted Gateway.
+        let usesAuthenticatedDiscoveryIdentity = isRemote &&
+            remoteResolution.transport == .direct &&
+            GatewayDiscoveryPreferences.hasAuthenticatedTLSIdentity(
+                configuredFingerprint: configuredTLSFingerprint)
 
         let source = SourceSnapshot(
             routingGeneration: app.generation,
             mode: SourceMode(mode),
-            token: mode == .unconfigured || !configCredentialsAllowed ? nil : self.resolveGatewayToken(
-                isRemote: isRemote,
-                root: root,
-                env: credentialEnv,
-                launchdSnapshot: launchdSnapshot),
-            password: mode == .unconfigured || !configCredentialsAllowed ? nil : self.resolveGatewayPassword(
-                isRemote: isRemote,
-                root: root,
-                env: credentialEnv,
-                launchdSnapshot: launchdSnapshot),
+            token: mode == .unconfigured || usesAuthenticatedDiscoveryIdentity
+                ? nil
+                : self.resolveGatewayToken(
+                    isRemote: isRemote,
+                    root: root,
+                    env: env,
+                    launchdSnapshot: launchdSnapshot),
+            password: mode == .unconfigured || usesAuthenticatedDiscoveryIdentity
+                ? nil
+                : self.resolveGatewayPassword(
+                    isRemote: isRemote,
+                    root: root,
+                    env: env,
+                    launchdSnapshot: launchdSnapshot),
             deviceAuthGatewayID: deviceAuthGatewayID,
             localPort: self.resolveGatewayPort(root: root, env: env, profile: profile),
             localHost: self.resolveLocalGatewayHost(
@@ -1034,7 +1031,7 @@ extension GatewayEndpointStore {
             bindMode: bindMode,
             remoteTransport: SourceTransport(remoteResolution.transport),
             directRemoteURL: remoteResolution.directURL,
-            remoteTLSFingerprint: isRemote ? GatewayRemoteConfig.resolveTLSFingerprint(root: root) : nil,
+            remoteTLSFingerprint: configuredTLSFingerprint,
             sshRouteIdentity: sshRouteIdentity)
         let selectionIsCurrent = await generationIsCurrent(app.generation)
         guard selectionIsCurrent, !Task.isCancelled else {
@@ -1278,7 +1275,6 @@ extension GatewayEndpointStore {
     static func _testLiveSourceSnapshot(
         state: AppState,
         profile: AppProfile = .current,
-        routeBindingKey: SymmetricKey? = GatewayDiscoveryPreferences.defaultRouteBindingKey(),
         beforeConfigRead: @escaping @Sendable () async -> Void) async -> SourceSnapshot
     {
         await self.liveSourceSnapshot(
@@ -1293,7 +1289,6 @@ extension GatewayEndpointStore {
                 state.gatewayRoutingGeneration == generation
             },
             profile: profile,
-            routeBindingKey: routeBindingKey,
             beforeConfigRead: beforeConfigRead)
     }
 

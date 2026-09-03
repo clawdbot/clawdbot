@@ -32,7 +32,6 @@ public final class GatewayDiscoveryModel {
         public var gatewayPort: Int?
         public var gatewayTls: Bool
         public var gatewayDirectReachable: Bool
-        public var supportsSecureDirectTransport: Bool
         public var cliPath: String?
         public var stableID: String
         public var debugID: String
@@ -48,7 +47,6 @@ public final class GatewayDiscoveryModel {
             gatewayPort: Int? = nil,
             gatewayTls: Bool = false,
             gatewayDirectReachable: Bool = false,
-            supportsSecureDirectTransport: Bool = false,
             cliPath: String? = nil,
             stableID: String,
             debugID: String,
@@ -63,7 +61,6 @@ public final class GatewayDiscoveryModel {
             self.gatewayPort = gatewayPort
             self.gatewayTls = gatewayTls
             self.gatewayDirectReachable = gatewayDirectReachable
-            self.supportsSecureDirectTransport = supportsSecureDirectTransport
             self.cliPath = cliPath
             self.stableID = stableID
             self.debugID = debugID
@@ -229,7 +226,6 @@ public final class GatewayDiscoveryModel {
                 gatewayPort: beacon.port,
                 gatewayTls: true,
                 gatewayDirectReachable: true,
-                supportsSecureDirectTransport: true,
                 cliPath: nil,
                 stableID: stableID,
                 debugID: "\(beacon.host):\(beacon.port)",
@@ -238,7 +234,7 @@ public final class GatewayDiscoveryModel {
     }
 
     private func recomputeGateways() {
-        let primary = Self.sortedDeduped(gateways: self.gatewaysByDomain.values.flatMap(\.self))
+        let primary = self.sortedDeduped(gateways: self.gatewaysByDomain.values.flatMap(\.self))
         let primaryFiltered = self.filterLocalGateways ? primary.filter { !$0.isLocal } : primary
 
         // Bonjour can return only "local" results for the wide-area domain (or no results at all),
@@ -249,7 +245,7 @@ public final class GatewayDiscoveryModel {
             return
         }
 
-        let combined = Self.sortedDeduped(gateways: primary + fallback)
+        let combined = self.sortedDeduped(gateways: primary + fallback)
         self.gateways = self.filterLocalGateways ? combined.filter { !$0.isLocal } : combined
     }
 
@@ -413,20 +409,15 @@ public final class GatewayDiscoveryModel {
         return "stable|\(gateway.stableID)"
     }
 
-    static func sortedDeduped(gateways: [DiscoveredGateway]) -> [DiscoveredGateway] {
-        var gatewaysByKey: [String: DiscoveredGateway] = [:]
-        for gateway in gateways {
+    private func sortedDeduped(gateways: [DiscoveredGateway]) -> [DiscoveredGateway] {
+        var seen = Set<String>()
+        let deduped = gateways.filter { gateway in
             let key = Self.dedupeKey(for: gateway)
-            if let existing = gatewaysByKey[key],
-               existing.supportsSecureDirectTransport || !gateway.supportsSecureDirectTransport
-            {
-                continue
-            }
-            // Equal endpoints share one UI row. Retain the source-minted
-            // direct-route fact or a trusted Serve endpoint would fall back to SSH.
-            gatewaysByKey[key] = gateway
+            if seen.contains(key) { return false }
+            seen.insert(key)
+            return true
         }
-        return gatewaysByKey.values.sorted {
+        return deduped.sorted {
             $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
         }
     }

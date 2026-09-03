@@ -89,6 +89,13 @@ extension AppState {
         var remoteToken: String
         var dirtyFields: Set<GatewayConfigField>
     }
+
+    struct GatewaySelectionSnapshot: Equatable {
+        let connectionMode: ConnectionMode
+        let remoteTransport: RemoteTransport
+        let remoteUrl: String
+        let remoteTarget: String
+    }
 }
 
 struct GatewayConfigConflictRecoveryView: View {

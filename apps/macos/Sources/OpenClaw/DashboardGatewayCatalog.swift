@@ -205,7 +205,6 @@ struct DashboardPrimaryGatewayAdapter {
             _ = self.persist(self.state, previous.tlsFingerprint)
             throw DashboardPrimaryGatewayError.notPromotable
         }
-        self.state.retireDiscoveryRouteOwnershipForManualEdit()
     }
 }
 
