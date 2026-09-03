@@ -252,10 +252,6 @@ describe("statusSummaryRuntime.resolveSessionRuntime", () => {
     ).toEqual({ id: "codex", label: "OpenAI Codex" });
   });
 
-  // The invariant this test guards is `id`: an unlocked `agentHarnessId` records the
-  // harness that produced the transcript, so it must never become the runtime that
-  // owns the next turn. It is now also named in the label as a `previous runtime`,
-  // which keeps that history visible precisely as history.
   it("does not treat an unlocked producing harness as the current runtime", () => {
     expect(
       resolveSessionRuntime({

@@ -8,7 +8,6 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import {
   isDefaultAgentRuntimeId,
   normalizeOptionalAgentRuntimeId,
-  OPENCLAW_AGENT_RUNTIME_ID,
 } from "../agents/agent-runtime-id.js";
 import { isCliProvider, type CliProviderClassifier } from "../agents/model-selection.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -40,39 +39,6 @@ type AgentRuntimeLabelArgs = {
   classifyCliProvider?: CliProviderClassifier;
 };
 
-/** The runtime the label describes, kept beside its text so the pin can be compared to it. */
-function resolveDescribedAgentRuntime(args: AgentRuntimeLabelArgs): {
-  label: string;
-  runtime?: string;
-} {
-  const runtimeRaw = normalizeOptionalString(args.resolvedHarness);
-  const runtime = normalizeOptionalLowercaseString(runtimeRaw);
-  if (runtime && runtime !== "auto" && runtime !== "default") {
-    return {
-      label: AGENT_RUNTIME_LABELS[runtime] ?? sanitizeTerminalText(runtimeRaw ?? runtime),
-      runtime,
-    };
-  }
-
-  const providerRaw =
-    normalizeOptionalString(args.sessionEntry?.modelProvider) ??
-    normalizeOptionalString(args.sessionEntry?.providerOverride) ??
-    normalizeOptionalString(args.fallbackProvider);
-  const provider = providerRaw ? sanitizeTerminalText(providerRaw) : undefined;
-  const providerRuntime = normalizeOptionalLowercaseString(providerRaw);
-  if (provider && (args.classifyCliProvider?.(provider) ?? isCliProvider(provider, args.config))) {
-    return {
-      label: AGENT_RUNTIME_LABELS[providerRuntime ?? ""] ?? `${provider} (cli)`,
-      runtime: providerRuntime,
-    };
-  }
-
-  return {
-    label: expectDefined(AGENT_RUNTIME_LABELS.openclaw, "OpenClaw runtime label"),
-    runtime: OPENCLAW_AGENT_RUNTIME_ID,
-  };
-}
-
 export function resolveAgentRuntimeLabel(args: AgentRuntimeLabelArgs): string {
   const acpAgentRaw = normalizeOptionalString(args.sessionEntry?.acp?.agent);
   const acpAgent = acpAgentRaw ? sanitizeTerminalText(acpAgentRaw) : undefined;
@@ -84,30 +50,37 @@ export function resolveAgentRuntimeLabel(args: AgentRuntimeLabelArgs): string {
     return backend ? `${acpAgent} (acp/${backend})` : `${acpAgent} (acp)`;
   }
 
-  const described = resolveDescribedAgentRuntime(args);
+  const runtimeRaw = normalizeOptionalString(args.resolvedHarness);
+  const runtime = normalizeOptionalLowercaseString(runtimeRaw);
+  let label: string;
+  if (runtime && runtime !== "auto" && runtime !== "default") {
+    label = AGENT_RUNTIME_LABELS[runtime] ?? sanitizeTerminalText(runtimeRaw ?? runtime);
+  } else {
+    const providerRaw =
+      normalizeOptionalString(args.sessionEntry?.modelProvider) ??
+      normalizeOptionalString(args.sessionEntry?.providerOverride) ??
+      normalizeOptionalString(args.fallbackProvider);
+    const provider = providerRaw ? sanitizeTerminalText(providerRaw) : undefined;
+    const providerRuntime = normalizeOptionalLowercaseString(providerRaw);
+    if (
+      provider &&
+      (args.classifyCliProvider?.(provider) ?? isCliProvider(provider, args.config))
+    ) {
+      label = AGENT_RUNTIME_LABELS[providerRuntime ?? ""] ?? `${provider} (cli)`;
+    } else {
+      label = expectDefined(AGENT_RUNTIME_LABELS.openclaw, "OpenClaw runtime label");
+    }
+  }
+
   const recordedRuntime = normalizeOptionalAgentRuntimeId(args.sessionEntry?.agentHarnessId);
-  // `agentHarnessId` always identifies the runtime that produced the transcript,
-  // but only a model-selection-locked session treats it as an active routing pin.
-  // Keep those meanings visibly distinct so ordinary history cannot be mistaken
-  // for the runtime that owns the next turn.
-  // Retired runtime ids stay in old session entries forever: an upgraded session
-  // still persists `agentHarnessId: "codex-cli"` while the live runtime resolves to
-  // `codex`, and AGENT_RUNTIME_LABELS deliberately renders both as "OpenAI Codex".
-  // Comparing raw ids there reports `OpenAI Codex (previous runtime: OpenAI Codex)`
-  // — a runtime transition that never happened. Two ids the operator sees under one
-  // name are one runtime for this annotation's purpose, so compare what is rendered.
+  // Unlocked harness ids describe transcript history; locked ids describe an active pin.
   const recordedLabel = recordedRuntime
     ? (AGENT_RUNTIME_LABELS[recordedRuntime] ?? sanitizeTerminalText(recordedRuntime))
     : undefined;
-  if (
-    !recordedRuntime ||
-    isDefaultAgentRuntimeId(recordedRuntime) ||
-    recordedRuntime === normalizeOptionalAgentRuntimeId(described.runtime) ||
-    recordedLabel === described.label
-  ) {
-    return described.label;
+  if (!recordedRuntime || isDefaultAgentRuntimeId(recordedRuntime) || recordedLabel === label) {
+    return label;
   }
   const relationship =
     args.sessionEntry?.modelSelectionLocked === true ? "session pin" : "previous runtime";
-  return `${described.label} (${relationship}: ${recordedLabel})`;
+  return `${label} (${relationship}: ${recordedLabel})`;
 }

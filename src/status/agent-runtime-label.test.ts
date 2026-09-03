@@ -73,9 +73,6 @@ describe("resolveAgentRuntimeLabel", () => {
     expect(resolveAgentRuntimeLabel(args)).toBe(expected);
   });
 
-  // openclaw-3wg / openclaw-4wz: `/status` reported a bare "Claude app-server"
-  // for agent:tank:direct:eddie while every dispatch failed with
-  // `Requested agent harness "codex" does not support anthropic/claude-opus-5`.
   it("names the persisted harness pin when it disagrees with the resolved harness", () => {
     expect(
       resolveAgentRuntimeLabel({
@@ -103,10 +100,6 @@ describe("resolveAgentRuntimeLabel", () => {
       expected: "OpenAI Codex",
     },
     {
-      // Upgraded sessions still persist the retired `codex-cli` id (exercised in
-      // doctor-session-state-providers.test.ts). It renders as "OpenAI Codex",
-      // exactly like the current `codex` id, so treating the pair as a transition
-      // produced "OpenAI Codex (previous runtime: OpenAI Codex)".
       name: "a retired codex-cli pin is not reported as a transition to codex",
       args: { sessionEntry: { agentHarnessId: "codex-cli" }, resolvedHarness: "codex" },
       expected: "OpenAI Codex",
@@ -120,7 +113,6 @@ describe("resolveAgentRuntimeLabel", () => {
       expected: "OpenAI Codex",
     },
     {
-      // The alias must not swallow a genuine transition away from Codex.
       name: "a retired codex-cli pin still reports a real transition",
       args: { sessionEntry: { agentHarnessId: "codex-cli" }, resolvedHarness: "claude-cli" },
       expected: "Claude CLI (previous runtime: OpenAI Codex)",
