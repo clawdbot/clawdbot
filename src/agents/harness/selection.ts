@@ -12,6 +12,7 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveProviderRefOwnership } from "../../plugins/providers.js";
+import { resolveAdmittedRunActiveAssertion } from "../admitted-run-context.js";
 import { resolveGroupToolPolicy } from "../agent-tools.policy.js";
 import {
   isHostScopedAgentToolActive,
@@ -456,6 +457,23 @@ export async function runAgentHarnessAttempt(
         ),
       ]
     : [];
+  if (
+    !selection.builtIn &&
+    !internalParams.suppressNextUserMessagePersistence &&
+    internalParams.userTurnTranscriptRecorder
+  ) {
+    const assertCurrent = resolveAdmittedRunActiveAssertion(
+      internalParams.admittedRunContext,
+      internalParams.abortSignal,
+    );
+    if (!assertCurrent) {
+      throw new Error("agent harness requires active admitted run authority");
+    }
+    assertCurrent();
+    // Promote approved input before the host binds annotation to its exact stored row.
+    await internalParams.userTurnTranscriptRecorder.persistApproved();
+    assertCurrent();
+  }
   if (nativeSessionRuntime) {
     await nativeSessionRuntime.assertCurrent();
   }

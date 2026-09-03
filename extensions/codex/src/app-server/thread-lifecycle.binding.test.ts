@@ -5233,7 +5233,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
     });
 
     expect(buildDenyAllPluginThreadConfig).toHaveBeenCalledTimes(1);
-    expect(buildEnabledPluginThreadConfig).toHaveBeenCalledTimes(1);
     const requestCalls = request.mock.calls;
     expect(requestCalls.map(([method]) => method)).toEqual([
       "thread/start",
@@ -5615,7 +5614,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
     });
 
     expect(binding.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
-    expect(buildPluginThreadConfig).toHaveBeenCalledTimes(2);
     const requestCalls = request.mock.calls as unknown as Array<
       [string, { approvalsReviewer?: string; config?: unknown }]
     >;
@@ -5701,7 +5699,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       policyContext: createTwoCalendarAppPolicyContext(),
       enabledPluginConfigKeys: ["google-calendar"],
     },
-  ])("rotates the loaded plugin app thread when $name", async (scenario) => {
+  ])("resumes with complete current plugin policy when $name", async (scenario) => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     await writeCodexAppServerBinding(sessionFile, {
@@ -5753,26 +5751,24 @@ describe("Codex app-server thread lifecycle bindings", () => {
       },
     });
 
-    expect(buildPluginThreadConfig).toHaveBeenCalledTimes(1);
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "thread/read",
       "thread/resume",
-      "thread/unsubscribe",
-      "thread/start",
+      "thread/inject_items",
     ]);
-    expect(request.mock.calls.at(-1)?.[1]).toEqual(
+    expect(request.mock.calls.find(([method]) => method === "thread/resume")?.[1]).toEqual(
       expect.objectContaining({
         config: { ...DEFAULT_CODEX_RUNTIME_THREAD_CONFIG, ...scenario.configPatch },
       }),
     );
     expect(await readCodexAppServerBinding(sessionFile)).toMatchObject({
-      threadId: "thread-recovered",
+      threadId: "thread-existing",
       pluginAppsFingerprint: scenario.fingerprint,
       pluginAppPolicyContext: scenario.policyContext,
     });
   });
 
-  it("keeps the existing plugin app binding when revalidation fails", async () => {
+  it("stops before resume and preserves the binding when app policy verification fails", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const pluginAppPolicyContext = createPluginAppPolicyContext();
@@ -5801,32 +5797,26 @@ describe("Codex app-server thread lifecycle bindings", () => {
     });
     const { client, request } = fixture;
 
-    await startOrResumeThread({
-      client,
-      params,
-      cwd: workspaceDir,
-      dynamicTools: [],
-      appServer,
-      pluginThreadConfig: {
-        enabled: true,
-        inputFingerprint: "plugin-apps-input-1",
-        enabledPluginConfigKeys: ["google-calendar"],
-        build: async () => {
-          throw new Error("plugin inventory unavailable");
+    await expect(
+      startOrResumeThread({
+        client,
+        params,
+        cwd: workspaceDir,
+        dynamicTools: [],
+        appServer,
+        pluginThreadConfig: {
+          enabled: true,
+          inputFingerprint: "plugin-apps-input-1",
+          enabledPluginConfigKeys: ["google-calendar"],
+          build: async () => {
+            throw new Error("plugin inventory unavailable");
+          },
         },
-      },
-    });
+      }),
+    ).rejects.toThrow("plugin inventory unavailable");
 
     const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
-    expect(requestCalls.map(([method]) => method)).toEqual([
-      "thread/read",
-      "thread/resume",
-      "thread/inject_items",
-    ]);
-    expect(requestCalls.find(([method]) => method === "thread/resume")?.[1].config).toEqual({
-      ...DEFAULT_CODEX_RUNTIME_THREAD_CONFIG,
-      ...createPluginAppConfigPatch(),
-    });
+    expect(requestCalls.map(([method]) => method)).toEqual(["thread/read"]);
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.threadId).toBe("thread-existing");
     expect(binding?.pluginAppsFingerprint).toBe("plugin-apps-config-1");
@@ -5892,7 +5882,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
       },
     });
 
-    expect(buildPluginThreadConfig).toHaveBeenCalledTimes(1);
     const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
     expect(requestCalls.map(([method]) => method)).toEqual([
       "thread/read",

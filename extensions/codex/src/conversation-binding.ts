@@ -623,11 +623,8 @@ function codexConversationSandboxOrPermissions(
   // globally configured Codex apps even when a network profile adds config.
   // Per-app user config overrides apps._default, so the feature kill switch
   // is the only authoritative boundary for this handlerless runtime.
-  const disabledApps = mergeCodexThreadConfigs(buildDisabledAppsConfigPatch(), {
-    "features.apps": false,
-  })!;
   const config = buildCodexProjectDocThreadConfig(
-    mergeCodexThreadConfigs(networkProxy?.configPatch, disabledApps),
+    mergeCodexThreadConfigs(networkProxy?.configPatch, buildDisabledAppsConfigPatch()),
   );
   return networkProxy ? { config } : { sandbox, config };
 }

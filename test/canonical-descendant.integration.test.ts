@@ -108,6 +108,7 @@ async function withFixture(
     ) => Promise<{ ok: boolean; key?: string; message?: string }>,
     revoke: (target: "source" | "child" | "registry", sourceKey: string) => void,
     admissions: Array<{ recorder: UserTurnTranscriptRecorder; before: unknown[] }>,
+    runtime: ReturnType<typeof createPluginRuntimeMock>,
   ) => Promise<void>,
   options: {
     loading?: "searchable" | "direct";
@@ -416,6 +417,7 @@ async function withFixture(
             );
           },
           admissions,
+          runtime,
         ),
       );
     } finally {
@@ -1036,6 +1038,24 @@ describe("canonical descendant lifecycle through real owners", () => {
     });
   }, 180_000);
 
+  it("forks with the current native model instead of the stale persisted model", async () => {
+    await withFixture(async (fixture, fork) => {
+      const source = await fixture.adopt();
+      const binding = await fixture.turn(source.sessionKey, "canonical");
+      const current = expectDefined(fixture.native.threads.get(binding.threadId), "canonical");
+      current.thread.model = "gpt-5.5";
+      const selected = (await fixture.readEntries(source.sessionKey)).at(-1)!;
+      const result = await fork(source.sessionKey, selected.entryId);
+      expect(result, result.message).toMatchObject({ ok: true });
+      const childKey = expectDefined(result.key, "child key");
+      expect(await fixture.bindingStore.read(fixture.identity(childKey))).toMatchObject({
+        model: "gpt-5.5",
+        modelProvider: current.thread.modelProvider,
+      });
+      expect(current.model).toBe("gpt-5.6-luna");
+    });
+  }, 180_000);
+
   it.each([
     ...(["searchable", "direct"] as const).flatMap((loading) =>
       (["unconfigured", "empty", "disabled", "enabled"] as const).map((appPolicy) => ({
@@ -1638,6 +1658,10 @@ describe("canonical descendant lifecycle through real owners", () => {
 
   it.each([
     ["ignored cut", /did not apply the exact beforeTurnId cut/],
+    ["missing model", /model/i],
+    ["null model", /model/i],
+    ["model changed during preparation", /canonical Codex source changed/],
+    ["provider changed during preparation", /canonical Codex source changed/],
     ["catalog mismatch", /native tool catalog is missing, corrupt, or changed/],
     ["child catalog", /did not preserve the actual native tool catalog/],
     ["child model", /did not preserve the exact canonical source and selected native model/],
@@ -1647,7 +1671,7 @@ describe("canonical descendant lifecycle through real owners", () => {
     "refuses %s without publishing an unsafe child",
     async (failure, expectedError) => {
       await withFixture(
-        async (fixture, fork) => {
+        async (fixture, fork, _revoke, _admissions, runtime) => {
           const source = await fixture.adopt();
           const binding = await fixture.turn(source.sessionKey, "first canonical");
           const sourceBefore = structuredClone(fixture.native.source);
@@ -1663,6 +1687,37 @@ describe("canonical descendant lifecycle through real owners", () => {
           const countBefore = fixture.native.calls.filter(
             (call) => call.method === "thread/fork",
           ).length;
+          const current = expectDefined(fixture.native.threads.get(binding.threadId), "canonical");
+          const create = runtime.agent.session.createSessionEntry;
+          const createSession = vi.spyOn(runtime.agent.session, "createSessionEntry");
+          if (failure === "missing model") {
+            delete current.thread.model;
+          }
+          if (failure === "null model") {
+            current.thread.model = null;
+          }
+          if (
+            failure === "model changed during preparation" ||
+            failure === "provider changed during preparation"
+          ) {
+            createSession.mockImplementation((params) =>
+              create({
+                ...params,
+                afterCreate: async (created) => {
+                  if (failure === "model changed during preparation") {
+                    current.thread.model = "gpt-5.5";
+                  } else {
+                    current.thread.modelProvider = "changed-provider";
+                  }
+                  const patch = await params.afterCreate?.(created);
+                  if (!patch) {
+                    throw new Error("Expected the canonical fork initialization patch");
+                  }
+                  return patch;
+                },
+              }),
+            );
+          }
           if (failure === "ignored cut") {
             fixture.native.setIgnoreCut(true);
           }
@@ -1686,13 +1741,22 @@ describe("canonical descendant lifecycle through real owners", () => {
           const result = await fork(source.sessionKey, messages.at(-1)!.entryId);
           expect(result.ok, result.message).toBe(false);
           expect(result.message).toMatch(expectedError);
+          if (failure === "missing model" || failure === "null model") {
+            expect(createSession).not.toHaveBeenCalled();
+          }
           expect(
             listSessionEntriesCore({ agentId: "main", storePath: fixture.storePath })
               .filter(({ entry }) => !existingSessions.has(entry.sessionId))
               .every(({ entry }) => entry.initializationPending === true),
             "failed forks must not publish a ready child",
           ).toBe(true);
-          if (failure === "catalog mismatch") {
+          if (
+            failure === "catalog mismatch" ||
+            failure === "missing model" ||
+            failure === "null model" ||
+            failure === "model changed during preparation" ||
+            failure === "provider changed during preparation"
+          ) {
             expect(
               fixture.native.calls.filter((call) => call.method === "thread/fork"),
             ).toHaveLength(countBefore);
