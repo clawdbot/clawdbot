@@ -514,9 +514,9 @@ The Gateway accepts updates only from the current node connection and stamps
 updates appear as `hostStats` in `node.list` and `node.describe` and broadcast
 `node.hostStats` with `{ nodeId, hostStats }` to read-scoped operators, using
 `dropIfSlow: true`. Stats are operator-facing and do not update model-visible
-node context. On disconnect, the Gateway persists the session's last snapshot
-as `lastHostStats` on the paired node record. Disconnects without a snapshot
-leave the previous value intact, and reconnecting does not clear it.
+node context. When received, the Gateway persists the snapshot as `lastHostStats`
+on the paired node record. Disconnecting or reconnecting without a new snapshot
+leaves the previous value intact.
 `node.list` and `node.describe` use live session stats while connected and
 project the saved snapshot as `hostStats` while offline, keeping its original
 `updatedAtMs` so clients can show the last-known age.

@@ -346,7 +346,6 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
             nodeId: nodeSession.nodeId,
             connectedAtMs: nodeSession.connectedAtMs,
             pairingGeneration: nodeSession.pairingGeneration,
-            hostStats: nodeSession.hostStats,
           }
         : undefined;
     const disconnectedNodeId = options.nodeRegistry.unregister(session.connId);
@@ -363,7 +362,6 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
           nodeId: disconnectHistory.nodeId,
           connectedAtMs: disconnectHistory.connectedAtMs,
           disconnectedAtMs,
-          hostStats: disconnectHistory.hostStats,
           expectedPairingGeneration: {
             nodeId: disconnectHistory.nodeId,
             key: disconnectHistory.pairingGeneration,

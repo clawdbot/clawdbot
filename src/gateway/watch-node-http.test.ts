@@ -338,14 +338,6 @@ describe("watch node HTTP transport", () => {
     const sessionToken = String(connected.sessionToken);
     expect(connectedNodes).toEqual([identity.deviceId]);
 
-    const hostStats = nodeRegistry.updateHostStats({
-      nodeId: identity.deviceId,
-      connId: nodeRegistry.get(identity.deviceId)!.connId,
-      stats: { cpuCount: 2, memoryTotalBytes: 4096, memoryFreeBytes: 1024 },
-      observedAtMs: 1_250,
-    });
-    expect(hostStats).not.toBeNull();
-
     const unauthenticated = await fetch(`${baseUrl}/disconnect`, { method: "POST" });
     expect(unauthenticated.status).toBe(401);
     expect(nodeRegistry.get(identity.deviceId)).toBeDefined();
@@ -386,7 +378,6 @@ describe("watch node HTTP transport", () => {
         (entry) => entry.nodeId === identity.deviceId,
       );
       expect(paired?.lastDisconnectedAtMs).toEqual(expect.any(Number));
-      expect(paired?.lastHostStats).toEqual(hostStats);
     });
 
     const repeatedDisconnect = await fetch(`${baseUrl}/disconnect`, {

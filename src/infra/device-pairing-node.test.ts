@@ -1,4 +1,5 @@
 // Tests node-role capability approvals stored on canonical paired-device records.
+import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -17,6 +18,7 @@ import {
   listNodePairing,
   recordPairedNodeConnection,
   recordPairedNodeDisconnection,
+  recordPairedNodeHostStats,
   releaseNodePairingCleanupClaim,
   renamePairedNode,
   requestNodePairing,
@@ -57,7 +59,7 @@ async function seedNodeDevice(baseDir: string, nodeId: string): Promise<void> {
   await approveDevicePairing(request.request.requestId, { callerScopes: [] }, baseDir);
 }
 
-async function setupPairedNode(baseDir: string, displayName?: string): Promise<void> {
+async function setupPairedNode(baseDir: string, displayName?: string) {
   await seedNodeDevice(baseDir, "node-1");
   const request = await requestNodePairing(
     {
@@ -73,8 +75,10 @@ async function setupPairedNode(baseDir: string, displayName?: string): Promise<v
     { callerScopes: ["operator.pairing", "operator.admin"] },
     baseDir,
   );
-  const paired = await findPairedNode("node-1", baseDir);
-  expect(paired?.nodeId).toBe("node-1");
+  return expectDefined(
+    resolveNodePairingGeneration(await getPairedDevice("node-1", baseDir)),
+    "node pairing generation",
+  );
 }
 
 async function findPairedNode(nodeId: string, baseDir: string) {
@@ -791,14 +795,7 @@ describe("node surface approvals", () => {
 
   test("records and clears generation-bound node disconnect history", async () => {
     await withNodePairingDir(async (baseDir) => {
-      await setupPairedNode(baseDir);
-      const database = openOpenClawStateDatabase({
-        env: { ...process.env, OPENCLAW_STATE_DIR: baseDir },
-      });
-      const generation = resolveNodePairingGeneration(await getPairedDevice("node-1", baseDir));
-      if (!generation) {
-        throw new Error("expected node pairing generation");
-      }
+      const generation = await setupPairedNode(baseDir);
 
       await expect(
         recordPairedNodeConnection("node-1", 1_000, baseDir, generation),
@@ -809,37 +806,28 @@ describe("node surface approvals", () => {
           connectedAtMs: 1_000,
           disconnectedAtMs: 1_500,
           expectedPairingGeneration: generation,
-          hostStats,
           baseDir,
         }),
       ).resolves.toEqual({ recorded: true });
       expect(await findPairedNode("node-1", baseDir)).toMatchObject({
         lastConnectedAtMs: 1_000,
         lastDisconnectedAtMs: 1_500,
-        lastHostStats: hostStats,
       });
-      expect(closeOpenClawStateDatabaseByPath(database.path)).toBe(true);
-      expect((await getPairedDevice("node-1", baseDir))?.nodeSurface?.lastHostStats).toEqual(
-        hostStats,
-      );
 
       await expect(
         recordPairedNodeConnection("node-1", 2_000, baseDir, generation),
       ).resolves.toEqual({ recorded: true, firstConnection: false });
       expect((await findPairedNode("node-1", baseDir))?.lastDisconnectedAtMs).toBeUndefined();
-      expect((await findPairedNode("node-1", baseDir))?.lastHostStats).toEqual(hostStats);
       await expect(
         recordPairedNodeDisconnection({
           nodeId: "node-1",
           connectedAtMs: 1_000,
           disconnectedAtMs: 2_500,
           expectedPairingGeneration: generation,
-          hostStats: { ...hostStats, updatedAtMs: 2_400 },
           baseDir,
         }),
       ).resolves.toEqual({ recorded: false });
       expect((await findPairedNode("node-1", baseDir))?.lastDisconnectedAtMs).toBeUndefined();
-      expect((await findPairedNode("node-1", baseDir))?.lastHostStats).toEqual(hostStats);
       await recordPairedNodeDisconnection({
         nodeId: "node-1",
         connectedAtMs: 2_000,
@@ -847,6 +835,28 @@ describe("node surface approvals", () => {
         expectedPairingGeneration: generation,
         baseDir,
       });
+      expect((await findPairedNode("node-1", baseDir))?.lastDisconnectedAtMs).toBe(3_000);
+    });
+  });
+
+  test("persists received host stats across connections and reopened readers", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      const generation = await setupPairedNode(baseDir);
+      const database = openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: baseDir },
+      });
+      await expect(
+        recordPairedNodeHostStats({
+          nodeId: "node-1",
+          hostStats,
+          expectedPairingGeneration: generation,
+          baseDir,
+        }),
+      ).resolves.toBe(true);
+      expect(closeOpenClawStateDatabaseByPath(database.path)).toBe(true);
+      expect((await getPairedDevice("node-1", baseDir))?.nodeSurface?.lastHostStats).toEqual(
+        hostStats,
+      );
       expect((await findPairedNode("node-1", baseDir))?.lastHostStats).toEqual(hostStats);
       await recordPairedNodeConnection("node-1", 4_000, baseDir, generation);
       const nextStats = {
@@ -855,14 +865,14 @@ describe("node surface approvals", () => {
         memoryFreeBytes: 0,
         updatedAtMs: 4_500,
       };
-      await recordPairedNodeDisconnection({
-        nodeId: "node-1",
-        connectedAtMs: 4_000,
-        disconnectedAtMs: 5_000,
-        expectedPairingGeneration: generation,
-        hostStats: nextStats,
-        baseDir,
-      });
+      await expect(
+        recordPairedNodeHostStats({
+          nodeId: "node-1",
+          expectedPairingGeneration: generation,
+          hostStats: nextStats,
+          baseDir,
+        }),
+      ).resolves.toBe(true);
       expect((await findPairedNode("node-1", baseDir))?.lastHostStats).toEqual(nextStats);
     });
   });
@@ -888,15 +898,9 @@ describe("node surface approvals", () => {
     });
   });
 
-  test("rejects disconnect history from a retired pairing generation", async () => {
+  test("rejects disconnect history and host stats from a retired pairing generation", async () => {
     await withNodePairingDir(async (baseDir) => {
-      await setupPairedNode(baseDir);
-      const previousGeneration = resolveNodePairingGeneration(
-        await getPairedDevice("node-1", baseDir),
-      );
-      if (!previousGeneration) {
-        throw new Error("expected initial node pairing generation");
-      }
+      const previousGeneration = await setupPairedNode(baseDir);
       await recordPairedNodeConnection("node-1", 1_000, baseDir, previousGeneration);
       const pending = await requestNodePairing(
         { nodeId: "node-1", platform: "darwin", commands: ["system.run", "system.which"] },
@@ -914,11 +918,18 @@ describe("node surface approvals", () => {
           connectedAtMs: 1_000,
           disconnectedAtMs: 1_500,
           expectedPairingGeneration: previousGeneration,
-          hostStats,
           baseDir,
         }),
       ).resolves.toEqual({ recorded: false });
       expect((await findPairedNode("node-1", baseDir))?.lastDisconnectedAtMs).toBeUndefined();
+      await expect(
+        recordPairedNodeHostStats({
+          nodeId: "node-1",
+          hostStats,
+          expectedPairingGeneration: previousGeneration,
+          baseDir,
+        }),
+      ).resolves.toBe(false);
       expect((await findPairedNode("node-1", baseDir))?.lastHostStats).toBeUndefined();
     });
   });
@@ -961,13 +972,7 @@ describe("node surface approvals", () => {
 
   test("rejects connection metadata from a retired pairing generation", async () => {
     await withNodePairingDir(async (baseDir) => {
-      await setupPairedNode(baseDir);
-      const previousGeneration = resolveNodePairingGeneration(
-        await getPairedDevice("node-1", baseDir),
-      );
-      if (!previousGeneration) {
-        throw new Error("expected initial node pairing generation");
-      }
+      const previousGeneration = await setupPairedNode(baseDir);
 
       const pending = await requestNodePairing(
         {

@@ -58,7 +58,7 @@ Headless node hosts report the hardware model on macOS and Linux.
 Connected CLI node hosts and the macOS app report CPU count, load averages,
 memory, and home-volume disk capacity every 60 seconds, starting on connection.
 The Gateway exposes the latest snapshot as `hostStats` in `node.list` and
-`node.describe`. On disconnect, it saves the last snapshot on the paired node
+`node.describe`. When received, it saves the snapshot on the paired node
 record, so offline nodes keep showing last-known stats with the original
 `updatedAtMs`. Connected nodes use live session stats. `openclaw nodes status`
 and `openclaw nodes describe` show a compact stats summary with a last-known age
