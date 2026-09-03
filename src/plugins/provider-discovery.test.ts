@@ -239,6 +239,49 @@ describe("runProviderCatalog", () => {
     expect(outcomes).toEqual([]);
   });
 
+  it("rejects profile-scoped outcomes after ambiguous profile selection", async () => {
+    const provider: ProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      auth: [],
+      catalog: {
+        run: async (ctx) => {
+          ctx.resolveProviderAuth("openai");
+          ctx.resolveProviderAuth("openai");
+          return {
+            providers: {},
+            outcomes: [
+              {
+                provider: "openai",
+                profileId: "openai:profile-b",
+                status: "ready",
+              },
+            ],
+          };
+        },
+      },
+    };
+    let authCall = 0;
+
+    await expect(
+      runProviderCatalog({
+        provider,
+        config: {},
+        env: {},
+        resolveProviderApiKey: () => ({ apiKey: undefined }),
+        resolveProviderAuth: () => {
+          authCall += 1;
+          return {
+            apiKey: `selected-key-${authCall}`,
+            mode: "api_key",
+            profileId: `openai:profile-${authCall === 1 ? "a" : "b"}`,
+            source: "profile",
+          };
+        },
+      }),
+    ).rejects.toThrow("did not match the selected authentication profile");
+  });
+
   it.each([
     { providerIds: ["OPENAI"], expected: ["openai"] },
     { providerIds: ["azure-openai"], expected: ["azure-openai"] },

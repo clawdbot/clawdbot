@@ -185,7 +185,7 @@ export async function runProviderCatalog(params: {
     return undefined;
   }
   // Hooks may compare credentials before choosing one, so retain every profile
-  // they inspect and reject outcomes attributed outside that selected set.
+  // they inspect. Profile-scoped outcomes require one unique resolved identity.
   const selectedProfiles = new Map<string, Set<string>>();
   const captureSelectedProfile = <T extends { profileId?: string }>(
     providerId: string | undefined,
@@ -219,12 +219,17 @@ export async function runProviderCatalog(params: {
   });
   for (const outcome of copyProviderCatalogOutcomes(result)) {
     if (outcome.profileId) {
-      const selected = providerCatalogIdentityKeys({
+      const selected = new Set<string>();
+      for (const providerKey of providerCatalogIdentityKeys({
         provider: params.provider,
         providerId: outcome.provider,
         resolveProviderAuthProviderId: params.resolveProviderAuthProviderId,
-      }).some((providerKey) => selectedProfiles.get(providerKey)?.has(outcome.profileId ?? ""));
-      if (!selected) {
+      })) {
+        for (const profileId of selectedProfiles.get(providerKey) ?? []) {
+          selected.add(profileId);
+        }
+      }
+      if (selected.size !== 1 || !selected.has(outcome.profileId)) {
         throw new Error(
           `Provider catalog outcome did not match the selected authentication profile (${outcome.provider})`,
         );
