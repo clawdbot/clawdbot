@@ -54,11 +54,16 @@ describe("saveMediaStreamWithIdleTimeout", () => {
 
   it("times out a stalled SDK-style HTTP stream and closes its connection", async () => {
     let serverSawClose = false;
+    let resolveClosed: () => void = () => {};
+    const closed = new Promise<void>((resolve) => {
+      resolveClosed = resolve;
+    });
     const server = createServer((req, res) => {
       res.writeHead(200, { "content-type": "image/jpeg", "content-length": "1048576" });
       res.flushHeaders();
       const markClose = () => {
         serverSawClose = true;
+        resolveClosed();
       };
       req.on("close", markClose);
       res.on("close", markClose);
@@ -84,9 +89,7 @@ describe("saveMediaStreamWithIdleTimeout", () => {
         chunkTimeoutMs: 50,
       });
       expect(stalled.destroyed).toBe(true);
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 20);
-      });
+      await closed;
       expect(serverSawClose).toBe(true);
     } finally {
       server.closeAllConnections?.();
