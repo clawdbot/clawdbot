@@ -18,6 +18,10 @@ import { runOutsideGatewayRootWorkAdmission } from "../../../process/gateway-wor
 import { createLazyPromise } from "../../../shared/lazy-runtime.js";
 import { classifyGatewayStaleInstall } from "../../stale-install.js";
 import { formatForLog, logWs } from "../../ws-log.js";
+import {
+  invalidateGatewayPolicyClient,
+  registerGatewayPolicyResponse,
+} from "../ws-policy-close.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
 import { scheduleGatewayRequestStart } from "./request-start.js";
@@ -62,7 +66,12 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       reason,
       method,
     });
-    close(4001, `client invalidated: ${reason}`);
+    invalidateGatewayPolicyClient(client, {
+      reason,
+      code: 4001,
+      message: `client invalidated: ${reason}`,
+      close: () => close(4001, `client invalidated: ${reason}`),
+    });
     return true;
   };
 
@@ -108,7 +117,12 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
         client.sharedGatewaySessionGeneration !== requiredGeneration
       ) {
         setCloseCause("gateway-auth-rotated", { authGenerationStale: true, method: req.method });
-        close(4001, "gateway auth changed");
+        invalidateGatewayPolicyClient(client, {
+          reason: "gateway-auth-changed",
+          code: 4001,
+          message: "gateway auth changed",
+          close: () => close(4001, "gateway auth changed"),
+        });
         return false;
       }
       return true;
@@ -122,52 +136,60 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       error?: ErrorShape,
       meta?: Record<string, unknown>,
     ) => {
-      let responseOk = ok;
-      let responseError = error;
-      const sendResult = send({ type: "res", id: req.id, ok, payload, error });
-      if (sendResult.kind === "serialization") {
-        const detail = formatForLog(sendResult.error);
-        logGateway.error(`response serialization failed method=${req.method}: ${detail}`);
-        responseOk = false;
-        responseError = errorShape(ErrorCodes.UNAVAILABLE, "response serialization failed");
-        send({ type: "res", id: req.id, ok: responseOk, error: responseError });
+      if (!policyResponse?.pending && !hasCurrentClientAuthority()) {
+        return;
       }
-      const unauthorizedRoleError = isUnauthorizedRoleError(responseError);
-      let logMeta = meta;
-      if (unauthorizedRoleError) {
-        const unauthorizedDecision = unauthorizedFloodGuard.registerUnauthorized();
-        if (unauthorizedDecision.suppressedSinceLastLog > 0) {
+      try {
+        let responseOk = ok;
+        let responseError = error;
+        const sendResult = send({ type: "res", id: req.id, ok, payload, error });
+        if (sendResult.kind === "serialization") {
+          const detail = formatForLog(sendResult.error);
+          logGateway.error(`response serialization failed method=${req.method}: ${detail}`);
+          responseOk = false;
+          responseError = errorShape(ErrorCodes.UNAVAILABLE, "response serialization failed");
+          send({ type: "res", id: req.id, ok: responseOk, error: responseError });
+        }
+        const unauthorizedRoleError = isUnauthorizedRoleError(responseError);
+        let logMeta = meta;
+        if (unauthorizedRoleError) {
+          const unauthorizedDecision = unauthorizedFloodGuard.registerUnauthorized();
+          if (unauthorizedDecision.suppressedSinceLastLog > 0) {
+            logMeta = {
+              ...logMeta,
+              suppressedUnauthorizedResponses: unauthorizedDecision.suppressedSinceLastLog,
+            };
+          }
+          if (!unauthorizedDecision.shouldLog) {
+            return;
+          }
+          if (unauthorizedDecision.shouldClose) {
+            setCloseCause("repeated-unauthorized-requests", {
+              unauthorizedCount: unauthorizedDecision.count,
+              method: req.method,
+            });
+            queueMicrotask(() => close(1008, "repeated unauthorized calls"));
+          }
           logMeta = {
             ...logMeta,
-            suppressedUnauthorizedResponses: unauthorizedDecision.suppressedSinceLastLog,
-          };
-        }
-        if (!unauthorizedDecision.shouldLog) {
-          return;
-        }
-        if (unauthorizedDecision.shouldClose) {
-          setCloseCause("repeated-unauthorized-requests", {
             unauthorizedCount: unauthorizedDecision.count,
-            method: req.method,
-          });
-          queueMicrotask(() => close(1008, "repeated unauthorized calls"));
+          };
+        } else {
+          unauthorizedFloodGuard.reset();
         }
-        logMeta = {
+        logWs("out", "res", {
+          connId,
+          id: req.id,
+          ok: responseOk,
+          method: req.method,
+          errorCode: responseError?.code,
+          errorMessage: responseError?.message,
           ...logMeta,
-          unauthorizedCount: unauthorizedDecision.count,
-        };
-      } else {
-        unauthorizedFloodGuard.reset();
+        });
+      } finally {
+        // ws queues frames in order: send the result before starting its close handshake.
+        policyResponse?.finish();
       }
-      logWs("out", "res", {
-        connId,
-        id: req.id,
-        ok: responseOk,
-        method: req.method,
-        errorCode: responseError?.code,
-        errorMessage: responseError?.message,
-        ...logMeta,
-      });
     };
 
     const context = buildRequestContext();
@@ -188,14 +210,15 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       }
       return true;
     };
-    if (!hasCurrentRuntimeAuthority()) {
-      return;
-    }
     const respondWithAuthority: typeof respond = (ok, payload, error, meta) => {
       if (hasCurrentRuntimeAuthority()) {
         respond(ok, payload, error, meta);
       }
     };
+    const policyResponse = registerGatewayPolicyResponse(req.method, client, respondWithAuthority);
+    if (!hasCurrentRuntimeAuthority()) {
+      return;
+    }
 
     const executeRequest = async () => {
       // Most UI/SDK RPCs outlive a reconnect. Companion asks are the exception:
@@ -259,6 +282,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
           staleInstall?.error ?? errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
         );
       } finally {
+        policyResponse?.finish();
         if (requestController) {
           client.socket.off("close", cancelRequest);
         }

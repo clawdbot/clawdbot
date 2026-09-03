@@ -25,6 +25,7 @@ export async function createPtyAdapter(params: {
   cols?: number;
   rows?: number;
   name?: string;
+  abortSignal?: AbortSignal;
 }): Promise<PtyAdapter> {
   // Worker deploys are portable JavaScript artifacts; exec falls back to the child adapter
   // instead of binding the Gateway host's native PTY binary into the bundle.
@@ -56,6 +57,14 @@ export async function createPtyAdapter(params: {
     cols: params.cols ?? 120,
     rows: params.rows ?? 30,
   });
+  if (params.abortSignal?.aborted) {
+    try {
+      pty.kill();
+    } catch {
+      // ignore kill errors
+    }
+    throw new Error("PTY construction aborted");
+  }
 
   let dataListener: IDisposable | null = null;
   let exitListener: IDisposable | null = null;

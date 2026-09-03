@@ -270,12 +270,10 @@ mutation path. Missing or ambiguous ownership fails closed instead of granting
 account-wide access.
 
 Runtime app inventory is the target-session accessibility check for both
-migrated curated plugins and manually configured workspace plugins. Codex
-harness session setup computes a restrictive thread app config from the enabled
-and accessible plugin apps; it is not recomputed on every turn, so
-`/codex plugins enable`/`disable` only affect
-new Codex conversations. Use `/new` or `/reset` to pick up the change in the
-current conversation.
+migrated curated plugins and manually configured workspace plugins. Before
+enabled-policy turns, including warm reuse and cold resume, the Codex harness
+rebuilds the restrictive thread app policy from current native settings while
+reusing its app inventory and plugin metadata caches.
 
 ## Support boundary
 
@@ -435,15 +433,22 @@ plugins, while unsafe schemas and ambiguous ownership fail closed:
   turns ownership-proven MCP approval elicitations into OpenClaw plugin
   approvals before returning the Codex approval response.
 - `"ask"`: OpenClaw uses the same Codex write/destructive gating as
-  `"auto"`, clears durable Codex per-tool approval overrides for the app
-  before the thread starts, and offers only one-shot approval or denial so
-  durable approvals cannot suppress later write-action prompts. For each
-  admitted app using `"ask"`, OpenClaw selects Codex's human approvals
+  `"auto"`, clears durable Codex per-tool and per-account approval overrides
+  for the app before the thread starts, and offers only one-shot approval or
+  denial so durable approvals cannot suppress later write-action prompts. These
+  checks also run before reusing a thread or answering a `/btw` side question.
+  For each admitted app using `"ask"`, OpenClaw selects Codex's human approvals
   reviewer for that app so Codex sends its approval elicitations to
   OpenClaw; other apps and non-app thread approvals keep their configured
   reviewer and policy.
 - Missing plugin identity, ambiguous ownership, a missing or mismatched
   turn id, or an unsafe elicitation schema declines instead of prompting.
+
+Apps outside the admitted policy stay disabled even if native Codex settings
+enable them. Native settings must be verified before an enabled policy can admit
+app tools. When no app can be admitted, Codex's app tool surface is disabled
+without reading native app settings. Disabling plugin apps also skips app
+inventory discovery.
 
 ## Troubleshooting
 

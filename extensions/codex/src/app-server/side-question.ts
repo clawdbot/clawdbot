@@ -95,8 +95,8 @@ import {
 } from "./native-hook-relay.js";
 import { isCodexNotificationForTurn } from "./notification-correlation.js";
 import {
-  buildCodexPluginAppsConfigPatchFromPolicyContext,
   mergeCodexThreadConfigs,
+  refreshCodexPluginAppApprovalPolicy,
 } from "./plugin-thread-config.js";
 import {
   assertCodexThreadForkResponse,
@@ -469,6 +469,7 @@ export async function runCodexAppServerSideQuestion(
     params.opts?.abortSignal?.addEventListener("abort", abortFromUpstream, { once: true });
   }
   let childThreadId: string | undefined;
+  let pluginAppPolicyContext = binding.pluginAppPolicyContext;
   let childClient: CodexAppServerClient | undefined;
   let policyWriteUncertain = false;
   let turnId: string | undefined;
@@ -585,7 +586,7 @@ export async function runCodexAppServerSideQuestion(
             projectedMcpServers,
             getActiveMcpToolCall: (serverName) =>
               nativeToolLifecycleProjector?.getActiveMcpToolCall(serverName),
-            pluginAppPolicyContext: binding.pluginAppPolicyContext,
+            pluginAppPolicyContext,
             signal: runAbortController.signal,
           });
           return approvalResult.kind === "handled"
@@ -735,26 +736,21 @@ export async function runCodexAppServerSideQuestion(
       nativeCodeModeEnabled: nativeToolSurfaceEnabled,
       nativeCodeModeOnlyEnabled: appServer.codeModeOnly,
     });
-    // Codex reloads config for thread/fork, so replay the persisted app policy or
-    // app-scoped reviewers disappear while sibling apps inherit the thread reviewer.
-    const pluginAppsConfigPatch = binding.pluginAppPolicyContext
-      ? buildCodexPluginAppsConfigPatchFromPolicyContext(binding.pluginAppPolicyContext)
-      : undefined;
-    const threadConfig =
-      mergeCodexThreadConfigs(
-        nativeHookRelayConfig,
-        runtimeThreadConfig,
-        pluginAppsConfigPatch,
-        appServer.networkProxy?.configPatch,
-      ) ?? runtimeThreadConfig;
     const sideThreadId = await withLeasedCodexAppServerClientStartSelectionRetry({
       lease: clientLease,
       options: clientOptions,
       signal: runAbortController.signal,
       run: async (forkClient, requestOptions) =>
         options.bindingStore.withLease(bindingIdentity, async () => {
-          if (binding.connectionScope === "supervision") {
+          const assertCurrentBinding = () => {
             params.hostCapabilities.assertActive();
+            runAbortController.signal.throwIfAborted();
+            if (!isDeepStrictEqual(options.bindingStore.read(bindingIdentity), binding)) {
+              throw new Error("Codex side-question binding changed before fork");
+            }
+          };
+          assertCurrentBinding();
+          if (binding.connectionScope === "supervision") {
             const { thread } = await forkClient.request(
               "thread/read",
               {
@@ -763,16 +759,38 @@ export async function runCodexAppServerSideQuestion(
               },
               requestOptions(),
             );
-            params.hostCapabilities.assertActive();
-            if (!isDeepStrictEqual(options.bindingStore.read(bindingIdentity), binding)) {
-              throw new Error("Codex side-question binding changed before fork");
-            }
-            params.hostCapabilities.assertActive();
+            assertCurrentBinding();
             assertCodexSupervisionThreadLineage(binding, thread);
           }
           await ensureSandboxEnvironment(forkClient);
-          params.hostCapabilities.assertActive();
+          assertCurrentBinding();
           const executionCwd = sandboxEnvironment?.cwd ?? cwd;
+          let pluginAppsConfigPatch: JsonObject | undefined;
+          if (binding.pluginAppPolicyContext) {
+            const refreshed = await refreshCodexPluginAppApprovalPolicy({
+              policyContext: binding.pluginAppPolicyContext,
+              configCwd: executionCwd,
+              request: (method, requestParams) => {
+                assertCurrentBinding();
+                return forkClient.request(method, requestParams, requestOptions());
+              },
+            }).finally(assertCurrentBinding);
+            pluginAppPolicyContext = refreshed.policyContext;
+            pluginAppsConfigPatch = refreshed.configPatch;
+            for (const diagnostic of refreshed.diagnostics) {
+              embeddedAgentLog.warn(diagnostic.message);
+            }
+          }
+          assertCurrentBinding();
+          // Fork reloads native config; refresh ask overrides before replaying the
+          // bound app policy, including when /btw is the first run after restart.
+          const threadConfig =
+            mergeCodexThreadConfigs(
+              nativeHookRelayConfig,
+              runtimeThreadConfig,
+              pluginAppsConfigPatch,
+              appServer.networkProxy?.configPatch,
+            ) ?? runtimeThreadConfig;
           const response = assertCodexThreadForkResponse(
             await forkCodexSideThread(
               forkClient,

@@ -18,6 +18,23 @@ import { SkillLibraryError } from "./errors.js";
 export const SKILL_LIBRARY_MAX_PATH_COMPONENTS = 16;
 export const SKILL_LIBRARY_MAX_TREE_ENTRIES = SKILL_LIBRARY_MAX_FILES * 2;
 
+/** Identifies the exact directory failure that prevented complete skill-tree traversal. */
+export class SkillTreeDirectoryError extends SkillLibraryError {
+  constructor(
+    readonly rootPath: string,
+    readonly failedPath: string,
+    cause: unknown,
+  ) {
+    super(
+      "INVALID_BUNDLE",
+      `Skill tree directory could not be read: root=${JSON.stringify(rootPath)} ` +
+        `path=${JSON.stringify(failedPath)} error=${describeSkillTreeFailure(cause)}`,
+      undefined,
+      { cause },
+    );
+  }
+}
+
 type PreparedSkillBundle = {
   revision: string;
   files: Array<Static<typeof manifestSchema>[number] & { bytes: Buffer }>;
@@ -333,6 +350,13 @@ export async function readSkillLibraryTree(directory: string): Promise<SkillLibr
   return files;
 }
 
+function describeSkillTreeFailure(error: unknown): string {
+  if (isErrno(error) && error.code) {
+    return `${error.code}: ${error.message}`;
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
 export async function readSkillBundleTree(
   directory: string,
   includePath?: (filePath: string) => boolean,
@@ -353,9 +377,12 @@ export async function readSkillBundleTree(
     throw new SkillLibraryError("INVALID_BUNDLE", "Skill tree exceeds traversal limits.");
   }
   if (walked.failedDirs.length) {
-    throw new SkillLibraryError("INVALID_BUNDLE", "Skill tree could not be read completely.");
+    const failed = walked.failedDirs[0]!;
+    throw new SkillTreeDirectoryError(directory, failed.path, failed.error);
   }
-  const safeRoot = await root(directory);
+  const safeRoot = await root(directory).catch((error: unknown) => {
+    throw new SkillTreeDirectoryError(directory, directory, error);
+  });
   const files: SkillLibraryFile[] = [];
   let total = 0;
   for (const entry of walked.entries) {
@@ -365,16 +392,28 @@ export async function readSkillBundleTree(
     if (entry.kind !== "file") {
       throw new SkillLibraryError(
         "INVALID_BUNDLE",
-        "Skill trees cannot contain links or special files.",
+        `Skill trees cannot contain links or special files: root=${JSON.stringify(directory)} ` +
+          `path=${JSON.stringify(entry.path)} kind=${entry.kind}.`,
       );
     }
     const portablePath = entry.relativePath.split(path.sep).join("/");
     validateSkillBundlePath(portablePath);
-    const { buffer, stat } = await safeRoot.read(entry.relativePath, {
-      hardlinks: "reject",
-      symlinks: "reject",
-      maxBytes: SKILL_LIBRARY_MAX_FILE_BYTES,
-    });
+    const read = await safeRoot
+      .read(entry.relativePath, {
+        hardlinks: "reject",
+        symlinks: "reject",
+        maxBytes: SKILL_LIBRARY_MAX_FILE_BYTES,
+      })
+      .catch((error: unknown) => {
+        throw new SkillLibraryError(
+          "INVALID_BUNDLE",
+          `Skill tree file could not be read: root=${JSON.stringify(directory)} ` +
+            `path=${JSON.stringify(entry.path)} error=${describeSkillTreeFailure(error)}`,
+          undefined,
+          { cause: error },
+        );
+      });
+    const { buffer, stat } = read;
     total += buffer.length;
     if (total > SKILL_LIBRARY_MAX_BUNDLE_BYTES || files.length >= SKILL_LIBRARY_MAX_FILES) {
       throw new SkillLibraryError("INVALID_BUNDLE", "Skill tree exceeds bundle limits.");

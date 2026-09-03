@@ -12,7 +12,6 @@ import { runtimeForLogger } from "../logging/subsystem.js";
 import { isGatewayDraining } from "../process/command-queue.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
-import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
 import { resolveDatabasePath } from "../state/openclaw-state-db-maintenance.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
@@ -118,32 +117,20 @@ export async function prepareGatewayKernelState(params: {
   const shouldStartWorkerEnvironmentService = Boolean(workerEnvironmentStartup);
   const hostDesktopConfig = gatewayPluginConfigAtStart.desktop?.host;
   const hostDesktopEnabled = hostDesktopConfig?.enabled === true;
-  const nodeCommandConfig = gatewayPluginConfigAtStart.gateway?.nodes?.commands;
-  const nodeDesktopObserveAvailable =
-    (nodeCommandConfig?.allow ?? []).some(
-      (command) => command.trim() === NODE_DESKTOP_STREAM_COMMAND,
-    ) &&
-    !(nodeCommandConfig?.deny ?? []).some(
-      (command) => command.trim() === NODE_DESKTOP_STREAM_COMMAND,
-    );
   const workerDesktopObserveAvailable =
     shouldStartWorkerEnvironmentService &&
     gatewayPluginConfigAtStart.cloudWorkers?.desktop === true;
-  const desktopSessionRegistry =
-    shouldStartWorkerEnvironmentService || hostDesktopEnabled || nodeDesktopObserveAvailable
-      ? createDesktopSessionRegistry()
-      : undefined;
-  const nodeDesktopStreamBroker =
-    nodeDesktopObserveAvailable || shouldStartWorkerEnvironmentService
-      ? (
-          await startupTrace.measure(
-            "node-desktop.runtime-import",
-            () => import("./desktop/node-stream-broker.js"),
-          )
-        ).createNodeDesktopStreamBroker()
-      : undefined;
+  // Policy can enable an already-approved node without restarting the Gateway.
+  // These owners allocate streams only when an authorized observation starts.
+  const desktopSessionRegistry = createDesktopSessionRegistry();
+  const nodeDesktopStreamBroker = (
+    await startupTrace.measure(
+      "node-desktop.runtime-import",
+      () => import("./desktop/node-stream-broker.js"),
+    )
+  ).createNodeDesktopStreamBroker();
   const hostDesktopService =
-    hostDesktopConfig && hostDesktopEnabled && desktopSessionRegistry
+    hostDesktopConfig && hostDesktopEnabled
       ? (
           await startupTrace.measure(
             "host-desktop.runtime-import",
@@ -154,21 +141,20 @@ export async function prepareGatewayKernelState(params: {
           registry: desktopSessionRegistry,
         })
       : undefined;
-  const workerEnvironmentRuntime =
-    workerEnvironmentStartup && desktopSessionRegistry
-      ? await startupTrace.measure("worker-environments.runtime-imports", async () => {
-          const workerModule = await loadWorkerEnvironmentStartupModule();
-          return await workerModule.createGatewayWorkerEnvironmentRuntime({
-            getPluginRegistry: () => pluginRuntime.registry,
-            getPortalRuntime: () => pluginGatewayContext.current,
-            resolveGatewayContext: () => pluginGatewayContext.current,
-            desktopSessionRegistry,
-            ...(nodeDesktopStreamBroker ? { nodeDesktopStreamBroker } : {}),
-            startup: workerEnvironmentStartup,
-            log,
-          });
-        })
-      : {};
+  const workerEnvironmentRuntime = workerEnvironmentStartup
+    ? await startupTrace.measure("worker-environments.runtime-imports", async () => {
+        const workerModule = await loadWorkerEnvironmentStartupModule();
+        return await workerModule.createGatewayWorkerEnvironmentRuntime({
+          getPluginRegistry: () => pluginRuntime.registry,
+          getPortalRuntime: () => pluginGatewayContext.current,
+          resolveGatewayContext: () => pluginGatewayContext.current,
+          desktopSessionRegistry,
+          nodeDesktopStreamBroker,
+          startup: workerEnvironmentStartup,
+          log,
+        });
+      })
+    : {};
   const {
     workerEnvironmentService,
     workerLiveEvents,
@@ -262,8 +248,6 @@ export async function prepareGatewayKernelState(params: {
     : undefined;
   const workerPlacementControlAvailable = workerPlacementRuntime?.dispatchService;
   const workerPlacementDispatchAvailable = workerPlacementControlAvailable;
-  const desktopObserveAvailable =
-    workerDesktopObserveAvailable || nodeDesktopObserveAvailable || Boolean(hostDesktopService);
   const channelLogs = Object.fromEntries(
     listGatewayStartupChannelPlugins().map((plugin) => [plugin.id, logChannels.child(plugin.id)]),
   ) as Record<ChannelId, ReturnType<typeof createSubsystemLogger>>;
@@ -286,7 +270,6 @@ export async function prepareGatewayKernelState(params: {
         (workerPlacementDispatchAvailable || method !== "sessions.dispatch") &&
         (workerPlacementControlAvailable ||
           (method !== "sessions.reclaim" && method !== "sessions.move")) &&
-        (desktopObserveAvailable || method !== "desktop.observe") &&
         (workerDesktopObserveAvailable ||
           (method !== "desktop.launch" &&
             method !== "worker.desktop.observe" &&
@@ -354,15 +337,7 @@ export async function prepareGatewayKernelState(params: {
       getRuntimeConfig().gateway?.trustedProxies,
     );
   const resolveSharedGatewaySessionGenerationForRuntimeSnapshot = () =>
-    resolveSharedGatewaySessionGeneration(
-      resolveGatewayAuth({
-        authConfig: getRuntimeConfig().gateway?.auth,
-        authOverride: resolvedStartupAuthOverride,
-        env: process.env,
-        tailscaleMode,
-      }),
-      getRuntimeConfig().gateway?.trustedProxies,
-    );
+    resolveSharedGatewaySessionGenerationForConfig(getRuntimeConfig());
   const sharedGatewaySessionGenerationState: SharedGatewaySessionGenerationState = {
     current: resolveCurrentSharedGatewaySessionGeneration(),
     required: null,
@@ -558,9 +533,7 @@ export async function prepareGatewayKernelState(params: {
     workerPlacementControlAvailable,
     workerPlacementDispatchAvailable,
     workerDesktopObserveAvailable,
-    desktopObserveAvailable,
     desktopSessionRegistry,
-    nodeDesktopObserveAvailable,
     nodeDesktopStreamBroker,
     hostDesktopService,
     channelLogs,

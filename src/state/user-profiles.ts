@@ -3,7 +3,11 @@ import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { sql } from "kysely";
-import type { UserProfileGitHubIdentity } from "../../packages/gateway-protocol/src/schema/users.js";
+import {
+  GATEWAY_OWNER_PROFILE_ID,
+  type UserProfile as UserProfileListItem,
+  type UserProfileGitHubIdentity,
+} from "../../packages/gateway-protocol/src/schema/users.js";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import { generateSecureUuid } from "../infra/secure-random.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
@@ -29,11 +33,13 @@ import {
   userProfileAvatarPresence,
   userProfilesDb,
 } from "./user-profiles-internal.js";
+import { ensureGatewayOwnerProfileRow } from "./user-profiles-owner.js";
 import {
   ensureUserProfileRoleSchema,
   ensureUserProfilesSchema,
   hasEnsuredUserProfileRoleSchema,
   UserProfileNotFoundError,
+  UserProfileOwnerError,
 } from "./user-profiles-schema.js";
 import {
   fetchTailscaleAvatar,
@@ -55,21 +61,7 @@ export {
   listProfiles,
 } from "./user-profile-list.js";
 
-type UserProfile = {
-  id: string;
-  displayName: string | null;
-  avatarMime: UserProfileAvatarMime | null;
-  mergedInto: string | null;
-  role?: string;
-  createdAt: number;
-  updatedAt: number;
-};
-
-type UserProfileListItem = UserProfile & {
-  emails: string[];
-  githubIdentity: UserProfileGitHubIdentity | null;
-  hasAvatar: boolean;
-};
+type UserProfile = Omit<UserProfileListItem, "emails" | "githubIdentity" | "hasAvatar">;
 
 type GitHubAuthenticationAlias =
   | { kind: "email"; email: string }
@@ -79,7 +71,7 @@ type UserProfileAvatarError =
   | { code: "avatar_too_large"; maxBytes: number }
   | { code: "unsupported_avatar_mime"; mime: string };
 
-export { UserProfileNotFoundError };
+export { GATEWAY_OWNER_PROFILE_ID, UserProfileNotFoundError };
 
 type UserProfileListRow = Pick<
   UserProfileRow,
@@ -90,10 +82,6 @@ type UserProfileListRow = Pick<
 };
 
 const MAX_USER_PROFILE_DISPLAY_NAME_LENGTH = 256;
-export const GATEWAY_OWNER_PROFILE_ID = "gateway-owner";
-// A dot keeps the local owner outside Tailscale's provider-suffix namespace.
-const GATEWAY_OWNER_PROFILE_PROVIDER = "gateway.local";
-const GATEWAY_OWNER_PROFILE_SUBJECT = "owner";
 
 function normalizeEmail(email: string): string {
   const normalized = email.trim().toLowerCase();
@@ -124,10 +112,9 @@ function insertUserProfile(
   db: DatabaseSync,
   displayName: string | null,
   now: number,
-  id = generateSecureUuid(),
 ): UserProfileRow {
   const row: UserProfileRow = {
-    id,
+    id: generateSecureUuid(),
     display_name: displayName,
     avatar: null,
     avatar_mime: null,
@@ -236,6 +223,9 @@ export function setUserProfileRole(
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const profile = requireResolvedUserProfileById(db, profileId);
+      if (profileId === GATEWAY_OWNER_PROFILE_ID || profile.id === GATEWAY_OWNER_PROFILE_ID) {
+        throw new UserProfileOwnerError("role");
+      }
       executeSqliteQuerySync(
         db,
         userProfilesDb(db)
@@ -305,7 +295,6 @@ export function ensureProfileForEmail(
 }
 
 function ensureProfileForProviderIdentity(params: {
-  profileId?: string;
   provider: string;
   subject: string;
   initialDisplayName: string | null;
@@ -348,7 +337,7 @@ function ensureProfileForProviderIdentity(params: {
         }
         return toUserProfile(requireResolvedUserProfileById(db, existingIdentity.profile_id));
       }
-      const row = insertUserProfile(db, params.initialDisplayName, now, params.profileId);
+      const row = insertUserProfile(db, params.initialDisplayName, now);
       executeSqliteQuerySync(
         db,
         kysely.insertInto("user_profile_identities").values({
@@ -453,14 +442,12 @@ export function ensureGatewayOwnerProfile(
   options: OpenClawStateDatabaseOptions = {},
 ): UserProfile {
   const displayName = normalizeInitialDisplayName(initialDisplayName);
-  const profile = ensureProfileForProviderIdentity({
-    profileId: GATEWAY_OWNER_PROFILE_ID,
-    provider: GATEWAY_OWNER_PROFILE_PROVIDER,
-    subject: GATEWAY_OWNER_PROFILE_SUBJECT,
-    initialDisplayName: displayName,
+  ensureUserProfilesSchema(options);
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => toUserProfile(ensureGatewayOwnerProfileRow(db, displayName)),
     options,
-  });
-  return adoptDisplayNameIfEmpty(profile.id, displayName, options);
+    { operationLabel: "user-profiles.ensure-owner" },
+  );
 }
 
 async function adoptAvatarIfEmpty(params: {
@@ -562,6 +549,9 @@ export function linkEmail(
     ({ db }) => {
       const kysely = userProfilesDb(db);
       const target = requireResolvedUserProfileById(db, targetProfileId);
+      if (targetProfileId === GATEWAY_OWNER_PROFILE_ID || target.id === GATEWAY_OWNER_PROFILE_ID) {
+        throw new UserProfileOwnerError("merge");
+      }
       const existingAlias = executeSqliteQueryTakeFirstSync(
         db,
         kysely
@@ -569,6 +559,9 @@ export function linkEmail(
           .select("profile_id")
           .where("email", "=", normalizedEmail),
       );
+      if (existingAlias?.profile_id === GATEWAY_OWNER_PROFILE_ID) {
+        throw new UserProfileOwnerError("merge");
+      }
       if (!existingAlias) {
         executeSqliteQuerySync(
           db,

@@ -2,21 +2,33 @@ import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { withCoreCanvasNodeCapability } from "../canvas/constants.js";
 import {
   getRuntimeConfig,
+  getRuntimeConfigSourceSnapshot,
   promoteConfigSnapshotToLastKnownGood,
   readConfigFileSnapshotForRuntimeTransaction,
   registerConfigWriteListener,
 } from "../config/io.js";
 import { isNixMode } from "../config/paths.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
+import { resolveGatewayAuth } from "./auth.js";
+import { diffGatewayReloadPaths } from "./config-diff.js";
+import {
+  buildGatewayReloadPlan,
+  listConfigReloadRefinementPrefixes,
+} from "./config-reload-plan.js";
 import { collectGatewayProcessMemoryUsageMb, finishGatewayRestartTrace } from "./restart-trace.js";
 import type { GatewayKernelRuntime } from "./server-kernel-request-runtime.js";
 import { GATEWAY_EVENTS } from "./server-methods-list.js";
+import { refreshConnectedNodeSurfaceCaches } from "./server-methods/nodes.read.js";
+import { assertGatewayRuntimeSecurityConfig } from "./server-runtime-config.js";
 import { getRequiredSharedGatewaySessionGeneration } from "./server-shared-auth-generation.js";
 import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
 import type { GatewayHttpTransport } from "./server-transport-bridge.js";
+import { disconnectDisallowedGatewayBrowserOriginClients } from "./server/ws-origin-policy.js";
+import { DEFAULT_TERMINAL_DETACH_SECONDS } from "./terminal/session-limits.js";
 
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
 const [POST_READY_MAINTENANCE_DELAY_MS, RETAINED_PLUGIN_CLEANUP_DELAY_MS] = [250, 30_000];
@@ -68,6 +80,8 @@ export async function finishGatewayStartup(params: {
     workerPlacementRuntime,
     terminalLaunchPolicy,
     terminalSessions,
+    nodeRegistry,
+    nodeDesktopService,
     startChannel,
     stopChannel,
     getAttachedGatewayMethodRegistry,
@@ -355,6 +369,20 @@ export async function finishGatewayStartup(params: {
   activateScheduledServicesWhenReady();
 
   const { startManagedGatewayConfigReloader } = await import("./server-reload-handlers.js");
+  const assertRuntimeSecurityConfig = (cfg: OpenClawConfig, env?: NodeJS.ProcessEnv) => {
+    assertGatewayRuntimeSecurityConfig({
+      cfg,
+      port,
+      bindHost,
+      controlUiEnabled: runtime.controlUiEnabled,
+      tailscaleMode: runtime.tailscaleMode,
+      resolvedAuth: resolveGatewayAuth({
+        authConfig: cfg.gateway?.auth,
+        tailscaleMode: runtime.tailscaleMode,
+        env,
+      }),
+    });
+  };
   const configReloaderParams: Parameters<typeof startManagedGatewayConfigReloader>[0] = {
     configRevisionProjector: gatewayRequestContext.configRevisionProjector,
     resolveGatewayContext: resolvePluginGatewayContext,
@@ -380,12 +408,26 @@ export async function finishGatewayStartup(params: {
             runtimeConfig: sourceConfig,
             sourceConfig,
           });
-          await activateRuntimeSecrets(candidate.runtimeConfig, {
+          const prepared = await activateRuntimeSecrets(candidate.runtimeConfig, {
             reason: "reload",
             activate: false,
             env: candidate.runtimeEnv.env,
             includeAuthStoreRefs: runtimeRefresh?.includeAuthStoreRefs,
           });
+          const previousConfig = getRuntimeConfig();
+          // Runtime defaults and startup overlays are not authored changes; they
+          // must not classify a hot write as a restart and bypass this validation.
+          const plan = buildGatewayReloadPlan(
+            diffGatewayReloadPaths(
+              getRuntimeConfigSourceSnapshot() ?? startupLastGoodSnapshot.sourceConfig,
+              sourceConfig,
+              listConfigReloadRefinementPrefixes(),
+            ),
+            { previousConfig, candidateConfig: prepared.config },
+          );
+          if (!plan.restartGateway) {
+            assertRuntimeSecurityConfig(prepared.config, candidate.runtimeEnv.env);
+          }
           return candidate;
         },
       }),
@@ -396,7 +438,6 @@ export async function finishGatewayStartup(params: {
       kernel.setReloadHookState(nextState);
       kernel.swapHeartbeatRunner(nextState.heartbeatRunner);
       const previousCronState = kernel.swapCronState(nextState.cronState);
-      kernel.setChannelHealthMonitor(nextState.channelHealthMonitor);
       if (previousCronState !== nextState.cronState) {
         cronStartState.handled = true;
       }
@@ -418,8 +459,20 @@ export async function finishGatewayStartup(params: {
     prepareTerminalConfig: (plan, nextConfig) => {
       terminalLaunchPolicy.prepareConfig(nextConfig, { restartPending: plan.restartGateway });
     },
-    reconcileTerminalSessions: () => {
+    reconcileRuntimePolicy: async (nextConfig, phase) => {
       terminalSessions.closeDisallowedAgents((agentId) => terminalLaunchPolicy.resolve(agentId).ok);
+      if (phase !== "committed") {
+        return;
+      }
+      terminalSessions.updateDetachGraceMs(
+        (nextConfig.gateway?.terminal?.detachedSessionTimeoutSeconds ??
+          DEFAULT_TERMINAL_DETACH_SECONDS) * 1000,
+      );
+      disconnectDisallowedGatewayBrowserOriginClients(clients, nextConfig);
+      for (const nodeSession of nodeRegistry.refreshRuntimePolicy(nextConfig)) {
+        refreshConnectedNodeSurfaceCaches({ context: gatewayRequestContext, nodeSession });
+      }
+      await nodeDesktopService.reconcileRuntimePolicy();
     },
     commitTerminalConfig: (nextConfig) => {
       terminalLaunchPolicy.commitConfig();
@@ -428,6 +481,7 @@ export async function finishGatewayStartup(params: {
     acceptTerminalConfig: terminalLaunchPolicy.acceptConfig,
     channelManager,
     activateRuntimeSecrets,
+    assertRuntimeSecurityConfig,
     prepareConfigCandidate: prepareReloadCandidate,
     applyRuntimeConfigOverrides: applyFixedGatewayOverlays,
     resolveSharedGatewaySessionGenerationForConfig,
