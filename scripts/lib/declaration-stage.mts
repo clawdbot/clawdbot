@@ -84,7 +84,9 @@ export async function publishStagedDeclarations(
       const raw = fs.readFileSync(file);
       // Strip undeclared bundler helpers (for example __exportAll) before the
       // staged bytes become the published declaration identity.
-      const sanitizedText = relative.endsWith(".d.ts")
+      const isDeclaration =
+        relative.endsWith(".d.ts") || relative.endsWith(".d.mts") || relative.endsWith(".d.cts");
+      const sanitizedText = isDeclaration
         ? sanitizeBundlerHelperDtsExports(raw.toString("utf8")).sourceText
         : raw.toString("utf8");
       const bytes = Buffer.from(sanitizedText, "utf8");
