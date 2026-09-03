@@ -21,6 +21,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.MotionDurationScale
@@ -33,6 +34,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.launch
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -71,6 +73,8 @@ class ChatReaderScrollOwnershipLayoutTest {
   fun finishingHistoryLoadDoesNotCancelAMovingNewUserTurn() {
     showReader(initialHistoryLoading = true)
     composeRule.waitForIdle()
+    click("Read earlier")
+    composeRule.waitForIdle()
     val initial = viewport()
     assertTrue("History must begin away from the latest row", initial.index > 0)
     val originalAutoAdvance = composeRule.mainClock.autoAdvance
@@ -101,6 +105,8 @@ class ChatReaderScrollOwnershipLayoutTest {
     showReader()
     composeRule.waitForIdle()
     assertEquals("The actual effect context must allow timed animations", 1f, checkNotNull(observedScale), 0f)
+    click("Read earlier")
+    composeRule.waitForIdle()
     val initial = viewport()
     assertTrue("History must begin away from the latest row", initial.index > 0)
     assertFalse(initial.scrolling)
@@ -190,6 +196,7 @@ class ChatReaderScrollOwnershipLayoutTest {
       ClawDesignTheme {
         var messages by remember { mutableStateOf(initialMessages) }
         var historyLoading by remember { mutableStateOf(initialHistoryLoading) }
+        val scope = rememberCoroutineScope()
         val timeline = remember(messages) { buildChatTimeline(messages, 0, emptyList(), null) }
         val current = rememberChatReaderScrollController("animation-owner", timeline, historyLoading = historyLoading)
         SideEffect { reader = current }
@@ -199,6 +206,12 @@ class ChatReaderScrollOwnershipLayoutTest {
           Column(Modifier.size(360.dp, 700.dp).clipToBounds()) {
             Row(horizontalArrangement = Arrangement.SpaceBetween) {
               TextButton(onClick = current.jumpToLatest) { Text("Jump to latest") }
+              TextButton(
+                onClick = {
+                  current.onManualNavigation()
+                  scope.launch { current.listState.scrollToItem(checkNotNull(timeline.readAnchorIndex)) }
+                },
+              ) { Text("Read earlier") }
               TextButton(onClick = manualNavigation) { Text("Read here") }
             }
             TextButton(onClick = { messages = initialMessages + message("new user", "user", 1000) }) { Text("Append user turn") }
