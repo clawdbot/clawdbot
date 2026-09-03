@@ -451,6 +451,7 @@ export const updateHandlers: GatewayRequestHandlers = {
               return;
             }
             const started = await startManagedServiceUpdateHandoff({
+              requester: params.requester,
               root: installRoot,
               timeoutMs,
               restartDrainTimeoutMs: resolveGatewayRestartDeferralTimeoutMs(),
