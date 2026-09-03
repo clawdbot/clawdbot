@@ -937,13 +937,18 @@ function computeNextProfileUsageStats(params: {
   const unusableUntil = resolveProfileUnusableUntil(params.existing);
   const previousCooldownExpired = typeof unusableUntil === "number" && params.now >= unusableUntil;
 
-  // A rate-limit profile remains half-open until a real request succeeds. Merely
-  // reaching its retry timestamp must not collapse every retry back to 30 seconds.
-  const shouldResetCounters =
-    params.reason === "rate_limit" ? false : windowExpired || previousCooldownExpired;
-  const baseErrorCount = shouldResetCounters ? 0 : (params.existing.errorCount ?? 0);
+  // A rate-limit profile remains half-open until a real request succeeds. Its
+  // dedicated counter survives expiry, while the aggregate counter resets so
+  // unrelated failures do not inherit the rate-limit backoff history.
+  const shouldResetAggregateCounter = windowExpired || previousCooldownExpired;
+  const baseErrorCount = shouldResetAggregateCounter ? 0 : (params.existing.errorCount ?? 0);
   const nextErrorCount = baseErrorCount + 1;
-  const failureCounts = shouldResetCounters ? {} : { ...params.existing.failureCounts };
+  const preservedRateLimitCount = params.existing.failureCounts?.rate_limit;
+  const failureCounts = shouldResetAggregateCounter
+    ? params.reason === "rate_limit" && preservedRateLimitCount
+      ? { rate_limit: preservedRateLimitCount }
+      : {}
+    : { ...params.existing.failureCounts };
   failureCounts[params.reason] = (failureCounts[params.reason] ?? 0) + 1;
 
   const updatedStats: ProfileUsageStats = {

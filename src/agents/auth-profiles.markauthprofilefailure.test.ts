@@ -346,7 +346,7 @@ describe("markAuthProfileFailure", () => {
     const stats = store.usageStats?.["anthropic:default"];
     // Expiry makes the profile eligible for a half-open probe; a failed probe
     // keeps the consecutive count so the next retry grows from 2m to 4m.
-    expect(stats?.errorCount).toBe(4);
+    expect(stats?.errorCount).toBe(1);
     expect(stats?.failureCounts?.rate_limit).toBe(4);
     const cooldownMs = (stats?.cooldownUntil ?? 0) - now;
     expectCooldownInRange(cooldownMs, 235_000, 245_000);

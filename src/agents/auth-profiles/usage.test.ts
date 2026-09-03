@@ -767,7 +767,7 @@ describe("clearExpiredCooldowns", () => {
         blockedReason: "subscription_limit",
         blockedSource: "codex_rate_limits",
         errorCount: 4,
-        failureCounts: { rate_limit: 4 },
+        failureCounts: { rate_limit: 4, timeout: 2 },
         lastFailureAt,
       },
     });
@@ -778,7 +778,7 @@ describe("clearExpiredCooldowns", () => {
     expect(stats?.blockedUntil).toBeUndefined();
     expect(stats?.blockedReason).toBeUndefined();
     expect(stats?.blockedSource).toBeUndefined();
-    expect(stats?.errorCount).toBe(4);
+    expect(stats?.errorCount).toBe(0);
     expect(stats?.failureCounts).toEqual({ rate_limit: 4 });
     expect(stats?.lastFailureAt).toBe(lastFailureAt);
   });
