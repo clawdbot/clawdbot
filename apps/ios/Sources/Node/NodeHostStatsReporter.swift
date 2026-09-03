@@ -5,9 +5,9 @@ enum NodeHostStatsReporter {
     static let eventName = "node.host.stats"
     static let intervalSeconds: TimeInterval = 60
 
-    // Disk capacity is deliberately not sampled: Apple's required-reason API policy
-    // does not permit sending disk-space values off-device, and the Gateway treats
-    // the disk fields as optional.
+    /// Wire payload for `node.host.stats`. Disk capacity is deliberately not sampled:
+    /// Apple's required-reason API policy does not permit sending disk-space values
+    /// off-device, and the Gateway treats the disk fields as optional.
     struct Payload: Encodable {
         let cpuCount: Int
         let memoryTotalBytes: UInt64
