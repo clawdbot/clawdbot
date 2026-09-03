@@ -307,6 +307,15 @@ class CronPage extends OpenClawLightDomElement {
       ("deliveryChannel" in patch && patch.deliveryChannel !== current.deliveryChannel) ||
       ("deliveryAccountId" in patch && patch.deliveryAccountId !== current.deliveryAccountId) ||
       ("agentId" in patch && patch.agentId !== current.agentId);
+    const scopedAccountChanged =
+      (current.deliveryAccountId ?? "").trim().length > 0 &&
+      "deliveryAccountId" in patch &&
+      patch.deliveryAccountId !== current.deliveryAccountId;
+    const deliveryDirectoryIdentityChanged =
+      ("deliveryMode" in patch && patch.deliveryMode !== current.deliveryMode) ||
+      ("deliveryChannel" in patch && patch.deliveryChannel !== current.deliveryChannel) ||
+      ("agentId" in patch && patch.agentId !== current.agentId) ||
+      scopedAccountChanged;
     let resolvedPatch =
       deliveryIdentityChanged && patch.deliveryThreadId === undefined
         ? { ...patch, deliveryThreadId: undefined }
@@ -314,9 +323,9 @@ class CronPage extends OpenClawLightDomElement {
     if (typeof patch.deliveryTo === "string") {
       const target = patch.deliveryTo.trim();
       const requestedAccountId = (
-        typeof patch.deliveryAccountId === "string"
-          ? patch.deliveryAccountId
-          : this.cron.cronForm.deliveryAccountId
+        "deliveryAccountId" in patch
+          ? (patch.deliveryAccountId ?? "")
+          : (this.cron.cronForm.deliveryAccountId ?? "")
       ).trim();
       const matches = this.deliveryConversations.filter(
         (conversation) =>
@@ -329,24 +338,25 @@ class CronPage extends OpenClawLightDomElement {
           conversation,
         ]),
       );
-      const selected = routes.size === 1 ? routes.values().next().value : undefined;
+      const selected =
+        !deliveryDirectoryIdentityChanged && routes.size === 1
+          ? routes.values().next().value
+          : undefined;
       resolvedPatch = {
         ...patch,
         ...(selected ? { deliveryAccountId: selected.accountId } : {}),
         deliveryThreadId: selected?.threadId,
       };
     }
-    this.cron.cronForm = normalizeCronFormState(
-      { ...this.cron.cronForm, ...resolvedPatch },
-      resolvedPatch,
-    );
+    const next = normalizeCronFormState({ ...this.cron.cronForm, ...resolvedPatch }, resolvedPatch);
+    const shouldReloadDeliveryConversations =
+      next.deliveryMode !== current.deliveryMode ||
+      next.deliveryChannel !== current.deliveryChannel ||
+      next.deliveryAccountId !== current.deliveryAccountId ||
+      next.agentId !== current.agentId;
+    this.cron.cronForm = next;
     this.cron.cronFieldErrors = validateCronForm(this.cron.cronForm);
-    if (
-      "deliveryMode" in patch ||
-      "deliveryChannel" in patch ||
-      "deliveryAccountId" in patch ||
-      "agentId" in patch
-    ) {
+    if (shouldReloadDeliveryConversations) {
       void this.loadDeliveryConversations();
     }
     this.requestCronUpdate();
@@ -380,7 +390,7 @@ class CronPage extends OpenClawLightDomElement {
         limit: 100,
       });
       if (isCurrent()) {
-        const accountId = cronState.cronForm.deliveryAccountId.trim();
+        const accountId = (cronState.cronForm.deliveryAccountId ?? "").trim();
         const eligible = result.conversations.filter(
           (conversation) => !accountId || conversation.accountId === accountId,
         );
@@ -633,7 +643,7 @@ class CronPage extends OpenClawLightDomElement {
           createOpen: this.cron.cronCreateOpen,
           listTab: this.listTab,
           detailTab: this.detailTab,
-          error: this.deliveryConversationsError ?? this.cron.cronError,
+          error: this.cron.cronError ?? this.deliveryConversationsError,
           busy: this.cron.cronBusy,
           form: this.cron.cronForm,
           heartbeatScratch: canManage ? this.heartbeatScratch : "",

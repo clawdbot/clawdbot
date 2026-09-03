@@ -77,13 +77,17 @@ describe("buildCronSuggestions", () => {
       cron,
       agentsList: null,
       modelSuggestions: [],
-      conversationTargets: ["-1009876543210"],
+      conversationTargets: ["-1009876543210", "https://example.test/conversation-shaped-url"],
     });
 
     expect(suggestions.deliveryToSuggestions).toEqual(
       scenario.mode === "webhook"
         ? scenario.recipients
-        : [...scenario.recipients, "-1009876543210"].toSorted(),
+        : [
+            ...scenario.recipients,
+            "-1009876543210",
+            "https://example.test/conversation-shaped-url",
+          ].toSorted(),
     );
     expect(suggestions.accountTargets).toEqual(scenario.accounts);
   });

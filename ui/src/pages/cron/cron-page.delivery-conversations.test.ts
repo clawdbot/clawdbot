@@ -506,6 +506,130 @@ describe("CronPage lifecycle", () => {
     expect(page.cron.cronForm.deliveryThreadId).toBeUndefined();
   });
 
+  it("reloads suggestions when selecting a target infers its account", async () => {
+    const fallbackRequest = createRequest();
+    const request = vi.fn(async (method: string) => {
+      if (method === "conversations.list") {
+        return {
+          conversations: [
+            {
+              conversationRef: "conv_telegram_account_a",
+              channel: "telegram",
+              accountId: "account-a",
+              kind: "group",
+              target: "-1000000000001",
+              firstSeenAt: 0,
+              lastSeenAt: 0,
+            },
+            {
+              conversationRef: "conv_telegram_account_b",
+              channel: "telegram",
+              accountId: "account-b",
+              kind: "group",
+              target: "-1000000000002",
+              firstSeenAt: 0,
+              lastSeenAt: 0,
+            },
+          ],
+        };
+      }
+      return fallbackRequest(method);
+    });
+    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
+    const page = createPage(createContext(gateway, "writer"));
+
+    await waitForCronPage(() => expect(page.cron.connected).toBe(true));
+    page.patchForm({ deliveryMode: "announce", deliveryChannel: "telegram" });
+    await waitForCronPage(() => expect(page.deliveryConversations).toHaveLength(2));
+
+    page.patchForm({ deliveryTo: "-1000000000001" });
+
+    expect(page.cron.cronForm.deliveryAccountId).toBe("account-a");
+    await waitForCronPage(() =>
+      expect(page.deliveryConversations.map((conversation) => conversation.target)).toEqual([
+        "-1000000000001",
+      ]),
+    );
+  });
+
+  it("does not restore a scoped account when it is cleared with the same target", async () => {
+    const fallbackRequest = createRequest();
+    const request = vi.fn(async (method: string) => {
+      if (method === "conversations.list") {
+        return {
+          conversations: [
+            {
+              conversationRef: "conv_telegram_bound_topic",
+              channel: "telegram",
+              accountId: "bound-account",
+              kind: "group",
+              target: "-1009876543210",
+              threadId: "42",
+              firstSeenAt: 0,
+              lastSeenAt: 0,
+            },
+          ],
+        };
+      }
+      return fallbackRequest(method);
+    });
+    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
+    const page = createPage(createContext(gateway, "writer"));
+
+    await waitForCronPage(() => expect(page.cron.connected).toBe(true));
+    page.patchForm({ deliveryMode: "announce", deliveryChannel: "telegram" });
+    await waitForCronPage(() => expect(page.deliveryConversations).toHaveLength(1));
+    page.patchForm({ deliveryTo: "-1009876543210" });
+    await waitForCronPage(() => expect(page.cron.cronForm.deliveryAccountId).toBe("bound-account"));
+
+    page.patchForm({ deliveryAccountId: undefined, deliveryTo: "-1009876543210" });
+
+    expect(page.cron.cronForm.deliveryAccountId).toBeUndefined();
+    expect(page.cron.cronForm.deliveryThreadId).toBeUndefined();
+  });
+
+  it.each([
+    ["mode", { deliveryMode: "none", deliveryTo: "-1009876543210" }],
+    ["channel", { deliveryChannel: "discord", deliveryTo: "-1009876543210" }],
+    ["agent", { agentId: "other-agent", deliveryTo: "-1009876543210" }],
+  ] as const)(
+    "does not reselect an old topic when the delivery %s changes in the same patch",
+    async (_name, patch) => {
+      const fallbackRequest = createRequest();
+      const request = vi.fn(async (method: string) => {
+        if (method === "conversations.list") {
+          return {
+            conversations: [
+              {
+                conversationRef: "conv_telegram_bound_topic",
+                channel: "telegram",
+                accountId: "bound-account",
+                kind: "group",
+                target: "-1009876543210",
+                threadId: "42",
+                firstSeenAt: 0,
+                lastSeenAt: 0,
+              },
+            ],
+          };
+        }
+        return fallbackRequest(method);
+      });
+      const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
+      const page = createPage(createContext(gateway, "writer"));
+
+      await waitForCronPage(() => expect(page.cron.connected).toBe(true));
+      page.patchForm({ deliveryMode: "announce", deliveryChannel: "telegram" });
+      await waitForCronPage(() => expect(page.deliveryConversations).toHaveLength(1));
+      page.patchForm({ deliveryTo: "-1009876543210" });
+      expect(page.cron.cronForm.deliveryThreadId).toBe("42");
+
+      page.patchForm(patch);
+
+      expect(page.cron.cronForm.deliveryThreadId).toBeUndefined();
+    },
+  );
+
   it("omits targets whose account or thread route is ambiguous", async () => {
     const fallbackRequest = createRequest();
     const request = vi.fn(async (method: string) => {
@@ -585,6 +709,28 @@ describe("CronPage lifecycle", () => {
     await waitForCronPage(() => expect(page.deliveryConversations).toHaveLength(1));
 
     expect(page.deliveryConversationsError).toBeNull();
+  });
+
+  it("keeps scheduler errors visible over recipient directory errors", async () => {
+    const fallbackRequest = createRequest();
+    const request = vi.fn(async (method: string) => {
+      if (method === "conversations.list") {
+        throw new Error("temporary directory failure");
+      }
+      return fallbackRequest(method);
+    });
+    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
+    const page = createPage(createContext(gateway, "writer"), { render: true });
+
+    await waitForCronPage(() => expect(page.cron.connected).toBe(true));
+    page.patchForm({ deliveryMode: "announce", deliveryChannel: "telegram" });
+    await waitForCronPage(() => expect(page.deliveryConversationsError).toContain("temporary"));
+    page.cron = { ...page.cron, cronError: "scheduler save failed" };
+    page.requestUpdate();
+    await page.updateComplete;
+
+    expect(page.textContent).toContain("scheduler save failed");
+    expect(page.textContent).not.toContain("temporary directory failure");
   });
 
   it("registers idempotently when the module is evaluated again", async () => {

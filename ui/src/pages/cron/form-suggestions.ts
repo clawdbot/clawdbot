@@ -47,7 +47,7 @@ export function buildCronSuggestions(params: {
   ]);
   const deliveryTargets = normalizeSortedUniqueTrimmedStringList([
     ...params.cron.cronJobs.map((job) => job.delivery?.to),
-    ...(params.conversationTargets ?? []),
+    ...(params.cron.cronForm.deliveryMode === "announce" ? (params.conversationTargets ?? []) : []),
   ]);
   const accountTargets = (
     channel === "last"
