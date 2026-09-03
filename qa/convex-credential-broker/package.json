@@ -10,7 +10,10 @@
     "dev": "convex dev"
   },
   "dependencies": {
-    "convex": "1.44.0",
-    "nostr-tools": "2.24.2"
+    "convex": "1.45.0",
+    "nostr-tools": "2.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "26.3.0"
   }
 }

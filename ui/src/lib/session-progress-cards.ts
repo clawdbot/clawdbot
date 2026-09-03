@@ -4,6 +4,7 @@ import type {
   ProgressCardPutResult,
   ProgressCardStep,
 } from "@openclaw/gateway-protocol";
+import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { GatewayRequestError } from "../api/gateway.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
@@ -60,7 +61,7 @@ function parseProgressCard(value: unknown, sessionKey: string): ProgressCard | n
   }
   const markdown = card.markdown;
   const revision = card.revision;
-  const updatedAt = card.updatedAt;
+  const updatedAt = asDateTimestampMs(card.updatedAt);
   const rawSteps = card.steps;
   if (
     card.sessionKey !== sessionKey ||
@@ -69,7 +70,7 @@ function parseProgressCard(value: unknown, sessionKey: string): ProgressCard | n
     typeof revision !== "number" ||
     !Number.isInteger(revision) ||
     revision < 1 ||
-    typeof updatedAt !== "number" ||
+    updatedAt === undefined ||
     !Number.isInteger(updatedAt)
   ) {
     throw new Error("Progress card response did not match the requested session");
@@ -301,12 +302,13 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
         sessionKey: card.sessionKey,
         expectedRevision: card.revision,
       });
-      const dismissed = result.card === null;
+      const resultCard = parseProgressCard(result, card.sessionKey);
+      const dismissed = resultCard === null;
       if (dismissed && cache.get(card.sessionKey)?.revision === card.revision) {
         remember(card.sessionKey, { card: null, revision: null });
         notify();
-      } else if (result.card) {
-        remember(card.sessionKey, { card: result.card, revision: result.card.revision });
+      } else if (resultCard) {
+        remember(card.sessionKey, { card: resultCard, revision: resultCard.revision });
         notify();
       }
       return dismissed;

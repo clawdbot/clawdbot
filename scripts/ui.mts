@@ -409,7 +409,7 @@ function resolveScriptAction(action: string): "dev" | "build" | "test" | null {
   return null;
 }
 
-function main(argv: string[] = process.argv.slice(2)): void {
+export function runUiCli(argv: string[] = process.argv.slice(2)): void {
   const [action, ...rest] = argv;
   if (!action) {
     usage();
@@ -423,6 +423,7 @@ function main(argv: string[] = process.argv.slice(2)): void {
   }
   if (action === "build") {
     assertRealOutputRoot(path.join(repoRoot, "dist"));
+    assertRealOutputRoot(path.join(repoRoot, "dist/control-ui"));
   }
 
   if (action === "install") {
@@ -453,14 +454,19 @@ function main(argv: string[] = process.argv.slice(2)): void {
     if (rest.some((arg) => arg === "--help" || arg === "-h")) {
       return;
     }
-    for (const validator of [
-      "check-control-ui-precompressed-assets.mts",
-      "check-control-ui-performance.mts",
-    ]) {
+    for (const [validator, ...validatorArgs] of [
+      ["check-control-ui-precompressed-assets.mts"],
+      ["check-control-ui-performance.mts", "--report-only"],
+    ] as const) {
       runSpawnCallSync(
         resolveSpawnCall(
           process.execPath,
-          ["--import", "tsx", path.join(repoRoot, "scripts", validator)],
+          [
+            "--import",
+            new URL("./tsx.mjs", import.meta.url).href,
+            path.join(here, validator),
+            ...validatorArgs,
+          ],
           buildEnv,
           { cwd: repoRoot },
         ),
@@ -501,5 +507,5 @@ export function isDirectScriptExecution(
 const isDirectExecution = isDirectScriptExecution();
 
 if (isDirectExecution) {
-  main();
+  runUiCli();
 }

@@ -9,8 +9,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readBoundedResponseText } from "../lib/bounded-response.mjs";
 
-/** @typedef {{ mode: "absent" | "contains", target: "botApiRequests" | "observationEvents" | "providerRequests", value: string }} EvidenceAssertion */
-/** @typedef {Record<string, unknown> & { assertion?: EvidenceAssertion, assertionOccurrences?: number, detail?: string, digest?: string, expectationMet: boolean, expected?: string, fixed?: boolean, ref?: string, sha?: string, status?: string }} EvidenceLane */
+/** @typedef {Record<string, unknown> & { detail?: string, digest?: string, expectationMet: boolean, expected?: string, fixed?: boolean, ref?: string, sha?: string, status?: string }} EvidenceLane */
 /**
  * @typedef {{
  *   alt?: string,
@@ -73,11 +72,6 @@ const MANTIS_ARTIFACT_UPLOAD_TIMEOUT_MS = 300_000;
 const MANTIS_UPLOAD_ERROR_BODY_MAX_BYTES = 64 * 1024;
 const COMMENT_GRAPHEME_SEGMENTER = new Intl.Segmenter("en", { granularity: "grapheme" });
 const MANTIS_EVIDENCE_SCHEMA_VERSION = 2;
-const TELEGRAM_ASSERTION_FACT_PATHS = {
-  botApiRequests: ["botApiRequests"],
-  observationEvents: ["observation", "events"],
-  providerRequests: ["providerRequests"],
-};
 
 /**
  * @param {string | undefined} value
@@ -200,68 +194,15 @@ function requireExpectationMet(comparison, laneName) {
   return lane.expectationMet;
 }
 
-function evaluateTelegramAssertion(manifest, manifestDir, laneName) {
-  const lane = manifest.comparison[laneName];
-  const assertion = lane?.assertion;
-  const validAssertion =
-    assertion &&
-    typeof assertion === "object" &&
-    !Array.isArray(assertion) &&
-    Object.keys(assertion).toSorted().join(",") === "mode,target,value" &&
-    Object.hasOwn(TELEGRAM_ASSERTION_FACT_PATHS, assertion.target) &&
-    (assertion.mode === "contains" || assertion.mode === "absent") &&
-    typeof assertion.value === "string" &&
-    assertion.value.length >= 1 &&
-    assertion.value.length <= 200;
-  if (!validAssertion) {
-    throw new Error(
-      `Telegram Desktop comparison.${laneName}.assertion must be exactly {target: providerRequests|botApiRequests|observationEvents, mode: contains|absent, value: 1..200 character literal}.`,
-    );
-  }
-  const factsPath = `${laneName}/mantis-lane-facts.json`;
-  const factsArtifact = (manifest.artifacts ?? []).find(
-    (artifact) => artifact?.lane === laneName && artifact?.path === factsPath,
-  );
-  if (!factsArtifact) {
-    throw new Error(`Telegram Desktop ${laneName} lane must list ${factsPath} as its artifact.`);
-  }
-  const factsSource = resolveArtifact(manifestDir, { ...factsArtifact, required: true }).source;
-  const facts = JSON.parse(readFileSync(factsSource, "utf8"));
-  const selectedFacts = TELEGRAM_ASSERTION_FACT_PATHS[assertion.target].reduce(
-    (value, key) => value?.[key],
-    facts,
-  );
-  if (!Array.isArray(selectedFacts)) {
-    throw new Error(
-      `Telegram Desktop ${laneName} facts target ${assertion.target} is not an array.`,
-    );
-  }
-  const assertionOccurrences = JSON.stringify(selectedFacts).split(assertion.value).length - 1;
-  const expectationMet =
-    assertion.mode === "contains" ? assertionOccurrences > 0 : assertionOccurrences === 0;
-  return { assertion, assertionOccurrences, expectationMet };
-}
-
 /**
  * @param {EvidenceManifestFile} manifest
- * @param {string} manifestDir
  */
-function reconcileEvidenceVerdict(manifest, manifestDir) {
+function reconcileEvidenceVerdict(manifest) {
   if (!manifest.comparison || typeof manifest.comparison !== "object") {
     throw new Error("Mantis evidence manifest requires a comparison.");
   }
   const laneNames = manifest.comparison.baseline ? ["baseline", "candidate"] : ["candidate"];
-  // Telegram Desktop judgments are agent-authored, so trusted code derives them from lane facts.
-  // Other scenario builders and jq producers are trusted and supply the boolean directly.
   const comparison = { ...manifest.comparison };
-  if (isTelegramDesktopProof(manifest)) {
-    for (const laneName of laneNames) {
-      comparison[laneName] = {
-        ...comparison[laneName],
-        ...evaluateTelegramAssertion(manifest, manifestDir, laneName),
-      };
-    }
-  }
   const unmetLanes = laneNames.filter((laneName) => !requireExpectationMet(comparison, laneName));
   const claimedPass = comparison.pass || comparison.outcome === "pass";
   const pass = comparison.pass && unmetLanes.length === 0;
@@ -287,7 +228,7 @@ function reconcileEvidenceVerdict(manifest, manifestDir) {
 export function validateEvidenceManifestFile(manifestPath) {
   const resolvedManifest = path.resolve(manifestPath);
   const manifestDir = path.dirname(resolvedManifest);
-  const manifest = validateEvidenceManifest(readJson(resolvedManifest), manifestDir);
+  const manifest = validateEvidenceManifest(readJson(resolvedManifest));
   for (const artifact of manifest.artifacts ?? []) {
     resolveArtifact(manifestDir, artifact);
   }
@@ -297,18 +238,17 @@ export function validateEvidenceManifestFile(manifestPath) {
 
 /**
  * @param {EvidenceManifestFile} manifest
- * @param {string} manifestDir
  */
-function validateEvidenceManifest(manifest, manifestDir) {
+function validateEvidenceManifest(manifest) {
   if (manifest.schemaVersion !== MANTIS_EVIDENCE_SCHEMA_VERSION) {
     throw new Error(
-      `Unsupported Mantis evidence manifest schema: ${manifest.schemaVersion}. ${isTelegramDesktopProof(manifest) ? "Rerun the Mantis Telegram Desktop Proof workflow; saved version-1 artifacts are not migrated." : "Rerun the proof to create schema version 2 evidence."}`,
+      `Unsupported Mantis evidence manifest schema: ${manifest.schemaVersion}. Rerun the proof to create schema version 2 evidence.`,
     );
   }
   if (!manifest.id || !manifest.title || !manifest.scenario) {
     throw new Error("Mantis evidence manifest requires id, title, and scenario.");
   }
-  return reconcileEvidenceVerdict(manifest, manifestDir);
+  return reconcileEvidenceVerdict(manifest);
 }
 /**
  * Loads and validates an evidence manifest from disk.
@@ -527,23 +467,6 @@ function laneLine(label, lane) {
   }
   return pieces.join("");
 }
-function laneAssertionLine(label, lane) {
-  if (!lane?.assertion || typeof lane.assertionOccurrences !== "number") {
-    return "";
-  }
-  const value = sanitizeCommentText(lane.assertion.value, 200);
-  return `- ${label} assertion: \`${lane.assertion.target}\` \`${lane.assertion.mode}\` "${value}" · occurrences: ${lane.assertionOccurrences} · ${lane.expectationMet ? "met" : "unmet"}`;
-}
-function hasVisibleProofArtifacts(manifest) {
-  return manifest.artifacts.some((artifact) =>
-    ["desktopScreenshot", "fullVideo", "motionClip", "motionPreview", "timeline"].includes(
-      artifact.kind,
-    ),
-  );
-}
-function isTelegramDesktopProof(manifest) {
-  return manifest.id === "telegram-desktop-proof" || manifest.scenario === "telegram-desktop-proof";
-}
 function publicSummary(manifest) {
   return manifest.summary ?? "Mantis captured QA evidence for this scenario.";
 }
@@ -559,17 +482,8 @@ function overallStatus(manifest) {
  * @param {EvidenceManifest} manifest
  * @param {{ requestSource?: string }} [options]
  */
-export function shouldPublishPrComment(manifest, { requestSource } = {}) {
-  if (!isTelegramDesktopProof(manifest) || hasVisibleProofArtifacts(manifest)) {
-    return true;
-  }
-  if (manifest.comparison?.outcome === "blocked") {
-    return true;
-  }
-  if (requestSource === "pull_request_target") {
-    return false;
-  }
-  return manifest.comparison.pass;
+export function shouldPublishPrComment() {
+  return true;
 }
 /** @param {RenderEvidenceCommentOptions} options */
 export function renderEvidenceComment({
@@ -610,17 +524,12 @@ export function renderEvidenceComment({
   if (actionsArtifactUrl) {
     lines.push(`- Artifact: ${actionsArtifactUrl}`);
   }
-  for (const { assertionLabel, lane, laneLabel } of [
-    { assertionLabel: "Baseline", lane: baseline, laneLabel: "Baseline" },
-    {
-      assertionLabel: "Candidate",
-      lane: candidate,
-      laneLabel: "Candidate (PR merged onto main)",
-    },
+  for (const { lane, laneLabel } of [
+    { lane: baseline, laneLabel: "Baseline" },
+    { lane: candidate, laneLabel: "Candidate (PR merged onto main)" },
   ]) {
     const laneSummary = laneLine(laneLabel, lane);
-    const assertionSummary = laneAssertionLine(assertionLabel, lane);
-    lines.push(...[laneSummary, assertionSummary].filter(Boolean));
+    lines.push(...[laneSummary].filter(Boolean));
   }
   if (comparison.differential) {
     lines.push(`- Differential (trusted facts): ${comparison.differential}`);

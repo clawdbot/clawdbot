@@ -31,7 +31,7 @@ describe("board session shell", () => {
   it("delegates the optional Workboard chip to its lazy element", () => {
     const linked = createContainer();
     const unlinked = createContainer();
-    const provider = boardProviderForSession("agent:main:workboard-link");
+    const provider = boardProviderForSession({ sessionKey: "agent:main:workboard-link" });
     const client = {
       request: vi.fn(async () => ({ cards: [] })),
       addEventListener: vi.fn(() => () => {}),
@@ -127,6 +127,34 @@ describe("board session shell", () => {
     ).toBe(activeMode);
   });
 
+  it("renders an icon-only control with an accessible label for every mode", () => {
+    const container = createContainer();
+    render(
+      renderBoardViewSwitch({
+        hasBoard: true,
+        face: "chat",
+        dock: "right",
+        canChangeDock: true,
+        onSelectMode: () => {},
+        onDockSideChange: () => {},
+      }),
+      container,
+    );
+
+    const radios = [...container.querySelectorAll("wa-radio")];
+    expect(radios.map((radio) => radio.querySelector(".sr-only")?.textContent)).toEqual([
+      "Chat",
+      "Split",
+      "Dashboard",
+    ]);
+    expect(radios.every((radio) => radio.querySelector("svg") !== null)).toBe(true);
+    expect(radios.map((radio) => radio.getAttribute("title"))).toEqual([
+      "Chat",
+      "Split",
+      "Dashboard",
+    ]);
+  });
+
   it("falls back to the two face options when dock changes are unavailable", () => {
     const container = createContainer();
     render(
@@ -217,7 +245,7 @@ describe("board session shell", () => {
 
   it.each(["left", "right", "bottom"] as const)("lays out the %s dock", (dock) => {
     const container = createContainer();
-    const provider = boardProviderForSession("agent:main:main");
+    const provider = boardProviderForSession({ sessionKey: "agent:main:main" });
     render(
       renderBoardSessionSurface({
         active: true,
@@ -247,7 +275,7 @@ describe("board session shell", () => {
 
   it("renders the hidden dock as board-only", () => {
     const container = createContainer();
-    const provider = boardProviderForSession("agent:main:main");
+    const provider = boardProviderForSession({ sessionKey: "agent:main:main" });
     render(
       renderBoardSessionSurface({
         active: true,
@@ -276,7 +304,7 @@ describe("board session shell", () => {
 
   it("preserves the board while the bottom chat mounts only for that dock", () => {
     const container = createContainer();
-    const provider = boardProviderForSession("agent:main:main");
+    const provider = boardProviderForSession({ sessionKey: "agent:main:main" });
     const props = {
       active: true,
       snapshot: provider.snapshot$.value,

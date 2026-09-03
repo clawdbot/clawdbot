@@ -16,17 +16,19 @@ const HOVERCARD_TAG = "openclaw-github-link-hovercard-provider";
 
 type HovercardProviderElement = GitHubLinkHovercardProvider;
 
-const bootstrap = new LazyHovercardBootstrap<HovercardProviderElement, GatewayBrowserClient | null>(
-  {
-    tag: HOVERCARD_TAG,
-    load: async () =>
-      (await import("./github-link-hovercard.runtime.ts")).GitHubLinkHovercardProvider,
-    snapshot: (provider) => provider.client,
-    restore: (provider, client) => {
-      provider.client = client;
-    },
+const bootstrap = new LazyHovercardBootstrap<
+  HovercardProviderElement,
+  { client: GatewayBrowserClient | null; agentId: string | undefined }
+>({
+  tag: HOVERCARD_TAG,
+  load: async () =>
+    (await import("./github-link-hovercard.runtime.ts")).GitHubLinkHovercardProvider,
+  snapshot: (provider) => ({ client: provider.client, agentId: provider.agentId }),
+  restore: (provider, properties) => {
+    provider.client = properties.client;
+    provider.agentId = properties.agentId;
   },
-);
+});
 
 async function activateHovercard(event: Event, trigger: HovercardBootstrapTrigger): Promise<void> {
   if (trigger === "pointer" && (event as PointerEvent).pointerType === "touch") {

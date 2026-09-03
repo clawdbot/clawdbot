@@ -31,6 +31,7 @@ import {
   readCodexConfigForAppAdmission,
   readCodexThreadAdmissibleAccountApps,
   refreshCodexPluginAppInventory,
+  resolveCodexPluginThreadAppCacheKey,
   resolveCodexExplicitAppEnablement,
   resolveCodexPluginAppThreadAdmission,
   resolveCodexThreadConfigAppsForRecord,
@@ -106,13 +107,16 @@ type BuildCodexPluginThreadConfigParams = {
   pluginConfig?: unknown;
   request: CodexPluginRuntimeRequest;
   configCwd?: string;
+  threadId?: string;
   appCache?: CodexAppInventoryCache;
   appCacheKey: string;
   metadataCache?: CodexPluginMetadataCache;
   nowMs?: number;
 };
 
-const CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION = 3;
+// Admission changes must rebuild existing bindings too, or an app omitted by
+// an older rule stays missing even after the gateway has been upgraded.
+const CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION = 4;
 const CODEX_PLUGIN_THREAD_CONFIG_FINGERPRINT_VERSION = 2;
 
 /** Returns true when plugin config exists and thread config may need app patches. */
@@ -156,6 +160,16 @@ export async function buildCodexPluginThreadConfig(
   params: BuildCodexPluginThreadConfigParams,
 ): Promise<CodexPluginThreadConfig> {
   const appCache = params.appCache ?? defaultCodexAppInventoryCache;
+  const threadAppCacheKey = resolveCodexPluginThreadAppCacheKey(params);
+  const threadRequest: CodexPluginRuntimeRequest = (method, requestParams) =>
+    params.request(
+      method,
+      (method === "app/installed" || method === "app/read") &&
+        params.threadId &&
+        isJsonObject(requestParams)
+        ? { ...requestParams, threadId: params.threadId }
+        : requestParams,
+    );
   let inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
     pluginConfig: params.pluginConfig,
     appCacheKey: params.appCacheKey,
@@ -174,9 +188,9 @@ export async function buildCodexPluginThreadConfig(
       ? await readCodexPluginInventory({
           pluginConfig: params.pluginConfig,
           policy,
-          request: params.request,
+          request: threadRequest,
           appCache,
-          appCacheKey: params.appCacheKey,
+          appCacheKey: threadAppCacheKey,
           configCwd: params.configCwd,
           metadataCache: params.metadataCache,
           nowMs: params.nowMs,
@@ -198,9 +212,9 @@ export async function buildCodexPluginThreadConfig(
     inventory = await readCodexPluginInventory({
       pluginConfig: params.pluginConfig,
       policy,
-      request: params.request,
+      request: threadRequest,
       appCache,
-      appCacheKey: params.appCacheKey,
+      appCacheKey: threadAppCacheKey,
       configCwd: params.configCwd,
       metadataCache: params.metadataCache,
       nowMs: params.nowMs,
@@ -218,9 +232,9 @@ export async function buildCodexPluginThreadConfig(
     }
     const activation = await ensureCodexPluginActivation({
       identity: record.policy,
-      request: params.request,
+      request: threadRequest,
       appCache,
-      appCacheKey: params.appCacheKey,
+      appCacheKey: threadAppCacheKey,
       configCwd: params.configCwd,
       metadataCache: params.metadataCache,
       deferAppInventoryRefresh: true,
@@ -253,9 +267,9 @@ export async function buildCodexPluginThreadConfig(
     inventory = await readCodexPluginInventory({
       pluginConfig: params.pluginConfig,
       policy,
-      request: params.request,
+      request: threadRequest,
       appCache,
-      appCacheKey: params.appCacheKey,
+      appCacheKey: threadAppCacheKey,
       configCwd: params.configCwd,
       metadataCache: params.metadataCache,
       nowMs: params.nowMs,
@@ -274,9 +288,9 @@ export async function buildCodexPluginThreadConfig(
     inventory = await readCodexPluginInventory({
       pluginConfig: params.pluginConfig,
       policy,
-      request: params.request,
+      request: threadRequest,
       appCache,
-      appCacheKey: params.appCacheKey,
+      appCacheKey: threadAppCacheKey,
       configCwd: params.configCwd,
       metadataCache: params.metadataCache,
       nowMs: params.nowMs,
@@ -662,14 +676,18 @@ function readPersistedAppToolApprovalOverrideNames(
   if (!isJsonObject(tools)) {
     return [];
   }
+  const keys = app.approvalOverrideToolConfigKeys;
   return Object.entries(tools)
-    .filter(([, value]) => hasPersistedToolApprovalOverride(value))
-    .map(([toolName]) => toolName)
+    .flatMap(([name, value]) =>
+      (!keys || keys.includes(name)) && hasPersistedToolApprovalOverride(value) ? [name] : [],
+    )
     .toSorted();
 }
 
 function hasPersistedToolApprovalOverride(value: JsonValue): boolean {
-  return isJsonObject(value) && value.approval_mode !== undefined;
+  // Codex serializes an unset optional approval mode as null. Treating null as
+  // an override turns a successful cleanup into an app-wide admission failure.
+  return isJsonObject(value) && value.approval_mode !== undefined && value.approval_mode !== null;
 }
 
 function quoteConfigKeyPathSegment(segment: string): string {

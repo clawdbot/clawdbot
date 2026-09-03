@@ -55,6 +55,7 @@ export function projectDraftSessionPlacementRecovery(recovery: SessionPlacementR
       attachments: restoreChatApiAttachments(recovery.attachments),
       visibility,
       toolOverrides: recovery.createParams?.toolOverrides ?? null,
+      permissionMode: recovery.createParams?.permissionMode,
     },
   };
 }

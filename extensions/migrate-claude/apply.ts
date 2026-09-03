@@ -48,7 +48,9 @@ export async function applyClaudePlan(params: {
     } else if (item.action === "append") {
       items.push(await appendItem(item));
     } else if (item.action === "create" && item.kind === "skill") {
-      items.push(await applyGeneratedSkillItem(item, { overwrite: params.ctx.overwrite }));
+      items.push(
+        await applyGeneratedSkillItem(item, reportDir, { overwrite: params.ctx.overwrite }),
+      );
     } else if (item.kind === "memory") {
       items.push(
         await copyMemoryMigrationFileItem(item, reportDir, {

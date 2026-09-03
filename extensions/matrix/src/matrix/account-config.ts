@@ -5,7 +5,7 @@ import {
   resolveMergedAccountConfig,
   resolveNormalizedAccountEntry,
 } from "openclaw/plugin-sdk/account-resolution-runtime";
-import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
+import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import type { CoreConfig, MatrixAccountConfig, MatrixConfig } from "../types.js";
 
 type MatrixRoomEntries = Record<string, NonNullable<MatrixConfig["groups"]>[string]>;

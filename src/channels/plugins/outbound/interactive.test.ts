@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   renderMessagePresentationChartFallbackText,
   renderMessagePresentationFallbackText,
+  normalizeMessagePresentation,
 } from "../../../interactive/payload.js";
 import {
   adaptMessagePresentationForChannel,
@@ -720,7 +721,7 @@ describe("presentation capability limits", () => {
     );
   });
 
-  it("applies advertised text limits to titles, text, context, and generated fallback", () => {
+  it("splits titles, text, context, and generated fallback without losing content", () => {
     const presentation = adaptMessagePresentationForChannel({
       presentation: {
         title: "abcdef",
@@ -749,32 +750,60 @@ describe("presentation capability limits", () => {
     expect(presentation).toEqual({
       title: "abcde",
       blocks: [
+        { type: "text", text: "f" },
         { type: "text", text: "hello" },
+        { type: "text", text: " worl" },
+        { type: "text", text: "d" },
         { type: "context", text: "abcde" },
+        { type: "context", text: "f" },
         { type: "context", text: "Actio" },
         { type: "context", text: "ns:\n" },
         { type: "context", text: "- Dep" },
         { type: "context", text: "loy" },
       ],
     });
+    expect(renderMessagePresentationFallbackText({ presentation })).toBe(
+      "abcdef\n\nhello world\n\nabcdef\n\nActions:\n- Deploy",
+    );
   });
 
-  it("does not split code points when applying utf8 byte text limits", () => {
+  it.each([
+    { encoding: "characters" as const, length: (text: string) => Array.from(text).length },
+    { encoding: "utf8-bytes" as const, length: (text: string) => Buffer.byteLength(text, "utf8") },
+    { encoding: "utf16-units" as const, length: (text: string) => text.length },
+  ])("preserves authored Unicode content under $encoding limits", ({ encoding, length }) => {
+    const text = "abc😀 def\nlast";
+    const original = {
+      title: text,
+      blocks: [
+        { type: "text" as const, text },
+        { type: "context" as const, text },
+      ],
+    };
+    const capabilities = { context: false, limits: { text: { maxLength: 6, encoding } } };
     const presentation = adaptMessagePresentationForChannel({
-      presentation: {
-        blocks: [{ type: "text", text: "abc😀def" }],
-      },
-      capabilities: {
-        limits: {
-          text: {
-            maxLength: 6,
-            encoding: "utf8-bytes",
-          },
-        },
-      },
+      presentation: original,
+      capabilities,
     });
-
-    expect(presentation.blocks).toEqual([{ type: "text", text: "abc" }]);
+    expect(length(presentation.title ?? "")).toBeLessThanOrEqual(6);
+    for (const block of presentation.blocks) {
+      expect(block.type).toBe("text");
+      if (block.type === "text") {
+        expect(length(block.text)).toBeLessThanOrEqual(6);
+        expect(Buffer.from(block.text, "utf8").toString("utf8")).toBe(block.text);
+      }
+    }
+    expect(renderMessagePresentationFallbackText({ presentation })).toBe(
+      renderMessagePresentationFallbackText({ presentation: original }),
+    );
+    expect(
+      renderMessagePresentationFallbackText({
+        presentation: normalizeMessagePresentation(
+          adaptMessagePresentationForChannel({ presentation, capabilities }),
+        ),
+      }),
+    ).toBe(renderMessagePresentationFallbackText({ presentation: original }));
+    expect(adaptMessagePresentationForChannel({ presentation: original })).toEqual(original);
   });
 
   it("does not split code points when applying label limits", () => {
@@ -983,6 +1012,27 @@ describe("presentation capability limits", () => {
         placeholder: "Extra",
         options: [{ label: "Four", value: "four" }],
       },
+    ]);
+  });
+
+  it("preserves authored button precedence when only action rows are bounded", () => {
+    const presentation = adaptMessagePresentationForChannel({
+      presentation: {
+        blocks: [
+          { type: "buttons", buttons: [{ label: "First", value: "first" }] },
+          {
+            type: "select",
+            placeholder: "Target",
+            options: [{ label: "Later", value: "later" }],
+          },
+        ],
+      },
+      capabilities: { limits: { actions: { maxRows: 1 } } },
+    });
+
+    expect(presentation.blocks).toEqual([
+      { type: "buttons", buttons: [{ label: "First", value: "first" }] },
+      { type: "context", text: "Target:\n- Later" },
     ]);
   });
 

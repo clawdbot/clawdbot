@@ -29,11 +29,49 @@ describe("SessionUnreadPatchGuard", () => {
     expect(guard.shouldPatch("agent:main:a", true)).toBe(false);
   });
 
+  it("keeps an acknowledgement latched across an optimistic local read", () => {
+    const guard = new SessionUnreadPatchGuard();
+    expect(guard.shouldPatch("agent:main:a", true, 100)).toBe(true);
+    expect(guard.shouldPatch("agent:main:a", false, 100)).toBe(false);
+    expect(guard.shouldPatch("agent:main:a", true, 100)).toBe(false);
+    guard.patchFailed("agent:main:a");
+    expect(guard.shouldPatch("agent:main:a", true, 100)).toBe(true);
+  });
+
+  it("treats a null marker as no manual marker", () => {
+    const guard = new SessionUnreadPatchGuard();
+    expect(guard.shouldPatch("agent:main:a", false)).toBe(false);
+    expect(guard.shouldPatch("agent:main:a", true, null)).toBe(true);
+  });
+
   it("does not patch read sessions and resets after changing sessions", () => {
     const guard = new SessionUnreadPatchGuard();
     expect(guard.shouldPatch("agent:main:a", false)).toBe(false);
     expect(guard.shouldPatch("agent:main:a", true)).toBe(true);
     expect(guard.shouldPatch("agent:main:b", true)).toBe(true);
     expect(guard.shouldPatch("agent:main:a", true)).toBe(true);
+  });
+
+  it("preserves a manual unread marker created after the active session was observed", () => {
+    const guard = new SessionUnreadPatchGuard();
+    expect(guard.shouldPatch("agent:main:a", false)).toBe(false);
+    expect(guard.shouldPatch("agent:main:a", true, 100)).toBe(false);
+    expect(guard.shouldPatch("agent:main:a", true, 100)).toBe(false);
+  });
+
+  it("acknowledges a manual unread marker on a later activation", () => {
+    const guard = new SessionUnreadPatchGuard();
+    expect(guard.shouldPatch("agent:main:a", false)).toBe(false);
+    expect(guard.shouldPatch("agent:main:a", true, 100)).toBe(false);
+    expect(guard.shouldPatch("agent:main:b", false)).toBe(false);
+    expect(guard.shouldPatch("agent:main:a", true, 100)).toBe(true);
+  });
+
+  it("restarts the unread episode when a retained pane is presented again", () => {
+    const guard = new SessionUnreadPatchGuard();
+    expect(guard.shouldPatch("agent:main:a", false)).toBe(false);
+    expect(guard.shouldPatch("agent:main:a", true, 100)).toBe(false);
+    guard.beginActivation("agent:main:a");
+    expect(guard.shouldPatch("agent:main:a", true, 100)).toBe(true);
   });
 });

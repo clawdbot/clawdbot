@@ -185,11 +185,11 @@ const mocks = vi.hoisted(() => {
       }),
     ),
     createManagedOutgoingMediaBlocks: vi.fn<CreateManagedOutgoingMediaBlocksMock>(async (params) =>
-      (params.mediaUrls ?? []).map((mediaUrl) => ({
-        type: params.attachments?.[0]?.type ?? "image",
-        artifactId: `artifact:${mediaUrl}`,
-        url: `/api/chat/media/outgoing/${encodeURIComponent(params.sessionKey)}/${encodeURIComponent(mediaUrl)}/full`,
-        openUrl: `/api/chat/media/outgoing/${encodeURIComponent(params.sessionKey)}/${encodeURIComponent(mediaUrl)}/full`,
+      (params.items ?? []).map((item) => ({
+        type: item.mimeType?.startsWith("audio/") ? "audio" : "image",
+        artifactId: `artifact:${item.url}`,
+        url: `/api/chat/media/outgoing/${encodeURIComponent(params.sessionKey)}/${encodeURIComponent(item.url)}/full`,
+        openUrl: `/api/chat/media/outgoing/${encodeURIComponent(params.sessionKey)}/${encodeURIComponent(item.url)}/full`,
       })),
     ),
     attachManagedOutgoingMediaToMessage: vi.fn<AttachManagedOutgoingMediaToMessageMock>(() => true),
@@ -1570,17 +1570,20 @@ describe("scheduleRestartSentinelWake", () => {
     expect(mocks.createManagedOutgoingMediaBlocks).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
       agentId: "main",
-      mediaUrls: [attachment.mediaUrl],
-      attachments: [
-        { type: attachment.type, path: attachment.mediaUrl, mimeType: attachment.mimeType },
+      items: [
+        {
+          url: attachment.mediaUrl,
+          mimeType: attachment.mimeType,
+          trustedLocal: true,
+        },
       ],
       stateDir: testState.stateDir,
       localRoots: [testState.statePath("media")],
-      allowLocalNonImage: true,
     });
     expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
       expect.objectContaining({
-        content: [expect.objectContaining({ type: attachment.type })],
+        content: [],
+        displayContent: [expect.objectContaining({ type: attachment.type })],
         idempotencyKey: `${attachment.type}:task-internal:agent-loop:generated-media-transcript`,
       }),
     );
@@ -1718,16 +1721,23 @@ describe("scheduleRestartSentinelWake", () => {
     expect(opsEvents[0]).toMatchObject({ type: "session", id: sessionId });
     const messageEvent = opsEvents[1] as {
       id?: string;
-      message?: { role?: string; content?: Array<Record<string, unknown>> };
+      message?: {
+        role?: string;
+        content?: Array<Record<string, unknown>>;
+        openclawDisplayContent?: Array<Record<string, unknown>>;
+      };
     };
     expect(messageEvent.message).toMatchObject({
       role: "assistant",
-      content: [expect.objectContaining({ type: "image", artifactId: expect.any(String) })],
+      content: [],
+      openclawDisplayContent: [
+        expect.objectContaining({ type: "image", artifactId: expect.any(String) }),
+      ],
     });
-    expect(messageEvent.message?.content).not.toEqual([
+    expect(messageEvent.message?.openclawDisplayContent).not.toEqual([
       { type: "text", text: path.basename(mediaPath) },
     ]);
-    const imageBlock = messageEvent.message?.content?.[0];
+    const imageBlock = messageEvent.message?.openclawDisplayContent?.[0];
     const artifactId = imageBlock?.artifactId;
     expect(artifactId).toBeTypeOf("string");
     const parsedArtifact = managedMediaActual.parseManagedOutgoingArtifactId(String(artifactId));
@@ -1779,15 +1789,21 @@ describe("scheduleRestartSentinelWake", () => {
     expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "main",
-        content: [expect.objectContaining({ type: "image" })],
+        content: [],
+        displayContent: [expect.objectContaining({ type: "image" })],
         storePath: "/tmp/sessions.json",
         idempotencyKey: "image:task-internal-partial:agent-loop:generated-media-transcript",
       }),
     );
     expect(mocks.createManagedOutgoingMediaBlocks).toHaveBeenCalledWith(
       expect.objectContaining({
-        mediaUrls: ["/tmp/one.png"],
-        attachments: [{ type: "image", path: "/tmp/one.png", name: "one.png" }],
+        items: [
+          {
+            url: "/tmp/one.png",
+            filename: "one.png",
+            trustedLocal: true,
+          },
+        ],
       }),
     );
     expect(mocks.mergeSessionDeliveryPreparedMediaBlocks).toHaveBeenCalledWith(

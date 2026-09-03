@@ -16,10 +16,12 @@ type SubagentAnnounceDeliveryDisposition =
 type SubagentAnnounceDeliveryFailureReason =
   | "completion_handoff_pending"
   | "completion_handoff_unavailable"
+  | "delivery_suppressed"
   | "generated_media_missing"
   | "message_tool_delivery_missing"
   | "requester_abandoned"
   | "source_owner_changed"
+  | "steer_dropped"
   | "visible_reply_missing";
 
 type SubagentAnnounceSteerOutcome =
@@ -81,6 +83,7 @@ function mapSteerOutcomeToDeliveryResult(
   return {
     delivered: false,
     path: "none",
+    ...(outcome.status === "dropped" ? { reason: "steer_dropped" } : {}),
   };
 }
 
@@ -174,5 +177,6 @@ export async function runSubagentAnnounceDispatch(params: {
     return withPhases(fallbackSteer);
   }
 
+  // Keep the direct failure authoritative; dropped fallback remains in its phase.
   return withPhases(primaryDirect);
 }

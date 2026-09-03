@@ -75,7 +75,7 @@ async function handleTargetedAct(
             ? "middle"
             : "left";
       const count = params.action === "double_click" ? 2 : params.action === "triple_click" ? 3 : 1;
-      const modifiers = normalizeModifiers(params.modifiers);
+      const modifiers = normalizeModifiers(params.modifiers, platform);
       args = {
         ...base,
         ...(element ?? windowPointArgs(state, params, windowRef, params, "click")),
@@ -99,7 +99,6 @@ async function handleTargetedAct(
         "drag start",
       );
       const to = windowPointArgs(state, params, windowRef, params, "drag end");
-      const modifiers = normalizeModifiers(params.modifiers);
       args = {
         ...base,
         from_x: from.x,
@@ -110,7 +109,6 @@ async function handleTargetedAct(
         ...(params.durationMs === undefined
           ? {}
           : { duration_ms: Math.min(10_000, params.durationMs) }),
-        ...(modifiers.length ? { modifier: modifiers } : {}),
         ...delivery,
       };
       break;
@@ -154,7 +152,7 @@ async function handleTargetedAct(
       if (!params.scrollDirection) {
         throw new Error("COMPUTER_INVALID_REQUEST: scrollDirection is required for scroll");
       }
-      if (normalizeModifiers(params.modifiers).length) {
+      if (normalizeModifiers(params.modifiers, platform).length) {
         throw new Error(
           "COMPUTER_UNSUPPORTED_ACTION: modifier-held scroll is unsupported by cua-driver",
         );
@@ -190,7 +188,7 @@ async function handleTargetedAct(
       break;
     }
     case "key": {
-      const chord = parseKeyChord(params.keys);
+      const chord = parseKeyChord(params.keys, platform);
       tool = "press_key";
       args = {
         ...base,
@@ -198,8 +196,7 @@ async function handleTargetedAct(
           (params.x !== undefined || params.y !== undefined
             ? windowPointArgs(state, params, windowRef, params, "key")
             : {})),
-        key: chord.key,
-        modifiers: chord.modifiers,
+        ...chord,
         ...delivery,
       };
       break;
@@ -224,6 +221,7 @@ export async function handleWindowAct(
   execution: CuaExecutionState,
   params: ComputerActParams,
   handleDesktop: (
+    platform: NodeJS.Platform,
     driver: CuaDriverSession,
     state: CuaFrameState,
     params: ComputerActParams,
@@ -239,7 +237,7 @@ export async function handleWindowAct(
     return await handleTargetedAct(platform, driver, state, input, signal);
   }
   if ((CUA_WIRE_ACTION_NAMES as readonly string[]).includes(input.action)) {
-    return await handleDesktop(driver, state, params, signal);
+    return await handleDesktop(platform, driver, state, params, signal);
   }
   const recordingResult = await handleRecordingAct(
     driver,
@@ -274,7 +272,7 @@ export async function handleWindowAct(
     case "get_accessibility_tree": {
       if (input.windowRef || input.query || input.depth !== undefined || input.maxElements) {
         throw new Error(
-          "COMPUTER_UNSUPPORTED_ACTION: CUA Driver 0.20.0 exposes get_accessibility_tree only as unfiltered desktop discovery; use get_window_state for a window tree",
+          "COMPUTER_UNSUPPORTED_ACTION: CUA Driver exposes get_accessibility_tree only as unfiltered desktop discovery; use get_window_state for a window tree",
         );
       }
       const result = await callWindowTool(driver, state, "get_accessibility_tree", {}, signal);

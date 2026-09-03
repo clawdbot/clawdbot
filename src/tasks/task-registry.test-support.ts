@@ -1,4 +1,5 @@
 import type { TaskRegistryControlRuntime } from "./task-registry-control.types.js";
+import type { TaskRegistryDeliveryRuntime } from "./task-registry-state.js";
 import { createTaskRecord as createTaskRecordOrNull } from "./task-registry.js";
 import type { TaskEventRecord, TaskRecord } from "./task-registry.types.js";
 
@@ -35,11 +36,6 @@ export function createAcpTaskRecord(
     ...params,
   });
 }
-
-type TaskRegistryDeliveryRuntime = Pick<
-  typeof import("./task-registry-delivery-runtime.js"),
-  "sendMessage"
->;
 
 type TaskRegistryTestApi = {
   maybeDeliverTaskStateChangeUpdate(

@@ -20,50 +20,36 @@ describe("session tool limits", () => {
     expect(normalizePositiveLimit(input, 500)).toBe(expected);
   });
 
-  it("keeps a bounded tail of accumulated child output", () => {
-    let output = appendBoundedTextTail("old-", "middle-", 12);
-    output = appendBoundedTextTail(output, "recent", 12);
-
-    expect(output).toBe("iddle-recent");
-    expect(Buffer.byteLength(output, "utf8")).toBeLessThanOrEqual(12);
-  });
-
-  it("clips oversized chunks to the configured tail bytes", () => {
-    const output = appendBoundedTextTail("ignored", "x".repeat(128), 16);
-
-    expect(output).toBe("x".repeat(16));
-    expect(Buffer.byteLength(output, "utf8")).toBe(16);
-  });
-
-  it("does not exceed the byte cap when clipping multibyte text", () => {
-    // Never return a partial UTF-8 character just to fill the final byte.
-    const output = appendBoundedTextTail("ignored", "é", 1);
-
-    expect(output).toBe("");
-    expect(Buffer.byteLength(output, "utf8")).toBeLessThanOrEqual(1);
-  });
-
-  it("keeps complete multibyte characters at the bounded tail", () => {
-    const output = appendBoundedTextTail("prefix", "aé", 2);
-
-    expect(output).toBe("é");
-    expect(Buffer.byteLength(output, "utf8")).toBe(2);
-  });
-
-  it("drops orphan continuation bytes when the byte window splits a character", () => {
-    // "aaaa😀ccccccc" is 15 bytes; a 6-byte chunk under a 16-byte cap keeps a
-    // 10-byte tail whose cut lands inside the 4-byte emoji. The orphan
-    // continuation bytes must not surface as U+FFFD at the head of the tail.
-    const output = appendBoundedTextTail("aaaa😀ccccccc", "dddddd", 16);
-
-    expect(output).toBe("cccccccdddddd");
-    expect(output).not.toContain("�");
-    expect(Buffer.byteLength(output, "utf8")).toBeLessThanOrEqual(16);
-  });
+  it.each([
+    { chunks: ["old-", "middle-", "recent"], cap: 12, tail: "iddle-recent", dropped: 5 },
+    { chunks: ["ignored", "x".repeat(128)], cap: 16, tail: "x".repeat(16), dropped: 119 },
+    { chunks: ["é"], cap: 1, tail: "", dropped: 2 },
+    { chunks: ["prefix", "aé"], cap: 2, tail: "é", dropped: 7 },
+    // The cap cuts inside the emoji; orphan continuation bytes must also be counted.
+    { chunks: ["aaaa😀ccccccc", "dddddd"], cap: 16, tail: "cccccccdddddd", dropped: 8 },
+    { chunks: ["short", " note"], cap: 16, tail: "short note", dropped: 0 },
+  ])(
+    "retains $tail and accounts for $dropped discarded bytes",
+    ({ chunks, cap, tail, dropped }) => {
+      let retained = "";
+      let discarded = 0;
+      for (const chunk of chunks) {
+        const appended = appendBoundedTextTail(retained, chunk, cap);
+        retained = appended.tail;
+        discarded += appended.droppedBytes;
+      }
+      expect(retained).toBe(tail);
+      expect(retained).not.toContain("�");
+      expect(discarded).toBe(dropped);
+      expect(Buffer.byteLength(retained)).toBeLessThanOrEqual(cap);
+      expect(Buffer.byteLength(retained) + discarded).toBe(Buffer.byteLength(chunks.join("")));
+    },
+  );
 
   it("uses the session stderr tail limit by default", () => {
     const output = appendBoundedTextTail("", "x".repeat(SESSION_TOOL_STDERR_TAIL_BYTES + 1));
 
-    expect(Buffer.byteLength(output, "utf8")).toBe(SESSION_TOOL_STDERR_TAIL_BYTES);
+    expect(Buffer.byteLength(output.tail, "utf8")).toBe(SESSION_TOOL_STDERR_TAIL_BYTES);
+    expect(output.droppedBytes).toBe(1);
   });
 });

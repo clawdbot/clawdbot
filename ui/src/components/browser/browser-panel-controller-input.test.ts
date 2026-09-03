@@ -1,6 +1,7 @@
 import { nothing, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import {
   createBrowserClient,
   createBrowserPanelTestController,
@@ -616,21 +617,53 @@ describe("BrowserPanelController capture and input ownership", () => {
     ).toBe(false);
   });
 
-  it("preserves the localized disabled-evaluation inspection outcome", async () => {
-    const { client } = createBrowserClient(async () => {
-      throw new Error("browser evaluateEnabled=false");
-    });
-    const controller = createBrowserPanelTestController(client, "tab-a");
-    controller.setMode("inspect");
+  it.each([
+    {
+      name: "structured action code",
+      message: "evaluation disabled",
+      details: { code: "ACT_EVALUATE_DISABLED" },
+      expected: true,
+    },
+    {
+      name: "legacy Browser node message without an action code",
+      message: "403: act:evaluate is disabled by config (browser.evaluateEnabled=false).",
+      details: { nodeError: { message: "legacy Browser node" } },
+      expected: true,
+    },
+    {
+      name: "unknown action code with matching prose",
+      message: "act:evaluate is disabled by config (browser.evaluateEnabled=false).",
+      details: { code: "ACT_UNKNOWN" },
+      expected: false,
+    },
+    {
+      name: "sanitized unknown action code with matching prose",
+      message: "act:evaluate is disabled by config (browser.evaluateEnabled=false).",
+      details: { unrecognizedCode: true },
+      expected: false,
+    },
+  ])(
+    "classifies $name without reinterpreting structured errors",
+    async ({ message, details, expected }) => {
+      const { client } = createBrowserClient(async () => {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message,
+          details,
+        });
+      });
+      const controller = createBrowserPanelTestController(client, "tab-a");
+      controller.setMode("inspect");
 
-    controller.handleOverlayPointerMove(createPointer(10, 20));
-    await flushBrowserResponses();
+      controller.handleOverlayPointerMove(createPointer(10, 20));
+      await flushBrowserResponses();
 
-    expect(controller.evaluateUnavailable).toBe(true);
-    expect(controller.mode).toBe("interact");
-    expect(controller.errorText).toBeTruthy();
-    expect(controller.errorText).not.toContain("Browser request failed");
-  });
+      expect(controller.evaluateUnavailable).toBe(expected);
+      expect(controller.mode).toBe(expected ? "interact" : "inspect");
+      expect(controller.errorText).toBeTruthy();
+      expect(controller.errorText?.includes("Browser request failed")).toBe(!expected);
+    },
+  );
 
   it("keeps the newest inspected element when pointer responses finish out of order", async () => {
     vi.useFakeTimers({ now: 1_000 });

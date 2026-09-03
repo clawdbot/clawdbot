@@ -1,12 +1,17 @@
-// Imported by dispatch-from-config.test.ts to keep its mocked suite in one Vitest module graph.
+// Imported by a dispatch-from-config entrypoint to keep its mocked suite in one Vitest module graph.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { createApprovalNativeRouteReporter } from "../../infra/approval-native-route-coordinator.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import {
+  DispatchReplyOperationAbortedError,
+  runWithDispatchAbortSignal,
+} from "./dispatch-from-config.abort.js";
 import {
   acpMocks,
   agentEventMocks,
@@ -39,6 +44,13 @@ import {
 } from "./dispatch-from-config.test-harness.js";
 import { withDispatchProcessedOutcomeSink } from "./dispatch-processed-outcome.js";
 import { buildTestCtx } from "./test-ctx.js";
+
+const FAST_ABORT_SESSION_MODEL = Object.freeze({
+  providerOverride: "anthropic",
+  modelOverride: "claude-opus-4-6-20260205",
+  modelOverrideRouteResolution: "resolved" as const,
+  thinkingLevel: "high" as const,
+});
 
 function setupResolvedAcpSessionNotice(params: { bound: boolean; messageThreadId?: string }) {
   const runtime = createAcpRuntime([{ type: "text_delta", text: "hello" }, { type: "done" }]);
@@ -141,6 +153,75 @@ beforeAll(globalBeforeAll0);
 
 describe("dispatchReplyFromConfig", () => {
   beforeEach(describe0BeforeEach0);
+
+  it("does not start dispatch work when the caller already aborted", async () => {
+    const abort = new AbortController();
+    const run = vi.fn();
+    const onWorkStarted = vi.fn();
+    abort.abort();
+
+    await expect(
+      runWithDispatchAbortSignal(abort.signal, run, onWorkStarted),
+    ).rejects.toBeInstanceOf(DispatchReplyOperationAbortedError);
+    expect(run).not.toHaveBeenCalled();
+    expect(onWorkStarted).not.toHaveBeenCalled();
+  });
+
+  it("audits an aborted prepared-runtime wait as a skipped reply operation", async () => {
+    setNoAbort();
+    const abort = new AbortController();
+    const preparedLookup = vi.fn(({ abortSignal }: { abortSignal?: AbortSignal }) =>
+      racePromiseWithAbortSignal(new Promise<never>(() => {}), abortSignal),
+    );
+    const runtimeLoaders = await import("./dispatch-from-config.runtime-loaders.js");
+    const preparedLoader = vi.spyOn(runtimeLoaders, "loadPreparedModelRuntime").mockResolvedValue({
+      loadPublishedGatewayReplyDispatchRuntime: preparedLookup,
+    } as never);
+    const dispatch = withDispatchProcessedOutcomeSink(() =>
+      dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: "telegram",
+          ChatType: "direct",
+          SessionKey: "agent:main:main",
+        }),
+        cfg: { ...emptyConfig, diagnostics: { enabled: true } },
+        dispatcher: createDispatcher(),
+        replyOptions: { abortSignal: abort.signal },
+        usePublishedModelRuntime: true,
+      }),
+    );
+    try {
+      await vi.waitFor(() => expect(preparedLookup).toHaveBeenCalledOnce());
+      abort.abort(new Error("request cancelled"));
+      const outcome = await dispatch;
+
+      expect(outcome.result).toMatchObject({
+        queuedFinal: false,
+        counts: { tool: 0, block: 0, final: 0 },
+      });
+      expect(outcome.processedOutcome).toEqual({
+        outcome: "skipped",
+        reason: "reply_operation_aborted",
+      });
+      expect(messageAuditEvents()[0]).toMatchObject({
+        status: "blocked",
+        outcome: "skipped",
+        reasonCode: "reply_operation_aborted",
+      });
+      expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outcome: "skipped",
+          reason: "reply_operation_aborted",
+        }),
+      );
+      expect(preparedLookup).toHaveBeenCalledWith({
+        agentId: "main",
+        abortSignal: abort.signal,
+      });
+    } finally {
+      preparedLoader.mockRestore();
+    }
+  });
 
   it("delivers plan status when verbose overrides preview suppression", async () => {
     setNoAbort();
@@ -418,7 +499,11 @@ describe("dispatchReplyFromConfig", () => {
     });
     expect(hookMocks.runner.runMessageReceived).toHaveBeenCalledOnce();
     expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledOnce();
-    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-fast-abort");
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith(
+      "binding-fast-abort",
+      undefined,
+      expect.objectContaining({ channel: "telegram", accountId: "default" }),
+    );
   });
 
   it("fast-resolves /approve before acquiring the active session operation", async () => {
@@ -429,6 +514,13 @@ describe("dispatchReplyFromConfig", () => {
     });
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) as ReplyPayload);
+    sessionStoreMocks.currentEntry = {
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-6-20260205",
+      modelOverrideRouteResolution: "resolved",
+      thinkingLevel: "high",
+    };
+    const onModelSelected = vi.fn();
     const ctx = buildTestCtx({
       Provider: "imessage",
       Surface: "imessage",
@@ -447,7 +539,13 @@ describe("dispatchReplyFromConfig", () => {
       SessionKey: "agent:main:imessage:direct:peer",
     });
 
-    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { onModelSelected },
+    });
 
     expect(mocks.tryFastApproveFromMessage).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -458,6 +556,11 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyResolver).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
       text: "✅ Approval allow-once submitted.",
+    });
+    expect(onModelSelected).toHaveBeenCalledWith({
+      provider: "anthropic",
+      model: "claude-opus-4-6-20260205",
+      thinkLevel: "high",
     });
   });
 
@@ -512,11 +615,7 @@ describe("dispatchReplyFromConfig", () => {
 
   it("seeds direct fast-abort prefixes from the session-selected model", async () => {
     mocks.tryFastAbortFromMessage.mockResolvedValue({ handled: true, aborted: true });
-    sessionStoreMocks.currentEntry = {
-      providerOverride: "anthropic",
-      modelOverride: "claude-opus-4-6-20260205",
-      thinkingLevel: "high",
-    };
+    sessionStoreMocks.currentEntry = { ...FAST_ABORT_SESSION_MODEL };
     const onModelSelected = vi.fn();
 
     await dispatchReplyFromConfig({
@@ -528,6 +627,8 @@ describe("dispatchReplyFromConfig", () => {
       }),
       cfg: emptyConfig,
       dispatcher: createDispatcher(),
+      fastAbortResolver: mocks.tryFastAbortFromMessage,
+      formatAbortReplyTextResolver: () => "⚙️ Agent was aborted.",
       replyOptions: { onModelSelected },
     });
 
@@ -540,11 +641,7 @@ describe("dispatchReplyFromConfig", () => {
 
   it("carries session prefix context through the actual routed fast-abort delivery", async () => {
     mocks.tryFastAbortFromMessage.mockResolvedValue({ handled: true, aborted: true });
-    sessionStoreMocks.currentEntry = {
-      providerOverride: "anthropic",
-      modelOverride: "claude-opus-4-6-20260205",
-      thinkingLevel: "high",
-    };
+    sessionStoreMocks.currentEntry = { ...FAST_ABORT_SESSION_MODEL };
 
     await dispatchReplyFromConfig({
       ctx: buildTestCtx({
@@ -1096,7 +1193,11 @@ describe("dispatchReplyFromConfig", () => {
       accountId: "default",
       conversationId: "C123",
     });
-    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-acp-current");
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith(
+      "binding-acp-current",
+      undefined,
+      boundConversationBinding.conversation,
+    );
     expect(sessionStoreMocks.loadSessionEntry).toHaveBeenCalledWith({
       storePath: sourceStorePath,
       sessionKey: sourceSessionKey,

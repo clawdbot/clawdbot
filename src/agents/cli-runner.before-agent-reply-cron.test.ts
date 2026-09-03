@@ -13,7 +13,7 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import type { HookRunner } from "../plugins/hooks.js";
-import { wrapRunWithTestAdmission } from "./admitted-run-context.test-support.js";
+import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import type { CliOutput } from "./cli-output-contracts.js";
 import { CliAuthProfilePreparationError } from "./cli-runner/auth-profile-preparation-error.js";
@@ -151,7 +151,6 @@ function makeStubContext(params: typeof baseRunParams & { trigger?: string }) {
     normalizedModel: params.model,
     systemPrompt: "",
     systemPromptReport: {},
-    bootstrapPromptWarningLines: [],
     authEpochVersion: 0,
     backendResolved: {},
     preparedBackend: { backend: { sessionMode: "none" } },
@@ -190,7 +189,7 @@ beforeEach(() => {
 
 beforeAll(async () => {
   const cliRunner = await import("./cli-runner.js");
-  runCliAgent = wrapRunWithTestAdmission(cliRunner.runCliAgent);
+  runCliAgent = wrapRunWithTestPreparedAdmission(cliRunner.runCliAgent);
   ({ restoreCliRunnerTestDeps, setCliRunnerTestDeps } = cliRunner);
 });
 

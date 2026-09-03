@@ -396,7 +396,6 @@ describe("describeImageWithModelCore", () => {
     };
     resolveModelAsyncMock
       .mockResolvedValueOnce({ model: hintedModel, authStorage, modelRegistry })
-      .mockResolvedValueOnce({ model: hintedModel, authStorage, modelRegistry })
       .mockResolvedValueOnce({ model: authoritativeModel, authStorage, modelRegistry });
     getApiKeyForModelMock.mockResolvedValueOnce({
       [API_KEY_FIELD]: "test-token",
@@ -428,8 +427,8 @@ describe("describeImageWithModelCore", () => {
       timeoutMs: 1000,
     });
 
-    expect(resolveModelAsyncMock).toHaveBeenCalledTimes(3);
-    expect(resolveModelAsyncMock.mock.calls[2]?.[4]).toEqual(
+    expect(resolveModelAsyncMock).toHaveBeenCalledTimes(2);
+    expect(resolveModelAsyncMock.mock.calls[1]?.[4]).toEqual(
       expect.objectContaining({
         authStorage,
         modelRegistry,
@@ -773,7 +772,14 @@ describe("describeImageWithModelCore", () => {
     });
 
     expect(acquireAgentRunPreparedModelRuntimeMock).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceDir: "/tmp/openclaw-workspace" }),
+      expect.objectContaining({
+        workspaceDir: "/tmp/openclaw-workspace",
+        loadRuntimePlugins: true,
+        runtimePluginSelections: [
+          { provider: "google", modelId: "gemini-2.5-flash", agentId: "vision-agent" },
+        ],
+      }),
+      { catalogMode: "static" },
     );
     expect(resolveModelAsyncMock).toHaveBeenCalledWith(
       "google",

@@ -86,6 +86,65 @@ describe("users gateway methods", () => {
     });
   });
 
+  it.each([
+    { method: "users.list", params: {} },
+    { method: "users.self", params: {} },
+    { method: "users.prefs.get", params: { keys: ["ui.theme"] } },
+    { method: "users.prefs.set", params: { entries: { "ui.theme": "claw" } } },
+    {
+      method: "users.linkEmail",
+      params: { email: "ada@example.test", targetProfileId: "profile-1" },
+    },
+    {
+      method: "users.setDisplayName",
+      params: { profileId: "profile-1", displayName: "Ada" },
+    },
+    { method: "users.setRole", params: { profileId: "profile-1", role: null } },
+    {
+      method: "users.setAvatar",
+      params: { profileId: "profile-1", mime: "image/png", avatarBase64: "AQ==" },
+    },
+  ])("rejects malformed $method before reaching user state", async ({ method, params }) => {
+    const invalid = { ...params, unexpected: true };
+    const original = structuredClone(invalid);
+    const unreadableState = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error("invalid users request reached owner state");
+        },
+      },
+    );
+
+    const respond = await runUsersHandler(method, invalid, unreadableState, unreadableState);
+
+    expect(respond.mock.calls).toEqual([
+      [
+        false,
+        undefined,
+        {
+          code: "INVALID_REQUEST",
+          message: `invalid ${method} params: at root: unexpected property 'unexpected'`,
+        },
+      ],
+    ]);
+    expect(invalid).toEqual(original);
+    for (const effect of [
+      ensureProfileForEmail,
+      getUserProfileDisplay,
+      getUserProfileListItem,
+      resolveUserProfileId,
+      linkEmail,
+      listProfiles,
+      setAvatar,
+      setDisplayName,
+      setUserProfileRole,
+      invalidateOperatorRolePolicy,
+    ]) {
+      expect(effect).not.toHaveBeenCalled();
+    }
+  });
+
   it("lists profiles through the read method", async () => {
     listProfiles.mockReturnValue([{ id: "profile-1" }]);
 
@@ -110,26 +169,30 @@ describe("users gateway methods", () => {
     expect(getUserProfileListItem).toHaveBeenNthCalledWith(2, profile.id);
   });
 
-  it("uses the connect-time provider profile without recreating an email alias", async () => {
-    const providerClient = {
-      authenticatedUserId: "ada@github",
-      authenticatedUserIsTailscaleProvider: true,
-      authenticatedUserProfile: {
-        profileId: profile.id,
-        displayName: "Ada",
-        hasAvatar: false,
-        updatedAt: 1,
-      },
-      connect: { scopes: ["operator.write"] },
-    };
-    resolveUserProfileId.mockReturnValue(profile.id);
-    getUserProfileListItem.mockReturnValue({ ...profile, emails: [] });
+  it.each(["provider", "owner"])(
+    "uses the connect-time %s profile without recreating an email alias",
+    async (kind) => {
+      const providerClient = {
+        ...(kind === "provider"
+          ? { authenticatedUserId: "ada@github", authenticatedUserIsTailscaleProvider: true }
+          : {}),
+        authenticatedUserProfile: {
+          profileId: profile.id,
+          displayName: "Ada",
+          hasAvatar: false,
+          updatedAt: 1,
+        },
+        connect: { scopes: ["operator.write"] },
+      };
+      resolveUserProfileId.mockReturnValue(profile.id);
+      getUserProfileListItem.mockReturnValue({ ...profile, emails: [] });
 
-    const respond = await runUsersHandler("users.self", {}, providerClient);
+      const respond = await runUsersHandler("users.self", {}, providerClient);
 
-    expect(respond).toHaveBeenCalledWith(true, { profile: { ...profile, emails: [] } });
-    expect(ensureProfileForEmail).not.toHaveBeenCalled();
-  });
+      expect(respond).toHaveBeenCalledWith(true, { profile: { ...profile, emails: [] } });
+      expect(ensureProfileForEmail).not.toHaveBeenCalled();
+    },
+  );
 
   it("waits for the authenticated GitHub sync before returning users.self", async () => {
     let finishSync: (() => void) | undefined;
@@ -554,30 +617,34 @@ describe("users gateway methods", () => {
     expect(ensureProfileForEmail).toHaveBeenCalledWith("ada@example.com");
   });
 
-  it("authorizes provider-owned profile edits from the connect-time profile id", async () => {
-    const providerClient = {
-      authenticatedUserId: "ada@github",
-      authenticatedUserIsTailscaleProvider: true,
-      authenticatedUserProfile: {
-        profileId: profile.id,
-        displayName: "Ada",
-        hasAvatar: false,
-        updatedAt: 1,
-      },
-      connect: { scopes: ["operator.write"] },
-    };
-    resolveUserProfileId.mockReturnValue(profile.id);
-    setDisplayName.mockReturnValue(profile);
+  it.each(["provider", "owner"])(
+    "authorizes %s profile edits from the connect-time profile id",
+    async (kind) => {
+      const providerClient = {
+        ...(kind === "provider"
+          ? { authenticatedUserId: "ada@github", authenticatedUserIsTailscaleProvider: true }
+          : {}),
+        authenticatedUserProfile: {
+          profileId: profile.id,
+          displayName: "Ada",
+          hasAvatar: false,
+          updatedAt: 1,
+        },
+        connect: { scopes: ["operator.write"] },
+      };
+      resolveUserProfileId.mockReturnValue(profile.id);
+      setDisplayName.mockReturnValue(profile);
 
-    expect(
-      await runUsersHandler(
-        "users.setDisplayName",
-        { profileId: profile.id, displayName: "Ada Lovelace" },
-        providerClient,
-      ),
-    ).toHaveBeenCalledWith(true, { profile });
-    expect(ensureProfileForEmail).not.toHaveBeenCalled();
-  });
+      expect(
+        await runUsersHandler(
+          "users.setDisplayName",
+          { profileId: profile.id, displayName: "Ada Lovelace" },
+          providerClient,
+        ),
+      ).toHaveBeenCalledWith(true, { profile });
+      expect(ensureProfileForEmail).not.toHaveBeenCalled();
+    },
+  );
 
   it("denies an identified write caller changing another profile's avatar", async () => {
     ensureProfileForEmail.mockReturnValue(profile);

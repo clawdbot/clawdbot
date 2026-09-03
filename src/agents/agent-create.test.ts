@@ -565,16 +565,26 @@ describe("createAgent", () => {
     expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
   });
 
-  it("respects skipBootstrap from the current config", async () => {
+  it.each([
+    { label: "configured", configured: true, override: undefined, ensureBootstrapFiles: false },
+    { label: "explicitly enabled", configured: false, override: true, ensureBootstrapFiles: false },
+    { label: "explicitly disabled", configured: true, override: false, ensureBootstrapFiles: true },
+  ])("respects $label bootstrap skipping for workspace and identity", async (policy) => {
     mocks.config = {
-      agents: { defaults: { skipBootstrap: true }, list: [{ id: "main" }] },
+      agents: { defaults: { skipBootstrap: policy.configured }, list: [{ id: "main" }] },
     };
+    mocks.ensureAgentWorkspace.mockResolvedValue({ dir: "/tmp/work", bootstrapPending: false });
 
-    await createAgent({ name: "researcher", workspace: "/tmp/work" });
+    await createAgent({
+      name: "researcher",
+      workspace: "/tmp/work",
+      ...(policy.override === undefined ? {} : { skipBootstrap: policy.override }),
+    });
 
     expect(mocks.ensureAgentWorkspace).toHaveBeenCalledWith(
-      expect.objectContaining({ ensureBootstrapFiles: false }),
+      expect.objectContaining({ ensureBootstrapFiles: policy.ensureBootstrapFiles }),
     );
+    expect(mocks.rootWrite).toHaveBeenCalledTimes(policy.ensureBootstrapFiles ? 1 : 0);
   });
 
   it("persists the authoritative workspace returned by setup", async () => {
@@ -708,6 +718,27 @@ describe("createAgent", () => {
       reason: "unsafe-identity-file",
     });
     expect(mocks.transformConfigFileWithRetry).toHaveBeenCalledOnce();
+    expect(mocks.persisted).not.toHaveProperty("agents");
+  });
+
+  it("rechecks creation authority after reading identity and before writing it", async () => {
+    mocks.ensureAgentWorkspace.mockResolvedValue({ dir: "/tmp/work", bootstrapPending: false });
+    const closed = new Error("creation authority closed");
+    const beforePersistentApply = vi.fn();
+    mocks.rootRead.mockImplementationOnce(async () => {
+      await Promise.resolve();
+      beforePersistentApply.mockImplementation(() => {
+        throw closed;
+      });
+      return { buffer: Buffer.from("# Identity\n") };
+    });
+    const prepareConfigCommit = vi.fn();
+
+    await expect(
+      createAgent({ name: "researcher", beforePersistentApply, prepareConfigCommit }),
+    ).rejects.toThrow(closed);
+    expect(mocks.rootWrite).not.toHaveBeenCalled();
+    expect(prepareConfigCommit).not.toHaveBeenCalled();
     expect(mocks.persisted).not.toHaveProperty("agents");
   });
 

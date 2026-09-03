@@ -188,7 +188,7 @@ export function createBrowserNodeProxyRequest(params: {
   allowAutomaticHostFallback: boolean;
   signal?: AbortSignal;
 }): BrowserProxyRequest {
-  let hostFallbackActive = false;
+  let target: "auto" | "node" | "host" = params.allowAutomaticHostFallback ? "auto" : "node";
   let route: BrowserProxyRoute | undefined;
   const dispatch = async (request: Parameters<BrowserProxyRequest>[0]) => {
     // Bind cancellation once so every node action and its safe host fallback
@@ -197,7 +197,7 @@ export function createBrowserNodeProxyRequest(params: {
       request.signal || params.signal
         ? { ...request, signal: request.signal ?? params.signal }
         : request;
-    if (hostFallbackActive) {
+    if (target === "host") {
       return await callLocalBrowserControl(requestWithSignal);
     }
     try {
@@ -206,26 +206,29 @@ export function createBrowserNodeProxyRequest(params: {
         nodeLabel: params.nodeTarget.label,
         declaredCommands: params.nodeTarget.commands ?? [],
         pendingDeclaredCommands: params.nodeTarget.pendingDeclaredCommands ?? [],
-        allowAutomaticHostFallback: params.allowAutomaticHostFallback,
+        allowAutomaticHostFallback: target === "auto",
         ...requestWithSignal,
       });
+      // A follow-up snapshot or setting belongs to the browser that already
+      // handled this action, even if that node subsequently becomes unavailable.
+      target = "node";
       route = parseBrowserProxyRoute(proxy);
       const failure = parseBrowserProxyFailure(proxy);
       if (failure) {
         const { status, body } = failure.error;
-        throw new BrowserServiceError(body.error, "reason" in body ? body : undefined, status);
+        throw new BrowserServiceError(body.error, body, status);
       }
       if (!("result" in proxy)) {
         throw new Error("Browser proxy returned a failure without an error payload.");
       }
       return await persistBrowserProxyResultFiles(proxy.result, proxy.files);
     } catch (error) {
-      if (!params.allowAutomaticHostFallback || !(error instanceof BrowserNodeSafeFallbackError)) {
+      if (target !== "auto" || !(error instanceof BrowserNodeSafeFallbackError)) {
         throw error;
       }
       // These failures are detected before route dispatch. Retrying any later
       // failure could duplicate a mutating browser action.
-      hostFallbackActive = true;
+      target = "host";
       route = undefined;
       logger.warn(
         `browser node ${params.nodeTarget.label ?? params.nodeTarget.nodeId} unavailable before dispatch (${error.message}); falling back to Gateway host`,
@@ -234,7 +237,7 @@ export function createBrowserNodeProxyRequest(params: {
     }
   };
   return Object.assign(dispatch, {
-    isHostFallbackActive: () => hostFallbackActive,
+    isHostFallbackActive: () => target === "host",
     route: () => route,
   });
 }

@@ -120,7 +120,7 @@ export function buildCronDeliveryTrace(params: {
   resolvedDelivery: ResolvedCronDeliveryTarget;
   sourceDeliveryOutcome: SourceDeliveryOutcome;
   fallbackUsed: boolean;
-  delivered: boolean;
+  delivered?: boolean;
 }): CronDeliveryTrace {
   // Trace both intended and resolved targets so run logs can explain fallback
   // delivery without leaking provider-specific raw routing internals.

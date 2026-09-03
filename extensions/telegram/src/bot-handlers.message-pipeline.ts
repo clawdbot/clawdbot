@@ -135,6 +135,7 @@ export interface TelegramMessagePipeline {
 
 function resolveRetainedTelegramMedia(params: {
   media?: TelegramResolvedMedia;
+  sourceMessage: Message;
   maxBytes: number;
   ttlHours?: number;
 }): TelegramMediaRef | undefined {
@@ -148,11 +149,17 @@ function resolveRetainedTelegramMedia(params: {
     return undefined;
   }
   const path = resolveTelegramInboundMediaUri(media.id);
+  const fileName =
+    params.sourceMessage.document?.file_name ??
+    params.sourceMessage.audio?.file_name ??
+    params.sourceMessage.video?.file_name ??
+    params.sourceMessage.animation?.file_name;
   return path
     ? {
         path,
         kind: media.kind,
         ...(media.contentType ? { contentType: media.contentType } : {}),
+        ...(fileName ? { fileName } : {}),
         ...(media.stickerMetadata ? { stickerMetadata: media.stickerMetadata } : {}),
       }
     : undefined;
@@ -320,6 +327,7 @@ export function createTelegramMessagePipeline({
           mediaRuntime.abortSignal?.throwIfAborted();
           mediaRef = resolveRetainedTelegramMedia({
             media: node.resolvedMedia,
+            sourceMessage: node.sourceMessage,
             maxBytes: mediaMaxBytes,
             ttlHours: cfg.attachments?.ttlHours,
           });
@@ -338,6 +346,7 @@ export function createTelegramMessagePipeline({
                 path: media.path,
                 kind: media.kind,
                 ...(media.contentType ? { contentType: media.contentType } : {}),
+                ...(media.fileName ? { fileName: media.fileName } : {}),
                 ...(media.stickerMetadata ? { stickerMetadata: media.stickerMetadata } : {}),
               };
               await recordReplyMessageResolvedMedia({

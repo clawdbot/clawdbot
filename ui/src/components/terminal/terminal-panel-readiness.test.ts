@@ -134,9 +134,11 @@ describe("terminal panel readiness", () => {
     panel.toggle();
 
     await waitForFast(() => {
-      expect(panel.renderRoot.querySelector(".tp-connecting")?.textContent).toContain(
-        "Connecting to session",
-      );
+      expect(
+        panel.renderRoot
+          .querySelector('openclaw-panel-loading-skeleton[data-panel-skeleton="terminal"]')
+          ?.getAttribute("aria-label"),
+      ).toContain("Connecting to session");
       expect(
         panel.renderRoot.querySelector(".tabstrip-tab")?.classList.contains("is-connecting"),
       ).toBe(true);
@@ -144,7 +146,11 @@ describe("terminal panel readiness", () => {
 
     open.resolve(terminalOpenResult("session-1"));
     await waitForFast(() => {
-      expect(panel.renderRoot.querySelector(".tp-connecting")).toBeNull();
+      expect(
+        panel.renderRoot.querySelector(
+          'openclaw-panel-loading-skeleton[data-panel-skeleton="terminal"]',
+        ),
+      ).toBeNull();
       expect(panel.renderRoot.querySelector(".tabstrip-tab")?.classList.contains("is-live")).toBe(
         true,
       );
@@ -189,15 +195,23 @@ describe("terminal panel readiness", () => {
     expect(panel.renderRoot.querySelector(".tabstrip-tab")?.textContent).toContain(
       "codex resume 0d5c…",
     );
-    expect(panel.renderRoot.querySelector(".tp-connecting")?.textContent).toContain(
-      "Connecting to session",
-    );
+    expect(
+      panel.renderRoot
+        .querySelector('openclaw-panel-loading-skeleton[data-panel-skeleton="terminal"]')
+        ?.getAttribute("aria-label"),
+    ).toContain("Connecting to session");
 
     listener?.({
       event: "terminal.data",
       payload: { sessionId: "catalog-terminal-1", seq: 5, data: "ready" },
     });
-    await waitForFast(() => expect(panel.renderRoot.querySelector(".tp-connecting")).toBeNull());
+    await waitForFast(() =>
+      expect(
+        panel.renderRoot.querySelector(
+          'openclaw-panel-loading-skeleton[data-panel-skeleton="terminal"]',
+        ),
+      ).toBeNull(),
+    );
     expect(new TextDecoder().decode(controller.write.mock.calls[0]?.[0])).toBe("ready");
     expect(sessionStorage.getItem("openclaw.terminal.sessions.v1")).toBe(
       JSON.stringify(["catalog-terminal-1"]),
@@ -243,7 +257,11 @@ describe("terminal panel readiness", () => {
       }),
     );
     await waitForFast(() =>
-      expect(panel.renderRoot.querySelector(".tp-connecting")).not.toBeNull(),
+      expect(
+        panel.renderRoot.querySelector(
+          'openclaw-panel-loading-skeleton[data-panel-skeleton="terminal"]',
+        ),
+      ).not.toBeNull(),
     );
 
     listener?.({
@@ -251,7 +269,13 @@ describe("terminal panel readiness", () => {
       payload: { sessionId: "catalog-terminal-1", seq: 12, data: "gap" },
     });
 
-    await waitForFast(() => expect(panel.renderRoot.querySelector(".tp-connecting")).toBeNull());
+    await waitForFast(() =>
+      expect(
+        panel.renderRoot.querySelector(
+          'openclaw-panel-loading-skeleton[data-panel-skeleton="terminal"]',
+        ),
+      ).toBeNull(),
+    );
     expect(requests).toContainEqual({
       method: "terminal.attach",
       params: { sessionId: "catalog-terminal-1" },

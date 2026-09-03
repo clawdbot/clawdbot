@@ -6,6 +6,8 @@ import {
   getExecuteAgentTurnForTest,
   createMockTypingSignaler,
   createFollowupRun,
+  fallbackAttemptOptions,
+  initialFallbackAttemptOptions,
   createMinimalRunAgentTurnParams,
 } from "./agent-runner-execution.test-support.js";
 import type {
@@ -14,7 +16,7 @@ import type {
 } from "./agent-runner-execution.test-support.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 
-const state = setupAgentRunnerExecutionTestState();
+const state = await setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: message tool progress", () => {
   it("suppresses progress callbacks after message-tool-only delivery completes", async () => {
@@ -206,9 +208,9 @@ describe("executeAgentTurn: message tool progress", () => {
         return { payloads: [{ text: "NO_REPLY" }], meta: {} };
       });
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      await params.run("anthropic", "primary");
+      await params.run("anthropic", "primary", initialFallbackAttemptOptions(params));
       return {
-        result: await params.run("openai", "fallback"),
+        result: await params.run("openai", "fallback", fallbackAttemptOptions(params, "unknown")),
         provider: "openai",
         model: "fallback",
         attempts: [],

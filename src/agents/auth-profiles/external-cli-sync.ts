@@ -5,12 +5,10 @@
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
-  readClaudeCliCredentialsCached,
   readCodexCliCredentialsCached,
   readMiniMaxCliCredentialsCached,
 } from "../cli-credentials.js";
 import {
-  CLAUDE_CLI_PROFILE_ID,
   EXTERNAL_CLI_SYNC_TTL_MS,
   MINIMAX_CLI_PROFILE_ID,
   OPENAI_CODEX_DEFAULT_PROFILE_ID,
@@ -51,13 +49,12 @@ type ExternalCliSyncProvider = {
   // CLI state must not replace or shadow it. Codex requires this to
   // avoid clobbering a locally refreshed token with stale CLI state.
   bootstrapOnly?: boolean;
+  persistence?: ExternalCliResolvedProfile["persistence"];
 };
 
-// Keep this gate aligned with the canonical identity-copy rule in oauth.ts.
-// Also the passthrough gate in cli-runner/prepare.ts: a live CLI login that
-// this sync would refuse to import must not authenticate a run either.
+// External CLI bootstrap must never replace a local profile with another identity.
 /** Return true when imported CLI credentials match an existing profile identity. */
-export function isSafeToUseExternalCliCredential(
+function isSafeToUseExternalCliCredential(
   existing: OAuthCredential | undefined,
   imported: OAuthCredential,
 ): boolean {
@@ -82,21 +79,6 @@ const EXTERNAL_CLI_SYNC_PROVIDERS: ExternalCliSyncProvider[] = [
         allowKeychainPrompt: options?.allowKeychainPrompt,
       }),
     bootstrapOnly: true,
-  },
-  {
-    profileId: CLAUDE_CLI_PROFILE_ID,
-    provider: "claude-cli",
-    aliases: ["anthropic"],
-    readCredentials: (options) => {
-      const credential = readClaudeCliCredentialsCached({
-        ttlMs: EXTERNAL_CLI_SYNC_TTL_MS,
-        allowKeychainPrompt: options?.allowKeychainPrompt,
-      });
-      if (credential?.type !== "oauth") {
-        return null;
-      }
-      return { ...credential, provider: "claude-cli" };
-    },
   },
   {
     profileId: MINIMAX_CLI_PROFILE_ID,
@@ -399,7 +381,11 @@ export function resolveExternalCliAuthProfiles(
           allowKeychainPrompt: options?.allowKeychainPrompt,
         });
         if (backfilled) {
-          profiles.push({ profileId, credential: backfilled, persistence: "persisted" });
+          profiles.push({
+            profileId,
+            credential: backfilled,
+            persistence: providerConfig.persistence ?? "persisted",
+          });
         }
         continue;
       }
@@ -462,7 +448,9 @@ export function resolveExternalCliAuthProfiles(
       profiles.push({
         profileId,
         credential: creds,
-        persistence: providerConfig.bootstrapOnly ? "runtime-only" : "persisted",
+        persistence:
+          providerConfig.persistence ??
+          (providerConfig.bootstrapOnly ? "runtime-only" : "persisted"),
       });
     }
   }

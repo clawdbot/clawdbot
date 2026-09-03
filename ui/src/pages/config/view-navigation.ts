@@ -1,5 +1,30 @@
 import type { TemplateResult } from "lit";
+import { isKernelOwnedChannelConfigKey } from "../../../../src/config/channel-config-keys.js";
+import type { ConfigUiHints } from "../../api/types.ts";
+import { hintForPath, humanize, type JsonSchema } from "../../components/config-form.shared.ts";
 import { icons } from "../../components/icons.ts";
+import { t } from "../../i18n/index.ts";
+
+export function getChannelConfigGroups(schema: JsonSchema, hints: ConfigUiHints) {
+  const entries = Object.entries(schema.properties ?? {});
+  const channels = entries
+    .filter(([key]) => !isKernelOwnedChannelConfigKey(key))
+    .map(([key, node]) => ({
+      key,
+      label: hintForPath(["channels", key], hints)?.label ?? node.title ?? humanize(key),
+      keys: [key],
+    }))
+    .toSorted((a, b) => a.label.localeCompare(b.label) || a.key.localeCompare(b.key));
+  const sharedKeys = entries
+    .filter(([key]) => isKernelOwnedChannelConfigKey(key))
+    .map(([key]) => key);
+  return [
+    ...channels,
+    ...(sharedKeys.length > 0
+      ? [{ key: null, label: t("configView.categories.other"), keys: sharedKeys }]
+      : []),
+  ];
+}
 
 const sidebarIcons: Record<string, TemplateResult> = {
   all: icons.layoutGrid,
@@ -51,7 +76,17 @@ type SectionCategoryDefinition = {
 export const SECTION_CATEGORIES: SectionCategoryDefinition[] = [
   {
     id: "core",
-    sections: ["env", "auth", "update", "meta", "logging", "diagnostics", "cli", "secrets"],
+    sections: [
+      "env",
+      "auth",
+      "update",
+      "meta",
+      "logging",
+      "diagnostics",
+      "cli",
+      "secrets",
+      "wizard",
+    ],
   },
   { id: "ai", sections: ["agents", "models", "skills", "tools", "memory", "session"] },
   {
@@ -64,7 +99,7 @@ export const SECTION_CATEGORIES: SectionCategoryDefinition[] = [
     id: "infrastructure",
     sections: ["gateway", "browser", "nodeHost", "discovery", "acp", "mcp"],
   },
-  { id: "appearance", sections: ["__appearance__", "ui", "wizard"] },
+  { id: "appearance", sections: ["__appearance__", "ui"] },
 ];
 
 export const CATEGORISED_KEYS = new Set(

@@ -5,8 +5,41 @@ import path from "node:path";
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
 import { Command } from "commander";
 import { expect, it, type TestAPI } from "vitest";
-import { getCompletionScript } from "./completion-cli.js";
+import { getCompletionScript, registerCompletionCli } from "./completion-cli.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
+
+export function createCompletionProgram(): Command {
+  const program = new Command();
+  program.name("openclaw");
+  program.description("CLI root");
+  program.option("-v, --verbose", "Verbose output");
+  program.option(
+    "--status-json",
+    "Output JSON (alias for `models status --json`) in $OPENCLAW_STATE_DIR",
+  );
+
+  const gateway = program.command("gateway").description("Gateway commands");
+  gateway.option("--force", "Force the action");
+  gateway.option("-t, --token <token>", "Gateway token");
+
+  gateway.command("status").description("Show gateway status").option("--json", "JSON output");
+  gateway.command("restart").description("Restart gateway");
+  program
+    .command("agent")
+    .description("Agent commands")
+    .option("--verbose <on|off>", "Set verbosity");
+  const sessions = program.command("sessions").description("Session commands");
+  sessions.option("--verbose", "Verbose output");
+  sessions.command("cleanup").description("Clean sessions").option("--dry-run", "Preview cleanup");
+
+  return program;
+}
+
+export function createDocumentedCompletionProgram(): Command {
+  const program = createCompletionProgram();
+  registerCompletionCli(program);
+  return program;
+}
 
 export function createAliasedCompletionProgram(): Command {
   const program = new Command();
@@ -23,22 +56,35 @@ export function createAliasedCompletionProgram(): Command {
   return program;
 }
 
-export function runGeneratedBashCompletion(program: Command, words: readonly string[]): string[] {
+export function runGeneratedBashCompletion(
+  program: Command,
+  words: readonly string[],
+  input: {
+    line?: string;
+    word?: string;
+    point?: number;
+    cword?: number;
+    bashPath?: string;
+    env?: NodeJS.ProcessEnv;
+  } = {},
+): string[] {
   const script = getCompletionScript("bash", program);
   const result = spawnSync(
-    "bash",
+    input.bashPath ?? "bash",
     [
       "--noprofile",
       "--norc",
       "-c",
       `${script}
 COMP_WORDS=(${words.map(quoteCliArg).join(" ")})
-COMP_CWORD=${words.length - 1}
-_openclaw_completion
+COMP_CWORD=${input.cword ?? words.length - 1}
+COMP_LINE=${quoteCliArg(input.line ?? words.join(" "))}
+COMP_POINT=${input.point ?? "${#COMP_LINE}"}
+_openclaw_completion openclaw ${quoteCliArg(input.word ?? words.at(-1) ?? "")}
 printf '%s\\n' "\${COMPREPLY[@]}"
 `,
     ],
-    { encoding: "utf8" },
+    { encoding: "utf8", env: input.env },
   );
 
   if (result.error) {

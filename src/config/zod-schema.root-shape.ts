@@ -1,3 +1,4 @@
+import path from "node:path";
 import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import { parseDurationMs } from "../cli/parse-duration.js";
@@ -214,19 +215,26 @@ export const OpenClawSchemaShape = {
   ui: z
     .strictObject({
       seamColor: HexColorSchema.optional(),
-      assistant: z
-        .strictObject({
-          name: z.string().max(50).optional(),
-          avatar: z.string().max(2_000_000).optional(),
-        })
-        .optional(),
       // Operator display prefs. Canonical here (agent-writable via approval,
       // synced across devices); the Control UI mirrors them into local
       // storage for instant boot and offline fallback.
       prefs: z
         .strictObject({
           theme: z
-            .union([z.literal("claw"), z.literal("knot"), z.literal("dash"), z.literal("custom")])
+            .union([
+              z.literal("claw"),
+              z.literal("knot"),
+              z.literal("dash"),
+              z.literal("absolutely"),
+              z.literal("tide"),
+              z.literal("beacon"),
+              z.literal("phosphor"),
+              z.literal("crt"),
+              z.literal("manuscript"),
+              z.literal("rose"),
+              z.literal("miami"),
+              z.literal("custom"),
+            ])
             .optional(),
           themeMode: z
             .union([z.literal("light"), z.literal("dark"), z.literal("system")])
@@ -295,6 +303,19 @@ export const OpenClawSchemaShape = {
   models: ModelsConfigSchema,
   nodeHost: NodeHostSchema,
   agents: AgentsSchema,
+  worktreeRoot: z
+    .string()
+    .trim()
+    .min(1)
+    .refine(
+      (value) =>
+        path.isAbsolute(value) ||
+        value === "~" ||
+        value.startsWith("~/") ||
+        value.startsWith(`~${path.sep}`),
+      "worktreeRoot must be an absolute path or a path starting with ~",
+    )
+    .optional(),
   tools: ToolsSchema,
   security: SecuritySchema,
   bindings: BindingsSchema,
@@ -317,6 +338,7 @@ export const OpenClawSchemaShape = {
   cron: z
     .strictObject({
       enabled: z.boolean().optional(),
+      skipMissedJobs: z.boolean().optional(),
       triggers: z
         .strictObject({
           enabled: z.boolean().optional(),
@@ -361,6 +383,7 @@ export const OpenClawSchemaShape = {
         .array(
           z.strictObject({
             providerId: z.string().min(1),
+            whenOccupied: z.boolean().optional(),
             sessionId: z.string().min(1).optional(),
             title: z.string().min(1).optional(),
             accountId: z.string().min(1).optional(),

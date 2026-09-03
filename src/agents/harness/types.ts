@@ -9,10 +9,19 @@ import type {
   ProviderRouteOverridePresence,
 } from "../../plugin-sdk/provider-model-types.js";
 import type { McpToolCatalog } from "../agent-bundle-mcp-types.js";
+import type { ModelRef } from "../model-ref-shared.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 import type { AgentHarnessRuntimeArtifactBinding } from "./runtime-artifact.types.js";
 
 export type { AgentHarnessRuntimeArtifactBinding } from "./runtime-artifact.types.js";
+
+/** Private native ownership, not execution authority or credential readiness. */
+export type AgentHarnessSessionRuntimeOwnership = {
+  model: "native";
+  auth: "native" | "host";
+  /** Actual native selection, only when both facts are known from the same binding. */
+  modelRef?: ModelRef;
+};
 
 export type AgentHarnessPreparedAuthSupport = {
   source: "profile" | "direct" | "harness" | "none";
@@ -97,6 +106,7 @@ type AgentHarnessLegacyAttemptResult = Omit<
 type AgentHarnessAttemptParamsBase = Omit<
   InternalEmbeddedRunAttemptParams,
   | "admittedRunContext"
+  | "codeModeRecovery"
   | "contextEngineLogicalTurnLease"
   | "onContextEngineTurnCandidate"
   | "trajectoryRecorder"
@@ -160,6 +170,8 @@ type AgentHarnessIsolatedCompletionParams = {
   timeoutMs: number;
   abortSignal?: AbortSignal;
   thinkLevel?: import("../../auto-reply/thinking.js").ThinkLevel;
+  /** Do not recover ambiguous reasoning as visible text; an empty visible result is valid. */
+  outputTextPolicy?: "strict-visible";
   streamParams?: {
     maxTokens?: number;
     temperature?: number;
@@ -302,6 +314,8 @@ export type AgentHarnessSessionForkFailureCode =
 
 export type AgentHarnessSessionForkParams = {
   targetKey: string;
+  /** Creator-owned isolation floor resolved by the trusted Gateway request. */
+  sandbox?: "required";
   source: {
     agentId: string;
     sessionId: string;
@@ -382,6 +396,14 @@ type AgentHarnessRunCapability<
    */
   conversationToolPolicySafeDenyTools?: readonly string[];
   supports(ctx: AgentHarnessSupportContext): AgentHarnessSupport;
+  /** Synchronous private ownership read; no discovery, auth loading, or native connection setup. */
+  resolveSessionRuntimeOwnership?(params: {
+    config?: OpenClawConfig;
+    agentId?: string;
+    sessionId: string;
+    sessionKey?: string;
+    assertCurrent: () => void;
+  }): AgentHarnessSessionRuntimeOwnership | undefined;
   /** Lets this harness resolve forwarded profiles or its own native credentials. */
   authBootstrap?: "harness";
   runAttempt(params: TAttemptParams): Promise<AgentHarnessAttemptResult>;
@@ -424,8 +446,32 @@ type AgentHarnessCompactionCapability = {
   compact?(params: AgentHarnessCompactParams): Promise<AgentHarnessCompactResult | undefined>;
 };
 
+export type AgentHarnessSessionDeletionParams = {
+  /** Present only during the exact host initializer's guarded rollback. */
+  initialization?: import("../../sessions/session-initialization.js").SessionInitialization;
+  agentId: string;
+  sessionKey: string;
+  sessionId: string;
+  lifecycleRevision?: string;
+  /** Revalidate the captured registry, harness, and operation before each side effect. */
+  assertCurrent: () => void;
+};
+
+export type AgentHarnessSessionDeletionMutation = {
+  /** Synchronously remove only the prepared owner's state at the session commit edge. */
+  commit: () => void;
+  /** Restore only that removal when the authoritative session transaction rolls back. */
+  rollback: () => void;
+};
+
 type AgentHarnessSessionLifecycleCapability = {
   reset?(params: AgentHarnessResetParams): Promise<void> | void;
+  /** Prepare outside the session writer; release native resources after its commit completes. */
+  withSessionDeletion?<T>(
+    this: void,
+    params: AgentHarnessSessionDeletionParams,
+    run: (mutation: AgentHarnessSessionDeletionMutation) => Promise<T>,
+  ): Promise<T>;
   dispose?(): Promise<void> | void;
 };
 
@@ -487,6 +533,7 @@ export type AgentHarnessModelCatalogParams = {
   agentId: string;
   agentDir: string;
   workspaceDir: string;
+  configuredModelRefs?: readonly import("../model-ref-shared.js").ModelRef[];
 };
 
 type AgentHarnessModelCatalogCapability = {
@@ -494,6 +541,14 @@ type AgentHarnessModelCatalogCapability = {
   loadModelCatalog?(
     params: AgentHarnessModelCatalogParams,
   ): Promise<readonly import("../model-catalog.types.js").ModelCatalogEntry[]>;
+  /**
+   * Reads current, secret-free native account evidence for this exact catalog scope/model.
+   * No I/O or discovery here. Missing/stale/disposed evidence returns undefined; this is
+   * picker metadata only, never execution authorization or a host-route credential.
+   */
+  readModelCatalogReadiness?(
+    params: AgentHarnessModelCatalogParams & { provider: string; modelId: string },
+  ): { accountType: string } | undefined;
 };
 
 /**

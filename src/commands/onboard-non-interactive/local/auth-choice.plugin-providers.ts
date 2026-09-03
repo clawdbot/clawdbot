@@ -8,7 +8,7 @@ import type { ApiKeyCredential } from "../../../agents/auth-profiles/types.js";
 import { applyAutoLocalModelLean } from "../../../config/local-model-lean-auto.js";
 import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { enablePluginInConfig } from "../../../plugins/enable.js";
+import { enablePluginWithCapabilityConsent } from "../../../plugins/enable.js";
 import { resolvePreferredProviderForAuthChoice } from "../../../plugins/provider-auth-choice-preference.js";
 import { resolveManifestProviderAuthChoice } from "../../../plugins/provider-auth-choices.js";
 import {
@@ -22,11 +22,6 @@ import type {
 } from "../../../plugins/types.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { createLazyRuntimeSurface } from "../../../shared/lazy-runtime.js";
-import {
-  CODEX_RUNTIME_PLUGIN_ID,
-  ensureCodexRuntimePluginForModelSelection,
-} from "../../codex-runtime-plugin-install.js";
-import { ensureCopilotRuntimePluginForModelSelection } from "../../copilot-runtime-plugin-install.js";
 import { createNonInteractiveLoggingPrompter } from "../../non-interactive-prompter.js";
 import {
   prepareAgentModelDefaults,
@@ -35,6 +30,10 @@ import {
 } from "../../onboard-agent-target.js";
 import { rejectOnboardingOption } from "../../onboard-options.js";
 import type { OnboardOptions } from "../../onboard-types.js";
+import {
+  CODEX_RUNTIME_PLUGIN_ID,
+  ensureModelSelectionRuntimePlugins,
+} from "../../runtime-plugin-install.js";
 
 const PROVIDER_PLUGIN_CHOICE_PREFIX = "provider-plugin:";
 
@@ -87,6 +86,24 @@ export async function applyNonInteractivePluginProviderChoice(params: {
       workspaceDir,
       includeUntrustedWorkspacePlugins: false,
     }));
+  const trustedManifestMatch = resolveManifestProviderAuthChoice(params.authChoice, {
+    config: nextConfig,
+    workspaceDir,
+    includeUntrustedWorkspacePlugins: false,
+  });
+  if (trustedManifestMatch) {
+    const enabled = await enablePluginWithCapabilityConsent(
+      nextConfig,
+      trustedManifestMatch.pluginId,
+      {
+        workspaceDir,
+      },
+    );
+    if (!enabled.enabled) {
+      return reject(enabled.reason ?? "Provider plugin could not be enabled.");
+    }
+    nextConfig = enabled.config;
+  }
   // Provider discovery is lazy so non-plugin auth choices do not pull plugin
   // runtime code into the basic non-interactive setup path.
   const {
@@ -124,11 +141,6 @@ export async function applyNonInteractivePluginProviderChoice(params: {
       );
     }
     // Keep mismatch diagnostics metadata-only so untrusted workspace plugins are not loaded.
-    const trustedManifestMatch = resolveManifestProviderAuthChoice(params.authChoice, {
-      config: nextConfig,
-      workspaceDir,
-      includeUntrustedWorkspacePlugins: false,
-    });
     const untrustedOnlyManifestMatch =
       !trustedManifestMatch &&
       resolveManifestProviderAuthChoice(params.authChoice, {
@@ -210,9 +222,10 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     }
   }
 
-  const enableResult = enablePluginInConfig(
+  const enableResult = await enablePluginWithCapabilityConsent(
     nextConfig,
     providerChoice.provider.pluginId ?? providerChoice.provider.id,
+    { workspaceDir },
   );
   if (!enableResult.enabled) {
     return reject(
@@ -260,18 +273,18 @@ export async function applyNonInteractivePluginProviderChoice(params: {
   }
   // Model selection can imply a runtime plugin even when auth setup belonged to
   // a provider plugin; install those runtimes before persisting the config.
-  const nonInteractivePrompter = createNonInteractiveLoggingPrompter(
-    params.runtime,
-    (message) => `Non-interactive setup cannot prompt for plugin install: ${message}`,
-  );
-  const codexInstall = await ensureCodexRuntimePluginForModelSelection({
+  const runtimes = await ensureModelSelectionRuntimePlugins({
     cfg: result,
     model: selectedModel,
-    prompter: nonInteractivePrompter,
+    prompter: createNonInteractiveLoggingPrompter(params.runtime, (message) => message),
     runtime: params.runtime,
     workspaceDir,
+    output: "silent",
   });
-  if (codexInstall.installed) {
+  if (!runtimes.ok) {
+    return reject(runtimes.message);
+  }
+  if (runtimes.codexInstalled) {
     // Non-interactive onboarding never auto-applies migration; emit a hint so
     // the operator knows Codex CLI state is available to import deliberately.
     // Gated on installed (not freshlyInstalled) so repair runs against an
@@ -279,29 +292,22 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     const { offerPostInstallMigrations } =
       await import("../../../wizard/setup.post-install-migration.js");
     await offerPostInstallMigrations({
-      config: codexInstall.cfg,
+      config: runtimes.cfg,
       runtime: params.runtime,
       installedPluginIds: [CODEX_RUNTIME_PLUGIN_ID],
       nonInteractive: true,
     });
   }
-  const copilotInstall = await ensureCopilotRuntimePluginForModelSelection({
-    cfg: codexInstall.cfg,
-    model: selectedModel,
-    prompter: nonInteractivePrompter,
-    runtime: params.runtime,
-    workspaceDir,
-  });
   const previousModel = providerConfig.agents?.defaults?.model;
   const previousAutoModel = enableResult.config.wizard?.localModelLeanAutoModel;
   const retainsAutoModelOwnership =
     previousAutoModel !== undefined &&
     previousAutoModel === resolveAgentModelPrimaryValue(previousModel) &&
-    previousAutoModel === copilotInstall.cfg.wizard?.localModelLeanAutoModel;
+    previousAutoModel === runtimes.cfg.wizard?.localModelLeanAutoModel;
 
   return projectProviderResult(
     applyAutoLocalModelLean({
-      config: copilotInstall.cfg,
+      config: runtimes.cfg,
       providerId: providerChoice.provider.id,
       modelRef: selectedModel,
       ...(retainsAutoModelOwnership ? { previousModelRef: previousAutoModel } : {}),

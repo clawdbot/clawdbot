@@ -144,7 +144,7 @@ export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
       this.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
         ? (fitSidebarLayout(opened, this.paneWidth) ?? opened)
         : opened;
-    state.updateSidebarLayout(fitted);
+    this.commitSidebarLayout(fitted);
     if (discussionPanel) {
       state.updateSidebarActivePanel(discussionPanel.id);
     }
@@ -181,7 +181,7 @@ export abstract class ChatPaneDiscussion extends ChatPaneSessionMenu {
       label,
       onToggle: () =>
         active
-          ? state.updateSidebarLayout(closeSlot(state.sidebarLayout, "discussion"))
+          ? this.commitSidebarLayout(closeSlot(state.sidebarLayout, "discussion"))
           : this.openSessionDiscussionSlot(),
     };
   }

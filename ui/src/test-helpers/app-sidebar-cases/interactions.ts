@@ -14,7 +14,10 @@ import {
   createGateway,
   createGatewayHarness,
   createSessions,
+  createSessionsHarness,
+  deferred,
   mountSidebar,
+  successfulSessionPatch,
 } from "../app-sidebar.ts";
 import {
   answerConfirmDialog,
@@ -57,20 +60,20 @@ describe("AppSidebar context menu boundary", () => {
 });
 
 describe("AppSidebar multi-select", () => {
-  it("names session actions and routes menu hints through the shared tooltip", async () => {
+  it("uses generic pin labels and routes menu hints through the shared tooltip", async () => {
     const { sidebar } = await mountMultiSelect();
 
     for (const key of ["agent:main:a", "agent:main:b"]) {
       const row = sidebar.querySelector<HTMLElement>(`[data-session-key="${key}"]`);
       const label = row?.querySelector(".sidebar-recent-session__name")?.textContent?.trim();
+      const pin = row?.querySelector<HTMLElement>("[data-sidebar-session-pin]");
       const menu = row?.querySelector<HTMLElement>("[data-session-menu]");
       const tooltip = menu?.closest("openclaw-tooltip") as
         | (HTMLElement & { content: string; describe: boolean })
         | null;
       expect(label).toBeTruthy();
-      expect(row?.querySelector("[data-sidebar-session-pin]")?.getAttribute("aria-label")).toBe(
-        `Pin session: ${label}`,
-      );
+      expect(pin?.getAttribute("aria-label")).toBe("Pin session");
+      expect(pin?.getAttribute("title")).toBe("Pin session");
       expect(menu?.getAttribute("aria-label")).toBe(`Open session menu: ${label}`);
       expect(menu?.hasAttribute("title")).toBe(false);
       expect(tooltip?.content).toBe("Open session menu");
@@ -217,8 +220,8 @@ describe("AppSidebar multi-select", () => {
     await waitForFast(() => expect(harness.patchMany).toHaveBeenCalledOnce());
     expect(harness.patchMany).toHaveBeenCalledWith(
       [
-        { key: "agent:main:a", agentId: "main" },
-        { key: "agent:main:b", agentId: "main" },
+        { key: "agent:main:a", agentId: "main", expectedSessionId: "session:agent:main:a" },
+        { key: "agent:main:b", agentId: "main", expectedSessionId: "session:agent:main:b" },
       ],
       { unread: true },
     );
@@ -290,6 +293,50 @@ describe("AppSidebar multi-select", () => {
     expect(request.mock.calls.filter(([method]) => method === "sessions.patchMany")).toEqual([]);
     expect(harness.patchMany).not.toHaveBeenCalled();
     expect(harness.refreshReplacement).not.toHaveBeenCalled();
+  });
+
+  it("hides an archived current thread immediately without navigating away", async () => {
+    const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
+    const setSessionKeySpy = vi.spyOn(gatewayHarness.gateway, "setSessionKey");
+    const harness = createSessionsHarness("main", [
+      "agent:main:main",
+      "agent:main:a",
+      "agent:main:b",
+    ]);
+    const pendingPatch = deferred<ReturnType<typeof successfulSessionPatch>>();
+    harness.patch.mockReturnValueOnce(pendingPatch.promise);
+    const { sidebar } = await mountSidebar(gatewayHarness.gateway, harness.sessions);
+    sidebar.connected = true;
+    sidebar.activeRouteId = "chat";
+    sidebar.sessionKey = "agent:main:a";
+    await sidebar.updateComplete;
+
+    openContextMenu(sidebar, "agent:main:a");
+    await sidebar.updateComplete;
+    (await sessionMenu(sidebar)).querySelector<HTMLButtonElement>('[data-shortcut="a"]')?.click();
+
+    await waitForFast(() => expect(harness.patch).toHaveBeenCalledOnce());
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector('[data-session-key="agent:main:a"]')).toBeNull();
+    expect(setSessionKeySpy).not.toHaveBeenCalled();
+
+    const result = harness.sessions.state.result;
+    harness.publishList({
+      result: result
+        ? {
+            ...result,
+            sessions: result.sessions.map((row) =>
+              row.key === "agent:main:a" ? Object.assign({}, row, { archived: true }) : row,
+            ),
+          }
+        : null,
+    });
+    pendingPatch.resolve(successfulSessionPatch("agent:main:a"));
+
+    await waitForFast(() =>
+      expect(sidebar.querySelector('[data-session-key="agent:main:a"]')).toBeNull(),
+    );
+    expect(setSessionKeySpy).not.toHaveBeenCalled();
   });
 
   it("deletes the selection in one batch after a single confirm", async () => {
@@ -623,13 +670,13 @@ describe("AppSidebar catalog session rows", () => {
         ["agent:main:main"],
       );
       (sidebar as unknown as { activeRouteId: string }).activeRouteId = "chat";
-      sidebar.sessionKey = "catalog:codex:gateway%3Alocal:thread-1";
+      sidebar.sessionKey = "agent:main:catalog:codex:gateway%3Alocal:thread-1";
       await sidebar.updateComplete;
 
       const active = sidebar.querySelectorAll(".sidebar-recent-session--active");
       expect(active).toHaveLength(1);
       expect(active[0]?.getAttribute("data-session-key")).toBe(
-        "catalog:codex:gateway%3Alocal:thread-1",
+        "agent:main:catalog:codex:gateway%3Alocal:thread-1",
       );
       expect(active[0]?.getAttribute("role")).toBe("listitem");
       expect(active[0]?.closest('[role="list"]')?.getAttribute("aria-label")).toBe("Local Codex");
@@ -644,7 +691,7 @@ describe("AppSidebar catalog session rows", () => {
       ]
         .filter((row) => !row.closest('[data-session-section^="catalog:"]'))
         .map((row) => row.getAttribute("data-session-key"));
-      expect(chatRows).not.toContain("catalog:codex:gateway%3Alocal:thread-1");
+      expect(chatRows).not.toContain(sidebar.sessionKey);
     } finally {
       vi.useRealTimers();
     }

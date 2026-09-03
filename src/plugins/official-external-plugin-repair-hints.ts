@@ -4,10 +4,13 @@ import { resolveConfiguredChannelPresencePolicy } from "./channel-plugin-ids.js"
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import {
   getOfficialExternalPluginCatalogEntry,
+  getOfficialExternalPluginCatalogEntryForPackage,
   getOfficialExternalPluginCatalogManifest,
+  isExternallyDistributedPlugin,
   resolveOfficialExternalPluginId,
-  resolveOfficialExternalPluginInstall,
+  resolveOfficialExternalPluginInstallSources,
   resolveOfficialExternalPluginLabel,
+  type OfficialExternalPluginCatalogEntry,
 } from "./official-external-plugin-catalog.js";
 
 /** Repair hint for installing an official external plugin that owns a missing surface. */
@@ -25,19 +28,58 @@ type MissingOfficialExternalChannelPluginRepairHint = OfficialExternalPluginRepa
   channelId: string;
 };
 
+/**
+ * Bundled plugins ship their dependencies inside the root package, so dependency status is
+ * only meaningful for external installs and for externally distributed plugins whose runtime
+ * was compiled into the bundled tree without its plugin-local dependencies.
+ */
+export function tracksPluginDependencyStatus(candidate: {
+  origin: string;
+  pluginId: string;
+  packageName?: string;
+  packageBuild?: { bundledDist?: boolean };
+}): boolean {
+  return candidate.origin !== "bundled" || isExternallyDistributedPlugin(candidate);
+}
+
+/**
+ * Names the install path when an externally distributed plugin fails to import its runtime
+ * dependencies. Source builds compile these plugins into `dist/extensions/<id>` but their
+ * dependencies stay plugin-local, so a moved or pruned checkout leaves the dist link dangling.
+ */
+export function resolveExternalPluginRuntimeDependencyRepairHint(candidate: {
+  pluginId: string;
+  packageName?: string;
+  packageBuild?: { bundledDist?: boolean };
+}): string | undefined {
+  if (!isExternallyDistributedPlugin(candidate)) {
+    return undefined;
+  }
+  // Only the official package that owns this canonical id earns its install command; a foreign
+  // package reusing the id must not be told to install the official one over itself.
+  const entry = getOfficialExternalPluginCatalogEntryForPackage(candidate.packageName);
+  const hint =
+    entry && resolveOfficialExternalPluginId(entry) === candidate.pluginId
+      ? buildOfficialExternalPluginRepairHint(entry, candidate.pluginId)
+      : null;
+  return hint
+    ? `runtime dependencies are missing for externally distributed plugin ${hint.label}; ${hint.repairHint}`
+    : `runtime dependencies are missing for externally distributed plugin ${candidate.pluginId}; reinstall or update the plugin package, then restart the Gateway.`;
+}
+
 /** Resolves install/doctor commands for an official external plugin or channel id. */
 export function resolveOfficialExternalPluginRepairHint(
   pluginIdOrChannelId: string,
 ): OfficialExternalPluginRepairHint | null {
   const entry = getOfficialExternalPluginCatalogEntry(pluginIdOrChannelId);
-  if (!entry) {
-    return null;
-  }
-  const install = resolveOfficialExternalPluginInstall(entry);
-  const npmSpec = install?.npmSpec?.trim();
-  const clawhubSpec = install?.clawhubSpec?.trim();
-  const installSpec =
-    install?.defaultChoice === "clawhub" ? (clawhubSpec ?? npmSpec) : (npmSpec ?? clawhubSpec);
+  return entry ? buildOfficialExternalPluginRepairHint(entry, pluginIdOrChannelId) : null;
+}
+
+function buildOfficialExternalPluginRepairHint(
+  entry: OfficialExternalPluginCatalogEntry,
+  pluginIdOrChannelId: string,
+): OfficialExternalPluginRepairHint | null {
+  const installSpec = resolveOfficialExternalPluginInstallSources(entry)[0]?.spec;
   if (!installSpec) {
     return null;
   }

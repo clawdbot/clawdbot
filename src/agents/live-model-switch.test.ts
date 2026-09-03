@@ -190,6 +190,7 @@ describe("live model switch", () => {
       storePath: "/tmp/session-store.json",
       sessionKey: "main",
       hydrateSkillPromptRefs: false,
+      clone: false,
       readConsistency: "latest",
     });
   });

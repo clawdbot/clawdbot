@@ -1,5 +1,5 @@
 // Zalouser tests cover inbound normalization and outbound bounds through public plugin paths.
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -20,6 +20,7 @@ vi.mock("./zca-client.js", () => ({
   TextStyle: { Indent: 9 },
 }));
 
+import { zalouserMessageAdapter } from "./channel.adapters.js";
 import { setZalouserRuntime } from "./runtime.js";
 import { saveStoredZaloCredentials } from "./session-state.js";
 import {
@@ -117,6 +118,56 @@ afterEach(() => {
 });
 
 describe("Zalo payload bounds", () => {
+  it("applies the resolved account media cap before the native message send", async () => {
+    const sendMessage = vi.fn(async () => ({ msgId: "media-cap" }));
+    const api = createMockApi({ sendMessage } as Partial<API>);
+    const directory = await realpath(await mkdtemp(path.join(os.tmpdir(), "zalouser-media-cap-")));
+    const file = path.join(directory, "attachment.txt");
+    try {
+      await withStoredSession({
+        profile: "media-cap",
+        api,
+        run: async () => {
+          const sendMedia = zalouserMessageAdapter.send?.media;
+          if (!sendMedia) {
+            throw new Error("Zalo Personal media sender unavailable");
+          }
+          const params = {
+            cfg: {
+              channels: {
+                zalouser: {
+                  mediaMaxMb: 10,
+                  accounts: { Limited: { profile: "media-cap", mediaMaxMb: 1 / 1024 } },
+                },
+              },
+            },
+            accountId: "limited",
+            to: "user:123456789",
+            text: "attachment",
+            mediaUrl: file,
+            mediaLocalRoots: [directory],
+          };
+          await writeFile(file, "x".repeat(1536));
+          await expect(sendMedia(params)).rejects.toThrow(/exceeds.*limit/i);
+          expect(sendMessage).not.toHaveBeenCalled();
+          await writeFile(file, "x".repeat(512));
+          const result = await sendMedia(params);
+          expect(result.messageId).toBe("media-cap");
+          expect(sendMessage).toHaveBeenCalledOnce();
+          expect(sendMessage).toHaveBeenCalledWith(
+            expect.objectContaining({
+              attachments: [expect.objectContaining({ data: Buffer.from("x".repeat(512)) })],
+            }),
+            "123456789",
+            expect.anything(),
+          );
+        },
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("keeps the 2,000-code-unit transport payload UTF-16 well-formed", async () => {
     const sendMessage = vi.fn(async () => ({ msgId: "message-1" }));
     const api = createMockApi({ sendMessage } as Partial<API>);

@@ -2,21 +2,30 @@ import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseWorkerLaunchPlan, type WorkerLaunchPlan } from "./launch-descriptor.js";
+import { hasExactOwnKeys } from "./protocol-record.js";
 
 const IDENTIFIER_MAX_CHARS = 256;
 const GATEWAY_NAMESPACE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
-const NODE_WORKER_SUPERVISOR_CANCEL_REQUEST_MAX_BYTES = 4 * 1024;
+const NODE_WORKER_SUPERVISOR_CONTROL_REQUEST_MAX_BYTES = 4 * 1024;
 const NODE_WORKER_RESULT_JSON_MAX_BYTES = 64 * 1024;
 const NODE_WORKER_ERROR_TEXT_MAX_BYTES = 4 * 1024;
 const NODE_WORKER_CONNECTION_FAILURE_CAUSE_MAX_BYTES = 64 * 1024;
 export const NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE = "openclaw-worker-connection-failure-v1";
 
 export type NodeWorkerLaunchInput = {
+  environmentSession: 1;
   launchId: string;
   gatewayNamespace: string;
   expectedBundleHash: string;
   placementGeneration: number;
   descriptor: WorkerLaunchPlan;
+};
+
+export type NodeWorkerEnvironmentStopInput = {
+  gatewayNamespace: string;
+  environmentId: string;
+  sessionId: string;
+  ownerEpoch: number;
 };
 
 export type NodeWorkerSupervisorIdentity = {
@@ -52,12 +61,6 @@ export type NodeWorkerConnectionFailureMessage = {
   type: typeof NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE;
   cause: string | null;
 };
-
-function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  return (
-    Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key))
-  );
-}
 
 function isIdentifier(value: unknown): value is string {
   return (
@@ -102,7 +105,7 @@ function decodeRequest(raw?: string | null): unknown {
   }
 }
 
-export function assertNodeWorkerLaunchIdentity(
+function assertNodeWorkerLaunchIdentity(
   input: Pick<NodeWorkerLaunchInput, "launchId" | "expectedBundleHash">,
   descriptor: WorkerLaunchPlan,
 ): void {
@@ -115,10 +118,14 @@ export function assertNodeWorkerLaunchIdentity(
 }
 
 export function parseNodeWorkerLaunchInput(raw?: string | null): NodeWorkerLaunchInput {
-  const value = decodeRequest(raw);
+  return validateNodeWorkerLaunchInput(decodeRequest(raw));
+}
+
+export function validateNodeWorkerLaunchInput(value: unknown): NodeWorkerLaunchInput {
   if (
     !isRecord(value) ||
-    !hasExactKeys(value, [
+    !hasExactOwnKeys(value, [
+      "environmentSession",
       "launchId",
       "gatewayNamespace",
       "expectedBundleHash",
@@ -127,6 +134,9 @@ export function parseNodeWorkerLaunchInput(raw?: string | null): NodeWorkerLaunc
     ])
   ) {
     throw new Error("INVALID_REQUEST: invalid node worker launch request");
+  }
+  if (value.environmentSession !== 1) {
+    throw new Error("INVALID_REQUEST: node worker environment lifetime support required");
   }
   const launchId = requireIdentifier(value.launchId, "launchId");
   const gatewayNamespace = requireIdentifier(value.gatewayNamespace, "gatewayNamespace");
@@ -149,6 +159,7 @@ export function parseNodeWorkerLaunchInput(raw?: string | null): NodeWorkerLaunc
     descriptor,
   );
   return {
+    environmentSession: 1,
     launchId,
     gatewayNamespace,
     expectedBundleHash: value.expectedBundleHash,
@@ -162,20 +173,20 @@ export function parseNodeWorkerLaunchInput(raw?: string | null): NodeWorkerLaunc
 
 export function parseNodeWorkerLookupInput(raw?: string | null): { launchId: string } {
   const value = decodeRequest(raw);
-  if (!isRecord(value) || !hasExactKeys(value, ["launchId"])) {
+  if (!isRecord(value) || !hasExactOwnKeys(value, ["launchId"])) {
     throw new Error("INVALID_REQUEST: invalid node worker lookup request");
   }
   return { launchId: requireIdentifier(value.launchId, "launchId") };
 }
 
 export function parseNodeWorkerCancelInput(raw?: string | null): NodeWorkerSupervisorIdentity {
-  if (!raw || Buffer.byteLength(raw, "utf8") > NODE_WORKER_SUPERVISOR_CANCEL_REQUEST_MAX_BYTES) {
+  if (!raw || Buffer.byteLength(raw, "utf8") > NODE_WORKER_SUPERVISOR_CONTROL_REQUEST_MAX_BYTES) {
     throw new Error("INVALID_REQUEST: invalid node worker cancel request");
   }
   const value = decodeRequest(raw);
   if (
     !isRecord(value) ||
-    !hasExactKeys(value, [
+    !hasExactOwnKeys(value, [
       "launchId",
       "planHash",
       "environmentId",
@@ -201,6 +212,31 @@ export function parseNodeWorkerCancelInput(raw?: string | null): NodeWorkerSuper
       "placementGeneration",
     ),
     runId: requireIdentifier(value.runId, "runId"),
+  };
+}
+
+export function parseNodeWorkerEnvironmentStopInput(
+  raw?: string | null,
+): NodeWorkerEnvironmentStopInput {
+  if (!raw || Buffer.byteLength(raw, "utf8") > NODE_WORKER_SUPERVISOR_CONTROL_REQUEST_MAX_BYTES) {
+    throw new Error("INVALID_REQUEST: invalid node worker environment stop request");
+  }
+  const value = decodeRequest(raw);
+  if (
+    !isRecord(value) ||
+    !hasExactOwnKeys(value, ["gatewayNamespace", "environmentId", "sessionId", "ownerEpoch"])
+  ) {
+    throw new Error("INVALID_REQUEST: invalid node worker environment stop request");
+  }
+  const gatewayNamespace = requireIdentifier(value.gatewayNamespace, "gatewayNamespace");
+  if (!GATEWAY_NAMESPACE_PATTERN.test(gatewayNamespace)) {
+    throw new Error("INVALID_REQUEST: gatewayNamespace must be a safe bounded path component");
+  }
+  return {
+    gatewayNamespace,
+    environmentId: requireIdentifier(value.environmentId, "environmentId"),
+    sessionId: requireIdentifier(value.sessionId, "sessionId"),
+    ownerEpoch: requireNonNegativeInteger(value.ownerEpoch, "ownerEpoch"),
   };
 }
 
@@ -284,7 +320,7 @@ export function parseNodeWorkerConnectionFailureMessage(
 ): NodeWorkerConnectionFailureMessage | null {
   if (
     !isRecord(value) ||
-    !hasExactKeys(value, ["type", "cause"]) ||
+    !hasExactOwnKeys(value, ["type", "cause"]) ||
     value.type !== NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE ||
     (value.cause !== null &&
       (typeof value.cause !== "string" ||
@@ -310,18 +346,18 @@ export function parseNodeWorkerSupervisorReceipt(
     return null;
   }
   if (value.state === "pending" || value.state === "running") {
-    return hasExactKeys(value, [...RECEIPT_IDENTITY_KEYS, "state"])
+    return hasExactOwnKeys(value, [...RECEIPT_IDENTITY_KEYS, "state"])
       ? { ...identity, state: value.state }
       : null;
   }
   if (value.state === "completed") {
-    return hasExactKeys(value, [...RECEIPT_IDENTITY_KEYS, "state", "resultJson"]) &&
+    return hasExactOwnKeys(value, [...RECEIPT_IDENTITY_KEYS, "state", "resultJson"]) &&
       isBoundedResultJson(value.resultJson)
       ? { ...identity, state: value.state, resultJson: value.resultJson }
       : null;
   }
   if (value.state === "failed" || value.state === "interrupted" || value.state === "cancelled") {
-    return hasExactKeys(value, [...RECEIPT_IDENTITY_KEYS, "state", "errorText"]) &&
+    return hasExactOwnKeys(value, [...RECEIPT_IDENTITY_KEYS, "state", "errorText"]) &&
       isBoundedErrorText(value.errorText)
       ? { ...identity, state: value.state, errorText: value.errorText }
       : null;

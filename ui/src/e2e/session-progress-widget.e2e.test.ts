@@ -1,8 +1,9 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiBundledSettingsStorageKey,
+  controlUiSessionUrl,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -12,7 +13,10 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 const sessionKey = "agent:main:progress-dashboard";
-const proofDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/session-progress-widget");
+let proofDir: string;
+beforeEach(() => {
+  proofDir = createControlUiE2eArtifactDir("session-progress-widget");
+});
 
 suite.define(() => {
   it("renders the live session progress card through an advertised dashboard kind", async () => {
@@ -75,7 +79,7 @@ suite.define(() => {
         { key: sessionKey, storage: storageKey },
       );
 
-      await page.goto(`${suite.server.baseUrl}dashboard`);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
       const card = page.locator('[data-progress-card-placement="board"]');
       await card.waitFor();
       expect(await card.locator("iframe").count()).toBe(0);
@@ -88,7 +92,6 @@ suite.define(() => {
         .toContain("1/3");
       await expect.poll(() => gateway.getRequests("progressCard.get")).toHaveLength(1);
 
-      await mkdir(proofDir, { recursive: true });
       await page.screenshot({
         animations: "disabled",
         fullPage: true,

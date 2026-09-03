@@ -19,7 +19,7 @@ describe("models cli lazy runtime boundary", () => {
       runtimeLoaded();
       return {
         defaultRuntime: {},
-        rejectAgentScopedModelWrite: vi.fn(),
+        rejectAgentScopedModelCommand: vi.fn(),
         resolveModelAgentOption: vi.fn(),
         runModelsCommand: vi.fn(),
       };
@@ -53,7 +53,7 @@ describe("models cli lazy runtime boundary", () => {
       runtimeLoaded();
       return {
         defaultRuntime,
-        rejectAgentScopedModelWrite: vi.fn(),
+        rejectAgentScopedModelCommand: vi.fn(),
         resolveModelAgentOption,
         runModelsCommand,
       };

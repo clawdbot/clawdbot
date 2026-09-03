@@ -1,4 +1,5 @@
 // Covers embedded backend behavior used by the TUI runtime.
+import fs from "node:fs/promises";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
@@ -13,6 +14,7 @@ import { defaultRuntime } from "../runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
 import { notifyListeners } from "../shared/listeners.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { EmbeddedTuiBackend as EmbeddedTuiBackendType } from "./embedded-backend.js";
 
 type EmbeddedAgentResult = {
@@ -38,7 +40,9 @@ const updateSessionGoalStatusMock = vi.fn();
 const loadAgentRuntimePluginRegistryHandleMock = vi.fn();
 const withPluginRuntimeRegistryScopeMock = vi.fn((_registry: unknown, run: () => unknown) => run());
 const ensureContextWindowCacheLoadedMock = vi.fn(async () => undefined);
-const runSessionStartupMigrationMock = vi.fn<() => Promise<void>>(async () => undefined);
+const runSessionStartupMigrationMock = vi.fn<(...args: unknown[]) => Promise<void>>(
+  async () => undefined,
+);
 const refreshPreparedModelRuntimeSnapshotsMock = vi.fn<
   (_config: unknown, _options?: unknown) => Promise<void>
 >(async () => undefined);
@@ -104,6 +108,9 @@ vi.mock("../agents/agent-command.js", () => ({
 vi.mock("../agents/embedded-agent-runner/runs.js", () => ({
   queueEmbeddedAgentMessageWithOutcomeAsync: (...args: unknown[]) =>
     queueEmbeddedAgentMessageWithOutcomeAsyncMock(...args),
+}));
+
+vi.mock("../agents/embedded-agent-runner/active-run-projections.js", () => ({
   resolveActiveEmbeddedRunSessionId: (...args: unknown[]) =>
     resolveActiveEmbeddedRunSessionIdMock(...args),
 }));
@@ -151,7 +158,8 @@ vi.mock("../config/sessions/session-accessor.js", () => ({
   applySessionPatchProjection: (...args: unknown[]) => applySessionPatchProjectionMock(...args),
 }));
 
-vi.mock("../agents/agent-scope.js", () => ({
+vi.mock("../agents/agent-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/agent-scope.js")>()),
   resolveAgentDir: (_cfg: unknown, agentId: string) => `/tmp/openclaw-agent-${agentId}/agent`,
   resolveAgentWorkspaceDir: (_cfg: unknown, agentId: string) => `/tmp/openclaw-agent-${agentId}`,
   resolveDefaultAgentId: (cfg?: {
@@ -219,7 +227,6 @@ vi.mock("../config/sessions/startup-migration.js", () => ({
 
 vi.mock("../gateway/chat-display-projection.js", () => ({
   projectChatDisplayMessages: (messages: unknown[]) => messages,
-  projectRecentChatDisplayMessages: (messages: unknown[]) => messages,
   resolveEffectiveChatHistoryMaxChars: () => 100_000,
 }));
 
@@ -938,6 +945,38 @@ describe("EmbeddedTuiBackend", () => {
     expect(listSessionsFromStoreAsyncMock).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects embedded session reads when the actual startup migration finds a legacy store", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const storePath = await state.writeText(
+        "custom/sessions.json",
+        JSON.stringify({
+          "agent:main:legacy": { sessionId: "legacy-session", updatedAt: 1 },
+        }),
+      );
+      const before = await fs.readFile(storePath);
+      getRuntimeConfigMock.mockReturnValue({ session: { store: storePath } });
+      const actual = await vi.importActual<
+        typeof import("../config/sessions/startup-migration.js")
+      >("../config/sessions/startup-migration.js");
+      runSessionStartupMigrationMock.mockImplementationOnce(async (...args: unknown[]) => {
+        await actual.runSessionStartupMigration(
+          args[0] as Parameters<typeof actual.runSessionStartupMigration>[0],
+        );
+      });
+      const backend = new EmbeddedTuiBackend();
+
+      backend.start();
+      try {
+        await expect(backend.listSessions({ agentId: "main" })).rejects.toThrow(
+          "Legacy session store requires migration",
+        );
+      } finally {
+        await backend.stop();
+      }
+      expect(await fs.readFile(storePath)).toEqual(before);
+    });
+  });
+
   it("publishes a static configured runtime before admitting the first local turn", async () => {
     const initialConfig = { agents: { list: [{ id: "main" }] } };
     getRuntimeConfigMock.mockReturnValue(initialConfig);
@@ -1468,7 +1507,15 @@ describe("EmbeddedTuiBackend", () => {
       message: "/btw detached",
       runId: "run-global-work-btw",
     });
-    await flushMicrotasks();
+    await vi.waitFor(() =>
+      expect(events).toContainEqual({
+        event: "chat.side_result",
+        payload: expect.objectContaining({ text: "side done", agentId: "work" }),
+      }),
+    );
+    expect(runBtwSideQuestionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: "global", agentId: "work" }),
+    );
 
     expect(
       events.filter((event) => ["chat", "agent", "chat.side_result"].includes(event.event)),
@@ -3073,6 +3120,11 @@ describe("EmbeddedTuiBackend", () => {
       finalPayloads: [],
       expectedText: "Draft answer",
     },
+    {
+      name: "preserves an ordinary MEDIA-like suffix in the authoritative final answer",
+      finalPayloads: [{ text: "The selected size is\nM" }],
+      expectedText: "The selected size is\nM",
+    },
   ])("$name", async ({ finalPayloads, expectedText }) => {
     const pending = deferred<EmbeddedAgentResult>();
     agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
@@ -3110,6 +3162,53 @@ describe("EmbeddedTuiBackend", () => {
       message: {
         role: "assistant",
         content: [{ type: "text", text: expectedText }],
+        timestamp: embeddedEventTimestamp,
+      },
+    });
+  });
+
+  it("preserves generic relative media URLs in the authoritative final answer", async () => {
+    const pending = deferred<EmbeddedAgentResult>();
+    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
+
+    const backend = new EmbeddedTuiBackend();
+    const events = captureBackendEvents(backend);
+
+    backend.start();
+    await sendMainChat(backend, "show the image", "run-local-relative-media");
+
+    registeredListener?.({
+      runId: "run-local-relative-media",
+      stream: "assistant",
+      data: {
+        text: "MEDIA:./image.png",
+        delta: "MEDIA:./image.png",
+        mediaUrls: ["./image.png"],
+      },
+    });
+    registeredListener?.({
+      runId: "run-local-relative-media",
+      stream: "lifecycle",
+      data: { phase: "end", stopReason: "stop" },
+    });
+
+    pending.resolve({ payloads: [{ text: "MEDIA:./image.png" }], meta: {} });
+    await flushMicrotasks();
+
+    expect(
+      events
+        .filter((event) => event.event === "chat")
+        .map((event) => event.payload)
+        .at(-1),
+    ).toStrictEqual({
+      runId: "run-local-relative-media",
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      state: "final",
+      stopReason: "stop",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "MEDIA:./image.png" }],
         timestamp: embeddedEventTimestamp,
       },
     });

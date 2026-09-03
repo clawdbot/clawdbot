@@ -2,7 +2,6 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
-import { NATIVE_UPDATE_DECLINED_EVENT } from "../app/native-link-routing.ts";
 import type { ApplicationStatusBanner } from "../app/update-overlay-helpers.ts";
 import "./sidebar-update-card.ts";
 
@@ -113,32 +112,6 @@ describe("SidebarUpdateCard", () => {
     expect(onReviewUpdate).toHaveBeenCalledOnce();
   });
 
-  it("returns a declined native alert update to the gateway", async () => {
-    const element = await mount({
-      currentVersion: "1.0.0",
-      latestVersion: "2.0.0",
-      channel: "stable",
-    });
-    const onUpdate = vi.fn();
-    element.onUpdate = onUpdate;
-
-    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
-    expect(onUpdate).toHaveBeenCalledOnce();
-
-    element.updateBusy = true;
-    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
-    expect(onUpdate).toHaveBeenCalledOnce();
-
-    element.updateBusy = false;
-    element.updateAvailable = null;
-    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
-    expect(onUpdate).toHaveBeenCalledOnce();
-
-    element.remove();
-    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
-    expect(onUpdate).toHaveBeenCalledOnce();
-  });
-
   it("renders an available update and narrates it after the Gateway drops its metadata", async () => {
     const element = await mount(
       { currentVersion: "1.0.0", latestVersion: "1.0.0", channel: "dev", commitsBehind: 246 },
@@ -184,6 +157,34 @@ describe("SidebarUpdateCard", () => {
     expect(element.querySelector(".sidebar-update-card__action")?.textContent).toContain(
       "Update Gateway",
     );
+  });
+
+  it("keeps an unauthorized update discoverable without allowing activation", async () => {
+    const element = await mount(
+      {
+        currentVersion: "1.0.0",
+        latestVersion: "2.0.0",
+        channel: "stable",
+      },
+      null,
+      false,
+    );
+    const onUpdate = vi.fn();
+    element.onUpdate = onUpdate;
+
+    const action = element.querySelector<HTMLButtonElement>(".sidebar-update-card__action");
+    const tooltip = action?.closest("openclaw-tooltip") as
+      | (HTMLElement & { content?: string; updateComplete: Promise<boolean> })
+      | null;
+    await tooltip?.updateComplete;
+
+    expect(action?.disabled).toBe(false);
+    expect(action?.getAttribute("aria-disabled")).toBe("true");
+    expect(action?.getAttribute("aria-describedby")).not.toBeNull();
+    expect(tooltip?.hasAttribute("open-on-click")).toBe(true);
+    expect(tooltip?.content).toContain("Administrator access is required");
+    action?.click();
+    expect(onUpdate).not.toHaveBeenCalled();
   });
 
   it("renders a quiet live countdown and stops ticking on disconnect", async () => {

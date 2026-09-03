@@ -1,5 +1,8 @@
-import { inferControlUiFocusBasePath } from "@openclaw/session-url-contract";
-import { normalizeRouteBasePath, normalizeRoutePath } from "@openclaw/uirouter";
+import {
+  inferControlUiFocusBasePath,
+  matchControlUiCatalogSharePath,
+} from "@openclaw/session-url-contract";
+import { normalizeRouteBasePath, normalizeRoutePath as normalizePath } from "@openclaw/uirouter";
 import type { RouteLocation } from "@openclaw/uirouter";
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
 import { DEFAULT_AGENT_PANEL, isAgentsPanel, type AgentsPanel } from "./lib/agents/panels.ts";
@@ -9,6 +12,10 @@ export const INTERNAL_SESSION_PATH_PARAM = "__openclawSessionPath";
 export const INTERNAL_MEMORY_PATH_PARAM = "__openclawMemoryPath";
 export const INTERNAL_PLUGINS_PATH_PARAM = "__openclawPluginsPath";
 export const INTERNAL_WORKBOARD_PATH_PARAM = "__openclawWorkboardPath";
+export const CONTROL_UI_DOCUMENT_ROUTE_PATHS = {
+  approval: "/approve",
+  question: "/ask",
+} as const;
 
 export type MemoryRouteTab = "overview" | "memories" | "dreams" | "settings";
 export type PluginsHubRouteTab = "installed" | "discover";
@@ -27,6 +34,7 @@ const APP_ROUTE_DEFINITIONS = {
   custodian: { path: "/custodian" },
   "new-session": { path: "/new" },
   activity: { path: "/activity" },
+  meetings: { path: "/meetings" },
   apps: { path: "/apps" },
   portals: { path: "/portals" },
   agents: { path: "/settings/agents", aliases: ["/agents"] },
@@ -77,8 +85,24 @@ const APP_ROUTE_DEFINITIONS = {
 export type RouteId = keyof typeof APP_ROUTE_DEFINITIONS;
 export const APP_ROUTE_IDS = Object.keys(APP_ROUTE_DEFINITIONS) as RouteId[];
 
+const APP_ROUTE_PATHS: string[] = [];
+const ROUTE_ID_BY_PATH = new Map<string, RouteId>();
+// Static paths and aliases share one prepared index; earlier declarations keep priority.
+for (const routeId of APP_ROUTE_IDS) {
+  const definition = APP_ROUTE_DEFINITIONS[routeId];
+  const paths: readonly string[] =
+    "aliases" in definition ? [definition.path, ...definition.aliases] : [definition.path];
+  for (const path of paths) {
+    const normalizedPath = normalizePath(path);
+    APP_ROUTE_PATHS.push(normalizedPath);
+    if (!ROUTE_ID_BY_PATH.has(normalizedPath)) {
+      ROUTE_ID_BY_PATH.set(normalizedPath, routeId);
+    }
+  }
+}
+
 export function isRouteId(routeId: string): routeId is RouteId {
-  return routeId in APP_ROUTE_DEFINITIONS;
+  return Object.hasOwn(APP_ROUTE_DEFINITIONS, routeId);
 }
 
 // Single source for page definitions: ui/src/pages/*/route.ts spreads this
@@ -87,18 +111,11 @@ export function isRouteId(routeId: string): routeId is RouteId {
 export function routePageSpec<Id extends RouteId>(
   routeId: Id,
 ): { id: Id; path: string; aliases?: readonly string[] } {
-  const definition = APP_ROUTE_DEFINITIONS[routeId];
-  return "aliases" in definition
-    ? { id: routeId, path: definition.path, aliases: definition.aliases }
-    : { id: routeId, path: definition.path };
+  return { id: routeId, ...APP_ROUTE_DEFINITIONS[routeId] };
 }
 
 export function normalizeBasePath(basePath: string): string {
   return normalizeRouteBasePath(basePath);
-}
-
-function normalizePath(path: string): string {
-  return normalizeRoutePath(path);
 }
 
 export function pathForRoute(routeId: RouteId, basePath = ""): string {
@@ -219,11 +236,18 @@ export function sessionRouteNamespaceFromPath(pathname: string, basePath = ""): 
     return null;
   }
   const routePath = normalizedPath.slice(normalizedBasePath.length);
-  return routePath.startsWith("/chat/")
-    ? "chat"
-    : routePath.startsWith("/dashboard/")
-      ? "dashboard"
-      : null;
+  if (routePath.startsWith("/chat/")) {
+    return "chat";
+  }
+  if (routePath.startsWith("/dashboard/")) {
+    return "dashboard";
+  }
+  // The shared matcher reserves every built-in route and document namespace.
+  const catalogShare = matchControlUiCatalogSharePath({
+    pathname: normalizedPath,
+    basePath: normalizedBasePath,
+  });
+  return catalogShare ? "chat" : null;
 }
 
 export function workboardBoardIdFromPath(pathname: string, basePath = ""): string | null {
@@ -270,34 +294,14 @@ export function routeIdFromPath(pathname: string, basePath = ""): RouteId | null
   if (pluginsHubTabFromPath(normalizedPath, normalizedBasePath)) {
     return "plugins";
   }
-  const sessionNamespace = sessionRouteNamespaceFromPath(normalizedPath, normalizedBasePath);
-  if (sessionNamespace) {
-    return sessionNamespace;
-  }
   // uirouter matches static paths case-insensitively (pathKey lowercases), so
   // this pre-gate must too — otherwise /Usage is rewritten to /chat before the
   // router, which would have matched it, ever starts.
-  const routePathKey = routePath.toLowerCase();
-  for (const routeId of APP_ROUTE_IDS) {
-    const definition = APP_ROUTE_DEFINITIONS[routeId];
-    const paths: readonly string[] =
-      "aliases" in definition ? [definition.path, ...definition.aliases] : [definition.path];
-    if (paths.some((candidate) => normalizePath(candidate) === routePathKey)) {
-      return routeId;
-    }
+  const exactRouteId = ROUTE_ID_BY_PATH.get(routePath.toLowerCase());
+  if (exactRouteId) {
+    return exactRouteId;
   }
-  return null;
-}
-
-function collectRoutePaths(): string[] {
-  return APP_ROUTE_IDS.flatMap((routeId) => {
-    const definition = APP_ROUTE_DEFINITIONS[routeId];
-    const paths: string[] = [definition.path];
-    if ("aliases" in definition) {
-      paths.push(...definition.aliases);
-    }
-    return paths;
-  });
+  return sessionRouteNamespaceFromPath(normalizedPath, normalizedBasePath);
 }
 
 // A candidate mount base that is a registered route ("/custodian"), or that
@@ -309,14 +313,13 @@ function collectRoutePaths(): string[] {
 // hosting); accepted tradeoff: namespaces nested under a real mount prefix
 // ("/ui/settings/other/config") are not rescued here.
 function isRouteOwnedBasePath(basePath: string): boolean {
-  const routePaths = collectRoutePaths().map((path) => normalizePath(path));
-  if (routePaths.includes(basePath)) {
+  if (APP_ROUTE_PATHS.includes(basePath)) {
     return true;
   }
   const segments = basePath.split("/").filter(Boolean);
   for (let count = 1; count <= segments.length; count += 1) {
     const ancestor = `/${segments.slice(0, count).join("/")}`;
-    if (routePaths.some((path) => path.startsWith(`${ancestor}/`))) {
+    if (APP_ROUTE_PATHS.some((path) => path.startsWith(`${ancestor}/`))) {
       return true;
     }
   }
@@ -337,10 +340,12 @@ export function inferBasePathFromPathname(pathname: string): string {
     return "";
   }
   const segments = normalizedPath.split("/").filter(Boolean);
-  const routePaths = collectRoutePaths();
   for (let index = 0; index < segments.length; index += 1) {
     const candidate = `/${segments.slice(index).join("/")}`;
-    const routePath = routePaths.find((path) => normalizePath(path) === candidate);
+    const routePath = APP_ROUTE_PATHS.find((path) => path === candidate);
+    const documentRoutePath = Object.values(CONTROL_UI_DOCUMENT_ROUTE_PATHS).find(
+      (path) => candidate === path || candidate.startsWith(`${path}/`),
+    );
     const dynamicAgentRoute = agentRouteFromPath(candidate) !== null;
     const dynamicWorkboardRoute = workboardBoardIdFromPath(candidate) !== null;
     const dynamicMemoryRoute = memoryTabFromPath(candidate) !== null;
@@ -349,6 +354,7 @@ export function inferBasePathFromPathname(pathname: string): string {
     const dynamicSessionRoute = sessionNamespace !== null;
     if (
       !routePath &&
+      !documentRoutePath &&
       !dynamicAgentRoute &&
       !dynamicWorkboardRoute &&
       !dynamicMemoryRoute &&
@@ -358,28 +364,21 @@ export function inferBasePathFromPathname(pathname: string): string {
       continue;
     }
     const previousSegment = segments[index - 1];
-    const dynamicRoutePath = dynamicAgentRoute
-      ? APP_ROUTE_DEFINITIONS.agents.path
-      : dynamicWorkboardRoute
-        ? APP_ROUTE_DEFINITIONS.workboard.path
-        : dynamicMemoryRoute
-          ? APP_ROUTE_DEFINITIONS.memory.path
-          : dynamicPluginsRoute
-            ? APP_ROUTE_DEFINITIONS.plugins.path
-            : sessionNamespace
-              ? APP_ROUTE_DEFINITIONS[sessionNamespace].path
-              : null;
+    const dynamicRoutePath = documentRoutePath
+      ? documentRoutePath
+      : dynamicAgentRoute
+        ? APP_ROUTE_DEFINITIONS.agents.path
+        : dynamicWorkboardRoute
+          ? APP_ROUTE_DEFINITIONS.workboard.path
+          : dynamicMemoryRoute
+            ? APP_ROUTE_DEFINITIONS.memory.path
+            : dynamicPluginsRoute
+              ? APP_ROUTE_DEFINITIONS.plugins.path
+              : sessionNamespace
+                ? APP_ROUTE_DEFINITIONS[sessionNamespace].path
+                : null;
     const firstRouteSegment = (routePath ?? dynamicRoutePath ?? "").split("/").find(Boolean);
-    if (
-      index > 0 &&
-      previousSegment === firstRouteSegment &&
-      (candidate === routePath ||
-        dynamicAgentRoute ||
-        dynamicWorkboardRoute ||
-        dynamicMemoryRoute ||
-        dynamicPluginsRoute ||
-        dynamicSessionRoute)
-    ) {
+    if (index > 0 && previousSegment === firstRouteSegment) {
       return "";
     }
     if (index === 0) {

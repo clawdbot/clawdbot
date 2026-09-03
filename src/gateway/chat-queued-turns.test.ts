@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import {
   abortQueuedChatTurnById,
   abortQueuedChatTurns,
@@ -186,7 +187,7 @@ describe("chat-queued-turns", () => {
     expect(plain.signal.aborted).toBe(false);
   });
 
-  it("aborts by runId and removes the entry", () => {
+  it.each(["rpc", "restart"])("aborts by runId and preserves %s disposition", (stopReason) => {
     const map = emptyMap();
     const controller = new AbortController();
     registerQueuedChatTurn({
@@ -199,10 +200,11 @@ describe("chat-queued-turns", () => {
     const res = abortQueuedChatTurnById(map, {
       runId: "run-b",
       sessionKey: "main",
-      stopReason: "rpc",
+      stopReason,
     });
     expect(res.aborted).toBe(true);
     expect(controller.signal.aborted).toBe(true);
+    expect(isAgentRunRestartAbortReason(controller.signal.reason)).toBe(stopReason === "restart");
     expect(map.has("run-b")).toBe(false);
   });
 
@@ -291,32 +293,37 @@ describe("chat-queued-turns", () => {
     expect(local.map((m) => m.runId)).toEqual(["local"]);
   });
 
-  it("aborts authorized matches before returning runIds", () => {
-    const map = emptyMap();
-    const a = new AbortController();
-    const b = new AbortController();
-    registerQueuedChatTurn({
-      chatQueuedTurns: map,
-      runId: "qa",
-      controller: a,
-      sessionId: "s",
-      sessionKey: "main",
-    });
-    registerQueuedChatTurn({
-      chatQueuedTurns: map,
-      runId: "qb",
-      controller: b,
-      sessionId: "s",
-      sessionKey: "main",
-    });
-    const matches = listQueuedChatTurnsForSession({
-      chatQueuedTurns: map,
-      sessionKeys: ["main"],
-    });
-    const runIds = abortQueuedChatTurns(map, matches, "rpc");
-    expect(runIds.toSorted()).toEqual(["qa", "qb"]);
-    expect(a.signal.aborted).toBe(true);
-    expect(b.signal.aborted).toBe(true);
-    expect(map.size).toBe(0);
-  });
+  it.each(["rpc", "restart"])(
+    "aborts authorized matches with %s before returning runIds",
+    (stopReason) => {
+      const map = emptyMap();
+      const a = new AbortController();
+      const b = new AbortController();
+      registerQueuedChatTurn({
+        chatQueuedTurns: map,
+        runId: "qa",
+        controller: a,
+        sessionId: "s",
+        sessionKey: "main",
+      });
+      registerQueuedChatTurn({
+        chatQueuedTurns: map,
+        runId: "qb",
+        controller: b,
+        sessionId: "s",
+        sessionKey: "main",
+      });
+      const matches = listQueuedChatTurnsForSession({
+        chatQueuedTurns: map,
+        sessionKeys: ["main"],
+      });
+      const runIds = abortQueuedChatTurns(map, matches, stopReason);
+      expect(runIds.toSorted()).toEqual(["qa", "qb"]);
+      expect(a.signal.aborted).toBe(true);
+      expect(b.signal.aborted).toBe(true);
+      expect(isAgentRunRestartAbortReason(a.signal.reason)).toBe(stopReason === "restart");
+      expect(isAgentRunRestartAbortReason(b.signal.reason)).toBe(stopReason === "restart");
+      expect(map.size).toBe(0);
+    },
+  );
 });

@@ -120,6 +120,8 @@ let buildPluginBindingApprovalCustomId: typeof import("./conversation-binding.js
 let bindPluginSessionConversation: typeof import("./session-conversation-binding.js").bindPluginSessionConversation;
 let detachPluginConversationBinding: typeof import("./conversation-binding.js").detachPluginConversationBinding;
 let getCurrentPluginConversationBinding: typeof import("./conversation-binding.js").getCurrentPluginConversationBinding;
+let hasShownPluginBindingFallbackNotice: typeof import("./conversation-binding.js").hasShownPluginBindingFallbackNotice;
+let markPluginBindingFallbackNoticeShown: typeof import("./conversation-binding.js").markPluginBindingFallbackNoticeShown;
 let parsePluginBindingApprovalCustomId: typeof import("./conversation-binding.js").parsePluginBindingApprovalCustomId;
 let requestPluginConversationBinding: typeof import("./conversation-binding.js").requestPluginConversationBinding;
 let resolvePluginConversationBindingApproval: typeof import("./conversation-binding.js").resolvePluginConversationBindingApproval;
@@ -176,6 +178,8 @@ beforeAll(async () => {
     buildPluginBindingApprovalCustomId,
     detachPluginConversationBinding,
     getCurrentPluginConversationBinding,
+    hasShownPluginBindingFallbackNotice,
+    markPluginBindingFallbackNoticeShown,
     parsePluginBindingApprovalCustomId,
     requestPluginConversationBinding,
     resolvePluginConversationBindingApproval,
@@ -471,6 +475,38 @@ describe("plugin conversation binding approvals", () => {
     registerSessionBindingAdapter(createAdapter("webchat", "default"));
   });
 
+  it("keeps fallback notices independent across channel and account binding owners", () => {
+    const bindingId = "default:shared-conversation";
+    for (const scope of [
+      { channel: "discord", accountId: "default" },
+      { channel: "telegram", accountId: "default" },
+      { channel: "discord", accountId: "work" },
+    ]) {
+      expect(hasShownPluginBindingFallbackNotice(bindingId, scope)).toBe(false);
+      markPluginBindingFallbackNoticeShown(bindingId, scope);
+      expect(hasShownPluginBindingFallbackNotice(bindingId, scope)).toBe(true);
+    }
+    expect(hasShownPluginBindingFallbackNotice(bindingId)).toBe(false);
+    markPluginBindingFallbackNoticeShown(bindingId);
+    expect(hasShownPluginBindingFallbackNotice(bindingId)).toBe(true);
+  });
+
+  it("bounds historical fallback notices while preserving recent suppression and lifecycle cleanup", async () => {
+    const scope = { channel: "discord", accountId: "default" };
+    for (let index = 0; index <= 4096; index += 1) {
+      markPluginBindingFallbackNoticeShown(`binding-${index}`, scope);
+    }
+
+    expect(hasShownPluginBindingFallbackNotice("binding-0", scope)).toBe(false);
+    expect(hasShownPluginBindingFallbackNotice("binding-1", scope)).toBe(true);
+    expect(hasShownPluginBindingFallbackNotice("binding-4096", scope)).toBe(true);
+    markPluginBindingFallbackNoticeShown("binding-4097", scope);
+    expect(hasShownPluginBindingFallbackNotice("binding-2", scope)).toBe(false);
+    expect(hasShownPluginBindingFallbackNotice("binding-1", scope)).toBe(true);
+    await drainGlobalSingletonLifecycleState();
+    expect(hasShownPluginBindingFallbackNotice("binding-4096", scope)).toBe(false);
+  });
+
   it("restores the prior Control UI binding when provider publication fails", async () => {
     const previous: SessionBindingRecord = {
       bindingId: "binding-prior",
@@ -507,6 +543,7 @@ describe("plugin conversation binding approvals", () => {
     expect(sessionBindingState.unbind).toHaveBeenCalledWith({
       bindingId: "binding-1",
       reason: "plugin-session-bind-rollback",
+      scope: previous.conversation,
     });
   });
 

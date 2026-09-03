@@ -13,11 +13,14 @@ import type {
 } from "../../plugins/cli-backend.types.js";
 import type { RunExit, TerminationReason } from "../../process/supervisor/types.js";
 import { resolveAdmittedRunActiveAssertion } from "../admitted-run-context.js";
+import { runBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
 import type { CliTerminalInterruption } from "../cli-output-contracts.js";
 import { resolveExecDefaults } from "../exec-defaults.js";
-import { isSignalTimeoutReason, type FailoverError } from "../failover-error.js";
+import { FailoverError, isSignalTimeoutReason } from "../failover-error.js";
 import { runStructuredInput } from "../harness/structured-input-execution.js";
 import { compileStructuredInputQuestions } from "../harness/structured-input.js";
+import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
+import { normalizeToolPolicyName } from "../tool-policy.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import {
   closeCliLiveSession,
@@ -29,7 +32,8 @@ import {
   resolveCliNativeToolApprovalPlan,
 } from "./cli-native-tool-approval.js";
 import { createCliAbortError } from "./execute-node-claude.js";
-import { resolveCliNoOutputTimeoutDecision } from "./no-output-timeout-policy.js";
+import { createCliFailoverError as failover } from "./exit-error.js";
+import * as noOutputPolicy from "./no-output-timeout-policy.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 const PLUGIN_ITERATOR_CLOSE_TIMEOUT_MS = 5_000;
@@ -75,6 +79,123 @@ function createPluginToolPermissionHandler(params: {
       return denyTool(`OpenClaw denied native tool ${toolName}: it is unavailable to this run.`);
     }
 
+    // Provider schemas are not policy schemas: match canonical names and file operands.
+    const canonicalToolName = normalizeToolPolicyName(
+      toolName.replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2").replace(/([a-z0-9])([A-Z])/g, "$1_$2"),
+    );
+    const nativeFileTool =
+      ["read", "write", "edit"].includes(canonicalToolName) &&
+      Object.hasOwn(request.toolInput, "file_path");
+    let policyInput = request.toolInput;
+    if (nativeFileTool) {
+      const nativePath = request.toolInput.file_path;
+      if (typeof nativePath !== "string") {
+        return denyTool("OpenClaw denied native file tool use: invalid file path.");
+      }
+      if (Object.hasOwn(request.toolInput, "path") && request.toolInput.path !== nativePath) {
+        return denyTool("OpenClaw denied native file tool use: conflicting file paths.");
+      }
+      policyInput = { ...request.toolInput, path: nativePath };
+      if (canonicalToolName === "edit") {
+        const { old_string: oldText, new_string: newText, edits } = request.toolInput;
+        if (typeof oldText !== "string" || typeof newText !== "string") {
+          return denyTool("OpenClaw denied native edit tool use: invalid replacement.");
+        }
+        if (
+          edits !== undefined &&
+          (!Array.isArray(edits) ||
+            edits.length !== 1 ||
+            !isRecord(edits[0]) ||
+            edits[0].oldText !== oldText ||
+            edits[0].newText !== newText)
+        ) {
+          return denyTool("OpenClaw denied native edit tool use: conflicting replacements.");
+        }
+        policyInput.edits = [{ oldText, newText }];
+      }
+    }
+
+    const requester = {
+      ...((run.messageChannel ?? run.messageProvider)
+        ? { channel: run.messageChannel ?? run.messageProvider }
+        : {}),
+      ...(run.agentAccountId ? { accountId: run.agentAccountId } : {}),
+      ...(run.senderId ? { senderId: run.senderId } : {}),
+      ...(run.senderIsOwner !== undefined ? { senderIsOwner: run.senderIsOwner } : {}),
+    };
+    const hookResult = await runBeforeToolCallHook({
+      toolName: canonicalToolName,
+      params: policyInput,
+      ...(request.toolCallId ? { toolCallId: request.toolCallId } : {}),
+      signal,
+      ctx: {
+        ...(run.agentId ? { agentId: run.agentId } : {}),
+        ...(run.config ? { config: run.config } : {}),
+        cwd: params.context.cwd ?? params.context.workspaceDir,
+        workspaceDir: params.context.workspaceDir,
+        ...(run.sessionKey ? { sessionKey: run.sessionKey } : {}),
+        sessionId: run.sessionId,
+        runId: run.runId,
+        ...(run.trigger ? { trigger: run.trigger } : {}),
+        ...(run.approvalReviewerDeviceId
+          ? { approvalReviewerDeviceId: run.approvalReviewerDeviceId }
+          : {}),
+        ...(run.currentChannelId ? { channelId: run.currentChannelId } : {}),
+        ...(Object.keys(requester).length > 0 ? { requester } : {}),
+        turnSourceChannel: run.messageChannel ?? run.messageProvider,
+        turnSourceTo: run.chatId ?? run.currentChannelId,
+        turnSourceAccountId: run.agentAccountId,
+        turnSourceThreadId: run.currentThreadTs,
+        loopDetection: resolveToolLoopDetectionConfig({
+          cfg: run.config,
+          agentId: run.agentId,
+        }),
+      },
+    });
+    try {
+      assertActive();
+    } catch {
+      return denyTool("OpenClaw denied native tool use: the admitted run closed during policy.");
+    }
+    if (hookResult.blocked) {
+      return denyTool(hookResult.reason);
+    }
+    if (!isRecord(hookResult.params)) {
+      return denyTool("OpenClaw denied native tool use: before_tool_call returned invalid input.");
+    }
+    let toolInput = hookResult.params;
+    // SDK permission replies must return the native schema, never policy-only aliases.
+    if (nativeFileTool) {
+      if (typeof toolInput.path !== "string") {
+        return denyTool("OpenClaw denied native file tool use: invalid rewritten file path.");
+      }
+      if (toolInput === policyInput) {
+        toolInput = request.toolInput;
+      } else {
+        toolInput = { ...toolInput, file_path: toolInput.path };
+        if (!Object.hasOwn(request.toolInput, "path")) {
+          delete toolInput.path;
+        }
+        if (canonicalToolName === "edit") {
+          const edits = toolInput.edits;
+          if (
+            !Array.isArray(edits) ||
+            edits.length !== 1 ||
+            !isRecord(edits[0]) ||
+            typeof edits[0].oldText !== "string" ||
+            typeof edits[0].newText !== "string"
+          ) {
+            return denyTool("OpenClaw denied an unrepresentable native edit rewrite.");
+          }
+          toolInput.old_string = edits[0].oldText;
+          toolInput.new_string = edits[0].newText;
+          if (!Object.hasOwn(request.toolInput, "edits")) {
+            delete toolInput.edits;
+          }
+        }
+      }
+    }
+
     const plan = resolveCliNativeToolApprovalPlan(permission);
     if (plan === "deny") {
       return denyTool(
@@ -84,7 +205,7 @@ function createPluginToolPermissionHandler(params: {
     const currentGrants = getCliLiveSessionApprovalGrants(params.context) ?? grants;
     if (plan === "allow" || (permission.ask !== "always" && currentGrants.has(toolName))) {
       assertActive();
-      return { behavior: "allow", updatedInput: request.toolInput };
+      return { behavior: "allow", updatedInput: toolInput };
     }
 
     params.onPendingApproval(1);
@@ -92,7 +213,7 @@ function createPluginToolPermissionHandler(params: {
     try {
       outcome = await requestCliNativeToolApproval({
         toolName,
-        toolInput: request.toolInput,
+        toolInput,
         pluginId: params.context.backendResolved.id,
         sessionKey: run.sessionKey,
         agentId: run.agentId,
@@ -122,7 +243,7 @@ function createPluginToolPermissionHandler(params: {
     if (outcome.grantAlways) {
       currentGrants.add(toolName);
     }
-    return { behavior: "allow", updatedInput: request.toolInput };
+    return { behavior: "allow", updatedInput: toolInput };
   };
 }
 
@@ -277,6 +398,7 @@ export async function executePluginOwnedProcess(params: {
   executionArgs: readonly string[];
   env: Record<string, string>;
   prompt: string;
+  promptContext?: PreparedCliRunContext["promptContext"];
   useResume: boolean;
   forceNewSession?: boolean;
   sessionId?: string;
@@ -311,6 +433,8 @@ export async function executePluginOwnedProcess(params: {
     observed: false,
     replayUnsafe: false,
   };
+  const updatePendingApproval = (delta: number) =>
+    (outstanding.approvals = Math.max(0, outstanding.approvals + delta));
   let noOutputTimer: ReturnType<typeof setTimeout> | undefined;
   const overallTimeoutMs = clampPositiveTimerTimeoutMs(run.timeoutMs);
   const noOutputTimeoutMs = clampPositiveTimerTimeoutMs(params.noOutputTimeoutMs);
@@ -328,7 +452,7 @@ export async function executePluginOwnedProcess(params: {
     }
     noOutputTimer = setTimeout(() => {
       const quietDurationMs = Date.now() - outstanding.lastOutputAt;
-      const decision = resolveCliNoOutputTimeoutDecision({
+      const decision = noOutputPolicy.resolveCliNoOutputTimeoutDecision({
         context: {
           provider: run.provider,
           model: params.context.modelId,
@@ -376,8 +500,8 @@ export async function executePluginOwnedProcess(params: {
   }
 
   let iterator: AsyncIterator<Record<string, unknown>> | undefined;
-  let terminalResultSeen = false;
-  let terminalErrorSeen = false;
+  let liveSession: ReturnType<typeof createCliLiveSessionCapability> | undefined;
+  let terminalResult: "none" | "success" | "error" = "none";
   try {
     resetNoOutputTimer();
     if (
@@ -395,12 +519,23 @@ export async function executePluginOwnedProcess(params: {
       }
       assertActive();
     }
+    if (params.liveSession) {
+      liveSession = createCliLiveSessionCapability({
+        context: params.context,
+        argv: [command, ...params.executionArgs],
+        env: params.env,
+        ...params.liveSession,
+        abortSignal: signal,
+        claimResources: params.context.preparedBackend.claimLiveSessionResources,
+      });
+    }
     const execution = params.execute({
       command,
       args: params.executionArgs,
       cwd,
       env: params.env,
       prompt: params.prompt,
+      ...(params.promptContext ? { promptContext: params.promptContext } : {}),
       modelId: params.context.normalizedModel,
       systemPrompt: stripSystemPromptCacheBoundary(params.context.systemPrompt).trim(),
       ...(params.sessionId ? { sessionId: params.sessionId } : {}),
@@ -409,33 +544,16 @@ export async function executePluginOwnedProcess(params: {
       timeoutMs: run.timeoutMs,
       ...(run.executionMode ? { executionMode: run.executionMode } : {}),
       ...(run.cliToolAvailability ? { toolAvailability: run.cliToolAvailability } : {}),
-      ...(params.liveSession
-        ? {
-            liveSession: createCliLiveSessionCapability({
-              context: params.context,
-              argv: [command, ...params.executionArgs],
-              env: params.env,
-              captureKey: params.liveSession.captureKey,
-              beginCapture: params.liveSession.beginCapture,
-              abortSignal: signal,
-              requiredGeneration: params.liveSession.requiredGeneration,
-              claimResources: params.context.preparedBackend.claimLiveSessionResources,
-            }),
-          }
-        : {}),
+      ...(liveSession ? { liveSession } : {}),
       requestToolPermission: createPluginToolPermissionHandler({
         context: params.context,
         abortSignal: signal,
-        onPendingApproval: (delta) => {
-          outstanding.approvals = Math.max(0, outstanding.approvals + delta);
-        },
+        onPendingApproval: updatePendingApproval,
       }),
       requestUserInput: createPluginUserInputHandler({
         context: params.context,
         abortSignal: signal,
-        onPendingInput: (delta) => {
-          outstanding.approvals = Math.max(0, outstanding.approvals + delta);
-        },
+        onPendingInput: updatePendingApproval,
       }),
     });
     iterator = execution[Symbol.asyncIterator]();
@@ -446,13 +564,16 @@ export async function executePluginOwnedProcess(params: {
         break;
       }
       if (!isRecord(next.value)) {
+        outstanding.replayUnsafe = true;
         throw new Error("CLI plugin runtime emitted an invalid structured stream event.");
       }
       if (next.value.type === "result") {
-        terminalResultSeen = true;
-        terminalErrorSeen ||=
+        terminalResult =
+          terminalResult === "error" ||
           next.value.is_error === true ||
-          (typeof next.value.subtype === "string" && next.value.subtype.startsWith("error_"));
+          (typeof next.value.subtype === "string" && next.value.subtype.startsWith("error_"))
+            ? "error"
+            : "success";
       }
       if (
         next.value.type === "system" &&
@@ -473,7 +594,7 @@ export async function executePluginOwnedProcess(params: {
       resetNoOutputTimer();
     }
 
-    if (!terminalResultSeen) {
+    if (terminalResult === "none") {
       throw new Error("CLI plugin runtime completed without a terminal result.");
     }
   } catch (error) {
@@ -484,9 +605,24 @@ export async function executePluginOwnedProcess(params: {
       }
       termination.reason = "manual-cancel";
     }
-    // SDKs can throw after emitting an authoritative failed terminal record.
-    // Preserve that record so the existing parser owns auth/rate-limit failover.
-    if (termination.reason === "exit" && !terminalErrorSeen) {
+    if (termination.reason === "exit" && terminalResult !== "error") {
+      if (
+        params.liveSession?.requiredGeneration &&
+        noOutputPolicy.isReplaySafeCliResumeControlOnly(
+          params.useResume,
+          outstanding.replayUnsafe,
+          Boolean(outstanding.approvals || outstanding.background || params.activeToolCount?.()),
+        )
+      ) {
+        try {
+          liveSession?.current();
+        } catch (sessionError) {
+          if (sessionError instanceof FailoverError && sessionError.reason === "session_expired") {
+            const { code, message, reason } = sessionError;
+            throw failover(message, reason, sessionError, { cause: error, code });
+          }
+        }
+      }
       throw error;
     }
   } finally {

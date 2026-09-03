@@ -1,5 +1,8 @@
+import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withTempDirSync } from "../test-helpers/temp-dir.js";
 import { withEnv } from "../test-utils/env.js";
 import { shouldIncludeHook } from "./config.js";
 import { buildWorkspaceHookStatus } from "./hooks-status.js";
@@ -41,6 +44,24 @@ function evaluate(config?: OpenClawConfig) {
   const status = buildWorkspaceHookStatus("/tmp", { entries: [entry], config }).hooks[0];
   return { runtimeIncluded, status };
 }
+
+it("includes a hook after an accepted binary is installed on unchanged PATH", () => {
+  withTempDirSync({ prefix: "openclaw-hook-binary-" }, (binDir) => {
+    const binaryEntry: HookEntry = {
+      ...entry,
+      metadata: { events: ["command:new"], requires: { anyBins: ["fixture-hook-tool"] } },
+    };
+    withEnv({ PATH: binDir }, () => {
+      const included = () => shouldIncludeHook({ entry: binaryEntry });
+      expect(included()).toBe(false);
+      const executable = path.join(binDir, "fixture-hook-tool");
+      fs.writeFileSync(executable, "#!/bin/sh\nexit 0\n");
+      fs.chmodSync(executable, 0o755);
+      expect(process.env.PATH).toBe(binDir);
+      expect(included()).toBe(true);
+    });
+  });
+});
 
 describe("hook environment requirements", () => {
   it.each([

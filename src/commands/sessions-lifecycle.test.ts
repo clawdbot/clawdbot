@@ -262,7 +262,7 @@ describe("sessions lifecycle commands", () => {
         deleteTranscript: true,
         archivedOnly: true,
       },
-      { defaultTimeoutMs: 30_000 },
+      { defaultTimeoutMs: 10 * 60_000 },
     );
     expect(runtime.writeJson).toHaveBeenCalledWith(
       {

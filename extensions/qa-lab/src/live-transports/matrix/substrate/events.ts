@@ -50,6 +50,7 @@ export type MatrixQaObservedEvent = {
   body?: string;
   formattedBody?: string;
   msgtype?: string;
+  live?: true;
   membership?: string;
   relatesTo?: {
     eventId?: string;
@@ -293,6 +294,7 @@ export function normalizeMatrixQaObservedEvent(
     formattedBody:
       typeof messageContent.formatted_body === "string" ? messageContent.formatted_body : undefined,
     msgtype: normalizedMsgtype,
+    ...("org.matrix.msc4357.live" in messageContent ? { live: true as const } : {}),
     membership: typeof content.membership === "string" ? content.membership : undefined,
     ...(logicalRelation ? { relatesTo: logicalRelation } : {}),
     ...(mentions

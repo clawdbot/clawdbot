@@ -26,6 +26,9 @@ type NodeWorkerContainerExpectedOwner = {
 };
 
 const DEFAULT_NODE_WORKER_CONTAINER_IMAGE = "node:22-slim";
+// Burst launches can delay a healthy daemon's identity response; keep revalidation
+// fail-closed without treating temporary daemon contention as an unavailable engine.
+const CONTAINER_REVALIDATION_TIMEOUT_MS = 30_000;
 
 const HOST_LABEL = "openclaw.node-worker.host";
 const GATEWAY_LABEL = "openclaw.node-worker.gateway";
@@ -34,6 +37,18 @@ const CONTAINER_NODE_EXECUTABLE = "node";
 const CONTAINER_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 const CONTAINER_ID_PATTERN = /^[a-f0-9]{64}$/u;
 const ENCODED_LAUNCH_PATTERN = /^[A-Za-z0-9_-]+$/u;
+// `.State.Running` is false both before a container starts and after it exits.
+// A created or initialized container still owns an admitted workload, so its
+// launch must never be finalized or fenced as if the worker had already ended.
+const OWNED_CONTAINER_STATUSES = new Set([
+  "created",
+  "initialized",
+  "running",
+  "paused",
+  "restarting",
+  "stopping",
+]);
+const ENDED_CONTAINER_STATUSES = new Set(["exited", "stopped", "dead", "removing"]);
 
 function hostNamespace(bundleRoot: string): string {
   return createHash("sha256").update(path.resolve(bundleRoot)).digest("hex").slice(0, 32);
@@ -83,6 +98,7 @@ async function resolveContainerEngineTarget(
   options: { pinned?: boolean } = {},
 ): Promise<Pick<NodeWorkerContainerEngine, "target" | "env">> {
   const env = engine.env ?? process.env;
+  const timeoutMs = options.pinned ? CONTAINER_REVALIDATION_TIMEOUT_MS : 5_000;
   if (engine.id === "docker") {
     const endpoint =
       env.DOCKER_HOST?.trim() ||
@@ -102,7 +118,7 @@ async function resolveContainerEngineTarget(
     const daemonId = await runContainerCommand(
       { ...engine, env: frozenEnv },
       ["info", "--format", "{{.ID}}"],
-      5_000,
+      timeoutMs,
     );
     if (!daemonId || daemonId === "<no value>") {
       throw new Error("Docker daemon did not report a stable identity");
@@ -116,7 +132,7 @@ async function resolveContainerEngineTarget(
   const info = await runContainerCommand(
     engine,
     ["info", "--format", "{{.Host.Hostname}}\t{{.Store.GraphRoot}}\t{{.Host.RemoteSocket.Path}}"],
-    5_000,
+    timeoutMs,
   );
   const [hostname, graphRoot, remoteSocket = "", extra] = info.split("\t");
   if (extra !== undefined || !hostname || !graphRoot || hostname === "<no value>") {
@@ -306,6 +322,7 @@ export async function createNodeWorkerContainer(
     CONTAINER_NODE_EXECUTABLE,
     params.image ?? DEFAULT_NODE_WORKER_CONTAINER_IMAGE,
     params.bundleEntry,
+    "--internal-worker-session",
   );
   const current = await resolveContainerEngineTarget(engine, { pinned: true });
   if (current.target !== engine.target) {
@@ -343,8 +360,8 @@ export async function inspectNodeWorkerContainer(
 ): Promise<"live" | "dead" | "reused" | "unknown"> {
   try {
     const format = expected
-      ? `{{.State.Running}}\t{{index .Config.Labels "${HOST_LABEL}"}}\t{{index .Config.Labels "${GATEWAY_LABEL}"}}\t{{index .Config.Labels "${LAUNCH_LABEL}"}}`
-      : "{{.State.Running}}";
+      ? `{{.State.Status}}\t{{index .Config.Labels "${HOST_LABEL}"}}\t{{index .Config.Labels "${GATEWAY_LABEL}"}}\t{{index .Config.Labels "${LAUNCH_LABEL}"}}`
+      : "{{.State.Status}}";
     const state = await runContainerCommand(engine, [
       "inspect",
       "--type",
@@ -353,7 +370,7 @@ export async function inspectNodeWorkerContainer(
       format,
       containerId,
     ]);
-    const [running, owner, gateway, launch, extra] = state.split("\t");
+    const [status = "", owner, gateway, launch, extra] = state.split("\t");
     if (expected) {
       if (
         extra !== undefined ||
@@ -366,7 +383,11 @@ export async function inspectNodeWorkerContainer(
     } else if (owner !== undefined) {
       return "unknown";
     }
-    return running === "true" ? "live" : running === "false" ? "dead" : "unknown";
+    return OWNED_CONTAINER_STATUSES.has(status)
+      ? "live"
+      : ENDED_CONTAINER_STATUSES.has(status)
+        ? "dead"
+        : "unknown";
   } catch (error) {
     return missingContainer(error) ? "dead" : "unknown";
   }

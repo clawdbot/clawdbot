@@ -172,6 +172,7 @@ export type SubagentCompletionDeliveryState = {
     | "queue_cap"
     | "parent_run_ended"
     | "sink_unavailable"
+    | "steer_dropped"
     | "dedupe"
     | "waiting_for_requester_turn";
 };
@@ -193,6 +194,8 @@ export type RequesterSettleWakeState = {
   afterRequesterYield?: true;
   /** Monotonic process generation protecting a newer yield from stale completion. */
   rearmGeneration?: number;
+  /** Number of times this batch has been deferred due to unsettled descendants. */
+  deferralCount?: number;
   lastError?: string | null;
   /** Cleanup wanted to retire this row; defer deletion until the outbox resolves. */
   retireAfterSettle?: boolean;
@@ -220,11 +223,11 @@ export type SubagentRunRecord = {
   runId: string;
   /** Detached task owner; steer/restart changes runId but continues the same task. */
   taskRunId?: string;
-  /** Requester attempt that must settle before this completion row can retire. */
+  /** Exact requester attempt for cancellation, independent of completion messaging. */
   requesterTurnRunId?: string;
   /** Durable proof that this requester attempt invoked sessions_yield. */
   requesterTurnYielded?: true;
-  /** Cleanup retirement deferred until requesterTurnRunId settles. */
+  /** Completion-producing row retirement deferred until requesterTurnRunId settles. */
   retireAfterRequesterTurn?: boolean;
   childSessionKey: string;
   controllerSessionKey?: string;
@@ -259,7 +262,7 @@ export type SubagentRunRecord = {
   killReconciliation?: SubagentKillReconciliationState;
   /** Durable operator cancellation ownership before runtime side effects complete. */
   killIntent?: SubagentKillIntent;
-  /** Durable requester-stop policy until silent completion cleanup finishes. */
+  /** Durable requester-delivery closure until silent completion cleanup finishes. */
   suppressCompletionDelivery?: boolean;
   expectsCompletionMessage?: boolean;
   endedReason?: SubagentLifecycleEndedReason;
@@ -327,5 +330,5 @@ export type SubagentRunReadRecord = Pick<
   | "cleanupCompletedAt"
   | "delivery"
 > & {
-  execution: Pick<SubagentExecutionState, "startedAt" | "endedAt" | "outcome">;
+  execution: Pick<SubagentExecutionState, "status" | "startedAt" | "endedAt" | "outcome">;
 };

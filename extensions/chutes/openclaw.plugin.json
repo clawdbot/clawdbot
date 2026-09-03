@@ -5,6 +5,11 @@
   },
   "enabledByDefault": true,
   "providers": ["chutes"],
+  "modelPricing": {
+    "providers": {
+      "chutes": { "chutes": { "provider": "chutes" } }
+    }
+  },
   "providerEndpoints": [
     {
       "endpointClass": "chutes-native",
@@ -76,7 +81,7 @@
             "cost": {
               "input": 1,
               "output": 1,
-              "cacheRead": 0.5,
+              "cacheRead": 0.09999999999999998,
               "cacheWrite": 0
             }
           },
@@ -88,9 +93,9 @@
             "contextWindow": 262144,
             "maxTokens": 65535,
             "cost": {
-              "input": 0.66,
-              "output": 3.5,
-              "cacheRead": 0.33,
+              "input": 0.58,
+              "output": 3.4,
+              "cacheRead": 0.05799999999999998,
               "cacheWrite": 0
             }
           },
@@ -120,7 +125,7 @@
             "cost": {
               "input": 1.25,
               "output": 3.95,
-              "cacheRead": 0.625,
+              "cacheRead": 0.12499999999999997,
               "cacheWrite": 0
             }
           },
@@ -148,7 +153,7 @@
             "cost": {
               "input": 0.3,
               "output": 2,
-              "cacheRead": 0.15,
+              "cacheRead": 0.029999999999999992,
               "cacheWrite": 0
             }
           },
@@ -162,7 +167,7 @@
             "cost": {
               "input": 0.45,
               "output": 3,
-              "cacheRead": 0.225,
+              "cacheRead": 0.04499999999999999,
               "cacheWrite": 0
             },
             "status": "deprecated",

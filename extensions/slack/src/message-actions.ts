@@ -46,6 +46,7 @@ export function listSlackMessageActions(
     actions.add("reactions");
   }
   if (isActionEnabled("messages")) {
+    actions.add("conversation-open");
     actions.add("read");
     actions.add("edit");
     actions.add("delete");

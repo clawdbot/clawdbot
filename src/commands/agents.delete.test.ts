@@ -8,6 +8,10 @@ import {
   tryResolveSoleAgentId,
 } from "../agents/agent-scope-config.js";
 import {
+  readPersistedAuthProfileStoreRaw,
+  writePersistedAuthProfileStoreRaw,
+} from "../agents/auth-profiles/sqlite.js";
+import {
   retainLegacyDefaultAgentId,
   tryGetLegacyDefaultAgentId,
 } from "../config/legacy.default-agent-owner.js";
@@ -31,7 +35,11 @@ import {
   registerOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db-registry.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
-import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
+import {
+  baseConfigSnapshot,
+  createTestConfigSnapshot,
+  createTestRuntime,
+} from "./test-runtime-config-helpers.js";
 
 const configMocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
@@ -77,7 +85,8 @@ vi.mock("../gateway/call.js", async () => ({
   isGatewayCredentialsRequiredError: gatewayMocks.isGatewayCredentialsRequiredError,
 }));
 
-vi.mock("../infra/fs-safe.js", () => ({
+vi.mock("../infra/fs-safe.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/fs-safe.js")>()),
   movePathToTrash: fsSafeMocks.movePathToTrash,
 }));
 
@@ -105,6 +114,12 @@ vi.mock("../wizard/clack-prompter.js", () => ({
 import { agentsDeleteCommand } from "./agents.commands.delete.js";
 
 const runtime = createTestRuntime();
+const sharedAuthStore = {
+  version: 1,
+  profiles: {
+    "test-provider:shared": { type: "api_key", provider: "test-provider", key: "test-shared-key" },
+  },
+};
 
 function gatewayTransportError(kind: "closed" | "timeout", code?: number): GatewayTransportError {
   return new GatewayTransportError({
@@ -167,13 +182,7 @@ async function arrangeAgentsDeleteTest(params: {
     recursive: true,
   });
 
-  configMocks.readConfigFileSnapshot.mockResolvedValue({
-    ...baseConfigSnapshot,
-    config: cfg,
-    runtimeConfig: cfg,
-    sourceConfig: cfg,
-    resolved: cfg,
-  });
+  configMocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot(cfg));
 
   return storePath;
 }
@@ -222,7 +231,9 @@ describe("agents delete command", () => {
   beforeEach(() => {
     configMocks.readConfigFileSnapshot.mockReset();
     configMocks.replaceConfigFile.mockReset();
-    fsSafeMocks.movePathToTrash.mockClear();
+    fsSafeMocks.movePathToTrash
+      .mockReset()
+      .mockImplementation(async (targetPath: string) => `${targetPath}.trashed`);
     workspaceStateMocks.deleteWorkspaceState.mockClear();
     processMocks.runCommandWithTimeout.mockClear();
     gatewayMocks.callGateway.mockReset();
@@ -283,6 +294,7 @@ describe("agents delete command", () => {
         deletedAgentId: "main",
         sessions,
       });
+      writePersistedAuthProfileStoreRaw(sharedAuthStore, path.join(stateDir, "agents/main/agent"));
       await agentsDeleteCommand({ id: "main", force: true, json: true }, runtime);
 
       expect(gatewayMocks.callGateway).not.toHaveBeenCalled();
@@ -300,6 +312,7 @@ describe("agents delete command", () => {
       ]);
       expect(runtime.exit).toHaveBeenCalledWith(1, { resetStream: process.stderr });
       expectSessionStore(cfg, sessions, "main");
+      expect(readPersistedAuthProfileStoreRaw()).toEqual(sharedAuthStore);
     });
   });
 
@@ -314,6 +327,7 @@ describe("agents delete command", () => {
         },
       };
       writeConfigMachineState("auth.sharedStore", { location: "state-db" });
+      writePersistedAuthProfileStoreRaw(sharedAuthStore);
       await arrangeAgentsDeleteTest({
         stateDir,
         cfg,
@@ -330,12 +344,21 @@ describe("agents delete command", () => {
           ops: { security: "allowlist", allowlist: [{ pattern: "/usr/bin/keep" }] },
         },
       });
+      fsSafeMocks.movePathToTrash.mockImplementation(async (targetPath: string) => {
+        const trashPath = `${targetPath}.trashed`;
+        await fs.rename(targetPath, trashPath);
+        return trashPath;
+      });
 
       await agentsDeleteCommand({ id: "main", force: true, json: true }, runtime);
 
       expect(runtime.error).not.toHaveBeenCalled();
       expect(runtime.exit).not.toHaveBeenCalledWith(1);
       expect(configMocks.replaceConfigFile).toHaveBeenCalledOnce();
+      await expect(fs.access(path.join(stateDir, "agents/main/agent"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(readPersistedAuthProfileStoreRaw()).toEqual(sharedAuthStore);
       expectSessionStore(cfg, {}, "main");
       expect(readExecApprovalsSnapshot().file.agents).toEqual({
         "*": { security: "deny" },
@@ -409,13 +432,7 @@ describe("agents delete command", () => {
       },
       "ops",
     );
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: cfg,
-      runtimeConfig: cfg,
-      sourceConfig: cfg,
-      resolved: cfg,
-    });
+    configMocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot(cfg));
 
     await agentsDeleteCommand({ id: "ops", force: true }, runtime);
 
@@ -674,26 +691,78 @@ describe("agents delete command", () => {
   });
 
   it("deregisters the agent database after offline deletion", async () => {
-    await withStateDirEnv("openclaw-agents-delete-registry-", async ({ stateDir }) => {
+    await withStateDirEnv("openclaw-agents-delete-registry-", async ({ tempRoot, stateDir }) => {
+      const mainAgentDir = path.join(tempRoot, "main-agent");
       const cfg: OpenClawConfig = {
         agents: {
           list: [
-            { id: "main", workspace: path.join(stateDir, "workspace-main") },
+            {
+              id: "main",
+              agentDir: mainAgentDir,
+              workspace: path.join(stateDir, "workspace-main"),
+            },
             { id: "ops", workspace: path.join(stateDir, "workspace-ops") },
           ],
         },
       };
       await arrangeAgentsDeleteTest({ stateDir, cfg, sessions: {} });
       const databasePath = path.join(stateDir, "agents", "ops", "agent", "openclaw-agent.sqlite");
+      const externalDatabaseDir = path.join(tempRoot, "external-databases");
+      await fs.mkdir(externalDatabaseDir);
+      await fs.mkdir(mainAgentDir);
+      const externalDatabasePath = path.join(externalDatabaseDir, "ops.sqlite");
+      const sharedDatabasePath = path.join(externalDatabaseDir, "shared.sqlite");
+      const survivorOwnedDatabasePath = path.join(mainAgentDir, "ops.sqlite");
+      const externalDatabasePaths = [
+        externalDatabasePath,
+        `${externalDatabasePath}-wal`,
+        `${externalDatabasePath}-shm`,
+        `${externalDatabasePath}-journal`,
+      ];
+      await Promise.all(
+        [...externalDatabasePaths, sharedDatabasePath, survivorOwnedDatabasePath].map(
+          (sqlitePath) => fs.writeFile(sqlitePath, ""),
+        ),
+      );
+      const canonicalExternalDatabaseDir = await fs.realpath(externalDatabaseDir);
+      const canonicalMainAgentDir = await fs.realpath(mainAgentDir);
       registerOpenClawAgentDatabase({ agentId: "ops", path: databasePath });
+      registerOpenClawAgentDatabase({ agentId: "ops", path: externalDatabasePath });
+      registerOpenClawAgentDatabase({ agentId: "ops", path: sharedDatabasePath });
+      registerOpenClawAgentDatabase({ agentId: "ops", path: survivorOwnedDatabasePath });
+      registerOpenClawAgentDatabase({ agentId: "main", path: sharedDatabasePath });
       recordAgentProvenance("ops", { createdVia: "operator" });
       recordAgentProvenance("child", { createdVia: "agent", creatorAgentId: "ops" });
       expect(listOpenClawRegisteredAgentDatabases().map((entry) => entry.agentId)).toContain("ops");
 
       await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
 
-      expect(listOpenClawRegisteredAgentDatabases().map((entry) => entry.agentId)).not.toContain(
-        "ops",
+      for (const sqlitePath of externalDatabasePaths) {
+        expect(fsSafeMocks.movePathToTrash).toHaveBeenCalledWith(
+          path.join(canonicalExternalDatabaseDir, path.basename(sqlitePath)),
+          { allowedRoots: [canonicalExternalDatabaseDir] },
+        );
+      }
+      expect(readJsonLogs()[0]?.removed).toEqual(
+        expect.arrayContaining(
+          externalDatabasePaths.map((sqlitePath) => ({ path: sqlitePath, method: "trash" })),
+        ),
+      );
+      expect(fsSafeMocks.movePathToTrash).not.toHaveBeenCalledWith(
+        path.join(canonicalExternalDatabaseDir, path.basename(sharedDatabasePath)),
+        expect.anything(),
+      );
+      expect(fsSafeMocks.movePathToTrash).not.toHaveBeenCalledWith(
+        path.join(canonicalMainAgentDir, path.basename(survivorOwnedDatabasePath)),
+        expect.anything(),
+      );
+      expect((await fs.stat(survivorOwnedDatabasePath)).isFile()).toBe(true);
+      const registeredDatabases = listOpenClawRegisteredAgentDatabases();
+      expect(registeredDatabases.map((entry) => entry.agentId)).not.toContain("ops");
+      expect(registeredDatabases).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ agentId: "main", path: sharedDatabasePath }),
+        ]),
       );
       expect(readAgentDeletionJournal("ops")?.cleanupCompleted).toBe(true);
       expect(readAgentProvenance("ops")).toBeUndefined();

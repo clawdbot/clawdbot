@@ -3,16 +3,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 
-const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
+const emptyPluginMetadataSnapshot = {
   configFingerprint: "models-list-configured-test-empty-plugin-metadata",
-  plugins: [],
-}));
+  ...createPluginMetadataSnapshotFixture(),
+};
 
 const mocks = vi.hoisted(() => ({
   loadPreparedModelCatalogSnapshot: vi.fn(),
   normalizeProviderResolvedModelWithPlugin: vi.fn(() => undefined),
-  shouldSuppressBuiltInModelFromManifest: vi.fn(() => false),
 }));
 
 vi.mock("../../agents/provider-model-normalization.runtime.js", () => ({
@@ -21,7 +21,8 @@ vi.mock("../../agents/provider-model-normalization.runtime.js", () => ({
   }),
 }));
 
-vi.mock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
+vi.mock("../../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/current-plugin-metadata-snapshot.js")>()),
   getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
 }));
 
@@ -32,7 +33,6 @@ vi.mock("../../agents/prepared-model-catalog.js", () => ({
 
 vi.mock("../../agents/model-suppression.js", () => ({
   shouldSuppressBuiltInModelCore: vi.fn(() => false),
-  shouldSuppressBuiltInModelFromManifest: mocks.shouldSuppressBuiltInModelFromManifest,
 }));
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
@@ -42,6 +42,7 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
 import { resolveConfiguredEntries } from "./list.configured.js";
 import { appendConfiguredModelRowSources } from "./list.row-sources.js";
 import type { ModelRow } from "./list.types.js";
+import { createModelCatalogProviderAliasCanonicalizer } from "./provider-aliases.js";
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -267,10 +268,10 @@ describe("configured model list rows", () => {
         cfg,
         agentDir: "/tmp/openclaw-agent",
         authIndex: { evaluateModelAuth },
+        canonicalizeProvider: createModelCatalogProviderAliasCanonicalizer({ cfg }).provider,
         configuredByKey: new Map(entries.map((entry) => [entry.key, entry])),
         discoveredKeys: new Set(),
         filter: {},
-        skipRuntimeModelSuppression: true,
       },
     });
 
@@ -323,10 +324,10 @@ describe("configured model list rows", () => {
         authIndex: {
           evaluateModelAuth: () => ({ availability: true, routeResolution: null }),
         },
+        canonicalizeProvider: createModelCatalogProviderAliasCanonicalizer({ cfg }).provider,
         configuredByKey: new Map(entries.map((entry) => [entry.key, entry])),
         discoveredKeys: new Set(),
         filter: {},
-        skipRuntimeModelSuppression: true,
       },
     });
 
@@ -395,10 +396,10 @@ describe("configured model list rows", () => {
         cfg,
         agentDir: "/tmp/openclaw-agent",
         authIndex: { evaluateModelAuth: () => ({ availability: true, routeResolution: null }) },
+        canonicalizeProvider: createModelCatalogProviderAliasCanonicalizer({ cfg }).provider,
         configuredByKey: new Map(entries.map((entry) => [entry.key, entry])),
         discoveredKeys: new Set<string>(),
         filter: {},
-        skipRuntimeModelSuppression: true,
       },
     });
 

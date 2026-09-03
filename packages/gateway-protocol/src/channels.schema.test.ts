@@ -63,7 +63,7 @@ describe("TalkSessionCancelOutputResultSchema", () => {
 });
 
 describe("ChannelsStatusResultSchema", () => {
-  /** Compiled status validator for channel docking diagnostics. */
+  /** Compiled validator for channel status diagnostics. */
   const validate = Compile(ChannelsStatusResultSchema);
 
   it("accepts gateway event-loop diagnostics emitted by channels.status", () => {

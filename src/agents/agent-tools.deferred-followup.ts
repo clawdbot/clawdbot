@@ -15,8 +15,8 @@ const TOOL_FOLLOWUPS = [
   [
     "sessions_search",
     "sessions_history",
-    "Search your own past sessions for matching user and assistant text.",
-    "Search your own past sessions for matching user and assistant text. Follow up with sessions_history using a returned sessionKey, sessionId, and messageId for neighboring context.",
+    "Search visible past sessions for matching user and assistant text.",
+    "Search visible past sessions for matching user and assistant text. Follow up with sessions_history using a returned sessionKey, sessionId, and messageId for neighboring context.",
   ],
   [
     "conversations_send",
@@ -25,6 +25,12 @@ const TOOL_FOLLOWUPS = [
     "through a conversationRef from conversations_list.",
   ],
   ["sessions_spawn", "agents_list", "configured agent;", "configured agent (see agents_list);"],
+  [
+    "sessions_yield",
+    "agents_wait",
+    "Collector runs require explicit collection instead.",
+    "Collector runs require agents_wait instead.",
+  ],
   [
     "sessions_spawn",
     "agents_wait",

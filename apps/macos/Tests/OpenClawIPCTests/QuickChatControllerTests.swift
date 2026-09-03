@@ -143,6 +143,31 @@ struct QuickChatControllerTests {
         #expect(clearedMonitorCount == 2)
     }
 
+    @Test func `deferred focus loss cannot dismiss a newer presentation`() async throws {
+        let model = Self.makeModel()
+        let controller = QuickChatController(enableUI: false, model: model, monitoringEnabled: false)
+        defer { controller.stop() }
+        controller.present()
+        let firstPresentation = try #require(model.activePresentationID)
+
+        controller.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification))
+        controller.dismiss()
+        controller.present()
+        let nextPresentation = try #require(model.activePresentationID)
+        #expect(nextPresentation != firstPresentation)
+
+        await Self.drainMainQueue()
+
+        #expect(controller.isVisible)
+        #expect(model.activePresentationID == nextPresentation)
+
+        controller.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification))
+        await Self.drainMainQueue()
+
+        #expect(!controller.isVisible)
+        #expect(model.activePresentationID == nil)
+    }
+
     @Test func `resign key keeps bar visible while granting permissions`() async {
         let latch = GrantLatch()
         let model = QuickChatModel(
@@ -185,6 +210,7 @@ struct QuickChatControllerTests {
             await Task.yield()
         }
         controller.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification))
+        await Self.drainMainQueue()
         #expect(!controller.isVisible)
         controller.stop()
     }
@@ -230,6 +256,7 @@ struct QuickChatControllerTests {
             await Task.yield()
         }
         controller.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification))
+        await Self.drainMainQueue()
         #expect(!controller.isVisible)
         controller.stop()
     }
@@ -240,6 +267,12 @@ struct QuickChatControllerTests {
         }
         await TestIsolation.withUserDefaultsValues([quickChatEnabledKey: false]) {
             #expect(!AppState(preview: true).quickChatEnabled)
+        }
+    }
+
+    private static func drainMainQueue() async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
         }
     }
 

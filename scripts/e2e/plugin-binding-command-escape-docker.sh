@@ -5,13 +5,16 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SOURCE_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 
 IMAGE_NAME="${OPENCLAW_PLUGIN_BINDING_COMMAND_ESCAPE_E2E_IMAGE:-openclaw-plugin-binding-command-escape-e2e}"
 CONTAINER_NAME="openclaw-plugin-binding-command-escape-e2e-$$"
 DOCKER_RUN_TIMEOUT="${OPENCLAW_PLUGIN_BINDING_COMMAND_ESCAPE_DOCKER_RUN_TIMEOUT:-900s}"
 RUN_LOG="$(mktemp -t openclaw-plugin-binding-command-escape-log.XXXXXX)"
-FOCUSED_TEST_REGEX="lets authorized gateway-style plugin commands escape plugin-owned bindings|keeps authorized unknown slash text in a plugin-owned binding routed to the bound plugin|keeps unauthorized plugin-owned binding slash replies suppressed while routed to the bound plugin"
+# The command-path test was renamed when main split this suite. The two names
+# describe the same required behavior, and only one exists in a target source.
+FOCUSED_TEST_REGEX="lets authorized (plugin-owned binding commands fall through to command processing|gateway-style plugin commands escape plugin-owned bindings)|keeps authorized unknown slash text in a plugin-owned binding routed to the bound plugin|keeps unauthorized plugin-owned binding slash replies suppressed while routed to the bound plugin"
 
 cleanup() {
   docker_e2e_docker_cmd rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
@@ -23,7 +26,7 @@ docker_e2e_build_or_reuse \
   "$IMAGE_NAME" \
   plugin-binding-command-escape \
   "$ROOT_DIR/scripts/e2e/plugin-binding-command-escape.Dockerfile" \
-  "$ROOT_DIR"
+  "$SOURCE_ROOT"
 
 echo "Running plugin binding command escape Docker E2E..."
 set +e
@@ -37,9 +40,10 @@ DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run --rm 
     set -euo pipefail
     # Main has one aggregate entry; frozen candidates may split binding cases into a second file.
     test_files=(src/auto-reply/reply/dispatch-from-config.test.ts)
-    if [[ -f src/auto-reply/reply/dispatch-from-config.lifecycle-and-bindings.test.ts ]]; then
+    if [[ -f src/auto-reply/reply/dispatch-from-config.lifecycle.test.ts ]]; then
       test_files=(
-        src/auto-reply/reply/dispatch-from-config.lifecycle-and-bindings.test.ts
+        src/auto-reply/reply/dispatch-from-config.delivery.test.ts
+        src/auto-reply/reply/dispatch-from-config.lifecycle.test.ts
         src/auto-reply/reply/dispatch-from-config.test.ts
       )
     fi

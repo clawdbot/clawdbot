@@ -11,14 +11,16 @@ import type { TlsOptions } from "node:tls";
 import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { isCanvasDocumentHttpPath } from "../canvas/constants.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
+import { runHttpConnectionRequest } from "../infra/http-request-lifecycle.js";
 import { parseDevicePairingJoinRequestPath } from "../pairing/join-code.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import { resolveAssistantIdentity } from "./assistant-identity.js";
+import { resolveAssistantAgentId } from "./assistant-identity.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import {
@@ -39,6 +41,7 @@ import {
   classifyNodeWorkerBundleTransferPath,
   classifyNodeWorkspaceTransferPath,
   classifyWorkerGatewayPath,
+  classifyWorkerBootstrapArtifactTransferPath,
 } from "./gateway-http-route-contracts.js";
 import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
 import {
@@ -78,6 +81,10 @@ import {
   handleNodeWorkspaceTransferHttpRequest,
   type NodeWorkspaceTransferHttpCallback,
 } from "./worker-environments/node-workspace-transfer-http.js";
+import {
+  handleWorkerBootstrapArtifactTransferHttpRequest,
+  type WorkerBootstrapArtifactTransferHttpCallback,
+} from "./worker-environments/worker-bootstrap-artifact-transfer-http.js";
 
 type PluginHttpRequestHandler = (
   req: IncomingMessage,
@@ -140,28 +147,14 @@ function isWebSocketUpgradeRequest(req: IncomingMessage): boolean {
 
 type GatewayHttpRequestStage = () => Promise<boolean> | boolean;
 
-async function runGatewayHttpRequestStages(
-  stages: readonly GatewayHttpRequestStage[],
-): Promise<boolean> {
-  for (const stage of stages) {
-    if (await stage()) {
-      return true;
-    }
-  }
-  return false;
-}
-
 /** Creates the gateway HTTP/HTTPS server and ordered request-stage router. */
 export function createGatewayHttpServer(opts: {
   clients: Set<GatewayWsClient>;
   controlUiEnabled: boolean;
   controlUiBasePath: string;
   controlUiRoot?: ControlUiRootState;
-  openAiChatCompletionsEnabled: boolean;
-  openAiChatCompletionsConfig?: import("../config/types.gateway.js").GatewayHttpChatCompletionsConfig;
-  openResponsesEnabled: boolean;
-  openResponsesConfig?: import("../config/types.gateway.js").GatewayHttpResponsesConfig;
-  strictTransportSecurityHeader?: string;
+  openAiChatCompletionsEnabled?: boolean;
+  openResponsesEnabled?: boolean;
   handleHooksRequest: HooksRequestHandler;
   handleMcpOAuthCallbackRequest?: McpOAuthCallbackHandler;
   handleWatchNodeRequest?: WatchNodeHttpRequestHandler;
@@ -177,6 +170,7 @@ export function createGatewayHttpServer(opts: {
   joinRateLimiter?: AuthRateLimiter;
   /** Authenticator/dispatcher for the reserved node worker bundle namespace. */
   handleNodeWorkerBundleTransferRequest?: NodeWorkerBundleTransferHttpCallback;
+  handleWorkerBootstrapArtifactTransferRequest?: WorkerBootstrapArtifactTransferHttpCallback;
   /** Authenticator/dispatcher for the reserved node workspace transfer namespace. */
   handleNodeWorkspaceTransferRequest?: NodeWorkspaceTransferHttpCallback;
   getReadiness?: ReadinessChecker;
@@ -194,11 +188,6 @@ export function createGatewayHttpServer(opts: {
     controlUiEnabled,
     controlUiBasePath,
     controlUiRoot,
-    openAiChatCompletionsEnabled,
-    openAiChatCompletionsConfig,
-    openResponsesEnabled,
-    openResponsesConfig,
-    strictTransportSecurityHeader,
     handleHooksRequest,
     handlePluginRequest,
     shouldEnforcePluginGatewayAuth,
@@ -211,13 +200,21 @@ export function createGatewayHttpServer(opts: {
   } = opts;
   const getResolvedAuth = opts.getResolvedAuth ?? (() => resolvedAuth);
   const loadGatewayConfig = opts.getRuntimeConfig ?? getRuntimeConfig;
-  const openAiCompatEnabled = openAiChatCompletionsEnabled || openResponsesEnabled;
   const controlUiRouteBasePath =
     controlUiBasePath && controlUiBasePath !== "/" ? controlUiBasePath.replace(/\/$/, "") : "";
-  const handleServerRequest = (req: IncomingMessage, res: ServerResponse) => {
+  const handleServerRequest = (
+    req: IncomingMessage,
+    res: ServerResponse,
+    expectation?: "continue" | "reject",
+  ) => {
     markGatewayIngressTransport(req, opts.ingressTransport ?? { kind: "ordinary" });
-    void runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () =>
-      handleRequest(req, res),
+    void runHttpConnectionRequest(
+      req,
+      () =>
+        runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () =>
+          handleRequest(req, res, expectation),
+        ),
+      res,
     ).catch((error: unknown) => {
       console.error("[gateway-http] failed to finalize request:", error);
       if (!res.destroyed) {
@@ -228,11 +225,37 @@ export function createGatewayHttpServer(opts: {
   const httpServer: HttpServer = opts.tlsOptions
     ? createHttpsServer(opts.tlsOptions, handleServerRequest)
     : createHttpServer(handleServerRequest);
+  // Node otherwise sends interim/expectation responses before application admission.
+  httpServer.on("checkContinue", (req, res) => handleServerRequest(req, res, "continue"));
+  httpServer.on("checkExpectation", (req, res) => handleServerRequest(req, res, "reject"));
+  httpServer.on("connect", (req, socket) => {
+    void runHttpConnectionRequest(
+      req,
+      async () => {
+        socket.destroy();
+      },
+      "upgrade",
+    );
+  });
 
-  async function handleRequest(req: IncomingMessage, res: ServerResponse) {
-    setDefaultSecurityHeaders(res, {
-      strictTransportSecurity: strictTransportSecurityHeader,
-    });
+  async function handleRequest(
+    req: IncomingMessage,
+    res: ServerResponse,
+    expectation?: "continue" | "reject",
+  ) {
+    // Read only the published snapshot: even liveness and rejection responses need
+    // current headers without depending on config IO or auth resolution.
+    setDefaultSecurityHeaders(res, getRuntimeConfigSnapshot()?.gateway?.http?.securityHeaders);
+    // Preserve Node's version/token classification while deferring its response
+    // until admission; reparsing Expect here would change HTTP/1.0 semantics.
+    if (expectation === "reject") {
+      res.writeHead(417);
+      res.end();
+      return;
+    }
+    if (expectation === "continue") {
+      res.writeContinue();
+    }
 
     // Don't interfere with real WebSocket upgrades; ws handles the 'upgrade' event.
     if (isWebSocketUpgradeRequest(req)) {
@@ -268,6 +291,15 @@ export function createGatewayHttpServer(opts: {
       }
 
       const configSnapshot = loadGatewayConfig();
+      // Pin endpoint admission and input limits to the same request snapshot.
+      // Only explicit server overrides survive config reloads.
+      const openAiChatCompletionsConfig = configSnapshot.gateway?.http?.endpoints?.chatCompletions;
+      const openResponsesConfig = configSnapshot.gateway?.http?.endpoints?.responses;
+      const openAiChatCompletionsEnabled =
+        opts.openAiChatCompletionsEnabled ?? openAiChatCompletionsConfig?.enabled ?? false;
+      const openResponsesEnabled =
+        opts.openResponsesEnabled ?? openResponsesConfig?.enabled ?? false;
+      const openAiCompatEnabled = openAiChatCompletionsEnabled || openResponsesEnabled;
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
       const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
       const ingressAttribution = prepareGatewayIngressAttribution({
@@ -320,7 +352,7 @@ export function createGatewayHttpServer(opts: {
         (await getControlUiModule()).handleControlUiHttpRequest(req, res, {
           ...controlUiRouteOptions,
           terminalEnabled: opts.isTerminalEnabled?.() ?? isTerminalConfigEnabled(configSnapshot),
-          agentId: resolveAssistantIdentity({ cfg: configSnapshot }).agentId,
+          agentId: resolveAssistantAgentId(configSnapshot),
           root: controlUiRoot,
         });
       const handleStandaloneControlUiRequest = async () => {
@@ -365,6 +397,18 @@ export function createGatewayHttpServer(opts: {
         respondNotFound(res);
         return true;
       });
+
+      addAdmittedStage(
+        classifyWorkerBootstrapArtifactTransferPath(scopedRequestPath) !== "outside",
+        () =>
+          handleWorkerBootstrapArtifactTransferHttpRequest({
+            req,
+            res,
+            clientIp: ingressAttribution.rateLimit.subject.key,
+            rateLimiter: joinRateLimiter,
+            callback: opts.handleWorkerBootstrapArtifactTransferRequest,
+          }),
+      );
 
       addAdmittedStage(classifyNodeWorkerBundleTransferPath(scopedRequestPath) !== "outside", () =>
         handleNodeWorkerBundleTransferHttpRequest({
@@ -437,7 +481,9 @@ export function createGatewayHttpServer(opts: {
         }),
       );
       addAdmittedStage(scopedRequestPath.startsWith("/__openclaw__/board/"), async () =>
-        (await getBoardHttpModule()).handleBoardHttpRequest(req, res),
+        (await getBoardHttpModule()).handleBoardHttpRequest(req, res, {
+          resolveGatewayContext: opts.getGatewayRequestContext?.()?.resolveGatewayContext,
+        }),
       );
       const userProfileAvatarRoute = parseControlUiUserAvatarPath(
         scopedRequestPath,
@@ -632,7 +678,7 @@ export function createGatewayHttpServer(opts: {
       addRequestStage(controlUiEnabled, async () =>
         (await getControlUiModule()).handleControlUiAssistantMediaRequest(req, res, {
           ...controlUiRouteOptions,
-          agentId: resolveAssistantIdentity({ cfg: configSnapshot }).agentId,
+          agentId: resolveAssistantAgentId(configSnapshot),
         }),
       );
       addRequestStage(controlUiEnabled, async () =>
@@ -640,8 +686,11 @@ export function createGatewayHttpServer(opts: {
       );
       addRequestStage(controlUiEnabled, handleControlUiRequest);
 
-      if (await runGatewayHttpRequestStages(requestStages)) {
-        return;
+      // A completed or disconnected response owns the request even when a stage reports fallthrough.
+      for (const stage of requestStages) {
+        if ((await stage()) || res.destroyed || res.writableEnded) {
+          return;
+        }
       }
 
       // Startup owns sidecar readiness. The plugin registry is still empty here, so an

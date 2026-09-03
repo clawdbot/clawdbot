@@ -20,6 +20,7 @@ import { subscribeEmbeddedAgentSession } from "../agents/embedded-agent-subscrib
 import { FailoverError } from "../agents/failover-error.js";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
+import { recordAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
@@ -2049,10 +2050,15 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
   it("rejects resolved terminal agent failures without exposing provider details", async () => {
     const privateDetail = "raw provider detail should stay private";
     agentCommandMock.mockClear();
-    agentCommandMock.mockResolvedValueOnce({
-      payloads: [{ text: "Command may have changed state", isError: true }],
-      meta: { error: { kind: "incomplete_turn", message: privateDetail } },
-    } as never);
+    agentCommandMock.mockResolvedValueOnce(
+      recordAgentRunTerminalOutcome(
+        {
+          payloads: [{ text: "Command may have changed state", isError: true }],
+          meta: { error: { kind: "incomplete_turn", message: privateDetail } },
+        },
+        "failed",
+      ) as never,
+    );
 
     const res = await postChatCompletions(enabledPort, {
       model: "openclaw",
@@ -2066,18 +2072,30 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     expect(body).not.toContain(privateDetail);
   });
 
-  it("rejects resolved error stop reasons", async () => {
+  it.each([
+    { name: "error stop", meta: { stopReason: "error" }, outcome: "failed", status: 500 },
+    {
+      name: "run-budget timeout without error metadata",
+      meta: { aborted: false, timeoutPhase: "provider", providerStarted: true },
+      outcome: "failed",
+      status: 500,
+    },
+    { name: "completed run with an error payload", meta: {}, outcome: "completed", status: 200 },
+  ] as const)("uses the recorded outcome for $name", async ({ meta, outcome, status }) => {
     agentCommandMock.mockClear();
-    agentCommandMock.mockResolvedValueOnce({
-      payloads: [{ text: "Command may have changed state", isError: true }],
-      meta: { stopReason: "error" },
-    } as never);
+    agentCommandMock.mockResolvedValueOnce(
+      recordAgentRunTerminalOutcome(
+        { payloads: [{ text: "Command may have changed state", isError: true }], meta },
+        outcome,
+      ) as never,
+    );
 
     const res = await postChatCompletions(enabledPort, {
       model: "openclaw",
       messages: [{ role: "user", content: "hi" }],
     });
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(status);
+    await res.text();
   });
 
   it.each(
@@ -2090,6 +2108,11 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       {
         label: "an error stop reason",
         meta: { stopReason: "error" },
+        expectedPhase: "end" as const,
+      },
+      {
+        label: "a run-budget timeout without error metadata",
+        meta: { aborted: false, timeoutPhase: "provider" as const, providerStarted: true },
         expectedPhase: "end" as const,
       },
     ].flatMap((failure) =>
@@ -2123,6 +2146,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         if (!runId) {
           throw new Error("expected a streaming chat-completion run ID");
         }
+        emitAgentEvent({ runId, stream: "assistant", data: { delta: "partial answer" } });
         const result = {
           payloads: [{ text: "Command may have changed state", isError: true }],
           meta: { durationMs: 0, ...meta },
@@ -2140,7 +2164,11 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           });
           const terminal = {
             metadata: {},
-            outcome: buildAgentRunTerminalOutcome({ status: "error", stopReason: "error" }),
+            outcome: buildAgentRunTerminalOutcome({
+              status: meta.timeoutPhase ? "timeout" : "error",
+              stopReason: meta.timeoutPhase ? undefined : "error",
+              timeoutPhase: meta.timeoutPhase,
+            }),
           };
           if (lifecycle.resolveResultError(result, false)) {
             lifecycle.emitResultError(result, false, terminal);
@@ -2148,7 +2176,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
             lifecycle.emitEnd(terminal);
           }
         }
-        return result;
+        return recordAgentRunTerminalOutcome(result, "failed");
       }) as never);
 
       try {
@@ -2158,16 +2186,22 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           stream: true,
         });
         const finishReasons: Array<string | null> = [];
+        const content: string[] = [];
         await expect(async () => {
           for await (const chunk of stream) {
             finishReasons.push(...chunk.choices.map((choice) => choice.finish_reason));
+            content.push(...chunk.choices.map((choice) => choice.delta.content ?? ""));
           }
         }).rejects.toMatchObject({
           error: { message: "internal error", type: "api_error" },
         });
         expect(finishReasons).not.toContain("stop");
+        expect(content.join("")).toBe("partial answer");
         expect(terminals).toEqual([
-          { phase: producerTerminal ? expectedPhase : "error", status: "error" },
+          {
+            phase: producerTerminal ? expectedPhase : "error",
+            status: producerTerminal && meta.timeoutPhase ? "timeout" : "error",
+          },
         ]);
       } finally {
         unsubscribe();
@@ -2609,6 +2643,75 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     },
   );
 
+  it.each(
+    [
+      {
+        name: "the corrected final payload",
+        provisional: "Working...",
+        replacement: "Done.",
+        payloads: [{ text: "Done." }],
+        expected: "Done.",
+      },
+      {
+        name: "all finalized payloads",
+        provisional: "First.Second.",
+        payloads: [{ text: "First." }, { text: "Second." }],
+        expected: "First.\n\nSecond.",
+      },
+      {
+        name: "streamed commentary when the final payload is empty",
+        provisional: "Working...",
+        payloads: [],
+        expected: "Working...",
+      },
+    ].flatMap((scenario) => (["required", "pinned"] as const).map((mode) => ({ scenario, mode }))),
+  )("uses $scenario.name for $mode tool-stream terminal commentary", async ({ scenario, mode }) => {
+    agentCommandMock.mockClear();
+    agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId: string }).runId;
+      emitAgentEvent({
+        runId,
+        stream: "assistant",
+        data: { text: scenario.provisional, delta: scenario.provisional },
+      });
+      if (scenario.replacement) {
+        emitAgentEvent({
+          runId,
+          stream: "assistant",
+          data: { text: scenario.replacement, delta: "", replace: true, phase: "final_answer" },
+        });
+      }
+      return {
+        payloads: scenario.payloads,
+        meta: {
+          stopReason: "tool_calls",
+          pendingToolCalls: [{ id: "call_1", name: "get_weather", arguments: '{"city":"Taipei"}' }],
+        },
+      };
+    }) as never);
+
+    const stream = await createOpenAiChatClient(enabledPort).chat.completions.create({
+      model: "openclaw",
+      messages: [{ role: "user", content: "Check the weather." }],
+      stream: true,
+      tools: [{ type: "function", function: { name: "get_weather", parameters: {} } }],
+      tool_choice:
+        mode === "required" ? "required" : { type: "function", function: { name: "get_weather" } },
+    });
+    let content = "";
+    const finishReasons: string[] = [];
+    for await (const chunk of stream) {
+      for (const choice of chunk.choices) {
+        content += choice.delta.content ?? "";
+        if (choice.finish_reason) {
+          finishReasons.push(choice.finish_reason);
+        }
+      }
+    }
+    expect(content).toBe(scenario.expected);
+    expect(finishReasons).toEqual(["tool_calls"]);
+  });
+
   it.each([
     {
       name: "successful completion without a provider terminal",
@@ -2628,8 +2731,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       name: "internal agent error without a provider terminal",
       fail: true,
       providerTerminal: false,
-      expected: "Error: internal error",
-      protocolError: false,
+      expected: "internal error",
+      protocolError: true,
     },
     {
       name: "internal agent error with a provider terminal",
@@ -2754,6 +2857,66 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
     },
   );
+
+  it.each([
+    { name: "a string", stream: "false" },
+    { name: "a number", stream: 1 },
+    { name: "an array", stream: [] },
+    { name: "an object", stream: {} },
+  ])("rejects $name stream mode before dispatching an agent", async ({ stream }) => {
+    agentCommandMock.mockClear();
+    const response = await postChatCompletions(enabledPort, {
+      model: "openclaw",
+      stream,
+      messages: [{ role: "user", content: "hi" }],
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.headers.get("content-type")).toContain("application/json");
+    await expect(response.json()).resolves.toMatchObject({
+      error: { type: "invalid_request_error", message: expect.stringContaining("stream") },
+    });
+    expect(agentCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps one created timestamp across every streamed completion chunk", async () => {
+    let now = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => (now += 1_000));
+    try {
+      agentCommandMock.mockClear();
+      agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
+        const runId = (opts as { runId?: string }).runId ?? "";
+        emitAgentEvent({ runId, stream: "assistant", data: { delta: "commentary" } });
+        return {
+          payloads: [{ text: "commentary" }],
+          meta: {
+            stopReason: "tool_calls",
+            pendingToolCalls: [
+              { id: "call_1", name: "lookup", arguments: JSON.stringify({ q: "x".repeat(300) }) },
+            ],
+            agentMeta: { usage: { input: 4, output: 1, total: 5 } },
+          },
+        };
+      }) as never);
+
+      const response = await postChatCompletions(enabledPort, {
+        model: "openclaw",
+        stream: true,
+        stream_options: { include_usage: true },
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(response.status).toBe(200);
+      const chunks = parseSseDataLines(await response.text())
+        .filter((data) => data !== "[DONE]")
+        .map((data) => JSON.parse(data) as { created?: number });
+
+      expect(chunks.length).toBeGreaterThanOrEqual(6);
+      expect(chunks.every((chunk) => typeof chunk.created === "number")).toBe(true);
+      expect(new Set(chunks.map((chunk) => chunk.created))).toEqual(new Set([chunks[0]?.created]));
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
 
   it("streams SSE chunks when stream=true", async () => {
     const port = enabledPort;
@@ -3143,16 +3306,16 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         const choices = errorChunks.flatMap(
           (chunk) => (chunk.choices as Array<Record<string, unknown>> | undefined) ?? [],
         );
-        const errorContentChoice = choices.find(
-          (choice) =>
-            (choice.delta as Record<string, unknown> | undefined)?.content ===
-            "Error: internal error",
-        );
-        expect(errorContentChoice?.finish_reason).toBeNull();
-        const stopChoices = choices.filter((choice) => choice.finish_reason === "stop");
-        expect(stopChoices).toHaveLength(1);
-        expect(stopChoices[0]?.delta).toEqual({});
-        expect(choices.at(-1)).toEqual(stopChoices[0]);
+        expect(errorChunks.filter((chunk) => "error" in chunk)).toEqual([
+          { error: { message: "internal error", type: "api_error" } },
+        ]);
+        expect(
+          choices.some((choice) =>
+            Boolean((choice.delta as Record<string, unknown> | undefined)?.content),
+          ),
+        ).toBe(false);
+        expect(choices.some((choice) => choice.finish_reason === "stop")).toBe(false);
+        expect(errorText).not.toContain("boom");
       }
     } finally {
       // shared server
@@ -3670,86 +3833,105 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     }
   });
 
-  it("blocks a view-capped operator from mutating another operator's session", async () => {
-    await withEnvAsync(
-      { OPENCLAW_GATEWAY_TOKEN: undefined, OPENCLAW_GATEWAY_PASSWORD: undefined },
-      async () => {
-        const port = await getGatewayTestPort();
-        let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
-        const previousGatewayAuth = testState.gatewayAuth;
-        const trustedProxyAuth = {
-          mode: "trusted-proxy" as const,
-          trustedProxy: {
-            userHeader: "x-forwarded-user",
-            requiredHeaders: ["x-forwarded-proto"],
-            allowLoopback: true,
-          },
-        };
-        testState.gatewayAuth = trustedProxyAuth;
-        try {
-          await writeGatewayConfig({
-            gateway: {
-              auth: trustedProxyAuth,
-              trustedProxies: ["127.0.0.1"],
-              roles: {
-                default: "guest",
-                definitions: {
-                  guest: {
-                    agents: "*",
-                    scopes: ["operator.write"],
-                    sessions: { others: "view" },
+  it.each(["trusted-proxy", "token"] as const)(
+    "preserves %s authority when mutating another operator session",
+    async (authMethod) => {
+      const sharedSecretOwner = authMethod === "token";
+      await withEnvAsync(
+        { OPENCLAW_GATEWAY_TOKEN: undefined, OPENCLAW_GATEWAY_PASSWORD: undefined },
+        async () => {
+          const port = await getGatewayTestPort();
+          let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+          const previousGatewayAuth = testState.gatewayAuth;
+          const trustedProxyAuth = {
+            mode: "trusted-proxy" as const,
+            trustedProxy: {
+              userHeader: "x-forwarded-user",
+              requiredHeaders: ["x-forwarded-proto"],
+              allowLoopback: true,
+            },
+          };
+          const requestAuth = sharedSecretOwner
+            ? { mode: "token" as const, token: "owner-secret" }
+            : trustedProxyAuth;
+          testState.gatewayAuth = requestAuth;
+          try {
+            await writeGatewayConfig({
+              gateway: {
+                auth: requestAuth,
+                trustedProxies: ["127.0.0.1"],
+                roles: {
+                  default: "guest",
+                  definitions: {
+                    guest: {
+                      agents: sharedSecretOwner ? [] : "*",
+                      scopes: ["operator.write"],
+                      sessions: { others: "view" },
+                    },
                   },
                 },
               },
-            },
-          });
-          resetConfigRuntimeState();
-          server = await startGatewayServer(port, {
-            host: "127.0.0.1",
-            auth: trustedProxyAuth,
-            controlUiEnabled: false,
-            openAiChatCompletionsEnabled: true,
-          });
+            });
+            resetConfigRuntimeState();
+            server = await startGatewayServer(port, {
+              host: "127.0.0.1",
+              auth: requestAuth,
+              controlUiEnabled: false,
+              openAiChatCompletionsEnabled: true,
+            });
 
-          const owner = ensureProfileForEmail("session-owner@example.test");
-          const sessionKey = "agent:main:foreign-openai-http";
-          await upsertSessionEntryCore(
-            { agentId: "main", sessionKey },
-            {
-              sessionId: "foreign-openai-http",
-              updatedAt: 1,
-              visibility: "shared",
-              createdActor: { type: "human", id: owner.id },
-            },
-          );
+            const owner = ensureProfileForEmail("session-owner@example.test");
+            const sessionKey = "agent:main:foreign-openai-http";
+            await upsertSessionEntryCore(
+              { agentId: "main", sessionKey },
+              {
+                sessionId: "foreign-openai-http",
+                updatedAt: 1,
+                visibility: "shared",
+                createdVia: "operator",
+                createdActor: { type: "human", source: "profile", id: owner.id },
+              },
+            );
 
-          agentCommandMock.mockClear();
-          agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
-          const response = await postChatCompletions(
-            port,
-            { model: "openclaw", messages: [{ role: "user", content: "mutate foreign session" }] },
-            {
-              "x-forwarded-for": "198.51.100.42",
-              "x-forwarded-proto": "https",
-              "x-forwarded-user": "guest@example.test",
-              "x-openclaw-session-key": sessionKey,
-            },
-          );
+            agentCommandMock.mockClear();
+            agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+            const response = await postChatCompletions(
+              port,
+              {
+                model: "openclaw",
+                messages: [{ role: "user", content: "mutate foreign session" }],
+              },
+              {
+                ...(sharedSecretOwner
+                  ? { authorization: "Bearer owner-secret" }
+                  : {
+                      "x-forwarded-for": "198.51.100.42",
+                      "x-forwarded-proto": "https",
+                      "x-forwarded-user": "guest@example.test",
+                    }),
+                "x-openclaw-session-key": sessionKey,
+              },
+            );
 
-          expect(response.status).toBe(403);
-          expect(await response.json()).toMatchObject({
-            error: { type: "forbidden", message: expect.stringContaining("session is shared") },
-          });
-          expect(agentCommandMock).not.toHaveBeenCalled();
-        } finally {
-          await server?.close({ reason: "openai operator role session sharing test done" });
-          testState.gatewayAuth = previousGatewayAuth;
-          await writeGatewayConfig({});
-          resetConfigRuntimeState();
-        }
-      },
-    );
-  });
+            expect(response.status).toBe(sharedSecretOwner ? 200 : 403);
+            if (sharedSecretOwner) {
+              expect(agentCommandMock).toHaveBeenCalledOnce();
+            } else {
+              expect(await response.json()).toMatchObject({
+                error: { type: "forbidden", message: expect.stringContaining("session is shared") },
+              });
+              expect(agentCommandMock).not.toHaveBeenCalled();
+            }
+          } finally {
+            await server?.close({ reason: "openai operator role session sharing test done" });
+            testState.gatewayAuth = previousGatewayAuth;
+            await writeGatewayConfig({});
+            resetConfigRuntimeState();
+          }
+        },
+      );
+    },
+  );
 
   it("preserves verified trusted-proxy owner identity for both response modes", async () => {
     await withEnvAsync(

@@ -29,12 +29,13 @@ export type OpenClawExecPolicy = OpenClawExecPolicyForCodexAppServer;
 export type ProviderAuthAliasConfig = NonNullable<ProviderAuthAliasLookupParams>["config"];
 export type CodexAppServerDefaultPolicy = {
   mode: CodexAppServerPolicyMode;
-  approvalPolicy?: CodexAppServerApprovalPolicy;
+  approvalPolicy?: CodexAppServerManagedApprovalPolicy;
   approvalsReviewer?: CodexAppServerApprovalsReviewer;
   sandbox?: CodexAppServerSandboxMode;
   dangerFullAccessAllowed?: boolean;
 };
-export type CodexAppServerApprovalPolicy = "never" | "on-request" | "untrusted";
+export type CodexAppServerApprovalPolicy = "never" | "on-request";
+export type CodexAppServerManagedApprovalPolicy = Extract<CodexApprovalPolicy, string>;
 export type CodexAppServerApprovalPolicySource = "config" | "env" | "requirements" | "implicit";
 export type CodexAppServerEffectiveApprovalPolicy = CodexApprovalPolicy;
 export type CodexAppServerSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
@@ -202,9 +203,6 @@ export type CodexAppServerRuntimeOptions = {
   codeModeOnly: boolean;
   loopDetectionPreToolUseRelay: boolean;
   requestTimeoutMs: number;
-  turnCompletionIdleTimeoutMs: number;
-  turnAssistantCompletionIdleTimeoutMs?: number;
-  postToolRawAssistantCompletionIdleTimeoutMs?: number;
   approvalPolicy: CodexAppServerEffectiveApprovalPolicy;
   approvalPolicySource?: CodexAppServerApprovalPolicySource;
   sandbox: CodexAppServerSandboxMode;
@@ -223,6 +221,7 @@ export type CodexModelBackedReviewerContext = {
   agentDir?: string;
   codexConfigToml?: string | null;
   homeScope?: CodexAppServerHomeScope;
+  codexArgs?: readonly string[];
 };
 
 export type CodexPluginConfig = {
@@ -247,9 +246,6 @@ export type CodexPluginConfig = {
     codeModeOnly?: boolean;
     loopDetectionPreToolUseRelay?: boolean;
     requestTimeoutMs?: number;
-    turnCompletionIdleTimeoutMs?: number;
-    turnAssistantCompletionIdleTimeoutMs?: number;
-    postToolRawAssistantCompletionIdleTimeoutMs?: number;
     approvalPolicy?: CodexAppServerApprovalPolicy;
     sandbox?: CodexAppServerSandboxMode;
     approvalsReviewer?: CodexAppServerApprovalsReviewer;

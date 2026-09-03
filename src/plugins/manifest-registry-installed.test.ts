@@ -7,13 +7,12 @@ import {
   recordInstalledPluginIndexInstallOwner,
   resolveInstalledPluginIndexInstallOwner,
 } from "./installed-plugin-index-install-owner.js";
-import {
-  readPersistedInstalledPluginIndex,
-  writePersistedInstalledPluginIndex,
-} from "./installed-plugin-index-store.js";
+import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
+import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import { loadInstalledPluginIndex, type InstalledPluginIndex } from "./installed-plugin-index.js";
 import {
   hasMissingInstalledPluginOwnerMetadata,
+  resolveInstalledPluginLifecycleOwnership,
   resolveInstalledPluginPackageOwnership,
 } from "./installed-plugin-package-ownership.js";
 import { resolvePluginManifestInstallOwner } from "./manifest-install-owner.js";
@@ -21,6 +20,7 @@ import {
   loadPluginManifestRegistryForInstalledIndex,
   resolveInstalledManifestRegistryIndexFingerprint,
 } from "./manifest-registry-installed.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
@@ -120,7 +120,7 @@ function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
   return Object.freeze(value);
 }
 
-function writePackageManifest(rootDir: string, channelLabel: string) {
+function writePackageManifest(rootDir: string, channelLabel: string, selectionDocsPrefix?: string) {
   const packageJsonPath = path.join(rootDir, "package.json");
   fs.writeFileSync(
     packageJsonPath,
@@ -134,6 +134,7 @@ function writePackageManifest(rootDir: string, channelLabel: string) {
         channel: {
           id: "installed",
           label: channelLabel,
+          ...(selectionDocsPrefix !== undefined ? { selectionDocsPrefix } : {}),
         },
       },
     }),
@@ -142,9 +143,12 @@ function writePackageManifest(rootDir: string, channelLabel: string) {
   return packageJsonPath;
 }
 
-function createIndexWithPackageJson(rootDir: string): InstalledPluginIndex {
+function createIndexWithPackageJson(
+  rootDir: string,
+  selectionDocsPrefix?: string,
+): InstalledPluginIndex {
   const index = createIndexWithFileSignatures(rootDir);
-  const packageJsonPath = writePackageManifest(rootDir, "Installed");
+  const packageJsonPath = writePackageManifest(rootDir, "Installed", selectionDocsPrefix);
   const record = index.plugins[0];
   if (!record) {
     throw new Error("expected index record");
@@ -179,6 +183,16 @@ function createIndexWithUnhashedPackageJson(rootDir: string): InstalledPluginInd
 }
 
 describe("loadPluginManifestRegistryForInstalledIndex", () => {
+  const loadRegistry = (index: InstalledPluginIndex) =>
+    loadPluginManifestRegistryForInstalledIndex({
+      index,
+      env: {
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      },
+      includeDisabled: true,
+    });
+
   it("reuses frozen installed-index fingerprints when file signatures are persisted", () => {
     const rootDir = makeTempDir();
     writePlugin(rootDir, "installed", "installed-");
@@ -260,7 +274,7 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     expect(second).toBe(first);
   });
 
-  it("reconstructs installed-index manifest registries when manifest files change", () => {
+  it("reconstructs installed-index manifests in a fresh operation after files change", () => {
     const rootDir = makeTempDir();
     const manifestPath = path.join(rootDir, "openclaw.plugin.json");
     writePlugin(rootDir, "installed", "installed-");
@@ -283,11 +297,13 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     const nextMtime = new Date(Date.now() + 5000);
     fs.utimesSync(manifestPath, nextMtime, nextMtime);
 
-    const second = loadPluginManifestRegistryForInstalledIndex({
-      index,
-      env,
-      includeDisabled: true,
-    });
+    const second = withPluginCache(createPluginCache(), () =>
+      loadPluginManifestRegistryForInstalledIndex({
+        index,
+        env,
+        includeDisabled: true,
+      }),
+    );
 
     expect(second).not.toBe(first);
     expect(second.plugins[0]?.modelSupport).toEqual({
@@ -328,6 +344,38 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     expect(third.plugins[0]?.packageDependencies).toEqual({
       "runtime-dep": "1.0.0",
     });
+  });
+
+  it("preserves empty docs prefixes from package channel metadata", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "installed", "installed-");
+
+    const registry = loadRegistry(createIndexWithPackageJson(rootDir, ""));
+
+    expect(registry.plugins[0]?.packageChannel?.selectionDocsPrefix).toBe("");
+  });
+
+  it("preserves empty docs prefixes from persisted installed-index metadata", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "installed", "installed-");
+    const index = createIndex(rootDir);
+    const record = expectDefined(index.plugins[0], "index.plugins[0] test invariant");
+
+    const registry = loadRegistry({
+      ...index,
+      plugins: [
+        {
+          ...record,
+          packageChannel: {
+            id: "installed",
+            label: "Installed",
+            selectionDocsPrefix: "",
+          },
+        },
+      ],
+    });
+
+    expect(registry.plugins[0]?.packageChannel?.selectionDocsPrefix).toBe("");
   });
 
   it("reuses installed package json path validation across registry loads", () => {
@@ -502,6 +550,10 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
       },
     };
     expect(resolveInstalledPluginPackageOwnership(orphanedOwner, "orphaned").ok).toBe(false);
+    expect(resolveInstalledPluginLifecycleOwnership(orphanedOwner, "orphaned")).toMatchObject({
+      ok: true,
+      value: { kind: "orphan", installOwner: "orphaned", pluginIds: [] },
+    });
     expect(hasMissingInstalledPluginOwnerMetadata(orphanedOwner, env)).toBe(false);
 
     const legacyAmbiguous = {
@@ -512,6 +564,7 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
       },
     };
     expect(resolveInstalledPluginPackageOwnership(legacyAmbiguous, "pack/one").ok).toBe(false);
+    expect(resolveInstalledPluginLifecycleOwnership(legacyAmbiguous, "pack/one").ok).toBe(false);
     expect(hasMissingInstalledPluginOwnerMetadata(legacyAmbiguous, env)).toBe(true);
 
     const packageAlias = path.join(stateDir, "pack-alias");
@@ -528,6 +581,7 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
       },
     };
     expect(resolveInstalledPluginPackageOwnership(aliasedAmbiguous, "pack/one").ok).toBe(false);
+    expect(resolveInstalledPluginLifecycleOwnership(aliasedAmbiguous, "pack/one").ok).toBe(false);
     expect(hasMissingInstalledPluginOwnerMetadata(aliasedAmbiguous, env)).toBe(true);
 
     const unrelatedOwner = "unrelated";

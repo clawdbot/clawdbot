@@ -1547,12 +1547,14 @@ describe("runCliAgent spawn path", () => {
     );
   });
 
-  it("captures a runtime artifact for a strict CLI credential", async () => {
+  it("captures a runtime artifact while preserving a strict CLI shim invocation", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-strict-artifact-"));
+    const implementation = path.join(dir, "2.1.205");
     const executable = path.join(dir, "claude-fixture");
     try {
-      await fs.copyFile(process.execPath, executable);
-      await fs.chmod(executable, 0o755);
+      await fs.copyFile(process.execPath, implementation);
+      await fs.chmod(implementation, 0o755);
+      await fs.symlink(implementation, executable);
       mockSuccessfulCliRun(CLAUDE_OK_JSONL);
       const context = buildPreparedCliRunContext({
         backend: { command: executable },
@@ -1570,8 +1572,9 @@ describe("runCliAgent spawn path", () => {
 
       expect(context.runtimeArtifactFingerprint).toMatch(/^[a-f0-9]{64}$/u);
       expect(context.runtimeOwnerFingerprint).toBeUndefined();
-      const input = mockCallArg(supervisorSpawnMock) as { argv?: string[] };
-      expect(input.argv?.[0]).toBe(await fs.realpath(executable));
+      const input = mockCallArg(supervisorSpawnMock) as { argv?: string[]; argv0?: string };
+      expect(input.argv?.[0]).toBe(await fs.realpath(implementation));
+      expect(input.argv0).toBe(executable);
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }
@@ -2332,42 +2335,6 @@ describe("runCliAgent spawn path", () => {
     expect(authLog).not.toContain("token-child");
     expect(authLog).not.toContain("/tmp/child-gemini-home");
     expect(authLog).not.toContain("sk-openai-child");
-  });
-
-  it("prepends bootstrap warnings to the CLI prompt body", async () => {
-    supervisorSpawnMock.mockResolvedValueOnce(
-      createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "ok",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      }),
-    );
-    const context = buildPreparedCliRunContext({
-      provider: "codex-cli",
-      model: "gpt-5.4",
-    });
-    context.reusableCliSession = { mode: "reuse", sessionId: "thread-123" };
-    context.bootstrapPromptWarningLines = [
-      "[Bootstrap truncation warning]",
-      "- AGENTS.md: 200 raw -> 20 injected",
-    ];
-
-    await executePreparedCliRun(context, "thread-123");
-
-    const input = mockCallArg(supervisorSpawnMock) as {
-      argv?: string[];
-      input?: string;
-    };
-    const promptCarrier = [input.input ?? "", ...(input.argv ?? [])].join("\n");
-
-    expect(promptCarrier).toContain("[Bootstrap truncation warning]");
-    expect(promptCarrier).toContain("- AGENTS.md: 200 raw -> 20 injected");
-    expect(promptCarrier).toContain("hi");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

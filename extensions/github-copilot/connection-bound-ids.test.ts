@@ -22,7 +22,7 @@ describe("github-copilot connection-bound response IDs", () => {
     const functionCallId = Buffer.from(`function-call-${"y".repeat(20)}`).toString("base64");
     const messageId = Buffer.from(`message-${"z".repeat(24)}`).toString("base64");
     const input = [
-      { id: "rs_existing", type: "reasoning" },
+      { id: "rs_existing", type: "reasoning", encrypted_content: "active" },
       { id: "msg_existing", type: "message" },
       { id: "fc_existing", type: "function_call" },
       { id: functionCallId, type: "function_call" },
@@ -37,53 +37,42 @@ describe("github-copilot connection-bound response IDs", () => {
     expect(input[4]?.id).toMatch(/^msg_[a-f0-9]{16}$/);
   });
 
-  it("preserves valid reasoning IDs but strips encrypted_content", () => {
-    const withEncrypted = Buffer.from(`reasoning-${"e".repeat(24)}`).toString("base64");
-    const withNull = Buffer.from(`reasoning-${"n".repeat(24)}`).toString("base64");
-    const withoutField = Buffer.from(`reasoning-${"a".repeat(24)}`).toString("base64");
+  it("preserves complete active reasoning and omits connection-bound IDs", () => {
+    const connectionBoundId = Buffer.from(`reasoning-${"e".repeat(24)}`).toString("base64");
     const input = [
-      { id: withEncrypted, type: "reasoning", encrypted_content: "opaque-encrypted-payload" },
-      { id: withNull, type: "reasoning", encrypted_content: null },
-      { id: withoutField, type: "reasoning" },
-    ];
-
-    expect(rewriteInputIds(input)).toBe(true);
-    expect(input[0]).toEqual({ id: withEncrypted, type: "reasoning" });
-    expect(input[1]).toEqual({ id: withNull, type: "reasoning" });
-    expect(input[2]).toEqual({ id: withoutField, type: "reasoning" });
-  });
-
-  it("strips encrypted_content from valid reasoning IDs at payload send time", () => {
-    const withEncrypted = "abcDEF0123+/=";
-    const withoutEncrypted = "reasoning/abc+123=";
-    const input = [
-      { id: withEncrypted, type: "reasoning", encrypted_content: "opaque-encrypted-payload" },
-      { id: withoutEncrypted, type: "reasoning" },
-    ];
-
-    expect(rewriteInputIds(input)).toBe(true);
-    expect(input[0]).toEqual({ id: withEncrypted, type: "reasoning" });
-    expect(input[1]).toEqual({ id: withoutEncrypted, type: "reasoning" });
-  });
-
-  it("drops unsafe reasoning IDs and strips encrypted_content from kept items", () => {
-    const overlongId = `5PX6gLHXT5wE+Y2tPmUV4gn+${"B".repeat(384)}`;
-    const input = [
-      {
-        id: overlongId,
-        type: "reasoning",
-        encrypted_content: "encrypted-replay-payload",
-        summary: [],
-      },
-      { type: "reasoning", encrypted_content: "missing-id", summary: [] },
-      { id: 123, type: "reasoning", encrypted_content: "non-string-id", summary: [] },
-      { id: "rs_valid", type: "reasoning", encrypted_content: "valid", summary: [] },
+      { id: "rs_active", type: "reasoning", encrypted_content: "native", summary: [] },
+      { type: "reasoning", status: "completed", encrypted_content: "idless" },
+      { id: connectionBoundId, type: "reasoning", status: null, encrypted_content: "connection" },
     ];
 
     expect(rewriteInputIds(input)).toBe(true);
     expect(input).toEqual([
-      { type: "reasoning", summary: [] },
-      { id: "rs_valid", type: "reasoning", summary: [] },
+      { id: "rs_active", type: "reasoning", encrypted_content: "native", summary: [] },
+      { type: "reasoning", status: "completed", encrypted_content: "idless" },
+      { type: "reasoning", encrypted_content: "connection" },
+    ]);
+    expect(rewriteInputIds(input)).toBe(false);
+  });
+
+  it("drops adjacent incomplete or foreign reasoning and only clears dependent assistant IDs", () => {
+    const invalidReasoning = [
+      { id: "thinking_0", type: "reasoning", encrypted_content: "foreign" },
+      { id: `rs_${"r".repeat(64)}`, type: "reasoning", encrypted_content: "oversized" },
+      { id: "rs_missing", type: "reasoning" },
+      { id: "rs_empty", type: "reasoning", encrypted_content: "" },
+      { id: "rs_i", type: "reasoning", status: "incomplete", encrypted_content: "partial" },
+      { id: 123, type: "reasoning", encrypted_content: "malformed" },
+    ];
+    const input: Array<Record<string, unknown>> = [
+      ...invalidReasoning,
+      { id: "msg_signed", type: "message", role: "assistant" },
+      { id: "msg_user", type: "message", role: "user" },
+    ];
+
+    expect(rewriteInputIds(input)).toBe(true);
+    expect(input).toEqual([
+      { type: "message", role: "assistant" },
+      { id: "msg_user", type: "message", role: "user" },
     ]);
   });
 

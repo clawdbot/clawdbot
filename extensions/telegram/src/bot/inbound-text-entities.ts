@@ -61,10 +61,9 @@ function longestBacktickRun(text: string): number {
 
 function markdownInlineCodeDelimiters(content: string): [string, string] {
   const delimiter = "`".repeat(longestBacktickRun(content) + 1);
-  if (content.startsWith(" ") || content.endsWith(" ")) {
-    return [`${delimiter} `, ` ${delimiter}`];
-  }
-  return [delimiter, delimiter];
+  // Padding keeps literal edge backticks separate from the Markdown delimiters.
+  const padding = /^[ `]|[ `]$/u.test(content) ? " " : "";
+  return [`${delimiter}${padding}`, `${padding}${delimiter}`];
 }
 
 function markdownPreAffixes(

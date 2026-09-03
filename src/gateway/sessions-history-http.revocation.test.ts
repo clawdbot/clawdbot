@@ -30,10 +30,14 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../sessions/transcript-events.js", async (importOriginal) => {
-  const { attachSessionTranscriptRunId, resolveTerminalAssistantTranscriptRunId } =
-    await importOriginal<typeof import("../sessions/transcript-events.js")>();
+  const {
+    attachSessionTranscriptRunId,
+    readSessionTranscriptUpdateVersion,
+    resolveTerminalAssistantTranscriptRunId,
+  } = await importOriginal<typeof import("../sessions/transcript-events.js")>();
   return {
     attachSessionTranscriptRunId,
+    readSessionTranscriptUpdateVersion,
     resolveTerminalAssistantTranscriptRunId,
     onInternalSessionTranscriptUpdate: (cb: typeof transcriptUpdateHandler) => {
       transcriptUpdateHandler = cb;
@@ -120,31 +124,17 @@ vi.mock("./session-utils.js", () => ({
   resolveSessionTranscriptCandidates: () => ["/tmp/session-1.jsonl"],
 }));
 
-vi.mock("./session-transcript-readers.js", () => ({
-  readRecentSessionMessagesWithStatsAsync: async () => {
-    if (transcriptReadError) {
-      throw transcriptReadError;
-    }
-    return { messages: [], totalMessages: 0 };
-  },
-  readSessionMessagesAsync: async () => [],
-  readSessionMessagesWithSourceAsync: async () => {
-    if (transcriptReadError) {
-      throw transcriptReadError;
-    }
-    return { messages: [] };
-  },
-}));
-
 vi.mock("./session-history-state.js", () => ({
   buildSessionHistorySnapshot: () => ({
     history: { items: [], nextCursor: null, messages: [] },
   }),
   resolveCursorSeq: (_cursor: string | undefined) => undefined,
-  resolveSessionHistoryTailReadOptions: (limit: number) => ({
-    maxMessages: limit * 20 + 20,
-    maxLines: limit * 20 + 20,
-  }),
+  readSessionHistoryRawSnapshotAsync: async () => {
+    if (transcriptReadError) {
+      throw transcriptReadError;
+    }
+    return { rawMessages: [] };
+  },
   SessionHistorySseState: {
     fromRawSnapshot: (_params: unknown) => ({
       snapshot: () => ({ items: [], nextCursor: null, messages: [] }),
@@ -196,7 +186,7 @@ class MockRes extends EventEmitter {
   writes: string[] = [];
   writableEnded = false;
   socket = new EventEmitter();
-  closeOnNextWrite = false;
+  closeOnFrame?: "retry" | "history";
 
   setHeader(name: string, value: string) {
     this.headers.set(name.toLowerCase(), value);
@@ -204,8 +194,10 @@ class MockRes extends EventEmitter {
 
   write(chunk: string) {
     this.writes.push(chunk);
-    if (this.closeOnNextWrite) {
-      this.closeOnNextWrite = false;
+    const written = this.writes.join("");
+    const closeMarker = this.closeOnFrame === "retry" ? "retry:" : "event: history";
+    if (this.closeOnFrame && written.includes(closeMarker) && written.endsWith("\n\n")) {
+      this.closeOnFrame = undefined;
       this.emit("close");
     }
     return true;
@@ -232,11 +224,11 @@ async function openSessionHistoryStream(
 
 async function openSessionHistoryStreamPair(
   options: Parameters<typeof handleSessionHistoryHttpRequest>[2],
-  params?: { closeOnFirstWrite?: boolean; expectSubscribed?: boolean },
+  params?: { closeOnFrame?: "retry" | "history"; expectSubscribed?: boolean },
 ) {
   const req = new MockReq(SESSION_HISTORY_URL);
   const res = new MockRes();
-  res.closeOnNextWrite = params?.closeOnFirstWrite === true;
+  res.closeOnFrame = params?.closeOnFrame;
 
   const handled = await handleSessionHistoryHttpRequest(
     req as unknown as IncomingMessage,
@@ -534,15 +526,18 @@ describe("session history SSE auth revocation", () => {
     });
   });
 
-  it("does not create SSE resources after an initial write closes the stream", async () => {
-    const { req, res } = await openSessionHistoryStreamPair(TRUSTED_PROXY_STARTUP_OPTIONS, {
-      closeOnFirstWrite: true,
-      expectSubscribed: false,
-    });
+  it.each(["retry", "history"] as const)(
+    "cleans up SSE resources when the initial %s frame closes the stream",
+    async (closeOnFrame) => {
+      const { req, res } = await openSessionHistoryStreamPair(TRUSTED_PROXY_STARTUP_OPTIONS, {
+        closeOnFrame,
+        expectSubscribed: false,
+      });
 
-    expect(res.writes.join("")).toBe("retry: 1000\n\n");
-    expect(transcriptUpdateHandler).toBeUndefined();
-    expect(req.listenerCount("error")).toBe(0);
-    expect(res.listenerCount("error")).toBe(0);
-  });
+      expect(res.writes.join("")).toContain("retry: 1000\n\n");
+      expect(transcriptUpdateHandler).toBeUndefined();
+      expect(req.listenerCount("error")).toBe(0);
+      expect(res.listenerCount("error")).toBe(0);
+    },
+  );
 });

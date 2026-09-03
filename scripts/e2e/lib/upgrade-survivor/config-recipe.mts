@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { parseReleaseVersion } from "../../../lib/release-version.mjs";
+import { compareReleaseVersions, parseReleaseVersion } from "../../../lib/release-version.mjs";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "../../../windows-cmd-helpers.mjs";
 
 const args = process.argv.slice(2);
@@ -16,6 +16,7 @@ type ConfigStep = {
   id: string;
   intent: string;
   argv: string[];
+  prepublishPluginPackages?: string[];
 };
 
 type BaselineAdaptationSummary = { skippedIntents: string[] };
@@ -131,6 +132,8 @@ function configSetJsonFile(
 
 const representativeConfigSteps: ConfigStep[] = [
   configSetJsonFile("models-openai", "models", "models.providers.openai", "models-openai.json"),
+  // Keep the migration specimen idle while baseline and candidate services run:
+  // a heartbeat refreshes its skills snapshot before inference, even when auth fails.
   configSetJsonFile("agents", "agents", "agents", "agents.json"),
   configSetJsonFile("skills", "skills", "skills", "skills.json"),
   configSetJsonFile("plugins", "plugins", "plugins", "plugins.json"),
@@ -178,12 +181,16 @@ const scenarioConfigSteps = new Map<string, ConfigStep[]>([
   [
     "acpx-openclaw-tools-bridge",
     [
-      configSetJsonFile(
-        "plugins-acpx-openclaw-tools-bridge",
-        "acpx-openclaw-tools-bridge",
-        "plugins",
-        "plugins-acpx-openclaw-tools-bridge.json",
-      ),
+      {
+        ...configSetJsonFile(
+          "plugins-acpx-openclaw-tools-bridge",
+          "acpx-openclaw-tools-bridge",
+          "plugins",
+          "plugins-acpx-openclaw-tools-bridge.json",
+        ),
+        // The candidate externalizes this runtime even when the baseline bundles it.
+        prepublishPluginPackages: ["@openclaw/acpx"],
+      },
     ],
   ],
   [
@@ -232,12 +239,7 @@ export function resolveScenarioConfigSteps(scenario: string): ConfigStep[] {
   return scenarioConfigSteps.get(scenario) ?? [];
 }
 
-const recipe: ConfigStep[] = [
-  {
-    id: "update-channel",
-    intent: "update",
-    argv: ["config", "set", "update.channel", "stable"],
-  },
+const sharedRecipe: ConfigStep[] = [
   configSetJsonFile("gateway", "gateway", "gateway", "gateway.json"),
   ...representativeConfigSteps,
   {
@@ -247,10 +249,39 @@ const recipe: ConfigStep[] = [
   },
 ];
 
-export function resolveUpgradeSurvivorConfigSteps(scenario = "base"): ConfigStep[] {
-  const validateStep = recipe.at(-1);
+export function resolveUpgradeSurvivorConfigSteps(
+  scenario = "base",
+  configuredUpdateChannel = process.env.OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL,
+): ConfigStep[] {
+  const validateStep = sharedRecipe.at(-1);
+  const updateChannel =
+    configuredUpdateChannel || (scenario === "prerelease-plugin-registry" ? "beta" : "stable");
+  if (updateChannel !== "stable" && updateChannel !== "beta") {
+    throw new Error(`invalid upgrade survivor update channel: ${updateChannel}`);
+  }
+  const sharedSteps = sharedRecipe.slice(0, -1).map((step) => {
+    if (scenario !== "recovery-cleanup" || step.id !== "agents") {
+      return step;
+    }
+    const agentsJson = step.argv[3];
+    if (agentsJson === undefined) {
+      throw new Error(`config recipe step ${step.id} is missing its JSON value`);
+    }
+    // Extend the canonical roster before the baseline adapter chooses entries or legacy list.
+    // A second agents.list write bypasses that version contract and can lose ownership defaults.
+    const agents = JSON.parse(agentsJson);
+    agents.entries["recovery-clean"] = { workspace: "~/workspace/recovery-clean" };
+    agents.entries["recovery-protected"] = { workspace: "~/workspace/recovery-protected" };
+    const argv = [...step.argv.slice(0, 3), JSON.stringify(agents), ...step.argv.slice(4)];
+    return Object.assign({}, step, { argv });
+  });
   return [
-    ...recipe.slice(0, -1),
+    {
+      id: "update-channel",
+      intent: "update",
+      argv: ["config", "set", "update.channel", updateChannel],
+    },
+    ...sharedSteps,
     ...resolveScenarioConfigSteps(scenario),
     ...(validateStep ? [validateStep] : []),
   ];
@@ -274,6 +305,56 @@ function adaptStepForBaseline(
     }
     return null;
   }
+  if (step.id === "agents") {
+    const agentsJson = step.argv[3];
+    if (agentsJson === undefined) {
+      throw new Error(`config recipe step ${step.id} is missing its JSON value`);
+    }
+    const agents = JSON.parse(agentsJson);
+    // Explicit ownership was introduced in beta.2; beta.1 requires a
+    // legacy default marker, so this boundary must compare prereleases too.
+    if (compareReleaseVersions(baselineVersion ?? "", "2026.8.1-beta.2") === -1) {
+      agents.list = Object.entries<Record<string, unknown>>(agents.entries).map(([id, entry]) => {
+        entry.id = id;
+        if (id === "main") {
+          entry.default = true;
+        }
+        return entry;
+      });
+      delete agents.entries;
+      delete agents.ownership;
+    }
+    if (isReleaseBefore(baselineVersion, "2026.4.0")) {
+      delete agents.defaults?.skills;
+      for (const agent of agents.list) {
+        delete agent.thinkingDefault;
+        delete agent.fastModeDefault;
+        delete agent.skills;
+      }
+      summary.skippedIntents.push("agent-modern-preferences");
+    }
+    return {
+      ...step,
+      argv: [...step.argv.slice(0, 3), JSON.stringify(agents), ...step.argv.slice(4)],
+    };
+  }
+  if (
+    step.id === "channels-discord" &&
+    compareReleaseVersions(baselineVersion ?? "", "2026.7.2-beta.4") === -1
+  ) {
+    const discordJson = step.argv[3];
+    if (discordJson === undefined) {
+      throw new Error(`config recipe step ${step.id} is missing its JSON value`);
+    }
+    // beta.4 retired nested DM policy. Older baselines retain the shipped
+    // specimen so candidate Doctor must migrate it without changing access.
+    const { dmPolicy, allowFrom, ...discord } = JSON.parse(discordJson);
+    discord.dm = { policy: dmPolicy, allowFrom };
+    return {
+      ...step,
+      argv: [...step.argv.slice(0, 3), JSON.stringify(discord), ...step.argv.slice(4)],
+    };
+  }
   if (!isReleaseBefore(baselineVersion, "2026.4.0")) {
     return step;
   }
@@ -282,24 +363,6 @@ function adaptStepForBaseline(
       summary.skippedIntents.push("feishu-channel");
     }
     return null;
-  }
-  if (step.id === "agents") {
-    const agentsJson = step.argv[3];
-    if (agentsJson === undefined) {
-      throw new Error(`config recipe step ${step.id} is missing its JSON value`);
-    }
-    const agents = JSON.parse(agentsJson);
-    delete agents.defaults?.skills;
-    for (const agent of agents.list ?? []) {
-      delete agent.thinkingDefault;
-      delete agent.fastModeDefault;
-      delete agent.skills;
-    }
-    summary.skippedIntents.push("agent-modern-preferences");
-    return {
-      ...step,
-      argv: [...step.argv.slice(0, 3), JSON.stringify(agents), ...step.argv.slice(4)],
-    };
   }
   if (step.intent === "plugins") {
     const pluginsJson = step.argv[3];

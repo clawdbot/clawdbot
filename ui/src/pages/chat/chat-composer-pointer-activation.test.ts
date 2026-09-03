@@ -74,13 +74,6 @@ describe("chat composer pointer activation", () => {
     stop.dispatchEvent(stopPointerDown);
     expect(stopPointerDown.defaultPrevented).toBe(true);
 
-    const shell = sendContainer.querySelector<HTMLElement>(".agent-chat__composer-shell")!;
-    shell.style.marginBottom = "14px";
-    sendInput.focus();
-    const stableLayoutPointerDown = primaryPointerDown();
-    send.dispatchEvent(stableLayoutPointerDown);
-    expect(stableLayoutPointerDown.defaultPrevented).toBe(false);
-
     const unrelatedInput = document.createElement("input");
     document.body.append(unrelatedInput);
     unrelatedInput.focus();

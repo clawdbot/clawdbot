@@ -18,6 +18,7 @@ import {
   sameDevicePairingStringSet,
   withDevicePairingLock,
 } from "./device-pairing-state.js";
+import type { DevicePairingStoreState } from "./device-pairing-store.js";
 import { persistDevicePairingStoreState as persistState } from "./device-pairing-store.js";
 import { createDeviceAuthToken, resolveRoleTokenScopes } from "./device-pairing-tokens.js";
 import {
@@ -47,6 +48,7 @@ type DevicePairingForbiddenReason =
   | "caller-scopes-required"
   | "caller-missing-scope"
   | "scope-outside-requested-roles"
+  | "approval-policy-changed"
   | "bootstrap-role-not-allowed"
   | "bootstrap-scope-not-allowed";
 
@@ -79,6 +81,8 @@ export function formatDevicePairingForbiddenMessage(result: DevicePairingForbidd
       return `missing scope: ${result.scope ?? "unknown"}`;
     case "scope-outside-requested-roles":
       return `invalid scope for requested roles: ${result.scope ?? "unknown"}`;
+    case "approval-policy-changed":
+      return "automatic pairing policy changed; retry pairing or request manual approval";
     case "bootstrap-role-not-allowed":
       return `bootstrap profile does not allow role: ${result.role ?? "unknown"}`;
     case "bootstrap-scope-not-allowed":
@@ -149,6 +153,40 @@ function buildApprovedPairedDevice(params: {
   };
 }
 
+function commitApprovedDevicePairing(params: {
+  state: DevicePairingStoreState;
+  requestId: string;
+  device: PairedDevice;
+  baseDir?: string;
+}): Extract<ApproveDevicePairingResult, { status: "approved" }> {
+  const { state, requestId, device, baseDir } = params;
+  const existing = state.pairedByDeviceId[device.deviceId];
+  // The approved device preserves nodeSurface by reference, so capture its
+  // generation before cleanup mutates generation-owned fields.
+  const previousNodeGeneration = resolveNodePairingGeneration(existing ?? null);
+  const nextNodeGeneration = resolveNodePairingGeneration(device);
+  const nodePairingGenerationChanged = Boolean(
+    previousNodeGeneration && previousNodeGeneration.key !== nextNodeGeneration?.key,
+  );
+  clearNodePairingGenerationState(device, previousNodeGeneration);
+  const installationIdentityChanged = Boolean(existing && existing.publicKey !== device.publicKey);
+  delete state.pendingById[requestId];
+  state.pairedByDeviceId[device.deviceId] = device;
+  persistState(
+    state,
+    baseDir,
+    "both",
+    installationIdentityChanged ? { clearApnsNodeIds: [device.deviceId] } : undefined,
+  );
+  invalidatePairedCardRendererCache();
+  return {
+    status: "approved",
+    requestId,
+    device,
+    ...(nodePairingGenerationChanged ? { nodePairingGenerationChanged: true as const } : {}),
+  };
+}
+
 function resolveApprovedTokenScopes(params: {
   role: string;
   pending: DevicePairingPendingRequest;
@@ -183,6 +221,25 @@ function resolveApprovedTokenScopes(params: {
   );
 }
 
+type DevicePairingApprovalOptions = {
+  callerScopes?: readonly string[];
+  accessMetadata?: DevicePairingAccessMetadata;
+  approvedVia?: Extract<
+    PairedDeviceApprovalKind,
+    "owner" | "silent" | "trusted-cidr" | "trusted-proxy" | "ssh-verified"
+  >;
+  /** Revalidate automatic approval against current policy after all pairing-lock awaits. */
+  isApprovalCurrent?: (state: {
+    pending: Readonly<DevicePairingPendingRequest>;
+    existing: Readonly<PairedDevice> | undefined;
+  }) => boolean;
+  /**
+   * Replace pending scopes for a new operator device, or a trusted-proxy
+   * same-key upgrade. The live role set is rechecked under the pairing lock.
+   */
+  autoApproveNewDeviceScopes?: readonly string[];
+};
+
 /** Approve a pending request with optional caller-scope checks for operator grants. */
 export async function approveDevicePairing(
   requestId: string,
@@ -190,37 +247,12 @@ export async function approveDevicePairing(
 ): Promise<ApproveDevicePairingResult>;
 export async function approveDevicePairing(
   requestId: string,
-  options: {
-    callerScopes?: readonly string[];
-    accessMetadata?: DevicePairingAccessMetadata;
-    approvedVia?: Extract<
-      PairedDeviceApprovalKind,
-      "owner" | "silent" | "trusted-cidr" | "trusted-proxy" | "ssh-verified"
-    >;
-    /**
-     * Replace the pending scopes only for a brand-new operator device, or — under
-     * trusted-proxy approval — for a known operator device re-requesting with its
-     * already-paired public key. The live role set is rechecked under the pairing
-     * lock so a merged request cannot inherit non-operator access through browser
-     * auto-approval.
-     */
-    autoApproveNewDeviceScopes?: readonly string[];
-  },
+  options: DevicePairingApprovalOptions,
   baseDir?: string,
 ): Promise<ApproveDevicePairingResult>;
 export async function approveDevicePairing(
   requestId: string,
-  optionsOrBaseDir?:
-    | {
-        callerScopes?: readonly string[];
-        accessMetadata?: DevicePairingAccessMetadata;
-        approvedVia?: Extract<
-          PairedDeviceApprovalKind,
-          "owner" | "silent" | "trusted-cidr" | "trusted-proxy" | "ssh-verified"
-        >;
-        autoApproveNewDeviceScopes?: readonly string[];
-      }
-    | string,
+  optionsOrBaseDir?: DevicePairingApprovalOptions | string,
   maybeBaseDir?: string,
 ): Promise<ApproveDevicePairingResult> {
   const options =
@@ -233,17 +265,7 @@ export async function approveDevicePairing(
 
 async function approveDevicePairingWithOptions(
   requestId: string,
-  options:
-    | {
-        callerScopes?: readonly string[];
-        accessMetadata?: DevicePairingAccessMetadata;
-        approvedVia?: Extract<
-          PairedDeviceApprovalKind,
-          "owner" | "silent" | "trusted-cidr" | "trusted-proxy" | "ssh-verified"
-        >;
-        autoApproveNewDeviceScopes?: readonly string[];
-      }
-    | undefined,
+  options: DevicePairingApprovalOptions | undefined,
   baseDir?: string,
 ): Promise<ApproveDevicePairingResult> {
   return await withDevicePairingLock(async () => {
@@ -255,6 +277,11 @@ async function approveDevicePairingWithOptions(
     const autoApproveScopes = options?.autoApproveNewDeviceScopes;
     const requestedRoles = resolveRequestedDeviceRoles(pendingRecord);
     const knownDevice = state.pairedByDeviceId[pendingRecord.deviceId];
+    // Config can publish while this approval waits for the lock or state load.
+    // No await may separate this authority check from token creation and commit.
+    if (options?.isApprovalCurrent?.({ pending: pendingRecord, existing: knownDevice }) === false) {
+      return { status: "forbidden", reason: "approval-policy-changed" };
+    }
     // Trusted-proxy connects carry an SSO-authenticated user, and the connect
     // handshake has already proven possession of the pending public key. A
     // matching key on the paired record is therefore the same physical device
@@ -299,7 +326,6 @@ async function approveDevicePairingWithOptions(
       existing?.approvedScopes ?? existing?.scopes,
       pending.scopes,
     );
-    const previousNodeGeneration = resolveNodePairingGeneration(existing ?? null);
     const tokens = existing?.tokens ? { ...existing.tokens } : {};
     const nextTokenScopesByRole = new Map<string, string[]>();
     for (const roleForToken of requestedRoles) {
@@ -358,29 +384,7 @@ async function approveDevicePairingWithOptions(
       approvedVia: options?.approvedVia ?? "owner",
       accessMetadata: options?.accessMetadata,
     });
-    const nextNodeGeneration = resolveNodePairingGeneration(device);
-    const nodePairingGenerationChanged = Boolean(
-      previousNodeGeneration && previousNodeGeneration.key !== nextNodeGeneration?.key,
-    );
-    clearNodePairingGenerationState(device, previousNodeGeneration);
-    const installationIdentityChanged = Boolean(
-      existing && existing.publicKey !== device.publicKey,
-    );
-    delete state.pendingById[requestId];
-    state.pairedByDeviceId[device.deviceId] = device;
-    persistState(
-      state,
-      baseDir,
-      "both",
-      installationIdentityChanged ? { clearApnsNodeIds: [device.deviceId] } : undefined,
-    );
-    invalidatePairedCardRendererCache();
-    return {
-      status: "approved",
-      requestId,
-      device,
-      ...(nodePairingGenerationChanged ? { nodePairingGenerationChanged: true as const } : {}),
-    };
+    return commitApprovedDevicePairing({ state, requestId, device, baseDir });
   });
 }
 
@@ -455,7 +459,6 @@ export async function approveBootstrapDevicePairing(
       pending.role,
     );
     const nextApprovedScopes = mergeDevicePairingScopes(preservedExistingScopes, grantedScopes);
-    const previousNodeGeneration = resolveNodePairingGeneration(existing ?? null);
     const tokens = existing?.tokens ? { ...existing.tokens } : {};
     for (const roleForToken of grantedRoles) {
       const existingToken = tokens[roleForToken];
@@ -482,28 +485,6 @@ export async function approveBootstrapDevicePairing(
       approvedVia: "bootstrap",
       accessMetadata: options?.accessMetadata,
     });
-    const nextNodeGeneration = resolveNodePairingGeneration(device);
-    const nodePairingGenerationChanged = Boolean(
-      previousNodeGeneration && previousNodeGeneration.key !== nextNodeGeneration?.key,
-    );
-    clearNodePairingGenerationState(device, previousNodeGeneration);
-    const installationIdentityChanged = Boolean(
-      existing && existing.publicKey !== device.publicKey,
-    );
-    delete state.pendingById[requestId];
-    state.pairedByDeviceId[device.deviceId] = device;
-    persistState(
-      state,
-      baseDir,
-      "both",
-      installationIdentityChanged ? { clearApnsNodeIds: [device.deviceId] } : undefined,
-    );
-    invalidatePairedCardRendererCache();
-    return {
-      status: "approved",
-      requestId,
-      device,
-      ...(nodePairingGenerationChanged ? { nodePairingGenerationChanged: true as const } : {}),
-    };
+    return commitApprovedDevicePairing({ state, requestId, device, baseDir });
   });
 }

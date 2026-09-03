@@ -1,127 +1,112 @@
 // Control UI controller manages agent files gateway state.
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type {
-  AgentFileEntry,
-  AgentsFilesGetResult,
-  AgentsFilesListResult,
-  AgentsFilesSetResult,
-} from "../../api/types.ts";
+import type { AgentsFilesGetResult, AgentsFilesSetResult } from "../../api/types.ts";
+import type { AgentCapability } from "../../lib/agents/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 
 type AgentFilesState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   requestGeneration: number;
+  agents: Pick<AgentCapability, "recordFile">;
   agentFilesLoading: boolean;
   agentFilesError: string | null;
-  agentFilesList: AgentsFilesListResult | null;
   agentFileContents: Record<string, string>;
   agentFileDrafts: Record<string, string>;
-  agentFileActive: string | null;
   agentFileSaving: boolean;
+  agentFileWriteRevisions: Map<string, number>;
 };
 
-function mergeFileEntry(
-  list: AgentsFilesListResult | null,
-  entry: AgentFileEntry,
-): AgentsFilesListResult | null {
-  if (!list) {
-    return list;
+async function requestAgentFile(
+  state: AgentFilesState,
+  agentId: string,
+  name: string,
+  operation: { kind: "read"; force?: boolean } | { kind: "write"; content: string },
+): Promise<boolean> {
+  const saving = operation.kind === "write";
+  const busy = saving ? "agentFileSaving" : "agentFilesLoading";
+  const client = state.client;
+  const agents = state.agents;
+  if (!client || !state.connected || state[busy]) {
+    return false;
   }
-  const hasEntry = list.files.some((file) => file.name === entry.name);
-  const nextFiles = hasEntry
-    ? list.files.map((file) => (file.name === entry.name ? entry : file))
-    : [...list.files, entry];
-  return { ...list, files: nextFiles };
+  if (
+    operation.kind === "read" &&
+    !operation.force &&
+    Object.hasOwn(state.agentFileContents, name)
+  ) {
+    return true;
+  }
+  const generation = state.requestGeneration;
+  const isConnected = () =>
+    state.client === client &&
+    state.agents === agents &&
+    state.connected &&
+    state.requestGeneration === generation;
+  const advanceWriteRevision = () => {
+    state.agentFileWriteRevisions.set(name, (state.agentFileWriteRevisions.get(name) ?? 0) + 1);
+  };
+  // Retire reads admitted before a write, and again on settlement for reads
+  // admitted during it: a later read request can still return pre-write bytes.
+  if (saving) {
+    advanceWriteRevision();
+  }
+  const revision = state.agentFileWriteRevisions.get(name);
+  const isCurrent = () =>
+    isConnected() && (saving || state.agentFileWriteRevisions.get(name) === revision);
+  state[busy] = true;
+  state.agentFilesError = null;
+  try {
+    const res = await client.request<AgentsFilesGetResult | AgentsFilesSetResult | null>(
+      saving ? "agents.files.set" : "agents.files.get",
+      { agentId, name, ...(operation.kind === "write" ? { content: operation.content } : {}) },
+    );
+    if (res?.file && isCurrent()) {
+      const content = operation.kind === "write" ? operation.content : (res.file.content ?? "");
+      const previousBase = state.agentFileContents[name] ?? "";
+      const currentDraft = state.agentFileDrafts[name];
+      state.agentFileContents = { ...state.agentFileContents, [name]: content };
+      // Reads rebase clean drafts; writes preserve edits made after submission.
+      if (
+        !Object.hasOwn(state.agentFileDrafts, name) ||
+        currentDraft === (saving ? content : previousBase)
+      ) {
+        state.agentFileDrafts = { ...state.agentFileDrafts, [name]: content };
+      }
+      state.agentFilesError = null;
+      agents.recordFile(res);
+      return true;
+    }
+  } catch (err) {
+    if (isCurrent()) {
+      state.agentFilesError = formatUiError(err);
+    }
+    return false;
+  } finally {
+    if (isConnected()) {
+      if (saving) {
+        advanceWriteRevision();
+      }
+      state[busy] = false;
+    }
+  }
+  return false;
 }
 
-export async function loadAgentFileContent(
+export function loadAgentFileContent(
   state: AgentFilesState,
   agentId: string,
   name: string,
   opts?: { force?: boolean },
 ): Promise<boolean> {
-  const client = state.client;
-  if (!client || !state.connected || state.agentFilesLoading) {
-    return false;
-  }
-  if (!opts?.force && Object.hasOwn(state.agentFileContents, name)) {
-    return true;
-  }
-  const generation = state.requestGeneration;
-  const isCurrent = () =>
-    state.client === client && state.connected && state.requestGeneration === generation;
-  state.agentFilesLoading = true;
-  state.agentFilesError = null;
-  try {
-    const res = await client.request<AgentsFilesGetResult | null>("agents.files.get", {
-      agentId,
-      name,
-    });
-    if (res?.file && isCurrent()) {
-      const content = res.file.content ?? "";
-      const previousBase = state.agentFileContents[name] ?? "";
-      const currentDraft = state.agentFileDrafts[name];
-      state.agentFilesList = mergeFileEntry(state.agentFilesList, res.file);
-      state.agentFileContents = { ...state.agentFileContents, [name]: content };
-      if (!Object.hasOwn(state.agentFileDrafts, name) || currentDraft === previousBase) {
-        state.agentFileDrafts = { ...state.agentFileDrafts, [name]: content };
-      }
-      return true;
-    }
-  } catch (err) {
-    if (isCurrent()) {
-      state.agentFilesError = formatUiError(err);
-    }
-    return false;
-  } finally {
-    if (isCurrent()) {
-      state.agentFilesLoading = false;
-    }
-  }
-  return false;
+  return requestAgentFile(state, agentId, name, { kind: "read", force: opts?.force });
 }
 
-export async function saveAgentFile(
+export function saveAgentFile(
   state: AgentFilesState,
   agentId: string,
   name: string,
   content: string,
 ): Promise<boolean> {
-  const client = state.client;
-  if (!client || !state.connected || state.agentFileSaving) {
-    return false;
-  }
-  const generation = state.requestGeneration;
-  const isCurrent = () =>
-    state.client === client && state.connected && state.requestGeneration === generation;
-  state.agentFileSaving = true;
-  state.agentFilesError = null;
-  try {
-    const res = await client.request<AgentsFilesSetResult | null>("agents.files.set", {
-      agentId,
-      name,
-      content,
-    });
-    if (res?.file && isCurrent()) {
-      state.agentFilesList = mergeFileEntry(state.agentFilesList, res.file);
-      state.agentFileContents = { ...state.agentFileContents, [name]: content };
-      // The response establishes the saved base, but must not discard text
-      // entered after this save started.
-      if (!Object.hasOwn(state.agentFileDrafts, name) || state.agentFileDrafts[name] === content) {
-        state.agentFileDrafts = { ...state.agentFileDrafts, [name]: content };
-      }
-      return true;
-    }
-  } catch (err) {
-    if (isCurrent()) {
-      state.agentFilesError = formatUiError(err);
-    }
-    return false;
-  } finally {
-    if (isCurrent()) {
-      state.agentFileSaving = false;
-    }
-  }
-  return false;
+  return requestAgentFile(state, agentId, name, { kind: "write", content });
 }

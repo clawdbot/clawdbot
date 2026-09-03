@@ -103,9 +103,7 @@ extension OnboardingView {
                         systemImage: "network",
                         selected: self.selectedConnectionMode == .remote)
                     {
-                        withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
-                            self.showRemoteChoices.toggle()
-                        }
+                        self.handleRemoteSelection()
                     }
 
                     if self.showRemoteChoices || self.selectedConnectionMode == .remote {
@@ -183,7 +181,9 @@ extension OnboardingView {
         if count > 0 {
             return count == 1
                 ? String(localized: "1 gateway found on your network — click to choose it.")
-                : String(localized: "\(count) gateways found on your network — click to choose one.")
+                : String(
+                    format: String(localized: "%lld gateways found on your network — click to choose one."),
+                    count)
         }
         return "For advanced setups — use a gateway that runs elsewhere."
     }
@@ -805,14 +805,8 @@ extension OnboardingView {
     }
 
     func cliPage() -> some View {
-        let remoteMode = self.state.connectionMode == .remote
-        let setupDetail = if remoteMode {
-            "OpenClaw is installing the matching runtime for this Mac node. " +
-                "It will connect to your selected Gateway without starting another one here."
-        } else {
-            "OpenClaw is setting up its background service on this Mac."
-        }
-        let detail = setupDetail + " Published Stable and Beta installs are usually quick. " +
+        let detail = "OpenClaw is setting up its Gateway background service on this Mac. " +
+            "Published Stable and Beta installs are usually quick. " +
             "Dev (Git main) downloads and builds OpenClaw from source, so allow several minutes " +
             "and several gigabytes of free space. No administrator password is required."
         return onboardingPage {
@@ -828,22 +822,18 @@ extension OnboardingView {
             self.onboardingCard(spacing: 14, padding: 16) {
                 self.installStepRow(
                     title: "Install OpenClaw",
-                    detail: self.cliInstalled
+                    detail: self.cliExecutableReady
                         ? (self.cliInstallLocation ?? "Installed")
                         : "A private copy inside your user folder.",
                     state: self.installStepStateForInstall,
-                    monospacedDetail: self.cliInstalled && self.cliInstallLocation != nil)
+                    monospacedDetail: self.cliExecutableReady && self.cliInstallLocation != nil)
                 self.installStepRow(
-                    title: remoteMode ? "Prepare the Mac node" : "Start the background service",
-                    detail: remoteMode
-                        ? "Runs inside the app and uses its macOS permissions."
-                        : "Runs quietly and starts again after a restart.",
+                    title: "Start the background service",
+                    detail: "Runs quietly and starts again after a restart.",
                     state: self.installStepStateForService)
                 self.installStepRow(
                     title: "Ready for the next step",
-                    detail: remoteMode
-                        ? "Once ready, this Mac connects to your selected Gateway."
-                        : "Once the service answers, you’ll connect your AI.",
+                    detail: "Once the service answers, you’ll connect your AI.",
                     state: self.cliInstalled ? .done : .pending)
 
                 if self.installFailed {
@@ -877,22 +867,57 @@ extension OnboardingView {
     /// Exactly one spinner at a time: the install row finishes before the
     /// service row starts, mirroring the actual runCLIInstall phases.
     private var installStepStateForInstall: InstallStepState {
-        if self.cliInstalled { return .done }
-        if self.installingCLI {
-            if self.cliInstallPhase == .choosingTarget { return .pending }
-            return self.cliInstallPhase == .startingService ? .done : .running
-        }
-        if self.installFailed { return .failed }
-        return .running // status probe still deciding
+        Self.cliInstallStepStates(
+            executableReady: self.cliExecutableReady,
+            gatewayReady: self.cliInstalled,
+            statusKnown: self.cliStatusKnown,
+            installing: self.installingCLI,
+            phase: self.cliInstallPhase).install
     }
 
     private var installStepStateForService: InstallStepState {
-        if self.cliInstalled { return .done }
-        if self.installingCLI {
-            return self.cliInstallPhase == .startingService ? .running : .pending
+        Self.cliInstallStepStates(
+            executableReady: self.cliExecutableReady,
+            gatewayReady: self.cliInstalled,
+            statusKnown: self.cliStatusKnown,
+            installing: self.installingCLI,
+            phase: self.cliInstallPhase).service
+    }
+
+    static func cliInstallStepStates(
+        executableReady: Bool,
+        gatewayReady: Bool,
+        statusKnown: Bool,
+        installing: Bool,
+        phase: CLIInstallPhase) -> (install: InstallStepState, service: InstallStepState)
+    {
+        let install: InstallStepState = if executableReady || gatewayReady {
+            .done
+        } else if installing {
+            if phase == .choosingTarget {
+                .pending
+            } else if phase == .startingService {
+                .done
+            } else {
+                .running
+            }
+        } else if statusKnown {
+            .failed
+        } else {
+            .running
         }
-        if self.installFailed { return .failed }
-        return .pending
+
+        let service: InstallStepState = if gatewayReady {
+            .done
+        } else if installing {
+            phase == .startingService ? .running : .pending
+        } else if statusKnown, executableReady {
+            .failed
+        } else {
+            .pending
+        }
+
+        return (install, service)
     }
 
     enum InstallStepState {

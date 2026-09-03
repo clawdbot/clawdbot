@@ -1,5 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { renderCopyButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
+import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-skeleton.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatByteSize } from "../../../lib/format.ts";
@@ -136,19 +138,9 @@ export function renderSessionWorkspaceRail(
           ${icons.eye}
         </button>
       </openclaw-tooltip>
-      <openclaw-tooltip .content=${t("chat.workspaceFiles.copyPath")}>
-        <button
-          class="chat-workspace-rail__row-action"
-          type="button"
-          aria-label=${t("chat.workspaceFiles.copyPath")}
-          @click=${(event: Event) => {
-            event.stopPropagation();
-            sessionWorkspace.onCopyPath(path);
-          }}
-        >
-          ${icons.copy}
-        </button>
-      </openclaw-tooltip>
+      <span @click=${(event: Event) => event.stopPropagation()}>
+        ${renderCopyButton(path, t("chat.workspaceFiles.copyPath"))}
+      </span>
     </span>
   `;
   const renderSessionSummary = (): TemplateResult | typeof nothing => {
@@ -457,7 +449,7 @@ export function renderSessionWorkspaceRail(
             ${sessionWorkspace.error}
           </div>`
         : sessionWorkspace.loading && !hasItems
-          ? html`<div class="chat-workspace-rail__state">${t("chat.workspaceFiles.loading")}</div>`
+          ? renderPanelLoadingSkeleton("files", t("chat.workspaceFiles.loading"))
           : html`
               <div class="chat-workspace-rail__scroll">
                 ${hasSessionItems

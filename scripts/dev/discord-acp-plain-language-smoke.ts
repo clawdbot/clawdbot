@@ -8,7 +8,6 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { formatErrorMessage } from "../../src/infra/errors.ts";
-import { createPluginStateKeyedStore } from "../../src/plugin-state/plugin-state-store.ts";
 import { readBoundedResponseText } from "../lib/bounded-response.mjs";
 import {
   maskIdentifier,
@@ -646,18 +645,6 @@ async function requestDiscordJson<T>(params: {
   );
 }
 
-async function readThreadBindings(stateDir: string): Promise<ThreadBindingRecord[]> {
-  const store = createPluginStateKeyedStore<ThreadBindingRecord>("discord", {
-    namespace: THREAD_BINDINGS_NAMESPACE,
-    maxEntries: THREAD_BINDINGS_MAX_ENTRIES,
-    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-  });
-  const entries = await store.entries();
-  return entries
-    .map((entry) => entry.value)
-    .filter((entry) => Boolean(entry?.threadId && entry?.targetSessionKey));
-}
-
 function normalizeBoundAt(record: ThreadBindingRecord): number {
   if (typeof record.boundAt === "number" && Number.isFinite(record.boundAt)) {
     return record.boundAt;
@@ -802,6 +789,14 @@ async function run(argv = process.argv.slice(2)): Promise<SuccessResult | Failur
     };
   }
 
+  // Argument-only invocations need no state runtime; initialize before any live send.
+  const { createPluginStateKeyedStore } =
+    await import("../../src/plugin-state/plugin-state-store.ts");
+  const bindingsStore = createPluginStateKeyedStore<ThreadBindingRecord>("discord", {
+    namespace: THREAD_BINDINGS_NAMESPACE,
+    maxEntries: THREAD_BINDINGS_MAX_ENTRIES,
+    env: { ...process.env, OPENCLAW_STATE_DIR: args.stateDir },
+  });
   const smokeId = `acp-smoke-${Date.now()}-${randomUUID().slice(0, 8)}`;
   const startedAt = Date.now();
   const deadline = startedAt + args.timeoutMs;
@@ -948,7 +943,9 @@ async function run(argv = process.argv.slice(2)): Promise<SuccessResult | Failur
   try {
     while (Date.now() < deadline && !winningBinding) {
       try {
-        const entries = await readThreadBindings(args.stateDir);
+        const entries = (await bindingsStore.entries())
+          .map((entry) => entry.value)
+          .filter((entry) => Boolean(entry?.threadId && entry?.targetSessionKey));
         latestCandidates = resolveCandidateBindings({
           entries,
           minBoundAt: minBindingBoundAt,

@@ -15,6 +15,12 @@ import {
   setSecretsRuntimeSourceSnapshotIfCurrent,
   type PreparedSecretsRuntimeSnapshot,
 } from "../secrets/runtime-state.js";
+import { diffConfigPaths } from "./config-diff.js";
+import {
+  buildGatewayReloadPlan,
+  isNoopGatewayReloadPlan,
+  type ChannelKind,
+} from "./config-reload-plan.js";
 import { shouldRefreshContextWindowCache } from "./config-reload-recovery.js";
 import type {
   GatewayConfigReloadTransactionOwnership,
@@ -25,6 +31,7 @@ import {
   GatewayHotReloadRecoveryError,
   GatewayHotReloadStaleSecretsError,
   type CurrentRuntimeSecretsPreparation,
+  type GatewayHotReloadPublication,
   type ManagedGatewayConfigReloaderParams,
   type RuntimeSecretsPreflightParams,
 } from "./server-reload-contracts.js";
@@ -104,11 +111,17 @@ type ManagedReloadOptions = Parameters<typeof startGatewayConfigReloader>[0];
 type EffectiveConfigUnchangedHandler = NonNullable<
   ManagedReloadOptions["onEffectiveConfigUnchanged"]
 >;
-type NoopConfigCommitHandler = NonNullable<ManagedReloadOptions["onNoopConfigCommit"]>;
 type HotReloadHandler = NonNullable<ManagedReloadOptions["onHotReload"]>;
 
 export function createManagedReloadSecretHandlers(options: {
-  params: ManagedGatewayConfigReloaderParams;
+  params: Pick<
+    ManagedGatewayConfigReloaderParams,
+    | "activateRuntimeSecrets"
+    | "clients"
+    | "reconcileTerminalSessions"
+    | "resolveSharedGatewaySessionGenerationForConfig"
+    | "sharedGatewaySessionGenerationState"
+  >;
   prepareRuntimeCandidate: PrepareRuntimeCandidate;
   tryPrepareRuntimeSecrets: TryPrepareRuntimeSecrets;
   applyHotReload: ReturnType<typeof createGatewayReloadHandlers>["applyHotReload"];
@@ -270,64 +283,16 @@ export function createManagedReloadSecretHandlers(options: {
       };
     }
   };
-  const onNoopConfigCommit: NoopConfigCommitHandler = async (
-    plan,
-    nextConfig,
-    transactionOwnership,
-    sourceConfig,
-  ) => {
-    for (;;) {
-      if (!transactionOwnership.isCurrent()) {
-        throw new GatewayConfigReloadSupersededError();
-      }
-      const preparation = await tryPrepareRuntimeSecrets(
-        prepareRuntimeCandidate(nextConfig, sourceConfig, transactionOwnership),
-        transactionOwnership,
-        {
-          reason: "reload",
-          publishFailureAsDegraded: true,
-          ...(transactionOwnership.runtimeEnv ? { env: transactionOwnership.runtimeEnv.env } : {}),
-          includeAuthStoreRefs: transactionOwnership.runtimeRefresh?.includeAuthStoreRefs,
-        },
-      );
-      if (!preparation || !isRuntimeSecretsPreparationCurrent(preparation)) {
-        continue;
-      }
-      const { expectedRevision: previousSnapshotRevision, snapshot: prepared } = preparation;
-      if (!transactionOwnership.isCurrent()) {
-        throw new GatewayConfigReloadSupersededError();
-      }
-      const activateIfCurrent = params.activateRuntimeSecrets.activatePreparedSnapshotIfCurrent;
-      const publishTerminalConfig = () => {
-        transactionOwnership.publishRuntimeEnv();
-        transactionOwnership.markRuntimeCommitted(prepared.config, plan);
-        params.reconcileTerminalSessions(plan, prepared.config);
-      };
-      const activated = activateIfCurrent
-        ? await activateIfCurrent(
-            prepared,
-            previousSnapshotRevision,
-            { reason: "reload", activate: true },
-            publishTerminalConfig,
-            transactionOwnership.isCurrent,
-          )
-        : (await activateSecretsRuntimeSnapshotIfCurrent(prepared, previousSnapshotRevision, {
-              canActivate: transactionOwnership.isCurrent,
-              onActivated: publishTerminalConfig,
-            }))
-          ? prepared
-          : null;
-      if (activated) {
-        return;
-      }
-    }
-  };
   const onHotReload: HotReloadHandler = async (
     plan,
     nextConfig,
     transactionOwnership,
     sourceConfig,
   ) => {
+    const authoredChannels = new Set(plan.restartChannels);
+    const authoredAccountTargets = new Map<ChannelKind, Set<string>>(
+      [...(plan.restartChannelAccounts ?? [])].map(([channel, ids]) => [channel, new Set(ids)]),
+    );
     // A deferred channel/plugin reload can overlap secrets.reload. Retry from
     // preparation unless the same active snapshot still owns publication.
     for (;;) {
@@ -335,6 +300,8 @@ export function createManagedReloadSecretHandlers(options: {
         throw new GatewayConfigReloadSupersededError();
       }
       const previousSnapshot = getActiveSecretsRuntimeSnapshotState();
+      // Prepared secrets carry effective defaults; commit and rollback must retain authored provenance.
+      const previousRuntimeSourceConfig = getRuntimeConfigSourceSnapshot() ?? undefined;
       const previousSnapshotRevision = getActiveSecretsRuntimeSnapshotRevisionState();
       const previousGenerationOwnership = captureSharedGatewaySessionGenerationOwnership(
         params.sharedGatewaySessionGenerationState,
@@ -358,6 +325,30 @@ export function createManagedReloadSecretHandlers(options: {
         continue;
       }
       const prepared = preparation.snapshot;
+      // Resolution can change channel lifetimes even when only a provider
+      // definition changed. Rebuild each attempt so a lost CAS leaves no targets.
+      const resolvedChannelPlan = buildGatewayReloadPlan(
+        previousSnapshot
+          ? diffConfigPaths(previousSnapshot.config, prepared.config).filter(
+              (path) => path === "channels" || path.startsWith("channels."),
+            )
+          : [],
+        { candidateConfig: prepared.config },
+      );
+      plan.restartChannels = new Set([...authoredChannels, ...resolvedChannelPlan.restartChannels]);
+      plan.restartChannelAccounts = new Map(
+        [...authoredAccountTargets].map(([channel, ids]) => [channel, new Set(ids)]),
+      );
+      for (const [channel, ids] of resolvedChannelPlan.restartChannelAccounts ?? []) {
+        const targets = plan.restartChannelAccounts.get(channel) ?? new Set<string>();
+        for (const id of ids) {
+          targets.add(id);
+        }
+        plan.restartChannelAccounts.set(channel, targets);
+      }
+      for (const channel of plan.restartChannels) {
+        plan.restartChannelAccounts.delete(channel);
+      }
       if (!transactionOwnership.isCurrent()) {
         throw new GatewayConfigReloadSupersededError();
       }
@@ -374,8 +365,9 @@ export function createManagedReloadSecretHandlers(options: {
       let publishedSharedGatewaySessionGeneration: SharedGatewaySessionGenerationOwnership | null =
         null;
       let terminalConfigReconciled = false;
+      let applicationStatus: Awaited<ReturnType<typeof applyHotReload>>;
       try {
-        await applyHotReload(plan, prepared.config, {
+        const publication: GatewayHotReloadPublication = {
           isCurrent: transactionOwnership.isCurrent,
           ...(transactionOwnership.runtimeEnv
             ? { runtimeEnv: transactionOwnership.runtimeEnv.env }
@@ -450,6 +442,7 @@ export function createManagedReloadSecretHandlers(options: {
                       publishedSnapshotRevision ?? -1,
                       prepared,
                       {
+                        runtimeSourceConfig: previousRuntimeSourceConfig,
                         onActivated: () => {
                           generationRestored = restoreOwnedCurrentSharedGatewaySessionGeneration(
                             params.sharedGatewaySessionGenerationState,
@@ -503,6 +496,7 @@ export function createManagedReloadSecretHandlers(options: {
                 {
                   reason: "reload",
                   activate: true,
+                  runtimeSourceConfig: sourceConfig,
                 },
                 publishRuntime,
                 () =>
@@ -528,6 +522,7 @@ export function createManagedReloadSecretHandlers(options: {
                         previousGenerationOwnership,
                       ),
                     onActivated: claimGenerationOwnership,
+                    runtimeSourceConfig: sourceConfig,
                   },
                 ))
               ) {
@@ -536,7 +531,21 @@ export function createManagedReloadSecretHandlers(options: {
               await publishRuntime();
             }
           },
-        });
+        };
+        if (isNoopGatewayReloadPlan(plan)) {
+          // A source no-op still shares secret/auth publication ownership, but
+          // must not churn services or prepared model owners without an effect.
+          let committed = false;
+          await publication.publish(
+            async () => {
+              committed = true;
+            },
+            () => committed,
+          );
+          applicationStatus = "applied";
+        } else {
+          applicationStatus = await applyHotReload(plan, prepared.config, publication);
+        }
       } catch (err) {
         if (err instanceof GatewayHotReloadStaleSecretsError) {
           if (!transactionOwnership.isCurrent()) {
@@ -560,6 +569,7 @@ export function createManagedReloadSecretHandlers(options: {
               publishedSnapshotRevision,
               prepared,
               {
+                runtimeSourceConfig: previousRuntimeSourceConfig,
                 onActivated: () => {
                   generationRestored = restoreOwnedCurrentSharedGatewaySessionGeneration(
                     params.sharedGatewaySessionGenerationState,
@@ -605,13 +615,12 @@ export function createManagedReloadSecretHandlers(options: {
           publishedSharedGatewaySessionGeneration,
         );
       }
-      return;
+      return applicationStatus;
     }
   };
 
   return {
     onEffectiveConfigUnchanged,
     onHotReload,
-    onNoopConfigCommit,
   };
 }

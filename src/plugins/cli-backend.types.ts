@@ -62,6 +62,13 @@ export type CliBackendConfig = {
   serialize?: boolean;
   /** Opt in to bounded raw transcript reseed before compaction for safe session resets. */
   reseedFromRawTranscriptWhenUncompacted?: boolean;
+  /**
+   * Controls fresh recovery after a recoverable resumed-session failure.
+   *
+   * Undefined and `replace-binding` preserve the legacy clear-and-reseed behavior.
+   * `invalidated-only` retries fresh only when the failure proves the binding expired.
+   */
+  freshSessionRecovery?: "replace-binding" | "invalidated-only";
   /** Runtime reliability tuning for this backend's process lifecycle. */
   reliability?: {
     /** No-output watchdog tuning (fresh vs resumed runs). */
@@ -225,6 +232,12 @@ export type CliBackendLiveSessionCapability = {
   remove(handle: CliBackendLiveSessionHandle): void;
 };
 
+/** Turn-only context that must not become an operator-authored native transcript row. */
+export type CliBackendPromptContext = {
+  prependContext?: string;
+  appendContext?: string;
+};
+
 /** Exact prepared local process facts consumed by a plugin-owned execution transport. */
 export type CliBackendExecuteContext = {
   command: string;
@@ -232,6 +245,7 @@ export type CliBackendExecuteContext = {
   cwd: string;
   env: Record<string, string>;
   prompt: string;
+  promptContext?: CliBackendPromptContext;
   modelId: string;
   systemPrompt: string;
   sessionId?: string;
@@ -319,6 +333,19 @@ export type CliBackendParseJsonlEvent = (
   line: string,
   ctx: CliBackendParseJsonlEventContext,
 ) => CliBackendParsedJsonlEvent | readonly CliBackendParsedJsonlEvent[] | null | undefined;
+
+export type CliBackendParsedJsonlLifecycleEvent =
+  | { kind: "compaction"; phase: "start" }
+  | { kind: "compaction"; phase: "end"; completed: boolean };
+
+export type CliBackendParseJsonlLifecycleEvent = (
+  line: string,
+  ctx: CliBackendParseJsonlEventContext,
+) =>
+  | CliBackendParsedJsonlLifecycleEvent
+  | readonly CliBackendParsedJsonlLifecycleEvent[]
+  | null
+  | undefined;
 
 export type CliBackendAuthEpochMode = "combined" | "profile-only";
 
@@ -505,6 +532,11 @@ type CliBackendPluginBase = {
    * renders them but does not treat them as host tool execution or delivery evidence.
    */
   parseJsonlEvent?: CliBackendParseJsonlEvent;
+  /**
+   * Optional lifecycle parser kept separate from the legacy JSONL event union.
+   * Existing plugins can continue exhaustively matching `parseJsonlEvent` results.
+   */
+  parseJsonlLifecycleEvent?: CliBackendParseJsonlLifecycleEvent;
   /**
    * Whether this CLI backend can expose native tools outside OpenClaw's tool
    * catalog. Exact restricted runs require `selectable` plus a declared

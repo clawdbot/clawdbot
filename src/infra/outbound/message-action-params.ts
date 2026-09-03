@@ -273,11 +273,11 @@ function normalizeBase64Payload(params: { base64?: string; contentType?: string 
   if (!params.base64) {
     return { base64: params.base64, contentType: params.contentType };
   }
-  const match = /^data:([^;]+);base64,(.*)$/i.exec(params.base64.trim());
+  const match = /^data:([^;,\s]+)(;(?!base64)[^,;\s]+)*;base64,(.*)$/is.exec(params.base64.trim());
   if (!match) {
     return { base64: params.base64, contentType: params.contentType };
   }
-  const [, mime, payload] = match;
+  const [, mime, , payload] = match;
   return {
     base64: payload,
     contentType: params.contentType ?? mime,
@@ -335,19 +335,17 @@ async function hydrateSendBufferMediaParams(params: {
   }
   const normalized = normalizeBase64Payload({
     base64: rawBuffer,
-    contentType: readToolStringParam(params.args, "contentType") ?? undefined,
+    contentType:
+      readToolStringParam(params.args, "contentType") ??
+      readToolStringParam(params.args, "mimeType"),
   });
   if (!normalized.base64) {
     return;
   }
-  const contentType =
-    readToolStringParam(params.args, "contentType") ??
-    readToolStringParam(params.args, "mimeType") ??
-    normalized.contentType;
   const filename =
     readToolStringParam(params.args, "filename") ??
     inferAttachmentFilename({
-      contentType: contentType ?? undefined,
+      contentType: normalized.contentType,
     });
   const maxBytes = resolveSendBufferMaxBytes(params);
   if (params.dryRun || params.preserveBuffer) {
@@ -376,7 +374,7 @@ async function hydrateSendBufferMediaParams(params: {
     }),
     maxBytes,
     {
-      contentType: contentType ?? undefined,
+      contentType: normalized.contentType,
       filename,
     },
   );
@@ -397,6 +395,8 @@ type AttachmentMediaPolicy =
   | {
       mode: "sandbox";
       sandboxRoot: string;
+      containerWorkdir?: string;
+      mediaReadFile?: OutboundMediaReadFile;
     }
   | {
       mode: "host";
@@ -408,6 +408,7 @@ type AttachmentMediaPolicy =
 /** Chooses sandbox or host media loading policy for attachment hydration. */
 export function resolveAttachmentMediaPolicy(params: {
   sandboxRoot?: string;
+  sandboxContainerWorkdir?: string;
   mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[] | "any";
   mediaReadFile?: OutboundMediaReadFile;
@@ -417,6 +418,10 @@ export function resolveAttachmentMediaPolicy(params: {
     return {
       mode: "sandbox",
       sandboxRoot,
+      ...(params.sandboxContainerWorkdir
+        ? { containerWorkdir: params.sandboxContainerWorkdir }
+        : {}),
+      ...(params.mediaReadFile ? { mediaReadFile: params.mediaReadFile } : {}),
     };
   }
   const explicitLocalRoots = resolveOutboundMediaLocalRoots(params.mediaLocalRoots);
@@ -457,11 +462,13 @@ function buildAttachmentMediaLoadOptions(params: {
   if (params.policy.mode === "sandbox") {
     const sandboxRoot = params.policy.sandboxRoot.trim();
     let sandboxFsPromise: ReturnType<typeof root> | undefined;
-    const readSandboxFile = createBoundedOutboundMediaReadFile(async (filePath, options) => {
-      sandboxFsPromise ??= root(sandboxRoot);
-      const sandboxFs = await sandboxFsPromise;
-      return await sandboxFs.readBytes(filePath, { maxBytes: options?.maxBytes });
-    });
+    const readSandboxFile =
+      params.policy.mediaReadFile ??
+      createBoundedOutboundMediaReadFile(async (filePath, options) => {
+        sandboxFsPromise ??= root(sandboxRoot);
+        const sandboxFs = await sandboxFsPromise;
+        return await sandboxFs.readBytes(filePath, { maxBytes: options?.maxBytes });
+      });
     return {
       maxBytes: params.maxBytes,
       ...(params.optimizeImages !== undefined ? { optimizeImages: params.optimizeImages } : {}),
@@ -498,9 +505,9 @@ async function hydrateAttachmentPayload(params: {
   });
   if (normalized.base64 !== rawBuffer && normalized.base64) {
     params.args.buffer = normalized.base64;
-    if (normalized.contentType && !contentTypeParam) {
-      params.args.contentType = normalized.contentType;
-    }
+  }
+  if (normalized.contentType && !readToolStringParam(params.args, "contentType")) {
+    params.args.contentType = normalized.contentType;
   }
 
   const filename = readToolStringParam(params.args, "filename");
@@ -533,7 +540,7 @@ async function hydrateAttachmentPayload(params: {
   } else if (!filename) {
     params.args.filename = inferAttachmentFilename({
       mediaHint: mediaSource,
-      contentType: contentTypeParam ?? undefined,
+      contentType: normalized.contentType,
     });
   }
 }
@@ -545,18 +552,23 @@ export async function normalizeSandboxMediaParams(params: {
   extraParamKeys?: readonly string[];
   structuredAttachments?: StructuredAttachmentMode;
 }): Promise<void> {
-  const sandboxRoot =
-    params.mediaPolicy.mode === "sandbox" ? params.mediaPolicy.sandboxRoot.trim() : undefined;
+  const sandbox =
+    params.mediaPolicy.mode === "sandbox"
+      ? {
+          sandboxRoot: params.mediaPolicy.sandboxRoot.trim(),
+          containerWorkdir: params.mediaPolicy.containerWorkdir,
+        }
+      : undefined;
   for (const key of buildActionMediaSourceParamKeys(params.extraParamKeys)) {
     const entry = resolveMediaParamEntry(params.args, key);
     if (!entry) {
       continue;
     }
     assertMediaNotDataUrl(entry.value);
-    if (!sandboxRoot) {
+    if (!sandbox?.sandboxRoot) {
       continue;
     }
-    const normalized = await resolveSandboxedMediaSource({ media: entry.value, sandboxRoot });
+    const normalized = await resolveSandboxedMediaSource({ media: entry.value, ...sandbox });
     if (normalized !== entry.value) {
       params.args[entry.key] = normalized;
     }
@@ -572,12 +584,12 @@ export async function normalizeSandboxMediaParams(params: {
   }
   for (const attachmentSource of attachmentSources) {
     assertMediaNotDataUrl(attachmentSource.value);
-    if (!sandboxRoot) {
+    if (!sandbox?.sandboxRoot) {
       continue;
     }
     const normalized = await resolveSandboxedMediaSource({
       media: attachmentSource.value,
-      sandboxRoot,
+      ...sandbox,
     });
     if (normalized !== attachmentSource.value) {
       attachmentSource.attachment[attachmentSource.key] = normalized;
@@ -589,6 +601,7 @@ export async function normalizeSandboxMediaParams(params: {
 export async function normalizeSandboxMediaList(params: {
   values: string[];
   sandboxRoot?: string;
+  sandboxContainerWorkdir?: string;
 }): Promise<string[]> {
   const sandboxRoot = params.sandboxRoot?.trim();
   const normalized: string[] = [];
@@ -600,7 +613,11 @@ export async function normalizeSandboxMediaList(params: {
     }
     assertMediaNotDataUrl(raw);
     const resolved = sandboxRoot
-      ? await resolveSandboxedMediaSource({ media: raw, sandboxRoot })
+      ? await resolveSandboxedMediaSource({
+          media: raw,
+          sandboxRoot,
+          containerWorkdir: params.sandboxContainerWorkdir,
+        })
       : raw;
     if (seen.has(resolved)) {
       continue;
@@ -632,9 +649,6 @@ async function hydrateAttachmentActionPayload(params: {
     attachmentSource?.contentType;
   if (attachmentSource?.filename && !readToolStringParam(params.args, "filename")) {
     params.args.filename = attachmentSource.filename;
-  }
-  if (attachmentSource?.contentType && !readToolStringParam(params.args, "contentType")) {
-    params.args.contentType = attachmentSource.contentType;
   }
 
   if (params.allowMessageCaptionFallback) {
@@ -734,18 +748,5 @@ export function parseJsonMessageParam(params: Record<string, unknown>, key: stri
 
 /** Parses the interactive message action param as JSON when provided as a string. */
 export function parseInteractiveParam(params: Record<string, unknown>): void {
-  const raw = params.interactive;
-  if (typeof raw !== "string") {
-    return;
-  }
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    delete params.interactive;
-    return;
-  }
-  try {
-    params.interactive = JSON.parse(trimmed) as unknown;
-  } catch {
-    throw new Error("--interactive must be valid JSON");
-  }
+  parseJsonMessageParam(params, "interactive");
 }

@@ -2,10 +2,17 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import {
+  markPluginRegistryActive,
+  markPluginRegistryRetired,
+} from "../../plugins/registry-lifecycle.js";
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   readSessionProgressCard,
   writeSessionProgressCard,
 } from "../../session-cards/progress-card-store.js";
+import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   runOpenClawAgentWriteTransaction,
@@ -124,6 +131,44 @@ function readClaim(params: { databaseAgentId: string; databasePath: string; key:
 
 function outcomeKinds(result: Awaited<ReturnType<typeof migrateLegacyMainSessionKeys>>) {
   return result.outcomes.map((outcome) => outcome.kind);
+}
+
+async function recordHarnessDeletions<T>(
+  run: () => Promise<T>,
+  beforePrepare?: () => void | Promise<void>,
+) {
+  const registry = createEmptyPluginRegistry();
+  const committed: string[] = [];
+  registry.agentHarnesses.push({
+    pluginId: "core",
+    source: "test",
+    harness: {
+      id: "migration-fixture",
+      label: "Migration fixture",
+      supports: () => ({ supported: true }),
+      async runAttempt() {
+        throw new Error("unused");
+      },
+      async withSessionDeletion(params, next) {
+        await beforePrepare?.();
+        return next({
+          commit() {
+            params.assertCurrent();
+            committed.push(params.sessionKey);
+          },
+          rollback() {
+            committed.splice(committed.lastIndexOf(params.sessionKey), 1);
+          },
+        });
+      },
+    },
+  });
+  markPluginRegistryActive(registry);
+  try {
+    return { result: await withPluginRuntimeRegistryScope(registry, run), committed };
+  } finally {
+    markPluginRegistryRetired(registry);
+  }
 }
 
 function setLedgerStatus(env: NodeJS.ProcessEnv, status: string): void {
@@ -358,6 +403,117 @@ describe("legacy main session migration", () => {
     expect(outcomeKinds(await run())).toContain(kind);
   });
 
+  it("cleans a foreign logical claim from its physical partition without bypassing active work", async () => {
+    const fixture = createFixture();
+    const storePath = path.join(fixture.stateDir, "shared.json");
+    fixture.cfg = {
+      agents: {
+        defaults: { sessionStore: { agentId: "ops" } },
+        entries: { ops: {}, beta: {} },
+      },
+      session: { store: storePath },
+    };
+    const source = {
+      databaseAgentId: "beta",
+      databasePath: path.join(fixture.stateDir, "shared.beta.sqlite"),
+      key: "agent:main:chat",
+    };
+    const destination = {
+      databaseAgentId: "ops",
+      databasePath: path.join(fixture.stateDir, "shared.sqlite"),
+      key: "agent:ops:chat",
+    };
+    const sibling = { ...destination, key: "agent:ops:keep" };
+    seedClaim(sibling);
+    const entry = seedClaim({ ...source, events: [{ kind: "repeat" }, { kind: "repeat" }] });
+    const sourceBefore = readClaim(source);
+    const siblingBefore = readClaim(sibling);
+    const admission = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: [source.key, entry.sessionId],
+      assertAllowed: () => {},
+    });
+    try {
+      const blocked = await migrateLegacyMainSessionKeys({
+        cfg: fixture.cfg,
+        env: fixture.env,
+        mode: "automatic",
+      });
+      expect(blocked.complete).toBe(false);
+      expect(blocked.warnings.join("\n")).toContain("competing work is in flight");
+      expect(readClaim(source)).toEqual(sourceBefore);
+    } finally {
+      admission.release();
+    }
+
+    const repaired = await migrateLegacyMainSessionKeys({
+      cfg: fixture.cfg,
+      env: fixture.env,
+      mode: "automatic",
+    });
+    const retry = await migrateLegacyMainSessionKeys({
+      cfg: fixture.cfg,
+      env: fixture.env,
+      mode: "automatic",
+    });
+
+    expect(repaired.complete).toBe(true);
+    expect(retry.ledgerComplete).toBe(true);
+    expect(readClaim(source)).toBeUndefined();
+    expect(readClaim(destination)?.entry).toMatchObject(entry);
+    expect(readClaim(destination)?.events).toEqual(sourceBefore?.events);
+    expect(readClaim(sibling)).toEqual(siblingBefore);
+    expect(fs.existsSync(path.join(fixture.stateDir, "shared.main.sqlite"))).toBe(false);
+  });
+
+  it("imports a new fixed-store destination at its planned path and owner on the first attempt", async () => {
+    const fixture = createFixture();
+    const storePath = path.join(fixture.stateDir, "shared.json");
+    fixture.cfg.session = { store: storePath };
+    const source = {
+      databaseAgentId: "main",
+      databasePath: databasePath(fixture.stateDir, "main"),
+      key: "agent:main:chat",
+    };
+    const sibling = { ...source, key: "agent:other:keep" };
+    const entry = seedClaim({ ...source, events: [{ kind: "repeat" }, { kind: "repeat" }] });
+    seedClaim(sibling);
+    const sourceBefore = readClaim(source);
+    const siblingBefore = readClaim(sibling);
+    const destination = {
+      databaseAgentId: "ops",
+      databasePath: path.join(fixture.stateDir, "shared.sqlite"),
+      key: "agent:ops:chat",
+    };
+
+    const result = await migrateLegacyMainSessionKeys({
+      cfg: fixture.cfg,
+      env: fixture.env,
+      mode: "automatic",
+    });
+    const retry = await migrateLegacyMainSessionKeys({
+      cfg: fixture.cfg,
+      env: fixture.env,
+      mode: "automatic",
+    });
+
+    expect(result.complete).toBe(true);
+    expect(outcomeKinds(result)).toContain("migrated-cross-store");
+    expect(retry.ledgerComplete).toBe(true);
+    expect(readClaim(source)).toBeUndefined();
+    expect(readClaim(destination)?.entry).toMatchObject(entry);
+    expect(readClaim(destination)?.events).toEqual(sourceBefore?.events);
+    expect(readClaim(sibling)).toEqual(siblingBefore);
+    expect(fs.existsSync(path.join(fixture.stateDir, "shared.ops.sqlite"))).toBe(false);
+    expect(fs.existsSync(storePath)).toBe(false);
+    expect(
+      runOpenClawAgentWriteTransaction(
+        (database) => readTranscriptEventRows(database, entry.sessionId),
+        { agentId: source.databaseAgentId, path: source.databasePath },
+      ),
+    ).toEqual([]);
+  });
+
   it("keeps divergent canonical claims intact and detects mid-stream transcript divergence", async () => {
     const fixture = createFixture();
     const entry: SessionEntry = { sessionId: "shared-id", updatedAt: 100 };
@@ -421,13 +577,16 @@ describe("legacy main session migration", () => {
       { agentId: "main", path: storePath },
     );
 
-    const result = await migrateLegacyMainSessionKeys({
-      cfg: fixture.cfg,
-      env: fixture.env,
-      mode: "automatic",
-    });
+    const { result, committed } = await recordHarnessDeletions(() =>
+      migrateLegacyMainSessionKeys({
+        cfg: fixture.cfg,
+        env: fixture.env,
+        mode: "automatic",
+      }),
+    );
 
     expect(outcomeKinds(result)).toContain("migrated-in-place");
+    expect(committed).toEqual(["agent:main:chat"]);
     expect(
       readClaim({ databaseAgentId: "main", databasePath: storePath, key: "agent:main:chat" }),
     ).toBeUndefined();
@@ -451,6 +610,40 @@ describe("legacy main session migration", () => {
         sessionKey: "agent:ops:chat",
       },
     });
+  });
+
+  it("preserves a canonical owner created while alias deletion is preparing", async () => {
+    const storePath = path.join(tempDirs.make("in-place-owner-race-"), "sessions.sqlite");
+    const fixture = createFixture({
+      agents: { entries: { ops: {} } },
+      session: { store: storePath },
+    });
+    const sourceTarget = {
+      databaseAgentId: "main",
+      databasePath: storePath,
+      key: "agent:main:chat",
+    };
+    const canonicalTarget = { ...sourceTarget, key: "agent:ops:chat" };
+    seedClaim(sourceTarget);
+    const sourceBefore = readClaim(sourceTarget);
+    let canonicalBefore: ReturnType<typeof readClaim>;
+
+    const { result, committed } = await recordHarnessDeletions(
+      () => migrateLegacyMainSessionKeys({ cfg: fixture.cfg, env: fixture.env, mode: "automatic" }),
+      () => {
+        seedClaim({
+          ...canonicalTarget,
+          entry: { sessionId: "concurrent-owner", updatedAt: 200 },
+          events: [{ type: "message", id: "concurrent-event" }],
+        });
+        canonicalBefore = readClaim(canonicalTarget);
+      },
+    );
+
+    expect(readClaim(canonicalTarget)).toEqual(canonicalBefore);
+    expect(readClaim(sourceTarget)).toEqual(sourceBefore);
+    expect(committed).toEqual([]);
+    expect(result.complete).toBe(false);
   });
 
   it.each([
@@ -567,12 +760,15 @@ describe("legacy main session migration", () => {
         key: "agent:ops:chat",
       });
 
-      const result = await migrateLegacyMainSessionKeys({
-        cfg: fixture.cfg,
-        env: fixture.env,
-        mode: "doctor-fix",
-      });
+      const { result, committed } = await recordHarnessDeletions(() =>
+        migrateLegacyMainSessionKeys({
+          cfg: fixture.cfg,
+          env: fixture.env,
+          mode: "doctor-fix",
+        }),
+      );
 
+      expect(committed).toEqual(["agent:main:chat"]);
       const outcome = result.outcomes.find((entry) => entry.kind === "divergent-canonical");
       expect(outcome?.quarantinedKeys).toEqual(["agent:ops:legacy-main-conflict-2"]);
       expect(

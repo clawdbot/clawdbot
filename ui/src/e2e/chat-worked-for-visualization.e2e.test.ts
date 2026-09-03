@@ -1,7 +1,15 @@
 // Control UI E2E covers completed-work expansion and persistent visual outcomes.
-import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+
+let artifactDir: string | undefined;
+beforeEach(() => {
+  const parent = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+  artifactDir = parent
+    ? createControlUiE2eArtifactDir("chat-worked-for-visualization", parent)
+    : undefined;
+});
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -19,11 +27,9 @@ const suite = createControlUiE2eSuite({
 });
 
 async function captureProof(page: import("playwright").Page, name: string) {
-  const artifactDir = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
   if (!artifactDir) {
     return;
   }
-  await fs.mkdir(artifactDir, { recursive: true });
   await page.screenshot({ path: path.join(artifactDir, `${name}.png`), fullPage: true });
 }
 

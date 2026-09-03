@@ -73,12 +73,20 @@ describe("buildChannelsTable", () => {
     mocks.missingOfficialExternalChannels.clear();
     mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([discordPlugin]);
     mocks.resolveInspectedChannelAccount.mockResolvedValue({
+      kind: "inspected",
       account: {
         tokenStatus: "configured_unavailable",
         tokenSource: "secretref",
       },
       enabled: true,
       configured: true,
+      snapshot: {
+        accountId: "default",
+        enabled: true,
+        configured: true,
+        tokenStatus: "configured_unavailable",
+        tokenSource: "secretref",
+      },
     });
   });
 
@@ -107,6 +115,32 @@ describe("buildChannelsTable", () => {
     const detailRow = table.details[0]?.rows[0];
     expect(detailRow?.Status).toBe("OK");
     expect(detailRow?.Notes).toContain("credential available in gateway runtime");
+  });
+
+  it("warns when an inspector cannot report configuration state", async () => {
+    mocks.resolveInspectedChannelAccount.mockResolvedValue({
+      kind: "inspected",
+      account: { enabled: true },
+      enabled: true,
+      configured: undefined,
+      snapshot: {
+        accountId: "default",
+        enabled: true,
+        stateReason: "configuration status unavailable",
+      },
+    });
+
+    const table = await buildChannelsTable({ channels: { discord: { enabled: true } } });
+    expect(table.rows).toEqual([
+      {
+        id: "discord",
+        label: "Discord",
+        enabled: true,
+        state: "warn",
+        detail: "configuration status unavailable",
+      },
+    ]);
+    expect(table.details).toEqual([]);
   });
 
   it("summarizes channels without selecting an owner from an explicit multi-agent roster", async () => {
@@ -172,12 +206,20 @@ describe("buildChannelsTable", () => {
     };
     mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([phonePlugin]);
     mocks.resolveInspectedChannelAccount.mockResolvedValue({
+      kind: "resolved",
       account: {
         name: "+12133734253",
         allowFrom: ["+442079460018", "bot-token"],
       },
       enabled: true,
       configured: true,
+      snapshot: {
+        accountId: "work",
+        enabled: true,
+        configured: true,
+        name: "+12133734253",
+        allowFrom: ["+442079460018", "bot-token"],
+      },
     });
 
     const table = await buildChannelsTable({ channels: { signal: { enabled: true } } });

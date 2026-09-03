@@ -1,14 +1,13 @@
-import "../../styles/lobster-pet.css";
 import { expectDefined } from "@openclaw/normalization-core";
 import { html, nothing, type TemplateResult } from "lit";
 import type { ControlUiBuildInfo } from "../../build-info.ts";
 import { icons } from "../../components/icons.ts";
 import {
   canonicalLobsterLook,
-  LOBSTER_PET_PALETTES,
   lobsterLookStyle,
   renderLobsterSvg,
-} from "../../components/lobster-pet.ts";
+} from "../../components/lobster-pet-look.ts";
+import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
 import {
   renderSettingsPage,
   renderSettingsRow,
@@ -19,6 +18,7 @@ import "../../components/tooltip.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
+import { COMMUNITY_DISCORD_URL } from "../../lib/product-links.ts";
 import "../../styles/about.css";
 import { brandIcons } from "./brand-icons.ts";
 
@@ -46,7 +46,7 @@ const ABOUT_LINKS: ReadonlyArray<{ href: string; icon: TemplateResult; label: ()
     label: () => t("aboutPage.linkGitHub"),
   },
   {
-    href: "https://discord.gg/clawd",
+    href: COMMUNITY_DISCORD_URL,
     icon: brandIcons.discord,
     label: () => t("aboutPage.linkDiscord"),
   },

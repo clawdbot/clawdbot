@@ -45,6 +45,10 @@ describe("qa scenario catalog", () => {
       | undefined;
 
     expect(scenario.sourcePath).toBe("qa/scenarios/models/openai-native-web-search-live.yaml");
+    expect(scenario.coverage).toEqual({
+      primary: ["web-search.web-search-exposure-openai"],
+      secondary: ["web-search.web-search-exposure", "openai.canonical-openai-model-routing-openai"],
+    });
     expect(scenario.gatewayConfigPatch?.tools).toEqual({
       web: {
         search: {

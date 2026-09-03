@@ -3,6 +3,10 @@ import fsp from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import {
+  readProviderJsonResponse,
+  readProviderTextResponse,
+} from "openclaw/plugin-sdk/provider-http";
+import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedOrigin,
 } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -17,7 +21,6 @@ import {
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_SHA256,
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_SIZE_BYTES,
   DEFAULT_LLAMA_CPP_MODEL_CACHE_FILE,
-  DEFAULT_LLAMA_CPP_MODEL_ID,
   DEFAULT_LLAMA_CPP_MODEL_REVISION,
   DEFAULT_LLAMA_CPP_MODEL_SHA256,
   DEFAULT_LLAMA_CPP_MODEL_SIZE_BYTES,
@@ -51,6 +54,17 @@ export type ManagedLlamaServer = {
   healthUrl: string;
   args: string[];
 };
+
+export type ManagedLlamaChatModel =
+  | { mode: "preserve" }
+  | { mode: "remove" }
+  | {
+      mode: "configure";
+      id: string;
+      path: string;
+      contextSize?: number;
+      maxTokens?: number;
+    };
 
 export type LlamaServerRuntimeFacts = {
   engine: "llama.cpp";
@@ -380,10 +394,7 @@ async function writePreset(presetPath: string, contents: string): Promise<void> 
 async function updatePreset(
   presetPath: string,
   params: {
-    chatModelId?: string;
-    chatModelPath?: string;
-    contextSize?: number;
-    maxTokens?: number;
+    chatModel: ManagedLlamaChatModel;
     embeddingModelIsDefault?: boolean;
     embeddingModelPath?: string;
     defaultEmbeddingModelPath?: string;
@@ -399,19 +410,17 @@ async function updatePreset(
         }
         throw error;
       });
-      if (params.chatModelId || params.chatModelPath) {
-        if (!params.chatModelId || !params.chatModelPath) {
-          throw new Error("llama.cpp chat model id and path must be provided together");
-        }
-      }
-      const chatSection = params.chatModelPath
-        ? renderChatModelSection({
-            id: params.chatModelId ?? DEFAULT_LLAMA_CPP_MODEL_ID,
-            modelPath: params.chatModelPath,
-            contextSize: params.contextSize,
-            maxTokens: params.maxTokens,
-          })
-        : readChatModelSection(existing);
+      const chatSection =
+        params.chatModel.mode === "preserve"
+          ? readChatModelSection(existing)
+          : params.chatModel.mode === "configure"
+            ? renderChatModelSection({
+                id: params.chatModel.id,
+                modelPath: params.chatModel.path,
+                contextSize: params.chatModel.contextSize,
+                maxTokens: params.chatModel.maxTokens,
+              })
+            : undefined;
       const embeddingSection = params.embeddingModelPath
         ? renderEmbeddingModelSection({
             isDefault: params.embeddingModelIsDefault,
@@ -459,10 +468,8 @@ async function findAvailableLlamaServerPort(preferred = LLAMA_CPP_DEFAULT_PORT):
 }
 
 export async function prepareManagedLlamaServer(params: {
-  chatModelId?: string;
-  chatModelPath?: string;
-  contextSize?: number;
-  maxTokens?: number;
+  // Runtime embedding refreshes preserve chat. Explicit embedding-only setup removes it.
+  chatModel: ManagedLlamaChatModel;
   embeddingModelIsDefault?: boolean;
   embeddingModelPath?: string;
   defaultEmbeddingModelPath?: string;
@@ -471,14 +478,7 @@ export async function prepareManagedLlamaServer(params: {
   const { command, asset } = await ensureLlamaServerInstalled();
   const { presetPath } = resolveManagedLlamaServerPaths(asset);
   await updatePreset(presetPath, {
-    ...(params.chatModelPath
-      ? {
-          chatModelId: params.chatModelId ?? DEFAULT_LLAMA_CPP_MODEL_ID,
-          chatModelPath: params.chatModelPath,
-        }
-      : {}),
-    contextSize: params.contextSize,
-    maxTokens: params.maxTokens,
+    chatModel: params.chatModel,
     embeddingModelIsDefault: params.embeddingModelIsDefault,
     embeddingModelPath: params.embeddingModelPath,
     defaultEmbeddingModelPath: params.defaultEmbeddingModelPath,
@@ -555,13 +555,16 @@ export async function ensureManagedLlamaServerForChat(params: {
       const configuredContext = params.model.params?.contextSize;
       const port = Number(new URL(params.provider.baseUrl).port);
       await prepareManagedLlamaServer({
-        chatModelId: params.model.id,
-        chatModelPath,
-        contextSize:
-          typeof configuredContext === "number" && configuredContext > 0
-            ? Math.floor(configuredContext)
-            : params.model.contextTokens,
-        maxTokens: params.model.maxTokens,
+        chatModel: {
+          mode: "configure",
+          id: params.model.id,
+          path: chatModelPath,
+          contextSize:
+            typeof configuredContext === "number" && configuredContext > 0
+              ? Math.floor(configuredContext)
+              : params.model.contextTokens,
+          maxTokens: params.model.maxTokens,
+        },
         defaultEmbeddingModelPath: path.join(cacheDir, DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE),
         port: Number.isInteger(port) && port > 0 ? port : undefined,
       });
@@ -594,7 +597,11 @@ async function fetchEndpoint(
       if (!response.ok) {
         return { ok: false };
       }
-      return { ok: true, value: accept === "json" ? await response.json() : await response.text() };
+      const value =
+        accept === "json"
+          ? await readProviderJsonResponse(response, "llama-server inspection")
+          : await readProviderTextResponse(response, "llama-server inspection");
+      return { ok: true, value };
     } finally {
       await release();
     }

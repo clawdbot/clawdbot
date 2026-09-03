@@ -3,6 +3,7 @@
  * and direct messages.
  */
 import { createHash } from "node:crypto";
+import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
 import {
   createMessageReceiptFromOutboundResults,
   type ChannelMessageUnknownSendContext,
@@ -239,15 +240,23 @@ export async function sendClickClackMedia(params: {
     deliveryQueueId: params.deliveryQueueId,
     deliveryPartIndex: params.deliveryPartIndex,
   });
+  const { account, client } = createOutboundContext(params);
+  const maxBytes = Math.min(
+    resolveChannelMediaMaxBytes({
+      cfg: params.cfg,
+      accountId: account.accountId,
+      resolveChannelLimitMb: () => account.config.mediaMaxMb,
+    }) ?? CLICKCLACK_MAX_UPLOAD_BYTES,
+    CLICKCLACK_MAX_UPLOAD_BYTES,
+  );
   const preloadedMedia = nonces.upload
     ? undefined
     : await loadOutboundMediaFromUrl(params.mediaUrl, {
-        maxBytes: CLICKCLACK_MAX_UPLOAD_BYTES,
+        maxBytes,
         mediaAccess: params.mediaAccess,
         mediaLocalRoots: params.mediaLocalRoots,
         mediaReadFile: params.mediaReadFile,
       });
-  const { account, client } = createOutboundContext(params);
   const workspaceId = await resolveWorkspaceId(client, account.workspace);
   const persistedUpload = nonces.upload
     ? await client.findUploadByNonce({ workspaceId, nonce: nonces.upload })
@@ -259,7 +268,7 @@ export async function sendClickClackMedia(params: {
     const media =
       preloadedMedia ??
       (await loadOutboundMediaFromUrl(params.mediaUrl, {
-        maxBytes: CLICKCLACK_MAX_UPLOAD_BYTES,
+        maxBytes,
         mediaAccess: params.mediaAccess,
         mediaLocalRoots: params.mediaLocalRoots,
         mediaReadFile: params.mediaReadFile,

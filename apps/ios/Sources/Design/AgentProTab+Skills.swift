@@ -203,7 +203,7 @@ extension AgentProTab {
             ProCard(padding: 0, radius: AgentLayout.cardRadius) {
                 let skills = self.filteredSkills
                 if skills.isEmpty {
-                    self.emptyDetailRow(
+                    agentProEmptyDetailRow(
                         icon: "sparkles",
                         title: self.gatewayConnected ? "No skills found" : "Skills unavailable",
                         detail: self.gatewayConnected
@@ -617,8 +617,8 @@ extension AgentProTab {
     func skillEditorMetadata(_ skill: SkillStatusEntryLite) -> some View {
         ProCard(radius: AgentLayout.cardRadius) {
             VStack(alignment: .leading, spacing: 8) {
-                self.detailMetric(label: "Key", value: skill.effectiveSkillKey)
-                self.detailMetric(label: "Source", value: self.normalized(skill.source) ?? "unknown")
+                agentProDetailMetric(label: "Key", value: skill.effectiveSkillKey)
+                agentProDetailMetric(label: "Source", value: self.normalized(skill.source) ?? "unknown")
                 if let filePath = self.normalized(skill.filePath) {
                     Text(filePath)
                         .font(OpenClawType.monoCaption2)

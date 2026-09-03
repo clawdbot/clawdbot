@@ -31,6 +31,11 @@
       - any-glob-to-any-file:
           - "extensions/pixverse/**"
           - "docs/providers/pixverse.md"
+"channel: a2a":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/a2a/**"
+          - "docs/channels/a2a.md"
 "channel: discord":
   - changed-files:
       - any-glob-to-any-file:
@@ -61,6 +66,11 @@
       - any-glob-to-any-file:
           - "extensions/logbook/**"
           - "docs/plugins/logbook.md"
+"plugin: imap":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/imap/**"
+          - "docs/automation/imap.md"
 "plugin: google-meet":
   - changed-files:
       - any-glob-to-any-file:
@@ -110,6 +120,10 @@
       - any-glob-to-any-file:
           - "extensions/bonjour/**"
           - "docs/gateway/bonjour.md"
+"plugin: visitor-access":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/visitor-access/**"
 "channel: imessage":
   - changed-files:
       - any-glob-to-any-file:
@@ -288,16 +302,8 @@
   - changed-files:
       - any-glob-to-any-file:
           - "docs/**"
-
-"r: skill":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "custodian-skills/**"
-          - "skills/**"
-          - "src/skills/**"
-          - "docs/tools/custodian-skills.md"
-          - "docs/tools/skills-config.md"
-          - "docs/tools/skills.md"
+          - ".agents/skills/openclaw-update/**"
+          - ".agents/skills/update-team-server/**"
 
 "cli":
   - changed-files:

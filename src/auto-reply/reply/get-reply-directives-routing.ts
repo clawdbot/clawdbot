@@ -36,7 +36,8 @@ function preserveMixedModelDirective(
     rawModelProfile: directives.rawModelProfile,
     rawModelRuntime: directives.rawModelRuntime,
     modelDirectiveSource: directives.modelDirectiveSource,
-    modelSessionOnly: directives.modelSessionOnly,
+    modelScope: directives.modelScope,
+    modelScopeConflict: directives.modelScopeConflict,
   };
 }
 
@@ -110,9 +111,22 @@ export function resolveReplyDirectiveRouting(params: {
       noMentions.trim() &&
       parseInlineSessionDirectives(noMentions, { modelAliases: params.modelAliases }).cleaned.trim()
     ) {
-      parsed = isModelSelectionDirective(parsed)
+      const mixed = isModelSelectionDirective(parsed)
         ? preserveMixedModelDirective(parsed, parsed.cleaned)
         : clearInlineDirectives(parsed.cleaned);
+      // Exec policy belongs to this message; placement keeps its directive-only persistence path.
+      const hasExecPolicy = parsed.rawExecSecurity !== undefined || parsed.rawExecAsk !== undefined;
+      parsed = {
+        ...mixed,
+        hasExecDirective: hasExecPolicy,
+        hasExecOptions: hasExecPolicy,
+        execSecurity: parsed.execSecurity,
+        execAsk: parsed.execAsk,
+        rawExecSecurity: parsed.rawExecSecurity,
+        rawExecAsk: parsed.rawExecAsk,
+        invalidExecSecurity: parsed.invalidExecSecurity,
+        invalidExecAsk: parsed.invalidExecAsk,
+      };
     }
   }
 

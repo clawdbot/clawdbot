@@ -13,7 +13,7 @@ import {
   buildProviderReauthCommand,
   coerceToFailoverError,
   describeFailoverError,
-  findCliMaxTurnsError,
+  hasProviderRequestSizeCeiling,
   isFailoverError,
   isNonProviderRuntimeCoordinationError,
 } from "./failover-error.js";
@@ -37,7 +37,6 @@ import {
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import {
   appendFailedCandidateAttempt,
-  findLiveSessionModelSwitchRedirectIndex,
   hasDifferentLiveSessionRuntimeSelection,
   isTranscriptNotContinuableError,
   type ModelFallbackAuthRuntime,
@@ -50,7 +49,9 @@ import {
   type ModelFallbackRunResult,
   type ModelFallbackStepHandler,
   recordFailedCandidateAttempt,
+  resolveFallbackAuthScope,
   resolveFallbackSoonestCooldownExpiry,
+  resolveLiveSessionModelSwitchRedirectIndex,
   resolveModelFallbackCandidateAgentRuntime,
   resolveModelFallbackCandidateHarnessAuthPrecheck,
   resolveNextFallbackCandidateIndex,
@@ -86,21 +87,6 @@ const log = createSubsystemLogger("model-fallback");
 const modelFallbackAuthRuntimeLoader = createLazyImportLoader<ModelFallbackAuthRuntime>(
   () => import("./auth-profiles.runtime.js"),
 );
-
-async function loadModelFallbackAuthRuntime() {
-  return await modelFallbackAuthRuntimeLoader.load();
-}
-
-function resolveFallbackAuthScope(params: {
-  userLockedAuthProfileId?: string;
-  profileIds?: readonly string[];
-}): string | undefined {
-  if (params.userLockedAuthProfileId) {
-    return params.userLockedAuthProfileId;
-  }
-  // resolveAuthProfileOrder places the profile selected for this model first.
-  return params.profileIds?.find((id) => id.trim())?.trim();
-}
 
 type RunWithModelFallbackParams<T> = {
   cfg: OpenClawConfig | undefined;
@@ -188,7 +174,7 @@ async function runWithModelFallbackInternal<T>(
   const userLockedAuthProfileId = params.userLockedAuthProfileId?.trim() || undefined;
   const authRuntime =
     !params.skipAuthProfileRuntime && params.cfg && hasAnyAuthProfileStoreSource(params.agentDir)
-      ? await loadModelFallbackAuthRuntime()
+      ? await modelFallbackAuthRuntimeLoader.load()
       : null;
   const authStore = authRuntime
     ? authRuntime.ensureAuthProfileStore(params.agentDir, {
@@ -206,13 +192,22 @@ async function runWithModelFallbackInternal<T>(
   let exhaustionResult: ModelFallbackExhaustionResult<T> | undefined;
   const cooldownProbeUsedProviders = new Set<string>();
   const tlsFailedProviders = new Set<string>();
+  const notifyFallbackStep: ModelFallbackStepHandler = async (step) => {
+    // Observations cannot replace candidate outcomes or stop a usable fallback.
+    // Policy-bearing callbacks such as onError retain their own failure semantics.
+    try {
+      await params.onFallbackStep?.(step);
+    } catch {
+      log.warn("Model fallback observer failed; preserving execution outcome.");
+    }
+  };
   const observeDecision = async (decision: ModelFallbackDecisionParams) => {
     if (!params.onFallbackStep && !isModelFallbackDecisionLogEnabled()) {
       return;
     }
     const fallbackStep = logModelFallbackDecision(decision);
     if (fallbackStep) {
-      await params.onFallbackStep?.(fallbackStep);
+      await notifyFallbackStep(fallbackStep);
     }
   };
   const observeFailedCandidate = async (
@@ -223,7 +218,7 @@ async function runWithModelFallbackInternal<T>(
     } else {
       const fallbackStep = recordFailedCandidateAttempt(failedAttempt);
       if (fallbackStep) {
-        await params.onFallbackStep?.(fallbackStep);
+        await notifyFallbackStep(fallbackStep);
       }
     }
     // Emit only real candidate-to-candidate transitions. Terminal candidates
@@ -380,7 +375,7 @@ async function runWithModelFallbackInternal<T>(
       }
     }
 
-    let runOptions: ModelFallbackRunOptions | undefined;
+    let runOptions: Pick<ModelFallbackRunOptions, "allowTransientCooldownProbe"> | undefined;
     let attemptedDuringCooldown = false;
     let transientProbeProviderForAttempt: string | null = null;
     if (
@@ -410,7 +405,10 @@ async function runWithModelFallbackInternal<T>(
           profileIds,
         });
         const authMode =
-          decision.reason === "billing"
+          decision.reason === "billing" ||
+          decision.reason === "auth" ||
+          decision.reason === "auth_permanent" ||
+          decision.reason === "session_expired"
             ? resolveSubscriptionAuthModeForProfiles({ store: authStore, profileIds })
             : undefined;
 
@@ -502,6 +500,12 @@ async function runWithModelFallbackInternal<T>(
       options: {
         ...runOptions,
         isFinalFallbackAttempt: !hasRemainingCandidate,
+        modelRoutingProvenance: {
+          requestedProvider: params.provider,
+          requestedModel: params.model,
+          stage: isPrimary ? "initial" : "fallback",
+          fallbackReason: isPrimary ? undefined : attempts.at(-1)?.reason,
+        },
       },
       // Only the outer fallback loop knows another candidate remains. Carry
       // that fact through this attempt so the embedded runner does not freeze
@@ -531,11 +535,6 @@ async function runWithModelFallbackInternal<T>(
       return attemptRun.success;
     }
     const err = attemptRun.error;
-    // Max-turn termination can follow successful tool actions. Stop before
-    // candidate fallback so the user can verify effects before any replay.
-    if (findCliMaxTurnsError(err)) {
-      throw err;
-    }
     if (isAgentHarnessPreflightError(err)) {
       const failedHarnessId = resolveAgentHarnessPreflightOwner(err);
       if (!failedHarnessId) {
@@ -625,8 +624,11 @@ async function runWithModelFallbackInternal<T>(
     // compaction/retry logic, not by model fallback.  If one escapes as a
     // throw, rethrow it immediately rather than trying a different model
     // that may have a smaller context window and fail worse.
+    // A provider request-size ceiling is the exception: it belongs to the
+    // refusing provider's quota rather than to any model's context window, so a
+    // differently provisioned candidate is exactly what may still admit it.
     const errMessage = formatErrorMessage(err);
-    if (isLikelyContextOverflowError(errMessage)) {
+    if (isLikelyContextOverflowError(errMessage) && !hasProviderRequestSizeCeiling(err)) {
       throw err;
     }
     if (isMissingAgentHarnessError(err)) {
@@ -655,7 +657,7 @@ async function runWithModelFallbackInternal<T>(
       ) {
         throw err;
       }
-      const liveSwitchTargetIndex = findLiveSessionModelSwitchRedirectIndex({
+      const liveSwitchTargetIndex = resolveLiveSessionModelSwitchRedirectIndex({
         error: err,
         candidates,
         currentIndex: i,

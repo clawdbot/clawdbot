@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
+import {
+  preparePublishedModelCatalogOwnerIdentity,
+  resolvePublishedModelCatalogOwner,
+} from "../agents/prepared-model-catalog-owner.js";
 import type { PublishedModelCatalogOwnerCandidate } from "../agents/prepared-model-catalog.types.js";
 import { setPreparedModelRuntimeAuthLoader } from "../agents/prepared-model-runtime-auth.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
@@ -44,6 +48,11 @@ function ownerSnapshot(
   agentId?: string,
 ): PublishedModelCatalogOwnerCandidate {
   return {
+    catalogOwner: preparePublishedModelCatalogOwnerIdentity({
+      config,
+      agentId,
+      agentDir: "/tmp/gateway-agent",
+    }),
     ...(agentId ? { agentId } : {}),
     agentDir: "/tmp/gateway-agent",
     config,
@@ -55,6 +64,98 @@ function ownerSnapshot(
 }
 
 describe("gateway prepared model catalog", () => {
+  it("keeps raw pre-roster input distinct from an explicitly empty roster", () => {
+    const input = {
+      config: {},
+      agentDir: "/tmp/raw-catalog-state/agents/main/agent",
+      env: { OPENCLAW_STATE_DIR: "/tmp/raw-catalog-state", OPENCLAW_HOME: "/tmp/raw-catalog-home" },
+    };
+    expect(preparePublishedModelCatalogOwnerIdentity(input)).toMatchObject({ agentId: "main" });
+    expect(
+      preparePublishedModelCatalogOwnerIdentity({ ...input, config: { agents: { entries: {} } } }),
+    ).toBeUndefined();
+  });
+
+  it.each([
+    { name: "wrong directory", agentId: "main", agentDir: "/tmp/wrong-agent", bound: false },
+    {
+      name: "unknown explicit id",
+      agentId: "missing",
+      agentDir: "/tmp/gateway-agent",
+      bound: false,
+    },
+    {
+      name: "explicit empty roster",
+      agentId: "main",
+      agentDir: "/tmp/gateway-agent",
+      empty: true,
+      bound: false,
+    },
+    {
+      name: "shared directory without id",
+      agentDir: "/tmp/gateway-agent",
+      shared: true,
+      bound: false,
+    },
+    {
+      name: "explicit shared-directory id",
+      agentId: "WORKER",
+      agentDir: "/tmp/gateway-agent",
+      shared: true,
+      bound: true,
+    },
+    { name: "unique directory without id", agentDir: "/tmp/gateway-agent", bound: true },
+  ])(
+    "preserves prepared binding validation: $name",
+    async ({ agentId, agentDir, empty, shared, bound }) => {
+      const config = ownerConfig();
+      if (empty) {
+        config.agents = { entries: {} };
+      } else if (shared) {
+        config.agents!.list!.push({ id: "worker", agentDir, workspace: "/tmp/worker-workspace" });
+      }
+      const input = { config, agentId, agentDir };
+      const candidate = {
+        ...ownerSnapshot(config),
+        ...input,
+        catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),
+      };
+      const project = loadGatewayModelCatalogSnapshot({
+        getConfig: () => config,
+        loadPublishedPreparedModelCatalogOwnerSnapshot: async () => candidate,
+      });
+      if (!bound) {
+        await expect(project).rejects.toMatchObject({
+          name: "PublishedModelCatalogOwnerResolutionError",
+        });
+        return;
+      }
+      const expected = {
+        agentId: shared ? "worker" : "main",
+        workspaceDir: shared ? "/tmp/worker-workspace" : "/tmp/gateway-workspace",
+      };
+      await expect(project).resolves.toMatchObject(expected);
+      const resolved = resolvePublishedModelCatalogOwner(candidate);
+      expect(
+        resolvePublishedModelCatalogOwner({
+          ...resolved,
+          catalogOwner: { ...resolved.catalogOwner },
+        }),
+      ).toEqual(resolved);
+    },
+  );
+
+  it("rejects a bound catalog without prepared auth", async () => {
+    const config = ownerConfig();
+    const candidate = { ...ownerSnapshot(config), authStore: undefined };
+    await expect(
+      loadGatewayModelCatalogSnapshot({
+        getConfig: () => config,
+        loadPublishedPreparedModelCatalogOwnerSnapshot: async () => candidate,
+      }),
+    ).rejects.toThrow("missing prepared auth state");
+  });
+
   it("reads the published read-only generation directly", async () => {
     const config = ownerConfig();
     const loadPublishedPreparedModelCatalogOwnerSnapshot = vi.fn(async () => ownerSnapshot(config));

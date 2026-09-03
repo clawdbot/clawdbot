@@ -10,10 +10,6 @@ export function normalizeStoredConversationId(raw: string): string {
   return raw.split(";")[0] ?? raw;
 }
 
-export function parseStoredConversationTimestamp(value: string | undefined): number | null {
-  return parseDateStringTimestampMs(value) ?? null;
-}
-
 export function toConversationStoreEntries(
   entries: Iterable<[string, StoredConversationReference]>,
 ): MSTeamsConversationStoreEntry[] {
@@ -87,8 +83,8 @@ export function findPreferredDmConversationByUserId(
   if (candidates.length > 1) {
     candidates.sort(
       (a, b) =>
-        (parseStoredConversationTimestamp(b.reference.lastSeenAt) ?? 0) -
-        (parseStoredConversationTimestamp(a.reference.lastSeenAt) ?? 0),
+        (parseDateStringTimestampMs(b.reference.lastSeenAt) ?? 0) -
+        (parseDateStringTimestampMs(a.reference.lastSeenAt) ?? 0),
     );
   }
 

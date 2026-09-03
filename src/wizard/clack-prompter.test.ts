@@ -1,6 +1,6 @@
 // Clack prompter tests cover prompt rendering, validation, and cancellation.
 import type { SpinnerOptions } from "@clack/prompts";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 const themeMocks = vi.hoisted(() => ({
   isRich: vi.fn(() => false),
@@ -8,6 +8,11 @@ const themeMocks = vi.hoisted(() => ({
 
 const stdoutIsTTYDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
 const stdoutColumnsDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "columns");
+const initialSuiteResizeListeners = process.stdout.listeners("resize");
+
+afterAll(() => {
+  expect(process.stdout.listeners("resize")).toEqual(initialSuiteResizeListeners);
+});
 
 function stubStdoutIsTTY(value: boolean): void {
   Object.defineProperty(process.stdout, "isTTY", { configurable: true, value });
@@ -181,7 +186,8 @@ describe("createClackPrompter", () => {
     stubStdoutColumns(14);
     const prompter = createClackPrompter();
 
-    prompter.progress("👨‍👩‍👧‍👦ABCDEFGH");
+    const progress = prompter.progress("👨‍👩‍👧‍👦ABCDEFGH");
+    onTestFinished(() => progress.stop());
 
     const spin = clackMocks.spinner.mock.results[0]!.value;
     expect(spin.start).toHaveBeenCalledWith(theme.accent("👨‍👩‍👧‍👦A…"));
@@ -210,7 +216,8 @@ describe("createClackPrompter", () => {
     stubStdoutColumns(undefined);
     const prompter = createClackPrompter();
 
-    prompter.progress("1234567890ABC");
+    const progress = prompter.progress("1234567890ABC");
+    onTestFinished(() => progress.stop());
 
     const spin = clackMocks.spinner.mock.results[0]!.value;
     expect(spin.start).toHaveBeenCalledWith(theme.accent("1234567890ABC"));
@@ -220,7 +227,8 @@ describe("createClackPrompter", () => {
     stubStdoutColumns(20);
     const prompter = createClackPrompter();
 
-    prompter.progress("Loading");
+    const progress = prompter.progress("Loading");
+    onTestFinished(() => progress.stop());
 
     const spin = clackMocks.spinner.mock.results[0]!.value;
     expect(spin.start).toHaveBeenCalledWith(theme.accent("Loading"));
@@ -230,7 +238,8 @@ describe("createClackPrompter", () => {
     stubStdoutColumns(10);
     const prompter = createClackPrompter();
 
-    prompter.progress("Loading");
+    const progress = prompter.progress("Loading");
+    onTestFinished(() => progress.stop());
 
     const spin = clackMocks.spinner.mock.results[0]!.value;
     expect(spin.start).toHaveBeenCalledWith(theme.accent(""));
@@ -243,7 +252,8 @@ describe("createClackPrompter", () => {
     themeMocks.isRich.mockReturnValue(true);
     const prompter = createClackPrompter();
 
-    prompter.progress("Loading");
+    const progress = prompter.progress("Loading");
+    onTestFinished(() => progress.stop());
 
     expect(clackMocks.spinner).toHaveBeenCalledWith({
       frames: ["(\\/)", "(||)", "(--)", "(||)"],
@@ -260,7 +270,8 @@ describe("createClackPrompter", () => {
     themeMocks.isRich.mockReturnValue(false);
     const prompter = createClackPrompter();
 
-    prompter.progress("Loading");
+    const progress = prompter.progress("Loading");
+    onTestFinished(() => progress.stop());
 
     expect(clackMocks.spinner).toHaveBeenCalledWith({ output: process.stdout });
   });

@@ -202,17 +202,23 @@ function readWindowsProcessTreeSnapshot(): ProcessTreeSnapshot | null {
   return parseWindowsProcessTreeSnapshot(result.stdout);
 }
 
-export function readProcessTreeCpuMs(rootPid: number | null | undefined): number | null {
+function readProcessTreeMetric(params: {
+  rootPid: number | null | undefined;
+  posixColumn: "time=" | "rss=";
+  parsePosixMetric: (raw: string) => number | null;
+  windowsMetric: "cpuByPid" | "rssByPid";
+}): number | null {
+  const { rootPid } = params;
   if (typeof rootPid !== "number" || !Number.isInteger(rootPid) || rootPid <= 0) {
     return null;
   }
   if (process.platform === "win32") {
     const snapshot = readWindowsProcessTreeSnapshot();
     return snapshot
-      ? collectProcessTreeMetric(rootPid, snapshot.childrenByParent, snapshot.cpuByPid)
+      ? collectProcessTreeMetric(rootPid, snapshot.childrenByParent, snapshot[params.windowsMetric])
       : null;
   }
-  const result = spawnSync("ps", ["-eo", "pid=,ppid=,time="], {
+  const result = spawnSync("ps", ["-eo", `pid=,ppid=,${params.posixColumn}`], {
     encoding: "utf8",
     killSignal: "SIGKILL",
     stdio: ["ignore", "pipe", "ignore"],
@@ -223,73 +229,42 @@ export function readProcessTreeCpuMs(rootPid: number | null | undefined): number
   }
 
   const childrenByParent = new Map<number, number[]>();
-  const cpuByPid = new Map<number, number>();
+  const metricByPid = new Map<number, number>();
   for (const line of result.stdout.split("\n")) {
     const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\S+)$/u);
     if (!match) {
       continue;
     }
-    const [, pidRaw, ppidRaw, cpuRaw] = match;
+    const [, pidRaw, ppidRaw, metricRaw] = match;
     const pid = Number(pidRaw);
     const ppid = Number(ppidRaw);
-    const cpuMs = parsePsCpuTimeMs(cpuRaw ?? "");
-    if (!Number.isInteger(pid) || !Number.isInteger(ppid) || cpuMs === null) {
+    const metric = params.parsePosixMetric(metricRaw ?? "");
+    if (!Number.isInteger(pid) || !Number.isInteger(ppid) || metric === null) {
       continue;
     }
-    cpuByPid.set(pid, cpuMs);
+    metricByPid.set(pid, metric);
     const children = childrenByParent.get(ppid) ?? [];
     children.push(pid);
     childrenByParent.set(ppid, children);
   }
-  if (!cpuByPid.has(rootPid)) {
-    return null;
-  }
 
-  return collectProcessTreeMetric(rootPid, childrenByParent, cpuByPid);
+  return collectProcessTreeMetric(rootPid, childrenByParent, metricByPid);
+}
+
+export function readProcessTreeCpuMs(rootPid: number | null | undefined): number | null {
+  return readProcessTreeMetric({
+    rootPid,
+    posixColumn: "time=",
+    parsePosixMetric: parsePsCpuTimeMs,
+    windowsMetric: "cpuByPid",
+  });
 }
 
 export function readProcessTreeRssBytes(rootPid: number | null | undefined): number | null {
-  if (typeof rootPid !== "number" || !Number.isInteger(rootPid) || rootPid <= 0) {
-    return null;
-  }
-  if (process.platform === "win32") {
-    const snapshot = readWindowsProcessTreeSnapshot();
-    return snapshot
-      ? collectProcessTreeMetric(rootPid, snapshot.childrenByParent, snapshot.rssByPid)
-      : null;
-  }
-  const result = spawnSync("ps", ["-eo", "pid=,ppid=,rss="], {
-    encoding: "utf8",
-    killSignal: "SIGKILL",
-    stdio: ["ignore", "pipe", "ignore"],
-    timeout: PROCESS_TREE_SNAPSHOT_TIMEOUT_MS,
+  return readProcessTreeMetric({
+    rootPid,
+    posixColumn: "rss=",
+    parsePosixMetric: parsePsRssBytes,
+    windowsMetric: "rssByPid",
   });
-  if (result.status !== 0) {
-    return null;
-  }
-
-  const childrenByParent = new Map<number, number[]>();
-  const rssByPid = new Map<number, number>();
-  for (const line of result.stdout.split("\n")) {
-    const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\S+)$/u);
-    if (!match) {
-      continue;
-    }
-    const [, pidRaw, ppidRaw, rssRaw] = match;
-    const pid = Number(pidRaw);
-    const ppid = Number(ppidRaw);
-    const rssBytes = parsePsRssBytes(rssRaw ?? "");
-    if (!Number.isInteger(pid) || !Number.isInteger(ppid) || rssBytes === null) {
-      continue;
-    }
-    rssByPid.set(pid, rssBytes);
-    const children = childrenByParent.get(ppid) ?? [];
-    children.push(pid);
-    childrenByParent.set(ppid, children);
-  }
-  if (!rssByPid.has(rootPid)) {
-    return null;
-  }
-
-  return collectProcessTreeMetric(rootPid, childrenByParent, rssByPid);
 }

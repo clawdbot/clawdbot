@@ -1,11 +1,11 @@
 import AppKit
 import ApplicationServices
 import AVFoundation
-import CoreGraphics
 import CoreLocation
 import Foundation
 import Observation
 import OpenClawIPC
+import PeekabooAutomationKit
 import Speech
 import UserNotifications
 
@@ -24,6 +24,8 @@ enum CapabilityAuthorizationStatus: Equatable, Sendable {
 }
 
 enum PermissionManager {
+    @MainActor static let screenRecordingPermissions = PermissionsService()
+
     /// UNUserNotificationCenter.current() aborts with NSInternalInconsistencyException
     /// ("bundleProxyForCurrentProcess is nil") in unbundled processes such as
     /// `swift build` dev binaries. Every notification-center call must check this
@@ -34,6 +36,13 @@ enum PermissionManager {
 
     static func isNotificationAuthorized(status: UNAuthorizationStatus) -> Bool {
         status == .authorized || status == .provisional
+    }
+
+    static func shouldOpenSpeechRecognitionSettings(
+        status: SFSpeechRecognizerAuthorizationStatus,
+        interactive: Bool) -> Bool
+    {
+        interactive && (status == .denied || status == .restricted)
     }
 
     static func isLocationAuthorized(status: CLAuthorizationStatus, requireAlways: Bool) -> Bool {
@@ -96,7 +105,10 @@ enum PermissionManager {
             return granted && self.isNotificationAuthorized(status: updated.authorizationStatus)
         }
         if settings.authorizationStatus == .denied, interactive {
-            NotificationPermissionHelper.openSettings()
+            SystemSettingsURLSupport.openFirst([
+                "x-apple.systempreferences:com.apple.Notifications-Settings.extension",
+                "x-apple.systempreferences:com.apple.preference.notifications",
+            ])
         }
         return false
     }
@@ -119,12 +131,12 @@ enum PermissionManager {
         return await MainActor.run { AXIsProcessTrusted() }
     }
 
+    @MainActor
     private static func ensureScreenRecording(interactive: Bool) async -> Bool {
-        let granted = ScreenRecordingProbe.isAuthorized()
-        if interactive, !granted {
-            await ScreenRecordingProbe.requestAuthorization()
+        if interactive, !self.screenRecordingPermissions.checkScreenRecordingPermission() {
+            self.screenRecordingPermissions.requestScreenRecordingPermission()
         }
-        return ScreenRecordingProbe.isAuthorized()
+        return await self.screenRecordingPermissions.checkScreenRecordingPermissionLive(forceProbe: interactive)
     }
 
     private static func ensureMicrophone(interactive: Bool) async -> Bool {
@@ -137,7 +149,7 @@ enum PermissionManager {
             return await AVCaptureDevice.requestAccess(for: .audio)
         case .denied, .restricted:
             if interactive {
-                MicrophonePermissionHelper.openSettings()
+                SystemSettingsURLSupport.openPrivacySettings(for: .microphone)
             }
             return false
         @unknown default:
@@ -147,6 +159,9 @@ enum PermissionManager {
 
     private static func ensureSpeechRecognition(interactive: Bool) async -> Bool {
         let status = SFSpeechRecognizer.authorizationStatus()
+        if self.shouldOpenSpeechRecognitionSettings(status: status, interactive: interactive) {
+            SystemSettingsURLSupport.openPrivacySettings(for: .speechRecognition)
+        }
         if status == .notDetermined, interactive {
             await withUnsafeContinuation { (cont: UnsafeContinuation<Void, Never>) in
                 SFSpeechRecognizer.requestAuthorization { _ in
@@ -167,7 +182,7 @@ enum PermissionManager {
             return await AVCaptureDevice.requestAccess(for: .video)
         case .denied, .restricted:
             if interactive {
-                CameraPermissionHelper.openSettings()
+                SystemSettingsURLSupport.openPrivacySettings(for: .camera)
             }
             return false
         @unknown default:
@@ -178,7 +193,7 @@ enum PermissionManager {
     private static func ensureLocation(interactive: Bool) async -> Bool {
         guard CLLocationManager.locationServicesEnabled() else {
             if interactive {
-                await MainActor.run { LocationPermissionHelper.openSettings() }
+                await MainActor.run { SystemSettingsURLSupport.openPrivacySettings(for: .location) }
             }
             return false
         }
@@ -192,7 +207,7 @@ enum PermissionManager {
             return self.isLocationAuthorized(status: updated, requireAlways: false)
         case .denied, .restricted:
             if interactive {
-                await MainActor.run { LocationPermissionHelper.openSettings() }
+                await MainActor.run { SystemSettingsURLSupport.openPrivacySettings(for: .location) }
             }
             return false
         @unknown default:
@@ -238,11 +253,10 @@ enum PermissionManager {
                 results[cap] = await MainActor.run { AXIsProcessTrusted() } ? .granted : .notGranted
 
             case .screenRecording:
-                if #available(macOS 10.15, *) {
-                    results[cap] = CGPreflightScreenCaptureAccess() ? .granted : .notGranted
-                } else {
-                    results[cap] = .granted
-                }
+                // CoreGraphics can retain a denial after a grant. Peekaboo retains confirmed grants
+                // and only unlocks live probes after an explicit permission request.
+                results[cap] = await self.screenRecordingPermissions.checkScreenRecordingPermissionLive()
+                    ? .granted : .notGranted
 
             case .microphone:
                 results[cap] = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
@@ -268,42 +282,6 @@ enum PermissionManager {
     static func grantedStatus(_ caps: [Capability] = Capability.allCases) async -> [Capability: Bool] {
         let statuses = await self.authorizationStatus(caps)
         return statuses.mapValues(\.isGranted)
-    }
-}
-
-enum NotificationPermissionHelper {
-    static func openSettings() {
-        SystemSettingsURLSupport.openFirst([
-            "x-apple.systempreferences:com.apple.Notifications-Settings.extension",
-            "x-apple.systempreferences:com.apple.preference.notifications",
-        ])
-    }
-}
-
-enum MicrophonePermissionHelper {
-    static func openSettings() {
-        SystemSettingsURLSupport.openFirst([
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
-            "x-apple.systempreferences:com.apple.preference.security",
-        ])
-    }
-}
-
-enum CameraPermissionHelper {
-    static func openSettings() {
-        SystemSettingsURLSupport.openFirst([
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera",
-            "x-apple.systempreferences:com.apple.preference.security",
-        ])
-    }
-}
-
-enum LocationPermissionHelper {
-    static func openSettings() {
-        SystemSettingsURLSupport.openFirst([
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices",
-            "x-apple.systempreferences:com.apple.preference.security",
-        ])
     }
 }
 
@@ -391,7 +369,7 @@ final class LocationPermissionRequester: NSObject, CLLocationManagerDelegate {
                 return
             }
             guard !Task.isCancelled, let self, self.requests.hasPendingRequests else { return }
-            LocationPermissionHelper.openSettings()
+            SystemSettingsURLSupport.openPrivacySettings(for: .location)
             self.finish(status: self.manager.authorizationStatus)
         }
     }
@@ -425,7 +403,7 @@ final class LocationPermissionRequester: NSObject, CLLocationManagerDelegate {
         let status = manager.authorizationStatus
         Task { @MainActor in
             if status == .denied || status == .restricted {
-                LocationPermissionHelper.openSettings()
+                SystemSettingsURLSupport.openPrivacySettings(for: .location)
             }
             self.finish(status: status)
         }
@@ -506,21 +484,5 @@ final class PermissionMonitor {
         self.lastCheck = Date()
 
         self.isChecking = false
-    }
-}
-
-enum ScreenRecordingProbe {
-    static func isAuthorized() -> Bool {
-        if #available(macOS 10.15, *) {
-            return CGPreflightScreenCaptureAccess()
-        }
-        return true
-    }
-
-    @MainActor
-    static func requestAuthorization() async {
-        if #available(macOS 10.15, *) {
-            _ = CGRequestScreenCaptureAccess()
-        }
     }
 }

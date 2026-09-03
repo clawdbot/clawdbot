@@ -460,23 +460,6 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
       });
     },
 
-    async preparePlacementMove(
-      input: {
-        sessionId: string;
-        source: WorkerPlacementMoveSource;
-        target: WorkerPlacementMoveTarget;
-        abandonSource?: true;
-      },
-      prepareNew: () => Promise<void>,
-    ) {
-      // Existing durable decisions own retries; asynchronous preparation is
-      // only for minting a new intent and must never run in a SQLite transaction.
-      if (!findMoveRowBySession(read(), required(input.sessionId, "move session id"))) {
-        await prepareNew();
-      }
-      return this.beginPlacementMove(input);
-    },
-
     recordPlacementMoveError(input: {
       operationId: string;
       sessionId: string;

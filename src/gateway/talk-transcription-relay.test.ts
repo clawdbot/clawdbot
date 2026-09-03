@@ -560,12 +560,22 @@ describe("talk transcription gateway relay", () => {
   });
 
   it("closes a backpressured owner for final transcripts while healthy owners still receive them", async () => {
-    const createSocket = () => ({
-      readyState: WebSocket.OPEN,
-      bufferedAmount: 0,
-      send: vi.fn<(payload: string) => void>(),
-      close: vi.fn<(code: number, reason: string) => void>(),
-    });
+    const createSocket = () => {
+      const socket = {
+        readyState: WebSocket.OPEN as number,
+        bufferedAmount: 0,
+        send: vi.fn<(payload: string) => void>(),
+        close: vi.fn<(code: number, reason: string) => void>(),
+        terminate: vi.fn<() => void>(),
+      };
+      socket.close.mockImplementation(() => {
+        socket.readyState = WebSocket.CLOSING;
+      });
+      socket.terminate.mockImplementation(() => {
+        socket.readyState = WebSocket.CLOSING;
+      });
+      return socket;
+    };
     const slowSocket = createSocket();
     const healthySocket = createSocket();
     const createClient = (
@@ -614,11 +624,13 @@ describe("talk transcription gateway relay", () => {
 
       expect(slowSocket.send).toHaveBeenCalledTimes(slowFramesBeforePartial);
       expect(slowSocket.close).not.toHaveBeenCalled();
+      expect(slowSocket.terminate).not.toHaveBeenCalled();
 
       slowRequest.onTranscript?.("slow final");
       healthyRequest.onTranscript?.("healthy final");
 
       expect(slowSocket.close).toHaveBeenCalledWith(1008, "slow consumer");
+      expect(slowSocket.terminate).toHaveBeenCalledOnce();
       const healthyFrames = healthySocket.send.mock.calls.map(
         ([frame]) => JSON.parse(frame) as { event: string; payload: unknown },
       );

@@ -5,8 +5,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ExpectedCliError } from "../cli/failure-output.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import {
-  baseConfigSnapshot,
   createCapturingTestRuntime,
+  createTestConfigSnapshot,
   createTestRuntime,
 } from "./test-runtime-config-helpers.js";
 
@@ -60,10 +60,9 @@ function getWrittenMainIdentity() {
 }
 
 async function runIdentityCommandFromWorkspace(workspace: string, fromIdentity = true) {
-  configMocks.readConfigFileSnapshot.mockResolvedValue({
-    ...baseConfigSnapshot,
-    config: { agents: { entries: { main: { workspace } } } },
-  });
+  configMocks.readConfigFileSnapshot.mockResolvedValue(
+    createTestConfigSnapshot({ agents: { entries: { main: { workspace } } } }),
+  );
   await agentsSetIdentityCommand({ workspace, fromIdentity }, runtime);
 }
 
@@ -102,17 +101,16 @@ describe("agents set-identity command", () => {
       "",
     ]);
 
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: {
+    configMocks.readConfigFileSnapshot.mockResolvedValue(
+      createTestConfigSnapshot({
         agents: {
           entries: {
             main: { workspace },
             ops: { workspace: path.join(root, "ops") },
           },
         },
-      },
-    });
+      }),
+    );
 
     await agentsSetIdentityCommand({ workspace }, runtime);
 
@@ -129,10 +127,9 @@ describe("agents set-identity command", () => {
     const { root, workspace } = await createIdentityWorkspace();
     await writeIdentityFile(workspace, ["- Name: Workspace Agent"]);
 
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: { agents: { entries: { main: { workspace } } } },
-    });
+    configMocks.readConfigFileSnapshot.mockResolvedValue(
+      createTestConfigSnapshot({ agents: { entries: { main: { workspace } } } }),
+    );
     const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(root);
 
     try {
@@ -149,14 +146,13 @@ describe("agents set-identity command", () => {
     const identityPath = await writeIdentityFile(workspace, ["- Name: Echo"]);
     const originalIdentity = await fs.readFile(identityPath, "utf8");
 
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: {
+    configMocks.readConfigFileSnapshot.mockResolvedValue(
+      createTestConfigSnapshot({
         agents: {
           entries: { main: { workspace }, ops: { workspace } },
         },
-      },
-    });
+      }),
+    );
 
     await expectIdentityCommandFailure(
       { workspace },
@@ -169,10 +165,9 @@ describe("agents set-identity command", () => {
     const { workspace } = await createIdentityWorkspace("unmatched");
     const identityPath = await writeIdentityFile(workspace, ["- Name: Untouched"]);
     const originalIdentity = await fs.readFile(identityPath, "utf8");
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: { agents: { entries: { main: {} } } },
-    });
+    configMocks.readConfigFileSnapshot.mockResolvedValue(
+      createTestConfigSnapshot({ agents: { entries: { main: {} } } }),
+    );
 
     await expectIdentityCommandFailure(
       { workspace, name: "Override", json: true },
@@ -192,10 +187,9 @@ describe("agents set-identity command", () => {
       "",
     ]);
 
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: { agents: { entries: { main: { workspace } } } },
-    });
+    configMocks.readConfigFileSnapshot.mockResolvedValue(
+      createTestConfigSnapshot({ agents: { entries: { main: { workspace } } } }),
+    );
 
     await agentsSetIdentityCommand(
       {
@@ -218,10 +212,9 @@ describe("agents set-identity command", () => {
 
   it("sanitizes identity echoes while preserving stored and JSON values", async () => {
     const name = "Operator\u001B]0;identity-injection\u0007🦞\r\nforged-row\tbadge";
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: { agents: { entries: { main: {} } } },
-    });
+    configMocks.readConfigFileSnapshot.mockResolvedValue(
+      createTestConfigSnapshot({ agents: { entries: { main: {} } } }),
+    );
 
     await agentsSetIdentityCommand({ agent: "main", name }, runtime);
 
@@ -251,10 +244,9 @@ describe("agents set-identity command", () => {
       "",
     ]);
 
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: { agents: { entries: { main: {} } } },
-    });
+    configMocks.readConfigFileSnapshot.mockResolvedValue(
+      createTestConfigSnapshot({ agents: { entries: { main: {} } } }),
+    );
 
     await agentsSetIdentityCommand({ agent: "main", identityFile: identityPath }, runtime);
 
@@ -278,10 +270,9 @@ describe("agents set-identity command", () => {
   });
 
   it("accepts avatar-only updates via flags", async () => {
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: { agents: { entries: { main: {} } } },
-    });
+    configMocks.readConfigFileSnapshot.mockResolvedValue(
+      createTestConfigSnapshot({ agents: { entries: { main: {} } } }),
+    );
 
     await agentsSetIdentityCommand(
       { agent: "main", avatar: "https://example.com/avatar.png" },
@@ -296,10 +287,9 @@ describe("agents set-identity command", () => {
   it.each(["ghostzzz", "агент✨", "   "])(
     "errors without changing config when --agent names %j",
     async (agent) => {
-      configMocks.readConfigFileSnapshot.mockResolvedValue({
-        ...baseConfigSnapshot,
-        config: { agents: { entries: { main: {} } } },
-      });
+      configMocks.readConfigFileSnapshot.mockResolvedValue(
+        createTestConfigSnapshot({ agents: { entries: { main: {} } } }),
+      );
 
       await expectIdentityCommandFailure(
         { agent, name: "Ghost", json: true },
@@ -311,10 +301,9 @@ describe("agents set-identity command", () => {
   it.each(["main", "openclaw", "crestodian"])(
     "does not create absent reserved agent %s",
     async (agentId) => {
-      configMocks.readConfigFileSnapshot.mockResolvedValue({
-        ...baseConfigSnapshot,
-        config: { agents: { entries: { ops: {} } } },
-      });
+      configMocks.readConfigFileSnapshot.mockResolvedValue(
+        createTestConfigSnapshot({ agents: { entries: { ops: {} } } }),
+      );
 
       await expectIdentityCommandFailure(
         { agent: agentId, name: "Hijack" },
@@ -325,10 +314,9 @@ describe("agents set-identity command", () => {
 
   it("rejects an unknown agent before attempting to read its explicit identity file", async () => {
     const { workspace } = await createIdentityWorkspace();
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: { agents: { entries: { main: { workspace } } } },
-    });
+    configMocks.readConfigFileSnapshot.mockResolvedValue(
+      createTestConfigSnapshot({ agents: { entries: { main: { workspace } } } }),
+    );
 
     await expectIdentityCommandFailure(
       { agent: "ghost", identityFile: path.join(workspace, "missing.md"), json: true },
@@ -337,14 +325,13 @@ describe("agents set-identity command", () => {
   });
 
   it("still updates a real existing agent", async () => {
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: {
+    configMocks.readConfigFileSnapshot.mockResolvedValue(
+      createTestConfigSnapshot({
         agents: {
           entries: { ops: { identity: { emoji: "🛠️" } } },
         },
-      },
-    });
+      }),
+    );
 
     await agentsSetIdentityCommand({ agent: "ops", name: "Operator" }, runtime);
 
@@ -359,15 +346,14 @@ describe("agents set-identity command", () => {
 
   it("still resolves and updates the implicit default agent by workspace", async () => {
     const { workspace } = await createIdentityWorkspace("implicit-main");
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: {
+    configMocks.readConfigFileSnapshot.mockResolvedValue(
+      createTestConfigSnapshot({
         agents: {
           defaults: { workspace },
           entries: {},
         },
-      },
-    });
+      }),
+    );
 
     await agentsSetIdentityCommand({ workspace, name: "Default Agent" }, runtime);
 
@@ -387,10 +373,9 @@ describe("agents set-identity command", () => {
       "x".repeat(TEST_MAX_IDENTITY_FILE_BYTES + 1),
     ]);
 
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: { agents: { entries: { main: {} } } },
-    });
+    configMocks.readConfigFileSnapshot.mockResolvedValue(
+      createTestConfigSnapshot({ agents: { entries: { main: {} } } }),
+    );
 
     const originalIdentity = await fs.readFile(identityPath, "utf8");
     const error = await agentsSetIdentityCommand(
@@ -415,10 +400,9 @@ describe("agents set-identity command", () => {
 
   it("errors when identity data is missing", async () => {
     const { workspace } = await createIdentityWorkspace();
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: { agents: { entries: { main: { workspace } } } },
-    });
+    configMocks.readConfigFileSnapshot.mockResolvedValue(
+      createTestConfigSnapshot({ agents: { entries: { main: { workspace } } } }),
+    );
 
     await expectIdentityCommandFailure(
       { workspace, fromIdentity: true, json: true },
@@ -430,10 +414,9 @@ describe("agents set-identity command", () => {
   });
 
   it("leaves unexpected configuration write failures with the shared root owner", async () => {
-    configMocks.readConfigFileSnapshot.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: { agents: { entries: { main: {} } } },
-    });
+    configMocks.readConfigFileSnapshot.mockResolvedValue(
+      createTestConfigSnapshot({ agents: { entries: { main: {} } } }),
+    );
     const writeFailure = new Error("configuration storage is unavailable");
     configMocks.replaceConfigFile.mockRejectedValueOnce(writeFailure);
 

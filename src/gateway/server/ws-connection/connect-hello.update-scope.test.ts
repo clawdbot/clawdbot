@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { HelloOk } from "../../../../packages/gateway-protocol/src/index.js";
+import {
+  GATEWAY_SERVER_CAPS,
+  type HelloOk,
+} from "../../../../packages/gateway-protocol/src/index.js";
 
 // Hello update-scope tests cover authenticated role/scope and recovery ownership projection.
 
@@ -81,6 +84,7 @@ import { sendGatewayHello } from "./connect-hello.js";
 function makeContext(role: "operator" | "node", scopes: string[]) {
   return {
     handler: {
+      getClient: () => null,
       connId: `conn-${role}`,
       bootId: "gateway-boot-a",
       gatewayMethods: [],
@@ -158,6 +162,7 @@ describe("sendGatewayHello update detail scope", () => {
     await sendGatewayHello(context as never, makeState(role, scopes) as never, {});
 
     expect(buildGatewaySnapshotMock).toHaveBeenCalledWith({
+      client: null,
       includeSensitive: false,
       includeUpdateDetails: false,
     });
@@ -169,6 +174,7 @@ describe("sendGatewayHello update detail scope", () => {
     await sendGatewayHello(context as never, makeState("operator", ["operator.read"]) as never, {});
 
     expect(buildGatewaySnapshotMock).toHaveBeenCalledWith({
+      client: null,
       includeSensitive: false,
       includeUpdateDetails: true,
     });
@@ -190,15 +196,19 @@ describe("sendGatewayHello update detail scope", () => {
     expect(helloPayload(context)?.server.buildId).toBe("build-a");
     expect(helloPayload(context)?.server.bootId).toBe("gateway-boot-a");
     expect(helloPayload(context)?.server.controlUiBuildSource).toBe("bundled");
+    expect(helloPayload(context)?.features.capabilities).toContain(
+      GATEWAY_SERVER_CAPS.SESSION_UNREAD_ACK_CONTRACT,
+    );
+    expect(helloPayload(context)?.features.capabilities).toContain("session-scoped-chat-metadata");
   });
 
-  it("omits package build identity for independently built configured UI roots", async () => {
+  it("reports Gateway build identity separately from configured UI source", async () => {
     const context = makeContext("operator", ["operator.read"]);
     context.configSnapshot = { gateway: { controlUi: { root: "/custom/ui" } } };
 
     await sendGatewayHello(context as never, makeState("operator", ["operator.read"]) as never, {});
 
-    expect(helloPayload(context)?.server.buildId).toBeUndefined();
+    expect(helloPayload(context)?.server.buildId).toBe("build-a");
     expect(helloPayload(context)?.server.controlUiBuildSource).toBe("configured");
   });
 
@@ -214,9 +224,10 @@ describe("sendGatewayHello update detail scope", () => {
     };
 
     const context = makeContext("operator", ["operator.pairing"]);
-    await sendGatewayHello(context as never, state as never, {});
+    await sendGatewayHello(context as never, state as never, {}, "owner-profile");
 
     expect(buildGatewaySnapshotMock).toHaveBeenCalledWith({
+      client: null,
       includeSensitive: false,
       includeUpdateDetails: false,
     });
@@ -243,6 +254,7 @@ describe("sendGatewayHello update detail scope", () => {
       const context = makeContext("operator", ["operator.read"]);
       const state = {
         ...makeState("operator", ["operator.read"]),
+        authResult: { ok: true, method: "trusted-proxy", user: `${principal}@example.test` },
         device: { id: "device-a" },
         deviceToken: {
           token,

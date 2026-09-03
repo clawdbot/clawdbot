@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { isCompactionReplayCheckpoint } from "@openclaw/ai/transports";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import { calculateContextTokens, estimateContextTokens } from "../runtime/index.js";
 import { AgentSessionModels } from "./agent-session-models.js";
@@ -89,16 +90,33 @@ export abstract class AgentSessionInspection extends AgentSessionModels {
     // If no such assistant exists, context token count is unknown until the next LLM response.
     const branchEntries = this.sessionManager.getBranch();
     const latestCompaction = getLatestCompactionEntry(branchEntries);
+    const providerCheckpointIndex = branchEntries.findLastIndex(
+      (entry) =>
+        entry.type === "message" &&
+        entry.message.role === "assistant" &&
+        isCompactionReplayCheckpoint(entry.message.providerReplay),
+    );
+    const clientCompactionIndex = latestCompaction
+      ? branchEntries.lastIndexOf(latestCompaction)
+      : -1;
+    const compactionIndex = Math.max(clientCompactionIndex, providerCheckpointIndex);
+    const providerCheckpoint = providerCheckpointIndex > clientCompactionIndex;
     let estimateFromContent = false;
 
-    if (latestCompaction) {
+    if (compactionIndex >= 0) {
       // Check if there's a valid assistant usage after the compaction boundary
-      const compactionIndex = branchEntries.lastIndexOf(latestCompaction);
       let hasPostCompactionUsage = false;
-      for (const entry of branchEntries.slice(compactionIndex + 1).toReversed()) {
+      for (let index = branchEntries.length - 1; index > compactionIndex; index -= 1) {
+        // SAFETY: The reverse index stays within the canonical branch entries.
+        const entry = branchEntries[index]!;
         if (entry.type === "message" && entry.message.role === "assistant") {
           const assistant = entry.message;
           if (assistant.stopReason !== "aborted" && assistant.stopReason !== "error") {
+            // Inspection has no prepared auth identity to select replay content.
+            // Stay unknown until a later provider measurement owns that window.
+            if (providerCheckpoint && assistant.usage.contextUsage?.state !== "available") {
+              continue;
+            }
             if (assistant.usage.contextUsage?.state === "unavailable") {
               estimateFromContent = true;
               continue;
@@ -113,7 +131,7 @@ export abstract class AgentSessionInspection extends AgentSessionModels {
         }
       }
 
-      if (!hasPostCompactionUsage && !estimateFromContent) {
+      if (!hasPostCompactionUsage && (providerCheckpoint || !estimateFromContent)) {
         return { tokens: null, contextWindow, percent: null };
       }
     }
@@ -178,25 +196,19 @@ export abstract class AgentSessionInspection extends AgentSessionModels {
    * @returns Text content, or undefined if no assistant message exists
    */
   getLastAssistantText(): string | undefined {
-    const lastAssistant = this.messages
-      .slice()
-      .toReversed()
-      .find((m) => {
-        if (m.role !== "assistant") {
-          return false;
-        }
-        const content = (m as { content?: unknown }).content;
-        if (m.stopReason === "aborted" && !hasPersistedAssistantContent(content)) {
-          return false;
-        }
-        return true;
-      });
-
-    if (!lastAssistant) {
-      return undefined;
+    const messages = this.messages;
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      // SAFETY: The reverse index stays within the canonical message array.
+      const message = messages[index]!;
+      if (message.role !== "assistant") {
+        continue;
+      }
+      const content = message.content;
+      if (message.stopReason === "aborted" && !hasPersistedAssistantContent(content)) {
+        continue;
+      }
+      return extractTextContent(content).trim() || undefined;
     }
-
-    const content = (lastAssistant as { content?: unknown }).content;
-    return extractTextContent(content).trim() || undefined;
+    return undefined;
   }
 }

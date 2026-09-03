@@ -38,7 +38,10 @@ function resolveNodesTransportTimeoutMs(
   invokeTimeoutMs?: unknown,
 ): number | null {
   const transportTimeoutMs =
-    overrideMs ?? parseTimeoutMsWithFallback(opts.timeout, DEFAULT_NODES_RPC_TIMEOUT_MS);
+    overrideMs ??
+    parseTimeoutMsWithFallback(opts.timeout, DEFAULT_NODES_RPC_TIMEOUT_MS, {
+      invalidType: "error",
+    });
   if (invokeTimeoutMs === 0) {
     // Zero disables the node deadline; null keeps Gateway startup bounded but the request unbounded.
     return null;

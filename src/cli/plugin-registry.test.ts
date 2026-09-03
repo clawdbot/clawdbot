@@ -86,7 +86,9 @@ const mocks = vi.hoisted(() => ({
   resolveEffectivePluginIds:
     vi.fn<typeof import("../plugins/effective-plugin-ids.js").resolveEffectivePluginIds>(),
   resolvePluginRuntimeLoadContext:
-    vi.fn<typeof import("../plugins/runtime/load-context.js").resolvePluginRuntimeLoadContext>(),
+    vi.fn<
+      typeof import("../plugins/runtime/load-context.resolve.js").resolvePluginRuntimeLoadContext
+    >(),
 }));
 
 let ensurePluginRegistryLoaded: typeof import("./plugin-registry.js").ensurePluginRegistryLoaded;
@@ -109,10 +111,13 @@ vi.mock("../plugins/effective-plugin-ids.js", () => ({
     mocks.resolveEffectivePluginIds(...args),
 }));
 
-vi.mock("../plugins/runtime/load-context.js", () => ({
+vi.mock("../plugins/runtime/load-context.resolve.js", () => ({
   resolvePluginRuntimeLoadContext: (
     ...args: Parameters<typeof mocks.resolvePluginRuntimeLoadContext>
   ) => mocks.resolvePluginRuntimeLoadContext(...args),
+}));
+
+vi.mock("../plugins/runtime/load-context.js", () => ({
   buildPluginRuntimeLoadOptionsFromValues: (
     values: {
       config: unknown;

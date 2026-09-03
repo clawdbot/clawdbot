@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { detectGlobalInstallManagerForRoot } from "./update-global.js";
-import { updateInstallRootsMatch } from "./update-install-root.js";
 import { buildUpdateCommandRunner, UPDATE_RUNNER_TIMEOUT_MS } from "./update-runner-command.js";
 import type {
   CommandRunner,
@@ -58,26 +57,6 @@ export function buildStartDirs(opts: UpdateRunnerOptions): string[] {
     dirs.push(processCwd);
   }
   return uniqueStrings(dirs);
-}
-
-export async function resolveGitRoot(
-  runCommand: CommandRunner,
-  candidates: string[],
-  timeoutMs: number,
-  packageRoot?: string | null,
-): Promise<string | null> {
-  for (const dir of candidates) {
-    const result = await runCommand(["git", "-C", dir, "rev-parse", "--show-toplevel"], {
-      timeoutMs,
-    }).catch(() => null);
-    const root = result?.code === 0 ? result.stdout.trim() : "";
-    // A launcher may live inside an unrelated checkout (for example nvm).
-    // Keep probing until the Git root owns the discovered OpenClaw package.
-    if (root && (!packageRoot || updateInstallRootsMatch(root, packageRoot))) {
-      return root;
-    }
-  }
-  return null;
 }
 
 export async function findPackageRoot(candidates: string[]) {

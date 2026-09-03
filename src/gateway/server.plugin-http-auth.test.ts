@@ -1,7 +1,7 @@
 // Plugin HTTP auth tests cover protected route canonicalization, operator scope
 // checks, hook/plugin route precedence, and unauthorized variant handling.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { describe, expect, test, vi } from "vitest";
+import { beforeAll, describe, expect, test, vi } from "vitest";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { canonicalizePathVariant } from "./security-path.js";
@@ -210,33 +210,10 @@ async function expectPluginRequestOk(
 }
 
 describe("gateway plugin HTTP auth boundary", () => {
-  test("applies default security headers and optional strict transport security", async () => {
-    await withGatewayTempConfig("openclaw-plugin-http-security-headers-test-", async () => {
-      const withoutHsts = createTestGatewayServer({ resolvedAuth: AUTH_NONE });
-      const withoutHstsResponse = await sendRequest(withoutHsts, { path: "/missing" });
-      expect(withoutHstsResponse.setHeader).toHaveBeenCalledWith(
-        "X-Content-Type-Options",
-        "nosniff",
-      );
-      expect(withoutHstsResponse.setHeader).toHaveBeenCalledWith("Referrer-Policy", "no-referrer");
-      expect(
-        withoutHstsResponse.setHeader.mock.calls.some(
-          ([headerName]) => headerName === "Strict-Transport-Security",
-        ),
-      ).toBe(false);
-
-      const withHsts = createTestGatewayServer({
-        resolvedAuth: AUTH_NONE,
-        overrides: {
-          strictTransportSecurityHeader: "max-age=31536000; includeSubDomains",
-        },
-      });
-      const withHstsResponse = await sendRequest(withHsts, { path: "/missing" });
-      expect(withHstsResponse.setHeader).toHaveBeenCalledWith(
-        "Strict-Transport-Security",
-        "max-age=31536000; includeSubDomains",
-      );
-    });
+  beforeAll(async () => {
+    // Compile the real Control UI owner before the request deadline starts;
+    // this suite verifies route/auth ownership, not source-loader startup latency.
+    await import("./control-ui.js");
   });
 
   test("serves unauthenticated liveness/readiness probe routes when no other route handles them", async () => {
