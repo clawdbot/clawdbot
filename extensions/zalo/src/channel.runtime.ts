@@ -1,7 +1,6 @@
 // Zalo plugin module implements channel behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-outbound";
-import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
 import {
   PAIRING_APPROVED_MESSAGE,
   type ChannelPlugin,
@@ -11,23 +10,19 @@ import { probeZalo } from "./probe.js";
 import { resolveZaloProxyFetch } from "./proxy.js";
 import { normalizeSecretInputString } from "./secret-input.js";
 import { sendMessageZalo } from "./send.js";
-import type { ResolvedZaloAccount, ZaloConfig } from "./types.js";
+import type { ResolvedZaloAccount } from "./types.js";
 
 export async function notifyZaloPairingApproval(params: { cfg: OpenClawConfig; id: string }) {
   const { resolveZaloAccount } = await import("./accounts.js");
   const account = resolveZaloAccount({ cfg: params.cfg });
   if (!account.token) {
-    const config = params.cfg.channels?.zalo as ZaloConfig | undefined;
-    const accountConfig = resolveAccountEntry(
-      config?.accounts as Record<string, ZaloConfig> | undefined,
-      account.accountId,
-    );
-    const accountPath = accountConfig
-      ? `channels.zalo.accounts.${account.accountId}`
-      : "channels.zalo";
-    const envHint = account.accountId === DEFAULT_ACCOUNT_ID ? ", or ZALO_BOT_TOKEN" : "";
+    const accountPath = `channels.zalo.accounts.${account.accountId}`;
+    const tokenPaths =
+      account.accountId === DEFAULT_ACCOUNT_ID
+        ? `channels.zalo.botToken, channels.zalo.tokenFile, ${accountPath}.botToken, ${accountPath}.tokenFile, or ZALO_BOT_TOKEN`
+        : `${accountPath}.botToken, ${accountPath}.tokenFile, channels.zalo.botToken, or channels.zalo.tokenFile`;
     throw new Error(
-      `Zalo token not configured for account ${account.accountId} (set ${accountPath}.botToken, ${accountPath}.tokenFile${envHint})`,
+      `Zalo token not configured for account ${account.accountId} (set ${tokenPaths})`,
     );
   }
   await sendMessageZalo(params.id, PAIRING_APPROVED_MESSAGE, {
