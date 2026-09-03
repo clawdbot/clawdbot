@@ -76,8 +76,11 @@ function planKey(queueId: string, partIndex: number): string {
   return `${queuePrefix(queueId)}${requireIndex(partIndex, "part index")}`;
 }
 
-// Stored bytes are a deserialization boundary, so the shape is parsed rather
-// than asserted: a plan that no longer matches is refused, not trusted.
+// Stored bytes are a deserialization boundary: the plan's own fields are parsed,
+// and a plan that no longer matches its version or topology is refused rather
+// than trusted. The two payload shapes below are checked only far enough to be
+// safe to hand back — they are re-rendered and compared push by push before any
+// of them is sent again, which is the check that matters for a replay.
 const lineMessageSchema = z.custom<messagingApi.Message>(
   (value) =>
     typeof value === "object" &&
@@ -132,6 +135,16 @@ async function readPlan(queueId: string, partIndex: number): Promise<LineDurable
 }
 
 async function writePlan(plan: LineDurableSendPlan): Promise<void> {
+  // The record is only worth writing if recovery can read it back. Checking here
+  // fails the send before the push crosses the boundary; the same plan rejected
+  // on the way out would instead be discovered after the reply was delivered,
+  // with nothing left to reconcile against.
+  const parsed = planSchema.safeParse(plan);
+  if (!parsed.success) {
+    throw new LineDurableSendPlanError(
+      `LINE durable send plan part ${plan.partIndex} cannot be recorded: ${parsed.error.message}`,
+    );
+  }
   const store = createPlanStore();
   await store.deleteExpired();
   await store.register(
@@ -259,7 +272,9 @@ export async function loadLineDurableSendPlans(queueId: string): Promise<LineDur
 function assertCompletePartTopology(plans: readonly LineDurableSendPlan[]): void {
   const partCount = plans[0]?.partCount;
   if (!partCount) {
-    throw new LineDurableSendPlanError("LINE ambiguous delivery has no recorded send plan");
+    // Callers answer an empty record before they get here, and a stored part
+    // count is at least one, so this is a plan whose topology did not survive.
+    throw new LineDurableSendPlanError("LINE durable send plan has no part count");
   }
   if (plans.some((plan) => plan.partCount !== partCount)) {
     throw new LineDurableSendPlanError("LINE durable send plan part topology is inconsistent");
