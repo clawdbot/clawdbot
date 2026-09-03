@@ -19,6 +19,43 @@ Plaintext still works. SecretRefs are opt-in per credential.
 Plaintext credentials remain agent-readable when they sit in files the agent can inspect, including `openclaw.json`, `.env`, retired auth-profile JSON archives, or generated `agents/*/agent/models.json` files. SecretRefs reduce that local blast radius once every supported credential is migrated and `openclaw secrets audit --check` reports no plaintext residue.
 </Warning>
 
+## Safe migration quick path
+
+To move supported credentials out of plaintext, follow this three-step workflow:
+
+<Steps>
+  <Step title="Audit current state">
+    ```bash
+    openclaw secrets audit --check
+    ```
+  </Step>
+  <Step title="Configure and apply SecretRefs">
+    ```bash
+    openclaw secrets configure --apply
+    ```
+
+    If the migration includes exec SecretRefs or providers, use this exec-aware variant so both audits resolve them:
+
+    ```bash
+    openclaw secrets audit --check --allow-exec
+    openclaw secrets configure --apply --allow-exec
+    openclaw secrets audit --check --allow-exec
+    ```
+
+  </Step>
+  <Step title="Re-audit">
+    ```bash
+    openclaw secrets audit --check
+    ```
+  </Step>
+</Steps>
+
+Do not treat the migration as complete until the re-audit is clean. If the audit still reports plaintext values at rest, the agent-access risk remains even when runtime APIs return redacted values.
+
+If you save a plan instead of applying during `configure`, create it with `openclaw secrets configure --json --plan-out <plan-path>`, then apply that saved plan with `openclaw secrets apply --from <plan-path>` before the re-audit. For a plan containing exec SecretRefs or providers, create it with `openclaw secrets configure --json --plan-out <plan-path> --allow-exec` and apply it with `openclaw secrets apply --from <plan-path> --allow-exec`.
+
+For supported credential fields, see [SecretRef Credential Surface](/reference/secretref-credential-surface). For command details, see [Audit and configure workflow](#audit-and-configure-workflow) below.
+
 ## Runtime model
 
 - Secrets resolve into an in-memory runtime snapshot, eagerly during activation, not lazily on request paths.
