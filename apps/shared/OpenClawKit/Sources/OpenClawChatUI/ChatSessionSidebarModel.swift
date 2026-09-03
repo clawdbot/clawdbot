@@ -497,7 +497,7 @@ public enum ChatSessionSidebarModel {
         _ session: OpenClawChatSessionEntry,
         mainSessionKey: String) -> Bool
     {
-        return self.normalized(session.sessionId) != nil &&
+        self.normalized(session.sessionId) != nil &&
             self.canDeleteSession(key: session.key, mainSessionKey: mainSessionKey)
     }
 
