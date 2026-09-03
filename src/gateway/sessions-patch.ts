@@ -214,6 +214,8 @@ export async function projectSessionsPatchEntry(params: {
   const next: SessionEntry = {
     ...existing,
     sessionId: existing?.sessionId || randomUUID(),
+    // Reset retains sessionId, so rollback also needs the original lifecycle revision.
+    ...(existing?.sessionId ? {} : { lifecycleRevision: randomUUID() }),
     updatedAt: Math.max(existing?.updatedAt ?? 0, now),
     ...(params.preparedSessionRoot ? { sessionRoot: params.preparedSessionRoot } : {}),
     // Stamp only genuinely new rows; existing placeholder aliases must not be restamped.

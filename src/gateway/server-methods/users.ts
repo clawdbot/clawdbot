@@ -14,6 +14,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getUserPreferences, setUserPreferences } from "../../state/user-preferences.js";
+import { UserProfileOwnerError } from "../../state/user-profiles-schema.js";
 import {
   ensureProfileForEmail,
   getUserProfileDisplay,
@@ -61,7 +62,7 @@ function decodeBase64(value: string): Uint8Array | undefined {
 }
 
 function profileError(error: unknown) {
-  if (error instanceof UserProfileNotFoundError) {
+  if (error instanceof UserProfileNotFoundError || error instanceof UserProfileOwnerError) {
     return errorShape(ErrorCodes.INVALID_REQUEST, error.message);
   }
   return errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error));

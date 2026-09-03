@@ -194,11 +194,15 @@ it("refreshes translated copy when the locale changes while mounted", async () =
   expect(note?.textContent?.trim()).not.toBe(englishNote);
 });
 
-it.each([{ emails: ["ada@example.test"] }, { emails: [] }])(
-  "renders identity before Usage statistics with emails $emails",
-  async ({ emails }) => {
+it.each([
+  { id: "profile-1", emails: ["ada@example.test"], emailRows: 1, hint: "Refresh to retry" },
+  { id: "profile-1", emails: [], emailRows: 1, hint: "Refresh to retry" },
+  { id: "gateway-owner", emails: [], emailRows: 0, hint: "Cloudflare Access" },
+])(
+  "renders $id identity before Usage statistics with emails $emails",
+  async ({ id, emails, emailRows, hint }) => {
     const profile: UserProfile = {
-      id: "profile-1",
+      id,
       displayName: "Ada",
       avatarMime: null,
       mergedInto: null,
@@ -228,6 +232,13 @@ it.each([{ emails: ["ada@example.test"] }, { emails: [] }])(
     );
 
     expect(request.mock.calls.map(([method]) => method)).toEqual(["users.self"]);
+    const identity = page.querySelector("#settings-profile-identity");
+    expect(identity?.textContent).toContain(hint);
+    expect(
+      [...(identity?.querySelectorAll(".settings-row__title") ?? [])].filter(
+        (node) => node.textContent?.trim() === "Linked emails",
+      ),
+    ).toHaveLength(emailRows);
     const docsLink = page.querySelector<HTMLAnchorElement>(".page-subtitle a");
     expect(docsLink?.textContent?.trim()).toBe("Learn more");
     expect(docsLink?.href).toBe("https://docs.openclaw.ai/concepts/user-model");

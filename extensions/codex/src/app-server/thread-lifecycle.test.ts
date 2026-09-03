@@ -2898,7 +2898,7 @@ describe("Codex plugin binding recovery", () => {
     ).resolves.toMatchObject({ threadId: "thread-managed-without-index" });
   });
 
-  it("does not rebuild a binding whose configured plugin is a settled negative", async () => {
+  it("preserves a settled plugin denial when resuming the same native binding", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createThreadLifecycleParams(sessionFile, workspaceDir);
@@ -2917,6 +2917,7 @@ describe("Codex plugin binding recovery", () => {
             destructive_enabled: false,
             open_world_enabled: false,
           },
+          calendar: { enabled: false },
         },
       },
       fingerprint: "plugin-config-settled",
@@ -2960,7 +2961,10 @@ describe("Codex plugin binding recovery", () => {
       },
     });
 
-    expect(build).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls.find(([method]) => method === "thread/resume")?.[1]).toMatchObject({
+      threadId: "thread-settled",
+      config: { apps: { calendar: { enabled: false } } },
+    });
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "thread/start",
       "thread/unsubscribe",
@@ -2970,7 +2974,7 @@ describe("Codex plugin binding recovery", () => {
     ]);
   });
 
-  it("rebuilds once when a settled negative binding still enables the plugin", async () => {
+  it("applies a settled plugin denial before resume without replacing the native binding", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createThreadLifecycleParams(sessionFile, workspaceDir);
@@ -3004,7 +3008,7 @@ describe("Codex plugin binding recovery", () => {
       })
       .mockResolvedValue({
         enabled: true,
-        configPatch: { apps: { _default: { enabled: false } } },
+        configPatch: { apps: { _default: { enabled: false }, calendar: { enabled: false } } },
         fingerprint: "plugin-config-settled",
         inputFingerprint: "plugin-input-settled",
         policyContext: { fingerprint: "plugin-policy-settled", apps: {}, pluginAppIds: {} },
@@ -3046,14 +3050,20 @@ describe("Codex plugin binding recovery", () => {
     await fixture.endTurn("thread-settled-transition");
     await startOrResumeThread({ ...common, pluginThreadConfig: settledProvider });
 
-    expect(build).toHaveBeenCalledTimes(2);
+    for (const [, resumeParams] of request.mock.calls.filter(
+      ([method]) => method === "thread/resume",
+    )) {
+      expect(resumeParams).toMatchObject({
+        threadId: "thread-settled-transition",
+        config: { apps: { calendar: { enabled: false } } },
+      });
+    }
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "thread/start",
       "thread/unsubscribe",
       "thread/read",
       "thread/resume",
-      "thread/unsubscribe",
-      "thread/start",
+      "thread/inject_items",
       "thread/unsubscribe",
       "thread/read",
       "thread/resume",

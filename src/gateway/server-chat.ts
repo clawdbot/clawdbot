@@ -1082,6 +1082,26 @@ export function createAgentEventHandler({
     broadcastChatDelta(sessionKey, agentId, clientRunId, sourceRunId, seq, text, opts);
   };
 
+  const sendSessionMessagePayload = (
+    event: "chat" | "agent",
+    deliverySessionKeys: string[],
+    payload: unknown,
+    dropIfSlow: boolean | undefined,
+  ) => {
+    const recipients = new Set<string>();
+    for (const key of deliverySessionKeys) {
+      for (const connId of sessionMessageSubscribers.get(key)) {
+        recipients.add(connId);
+      }
+    }
+    if (recipients.size > 0) {
+      broadcastToConnIds(event, payload, recipients, {
+        dropIfSlow,
+        sessionKeys: deliverySessionKeys,
+      });
+    }
+  };
+
   const sendChatPayload = (
     sessionKey: string,
     payload: unknown,
@@ -1096,15 +1116,7 @@ export function createAgentEventHandler({
       sendNodeSessionPayloadForAgent(sessionKey, "chat", payload, opts?.agentId);
       return;
     }
-    const recipients = new Set(
-      deliverySessionKeys.flatMap((deliveryKey) => [...sessionMessageSubscribers.get(deliveryKey)]),
-    );
-    if (recipients.size > 0) {
-      broadcastToConnIds("chat", payload, recipients, {
-        dropIfSlow: opts?.dropIfSlow,
-        sessionKeys: deliverySessionKeys,
-      });
-    }
+    sendSessionMessagePayload("chat", deliverySessionKeys, payload, opts?.dropIfSlow);
   };
 
   const emitChatTerminal = (
@@ -1197,25 +1209,7 @@ export function createAgentEventHandler({
       return;
     }
     const deliverySessionKeys = resolveSessionDeliveryKeys(sessionKey, opts?.agentId);
-    const recipients = new Set(
-      deliverySessionKeys.flatMap((deliveryKey) => [...sessionMessageSubscribers.get(deliveryKey)]),
-    );
-    if (recipients.size > 0) {
-      broadcastToConnIds("agent", payload, recipients, {
-        dropIfSlow: opts?.dropIfSlow,
-        sessionKeys: deliverySessionKeys,
-      });
-    }
-  };
-
-  const sendNodeAgentPayload = (
-    sessionKey: string | undefined,
-    payload: AgentEventPayload & { spawnedBy?: string },
-    agentId?: string,
-  ) => {
-    if (sessionKey) {
-      sendNodeSessionPayloadForAgent(sessionKey, "agent", payload, agentId);
-    }
+    sendSessionMessagePayload("agent", deliverySessionKeys, payload, opts?.dropIfSlow);
   };
 
   const flushBufferedAgentDeltaIfNeeded = (clientRunId: string) => {
@@ -1666,8 +1660,9 @@ export function createAgentEventHandler({
         !suppressHeartbeatToolEvents &&
         toolVerbose !== "off"
       ) {
-        sendNodeAgentPayload(
+        sendNodeSessionPayloadForAgent(
           sessionKey,
+          "agent",
           projectToolSearchCodeEventForChannelPayload({
             ...channelToolPayload,
             ...buildSessionEventSnapshot(sessionKey, undefined, sessionAgentId),

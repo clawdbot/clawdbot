@@ -1,5 +1,6 @@
 // Public user-profile and self-service GitHub contracts.
 export {
+  GATEWAY_OWNER_PROFILE_ID,
   GIT_COAUTHOR_PREFERENCE_KEY,
   isGitCoauthorCreditEnabled,
   normalizeUiAppearancePreference,
