@@ -105,11 +105,11 @@ function scanDts(sourceText: string, fileName: string): DtsSanitization {
   const edits: Array<{ start: number; end: number }> = [];
 
   for (const statement of sourceFile.statements) {
-    if (
-      ts.isImportDeclaration(statement) &&
-      ts.isNamedImports(statement.importClause?.namedBindings)
-    ) {
-      const { namedBindings } = statement.importClause;
+    const importBindings = ts.isImportDeclaration(statement)
+      ? statement.importClause?.namedBindings
+      : undefined;
+    if (importBindings && ts.isNamedImports(importBindings)) {
+      const namedBindings = importBindings;
       const helpers = namedBindings.elements.filter(
         (specifier): specifier is ts.ImportSpecifier =>
           ts.isImportSpecifier(specifier) &&
@@ -127,14 +127,14 @@ function scanDts(sourceText: string, fileName: string): DtsSanitization {
         }
       }
     }
-    if (
-      !ts.isExportDeclaration(statement) ||
-      statement.moduleSpecifier ||
-      !ts.isNamedExports(statement.exportClause)
-    ) {
+    if (!ts.isExportDeclaration(statement) || statement.moduleSpecifier) {
       continue;
     }
-    for (const element of statement.exportClause.elements) {
+    const exportClause = statement.exportClause;
+    if (!ts.isNamedExports(exportClause)) {
+      continue;
+    }
+    for (const element of exportClause.elements) {
       const localName = exportElementLocalName(element);
       if (!isBundlerHelperName(localName) || helperIsDeclared) {
         continue;
