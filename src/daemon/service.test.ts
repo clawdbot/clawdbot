@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
+import * as portProbes from "../infra/ports-probe.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { captureEnv } from "../test-utils/env.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
@@ -205,6 +206,9 @@ describe("readGatewayServiceState", () => {
           await new Promise<void>((resolve) => {
             listener.close(() => resolve());
           });
+          // A released host port can be reclaimed; this fixture models an absent
+          // listener in its isolated namespace. Held-listener cases stay native.
+          vi.spyOn(portProbes, "probePortUsage").mockResolvedValue("free");
         }
         if (condition === "configured listener") {
           delete process.env.OPENCLAW_GATEWAY_PORT;
