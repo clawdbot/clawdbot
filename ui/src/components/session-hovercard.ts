@@ -422,9 +422,9 @@ function renderProgressHeadsUp(
     return nothing;
   }
   const statusLabel = t(
-    headsUp.step.status === "in_progress"
+    headsUp.status === "in_progress"
       ? "sessionProgressCard.status.inProgress"
-      : headsUp.step.status === "paused"
+      : headsUp.status === "paused"
         ? "sessionProgressCard.status.paused"
         : "sessionProgressCard.status.pending",
   );
@@ -432,19 +432,19 @@ function renderProgressHeadsUp(
     class="session-hovercard__context-row session-hovercard__plan-row"
     aria-label=${t("sessionProgressCard.stepLabel", {
       status: statusLabel,
-      step: headsUp.step.step,
+      step: headsUp.step,
     })}
-    title=${headsUp.step.step}
+    title=${headsUp.step}
   >
     <span class="session-hovercard__context-icon" aria-hidden="true"
       >${
-        headsUp.step.status === "in_progress"
+        headsUp.status === "in_progress"
           ? html`<span class="session-run-spinner"></span>`
           : icons.clock
       }</span
     >
     <span class="session-hovercard__context-value session-hovercard__plan-step"
-      >${headsUp.step.step}</span
+      >${headsUp.step}</span
     >
     <span class="session-hovercard__plan-count">${headsUp.completed}/${headsUp.total}</span>
   </div>`;

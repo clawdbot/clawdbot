@@ -12,9 +12,6 @@ import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
 type SessionProgressCardPlacement = "board" | "composer";
 type PresentedProgressStepStatus = ProgressCardStep["status"] | "paused";
-type PresentedProgressStep = Omit<ProgressCardStep, "status"> & {
-  status: PresentedProgressStepStatus;
-};
 
 const STATUS_LABEL_KEYS: Record<ProgressCardStep["status"], Parameters<typeof t>[0]> = {
   completed: "sessionProgressCard.status.completed",
@@ -163,9 +160,10 @@ function progressCounts(card: ProgressCard): { completed: number; total: number 
   };
 }
 
-export type ProgressCardHeadsUp = {
+type ProgressCardHeadsUp = {
   completed: number;
-  step: PresentedProgressStep;
+  status: PresentedProgressStepStatus;
+  step: string;
   total: number;
 };
 
@@ -177,11 +175,9 @@ function unfinishedProgressStep(steps: readonly ProgressCardStep[]): ProgressCar
 }
 
 function isProgressCardStaleForRun(card: ProgressCard, startedAt?: number): boolean {
-  const validStartedAt = asDateTimestampMs(startedAt);
-  const validUpdatedAt = asDateTimestampMs(card.updatedAt);
-  return (
-    validStartedAt !== undefined && validUpdatedAt !== undefined && validUpdatedAt < validStartedAt
-  );
+  const runStart = asDateTimestampMs(startedAt);
+  const cardUpdate = asDateTimestampMs(card.updatedAt);
+  return runStart !== undefined && cardUpdate !== undefined && cardUpdate < runStart;
 }
 
 export function progressCardHeadsUp(
@@ -189,7 +185,8 @@ export function progressCardHeadsUp(
   sessionStatus?: SessionRunStatus,
   startedAt?: number,
 ): ProgressCardHeadsUp | null {
-  if (sessionStatus && TERMINAL_OUTCOME_LABEL_KEYS[sessionStatus]) {
+  const staleForRun = card ? isProgressCardStaleForRun(card, startedAt) : false;
+  if (sessionStatus && TERMINAL_OUTCOME_LABEL_KEYS[sessionStatus] && !staleForRun) {
     return null;
   }
   const counts = card ? progressCounts(card) : null;
@@ -200,16 +197,8 @@ export function progressCardHeadsUp(
   if (!step) {
     return null;
   }
-  return {
-    ...counts,
-    step: {
-      ...step,
-      status:
-        step.status === "in_progress" && isProgressCardStaleForRun(card, startedAt)
-          ? "paused"
-          : step.status,
-    },
-  };
+  const status = step.status === "in_progress" && staleForRun ? "paused" : step.status;
+  return { ...counts, status, step: step.step };
 }
 
 function currentProgressStep(steps: readonly ProgressCardStep[]): ProgressCardStep | undefined {

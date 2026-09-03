@@ -36,6 +36,7 @@ suite.define(() => {
           "chat.metadata",
           "chat.startup",
           "progressCard.get",
+          "sessions.list",
           "sessions.patch",
         ],
         methodResponses: {
