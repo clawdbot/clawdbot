@@ -5,6 +5,7 @@ import {
 } from "@openclaw/gateway-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasNonEmptyString as isNonEmptyString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Value } from "typebox/value";
 import type { HumanMention } from "../chat/chat-types.ts";
 import { readHumanMentions } from "../chat/human-mentions.ts";
@@ -520,7 +521,7 @@ export function pauseSessionPlacementRecovery(
     ...recovery,
     phase: "paused",
     reason,
-    error: formatUiError(error).slice(0, SESSION_PLACEMENT_ERROR_MAX_LENGTH),
+    error: truncateUtf16Safe(formatUiError(error), SESSION_PLACEMENT_ERROR_MAX_LENGTH),
   };
   if (persistent && !writeSessionPlacementRecoveryIfAvailable(paused)) {
     // Preserve input in memory without leaving an executable pending row when
@@ -538,11 +539,10 @@ export function pauseSessionPlacementRecovery(
         recovery.messageId,
       );
     }
-    paused.error =
-      `Recovery could not be saved in this tab. Keep this page open.\n${paused.error}`.slice(
-        0,
-        SESSION_PLACEMENT_ERROR_MAX_LENGTH,
-      );
+    paused.error = truncateUtf16Safe(
+      `Recovery could not be saved in this tab. Keep this page open.\n${paused.error}`,
+      SESSION_PLACEMENT_ERROR_MAX_LENGTH,
+    );
   }
   return paused;
 }

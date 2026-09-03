@@ -205,6 +205,34 @@ describe("session placement recovery", () => {
     },
   );
 
+  it("keeps bounded pause errors on UTF-16 character boundaries", () => {
+    const error = `${"x".repeat(4095)}🤖`;
+
+    const paused = pauseSessionPlacementRecovery(recovery, error, false);
+
+    expect(paused.error).toBe("x".repeat(4095));
+  });
+
+  it("keeps storage-failure guidance on UTF-16 character boundaries", () => {
+    const prefix = "Recovery could not be saved in this tab. Keep this page open.\n";
+    const error = `${"x".repeat(4095 - prefix.length)}🤖`;
+    vi.stubGlobal("sessionStorage", {
+      getItem: () => null,
+      removeItem: () => undefined,
+      setItem: () => {
+        throw new DOMException("quota exceeded", "QuotaExceededError");
+      },
+      get length() {
+        return 0;
+      },
+      key: () => null,
+    });
+
+    const paused = pauseSessionPlacementRecovery(recovery, error, true);
+
+    expect(paused.error).toBe(`${prefix}${"x".repeat(4095 - prefix.length)}`);
+  });
+
   it("migrates only exact framed rows under a new scope", () => {
     const sourceScope = recovery.recoveryScope;
     const newScope = "gateway-principal";
