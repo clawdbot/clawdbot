@@ -620,7 +620,7 @@ describe("detectChangedScope", () => {
       runMacosNode: false,
       runIosBuild: false,
       runAndroid: false,
-      runWindows: false,
+      runWindows: true,
       runSkillsPython: false,
       runChangedSmoke: true,
       runControlUiI18n: false,

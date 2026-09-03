@@ -253,6 +253,7 @@ export function detectChangedScope(changedPaths) {
     }
 
     if (
+      path === "scripts/ci-changed-scope.mjs" ||
       windowsCiTests.has(path) ||
       WINDOWS_LAN_ADVERTISEMENT_SCOPE_RE.test(path) ||
       WINDOWS_FILE_URL_SCOPE_RE.test(path) ||
