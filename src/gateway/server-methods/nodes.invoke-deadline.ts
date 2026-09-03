@@ -8,5 +8,5 @@ export async function awaitNodeInvokeWithinDeadline<T>(
   operation: () => Promise<T>,
   deadlineAtMs: number | undefined,
 ): Promise<T | typeof NODE_INVOKE_DEADLINE_EXPIRED> {
-  return await awaitWithinDeadline(operation, deadlineAtMs);
+  return await awaitWithinDeadline(operation, deadlineAtMs, () => performance.now());
 }

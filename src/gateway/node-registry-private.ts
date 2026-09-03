@@ -261,7 +261,7 @@ async function invokeNodeRegistryCore(
   // Explicit budgets include pairing and serialization; omitted budgets retain
   // the post-dispatch default, and zero keeps long-lived invokes unbounded.
   const deadlineAtMs =
-    Number.isFinite(params.timeoutMs) && timeoutMs > 0 ? Date.now() + timeoutMs : undefined;
+    Number.isFinite(params.timeoutMs) && timeoutMs > 0 ? performance.now() + timeoutMs : undefined;
   if (isPrivateNodeInvokeCommand(params.command) && !allowPrivateCommand) {
     return {
       ok: false,
@@ -305,6 +305,7 @@ async function invokeNodeRegistryCore(
     const resolution = await awaitWithinDeadline(
       () => state.context.resolvePairingLease(pairingNode),
       deadlineAtMs,
+      () => performance.now(),
     );
     if (resolution === ABSOLUTE_DEADLINE_EXPIRED) {
       return { ok: false, error: { code: "TIMEOUT", message: "node invoke timed out" } };
@@ -378,7 +379,7 @@ async function invokeNodeRegistryCore(
     };
   }
   if (deadlineAtMs !== undefined) {
-    timeoutMs = Math.max(0, deadlineAtMs - Date.now());
+    timeoutMs = Math.max(0, deadlineAtMs - performance.now());
     if (timeoutMs === 0) {
       return { ok: false, error: { code: "TIMEOUT", message: "node invoke timed out" } };
     }

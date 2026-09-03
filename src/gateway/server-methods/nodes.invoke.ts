@@ -127,10 +127,14 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
       return;
     }
     const invokeDeadlineAtMs =
-      typeof p.timeoutMs === "number" && p.timeoutMs > 0 ? Date.now() + p.timeoutMs : undefined;
+      typeof p.timeoutMs === "number" && p.timeoutMs > 0
+        ? performance.now() + p.timeoutMs
+        : undefined;
     let nodeCommandDispatched = false;
     const resolveRemainingInvokeTimeoutMs = () =>
-      invokeDeadlineAtMs === undefined ? p.timeoutMs : Math.max(0, invokeDeadlineAtMs - Date.now());
+      invokeDeadlineAtMs === undefined
+        ? p.timeoutMs
+        : Math.max(0, invokeDeadlineAtMs - performance.now());
     const respondIfInvokeExpired = () => {
       if (invokeDeadlineAtMs === undefined || resolveRemainingInvokeTimeoutMs() !== 0) {
         return false;

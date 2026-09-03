@@ -161,7 +161,7 @@ export class NodeInvokeStreamController {
       params.pending.admissionContinuation = continuation;
     }
     if (params.timeoutMs > 0) {
-      params.pending.deadlineAtMs = Date.now() + params.timeoutMs;
+      params.pending.deadlineAtMs = performance.now() + params.timeoutMs;
     }
     this.options.pendingInvokes.set(params.requestId, params.pending);
     if (params.timeoutMs > 0) {
@@ -339,7 +339,7 @@ export class NodeInvokeStreamController {
   }
 
   private settleIfExpired(requestId: string, pending: PendingInvoke): boolean {
-    if (pending.deadlineAtMs === undefined || Date.now() < pending.deadlineAtMs) {
+    if (pending.deadlineAtMs === undefined || performance.now() < pending.deadlineAtMs) {
       return false;
     }
     this.settleTimeout(requestId, pending);

@@ -6,11 +6,12 @@ export const ABSOLUTE_DEADLINE_EXPIRED = Symbol("absolute deadline expired");
 export async function awaitWithinDeadline<T>(
   operation: () => Promise<T>,
   deadlineAtMs: number | undefined,
+  now: () => number = Date.now,
 ): Promise<T | typeof ABSOLUTE_DEADLINE_EXPIRED> {
   if (deadlineAtMs === undefined) {
     return await operation();
   }
-  if (Math.max(0, deadlineAtMs - Date.now()) === 0) {
+  if (Math.max(0, deadlineAtMs - now()) === 0) {
     return ABSOLUTE_DEADLINE_EXPIRED;
   }
 
@@ -21,7 +22,7 @@ export async function awaitWithinDeadline<T>(
     const deadline = new Promise<typeof ABSOLUTE_DEADLINE_EXPIRED>((resolve) => {
       // Node overflows long timer delays, so rearm against the real deadline.
       const waitForDeadline = () => {
-        const remainingMs = Math.max(0, deadlineAtMs - Date.now());
+        const remainingMs = Math.max(0, deadlineAtMs - now());
         if (remainingMs === 0) {
           resolve(ABSOLUTE_DEADLINE_EXPIRED);
           return;
@@ -32,9 +33,7 @@ export async function awaitWithinDeadline<T>(
     });
     return await Promise.race([
       deadline,
-      operation().then((result) =>
-        Date.now() >= deadlineAtMs ? ABSOLUTE_DEADLINE_EXPIRED : result,
-      ),
+      operation().then((result) => (now() >= deadlineAtMs ? ABSOLUTE_DEADLINE_EXPIRED : result)),
     ]);
   } finally {
     if (timer !== undefined) {

@@ -981,6 +981,26 @@ describe("node.invoke APNs wake path", () => {
       ]);
     });
 
+    it.each([-10_000, 10_000])(
+      "keeps the invoke deadline stable across a %i ms wall-clock change",
+      async (clockChange) => {
+        const invocation = start({ timeoutMs: 500 });
+        await vi.advanceTimersByTimeAsync(0);
+        vi.setSystemTime(clockChange);
+        await vi.advanceTimersByTimeAsync(499);
+        expect(requests).toHaveLength(1);
+        vi.setSystemTime(clockChange + 1);
+        await vi.advanceTimersByTimeAsync(1);
+
+        expect(firstRespondCall(await invocation)).toMatchObject([
+          false,
+          undefined,
+          { details: { nodeError: { code: "TIMEOUT" } } },
+        ]);
+        expect(requests).toHaveLength(1);
+      },
+    );
+
     it("returns the final readiness rejection after exhausting bounded retries", async () => {
       const invocation = start({ timeoutMs: 0 });
       await vi.advanceTimersByTimeAsync(0);
@@ -1720,7 +1740,7 @@ describe("node.invoke APNs wake path", () => {
     const nodeId = "ios-node-late-apns-wake-result";
     mockDirectWakeConfig(nodeId);
     mocks.sendApnsBackgroundWake.mockImplementation(async () => {
-      vi.setSystemTime(101);
+      await new Promise<void>((resolve) => setTimeout(resolve, 101));
       return {
         ok: true,
         status: 200,
@@ -1732,10 +1752,12 @@ describe("node.invoke APNs wake path", () => {
     });
     const nodeRegistry = createMissingNodeRegistry();
 
-    const respond = await invokeNode({
+    const invocation = invokeNode({
       nodeRegistry,
       requestParams: { nodeId, idempotencyKey: "idem-late-apns-wake-result", timeoutMs: 100 },
     });
+    await vi.advanceTimersByTimeAsync(100);
+    const respond = await invocation;
 
     expect(firstRespondCall(respond)).toMatchObject([
       false,
