@@ -30,7 +30,8 @@ func whatsappLoginStartParams(force: Bool) -> [String: AnyCodable] {
 
 func whatsappLoginWaitParams(
     timeoutMs: Int,
-    currentQrDataUrl: String?) -> [String: AnyCodable]
+    currentQrDataUrl: String?,
+    sessionKey: String? = nil) -> [String: AnyCodable]
 {
     var params: [String: AnyCodable] = [
         "channel": AnyCodable("whatsapp"),
@@ -38,6 +39,9 @@ func whatsappLoginWaitParams(
     ]
     if let currentQrDataUrl {
         params["currentQrDataUrl"] = AnyCodable(currentQrDataUrl)
+    }
+    if let sessionKey {
+        params["sessionKey"] = AnyCodable(sessionKey)
     }
     return params
 }
@@ -125,11 +129,13 @@ extension ChannelsStore {
                 timeoutMs: 35000)
             self.whatsappLoginMessage = result.message
             self.whatsappLoginQrDataUrl = result.qrDataUrl
+            self.whatsappLoginSessionKey = result.sessionKey
             self.whatsappLoginConnected = result.connected
             shouldAutoWait = autoWait && result.qrDataUrl != nil
         } catch {
             self.whatsappLoginMessage = error.localizedDescription
             self.whatsappLoginQrDataUrl = nil
+            self.whatsappLoginSessionKey = nil
             self.whatsappLoginConnected = nil
         }
         await self.refresh(probe: true)
@@ -152,7 +158,8 @@ extension ChannelsStore {
             {
                 let params = whatsappLoginWaitParams(
                     timeoutMs: remainingMs,
-                    currentQrDataUrl: self.whatsappLoginQrDataUrl)
+                    currentQrDataUrl: self.whatsappLoginQrDataUrl,
+                    sessionKey: self.whatsappLoginSessionKey)
                 let result: WhatsAppLoginWaitResult = try await GatewayConnection.shared.requestDecoded(
                     method: .webLoginWait,
                     params: params,
@@ -184,6 +191,7 @@ extension ChannelsStore {
                 ? "Logged out and cleared credentials."
                 : "No WhatsApp session found."
             self.whatsappLoginQrDataUrl = nil
+            self.whatsappLoginSessionKey = nil
         } catch {
             self.whatsappLoginMessage = error.localizedDescription
         }
@@ -220,6 +228,7 @@ extension ChannelsStore {
 private struct WhatsAppLoginStartResult: Codable {
     let qrDataUrl: String?
     let message: String
+    let sessionKey: String?
     let connected: Bool?
 }
 

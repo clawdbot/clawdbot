@@ -282,6 +282,32 @@ describe("channels controller WhatsApp provider selection", () => {
     );
     channels.dispose();
   });
+
+  it("carries the provider session key from login start into wait", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "web.login.start") {
+        return { message: "scan", sessionKey: "opaque-session" };
+      }
+      if (method === "web.login.wait") {
+        return { connected: true, message: "connected" };
+      }
+      return createChannelsSnapshot("refreshed");
+    });
+    const channels = createChannelCapability({
+      snapshot: { client: { request }, phase: "connected" },
+      subscribe: () => () => undefined,
+    } as never);
+
+    await channels.startWhatsApp(false);
+    await channels.waitWhatsApp();
+
+    expect(request).toHaveBeenCalledWith(
+      "web.login.wait",
+      expect.objectContaining({ channel: "whatsapp", sessionKey: "opaque-session" }),
+    );
+    expect(channels.state.whatsappLoginSessionKey).toBeNull();
+    channels.dispose();
+  });
 });
 
 describe("channels controller WhatsApp logout", () => {

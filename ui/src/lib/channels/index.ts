@@ -1,7 +1,5 @@
-import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { roleScopesAllow } from "../../../../src/shared/operator-scope-compat.ts";
 import type {
-  ChannelAccountSnapshot,
   ChannelsPairingApproveResult,
   ChannelsPairingListResult,
   ChannelsStatusSnapshot,
@@ -52,6 +50,7 @@ type ChannelsState = {
   pairingBusyRequestId: string | null;
   whatsappLoginMessage: string | null;
   whatsappLoginQrDataUrl: string | null;
+  whatsappLoginSessionKey: string | null;
   whatsappLoginConnected: boolean | null;
   whatsappBusy: boolean;
 };
@@ -83,46 +82,16 @@ export type ChannelCapability = {
   dispose: () => void;
 };
 
-export function resolveChannelAccounts(
-  channelAccounts: ChannelsStatusSnapshot["channelAccounts"] | null | undefined,
-  channelId: string,
-): ChannelAccountSnapshot[] {
-  const accounts =
-    channelAccounts && Object.hasOwn(channelAccounts, channelId) && channelAccounts[channelId];
-  return Array.isArray(accounts) ? accounts : [];
-}
-
-export function channelSnapshotEntryIsActive(
-  snapshot: ChannelsStatusSnapshot | null,
-  channelId: string,
-): boolean {
-  if (!snapshot) {
-    return false;
-  }
-  const status = asRecord(
-    Object.hasOwn(snapshot.channels, channelId) ? snapshot.channels[channelId] : undefined,
-  );
-  if (status?.configured === true || status?.running === true || status?.connected === true) {
-    return true;
-  }
-  return resolveChannelAccounts(snapshot.channelAccounts, channelId).some(
-    (account) =>
-      account.configured === true || account.running === true || account.connected === true,
-  );
-}
-
-/** Matches the Channels hub's definition of a transport the operator already uses. */
-export function channelSnapshotHasActiveChannel(snapshot: ChannelsStatusSnapshot | null): boolean {
-  if (!snapshot) {
-    return false;
-  }
-  const channelIds = new Set([
-    ...snapshot.channelOrder,
-    ...Object.keys(snapshot.channels),
-    ...Object.keys(snapshot.channelAccounts),
-  ]);
-  return [...channelIds].some((channelId) => channelSnapshotEntryIsActive(snapshot, channelId));
-}
+export {
+  channelSnapshotEntryIsActive,
+  channelSnapshotHasActiveChannel,
+  resolveChannelAccounts,
+} from "./readiness.ts";
+export {
+  formatChannelExtraValue,
+  resolveChannelConfigValue,
+  resolveChannelExtras,
+} from "./config.ts";
 
 export function resolveChannelPairingAuthSignature(
   snapshot: Partial<ChannelGatewaySnapshot>,
@@ -167,6 +136,7 @@ function createInitialChannelsState(snapshot: Partial<ChannelGatewaySnapshot> = 
     pairingBusyRequestId: null,
     whatsappLoginMessage: null,
     whatsappLoginQrDataUrl: null,
+    whatsappLoginSessionKey: null,
     whatsappLoginConnected: null,
     whatsappBusy: false,
   };
@@ -456,6 +426,7 @@ async function startWhatsAppLogin(
     const res = await operation.client.request<{
       message?: string;
       qrDataUrl?: string;
+      sessionKey?: string;
       connected?: boolean;
     }>("web.login.start", {
       channel: "whatsapp",
@@ -466,6 +437,7 @@ async function startWhatsAppLogin(
     if (!isCurrentWhatsAppOperation(state, operation)) {
       return false;
     }
+    state.whatsappLoginSessionKey = res.connected ? null : (res.sessionKey ?? null);
     state.whatsappLoginMessage = res.message ? formatUiError(res.message) : null;
     state.whatsappLoginQrDataUrl = res.qrDataUrl ?? null;
     state.whatsappLoginConnected = typeof res.connected === "boolean" ? res.connected : null;
@@ -473,6 +445,7 @@ async function startWhatsAppLogin(
     if (isCurrentWhatsAppOperation(state, operation)) {
       state.whatsappLoginMessage = formatUiError(err);
       state.whatsappLoginQrDataUrl = null;
+      state.whatsappLoginSessionKey = null;
       state.whatsappLoginConnected = null;
     }
     return false;
@@ -499,6 +472,7 @@ async function waitWhatsAppLogin(state: ChannelsState, accountId?: string): Prom
       channel: "whatsapp",
       timeoutMs: 120000,
       currentQrDataUrl,
+      ...(state.whatsappLoginSessionKey ? { sessionKey: state.whatsappLoginSessionKey } : {}),
       ...(accountId ? { accountId } : {}),
     });
     if (!isCurrentWhatsAppOperation(state, operation)) {
@@ -506,6 +480,9 @@ async function waitWhatsAppLogin(state: ChannelsState, accountId?: string): Prom
     }
     state.whatsappLoginMessage = res.message ? formatUiError(res.message) : null;
     state.whatsappLoginConnected = res.connected ?? null;
+    if (res.connected) {
+      state.whatsappLoginSessionKey = null;
+    }
     if (res.qrDataUrl) {
       state.whatsappLoginQrDataUrl = res.qrDataUrl;
     } else if (res.connected) {
@@ -541,6 +518,7 @@ async function logoutWhatsApp(state: ChannelsState, accountId?: string): Promise
     if (result.cleared) {
       state.whatsappLoginMessage = t("channels.whatsapp.loggedOut");
       state.whatsappLoginQrDataUrl = null;
+      state.whatsappLoginSessionKey = null;
       state.whatsappLoginConnected = null;
     } else {
       state.whatsappLoginMessage = t("channels.whatsapp.logoutNotCleared");
@@ -556,56 +534,6 @@ async function logoutWhatsApp(state: ChannelsState, accountId?: string): Promise
     }
   }
   return true;
-}
-
-export function resolveChannelConfigValue(
-  configForm: Record<string, unknown> | null | undefined,
-  channelId: string,
-): Record<string, unknown> | null {
-  if (!configForm) {
-    return null;
-  }
-  const channels = (configForm.channels ?? {}) as Record<string, unknown>;
-  const fromChannels = channels[channelId];
-  if (fromChannels && typeof fromChannels === "object") {
-    return fromChannels as Record<string, unknown>;
-  }
-  const fallback = configForm[channelId];
-  if (fallback && typeof fallback === "object") {
-    return fallback as Record<string, unknown>;
-  }
-  return null;
-}
-
-export function formatChannelExtraValue(raw: unknown): string {
-  if (raw == null) {
-    return t("common.na");
-  }
-  if (typeof raw === "string" || typeof raw === "number" || typeof raw === "boolean") {
-    return String(raw);
-  }
-  try {
-    return JSON.stringify(raw);
-  } catch {
-    return t("common.na");
-  }
-}
-
-export function resolveChannelExtras(params: {
-  configForm: Record<string, unknown> | null | undefined;
-  channelId: string;
-  fields: readonly string[];
-}): Array<{ label: string; value: string }> {
-  const value = resolveChannelConfigValue(params.configForm, params.channelId);
-  if (!value) {
-    return [];
-  }
-  return params.fields.flatMap((field) => {
-    if (!(field in value)) {
-      return [];
-    }
-    return [{ label: field, value: formatChannelExtraValue(value[field]) }];
-  });
 }
 
 export function createChannelCapability(gateway: ChannelGateway): ChannelCapability {
@@ -664,6 +592,7 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
       lifecycle.whatsappEpoch += 1;
       lifecycle.whatsappOperationSeq += 1;
       state.whatsappBusy = false;
+      state.whatsappLoginSessionKey = null;
       if (!nextWhatsAppAdminAccess) {
         state.whatsappLoginMessage = null;
         state.whatsappLoginQrDataUrl = null;

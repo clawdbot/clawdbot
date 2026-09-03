@@ -9,10 +9,12 @@ struct ChannelsStoreUIConfigTests {
         let start = whatsappLoginStartParams(force: true)
         let wait = whatsappLoginWaitParams(
             timeoutMs: 120_000,
-            currentQrDataUrl: "data:image/png;base64,current")
+            currentQrDataUrl: "data:image/png;base64,current",
+            sessionKey: "opaque-session")
 
         #expect(start["channel"]?.value as? String == "whatsapp")
         #expect(wait["channel"]?.value as? String == "whatsapp")
+        #expect(wait["sessionKey"]?.value as? String == "opaque-session")
     }
 
     @Test func `user accent overrides the operator seam color`() {
