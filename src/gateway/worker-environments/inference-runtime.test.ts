@@ -214,6 +214,8 @@ function setup(
     allowGatewaySubagentBinding: true,
     workspaceDir: WORKSPACE,
     config,
+    observationConfig: config,
+    isCurrent: () => true,
     authModes: {},
     metadataSnapshot: createEmptyPluginMetadataSnapshot(WORKSPACE),
     pluginRegistry: options.pluginRegistry ?? createEmptyPluginRegistry(),

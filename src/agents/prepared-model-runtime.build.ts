@@ -10,12 +10,15 @@ import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolveUsableAgentCredentialModes } from "./agent-auth-credentials.js";
 import { getPreparedRuntimeAuthMaterializations } from "./auth-profiles/runtime-materializations.js";
 import { collectConfiguredAgentHarnessRuntimes } from "./harness-runtimes.js";
+import { augmentPreparedModelCatalogWithAgentHarness } from "./harness/model-catalog.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
   createPreparedModelCatalogWorker,
   createPreparedModelCatalogWorkerInput,
 } from "./prepared-model-catalog-worker.js";
 import {
+  getPreparedModelFullCatalogAuth,
+  setPreparedModelFullCatalogAuth,
   setPreparedModelRuntimeAuthMaterializations,
   setPreparedModelRuntimeAuthLoader,
   setPreparedModelRuntimeAuthStore,
@@ -36,6 +39,7 @@ import {
   prepareWorkspaceBuildGroup,
 } from "./prepared-model-runtime.facts.js";
 import {
+  markPreparedModelCatalogFull,
   materializePreparedModelCatalog,
   prepareFullCatalogFacts,
 } from "./prepared-model-runtime.full-catalog.js";
@@ -60,6 +64,7 @@ const MAX_CONCURRENT_FULL_MODEL_CATALOG_BUILDS = 1;
 const limitFullModelCatalogBuild = pLimit(MAX_CONCURRENT_FULL_MODEL_CATALOG_BUILDS);
 
 type PreparedModelRuntimeCatalogAccess = Readonly<{
+  isCurrent: () => boolean;
   readFullModelCatalog: () => ModelCatalogSnapshot | undefined;
   loadFullModelCatalog: (options?: { refresh?: boolean }) => Promise<ModelCatalogSnapshot>;
   loadAuth: (scope: PreparedModelRuntimeAuthScope) => Promise<PreparedModelRuntimeAuth>;
@@ -191,6 +196,7 @@ function createFullModelCatalogAccess(params: {
     isCurrent: params.isCurrent,
   });
   return {
+    isCurrent: params.isCurrent,
     loadAuth: ({ providerIds, profileIds }) => {
       const cacheKey = [providerIds, profileIds ?? []]
         .map((ids) =>
@@ -239,7 +245,24 @@ function createFullModelCatalogAccess(params: {
               // Full inventory belongs to explicit control-plane reads. The generation queue
               // prevents a stale plan from overlapping or following a replacement build.
               assertCurrent();
-              const catalog = await worker.loadCatalog();
+              const workerCatalog = await worker.loadCatalog();
+              assertCurrent();
+              const auth = getPreparedModelFullCatalogAuth(workerCatalog);
+              if (!auth) {
+                throw new Error("prepared model catalog worker omitted its auth generation");
+              }
+              // Native harness readiness is process-local. The worker can serialize discovered
+              // rows, but it cannot transfer the parent Gateway's harness observation. Reobserve
+              // through the generation-owned parent registry before publishing the full catalog.
+              const catalog = markPreparedModelCatalogFull(
+                await augmentPreparedModelCatalogWithAgentHarness({
+                  input: params.agentFacts.input,
+                  snapshot: workerCatalog,
+                  pluginRegistry: params.pluginGeneration.pluginRegistry,
+                  isCurrent: params.isCurrent,
+                }),
+              );
+              setPreparedModelFullCatalogAuth(catalog, auth);
               assertCurrent();
               return catalog;
             }),
@@ -295,6 +318,8 @@ function createSnapshot(
     ...(input.inheritedAuthDir ? { inheritedAuthDir: input.inheritedAuthDir } : {}),
     ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
     config: input.config,
+    observationConfig: input.config,
+    isCurrent: catalogAccess.isCurrent,
     authModes: resolveUsableAgentCredentialModes(credentials),
     metadataSnapshot: pluginMetadataSnapshot,
     allowGatewaySubagentBinding: input.allowGatewaySubagentBinding === true,

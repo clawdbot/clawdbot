@@ -314,8 +314,7 @@ async function settleCodeModeResult(params: {
         (request) => !pendingIds.has(request.id),
       );
       pending.push(
-        ...createPendingBridgeStates({
-          pendingRequests: newPendingRequests,
+        ...createPendingBridgeStates(newPendingRequests, {
           config: params.config,
           runtime: params.runtime,
           catalogProjection: params.catalogProjection,
@@ -442,8 +441,7 @@ async function settleCodeModeResult(params: {
         (request) => !pendingIds.has(request.id),
       );
       pending.push(
-        ...createPendingBridgeStates({
-          pendingRequests: newPendingRequests,
+        ...createPendingBridgeStates(newPendingRequests, {
           config: params.config,
           runtime: params.runtime,
           catalogProjection: params.catalogProjection,

@@ -513,8 +513,13 @@ The Gateway accepts updates only from the current node connection and stamps
 `updatedAtMs` with its own receipt time; nodes never send a timestamp. Successful
 updates appear as `hostStats` in `node.list` and `node.describe` and broadcast
 `node.hostStats` with `{ nodeId, hostStats }` to read-scoped operators, using
-`dropIfSlow: true`. Stats are operator-facing, do not update model-visible node
-context, and disappear when the live session ends. They are never persisted.
+`dropIfSlow: true`. Stats are operator-facing and do not update model-visible
+node context. When received, the Gateway persists the snapshot as `lastHostStats`
+on the paired node record. Disconnecting or reconnecting without a new snapshot
+leaves the previous value intact.
+`node.list` and `node.describe` use live session stats while connected and
+project the saved snapshot as `hostStats` while offline, keeping its original
+`updatedAtMs` so clients can show the last-known age.
 
 The structured `node.event` result uses `reason: "updated"`, `"stale_connection"`,
 or `"invalid_payload"`. An older Gateway may return `handled: false`; the node

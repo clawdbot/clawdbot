@@ -173,7 +173,6 @@
     "native.android.1b95ee4b75f6033b": "Збережені дані автентифікації недійсні",
     "native.android.1bbbdb0fb0e3a5a3": "Вимкнути",
     "native.android.1c35de4d06275916": "Вітаємо в OpenClaw",
-    "native.android.1c3686e1c087e2c8": "Не вдалося завантажити каталог постачальників.",
     "native.android.1c4acd27277544e0": "Доступ лише для читання; правила підтвердження нативних інструментів все ще діють.",
     "native.android.1c4be71b5c3aa079": "Потрібне підключення",
     "native.android.1c62b20321fbbd26": "Забути",
@@ -1455,7 +1454,6 @@
     "native.android.e5021b83ff593f1e": "Поточний",
     "native.android.e502c87002ff73f0": "${seconds} с",
     "native.android.e50e16c71fc204f1": "Деякі перевірки стану каналів не завершилися.",
-    "native.android.e5387d6aaf34ede8": "Пошук…",
     "native.android.e53f4d638a7fa07e": "Підключіть Gateway, щоб завантажити запити на затвердження в застосунку.",
     "native.android.e541942ff77b53eb": "Прослуховування (PTT)",
     "native.android.e54941cceace936d": "Перемотати сюди",
@@ -2243,6 +2241,7 @@
     "native.apple.36797a0a0d370b1c": "Запустити перевірку стану зараз",
     "native.apple.367d222547a7dfa4": "Контекст",
     "native.apple.3704f5846ba19f61": "Перевірка…",
+    "native.apple.3707ddd116730423": "\\(minimum)–\\(maximum)",
     "native.apple.3763e29c884dd87a": "Оновити токен Gateway",
     "native.apple.37715ac8050292a6": "Оновлено %@",
     "native.apple.377a95b3a57b9e32": "Облікові дані зберігаються разом із цим профілем у в’язці ключів Mac.",
@@ -2450,6 +2449,7 @@
     "native.apple.4a85eb1605f1ba49": "+ще %1$lld працює",
     "native.apple.4a999d79dfd4a4e2": "Gateway повернув неочікувану відповідь про статус каналу.",
     "native.apple.4aa0a356f580cb09": "unknown gateway error",
+    "native.apple.4adc28ed0e25f735": "Не вдалося відкрити фонову сесію",
     "native.apple.4b1707775e3d4ded": "Вузол Watch онлайн",
     "native.apple.4b1c264d08779b81": "Погіршено",
     "native.apple.4b34153a64ea0fbe": "%@, справний",
@@ -3657,6 +3657,7 @@
     "native.apple.bb24048d5940285c": "Увімкніть або встановіть плагін провайдера текстового висновку на цьому Gateway, а потім перевірте ще раз.",
     "native.apple.bb25a6eb7fab6d0e": "Виринання",
     "native.apple.bb3054116d83e716": "Перезапустіть OpenClaw, щоб повторити спробу з вбудованим демоном CUA.",
+    "native.apple.bb3b23bb105850ba": "\\(maximum)",
     "native.apple.bb5f5e891aeadb25": "Цей спарений gateway більше недоступний.",
     "native.apple.bb69920e6930860f": "Automation issues",
     "native.apple.bb7347e3399c42ee": "Контекст із %@ — %@",
@@ -4298,6 +4299,7 @@
     "native.apple.f4155b853aa86198": "Розділ Skills",
     "native.apple.f420de18a586c900": "Використовуйте логіни вашого браузера",
     "native.apple.f43c1f8049a80f31": "Видалити гілки",
+    "native.apple.f4483cba92be9484": "Виділити текст",
     "native.apple.f454890b0dc22cfd": "Локально (цей Mac)",
     "native.apple.f47dbe72f59ee9cb": "Потрібен дозвіл на використання мікрофона та розпізнавання мовлення.",
     "native.apple.f496b5c54219ca5f": "Готово до швидких дій",
@@ -4428,6 +4430,7 @@
     "native.apple.ff9163dd493d583b": "Пробудити",
     "native.apple.ffba42bcdc2cc866": "1 токен",
     "native.apple.ffcccb2c944378ff": "Гучномовець",
-    "native.apple.ffd5f2e059651aa1": "Відкрити налаштування Gateway"
+    "native.apple.ffd5f2e059651aa1": "Відкрити налаштування Gateway",
+    "native.apple.ffefad3c8b30c36d": "Копіювати код"
   }
 }

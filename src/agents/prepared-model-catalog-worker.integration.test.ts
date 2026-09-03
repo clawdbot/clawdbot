@@ -709,7 +709,9 @@ describe("prepared model catalog worker boundary", () => {
     const added = await projectModels();
     expect(added).toMatchObject({
       result: {
-        models: [expect.objectContaining({ id: "durable-model", available: true })],
+        models: expect.arrayContaining([
+          expect.objectContaining({ id: "durable-model", available: true }),
+        ]),
       },
       projected: {
         authStore: {
@@ -736,11 +738,9 @@ describe("prepared model catalog worker boundary", () => {
 
     writeDurableProfile();
     const removed = await projectModels();
-    expect(removed).toMatchObject({
-      result: {
-        models: [expect.objectContaining({ id: "durable-model", available: false })],
-      },
-    });
+    expect(removed.result.models).toContainEqual(
+      expect.objectContaining({ id: "durable-model", available: false }),
+    );
     expect(removed.projected.authStore).toBeDefined();
     expect(
       removed.projected.authStore?.profiles[`${DURABLE_AUTH_PROVIDER_ID}:default`],
@@ -874,9 +874,9 @@ describe("prepared model catalog worker boundary", () => {
       return await buildModelsListResult({ context, params: { view: "all", refresh: true } });
     };
 
-    await expect(listModels()).resolves.toMatchObject({
-      models: [expect.objectContaining({ id: "gpt-5.4", available: false })],
-    });
+    expect((await listModels()).models).toContainEqual(
+      expect.objectContaining({ id: "gpt-5.4", available: false }),
+    );
     fs.writeFileSync(
       path.join(codexHome, "auth.json"),
       JSON.stringify({
@@ -889,13 +889,13 @@ describe("prepared model catalog worker boundary", () => {
       "utf8",
     );
 
-    await expect(listModels()).resolves.toMatchObject({
-      models: [expect.objectContaining({ id: "gpt-5.4", available: true })],
-    });
+    expect((await listModels()).models).toContainEqual(
+      expect.objectContaining({ id: "gpt-5.4", available: true }),
+    );
     fs.rmSync(path.join(codexHome, "auth.json"));
-    await expect(listModels()).resolves.toMatchObject({
-      models: [expect.objectContaining({ id: "gpt-5.4", available: false })],
-    });
+    expect((await listModels()).models).toContainEqual(
+      expect.objectContaining({ id: "gpt-5.4", available: false }),
+    );
   });
 
   it("refreshes and removes a Codex login that existed in the prepared generation", async () => {

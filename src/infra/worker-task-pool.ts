@@ -233,15 +233,20 @@ export class WorkerTaskPool<Input, Output> {
         void this.retire(slot).then(complete);
         return;
       }
-      slot.worker?.unref();
-      const idleMs = this.options.idleTimeoutMs ?? 60_000;
-      if (idleMs > 0) {
-        slot.idleTimer = setTimeout(() => void this.retire(slot), idleMs);
-        slot.idleTimer.unref();
-      }
+      this.idle(slot);
     }
     complete();
     this.dispatch();
+  }
+
+  // A separate scope keeps the idle timer from retaining the completed task/result.
+  private idle(slot: Slot<Input, Output>): void {
+    slot.worker?.unref();
+    const idleMs = this.options.idleTimeoutMs ?? 60_000;
+    if (idleMs > 0) {
+      slot.idleTimer = setTimeout(() => void this.retire(slot), idleMs);
+      slot.idleTimer.unref();
+    }
   }
 
   private retire(slot: Slot<Input, Output>): Promise<void> {

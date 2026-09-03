@@ -173,7 +173,6 @@
     "native.android.1b95ee4b75f6033b": "Xác thực đã lưu không hợp lệ",
     "native.android.1bbbdb0fb0e3a5a3": "Tắt",
     "native.android.1c35de4d06275916": "Chào mừng bạn đến với OpenClaw",
-    "native.android.1c3686e1c087e2c8": "Không thể tải danh mục nhà cung cấp.",
     "native.android.1c4acd27277544e0": "Truy cập chỉ đọc; các quy tắc phê duyệt công cụ gốc vẫn được áp dụng.",
     "native.android.1c4be71b5c3aa079": "Cần kết nối",
     "native.android.1c62b20321fbbd26": "Quên",
@@ -1455,7 +1454,6 @@
     "native.android.e5021b83ff593f1e": "Hiện tại",
     "native.android.e502c87002ff73f0": "${seconds}gi",
     "native.android.e50e16c71fc204f1": "Một số kiểm tra trạng thái kênh chưa hoàn tất.",
-    "native.android.e5387d6aaf34ede8": "Đang tìm kiếm…",
     "native.android.e53f4d638a7fa07e": "Kết nối gateway để tải các yêu cầu phê duyệt trong ứng dụng.",
     "native.android.e541942ff77b53eb": "Đang nghe (PTT)",
     "native.android.e54941cceace936d": "Tua lại về đây",
@@ -2243,6 +2241,7 @@
     "native.apple.36797a0a0d370b1c": "Chạy kiểm tra tình trạng ngay",
     "native.apple.367d222547a7dfa4": "Ngữ cảnh",
     "native.apple.3704f5846ba19f61": "Đang kiểm tra…",
+    "native.apple.3707ddd116730423": "\\(minimum)–\\(maximum)",
     "native.apple.3763e29c884dd87a": "Cập nhật token Gateway",
     "native.apple.37715ac8050292a6": "Được cập nhật bởi %@",
     "native.apple.377a95b3a57b9e32": "Thông tin xác thực được lưu cùng hồ sơ này trong Chuỗi khóa trên máy Mac của bạn.",
@@ -2450,6 +2449,7 @@
     "native.apple.4a85eb1605f1ba49": "+%1$lld đang hoạt động",
     "native.apple.4a999d79dfd4a4e2": "Gateway đã trả về phản hồi trạng thái kênh không mong đợi.",
     "native.apple.4aa0a356f580cb09": "unknown gateway error",
+    "native.apple.4adc28ed0e25f735": "Không thể mở phiên nền",
     "native.apple.4b1707775e3d4ded": "Nút Watch trực tuyến",
     "native.apple.4b1c264d08779b81": "Suy giảm",
     "native.apple.4b34153a64ea0fbe": "%@, khỏe mạnh",
@@ -3657,6 +3657,7 @@
     "native.apple.bb24048d5940285c": "Bật hoặc cài đặt một plugin nhà cung cấp suy luận văn bản trên Gateway này, rồi kiểm tra lại.",
     "native.apple.bb25a6eb7fab6d0e": "Đang nổi lên",
     "native.apple.bb3054116d83e716": "Mở lại OpenClaw để thử lại daemon CUA nhúng.",
+    "native.apple.bb3b23bb105850ba": "\\(maximum)",
     "native.apple.bb5f5e891aeadb25": "Gateway đã ghép nối này không còn khả dụng.",
     "native.apple.bb69920e6930860f": "Sự cố tự động hóa",
     "native.apple.bb7347e3399c42ee": "Ngữ cảnh từ %@ — %@",
@@ -4298,6 +4299,7 @@
     "native.apple.f4155b853aa86198": "Mục Skills",
     "native.apple.f420de18a586c900": "Dùng thông tin đăng nhập trình duyệt của bạn",
     "native.apple.f43c1f8049a80f31": "Xóa luồng",
+    "native.apple.f4483cba92be9484": "Chọn văn bản",
     "native.apple.f454890b0dc22cfd": "Cục bộ (máy Mac này)",
     "native.apple.f47dbe72f59ee9cb": "Cần có quyền truy cập micrô và nhận dạng giọng nói.",
     "native.apple.f496b5c54219ca5f": "Sẵn sàng cho thao tác nhanh",
@@ -4428,6 +4430,7 @@
     "native.apple.ff9163dd493d583b": "Đánh thức",
     "native.apple.ffba42bcdc2cc866": "1 token",
     "native.apple.ffcccb2c944378ff": "Loa ngoài",
-    "native.apple.ffd5f2e059651aa1": "Mở Cài đặt Gateway"
+    "native.apple.ffd5f2e059651aa1": "Mở Cài đặt Gateway",
+    "native.apple.ffefad3c8b30c36d": "Sao chép mã"
   }
 }

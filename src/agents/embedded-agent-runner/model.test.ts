@@ -1104,6 +1104,8 @@ describe("resolveModel", () => {
       activeProjectKeys: [],
       allowGatewaySubagentBinding: false,
       config: cfg,
+      observationConfig: cfg,
+      isCurrent: () => true,
       authModes: {},
       metadataSnapshot: createPluginMetadataSnapshotFixture(),
       modelCatalog: { entries: [], routeVariants: [] },
@@ -1136,6 +1138,7 @@ describe("resolveModel", () => {
   });
 
   it("falls back when an opaque prepared handle has no model facts", async () => {
+    const config = {};
     resolveBundledStaticCatalogModelMock.mockReturnValueOnce(
       makeMistralCatalogModel({ input: ["text"] }),
     );
@@ -1145,7 +1148,9 @@ describe("resolveModel", () => {
       agentDir: state.agentDir(),
       activeProjectKeys: [],
       allowGatewaySubagentBinding: false,
-      config: {},
+      config,
+      observationConfig: config,
+      isCurrent: () => true,
       authModes: {},
       metadataSnapshot: createPluginMetadataSnapshotFixture(),
       modelCatalog: { entries: [], routeVariants: [] },
@@ -1178,12 +1183,15 @@ describe("resolveModel", () => {
 
   it("resolves opt-in provider static catalog rows while skipping agent discovery", async () => {
     const metadataSnapshot = createPluginMetadataSnapshotFixture();
+    const config = {};
     const preparedModelRuntime = {
       catalogOwner: undefined,
       agentDir: state.agentDir(),
       activeProjectKeys: [],
       allowGatewaySubagentBinding: false,
-      config: {},
+      config,
+      observationConfig: config,
+      isCurrent: () => true,
       authModes: {},
       metadataSnapshot,
       modelCatalog: { entries: [], routeVariants: [] },

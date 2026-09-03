@@ -26,6 +26,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isManifestPluginAvailableForControlPlane } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import type { ProviderCatalogOutcome } from "../../plugins/provider-catalog.types.js";
+import type { PluginRegistry } from "../../plugins/registry.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { listUserProfileAuthLinks } from "../../state/user-model-accounts.js";
 
@@ -156,6 +157,8 @@ export type ModelsListAuthProjectionParams = {
   preparedRuntimeAuthMaterializations?: readonly RuntimeAuthMaterialization[];
   preparedSyntheticAuthComplete?: boolean;
   requesterProfileId?: string;
+  pluginRegistry?: PluginRegistry;
+  observationConfig?: OpenClawConfig;
   preferredProfileId?: string;
   lockedProfileId?: string;
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
@@ -225,7 +228,9 @@ export function createModelsListAuthProjection(params: ModelsListAuthProjectionP
     workspaceDir,
     preferredProfileId: params.preferredProfileId,
     lockedProfileId: params.lockedProfileId,
+    pluginRegistry: params.pluginRegistry,
     isCurrent: params.isCurrent,
+    observationConfig: params.observationConfig,
   });
   // A selected profile is host-owned auth, not evidence from the shared native
   // login; the harness evaluator already applies this rule to session pins.
@@ -275,5 +280,8 @@ export function createModelsListAuthProjection(params: ModelsListAuthProjectionP
     authStore,
     authModes: params.preparedRuntimeAuthModes,
     authMaterializations: params.preparedRuntimeAuthMaterializations,
+    pluginRegistry: params.pluginRegistry,
+    isCurrent: params.isCurrent ?? (() => params.observationConfig === undefined),
+    observationConfig: params.observationConfig,
   };
 }
