@@ -576,26 +576,30 @@ jobs:
 
           def checkout_harness(sha):
               action = ".github/actions/setup-node-env/action.yml"
+              evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/direct-run.mjs")
               if kind == "linux-node" and not os.path.isfile(os.path.join(workspace, action)):
                   raise GitFailure(1)
               harness = os.path.join(workspace, ".ci-harness")
               os.makedirs(harness, exist_ok=True)
               if sha == os.environ["WORKFLOW_SHA"]:
                   # Export the workflow revision from the freshly populated index, replacing
-                  # retained platform files without updating the index or trusting later edits.
+                  # retained harness files without updating the index or trusting later edits.
                   pathspecs = [".github/actions"]
-                  if kind == "preflight":
+                  if kind in ("platform", "linux-node"):
+                      pathspecs += evidence_scripts
+                  elif kind == "preflight":
                       pathspecs += ["scripts/lib/release-context.mjs", "scripts/lib/release-version.mjs"]
                   paths = git_output(workspace, "ls-files", "-z", "--", *pathspecs).split("\0")[:-1]
                   run_git(workspace, "checkout-index", "--force", f"--prefix={harness}/", "--", *paths)
               else:
                   run_git(harness, "init", harness)
                   run_git(harness, "remote", "add", "origin", remote)
-                  # The harness only supplies .github/actions, so narrow the fetch before it runs:
-                  # sparse first, then blob-less. A full snapshot here downloads a second copy of
-                  # the repository that the checkout below immediately discards, and every extra
-                  # byte is amplified by the shared runner egress.
-                  run_git(harness, "sparse-checkout", "set", ".github/actions")
+                  sparse_paths = ["/.github/actions/"]
+                  if kind in ("platform", "linux-node"):
+                      sparse_paths += [f"/{path}" for path in evidence_scripts]
+                  # Rooted non-cone patterns keep the kind-owned workflow files exact.
+                  # Sparse first, then blob-less avoids downloading a second repository snapshot.
+                  run_git(harness, "sparse-checkout", "set", "--no-cone", *sparse_paths)
                   fetch(harness, f"+{os.environ['WORKFLOW_SHA']}:refs/remotes/origin/ci-harness",
                         max_attempts=1, blobless=True)
                   # Checkout now materializes the sparse blobs over the network, so it carries the
@@ -4952,10 +4956,10 @@ jobs:
             --fastlane-version "$fastlane_version"
             --node-version "$(node --version)"
           )
-          node scripts/ios-screenshot-evidence.mjs "${collect_args[@]}"
+          node .ci-harness/scripts/ios-screenshot-evidence.mjs "${collect_args[@]}"
           if [[ "$DEVICE_FAMILY" == "ipad-13" ]]; then
             collect_args[2]="watch"
-            node scripts/ios-screenshot-evidence.mjs "${collect_args[@]}"
+            node .ci-harness/scripts/ios-screenshot-evidence.mjs "${collect_args[@]}"
           fi
 
       - name: Upload iOS screenshot shard evidence
@@ -5012,7 +5016,7 @@ jobs:
           TARGET_SHA: ${{ needs.preflight.outputs.checkout_revision }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
-          node scripts/ios-screenshot-evidence.mjs reduce \
+          node .ci-harness/scripts/ios-screenshot-evidence.mjs reduce \
             --input apps/ios/build/ScreenshotEvidenceInputs \
             --output . \
             --target-sha "$TARGET_SHA" \

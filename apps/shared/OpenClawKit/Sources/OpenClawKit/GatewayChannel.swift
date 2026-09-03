@@ -560,9 +560,7 @@ public actor GatewayChannelActor {
                 response,
                 identity: identity,
                 selectedAuth: selectedAuth,
-                role: role,
-                deviceAuthGatewayID: deviceAuthGatewayID,
-                deviceIdentityProfile: deviceIdentityProfile,
+                options: options,
                 connectionGeneration: connectionGeneration)
             self.receivedDeviceAuthRoles.formUnion(outcome.receivedRoles)
             self.persistedDeviceAuthRoles.formUnion(outcome.persistedRoles)
@@ -902,12 +900,13 @@ extension GatewayChannelActor {
         _ res: ResponseFrame,
         identity: DeviceIdentity?,
         selectedAuth: SelectedConnectAuth,
-        role: String,
-        deviceAuthGatewayID: String?,
-        deviceIdentityProfile: GatewayDeviceIdentityProfile,
+        options: GatewayConnectOptions,
         connectionGeneration: UInt64) async throws
         -> (receivedRoles: Set<String>, persistedRoles: Set<String>, hello: HelloOk)
     {
+        let role = options.role
+        let deviceAuthGatewayID = options.deviceAuthGatewayID
+        let deviceIdentityProfile = options.deviceIdentityProfile
         if res.ok == false {
             let error = res.error
             let msg = error?.message ?? "gateway connect failed"
@@ -970,7 +969,7 @@ extension GatewayChannelActor {
             let sameStoredToken = authRole == role && deviceToken == selectedAuth.storedToken
             // Hello scopes describe this socket. Reissuing the stored token must not narrow its reusable grant.
             let scopes = sameStoredToken ? (selectedAuth.storedScopes ?? helloScopes) : helloScopes
-            if let identity, self.persistIssuedDeviceToken(
+            if let identity, options.allowsDeviceAuthPersistence, self.persistIssuedDeviceToken(
                 authSource: self.lastAuthSource,
                 deviceId: identity.deviceId,
                 role: authRole,
@@ -992,13 +991,14 @@ extension GatewayChannelActor {
                 }
                 let scopes = rawEntry["scopes"]?.arrayValue?.compactMap(\.stringValue) ?? []
                 receivedRoles.insert(authRole)
-                if let identity, self.shouldPersistBootstrapHandoffTokens(), self.persistBootstrapHandoffToken(
-                    deviceId: identity.deviceId,
-                    role: authRole,
-                    token: deviceToken,
-                    scopes: scopes,
-                    deviceAuthGatewayID: deviceAuthGatewayID,
-                    deviceIdentityProfile: deviceIdentityProfile)
+                if let identity, options.allowsDeviceAuthPersistence, self.shouldPersistBootstrapHandoffTokens(),
+                   self.persistBootstrapHandoffToken(
+                       deviceId: identity.deviceId,
+                       role: authRole,
+                       token: deviceToken,
+                       scopes: scopes,
+                       deviceAuthGatewayID: deviceAuthGatewayID,
+                       deviceIdentityProfile: deviceIdentityProfile)
                 {
                     persistedRoles.insert(authRole)
                 }

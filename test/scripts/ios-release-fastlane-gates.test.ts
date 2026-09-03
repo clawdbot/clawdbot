@@ -944,6 +944,11 @@ end
     expect(shardJob).toContain("run_ios_fastlane ios watch_screenshot");
     expect(shardJob).toContain("run: pnpm ios:screenshots");
     expect(shardJob).toContain("id: package_screenshot_evidence");
+    expect(shardJob).toContain('if [[ "$DEVICE_FAMILY" == "ipad-13" ]]; then');
+    expect(
+      shardJob.match(/node \.ci-harness\/scripts\/ios-screenshot-evidence\.mjs/g),
+    ).toHaveLength(2);
+    expect(shardJob).not.toContain("node scripts/ios-screenshot-evidence.mjs");
     expect(shardJob).toContain("steps.package_screenshot_evidence.outcome == 'failure'");
     expect(shardJob).toContain("apps/ios/build/SnapshotTestResults/capture-attempts.json");
     expect(shardJob).not.toContain("IOS_SCREENSHOT_FASTLANE_VERSION");
@@ -958,7 +963,8 @@ end
     expect(reducerJob).toContain("Setup screenshot evidence Node");
     expect(reducerJob).toContain("node-version: ${{ env.IOS_SCREENSHOT_NODE_VERSION }}");
     expect(reducerJob).toContain("id: reduce_screenshot_evidence");
-    expect(reducerJob).toContain("scripts/ios-screenshot-evidence.mjs reduce");
+    expect(reducerJob).toContain("node .ci-harness/scripts/ios-screenshot-evidence.mjs reduce");
+    expect(reducerJob).not.toContain("node scripts/ios-screenshot-evidence.mjs");
     expect(reducerJob).toContain('--workflow-sha "$WORKFLOW_SHA"');
     expect(reducerJob).toContain('--run-id "$RUN_ID"');
     expect(reducerJob).toContain('--run-attempt "$RUN_ATTEMPT"');

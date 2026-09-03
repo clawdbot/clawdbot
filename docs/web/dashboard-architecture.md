@@ -7,27 +7,29 @@ title: "Dashboard Architecture"
 doc-schema-version: 1
 ---
 
-Session dashboards are the persistent widget face of a session. This reference
-covers their ownership, sandbox and capability boundaries, storage, and Gateway
-protocol. For the operator workflow, see [Session Dashboards](/web/dashboards);
-for the widget authoring API, see [Show widget](/tools/show-widget).
+Session dashboards are persistent widget boards attached to a session. This
+reference covers their ownership, sandbox and capability boundaries, storage,
+and Gateway protocol. For the operator workflow, see
+[Session Dashboards](/web/dashboards); for the widget authoring API, see
+[Show widget](/tools/show-widget).
 
 ## Vision
 
 A dashboard turns the session into a workbench: the agent renders interactive
-widgets, the user pins them onto a persistent board, and chat docks beside the
-board or hides. The board and conversation remain part of the same session.
+widgets, the user pins them onto a persistent board, and the board opens beside
+its chat or expands across the task area. The board and conversation remain part
+of the same session.
 
 Principles:
 
-- **A board is a face of a session, not a new object.** Every session (thread)
-  has two faces: the transcript and the board. A session with no pinned widgets
-  is plain chat. Pin one widget and the board exists. Boards inherit the
-  session's identity, agent ownership, naming, pinning, and lifecycle. There is
-  no `dashboard_create`, no board registry, no separate ACL model.
+- **A board belongs to a session; it is not a new workspace.** A session with no
+  pinned widgets is plain chat. Pin one widget and the board exists in that
+  session's dashboard side panel. Boards inherit the session's identity, agent
+  ownership, naming, pinning, and lifecycle. There is no `dashboard_create`, no
+  board registry, and no separate ACL model.
 - **Agent parity.** Everything the user can do on a board, the agent can do
   with tools: add/update/remove widgets, arrange them, manage tabs, switch the
-  visible tab, dock or hide the chat.
+  visible tab, and request split or expanded presentation.
 - **Native, not embedded.** The board is Lit components in the Control UI shell
   (the same design system as the rest of the app). Only widget _content_ is
   sandboxed in iframes. No URL bar, no browser chrome.
@@ -40,15 +42,15 @@ Principles:
 
 ## Concepts
 
-| Concept             | Definition                                                                                                                                                        |
-| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Session (thread)    | Existing gateway session, keyed by stable `sessionKey`. Owned by an agent.                                                                                        |
-| Board               | The widget face of one session. Exists iff the session has widgets/tabs. Survives `/new`/`/reset` (attached to `sessionKey`, not the transcript).                 |
-| Tab                 | A presentation page of a board: which widgets, their arrangement, and the chat dock state (`left`/`right`/`bottom`/`hidden`). Boards start with one implicit tab. |
-| Widget              | Named, sandboxed HTML/JS program owned by the session. Addressed as `sessionKey` + `name`. Updated in place by name.                                              |
-| Capability manifest | Per-widget declaration of reach: `data` (read bindings), `actions` (allowlisted verbs), `prompt` (send to session), `net` (allowed origins).                      |
-| Pin (widget)        | Moving a transcript widget onto the session's board (user affordance or agent tool arg). Unpin removes it from the board.                                         |
-| Pin (session)       | Existing sidebar pinning of sessions. A pinned session with a board opens on its board face.                                                                      |
+| Concept             | Definition                                                                                                                                         |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Session (thread)    | Existing gateway session, keyed by stable `sessionKey`. Owned by an agent.                                                                         |
+| Board               | The widget board of one session. Exists iff the session has widgets/tabs. Survives `/new`/`/reset` (attached to `sessionKey`, not the transcript). |
+| Tab                 | A presentation page of a board: which widgets and their arrangement. Boards start with one implicit tab.                                           |
+| Widget              | Named, sandboxed HTML/JS program owned by the session. Addressed as `sessionKey` + `name`. Updated in place by name.                               |
+| Capability manifest | Per-widget declaration of reach: `data` (read bindings), `actions` (allowlisted verbs), `prompt` (send to session), `net` (allowed origins).       |
+| Pin (widget)        | Moving a transcript widget onto the session's board (user affordance or agent tool arg). Unpin removes it from the board.                          |
+| Pin (session)       | Existing sidebar pinning of sessions. A pinned session with a board opens its owning chat with the dashboard panel restored.                       |
 
 ## UX flows
 
@@ -57,19 +59,18 @@ Principles:
   on the session's board. The agent can pass `pin: true` to do the same. A
   channel presenter can instead make the same core document visible on the
   current transport.
-- **Board view:** a session with a board gets a view switch (Chat / Split /
-  Dashboard). Split = tab strip (only when >1 tab) + fluid grid + docked chat
-  pane; Dashboard is the same without the chat. The chat dock is resizable and
-  movable (left/right/bottom) via the switch's dock picker. Per-tab dock state
-  is remembered.
+- **Board view:** the first pinned widget opens a resizable dashboard side panel
+  beside the chat. Expanding the panel gives the board the full task area;
+  collapsing it restores the split layout; closing it restores chat alone.
+  Later board updates preserve the user's current panel state.
 - **Drag:** user drags widgets; grid auto-compacts (widgets float up, neighbors
   reflow). Resize by handle snaps to size steps. No pixel placement — for
   anyone.
 - **Reset warning:** `/new` / `/reset` on a board-bearing session asks for
   confirmation in the web UI ("context resets, the dashboard stays") and keeps
   the board.
-- **Sidebar:** pinned sessions render their board face when they have one.
-  The Home session's board is the default "agent dashboard".
+- **Sidebar:** pinned sessions with a board restore that dashboard in the owning
+  chat. The Home session's board is the default "agent dashboard".
 - **Interactions** (three tiers, see below): silent state events, visible
   prompt sends, and automation triggers.
 
@@ -80,8 +81,8 @@ Principles:
    session notice (same mechanism as group-activity notices). No agent turn is
    started; the model sees accumulated notices on its next run.
 2. **Prompts (explicit talk).** `bridge.sendPrompt(text)` — requires user
-   activation; sends a visible user message into the session (the docked chat
-   shows it). Rate-limited; each send is user-confirmed unless the widget holds
+   activation; sends a visible user message into the owning session. Rate-limited;
+   each send is user-confirmed unless the widget holds
    the `prompt` capability grant.
 3. **Automation.** `bridge.runAction(name, args)` — fires a manifest-declared
    action. Initial verb set: `cron.trigger` (run an existing cron job now) and
@@ -356,7 +357,7 @@ Events (in `EVENT_SCOPE_GUARDS`, read scope):
 - `board.changed { sessionKey, revision, widget? }` — persisted state changed;
   UI refetches (and reloads one iframe when `widget` is present).
 - `board.command { sessionKey, command }` — transient UI drive (agent switches
-  the visible tab, toggles chat dock) — the `ui.command` pattern.
+  the visible tab or dashboard panel presentation) — the `ui.command` pattern.
 
 Widget bytes are served over the authenticated HTTP surface, not the socket.
 

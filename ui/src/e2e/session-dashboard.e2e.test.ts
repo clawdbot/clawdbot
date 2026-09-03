@@ -251,23 +251,13 @@ suite.define(() => {
     }
   });
 
-  it("pins Canvas HTML, follows board commands, and persists dock resizing", async () => {
+  it("pins Canvas HTML, follows board commands, and switches dashboard panel width", async () => {
     const recordProof = process.env.OPENCLAW_UI_E2E_RECORD === "1";
     if (recordProof) {
       await mkdir(path.join(suite.artifactDir, "workboard-pin"), { recursive: true });
     }
     const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
     const page = await context.newPage();
-    const resizableBoardSnapshot = {
-      ...boardSnapshot,
-      tabs: boardSnapshot.tabs.map((tab) =>
-        tab.tabId === "research" ? { ...tab, chatDock: "bottom" } : tab,
-      ),
-    };
-    const resizablePinnedBoardSnapshot = {
-      ...pinnedBoardSnapshot,
-      tabs: resizableBoardSnapshot.tabs,
-    };
     const gateway = await installMockGateway(page, {
       sessionKey,
       featureCapabilities: [GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC],
@@ -301,8 +291,8 @@ suite.define(() => {
         },
       ],
       methodResponses: {
-        "board.get": resizableBoardSnapshot,
-        "board.widget.put": resizablePinnedBoardSnapshot,
+        "board.get": boardSnapshot,
+        "board.widget.put": pinnedBoardSnapshot,
       },
     });
     await showDashboard(page);
@@ -311,8 +301,23 @@ suite.define(() => {
     await expect
       .poll(async () => (await gateway.getRequests("board.get")).length, { timeout: 30_000 })
       .toBeGreaterThan(0);
-    await page.locator('wa-radio[value="dashboard"]').waitFor();
+    await page.locator(".side-panel").waitFor();
     await page.locator(".board-session-surface").waitFor();
+    await page.locator(".chat-thread").waitFor();
+    if (recordProof) {
+      await page.screenshot({
+        path: path.join(suite.artifactDir, "workboard-pin", "03-direct-route.png"),
+      });
+    }
+
+    await page.locator(".side-panel__dock-bottom").click();
+    await expect.poll(() => page.locator(".sidebar-region--bottom").count()).toBe(1);
+    await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(true);
+    if (recordProof) {
+      await page.screenshot({
+        path: path.join(suite.artifactDir, "workboard-pin", "04-bottom-dock.png"),
+      });
+    }
 
     const preview = page.locator('.chat-tool-card__preview[data-kind="canvas"]');
     const previewBubble = page.locator(".chat-bubble", { has: preview });
@@ -368,7 +373,7 @@ suite.define(() => {
         path: path.join(path.join(suite.artifactDir, "workboard-pin"), "02-pinned.png"),
       });
     }
-    await gateway.setMethodResponse("board.get", resizablePinnedBoardSnapshot);
+    await gateway.setMethodResponse("board.get", pinnedBoardSnapshot);
 
     await gateway.emitGatewayEvent("board.command", {
       sessionKey,
@@ -377,30 +382,30 @@ suite.define(() => {
     const researchTab = page.locator('[data-board-tab-id="research"]');
     await expect.poll(() => researchTab.getAttribute("active")).not.toBeNull();
 
-    const divider = page.locator(".board-session-surface__divider");
-    const dock = page.locator(".board-session-surface__chat");
-    const dockHeight = () => dock.evaluate((element) => getComputedStyle(element).height);
-    const dividerBounds = await divider.boundingBox();
-    expect(dividerBounds).not.toBeNull();
-    await page.mouse.move(
-      dividerBounds!.x + dividerBounds!.width / 2,
-      dividerBounds!.y + dividerBounds!.height / 2,
-    );
-    await page.mouse.down();
-    await page.mouse.move(dividerBounds!.x, dividerBounds!.y - 80);
-    await page.mouse.up();
-    await expect.poll(dockHeight).not.toBe("320px");
-    const persistedHeight = await dockHeight();
-    expect(persistedHeight).toMatch(/^\d+(?:\.\d+)?px$/u);
-
-    await page.reload();
-    await dock.waitFor();
-    expect(await dockHeight()).toBe(persistedHeight);
+    const expand = page.getByRole("button", { name: "Expand side panel" });
+    await expand.click();
+    await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
+    await page.getByRole("button", { name: "Collapse", exact: true }).click();
+    await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
+    await expect.poll(() => page.locator(".sidebar-region--bottom").count()).toBe(1);
     await expect
       .poll(() =>
         page.locator('.chat-tool-card__preview[data-kind="canvas"] [data-pin-widget]').isDisabled(),
       )
       .toBe(true);
+    if (recordProof) {
+      await page.screenshot({
+        path: path.join(suite.artifactDir, "workboard-pin", "05-collapsed-bottom.png"),
+      });
+    }
+    await page.locator(".side-panel__minimize").click();
+    await expect.poll(() => page.locator(".board-session-surface").count()).toBe(0);
+    await page.locator(".chat-thread").waitFor();
+    if (recordProof) {
+      await page.screenshot({
+        path: path.join(suite.artifactDir, "workboard-pin", "06-chat-only.png"),
+      });
+    }
     await context.close();
   });
 
@@ -645,25 +650,20 @@ suite.define(() => {
         });
       }
 
-      const cardElement = page.locator("openclaw-workboard-card-widget");
-      await cardElement.evaluate((element) => {
+      const cardElement = await page.locator("openclaw-workboard-card-widget").elementHandle();
+      expect(cardElement).not.toBeNull();
+      await cardElement?.evaluate((element) => {
         Reflect.set(globalThis, "workboardPluginElementIdentity", element);
       });
       const listCountBeforeHide = (await gateway.getRequests("workboard.cards.list")).length;
-      const mode = (value: "chat" | "split") =>
-        page.locator(`wa-radio.settings-segmented__btn[value="${value}"]`);
-
-      await mode("chat").click();
-      await expect
-        .poll(() => page.locator(".board-session-surface").getAttribute("hidden"))
-        .not.toBeNull();
+      await page.locator(".side-panel__minimize").click();
+      await expect.poll(() => page.locator(".board-session-surface").count()).toBe(0);
       await expect
         .poll(() =>
-          cardElement.evaluate(
+          cardElement?.evaluate(
             (element) =>
               element === Reflect.get(globalThis, "workboardPluginElementIdentity") &&
-              Reflect.get(element, "active") === false &&
-              element.isConnected,
+              !element.isConnected,
           ),
         )
         .toBe(true);
@@ -679,17 +679,18 @@ suite.define(() => {
       );
       expect(await gateway.getRequests("workboard.cards.list")).toHaveLength(listCountBeforeHide);
 
-      await mode("split").click();
+      await gateway.emitGatewayEvent("board.command", {
+        sessionKey,
+        command: { kind: "focus_tab", tabId: "main" },
+      });
       await expect
         .poll(async () => (await gateway.getRequests("workboard.cards.list")).length)
         .toBe(listCountBeforeHide + 1);
+      const reopenedCardElement = page.locator("openclaw-workboard-card-widget");
       await expect
         .poll(() =>
-          cardElement.evaluate(
-            (element) =>
-              element === Reflect.get(globalThis, "workboardPluginElementIdentity") &&
-              Reflect.get(element, "active") === true &&
-              element.isConnected,
+          reopenedCardElement.evaluate(
+            (element) => Reflect.get(element, "active") === true && element.isConnected,
           ),
         )
         .toBe(true);

@@ -60,7 +60,6 @@ openclaw-chat-pane {
     openclaw-session-owner-chip,
     .chat-pane__participants,
     .chat-pane__presence,
-    .chat-pane__face-switch,
     .chat-pane__sharing-menu,
     .chat-pane__draft-indicator,
     .chat-pane__branches-menu,
@@ -197,16 +196,9 @@ openclaw-chat-pane {
   gap: 8px;
 }
 
-/* Equal outer tracks keep the face switch on the pane centerline even when
-   either chrome cluster grows; the identity trail owns the shrinkable text. */
 .chat-pane__header-center {
   position: relative;
   justify-self: center;
-}
-
-.chat-pane__header-center:has(.chat-pane__face-switch) {
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--panel-strong) 76%, transparent);
 }
 
 .chat-pane__header-trailing {
@@ -767,6 +759,20 @@ openclaw-chat-pane {
   margin-top: 8px;
 }
 
+.chat-pane__sharing-owner-title {
+  margin-top: 8px;
+}
+
+.chat-pane__sharing-owner {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  min-height: 36px;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
 .chat-pane__sharing-member-skeleton {
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr);
@@ -830,6 +836,11 @@ openclaw-chat-pane {
   font-size: 13px;
 }
 
+.chat-pane__draft-indicator svg {
+  width: 15px;
+  height: 15px;
+}
+
 .chat-pane__header-center .chat-pane__draft-indicator {
   width: 28px;
   height: 28px;
@@ -849,7 +860,6 @@ openclaw-chat-pane {
   .chat-pane__actions .chat-pane__split-down,
   .chat-pane__actions .chat-pane__split-right,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-side-panel-toggle,
-  .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__dock-caret,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__sharing-menu,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__branches-menu,
   .chat-pane__header:has(.chat-pane__close-pane) .chat-pane__gateway-menu,

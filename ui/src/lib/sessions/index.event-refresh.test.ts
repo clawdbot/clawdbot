@@ -162,7 +162,7 @@ describe("event-driven session list refresh", () => {
         params?: {
           agentId?: string;
           archived?: "all";
-          boardFace?: "dashboard";
+          hasBoard?: boolean;
           includeDerivedTitles?: boolean;
           includeLastMessage?: boolean;
           limit?: number;
@@ -172,7 +172,7 @@ describe("event-driven session list refresh", () => {
         if (method !== "sessions.list") {
           throw new Error(`Unexpected request: ${method}`);
         }
-        if (params?.boardFace !== "dashboard") {
+        if (params?.hasBoard !== true) {
           return sessionsResult([], 1);
         }
         const rows = params.agentId
@@ -192,7 +192,7 @@ describe("event-driven session list refresh", () => {
       request as unknown as GatewayBrowserClient["request"],
     );
     const allAgentsQuery = {
-      boardFace: "dashboard" as const,
+      hasBoard: true,
       archivedFilter: "all" as const,
       includeDerivedTitles: true,
       includeLastMessage: true,
@@ -213,7 +213,7 @@ describe("event-driven session list refresh", () => {
       await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
 
       const researchDashboardRequests = request.mock.calls.filter(
-        ([, params]) => (params as { boardFace?: unknown } | undefined)?.boardFace === "dashboard",
+        ([, params]) => (params as { hasBoard?: unknown } | undefined)?.hasBoard === true,
       );
       expect(researchDashboardRequests).toHaveLength(1);
       expect(researchDashboardRequests[0]?.[1]).toEqual({
@@ -224,7 +224,7 @@ describe("event-driven session list refresh", () => {
         includeDerivedTitles: true,
         includeLastMessage: true,
         archived: "all",
-        boardFace: "dashboard",
+        hasBoard: true,
       });
       expect(researchDashboardRequests[0]?.[1]).not.toHaveProperty("offset");
       expect(researchDashboardRequests[0]?.[1]).not.toHaveProperty("agentId");
@@ -235,7 +235,7 @@ describe("event-driven session list refresh", () => {
       await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
 
       const writerDashboardRequests = request.mock.calls.filter(
-        ([, params]) => (params as { boardFace?: unknown } | undefined)?.boardFace === "dashboard",
+        ([, params]) => (params as { hasBoard?: unknown } | undefined)?.hasBoard === true,
       );
       expect(writerDashboardRequests).toHaveLength(2);
       expect(

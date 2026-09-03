@@ -5312,6 +5312,7 @@ public struct SessionsListParams: Codable, Sendable {
     public let includelastmessage: Bool?
     public let label: String?
     public let boardface: AnyCodable?
+    public let hasboard: Bool?
     public let creatorid: String?
     public let ownerid: String?
     public let ownerfirst: Bool?
@@ -5336,6 +5337,7 @@ public struct SessionsListParams: Codable, Sendable {
         includelastmessage: Bool? = nil,
         label: String? = nil,
         boardface: AnyCodable? = nil,
+        hasboard: Bool? = nil,
         creatorid: String? = nil,
         ownerid: String? = nil,
         ownerfirst: Bool? = nil,
@@ -5359,6 +5361,7 @@ public struct SessionsListParams: Codable, Sendable {
         self.includelastmessage = includelastmessage
         self.label = label
         self.boardface = boardface
+        self.hasboard = hasboard
         self.creatorid = creatorid
         self.ownerid = ownerid
         self.ownerfirst = ownerfirst
@@ -5384,6 +5387,7 @@ public struct SessionsListParams: Codable, Sendable {
         case includelastmessage = "includeLastMessage"
         case label
         case boardface = "boardFace"
+        case hasboard = "hasBoard"
         case creatorid = "creatorId"
         case ownerid = "ownerId"
         case ownerfirst = "ownerFirst"

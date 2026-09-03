@@ -5,6 +5,7 @@ import { getActivePluginRegistryWorkspaceDirFromStateCore } from "./runtime-work
 export { PLUGIN_REGISTRY_STATE };
 
 type PluginRegistry = import("./registry-types.js").PluginRegistry;
+type MemoryCapabilityRegistrar = import("./types.js").OpenClawPluginApi["registerMemoryCapability"];
 
 export type RegistryState = {
   activeRegistry: PluginRegistry | null;
@@ -14,7 +15,11 @@ export type RegistryState = {
   workspaceDir: string | null;
   runtimeSubagentMode: "default" | "explicit" | "gateway-bindable";
   importedPluginIds: Set<string>;
-  registrationContext?: { registry: PluginRegistry; pluginId: string };
+  registrationContext?: {
+    registry: PluginRegistry;
+    pluginId: string;
+    registerMemoryCapability?: MemoryCapabilityRegistrar;
+  };
   commandRegistryClearTail?: Promise<void>;
   commandRegistryClearRegistries?: Map<PluginRegistry, number>;
 };
