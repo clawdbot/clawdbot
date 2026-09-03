@@ -36,41 +36,46 @@ export function renderNewSessionIncognitoControl(
   const description = disabledReason ?? t("newSession.incognitoDescription");
   return html`
     <div class="new-session-page__incognito-rail">
-      ${draftAvailable
-        ? html`
-            <openclaw-tooltip
-              class="new-session-page__draft-tooltip"
-              .content=${t("newSession.draftDescription")}
-            >
-              <button
-                type="button"
-                class="shell-chrome-controls__button new-session-page__draft-toggle ${draftActive
-                  ? "new-session-page__draft-toggle--active"
-                  : ""}"
-                role="switch"
-                aria-label=${`${t("newSession.draft")}: ${t("newSession.draftDescription")}`}
-                aria-checked=${String(draftActive)}
-                ?disabled=${submission.submitting ||
-                Boolean(submission.pendingPlacement.sessionKey)}
-                title=${t("newSession.draftDescription")}
-                @click=${() => submission.setVisibility(draftActive ? "normal" : "draft")}
+      ${
+        draftAvailable
+          ? html`
+              <openclaw-tooltip
+                class="new-session-page__draft-tooltip"
+                .content=${t("newSession.draftDescription")}
               >
-                ${icons.pencil}
-                ${draftActive
-                  ? html`<span class="new-session-page__draft-toggle-label"
-                      >${t("newSession.draft")}</span
-                    >`
-                  : nothing}
-              </button>
-            </openclaw-tooltip>
-          `
-        : nothing}
+                <button
+                  type="button"
+                  class="shell-chrome-controls__button new-session-page__draft-toggle ${
+                    draftActive ? "new-session-page__draft-toggle--active" : ""
+                  }"
+                  role="switch"
+                  aria-label=${`${t("newSession.draft")}: ${t("newSession.draftDescription")}`}
+                  aria-checked=${String(draftActive)}
+                  ?disabled=${
+                    submission.submitting || Boolean(submission.pendingPlacement.sessionKey)
+                  }
+                  title=${t("newSession.draftDescription")}
+                  @click=${() => submission.setVisibility(draftActive ? "normal" : "draft")}
+                >
+                  ${icons.pencil}
+                  ${
+                    draftActive
+                      ? html`<span class="new-session-page__draft-toggle-label"
+                          >${t("newSession.draft")}</span
+                        >`
+                      : nothing
+                  }
+                </button>
+              </openclaw-tooltip>
+            `
+          : nothing
+      }
       <openclaw-tooltip .content=${description}>
         <button
           type="button"
-          class="shell-chrome-controls__button new-session-page__incognito-toggle ${active
-            ? "new-session-page__incognito-toggle--active"
-            : ""}"
+          class="shell-chrome-controls__button new-session-page__incognito-toggle ${
+            active ? "new-session-page__incognito-toggle--active" : ""
+          }"
           role="switch"
           aria-label=${t("newSession.incognito")}
           aria-checked=${String(active)}
@@ -94,9 +99,9 @@ export function renderNewSessionIncognitoNotice(active: boolean) {
   const description = t("newSession.incognitoDescription");
   return html`
     <div
-      class="new-session-page__incognito-notice ${active
-        ? "new-session-page__incognito-notice--visible"
-        : ""}"
+      class="new-session-page__incognito-notice ${
+        active ? "new-session-page__incognito-notice--visible" : ""
+      }"
       role="status"
       aria-hidden=${String(!active)}
     >

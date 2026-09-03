@@ -488,8 +488,10 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               }}
               .worktreePath=${row.execNode || !isNativeLocalGateway() ? null : workspace.root}
               .onboarding=${this.onboarding}
-              .preferencesBrowserOnly=${this.context.runtimeConfig?.state.connected &&
-              this.context.runtimeConfig.canPatch === false}
+              .preferencesBrowserOnly=${
+                this.context.runtimeConfig?.state.connected &&
+                this.context.runtimeConfig.canPatch === false
+              }
               .compact=${this.narrow}
               .navigationAllowed=${true}
               .copyMarkdownAllowed=${canCopySessionMarkdown(this.context.gateway.snapshot)}
@@ -553,11 +555,13 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       onClosePane: this.onClosePane,
     });
     const continueCommand = this.currentContinueInTerminalCommand(row);
-    return html`${header}${continueCommand
-      ? renderContinueInTerminalDialog({
-          command: continueCommand,
-          onClose: () => this.closeContinueInTerminalDialog(),
-        })
-      : nothing}`;
+    return html`${header}${
+      continueCommand
+        ? renderContinueInTerminalDialog({
+            command: continueCommand,
+            onClose: () => this.closeContinueInTerminalDialog(),
+          })
+        : nothing
+    }`;
   }
 }

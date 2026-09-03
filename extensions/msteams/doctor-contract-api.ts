@@ -615,9 +615,9 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     async detectLegacyState(params) {
       const files = (
         await Promise.all(
-          (
-            await listCandidateStorePaths(params)
-          ).map((storePath) => listLegacyLearningFiles(storePath)),
+          (await listCandidateStorePaths(params)).map((storePath) =>
+            listLegacyLearningFiles(storePath),
+          ),
         )
       ).flat();
       if (files.length === 0) {
@@ -634,9 +634,9 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       const warnings: string[] = [];
       const files = (
         await Promise.all(
-          (
-            await listCandidateStorePaths(params)
-          ).map((storePath) => listLegacyLearningFiles(storePath)),
+          (await listCandidateStorePaths(params)).map((storePath) =>
+            listLegacyLearningFiles(storePath),
+          ),
         )
       ).flat();
       const store = params.context.openPluginStateKeyedStore<FeedbackLearningEntry>({

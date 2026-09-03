@@ -77,16 +77,20 @@ function renderDependencyDetailList(dependencies: WorkboardDependencyState) {
         ${dependencies.parents.map(
           (parent) => html`
             <li class=${parent.done ? "is-done" : "is-blocked"}>
-              ${parent.done
-                ? html`<span class="workboard-detail__dependency-spacer"></span>`
-                : icons.alertTriangle}
+              ${
+                parent.done
+                  ? html`<span class="workboard-detail__dependency-spacer"></span>`
+                  : icons.alertTriangle
+              }
               <span>${parent.title}</span>
               <span>
-                ${parent.missing
-                  ? t("workboard.dependencyStatusMissing")
-                  : parent.status
-                    ? formatStatusLabel(parent.status)
-                    : t("workboard.unknownStatus")}
+                ${
+                  parent.missing
+                    ? t("workboard.dependencyStatusMissing")
+                    : parent.status
+                      ? formatStatusLabel(parent.status)
+                      : t("workboard.unknownStatus")
+                }
               </span>
             </li>
           `,
@@ -259,9 +263,11 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
     <openclaw-modal-dialog
       class="drawer"
       label=${card.title}
-      description=${task && taskIsAuthoritative
-        ? taskDetail(task)
-        : (lifecycle.session?.displayName ?? formatted.detail)}
+      description=${
+        task && taskIsAuthoritative
+          ? taskDetail(task)
+          : (lifecycle.session?.displayName ?? formatted.detail)
+      }
       style="--openclaw-modal-width: min(460px, 100vw); --openclaw-modal-max-height: 100dvh;"
       @modal-cancel=${() => {
         closeCardDetails(state);
@@ -298,9 +304,11 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
                 ${formatted.label}
               </span>
               <span id=${workboardCardDetailDescriptionId} class="workboard-card__lifecycle-detail">
-                ${task && taskIsAuthoritative
-                  ? taskDetail(task)
-                  : (lifecycle.session?.displayName ?? formatted.detail)}
+                ${
+                  task && taskIsAuthoritative
+                    ? taskDetail(task)
+                    : (lifecycle.session?.displayName ?? formatted.detail)
+                }
               </span>
             </div>
             <div class="workboard-detail__grid">
@@ -316,80 +324,94 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
             </div>
           </section>
 
-          ${card.notes
-            ? html`
-                <section class="workboard-detail__section">
-                  <h3>${t("workboard.fieldNotes")}</h3>
-                  <p>${card.notes}</p>
-                </section>
-              `
-            : nothing}
-          ${linkedSessionKey
-            ? html`
-                <openclaw-workboard-card-dashboard
-                  .session=${{
-                    sessionKey: linkedSessionKey,
-                    agentId: parseAgentSessionKey(linkedSessionKey)?.agentId ?? card.agentId,
-                  }}
-                  .client=${props.client}
-                  .connected=${props.connected}
-                  .canMutate=${props.canWrite !== false}
-                  .canGrant=${props.canGrant === true}
-                ></openclaw-workboard-card-dashboard>
-              `
-            : nothing}
+          ${
+            card.notes
+              ? html`
+                  <section class="workboard-detail__section">
+                    <h3>${t("workboard.fieldNotes")}</h3>
+                    <p>${card.notes}</p>
+                  </section>
+                `
+              : nothing
+          }
+          ${
+            linkedSessionKey
+              ? html`
+                  <openclaw-workboard-card-dashboard
+                    .session=${{
+                      sessionKey: linkedSessionKey,
+                      agentId: parseAgentSessionKey(linkedSessionKey)?.agentId ?? card.agentId,
+                    }}
+                    .client=${props.client}
+                    .connected=${props.connected}
+                    .canMutate=${props.canWrite !== false}
+                    .canGrant=${props.canGrant === true}
+                  ></openclaw-workboard-card-dashboard>
+                `
+              : nothing
+          }
           ${renderDependencyDetailList(dependencies)}
           ${detailSections.map(([title, values]) => renderDetailList(title, values))}
 
           <section class="workboard-detail__section">
             <h3>${t("workboard.detailOperatorNotes")}</h3>
-            ${comments.length
-              ? html`
-                  <ol class="workboard-detail__list">
-                    ${comments.slice(-6).map((comment) => html`<li>${comment.body}</li>`)}
-                  </ol>
-                `
-              : html`<p>${t("workboard.detailNoNotes")}</p>`}
-            ${writable
-              ? html`
-                  <textarea
-                    class="input workboard-detail__note"
-                    maxlength="2000"
-                    placeholder=${t("workboard.detailNotePlaceholder")}
-                    .value=${state.detailCommentBody}
-                    @input=${(event: InputEvent) => {
-                      state.detailCommentBody = (event.currentTarget as HTMLTextAreaElement).value;
-                      props.onRequestUpdate?.();
-                    }}
-                  ></textarea>
-                  <button
-                    class="btn"
-                    type="button"
-                    ?disabled=${busy || !state.detailCommentBody.trim()}
-                    @click=${() =>
-                      addWorkboardCardComment({
-                        host: props.host,
-                        client: props.client,
-                        cardId: card.id,
-                        body: state.detailCommentBody,
-                        requestUpdate: props.onRequestUpdate,
-                      })}
-                  >
-                    ${icons.plus} ${t("workboard.detailAddNote")}
-                  </button>
-                `
-              : nothing}
+            ${
+              comments.length
+                ? html`
+                    <ol class="workboard-detail__list">
+                      ${comments.slice(-6).map((comment) => html`<li>${comment.body}</li>`)}
+                    </ol>
+                  `
+                : html`<p>${t("workboard.detailNoNotes")}</p>`
+            }
+            ${
+              writable
+                ? html`
+                    <textarea
+                      class="input workboard-detail__note"
+                      maxlength="2000"
+                      placeholder=${t("workboard.detailNotePlaceholder")}
+                      .value=${state.detailCommentBody}
+                      @input=${(event: InputEvent) => {
+                        state.detailCommentBody = (
+                          event.currentTarget as HTMLTextAreaElement
+                        ).value;
+                        props.onRequestUpdate?.();
+                      }}
+                    ></textarea>
+                    <button
+                      class="btn"
+                      type="button"
+                      ?disabled=${busy || !state.detailCommentBody.trim()}
+                      @click=${() =>
+                        addWorkboardCardComment({
+                          host: props.host,
+                          client: props.client,
+                          cardId: card.id,
+                          body: state.detailCommentBody,
+                          requestUpdate: props.onRequestUpdate,
+                        })}
+                    >
+                      ${icons.plus} ${t("workboard.detailAddNote")}
+                    </button>
+                  `
+                : nothing
+            }
           </section>
 
           <div class="workboard-detail__actions">
             ${writable && !archived ? renderEditCardAction(props, card) : nothing}
             ${writable ? renderArchiveCardAction(props, card, busy, archived) : nothing}
-            ${writable && !archived
-              ? renderCardMoveControl(props, card, busy, { wide: true })
-              : nothing}
-            ${writable && (linkedSessionKey ? live : activeTask)
-              ? renderStopCardAction(props, card, busy)
-              : nothing}
+            ${
+              writable && !archived
+                ? renderCardMoveControl(props, card, busy, { wide: true })
+                : nothing
+            }
+            ${
+              writable && (linkedSessionKey ? live : activeTask)
+                ? renderStopCardAction(props, card, busy)
+                : nothing
+            }
             ${renderOpenSessionCardAction(props, linkedSessionKey)}
             ${writable ? renderDeleteCardAction(props, card, busy) : nothing}
             ${showStartControls ? renderStartExecutionControls(props, card) : nothing}

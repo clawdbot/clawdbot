@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND } from "../infra/node-commands.js";
 import {
   mergeRemoteNodeSkillEntries,
   removeRemoteNodeSkills,
@@ -12,7 +13,11 @@ import {
   TALK_PTT_COMMANDS,
 } from "./node-command-policy.js";
 import { listConnectedNodePluginTools } from "./node-plugin-tool-snapshot.js";
-import { NodeRegistry, readNodeSessionWithheldCommands } from "./node-registry.js";
+import {
+  NodeRegistry,
+  readNodeSessionWithheldCommands,
+  type NodeSession,
+} from "./node-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
 const registries: NodeRegistry[] = [];
@@ -71,6 +76,7 @@ function createFixture(
     node,
     client,
     socket,
+    getConfig: () => config,
     publishConfig: (next: OpenClawConfig) => {
       config = next;
     },
@@ -81,7 +87,62 @@ function createFixture(
   };
 }
 
+function readCommandState(node: NodeSession, config: OpenClawConfig, command: string) {
+  return resolveRequiredNodeCommandAuthority({
+    requiredCommands: [command],
+    declaredCommands: node.declaredCommands,
+    effectiveCommands: node.commands,
+    withheldCommands: readNodeSessionWithheldCommands(node),
+    allowlist: resolveNodeCommandAllowlist(config, node),
+  })?.state;
+}
+
 describe("connected node runtime policy", () => {
+  it.each([
+    { command: "system.run", allow: [], state: "pending-approval" },
+    { command: "screen.snapshot", caps: ["screen"], allow: [], state: "pending-approval" },
+    { command: "computer.act", caps: ["computer"], allow: [], state: "pending-approval" },
+    { command: "camera.list", caps: ["camera"], allow: ["camera.list"], state: "pending-approval" },
+    {
+      command: "location.get",
+      caps: ["location"],
+      allow: ["location.get"],
+      state: "pending-approval",
+    },
+    { command: "talk.ptt.start", allow: [], state: "pending-approval" },
+    { command: "camera.snap", allow: [], state: "unauthorized" },
+    { command: "camera.snap", allow: ["camera.snap"], state: "pending-approval" },
+    {
+      command: NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+      allow: [NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND],
+      state: "unauthorized",
+    },
+  ])(
+    "classifies an unapproved $command as $state (allow=$allow)",
+    ({ command, allow, state, caps = [] }) => {
+      const config = { gateway: { nodes: { commands: { allow } } } };
+      const { registry, client, socket } = createFixture(config);
+      Object.assign(client.connect, {
+        caps,
+        commands: [],
+        declaredCaps: caps,
+        declaredCommands: [command],
+        sessionCapsCeiling: caps,
+        sessionCommandsCeiling: [command],
+      });
+      const node = registry.register(client, {
+        pairingIdentity: "policy-identity",
+        pairingGeneration: "policy-generation",
+        approvedSurface: { caps, commands: [] },
+      });
+
+      expect(readCommandState(node, config, command)).toBe(state);
+      expect(node.commands).toEqual([]);
+      expect(node.caps).toEqual([]);
+      expect(socket.close).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     { name: "command-only advertisement", caps: [], initiallyDenied: false },
     { name: "initially denied approved declaration", caps: [], initiallyDenied: true },
@@ -306,41 +367,25 @@ describe("connected node runtime policy", () => {
   });
 
   it("withdraws and restores approved commands without granting an unapproved declaration", () => {
-    const { node, client, socket, reload } = createFixture();
-    const commandAuthority = (config: OpenClawConfig, command: string) =>
-      resolveRequiredNodeCommandAuthority({
-        requiredCommands: [command],
-        declaredCommands: node.declaredCommands,
-        effectiveCommands: node.commands,
-        withheldCommands: readNodeSessionWithheldCommands(node),
-        allowlist: resolveNodeCommandAllowlist(config, node),
-      });
-    const deniedConfig = { gateway: { nodes: { commands: { deny: ["computer.act"] } } } };
-    reload(deniedConfig);
+    const { node, client, socket, reload, getConfig } = createFixture();
+    expect(readCommandState(node, getConfig(), "computer.act")).toBe("invocable");
+    expect(readCommandState(node, getConfig(), "screen.snapshot")).toBe("pending-approval");
+    reload({ gateway: { nodes: { commands: { deny: ["computer.act"] } } } });
 
     expect(node.commands).toEqual(["system.run"]);
     expect(node.caps).toEqual([]);
     expect(client.connect.commands).toEqual(["system.run"]);
     expect(readNodeSessionWithheldCommands(node)).toContain("computer.act");
-    expect(commandAuthority(deniedConfig, "computer.act")).toEqual({
-      command: "computer.act",
-      state: "unauthorized",
-    });
+    expect(readCommandState(node, getConfig(), "computer.act")).toBe("unauthorized");
+    expect(readCommandState(node, getConfig(), "screen.snapshot")).toBe("pending-approval");
 
-    const restoredConfig = { gateway: { nodes: { commands: { allow: ["screen.snapshot"] } } } };
-    reload(restoredConfig);
+    reload({ gateway: { nodes: { commands: { allow: ["screen.snapshot"] } } } });
 
     expect(node.commands).toEqual(["computer.act", "system.run"]);
     expect(node.caps).toEqual(["computer"]);
     expect(readNodeSessionWithheldCommands(node)).not.toContain("computer.act");
-    expect(commandAuthority(restoredConfig, "computer.act")).toEqual({
-      command: "computer.act",
-      state: "invocable",
-    });
-    expect(commandAuthority(restoredConfig, "screen.snapshot")).toEqual({
-      command: "screen.snapshot",
-      state: "pending-approval",
-    });
+    expect(readCommandState(node, getConfig(), "computer.act")).toBe("invocable");
+    expect(readCommandState(node, getConfig(), "screen.snapshot")).toBe("pending-approval");
     expect(node.connId).toBe("policy-conn");
     expect(node.pairingGeneration).toBe("policy-generation");
     expect(socket.close).not.toHaveBeenCalled();

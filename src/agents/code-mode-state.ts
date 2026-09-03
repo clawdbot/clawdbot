@@ -408,13 +408,11 @@ export function createPendingBridgeStates(
       signal,
       onUpdate: params.onUpdate,
     });
-    const completion = raceWithAbortSignal(bridgeCall, signal).catch(
-      (): SettledBridgeRequest => ({
-        id: request.id,
-        ok: false,
-        error: signal.reason instanceof Error ? signal.reason.message : BRIDGE_CLOSED_MESSAGE,
-      }),
-    );
+    const completion = raceWithAbortSignal(bridgeCall, signal).catch((): SettledBridgeRequest => ({
+      id: request.id,
+      ok: false,
+      error: signal.reason instanceof Error ? signal.reason.message : BRIDGE_CLOSED_MESSAGE,
+    }));
     const state: PendingBridgeState = {
       ...request,
       promise: completion.then((settled) => {

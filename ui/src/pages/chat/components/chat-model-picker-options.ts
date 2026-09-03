@@ -113,15 +113,15 @@ export function renderChatModelPickerOption(params: {
         .join(" · ");
   const accessibleStatus = needsAuth ? t("modelSetup.candidates.signInNeeded") : "";
   const option = html`<button
-    class="chat-controls__inline-select-option chat-controls__model-option ${selected
-      ? "chat-controls__inline-select-option--selected"
-      : ""}"
+    class="chat-controls__inline-select-option chat-controls__model-option ${
+      selected ? "chat-controls__inline-select-option--selected" : ""
+    }"
     data-chat-model-option=${params.entry.value}
     data-chat-model-default=${params.entry.isDefault ? "true" : nothing}
     data-chat-model-index=${params.index}
-    data-chat-model-keywords=${params.entry.isDefault
-      ? t("chat.modelControls.default").toLocaleLowerCase()
-      : nothing}
+    data-chat-model-keywords=${
+      params.entry.isDefault ? t("chat.modelControls.default").toLocaleLowerCase() : nothing
+    }
     data-chat-model-name=${modelLabel.toLocaleLowerCase()}
     data-chat-model-provider-label=${providerDisplayLabel(
       params.entry.provider,
@@ -157,36 +157,46 @@ export function renderChatModelPickerOption(params: {
     <span class="chat-controls__model-option-copy">
       <span class="chat-controls__model-option-title">
         <span class="chat-controls__model-option-name">${modelLabel}</span>
-        ${params.entry.isDefault
-          ? html`<span
-              class="chat-controls__model-state-label chat-controls__model-state-label--default"
-              >${t("chat.modelControls.default")}</span
-            >`
-          : nothing}
-        ${modelMeta
-          ? html`<span class="chat-controls__model-option-meta">${modelMeta}</span>`
-          : nothing}
-        ${needsAuth
-          ? html`<span
-              class="chat-controls__model-option-auth-warning"
-              data-chat-model-auth-warning
-            >
-              ${icons.alertTriangle}<span>${accessibleStatus}</span>
-            </span>`
-          : nothing}
-        ${params.entry.supportsTools === false
-          ? html`<span class="chat-controls__model-chat-only-info" aria-hidden="true"
-              >${icons.info}</span
-            >`
-          : nothing}
+        ${
+          params.entry.isDefault
+            ? html`<span
+                class="chat-controls__model-state-label chat-controls__model-state-label--default"
+                >${t("chat.modelControls.default")}</span
+              >`
+            : nothing
+        }
+        ${
+          modelMeta
+            ? html`<span class="chat-controls__model-option-meta">${modelMeta}</span>`
+            : nothing
+        }
+        ${
+          needsAuth
+            ? html`<span
+                class="chat-controls__model-option-auth-warning"
+                data-chat-model-auth-warning
+              >
+                ${icons.alertTriangle}<span>${accessibleStatus}</span>
+              </span>`
+            : nothing
+        }
+        ${
+          params.entry.supportsTools === false
+            ? html`<span class="chat-controls__model-chat-only-info" aria-hidden="true"
+                >${icons.info}</span
+              >`
+            : nothing
+        }
       </span>
     </span>
     <span class="chat-controls__model-option-action">
-      ${selected
-        ? html`<span class="chat-controls__inline-select-check" aria-hidden="true"
-            >${icons.check}</span
-          >`
-        : html`<kbd data-chat-model-shortcut="true" aria-hidden="true" hidden></kbd>`}
+      ${
+        selected
+          ? html`<span class="chat-controls__inline-select-check" aria-hidden="true"
+              >${icons.check}</span
+            >`
+          : html`<kbd data-chat-model-shortcut="true" aria-hidden="true" hidden></kbd>`
+      }
     </span>
   </button>`;
   return params.entry.supportsTools === false

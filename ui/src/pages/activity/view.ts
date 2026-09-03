@@ -254,31 +254,39 @@ function renderEntry(props: ActivityProps, entry: ActivityEntry) {
       </summary>
       <div class="activity-entry__body">
         <div class="activity-entry__facts">
-          ${entry.entryKind === "answer_candidate"
-            ? html`<span class="mono"
-                >${t("activity.answerCandidate.itemId")}: ${entry.itemId}</span
-              >`
-            : html`
-                <span>${hiddenArgumentsLabel(entry.hiddenArgumentCount)}</span>
-                <span class="mono">${t("activity.toolCallId")}: ${entry.toolCallId}</span>
-              `}
+          ${
+            entry.entryKind === "answer_candidate"
+              ? html`<span class="mono"
+                  >${t("activity.answerCandidate.itemId")}: ${entry.itemId}</span
+                >`
+              : html`
+                  <span>${hiddenArgumentsLabel(entry.hiddenArgumentCount)}</span>
+                  <span class="mono">${t("activity.toolCallId")}: ${entry.toolCallId}</span>
+                `
+          }
           <a
             class="activity-entry__run-link mono"
             href=${activityRunInspectorHref(entry.runId, props.basePath)}
             >${t("activity.runId")}: ${entry.runId}</a
           >
-          ${entry.sessionKey
-            ? html`<span class="mono">${t("activity.session")}: ${entry.sessionKey}</span>`
-            : nothing}
+          ${
+            entry.sessionKey
+              ? html`<span class="mono">${t("activity.session")}: ${entry.sessionKey}</span>`
+              : nothing
+          }
         </div>
-        ${entry.outputPreview
-          ? html`
-              <pre class="activity-entry__preview">${entry.outputPreview}</pre>
-              ${entry.outputTruncated
-                ? html`<div class="activity-entry__note">${t("activity.outputTruncated")}</div>`
-                : nothing}
-            `
-          : html`<div class="activity-entry__note">${t("activity.noOutputPreview")}</div>`}
+        ${
+          entry.outputPreview
+            ? html`
+                <pre class="activity-entry__preview">${entry.outputPreview}</pre>
+                ${
+                  entry.outputTruncated
+                    ? html`<div class="activity-entry__note">${t("activity.outputTruncated")}</div>`
+                    : nothing
+                }
+              `
+            : html`<div class="activity-entry__note">${t("activity.noOutputPreview")}</div>`
+        }
       </div>
     </details>
   `;
@@ -341,15 +349,19 @@ export function renderActivity(props: ActivityProps) {
           aria-label=${t("activity.streamLabel")}
           @scroll=${props.onScroll}
         >
-          ${filtered.length === 0
-            ? html`
-                <div class="activity-empty">
-                  ${props.entries.length === 0 || !hasAnyFilters
-                    ? t("activity.empty")
-                    : t("activity.emptyFiltered")}
-                </div>
-              `
-            : filtered.map((entry) => renderEntry(props, entry))}
+          ${
+            filtered.length === 0
+              ? html`
+                  <div class="activity-empty">
+                    ${
+                      props.entries.length === 0 || !hasAnyFilters
+                        ? t("activity.empty")
+                        : t("activity.emptyFiltered")
+                    }
+                  </div>
+                `
+              : filtered.map((entry) => renderEntry(props, entry))
+          }
         </div>
       </div>
     </section>

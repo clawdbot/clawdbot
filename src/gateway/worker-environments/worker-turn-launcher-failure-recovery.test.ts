@@ -558,19 +558,17 @@ describe("worker turn launcher failure recovery", () => {
       throw new Error("unexpected worker handoff");
     });
     const acknowledgeCredentialDelivery = vi.fn(() => true);
-    const startTunnel = vi.fn(
-      async (): Promise<WorkerTunnelHandle> => ({
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
-        quiesceWorkspace: vi.fn(),
-        runWorkspaceCommand: vi.fn(),
-        measureLaunchTurn,
-        launchTurn,
-        syncWorkspace: vi.fn(),
-        reconcileWorkspace: vi.fn(),
-        stop: vi.fn(async () => {}),
-      }),
-    );
+    const startTunnel = vi.fn(async (): Promise<WorkerTunnelHandle> => ({
+      environmentId: ENVIRONMENT_ID,
+      ownerEpoch: OWNER_EPOCH,
+      quiesceWorkspace: vi.fn(),
+      runWorkspaceCommand: vi.fn(),
+      measureLaunchTurn,
+      launchTurn,
+      syncWorkspace: vi.fn(),
+      reconcileWorkspace: vi.fn(),
+      stop: vi.fn(async () => {}),
+    }));
     const stopTunnel = vi.fn(async () => {});
     const destroy = vi.fn(async () => attachedEnvironment());
     const environments: WorkerTurnEnvironmentService = {

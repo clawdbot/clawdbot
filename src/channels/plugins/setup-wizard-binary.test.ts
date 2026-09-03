@@ -88,20 +88,18 @@ describe("createCliPathTextInput", () => {
 
 describe("createDelegatedSetupWizardStatusResolvers", () => {
   it("forwards optional status resolvers to the loaded wizard", async () => {
-    const loadWizard = vi.fn(
-      async (): Promise<ChannelSetupWizard> => ({
-        channel: "demo",
-        status: {
-          configuredLabel: "configured",
-          unconfiguredLabel: "needs setup",
-          resolveConfigured: () => true,
-          resolveStatusLines: async () => ["line"],
-          resolveSelectionHint: async () => "hint",
-          resolveQuickstartScore: async () => 7,
-        },
-        credentials: [],
-      }),
-    );
+    const loadWizard = vi.fn(async (): Promise<ChannelSetupWizard> => ({
+      channel: "demo",
+      status: {
+        configuredLabel: "configured",
+        unconfiguredLabel: "needs setup",
+        resolveConfigured: () => true,
+        resolveStatusLines: async () => ["line"],
+        resolveSelectionHint: async () => "hint",
+        resolveQuickstartScore: async () => 7,
+      },
+      credentials: [],
+    }));
 
     const status = createDelegatedSetupWizardStatusResolvers(loadWizard);
 
@@ -113,24 +111,22 @@ describe("createDelegatedSetupWizardStatusResolvers", () => {
 
 describe("createDelegatedTextInputShouldPrompt", () => {
   it("forwards shouldPrompt for the requested input key", async () => {
-    const loadWizard = vi.fn(
-      async (): Promise<ChannelSetupWizard> => ({
-        channel: "demo",
-        status: {
-          configuredLabel: "configured",
-          unconfiguredLabel: "needs setup",
-          resolveConfigured: () => true,
+    const loadWizard = vi.fn(async (): Promise<ChannelSetupWizard> => ({
+      channel: "demo",
+      status: {
+        configuredLabel: "configured",
+        unconfiguredLabel: "needs setup",
+        resolveConfigured: () => true,
+      },
+      credentials: [],
+      textInputs: [
+        {
+          inputKey: "cliPath",
+          message: "CLI path",
+          shouldPrompt: async ({ currentValue }) => currentValue !== "imsg",
         },
-        credentials: [],
-        textInputs: [
-          {
-            inputKey: "cliPath",
-            message: "CLI path",
-            shouldPrompt: async ({ currentValue }) => currentValue !== "imsg",
-          },
-        ],
-      }),
-    );
+      ],
+    }));
 
     const shouldPrompt = createDelegatedTextInputShouldPrompt({
       loadWizard,

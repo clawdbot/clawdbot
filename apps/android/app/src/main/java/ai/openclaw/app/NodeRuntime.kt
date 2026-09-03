@@ -1115,6 +1115,9 @@ class NodeRuntime private constructor(
   // of the UI request or lifecycle sequence that originally admitted it.
   private class GatewayConnectionContext(
     val auth: GatewayConnectAuth,
+    // A started session owns retries and auth pauses before readiness is published.
+    // Only bootstrap without operator auth may admit this role after the node connects.
+    var operatorConnectAdmitted: Boolean = false,
   )
 
   private var activeGatewayConnection: GatewayConnectionContext? = null
@@ -4562,7 +4565,8 @@ class NodeRuntime private constructor(
   ): Boolean =
     runGatewayConnectOperation {
       beforeConnect()
-      activeGatewayConnection = GatewayConnectionContext(auth)
+      val connection = GatewayConnectionContext(auth)
+      activeGatewayConnection = connection
       val tls = connectionManager.resolveTlsParams(endpoint)
       val storedOperatorEntry = loadStoredRoleDeviceAuthEntry(endpoint, "operator")
       refreshGatewayControlPage(endpoint, auth, storedOperatorEntry?.token)
@@ -4581,6 +4585,7 @@ class NodeRuntime private constructor(
         }
         operatorSession.disconnect()
       } else {
+        connection.operatorConnectAdmitted = true
         operatorSession.connect(
           endpoint,
           operatorAuth.token,
@@ -4878,8 +4883,9 @@ class NodeRuntime private constructor(
       val operatorAuth =
         resolveOperatorSessionConnectAuth(auth, storedOperatorEntry?.token) ?: return@launch
       launchGatewayLifecycle({ activeGatewayConnection === connection && connectedEndpoint?.stableId == endpoint.stableId }) {
-        if (operatorConnected) return@launchGatewayLifecycle
+        if (connection.operatorConnectAdmitted) return@launchGatewayLifecycle
         runGatewayConnectOperation {
+          connection.operatorConnectAdmitted = true
           updateStatus {
             operatorStatusText = "Connecting…"
             operatorConnectionProblem = null

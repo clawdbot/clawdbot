@@ -222,52 +222,60 @@ export class CustodianPage extends OpenClawLightDomElement {
         : nothing;
     return html`
       <section
-        class="custodian custodian--page ${this.store.setupRequired
-          ? "custodian--setup-required"
-          : ""}"
+        class="custodian custodian--page ${
+          this.store.setupRequired ? "custodian--setup-required" : ""
+        }"
       >
         <header
-          class="custodian__header custodian__column ${this.onboarding
-            ? "custodian__header--minimal"
-            : ""}"
+          class="custodian__header custodian__column ${
+            this.onboarding ? "custodian__header--minimal" : ""
+          }"
         >
-          ${this.onboarding
-            ? nothing
-            : html`<div class="custodian__identity">
-                <div class="custodian__mark" aria-hidden="true">
-                  <openclaw-mascot
-                    .mood=${this.store.sending ? "thinking" : "idle"}
-                    .size=${38}
-                  ></openclaw-mascot>
-                </div>
-                <div>
-                  <h1>${t("custodian.title")}</h1>
-                  <p>${t("custodian.subtitleCaretaker")}</p>
-                </div>
-              </div>`}
+          ${
+            this.onboarding
+              ? nothing
+              : html`<div class="custodian__identity">
+                  <div class="custodian__mark" aria-hidden="true">
+                    <openclaw-mascot
+                      .mood=${this.store.sending ? "thinking" : "idle"}
+                      .size=${38}
+                    ></openclaw-mascot>
+                  </div>
+                  <div>
+                    <h1>${t("custodian.title")}</h1>
+                    <p>${t("custodian.subtitleCaretaker")}</p>
+                  </div>
+                </div>`
+          }
           <div class="custodian__header-actions">
-            ${this.onboarding
-              ? html`<openclaw-sidebar-attention></openclaw-sidebar-attention>`
-              : nothing}
-            ${this.historyAvailable
-              ? html`<button
-                  class="btn btn--ghost custodian__history-toggle"
-                  type="button"
-                  aria-expanded=${this.historyOpen ? "true" : "false"}
-                  @click=${() => this.toggleHistory()}
-                >
-                  ${t("custodian.history.button")}
-                </button>`
-              : nothing}
-            ${this.onboarding
-              ? html`<button
-                  class="btn btn--ghost"
-                  type="button"
-                  @click=${() => this.store.exitSetup()}
-                >
-                  ${t("custodian.exitSetup")}
-                </button>`
-              : nothing}
+            ${
+              this.onboarding
+                ? html`<openclaw-sidebar-attention></openclaw-sidebar-attention>`
+                : nothing
+            }
+            ${
+              this.historyAvailable
+                ? html`<button
+                    class="btn btn--ghost custodian__history-toggle"
+                    type="button"
+                    aria-expanded=${this.historyOpen ? "true" : "false"}
+                    @click=${() => this.toggleHistory()}
+                  >
+                    ${t("custodian.history.button")}
+                  </button>`
+                : nothing
+            }
+            ${
+              this.onboarding
+                ? html`<button
+                    class="btn btn--ghost"
+                    type="button"
+                    @click=${() => this.store.exitSetup()}
+                  >
+                    ${t("custodian.exitSetup")}
+                  </button>`
+                : nothing
+            }
           </div>
         </header>
 
