@@ -2770,7 +2770,7 @@ jobs:
               pnpm check:coercion-helpers
               ;;
             baseline-ratchets)
-              for required_script in check:max-lines-ratchet check:assertion-safety; do
+              for required_script in check:max-lines-ratchet check:assertion-safety config:docs:check plugins:inventory:check; do
                 if ! has_package_script "$required_script"; then
                   echo "Current CI targets must provide ${required_script}." >&2
                   exit 1
@@ -2795,6 +2795,8 @@ jobs:
               fi
               pnpm check:max-lines-ratchet --base "$base_ref"
               pnpm check:assertion-safety --base "$base_ref"
+              pnpm config:docs:check
+              pnpm plugins:inventory:check
               ;;
             release-lint-core-*)
               stripe="${TASK#release-lint-core-}"
@@ -4085,6 +4087,12 @@ jobs:
       - name: Check formatting
         if: needs.preflight.outputs.run_format_check == 'true'
         run: pnpm format:check
+
+      - name: Check config docs baseline
+        run: pnpm config:docs:check
+
+      - name: Check plugin inventory
+        run: pnpm plugins:inventory:check
 
       - name: Checkout ClawHub docs source
         shell: bash

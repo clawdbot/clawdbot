@@ -3449,6 +3449,8 @@ NODE
       ["src/old.ts", "docs/new.md", "true", "false"],
       ["docs/old.md", "src/new.ts", "true", "false"],
       ["docs/old.md", "docs/new.md", "true", "true"],
+      ["docs/old.md", "docs/.generated/config-baseline.counts.json", "true", "true"],
+      ["docs/old.md", "docs/plugins/plugin-inventory.md", "true", "true"],
       ["src/old.ts", "src/new.ts", "false", "false"],
       ["test/fixtures/old.md", "docs/new.md", "true", "false"],
       ["docs/removed.md", null, "true", "true"],
@@ -3507,6 +3509,20 @@ NODE
       expect(readFileSync(trace, "utf8")).not.toContain('"fetch"');
       expect(localObjects()).not.toContain(sourceBlob);
     }
+  });
+
+  it("runs generated docs checks in the docs-only job", () => {
+    const job = readCiWorkflow().jobs["check-docs"];
+    const configDocsCheck = job.steps.find(
+      (step: WorkflowStep) => step.name === "Check config docs baseline",
+    );
+    const pluginInventoryCheck = job.steps.find(
+      (step: WorkflowStep) => step.name === "Check plugin inventory",
+    );
+
+    expect(job.if).toBe("needs.preflight.outputs.run_check_docs == 'true'");
+    expect(configDocsCheck?.run).toBe("pnpm config:docs:check");
+    expect(pluginInventoryCheck?.run).toBe("pnpm plugins:inventory:check");
   });
 
   it("bounds matrix fan-out for runner-registration pressure", () => {
@@ -10292,7 +10308,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "OPENCLAW_E2E_SKIP_BUILD=1 OPENCLAW_TEST_BUN_LAUNCHER=1 pnpm test test/openclaw-launcher.e2e.test.ts",
     );
     expect(checksFastRun.run).toContain(
-      "for required_script in check:max-lines-ratchet check:assertion-safety; do",
+      "for required_script in check:max-lines-ratchet check:assertion-safety config:docs:check plugins:inventory:check; do",
     );
     expect(checksFastRun.run).toContain('has_package_script "$required_script"');
     expect(checksFastRun.env.RATCHET_PR_HEAD_SHA).toBe(
@@ -10352,6 +10368,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(checksFastRun.run).not.toContain("+${merge_base}:refs/remotes/origin/ci-ratchet-base");
     expect(checksFastRun.run).toContain('pnpm check:max-lines-ratchet --base "$base_ref"');
     expect(checksFastRun.run).toContain('pnpm check:assertion-safety --base "$base_ref"');
+    expect(checksFastRun.run).toContain("pnpm config:docs:check");
+    expect(checksFastRun.run).toContain("pnpm plugins:inventory:check");
     expect(maxLinesRatchet).toContain(
       'import { main as checkEnvVarCount } from "./check-env-var-count.mts";',
     );
