@@ -71,29 +71,30 @@ describe("memory search result monotonicity", () => {
   it.each([
     { name: "an ordinary search", activeProjectKeys: undefined },
     { name: "a project-aware search", activeProjectKeys: ["pool-project"] },
-  ])("retrieves one candidate width across requested counts for $name", async ({
-    activeProjectKeys,
-  }) => {
-    await seedGradedCorpus(12);
-    const manager = await getFreshManager(hybridConfig());
-    try {
-      await manager.sync({ reason: "test" });
-      const knnLimits: number[] = [];
-      const runKnn = knnSubprocess.runVectorKnnInSubprocess;
-      vi.spyOn(knnSubprocess, "runVectorKnnInSubprocess").mockImplementation(async (params) => {
-        knnLimits.push(params.request.limit);
-        return await runKnn(params);
-      });
-      for (const maxResults of [1, 2, 6]) {
-        await manager.search("alpha", { maxResults, minScore: 0, activeProjectKeys });
+  ])(
+    "retrieves one candidate width across requested counts for $name",
+    async ({ activeProjectKeys }) => {
+      await seedGradedCorpus(12);
+      const manager = await getFreshManager(hybridConfig());
+      try {
+        await manager.sync({ reason: "test" });
+        const knnLimits: number[] = [];
+        const runKnn = knnSubprocess.runVectorKnnInSubprocess;
+        vi.spyOn(knnSubprocess, "runVectorKnnInSubprocess").mockImplementation(async (params) => {
+          knnLimits.push(params.request.limit);
+          return await runKnn(params);
+        });
+        for (const maxResults of [1, 2, 6]) {
+          await manager.search("alpha", { maxResults, minScore: 0, activeProjectKeys });
+        }
+        // Retrieval width must not vary with the requested count, otherwise fusion ranks
+        // a different candidate set per call. Project expansion scales the one floored
+        // window, so its width stays constant too.
+        expect(new Set(knnLimits).size).toBe(1);
+      } finally {
+        vi.restoreAllMocks();
+        await manager.close?.();
       }
-      // Retrieval width must not vary with the requested count, otherwise fusion ranks
-      // a different candidate set per call. Project expansion scales the one floored
-      // window, so its width stays constant too.
-      expect(new Set(knnLimits).size).toBe(1);
-    } finally {
-      vi.restoreAllMocks();
-      await manager.close?.();
-    }
-  });
+    },
+  );
 });
