@@ -62,13 +62,14 @@
  * opposite verdict.
  *
  * ENTRYPOINT
- * Drives `dist/entry.js` when a build is present, otherwise `src/entry.ts`
- * through the repository's own tsx loader. Either way it is the production CLI
- * entry, and the script prints which one it used.
+ * Drives `dist/entry.js` only when `dist/build-info.json` identifies the exact
+ * reviewed `HEAD`; otherwise it uses `src/entry.ts` through the repository's
+ * own tsx loader. Either way it is the production CLI entry, and the script
+ * prints which one it used.
  *
  * Run: pnpm tsx scripts/proof-136411-plugin-diagnostic-warn-level.ts
  */
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
@@ -129,11 +130,22 @@ function removeTempRoots(): void {
   }
 }
 
-/** Resolves the production CLI entry, preferring a build when one exists. */
+/** Resolves the production CLI entry, using only a build of the reviewed head. */
 function resolveEntry(): { args: string[]; label: string } {
   const dist = path.join(repoRoot, "dist", "entry.js");
-  if (fs.existsSync(dist)) {
-    return { args: [dist], label: "dist/entry.js (built)" };
+  const buildInfo = path.join(repoRoot, "dist", "build-info.json");
+  try {
+    const head = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+    }).trim();
+    const builtCommit = (JSON.parse(fs.readFileSync(buildInfo, "utf-8")) as { commit?: unknown })
+      .commit;
+    if (fs.existsSync(dist) && typeof builtCommit === "string" && builtCommit === head) {
+      return { args: [dist], label: "dist/entry.js (built from current HEAD)" };
+    }
+  } catch {
+    // Missing, malformed, or unverifiable build metadata makes dist ineligible.
   }
   return {
     args: [
@@ -141,7 +153,7 @@ function resolveEntry(): { args: string[]; label: string } {
       path.join(repoRoot, "scripts", "tsx.mjs"),
       path.join(repoRoot, "src", "entry.ts"),
     ],
-    label: "src/entry.ts (tsx loader)",
+    label: "src/entry.ts (tsx loader; no matching dist build)",
   };
 }
 
@@ -262,15 +274,32 @@ function run(
   env: Record<string, string>,
 ): Promise<{ code: number | null; output: string }> {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [...entryArgs, ...args], { cwd: repoRoot, env });
     let output = "";
-    child.stdout.on("data", (chunk: Buffer) => {
+    let settled = false;
+    const finish = (result: { code: number | null; output: string }): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolve(result);
+    };
+    let child: ChildProcess;
+    try {
+      child = spawn(process.execPath, [...entryArgs, ...args], { cwd: repoRoot, env });
+    } catch (error: unknown) {
+      finish({ code: 1, output: `spawn failed: ${String(error)}` });
+      return;
+    }
+    child.stdout?.on("data", (chunk: Buffer) => {
       output += chunk.toString();
     });
-    child.stderr.on("data", (chunk: Buffer) => {
+    child.stderr?.on("data", (chunk: Buffer) => {
       output += chunk.toString();
     });
-    child.on("close", (code) => resolve({ code, output }));
+    child.once("error", (error) => {
+      finish({ code: 1, output: `${output}spawn failed: ${String(error)}` });
+    });
+    child.once("close", (code) => finish({ code, output }));
   });
 }
 
@@ -278,6 +307,9 @@ async function main(): Promise<number> {
   console.log("proof-136411: warn-level plugin diagnostics must use the Gateway warning sink");
   const entry = resolveEntry();
   console.log(`  entrypoint: ${entry.label}`);
+  if (process.argv.includes("--entry-only")) {
+    return 0;
+  }
 
   const cacheRoot = path.join(repoRoot, ".artifacts", "proof-136411");
   fs.mkdirSync(cacheRoot, { recursive: true });
@@ -346,6 +378,7 @@ async function main(): Promise<number> {
   console.log("\n=== gateway: a real startup that must present the diagnostic ===");
   let gateway: ChildProcess | undefined;
   let consoleStream = "";
+  let gatewaySpawnError: Error | undefined;
   try {
     gateway = spawn(
       process.execPath,
@@ -371,10 +404,17 @@ async function main(): Promise<number> {
     gateway.stderr?.on("data", (chunk: Buffer) => {
       consoleStream += chunk.toString();
     });
+    gateway.once("error", (error) => {
+      gatewaySpawnError = error;
+      consoleStream += `spawn failed: ${String(error)}`;
+    });
 
     const deadline = Date.now() + 180_000;
     let ready = false;
     while (Date.now() < deadline) {
+      if (gatewaySpawnError) {
+        break;
+      }
       try {
         const response = await fetch(`http://127.0.0.1:${port}/readyz`);
         if (response.status === 200) {
@@ -388,6 +428,9 @@ async function main(): Promise<number> {
     }
     check("gateway reported ready", ready, true);
     if (!ready) {
+      if (gatewaySpawnError) {
+        console.log(`  gateway spawn failed: ${String(gatewaySpawnError)}`);
+      }
       console.log(redact(consoleStream).trim().split("\n").slice(-20).join("\n"));
       return 1;
     }
