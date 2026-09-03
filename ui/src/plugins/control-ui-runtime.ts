@@ -289,7 +289,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
     try {
       const styles: HTMLLinkElement[] = [];
       const initialize = async (): Promise<ControlUiPluginOwner | undefined> => {
-        const { initializeControlUiPlugin } = await import("./control-ui-host.ts");
+        const { initializeControlUiPlugin } = await import("./control-ui-loader.ts");
         return initializeControlUiPlugin(this.getContext, this, owner, styles, () =>
           this.disposeOwner(owner),
         );
