@@ -8,7 +8,7 @@ import {
 } from "../lifecycle/workspace-skill-write.js";
 import { resolveSkillManifestMetadata } from "../loading/frontmatter.js";
 import type { Skill } from "../loading/skill-contract.js";
-import { loadSkillRootRecords } from "../loading/workspace-skill-loader.js";
+import { loadSkillRootRecords } from "../loading/skill-root-loader.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
 
 function assertWritableSkillTarget(
