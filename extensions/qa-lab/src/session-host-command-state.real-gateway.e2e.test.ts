@@ -442,11 +442,11 @@ async function waitForReconnect(client: GatewayClient, previousCount: number): P
 
 function createDeviceIdentity(): DeviceIdentity {
   const { privateKey, publicKey } = crypto.generateKeyPairSync("ed25519");
-  const publicKeyPem = publicKey.export({ format: "pem", type: "spki" }).toString();
+  const publicKeyPem = publicKey.export({ format: "pem", type: "spki" });
   const publicKeyRaw = publicKey.export({ format: "der", type: "spki" }).subarray(-32);
   return {
     deviceId: crypto.createHash("sha256").update(publicKeyRaw).digest("hex"),
-    privateKeyPem: privateKey.export({ format: "pem", type: "pkcs8" }).toString(),
+    privateKeyPem: privateKey.export({ format: "pem", type: "pkcs8" }),
     publicKeyPem,
   };
 }
