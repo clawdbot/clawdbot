@@ -207,6 +207,15 @@ async function maybeCreateSessionSqliteGithubIssue(
     }
     return;
   }
+  if (created.status === "fallback-unavailable") {
+    const message =
+      "GitHub issue creation is unavailable, and this report is too large for a safe browser fallback.";
+    report.supportIssue.github = { message, status: "failed" };
+    if (shouldLog) {
+      runtime.log(`session-sqlite recover: ${message}`);
+    }
+    return;
+  }
   const message =
     created.reason === "cli-unavailable"
       ? "GitHub CLI is unavailable."
@@ -221,7 +230,7 @@ async function maybeCreateSessionSqliteGithubIssue(
     runtime.log(
       opened
         ? "session-sqlite recover: opened the sanitized fallback in your browser"
-        : "session-sqlite recover: browser handoff unavailable; rerun this recovery in JSON mode to retrieve the sanitized fallback",
+        : "session-sqlite recover: browser handoff unavailable; the sanitized report remains available in the recovery result",
     );
   }
 }

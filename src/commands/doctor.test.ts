@@ -35,7 +35,10 @@ vi.mock("./doctor-sqlite-maintenance-lock.js", () => ({
 vi.mock("../infra/github-issue.js", () => ({
   prepareGithubIssue: (input: { body: string; title: string }) => ({
     ...input,
-    fallbackUrl: "https://github.com/openclaw/openclaw/issues/new?title=run-1",
+    browserFallback: {
+      status: "available",
+      url: "https://github.com/openclaw/openclaw/issues/new?title=run-1",
+    },
     marker: `openclaw-report:${"a".repeat(64)}`,
   }),
   submitGithubIssue: mocks.submitGithubIssue,
@@ -351,7 +354,10 @@ describe("doctorCommand", () => {
 
     expect(mocks.submitGithubIssue).toHaveBeenCalledWith({
       body: supportIssue.body,
-      fallbackUrl: supportIssue.url,
+      browserFallback: {
+        status: "available",
+        url: supportIssue.url,
+      },
       marker: `openclaw-report:${"a".repeat(64)}`,
       title: supportIssue.title,
     });
@@ -477,12 +483,72 @@ describe("doctorCommand", () => {
     expect(mocks.openUrl).toHaveBeenCalledWith(fallbackUrl);
     const output = runtime.log.mock.calls.flat().join("\n");
     expect(output).toContain(
-      "browser handoff unavailable; rerun this recovery in JSON mode to retrieve the sanitized fallback",
+      "browser handoff unavailable; the sanitized report remains available in the recovery result",
     );
     expect(output).not.toContain("private-report-text");
     expect(output).not.toContain("issues/new?");
     expect((supportIssue as { github?: unknown }).github).toEqual({
       message: "GitHub issue creation is unavailable.",
+      status: "failed",
+    });
+  });
+
+  it("keeps an oversized fallback in the recovery result without opening a browser", async () => {
+    const supportIssue = {
+      body: "private-report-text".repeat(1_000),
+      title: "Session SQLite migration recovery report (run-1)",
+    };
+    const report = {
+      mode: "recover",
+      supportIssue,
+      targets: [],
+      totals: {
+        archivedTranscriptFiles: 0,
+        archivedUnreferencedJsonlFiles: 0,
+        importedEntries: 0,
+        importedTranscriptEvents: 0,
+        issues: 0,
+        legacyEntries: 0,
+        sqliteEntries: 0,
+        targets: 0,
+        unreferencedJsonlFiles: 0,
+        validatedEntries: 0,
+        validatedTranscriptEvents: 0,
+      },
+    };
+    mocks.runDoctorSessionSqlite.mockResolvedValueOnce(report);
+    mocks.submitGithubIssue.mockResolvedValueOnce({
+      cause: "authentication-unavailable",
+      reason: "fallback-url-too-long",
+      status: "fallback-unavailable",
+    });
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      writeStdout: vi.fn(),
+      writeJson: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
+
+    await expect(
+      doctorCommand(runtime, {
+        sessionSqlite: "recover",
+        sessionSqliteGithubIssue: true,
+        yes: true,
+      }),
+    ).rejects.toThrow("exit:0");
+
+    expect(mocks.openUrl).not.toHaveBeenCalled();
+    expect(supportIssue.body).toContain("private-report-text");
+    const output = runtime.log.mock.calls.flat().join("\n");
+    expect(output).toContain("too large for a safe browser fallback");
+    expect(output).not.toContain("private-report-text");
+    expect(output).not.toContain("openclaw ");
+    expect((supportIssue as { github?: unknown }).github).toEqual({
+      message:
+        "GitHub issue creation is unavailable, and this report is too large for a safe browser fallback.",
       status: "failed",
     });
   });

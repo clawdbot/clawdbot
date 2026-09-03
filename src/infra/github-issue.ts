@@ -5,17 +5,31 @@ import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 
 export type PreparedGithubIssue = {
   body: string;
-  fallbackUrl: string;
+  browserFallback: GithubIssueBrowserFallback;
   marker: string;
   title: string;
 };
 
+export type GithubIssueBrowserFallback =
+  | { status: "available"; url: string }
+  | { reason: "url-too-long"; status: "unavailable" };
+
+type GithubIssueBrowserFallbackReason =
+  | "authentication-unavailable"
+  | "cli-unavailable"
+  | "transport-unavailable";
+
 export type GithubIssueSubmitResult =
   | { status: "created"; url: string }
   | {
-      reason: "authentication-unavailable" | "cli-unavailable" | "transport-unavailable";
+      reason: GithubIssueBrowserFallbackReason;
       status: "browser-fallback";
       url: string;
+    }
+  | {
+      cause: GithubIssueBrowserFallbackReason;
+      reason: "fallback-url-too-long";
+      status: "fallback-unavailable";
     }
   | { reason: "creation-outcome-unknown"; status: "outcome-unknown" };
 
@@ -37,10 +51,8 @@ const GITHUB_ISSUE_CREATE_TIMEOUT_MS = 30_000;
 const GITHUB_OUTPUT_MAX_BYTES = 1024 * 1024;
 const GITHUB_ISSUE_BODY_MAX_BYTES = 20_000;
 const GITHUB_ISSUE_TITLE_MAX_BYTES = 512;
-const GITHUB_PREFILL_BODY_MAX_BYTES = 6_000;
-const GITHUB_PREFILL_URL_MAX_CHARS = 16_384;
+const GITHUB_PREFILL_URL_MAX_BYTES = 8_000;
 const GITHUB_BODY_TRUNCATED_SUFFIX = "\n\n...<truncated>";
-const GITHUB_PREFILL_TRUNCATED_SUFFIX = "\n\n...(truncated for URL)";
 const GITHUB_MARKER_RE = /^openclaw-report:[a-f0-9]{64}$/u;
 const GITHUB_AUTH_ARGS = ["auth", "status", "--active", "--hostname", "github.com"] as const;
 const inflightSubmissions = new Map<string, Promise<GithubIssueSubmitResult>>();
@@ -58,33 +70,17 @@ function buildPrefilledUrl(title: string, body: string): string {
   return `https://github.com/openclaw/openclaw/issues/new?${query.toString()}`;
 }
 
-/** Builds a bounded browser fallback from content sanitized by its domain owner. */
-export function prepareGithubIssueBrowserFallback(title: string, body: string): string {
+/** Builds an exact browser fallback when its encoded request stays within a safe bound. */
+export function prepareGithubIssueBrowserFallback(
+  title: string,
+  body: string,
+): GithubIssueBrowserFallback {
   const boundedTitle = boundUtf8(title, GITHUB_ISSUE_TITLE_MAX_BYTES, GITHUB_BODY_TRUNCATED_SUFFIX);
-  const bodyBytes = Buffer.byteLength(body, "utf8");
-  if (bodyBytes <= GITHUB_PREFILL_BODY_MAX_BYTES) {
-    const fullUrl = buildPrefilledUrl(boundedTitle, body);
-    if (fullUrl.length <= GITHUB_PREFILL_URL_MAX_CHARS) {
-      return fullUrl;
-    }
+  const url = buildPrefilledUrl(boundedTitle, body);
+  if (Buffer.byteLength(url, "utf8") > GITHUB_PREFILL_URL_MAX_BYTES) {
+    return { reason: "url-too-long", status: "unavailable" };
   }
-  let low = 0;
-  let high = Math.min(bodyBytes, GITHUB_PREFILL_BODY_MAX_BYTES);
-  let result = buildPrefilledUrl(boundedTitle, GITHUB_PREFILL_TRUNCATED_SUFFIX);
-  while (low <= high) {
-    const middle = Math.floor((low + high) / 2);
-    const candidate = buildPrefilledUrl(
-      boundedTitle,
-      `${truncateUtf8Prefix(body, middle)}${GITHUB_PREFILL_TRUNCATED_SUFFIX}`,
-    );
-    if (candidate.length <= GITHUB_PREFILL_URL_MAX_CHARS) {
-      result = candidate;
-      low = middle + 1;
-    } else {
-      high = middle - 1;
-    }
-  }
-  return result;
+  return { status: "available", url };
 }
 
 /** Bounds sanitized content and adds the stable marker used for reconciliation. */
@@ -108,10 +104,19 @@ export function prepareGithubIssue(input: { body: string; title: string }): Prep
   )}${markerComment}`;
   return {
     body,
-    fallbackUrl: prepareGithubIssueBrowserFallback(title, body),
+    browserFallback: prepareGithubIssueBrowserFallback(title, body),
     marker,
     title,
   };
+}
+
+function browserFallbackResult(
+  issue: PreparedGithubIssue,
+  reason: GithubIssueBrowserFallbackReason,
+): GithubIssueSubmitResult {
+  return issue.browserFallback.status === "available"
+    ? { reason, status: "browser-fallback", url: issue.browserFallback.url }
+    : { cause: reason, reason: "fallback-url-too-long", status: "fallback-unavailable" };
 }
 
 function issueCreateArgs(): readonly string[] {
@@ -233,11 +238,7 @@ async function submitGithubIssueOnce(
 ): Promise<GithubIssueSubmitResult> {
   const auth = await runGh(GITHUB_AUTH_ARGS, { input: "" });
   if (auth.errorCode || auth.status !== 0) {
-    return {
-      reason: browserFallbackReason(auth),
-      status: "browser-fallback",
-      url: issue.fallbackUrl,
-    };
+    return browserFallbackResult(issue, browserFallbackReason(auth));
   }
   const created = await runGh(issueCreateArgs(), {
     input: JSON.stringify({ body: issue.body, title: issue.title }),
@@ -249,11 +250,7 @@ async function submitGithubIssueOnce(
     return { status: "created", url: directUrl };
   }
   if (!created.started && created.errorCode) {
-    return {
-      reason: "transport-unavailable",
-      status: "browser-fallback",
-      url: issue.fallbackUrl,
-    };
+    return browserFallbackResult(issue, "transport-unavailable");
   }
   if (
     httpStatus !== undefined &&
@@ -262,11 +259,10 @@ async function submitGithubIssueOnce(
     httpStatus !== 408 &&
     httpStatus !== 499
   ) {
-    return {
-      reason: httpStatus === 401 ? "authentication-unavailable" : "transport-unavailable",
-      status: "browser-fallback",
-      url: issue.fallbackUrl,
-    };
+    return browserFallbackResult(
+      issue,
+      httpStatus === 401 ? "authentication-unavailable" : "transport-unavailable",
+    );
   }
   // Once creation starts, a lost response can still hide a created issue. Only exact marker
   // reconciliation may resolve that ambiguity; a browser fallback could duplicate the report.

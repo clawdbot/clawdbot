@@ -37,6 +37,14 @@ function prepare(body: string) {
   return prepareGithubIssue({ body, title: `Support report ${body}` });
 }
 
+function availableFallbackUrl(issue: ReturnType<typeof prepareGithubIssue>): string {
+  expect(issue.browserFallback.status).toBe("available");
+  if (issue.browserFallback.status !== "available") {
+    throw new Error("expected an available browser fallback");
+  }
+  return issue.browserFallback.url;
+}
+
 describe("GitHub issue transport", () => {
   beforeEach(() => {
     spawnMock.mockReset();
@@ -61,8 +69,7 @@ describe("GitHub issue transport", () => {
     expect(issue.body).toContain("Credential: <redacted>");
     expect(issue.body).toContain(`<!-- ${issue.marker} -->`);
     expect(Buffer.byteLength(issue.body, "utf8")).toBeLessThanOrEqual(20_000);
-    expect(issue.fallbackUrl.length).toBeLessThanOrEqual(16_384);
-    expect(new URL(issue.fallbackUrl).origin).toBe("https://github.com");
+    expect(issue.browserFallback).toEqual({ reason: "url-too-long", status: "unavailable" });
   });
 
   it("does not expose raw process diagnostics through a transport failure", async () => {
@@ -78,18 +85,57 @@ describe("GitHub issue transport", () => {
     expect(result).toEqual({
       reason: "authentication-unavailable",
       status: "browser-fallback",
-      url: issue.fallbackUrl,
+      url: availableFallbackUrl(issue),
     });
     expect(JSON.stringify(result)).not.toContain("private-value");
   });
 
-  it("keeps browser fallback truncation on a valid UTF-8 boundary", () => {
-    const url = prepareGithubIssueBrowserFallback("Sanitized report", "🦞 &=?".repeat(5_000));
-    const body = new URL(url).searchParams.get("body");
+  it.each([
+    { label: "ASCII", prefix: "a".repeat(200) },
+    { label: "multibyte", prefix: "🦞".repeat(100) },
+    { label: "heavily escaped", prefix: "&=?%".repeat(100) },
+  ])("enforces the exact encoded browser URL byte bound for $label input", ({ prefix }) => {
+    const title = "t";
+    const encodedPrefix = `https://github.com/openclaw/openclaw/issues/new?${new URLSearchParams({
+      body: prefix,
+      title,
+    }).toString()}`;
+    const bodyAtLimit = `${prefix}${"a".repeat(8_000 - Buffer.byteLength(encodedPrefix, "utf8"))}`;
 
-    expect(url.length).toBeLessThanOrEqual(16_384);
-    expect(body).not.toContain("�");
-    expect(body).toContain("truncated for URL");
+    const atLimit = prepareGithubIssueBrowserFallback(title, bodyAtLimit);
+    expect(atLimit.status).toBe("available");
+    if (atLimit.status !== "available") {
+      throw new Error("expected exact-bound fallback to be available");
+    }
+    expect(Buffer.byteLength(atLimit.url, "utf8")).toBe(8_000);
+    expect(new URL(atLimit.url).searchParams.get("body")).toBe(bodyAtLimit);
+    expect(prepareGithubIssueBrowserFallback(title, `${bodyAtLimit}a`)).toEqual({
+      reason: "url-too-long",
+      status: "unavailable",
+    });
+  });
+
+  it("never truncates the prepared report or reconciliation marker for a browser fallback", () => {
+    const issue = prepareGithubIssue({ body: "🦞 &=?".repeat(5_000), title: "Sanitized report" });
+
+    expect(issue.body).toContain(`<!-- ${issue.marker} -->`);
+    expect(issue.browserFallback).toEqual({ reason: "url-too-long", status: "unavailable" });
+  });
+
+  it("returns a typed unavailable fallback while retaining the prepared body", async () => {
+    const issue = prepareGithubIssue({ body: "&=?%".repeat(5_000), title: "Sanitized report" });
+    const runGh = vi
+      .fn<RunGithubCli>()
+      .mockResolvedValueOnce(cliResult({ started: true, status: 4 }));
+
+    await expect(submitGithubIssue(issue, runGh)).resolves.toEqual({
+      cause: "authentication-unavailable",
+      reason: "fallback-url-too-long",
+      status: "fallback-unavailable",
+    });
+    expect(issue.body).toContain(`<!-- ${issue.marker} -->`);
+    expect(issue.body).toContain("&=?%");
+    expect(runGh).toHaveBeenCalledOnce();
   });
 
   it("submits the prepared body through stdin and accepts only the canonical issue URL", async () => {
@@ -149,7 +195,7 @@ describe("GitHub issue transport", () => {
     await expect(submitGithubIssue(issue, runGh)).resolves.toEqual({
       reason: "transport-unavailable",
       status: "browser-fallback",
-      url: issue.fallbackUrl,
+      url: availableFallbackUrl(issue),
     });
     expect(runGh).toHaveBeenCalledTimes(2);
   });
@@ -212,7 +258,7 @@ describe("GitHub issue transport", () => {
     await expect(submitGithubIssue(issue, runGh)).resolves.toEqual({
       reason: test.expected,
       status: "browser-fallback",
-      url: issue.fallbackUrl,
+      url: availableFallbackUrl(issue),
     });
     expect(runGh).toHaveBeenCalledOnce();
   });
@@ -366,7 +412,7 @@ describe("GitHub issue transport", () => {
     await expect(submission).resolves.toEqual({
       reason: "authentication-unavailable",
       status: "browser-fallback",
-      url: issue.fallbackUrl,
+      url: availableFallbackUrl(issue),
     });
     expect(child.kill).toHaveBeenCalledWith("SIGKILL");
     expect(child.stdin.destroy).toHaveBeenCalledOnce();

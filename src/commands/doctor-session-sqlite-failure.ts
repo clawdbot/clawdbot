@@ -95,11 +95,12 @@ export function createSessionSqliteMigrationFailureIssue(
     reportBody,
   ].join("\n");
   const boundedBody = truncateUtf16Safe(body, 20_000);
+  const browserFallback = prepareGithubIssueBrowserFallback(title, boundedBody);
   return {
     body: boundedBody,
     ...(bodyPath ? { bodyPath } : {}),
     title,
-    url: prepareGithubIssueBrowserFallback(title, boundedBody),
+    ...(browserFallback.status === "available" ? { url: browserFallback.url } : {}),
   };
 }
 

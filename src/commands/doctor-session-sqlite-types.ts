@@ -72,7 +72,7 @@ export type SessionSqliteMigrationFailureIssue = {
     url?: string;
   };
   title: string;
-  url: string;
+  url?: string;
 };
 
 export type DoctorSessionSqliteMode =
