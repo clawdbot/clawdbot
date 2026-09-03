@@ -104,6 +104,8 @@ vi.mock("../prepared-model-runtime.js", async () => {
       activeProjectKeys: [],
       allowGatewaySubagentBinding: false,
       config,
+      observationConfig: config,
+      isCurrent: () => true,
       authModes: {},
       metadataSnapshot: createPluginMetadataSnapshot({
         config,

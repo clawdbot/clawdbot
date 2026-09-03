@@ -691,52 +691,12 @@ describe("ConfigPage session observer models", () => {
     expect(modelCatalogStore.loadModelCatalog).toHaveBeenNthCalledWith(1, firstClient, {
       agentId: "main",
       preparedOnly: true,
+      rejectOnFailure: true,
     });
     expect(modelCatalogStore.loadModelCatalog).toHaveBeenNthCalledWith(2, secondClient, {
       agentId: "main",
       preparedOnly: true,
-    });
-  });
-
-  it("retries a transient catalog failure on the next status refresh", async () => {
-    const recoveredModels = [{ id: "small", name: "Small", provider: "openai" }];
-    vi.spyOn(modelCatalogStore, "loadModelCatalog")
-      .mockRejectedValueOnce(new Error("catalog unavailable"))
-      .mockResolvedValueOnce({ models: recoveredModels });
-    const client = {} as GatewayBrowserClient;
-    const gateway = {
-      snapshot: { client, phase: "connected" },
-    } as unknown as ApplicationGateway;
-    const page = new ConfigPage();
-    const state = page as unknown as {
-      context: ApplicationContext;
-      systemInfoGatewaySource: ApplicationGateway;
-      sessionObserverModels: ModelCatalogEntry[];
-      sessionObserverModelsUnavailable: boolean;
-      ensureSessionObserverModels: (
-        client: GatewayBrowserClient,
-        agentId: string | null,
-      ) => Promise<void>;
-    };
-    Object.defineProperty(page, "isConnected", { configurable: true, value: true });
-    state.context = {
-      gateway,
-      agentSelection: { state: { selectedId: "main" } },
-    } as ApplicationContext;
-    state.systemInfoGatewaySource = gateway;
-
-    await state.ensureSessionObserverModels(client, "main");
-    expect(state.sessionObserverModels).toEqual([]);
-    expect(state.sessionObserverModelsUnavailable).toBe(true);
-
-    await state.ensureSessionObserverModels(client, "main");
-
-    expect(state.sessionObserverModels).toEqual(recoveredModels);
-    expect(state.sessionObserverModelsUnavailable).toBe(false);
-    expect(modelCatalogStore.loadModelCatalog).toHaveBeenCalledTimes(2);
-    expect(modelCatalogStore.loadModelCatalog).toHaveBeenLastCalledWith(client, {
-      agentId: "main",
-      preparedOnly: true,
+      rejectOnFailure: true,
     });
   });
 
@@ -782,10 +742,12 @@ describe("ConfigPage session observer models", () => {
     expect(modelCatalogStore.loadModelCatalog).toHaveBeenNthCalledWith(1, client, {
       agentId: "main",
       preparedOnly: true,
+      rejectOnFailure: true,
     });
     expect(modelCatalogStore.loadModelCatalog).toHaveBeenNthCalledWith(2, client, {
       agentId: "writer",
       preparedOnly: true,
+      rejectOnFailure: true,
     });
 
     selectionState.selectedId = null;

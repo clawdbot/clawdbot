@@ -48,6 +48,7 @@ import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { getRuntimeConfigSourceSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import type { PluginRegistry } from "../../plugins/registry.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { loadDeferredCatalog, readPreparedCatalog } from "../server-model-catalog-auth.js";
 import { resolveGatewayModelThinkingProfile } from "../session-utils-model.js";
@@ -56,6 +57,10 @@ import {
   createModelsListAuthResolver,
   createModelsListEntryEvaluator,
 } from "./models-list-auth-resolver.js";
+import {
+  listConfiguredRuntimeDiscoveryProviderIds,
+  resolveProviderConfigInventoryEntries,
+} from "./models-list-configured-static.js";
 import { prepareModelsListHarnessCatalog } from "./models-list-harness-catalog.js";
 import {
   buildPublicModelProjection,
@@ -85,76 +90,6 @@ function resolveModelsListView(params: Record<string, unknown>): ModelCatalogBro
   return view === "configured" || view === "provider-config" || view === "all" ? view : "default";
 }
 
-/** Configured dynamic-catalog providers that omit explicit model inventory. */
-function listConfiguredRuntimeDiscoveryProviderIds(
-  cfg: OpenClawConfig,
-  metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">,
-): Set<string> {
-  const ids = new Set<string>();
-  const providers = cfg.models?.providers;
-  if (!providers || typeof providers !== "object" || !metadataSnapshot) {
-    return ids;
-  }
-  const dynamicProviders = new Set<string>();
-  for (const plugin of metadataSnapshot.plugins) {
-    for (const [providerRaw, mode] of Object.entries(plugin.modelCatalog?.discovery ?? {})) {
-      const providerId = normalizeProviderId(providerRaw);
-      if (providerId && (mode === "runtime" || mode === "refreshable")) {
-        dynamicProviders.add(providerId);
-      }
-    }
-  }
-  for (const [providerRaw, provider] of Object.entries(providers)) {
-    const providerId = normalizeProviderId(providerRaw);
-    if (providerId && dynamicProviders.has(providerId) && !Array.isArray(provider?.models)) {
-      ids.add(providerId);
-    }
-  }
-  return ids;
-}
-
-function resolveProviderConfigInventoryEntries(params: {
-  authoredEntries: readonly ModelCatalogEntry[];
-  canonicalEntries: readonly ModelCatalogEntry[];
-  discoveryOnlyProviderIds?: ReadonlySet<string>;
-}): ModelCatalogEntry[] {
-  const canonicalByKey = new Map<string, ModelCatalogEntry>();
-  for (const entry of params.canonicalEntries) {
-    const key = resolveModelCatalogIdentityKey(entry);
-    if (!canonicalByKey.has(key)) {
-      canonicalByKey.set(key, entry);
-    }
-  }
-  const seen = new Set<string>();
-  const inventory: ModelCatalogEntry[] = [];
-  for (const authoredEntry of params.authoredEntries) {
-    const key = resolveModelCatalogIdentityKey(authoredEntry);
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    // Authored config owns inventory membership. Canonical catalog rows own
-    // route metadata; configured logical overrides are applied by the projector.
-    inventory.push(canonicalByKey.get(key) ?? authoredEntry);
-  }
-  if (params.discoveryOnlyProviderIds) {
-    // Providers configured without explicit model lists (for example litellm)
-    // surface their key-scoped discovered rows as the configured inventory.
-    for (const canonicalEntry of params.canonicalEntries) {
-      const key = resolveModelCatalogIdentityKey(canonicalEntry);
-      if (seen.has(key)) {
-        continue;
-      }
-      if (!params.discoveryOnlyProviderIds.has(normalizeProviderId(canonicalEntry.provider))) {
-        continue;
-      }
-      seen.add(key);
-      inventory.push(canonicalEntry);
-    }
-  }
-  return inventory;
-}
-
 /** Builds one per-agent, snapshot-scoped route projection for Gateway thinking metadata. */
 export function createGatewayAgentModelCatalogProjector(params: {
   cfg: OpenClawConfig;
@@ -164,6 +99,9 @@ export function createGatewayAgentModelCatalogProjector(params: {
   preparedAuthStore: AuthProfileStore;
   preparedRuntimeAuthModes?: PreparedAgentCredentialModes;
   preparedRuntimeAuthMaterializations?: readonly RuntimeAuthMaterialization[];
+  pluginRegistry?: PluginRegistry;
+  isCurrent?: () => boolean;
+  observationConfig?: OpenClawConfig;
   preferredProfileId?: string;
   lockedProfileId?: string;
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
@@ -180,6 +118,9 @@ export function createGatewayAgentModelCatalogProjector(params: {
     workspaceDir,
     preferredProfileId: params.preferredProfileId,
     lockedProfileId: params.lockedProfileId,
+    pluginRegistry: params.pluginRegistry,
+    isCurrent: params.isCurrent,
+    observationConfig: params.observationConfig,
   });
   const projectionCatalog =
     params.snapshot.routeVariants.length > 0
@@ -231,6 +172,9 @@ export function createGatewayAgentModelCatalogProjector(params: {
     authStore: params.preparedAuthStore,
     authModes: params.preparedRuntimeAuthModes,
     authMaterializations: params.preparedRuntimeAuthMaterializations,
+    pluginRegistry: params.pluginRegistry,
+    isCurrent: params.isCurrent ?? (() => params.observationConfig === undefined),
+    observationConfig: params.observationConfig,
     projectCatalog: () =>
       (projectedCatalog ??= Promise.all(
         logicalEntries.map(async (entry) => {
@@ -515,6 +459,10 @@ export async function prepareModelsListResult(
   const preparedProjectionOwner = ownerSnapshot ?? params.catalogProjector;
   const metadataSnapshot = preparedProjectionOwner?.metadataSnapshot;
   const preparedAuthStore = ownerSnapshot?.authStore ?? params.catalogProjector?.authStore;
+  const preparedPluginRegistry = preparedProjectionOwner?.pluginRegistry;
+  const preparedOwnerIsCurrent = preparedProjectionOwner?.isCurrent;
+  const isCurrent = () =>
+    params.context.getRuntimeConfig() === initialConfig && preparedOwnerIsCurrent?.() === true;
   if (!metadataSnapshot || !preparedAuthStore) {
     throw new Error("Gateway model catalog owner omitted prepared metadata or auth state");
   }
@@ -526,6 +474,9 @@ export async function prepareModelsListResult(
     snapshot,
     view,
     metadataSnapshot,
+    pluginRegistry: preparedPluginRegistry,
+    isCurrent,
+    observationConfig: preparedProjectionOwner?.observationConfig,
     allowHarnessDiscovery: params.preloadedOnly !== true && !preparedOnly,
     onError: (error) =>
       params.context.logGateway.debug(
@@ -541,7 +492,9 @@ export async function prepareModelsListResult(
       agentId,
       agentDir: ownerSnapshot?.agentDir ?? resolveAgentDir(cfg, agentId),
       workspaceDir,
-      isCurrent: () => params.context.getRuntimeConfig() === initialConfig,
+      pluginRegistry: preparedPluginRegistry,
+      isCurrent,
+      observationConfig: preparedProjectionOwner?.observationConfig,
     });
   const evaluateNative: typeof nativeEvaluator = (entry, host) => {
     const native = nativeEvaluator(entry, host);
@@ -551,7 +504,6 @@ export async function prepareModelsListResult(
   };
   // Config turnover still invalidates prepared host facts. Native readiness is read live,
   // so account publication/revocation never repeats host preparation or discovery.
-  const isCurrent = () => params.context.getRuntimeConfig() === initialConfig;
   const { routeVariants, providerOutcomes } = snapshot;
   const publicProviderOutcomes = projectProviderCatalogOutcomes(providerOutcomes);
   const outcomeProjection = publicProviderOutcomes?.length
@@ -599,6 +551,9 @@ export async function prepareModelsListResult(
       preparedAuthStore,
       preparedRuntimeAuthModes,
       preparedRuntimeAuthMaterializations,
+      pluginRegistry: preparedPluginRegistry,
+      isCurrent,
+      observationConfig: preparedProjectionOwner?.observationConfig,
       ...(params.routeResolverFactory ? { routeResolverFactory: params.routeResolverFactory } : {}),
     });
     const inventory = await inventoryProjector.projectCatalog();

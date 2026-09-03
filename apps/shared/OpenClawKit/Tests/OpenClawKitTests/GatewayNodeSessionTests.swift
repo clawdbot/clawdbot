@@ -740,7 +740,8 @@ private func operatorConnectOptions(
     caps: [String] = [],
     clientId: String = "openclaw-ios-test",
     clientMode: String = "ui",
-    includeDeviceIdentity: Bool = false) -> GatewayConnectOptions
+    includeDeviceIdentity: Bool = false,
+    deviceAuthGatewayID: String? = nil) -> GatewayConnectOptions
 {
     GatewayConnectOptions(
         role: "operator",
@@ -751,7 +752,8 @@ private func operatorConnectOptions(
         clientId: clientId,
         clientMode: clientMode,
         clientDisplayName: "iOS Test",
-        includeDeviceIdentity: includeDeviceIdentity)
+        includeDeviceIdentity: includeDeviceIdentity,
+        deviceAuthGatewayID: deviceAuthGatewayID)
 }
 
 private func testURL(_ value: String) throws -> URL {
@@ -2834,14 +2836,18 @@ struct GatewayNodeSessionTests {
     }
 
     @Test(.stateDirectoryIsolated)
-    func `credentialless setup handoff does not send a stored device token`() async throws {
+    func `ownerless handoff does not persist or reuse an issued device token`() async throws {
         let identity = DeviceIdentityStore.loadOrCreate()
         _ = DeviceAuthStore.storeToken(
             deviceId: identity.deviceId,
             role: "node",
             token: "previous-gateway-device-token")
 
-        let session = FakeGatewayWebSocketSession()
+        let session = FakeGatewayWebSocketSession(helloAuth: [
+            "deviceToken": "ownerless-issued-device-token",
+            "role": "node",
+            "scopes": [],
+        ])
         let gateway = GatewayNodeSession()
         let options = nodeConnectOptions(includeDeviceIdentity: true, allowStoredDeviceAuth: false)
 
@@ -2856,8 +2862,23 @@ struct GatewayNodeSessionTests {
         #expect(auth["bootstrapToken"] == nil)
         #expect(auth["deviceToken"] == nil)
         #expect(task.latestConnectDevice() != nil)
-        #expect(await gateway.currentDeviceAuthRoles().persisted == [])
+        let initialRoles = await gateway.currentDeviceAuthRoles()
+        #expect(initialRoles.received == ["node"])
+        #expect(initialRoles.persisted.isEmpty)
+        #expect(DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: "node")?
+            .token == "previous-gateway-device-token")
 
+        try await waitUntil("ownerless socket receiving before reconnect") {
+            task.hasPendingReceiveHandler()
+        }
+        task.emitReceiveFailure()
+        try await waitUntil("ownerless reconnect socket created") {
+            session.snapshotMakeCount() == 2
+        }
+        let reconnectAuth = try #require(session.latestTask()?.latestConnectAuth())
+        #expect(reconnectAuth["token"] == nil)
+        #expect(reconnectAuth["bootstrapToken"] == nil)
+        #expect(reconnectAuth["deviceToken"] == nil)
         await gateway.disconnect()
     }
 
@@ -2892,6 +2913,7 @@ struct GatewayNodeSessionTests {
 
     @Test(.stateDirectoryIsolated)
     func `share extension identity profile uses separate node identity and token store`() async throws {
+        let gatewayID = "share-gateway"
         let primaryIdentity = DeviceIdentityStore.loadOrCreate()
         _ = DeviceAuthStore.storeToken(
             deviceId: primaryIdentity.deviceId,
@@ -2908,7 +2930,8 @@ struct GatewayNodeSessionTests {
             clientId: "openclaw-ios",
             clientDisplayName: "OpenClaw Share",
             deviceIdentityProfile: .shareExtension,
-            includeDeviceIdentity: true)
+            includeDeviceIdentity: true,
+            deviceAuthGatewayID: gatewayID)
 
         try await gateway.connectForTest(
             testURL("ws://example.invalid"),
@@ -2921,14 +2944,20 @@ struct GatewayNodeSessionTests {
         #expect(shareDeviceId != primaryIdentity.deviceId)
         #expect(DeviceAuthStore.loadToken(deviceId: primaryIdentity.deviceId, role: "node")?
             .token == "primary-node-token")
-        // Profile selects identity resolution, not a token namespace; (device_id, role) is the canonical key.
-        // Per-profile identities keep caches disjoint in practice, and Node reads the same table by that key.
-        #expect(DeviceAuthStore.loadToken(deviceId: shareDeviceId, role: "node")?.token == "share-node-token")
-        #expect(DeviceAuthStore.loadToken(deviceId: shareDeviceId, role: "node")?.scopes == ["node.exec"])
+        // Profile selects identity resolution; the stable Gateway owner scopes the token within that identity.
+        #expect(DeviceAuthStore.loadToken(
+            deviceId: shareDeviceId,
+            role: "node",
+            gatewayID: gatewayID)?.token == "share-node-token")
         #expect(
             DeviceAuthStore
-                .loadToken(deviceId: shareDeviceId, role: "node", profile: .shareExtension)?.token ==
+                .loadToken(
+                    deviceId: shareDeviceId,
+                    role: "node",
+                    gatewayID: gatewayID,
+                    profile: .shareExtension)?.token ==
                 "share-node-token")
+        #expect(DeviceAuthStore.loadToken(deviceId: shareDeviceId, role: "node") == nil)
 
         await gateway.disconnect()
     }
@@ -3079,6 +3108,7 @@ struct GatewayNodeSessionTests {
 
     @Test(.stateDirectoryIsolated)
     func `failed device token write retains issuance without claiming persistence`() async throws {
+        let gatewayID = "blocked-storage-gateway"
         let stateDir = try #require(ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"])
         let blocker = URL(fileURLWithPath: stateDir, isDirectory: true)
             .appendingPathComponent("identity", isDirectory: false)
@@ -3093,7 +3123,9 @@ struct GatewayNodeSessionTests {
             "scopes": [],
         ])
         let gateway = GatewayNodeSession()
-        let options = nodeConnectOptions(includeDeviceIdentity: true)
+        let options = nodeConnectOptions(
+            includeDeviceIdentity: true,
+            deviceAuthGatewayID: gatewayID)
 
         try await gateway.connectForTest(
             testURL("wss://example.invalid"),
@@ -3109,19 +3141,23 @@ struct GatewayNodeSessionTests {
 
     @Test(.stateDirectoryIsolated)
     func `same primary device token preserves stored scopes`() async throws {
+        let gatewayID = "operator-gateway"
         let identity = DeviceIdentityStore.loadOrCreate()
         _ = DeviceAuthStore.storeToken(
             deviceId: identity.deviceId,
             role: "operator",
             token: "server-operator-token",
-            scopes: ["operator.admin", "operator.read"])
+            scopes: ["operator.admin", "operator.read"],
+            gatewayID: gatewayID)
         let session = FakeGatewayWebSocketSession(helloAuth: [
             "deviceToken": "server-operator-token",
             "role": "operator",
             "scopes": ["operator.read"],
         ])
         let gateway = GatewayNodeSession()
-        let options = operatorConnectOptions(includeDeviceIdentity: true)
+        let options = operatorConnectOptions(
+            includeDeviceIdentity: true,
+            deviceAuthGatewayID: gatewayID)
 
         try await gateway.connectForTest(
             testURL("wss://example.invalid"),
@@ -3129,7 +3165,10 @@ struct GatewayNodeSessionTests {
             options: options,
             session: session)
 
-        let operatorEntry = try #require(DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: "operator"))
+        let operatorEntry = try #require(DeviceAuthStore.loadToken(
+            deviceId: identity.deviceId,
+            role: "operator",
+            gatewayID: gatewayID))
         #expect(operatorEntry.token == "server-operator-token")
         #expect(operatorEntry.scopes == ["operator.admin", "operator.read"])
 
@@ -3138,12 +3177,14 @@ struct GatewayNodeSessionTests {
 
     @Test(.stateDirectoryIsolated)
     func `rotated primary device token uses hello scopes and ignores additional handoff tokens`() async throws {
+        let gatewayID = "rotating-operator-gateway"
         let identity = DeviceIdentityStore.loadOrCreate()
         _ = DeviceAuthStore.storeToken(
             deviceId: identity.deviceId,
             role: "operator",
             token: "old-operator-token",
-            scopes: ["operator.admin", "operator.read"])
+            scopes: ["operator.admin", "operator.read"],
+            gatewayID: gatewayID)
         let session = FakeGatewayWebSocketSession(helloAuth: [
             "deviceToken": "rotated-operator-token",
             "role": "operator",
@@ -3157,7 +3198,9 @@ struct GatewayNodeSessionTests {
             ],
         ])
         let gateway = GatewayNodeSession()
-        let options = operatorConnectOptions(includeDeviceIdentity: true)
+        let options = operatorConnectOptions(
+            includeDeviceIdentity: true,
+            deviceAuthGatewayID: gatewayID)
 
         try await gateway.connectForTest(
             testURL("wss://example.invalid"),
@@ -3165,7 +3208,10 @@ struct GatewayNodeSessionTests {
             options: options,
             session: session)
 
-        let operatorEntry = try #require(DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: "operator"))
+        let operatorEntry = try #require(DeviceAuthStore.loadToken(
+            deviceId: identity.deviceId,
+            role: "operator",
+            gatewayID: gatewayID))
         #expect(operatorEntry.token == "rotated-operator-token")
         #expect(operatorEntry.scopes == ["operator.read"])
         #expect(DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: "node") == nil)
@@ -3175,6 +3221,7 @@ struct GatewayNodeSessionTests {
 
     @Test(.stateDirectoryIsolated)
     func `untrusted bootstrap hello does not persist bootstrap handoff tokens`() async throws {
+        let gatewayID = "untrusted-bootstrap-gateway"
         let identity = DeviceIdentityStore.loadOrCreate()
         let session = FakeGatewayWebSocketSession(helloAuth: [
             "deviceToken": "untrusted-node-token",
@@ -3192,7 +3239,9 @@ struct GatewayNodeSessionTests {
             ],
         ])
         let gateway = GatewayNodeSession()
-        let options = nodeConnectOptions(includeDeviceIdentity: true)
+        let options = nodeConnectOptions(
+            includeDeviceIdentity: true,
+            deviceAuthGatewayID: gatewayID)
 
         try await gateway.connectForTest(
             testURL("ws://example.invalid"),
@@ -3200,16 +3249,23 @@ struct GatewayNodeSessionTests {
             options: options,
             session: session)
 
-        #expect(DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: "node") == nil)
-        #expect(DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: "operator") == nil)
+        #expect(DeviceAuthStore.loadToken(
+            deviceId: identity.deviceId,
+            role: "node",
+            gatewayID: gatewayID) == nil)
+        #expect(DeviceAuthStore.loadToken(
+            deviceId: identity.deviceId,
+            role: "operator",
+            gatewayID: gatewayID) == nil)
 
         await gateway.disconnect()
     }
 
     @Test(.stateDirectoryIsolated)
-    func `private lan bootstrap persists handoff tokens for reconnect`() async throws {
+    func `owner-bound bootstrap persists handoff tokens when lookup is disabled`() async throws {
+        let gatewayID = "loopback-gateway"
         let identity = DeviceIdentityStore.loadOrCreate()
-        let url = try #require(URL(string: "ws://192.168.50.164:18889"))
+        let url = try #require(URL(string: "ws://127.0.0.1:18889"))
         let bootstrapSession = FakeGatewayWebSocketSession(helloAuth: [
             "deviceToken": "lan-node-token",
             "role": "node",
@@ -3226,7 +3282,10 @@ struct GatewayNodeSessionTests {
             ],
         ])
         let gateway = GatewayNodeSession()
-        let options = nodeConnectOptions(includeDeviceIdentity: true)
+        let options = nodeConnectOptions(
+            includeDeviceIdentity: true,
+            allowStoredDeviceAuth: false,
+            deviceAuthGatewayID: gatewayID)
 
         try await gateway.connectForTest(
             url,
@@ -3235,8 +3294,14 @@ struct GatewayNodeSessionTests {
             session: bootstrapSession)
         await gateway.disconnect()
 
-        let nodeEntry = try #require(DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: "node"))
-        let operatorEntry = try #require(DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: "operator"))
+        let nodeEntry = try #require(DeviceAuthStore.loadToken(
+            deviceId: identity.deviceId,
+            role: "node",
+            gatewayID: gatewayID))
+        let operatorEntry = try #require(DeviceAuthStore.loadToken(
+            deviceId: identity.deviceId,
+            role: "operator",
+            gatewayID: gatewayID))
         #expect(nodeEntry.token == "lan-node-token")
         #expect(nodeEntry.scopes == [])
         #expect(operatorEntry.token == "lan-operator-token")
@@ -3246,7 +3311,9 @@ struct GatewayNodeSessionTests {
         ])
 
         let reconnectSession = FakeGatewayWebSocketSession()
-        try await gateway.connectForTest(url, options: options, session: reconnectSession)
+        var reconnectOptions = options
+        reconnectOptions.allowStoredDeviceAuth = true
+        try await gateway.connectForTest(url, options: reconnectOptions, session: reconnectSession)
 
         let reconnectAuth = try #require(reconnectSession.latestTask()?.latestConnectAuth())
         #expect(reconnectAuth["token"] as? String == "lan-node-token")

@@ -5,6 +5,7 @@ import type { createOpenAIModelRoutesResolver } from "../../agents/openai-model-
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import type { PluginRegistry } from "../../plugins/registry-types.js";
 import {
   type PreparedGatewayModelCatalogSnapshot,
   registerGatewayModelCatalogPrivateAccess,
@@ -58,6 +59,7 @@ export async function listModels(params: {
   catalogComplete?: boolean;
   preparedAuthModes?: PreparedAgentCredentialModes;
   metadataSnapshot?: PluginMetadataSnapshot;
+  pluginRegistry?: PluginRegistry;
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
   view?: "all" | "configured" | "provider-config" | "default";
 }) {
@@ -70,6 +72,9 @@ export async function listModels(params: {
       catalogComplete: params.catalogComplete ?? false,
       workspaceDir: params.workspaceDir ?? "/tmp/models-list-openai-workspace",
       config,
+      observationConfig: config,
+      pluginRegistry: params.pluginRegistry,
+      isCurrent: () => true,
       authModes: params.preparedAuthModes ?? {},
       authStore: loadAuthProfileStoreWithoutExternalProfiles(
         params.agentDir ?? "/tmp/models-list-openai-agent",

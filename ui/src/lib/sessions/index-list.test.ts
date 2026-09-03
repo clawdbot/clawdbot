@@ -8,6 +8,7 @@ type ListParams = {
   agentId?: string;
   archived?: true | "all";
   boardFace?: "chat" | "dashboard";
+  hasBoard?: boolean;
   includeDerivedTitles?: boolean;
   includeLastMessage?: boolean;
   limit?: number;
@@ -294,15 +295,13 @@ describe("session list requests", () => {
   it("keeps dashboard and sidebar queries distinct without inventing a dashboard agent", async () => {
     const request = vi.fn(async (_method: string, params?: ListParams) =>
       listResult([
-        params?.boardFace === "dashboard"
-          ? "agent:main:dashboard-result"
-          : "agent:main:sidebar-result",
+        params?.hasBoard === true ? "agent:main:dashboard-result" : "agent:main:sidebar-result",
       ]),
     );
     const { sessions } = sessionHarness(request);
     const dashboardQuery = {
       limit: 50,
-      boardFace: "dashboard" as const,
+      hasBoard: true,
       archivedFilter: "all" as const,
     };
     const sidebarQuery = {
@@ -338,7 +337,7 @@ describe("session list requests", () => {
       configuredAgentsOnly: true,
       limit: 50,
       archived: "all",
-      boardFace: "dashboard",
+      hasBoard: true,
     });
     expect(request.mock.calls[0]?.[1]).not.toHaveProperty("agentId");
     expect(request.mock.calls[1]?.[1]).toMatchObject({

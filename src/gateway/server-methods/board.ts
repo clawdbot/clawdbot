@@ -54,6 +54,7 @@ import { mintMcpAppViewFromTranscript } from "../mcp-app-reconstruction.js";
 import { sessionObserverScopeKey } from "../session-observer-model.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveSessionStoreKey } from "../session-store-key.js";
+import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, defineValidatedGatewayMethod } from "./validation.js";
 
@@ -251,6 +252,11 @@ export function createBoardHandlers(
             boardSession.agentId,
           );
           if (boardParams.ops.length > 0) {
+            emitSessionsChanged(context, {
+              sessionKey: snapshot.sessionKey,
+              agentId: boardSession.agentId,
+              reason: "board",
+            });
             context.broadcast("board.changed", {
               sessionKey: snapshot.sessionKey,
               revision: snapshot.revision,
@@ -445,6 +451,11 @@ export function createBoardHandlers(
             }
           }
           snapshot = projectBoardSnapshot(snapshot, boardSession.agentId);
+          emitSessionsChanged(context, {
+            sessionKey: snapshot.sessionKey,
+            agentId: boardSession.agentId,
+            reason: "board",
+          });
           context.broadcast("board.changed", {
             sessionKey: snapshot.sessionKey,
             revision: snapshot.revision,

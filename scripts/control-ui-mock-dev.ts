@@ -60,6 +60,7 @@ type CliOptions = {
     | "attachments"
     | "board"
     | "code-fences"
+    | "dashboards"
     | "goal"
     | "swarm"
     | "update-available"
@@ -361,6 +362,7 @@ function parseFixture(value: string | undefined): CliOptions["fixture"] {
     value !== "attachments" &&
     value !== "board" &&
     value !== "code-fences" &&
+    value !== "dashboards" &&
     value !== "goal" &&
     value !== "swarm" &&
     value !== "update-available" &&
@@ -1700,6 +1702,37 @@ async function createChatPickerScenario(
   const workboardMocks = buildWorkboardMocks(baseTime);
   const activityTime = Date.now();
   const activitySessions = buildActivitySessionRows(activityTime);
+  const dashboardGallerySessions =
+    fixture === "dashboards"
+      ? [
+          sessionRow("agent:main:dashboard:release-health", "Release health", baseTime - 3_000, {
+            boardFace: "dashboard",
+            createdActor: MOCK_ACTOR_MIRA,
+            hasActiveRun: true,
+            status: "running",
+          }),
+          sessionRow("agent:main:dashboard:model-spend", "Model spend", baseTime - 8_000, {
+            boardFace: "dashboard",
+            createdActor: MOCK_ACTOR_PETER,
+          }),
+          sessionRow("agent:main:dashboard:support-radar", "Support radar", baseTime - 18_000, {
+            boardFace: "dashboard",
+            createdActor: MOCK_ACTOR_MIRA,
+          }),
+          sessionRow("agent:main:dashboard:ci-signal", "CI signal", baseTime - 42_000, {
+            boardFace: "dashboard",
+            createdActor: MOCK_ACTOR_PETER,
+          }),
+          sessionRow("agent:main:dashboard:community-pulse", "Community pulse", baseTime - 75_000, {
+            boardFace: "dashboard",
+            createdActor: MOCK_ACTOR_MIRA,
+          }),
+          sessionRow("agent:main:dashboard:gateway-fleet", "Gateway fleet", baseTime - 130_000, {
+            boardFace: "dashboard",
+            createdActor: MOCK_ACTOR_PETER,
+          }),
+        ]
+      : [];
   const activeGoal = {
     schemaVersion: 1 as const,
     id: "goal-mobile-parity",
@@ -1716,6 +1749,7 @@ async function createChatPickerScenario(
   };
   const sessions = [
     ...activitySessions,
+    ...dashboardGallerySessions,
     ...(fixture === "workboard"
       ? [
           sessionRow(workboardMocks.sessionKey, "Product operations dashboard", baseTime, {

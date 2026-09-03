@@ -24,7 +24,6 @@ import {
   reorderPanel,
   setSidebarDock,
   setSidebarExpanded,
-  setSidebarOpen,
   sidebarDock,
   type SidebarLayout,
   type SidebarSlotId,
@@ -108,7 +107,6 @@ export function sidebarRegionCallbacks(params: {
   layout: SidebarLayout;
   closePanelSlot: (slot: SidebarSlotId) => void;
   openPanelSlot: (slot: SidebarSlotId) => void;
-  hideBoard: () => void;
   forgetDiscussionUrl: () => void;
   resizePanel: (columnId: string, size: number) => void;
   setPanelOpen: (open: boolean) => void;
@@ -120,8 +118,8 @@ export function sidebarRegionCallbacks(params: {
       state.updateSidebarActivePanel(panelId);
     },
     closeSlot: (slot) => {
-      if (slot === "chat") {
-        params.hideBoard();
+      if (slot === "dashboard") {
+        params.setPanelOpen(false);
         return;
       }
       if (slot === "discussion") {
@@ -204,31 +202,18 @@ export function resolveSidebarLayoutForBoard(params: {
   paneWidth: number;
 }): SidebarLayout {
   let layout = params.layout;
-  const chatSide =
-    params.board.hasBoard &&
-    params.board.face === "dashboard" &&
-    (params.board.dock === "left" || params.board.dock === "right")
-      ? params.board.dock
-      : null;
-  if (!chatSide) {
-    layout = closeSlot(layout, "chat");
-    if (
-      params.board.hasBoard &&
-      params.board.face === "dashboard" &&
-      params.board.dock === "hidden" &&
-      params.board.provider.canMutate
-    ) {
-      // Dashboard is the board-only mode. Preserve the stored tabs for the
-      // next explicit Split transition, but never render them over the board.
-      layout = setSidebarOpen(layout, false);
-    }
+  if (!params.board.hasBoard) {
+    layout = closeSlot(layout, "dashboard");
+    return fitSidebarLayout(layout, params.paneWidth) ?? layout;
+  }
+  if (params.board.face !== "dashboard") {
     return fitSidebarLayout(layout, params.paneWidth) ?? layout;
   }
   const explicitlyClosed = layout.columns.length > 0 && layout.open === false;
   const selectedPanelId = layout.columns[0]?.activePanelId;
-  layout = openSlot(layout, "chat");
-  // Board projection must guarantee the chat tab exists without stealing the
-  // user's selected side-panel tab on every render.
+  layout = openSlot(layout, "dashboard");
+  // Route projection guarantees the dashboard exists without stealing a
+  // side-panel tab the user selected after arriving.
   if (selectedPanelId) {
     layout = activatePanel(layout, selectedPanelId);
   }

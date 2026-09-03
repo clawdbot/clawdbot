@@ -37,6 +37,7 @@ import {
   applyConnectionScopeCap,
   isStartupNodeBootstrapConnect,
   rejectGatewayStartupConnect,
+  resolveGatewayConnectPolicyFailure,
 } from "./connect-admission.js";
 import {
   pairedDeviceAllowsBootstrapProfile,
@@ -89,6 +90,8 @@ export async function authorizeGatewayConnectDevice(
     skipLocalBackendSelfPairing,
     controlUiPairingKind,
   } = state;
+  const isConnectAuthorizationCurrent = () =>
+    resolveGatewayConnectPolicyFailure(context, state) === undefined;
   const failPairingHandshake = (params: {
     message: string;
     details?:
@@ -278,12 +281,16 @@ export async function authorizeGatewayConnectDevice(
             accessMetadata: clientAccessMetadata,
             approvedVia: "trusted-proxy",
             autoApproveNewDeviceScopes: trustedProxyApprovalScopes,
+            isApprovalCurrent: isConnectAuthorizationCurrent,
           });
         } else if (plan.bootstrapApprovalProfile) {
           approved = await approveBootstrapDevicePairing(
             pairing.request.requestId,
             plan.bootstrapApprovalProfile,
-            { accessMetadata: clientAccessMetadata },
+            {
+              accessMetadata: clientAccessMetadata,
+              isApprovalCurrent: isConnectAuthorizationCurrent,
+            },
           );
         } else if (plan.localApproval) {
           approved = await approveDevicePairing(pairing.request.requestId, {
@@ -304,6 +311,7 @@ export async function authorizeGatewayConnectDevice(
               const currentConfig = getRuntimeConfigSnapshot();
               if (
                 !currentConfig ||
+                !isConnectAuthorizationCurrent() ||
                 pending.deviceId !== device.id ||
                 pending.publicKey !== devicePublicKey ||
                 (plan.localApproval === "trusted-cidr" && !isScopelessNodePairingRequest(pending))
@@ -542,6 +550,7 @@ export async function authorizeGatewayConnectDevice(
           state: { ...state, scopes, handoffBootstrapProfile },
           scopes,
           hasApprovedDeviceBaseline: hasServerApprovedDeviceTokenBaseline,
+          isIssuanceCurrent: isConnectAuthorizationCurrent,
         });
 
   return {

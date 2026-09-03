@@ -4,6 +4,7 @@ import type { AgentHarness } from "../harness/types.js";
 import { makeAttemptResult, makeCompactionSuccess } from "./run.overflow-compaction.fixture.js";
 import {
   createOverflowRunParams,
+  mockedBuildAgentRuntimePlan,
   mockedBuildEmbeddedRunPayloads,
   mockedCompactDirect,
   mockedGetApiKeyForModel,
@@ -15,6 +16,13 @@ import {
   createSharedRunIntegrationSession,
   loadSharedRunIntegrationHarness,
 } from "./run.shared-integration-harness.test-support.js";
+import {
+  clearActiveEmbeddedRun,
+  resolveEmbeddedRunAbandonment,
+  markActiveEmbeddedRunAbandoned,
+  setActiveEmbeddedRun,
+} from "./runs.js";
+import { createEmbeddedRunHandle, testing as runsTesting } from "./runs.test-support.js";
 
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 
@@ -42,6 +50,7 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
 
   beforeEach(() => {
     resetSharedRunIntegrationHarnessMocks();
+    runsTesting.resetActiveEmbeddedRuns();
   });
 
   afterEach(async () => {
@@ -120,6 +129,58 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
     });
     expect(result.meta.agentMeta?.compactionTokensAfter).toBe(60_000);
     expect(result.payloads).toEqual([{ text: "timeout recovery complete" }]);
+  });
+
+  it("restores terminal abandonment when retry preparation fails before registration", async () => {
+    const session = await createSharedRunIntegrationSession();
+    fixture = session;
+    const preparationError = new Error("next attempt preparation failed");
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
+      const handle = createEmbeddedRunHandle({ runId: params.runId });
+      setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
+      expect(
+        markActiveEmbeddedRunAbandoned({
+          sessionId: params.sessionId,
+          handle,
+          sessionKey: params.sessionKey,
+          sessionFile: params.sessionFile,
+          reason: "timeout",
+        }),
+      ).toBe(true);
+      clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
+      return makeAttemptResult({
+        timedOut: true,
+        lastAssistant: { usage: { input: 160_000 } } as never,
+      });
+    });
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "compacted before failed retry preparation",
+        tokensBefore: 160_000,
+        tokensAfter: 60_000,
+      }),
+    );
+    const defaultBuildRuntimePlan = mockedBuildAgentRuntimePlan.getMockImplementation();
+    expect(defaultBuildRuntimePlan).toBeDefined();
+    let buildCalls = 0;
+    mockedBuildAgentRuntimePlan.mockImplementation(() => {
+      buildCalls += 1;
+      if (buildCalls === 2) {
+        throw preparationError;
+      }
+      return defaultBuildRuntimePlan!();
+    });
+
+    await expect(runEmbeddedAgent(session.runParams)).rejects.toBe(preparationError);
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
+    expect(mockedBuildAgentRuntimePlan).toHaveBeenCalledTimes(2);
+    expect(
+      resolveEmbeddedRunAbandonment({
+        sessionId: session.runParams.sessionId,
+        sessionKey: session.runParams.sessionKey,
+      }),
+    ).toBe("timeout");
   });
 
   it("leaves timeout recovery to a forced unlocked Codex compaction owner", async () => {

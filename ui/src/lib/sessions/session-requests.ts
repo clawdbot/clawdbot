@@ -116,6 +116,9 @@ export function buildSessionListParams(options: SessionListOptions = {}): Record
   if (options.boardFace) {
     params.boardFace = options.boardFace;
   }
+  if (options.hasBoard !== undefined) {
+    params.hasBoard = options.hasBoard;
+  }
   if (agentId) {
     params.agentId = agentId;
   }

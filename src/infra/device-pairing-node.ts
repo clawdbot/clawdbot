@@ -3,7 +3,9 @@
 // surface projected from those canonical paired-device records.
 import { randomUUID } from "node:crypto";
 import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import type { NodeHostStats } from "../shared/node-host-stats.js";
 import { resolveMissingRequestedScope } from "../shared/operator-scope-compat.js";
+import { updatePairedNodeGenerationSurface } from "./device-pairing-node-facts.js";
 import { updatePairedDeviceNodeSurfaceInTransaction } from "./device-pairing-store.js";
 import {
   clearNodePairingGenerationState,
@@ -81,6 +83,7 @@ export type PairedDeviceNode = NodeDeclaredSurface & {
   approvedAtMs: number;
   lastConnectedAtMs?: number;
   lastDisconnectedAtMs?: number;
+  lastHostStats?: NodeHostStats;
   lastSeenAtMs?: number;
   lastSeenReason?: string;
 };
@@ -191,6 +194,7 @@ function toPairedNode(
     approvedAtMs: surface.approvedAtMs,
     lastConnectedAtMs: surface.lastConnectedAtMs,
     lastDisconnectedAtMs: surface.lastDisconnectedAtMs,
+    lastHostStats: surface.lastHostStats,
     lastSeenAtMs: device.lastSeenAtMs,
     lastSeenReason: device.lastSeenReason,
   };
@@ -582,6 +586,7 @@ export async function approveNodePairing(
       createdAtMs: device.nodeSurface?.createdAtMs ?? now,
       approvedAtMs: now,
       lastConnectedAtMs: device.nodeSurface?.lastConnectedAtMs,
+      lastHostStats: device.nodeSurface?.lastHostStats,
     };
     delete device.pendingNodeSurface;
     const nextPairingState = resolveNodePairingState(device);
@@ -654,17 +659,13 @@ export async function recordPairedNodeConnection(
       nodeId,
       baseDir,
       (device) => {
-        if (!device?.nodeSurface) {
+        if (
+          !device?.nodeSurface ||
+          (expectedPairingGeneration &&
+            (expectedPairingGeneration.nodeId !== device.deviceId ||
+              resolveNodePairingGeneration(device)?.key !== expectedPairingGeneration.key))
+        ) {
           return { value: { recorded: false }, persist: false };
-        }
-        if (expectedPairingGeneration) {
-          const currentPairingGeneration = resolveNodePairingGeneration(device);
-          if (
-            expectedPairingGeneration.nodeId !== device.deviceId ||
-            currentPairingGeneration?.key !== expectedPairingGeneration.key
-          ) {
-            return { value: { recorded: false }, persist: false };
-          }
         }
         // Read and write under the pairing lock. Concurrent rehandshakes must not
         // both claim the same node's first connection and schedule duplicate alerts.
@@ -692,7 +693,18 @@ export async function recordPairedNodeConnection(
   });
 }
 
-type RecordPairedNodeDisconnectionResult = { recorded: boolean };
+/** Persist a received snapshot for its pairing generation, independent of socket lifetime. */
+export async function recordPairedNodeHostStats(params: {
+  nodeId: string;
+  hostStats: NodeHostStats;
+  expectedPairingGeneration: NodePairingGeneration;
+  baseDir?: string;
+}): Promise<boolean> {
+  return await updatePairedNodeGenerationSurface({
+    ...params,
+    update: (surface) => ({ ...surface, lastHostStats: params.hostStats }),
+  });
+}
 
 /** Persist the end of the exact successful node connection that just retired. */
 export async function recordPairedNodeDisconnection(params: {
@@ -701,39 +713,21 @@ export async function recordPairedNodeDisconnection(params: {
   disconnectedAtMs: number;
   expectedPairingGeneration: NodePairingGeneration;
   baseDir?: string;
-}): Promise<RecordPairedNodeDisconnectionResult> {
-  return await withPairedDeviceRecords<RecordPairedNodeDisconnectionResult>(params.baseDir, () => {
-    const value = updatePairedDeviceNodeSurfaceInTransaction<RecordPairedNodeDisconnectionResult>(
-      params.nodeId,
-      params.baseDir,
-      (device) => {
-        const currentPairingGeneration = resolveNodePairingGeneration(device);
-        if (
-          !device?.nodeSurface ||
-          params.expectedPairingGeneration.nodeId !== device.deviceId ||
-          currentPairingGeneration?.key !== params.expectedPairingGeneration.key ||
-          device.nodeSurface.lastConnectedAtMs !== params.connectedAtMs ||
-          params.disconnectedAtMs < params.connectedAtMs
-        ) {
-          return { value: { recorded: false }, persist: false };
-        }
-        return {
-          value: { recorded: true },
-          persist: true,
-          nodeSurface: {
-            ...device.nodeSurface,
-            lastDisconnectedAtMs: Math.max(
-              device.nodeSurface.lastDisconnectedAtMs ?? params.disconnectedAtMs,
-              params.disconnectedAtMs,
-            ),
-          },
-        };
-      },
-    );
-    // The row-scoped transaction owns cross-process generation and connection
-    // validation; the shared lock prevents stale full-snapshot replay.
-    return { value, persist: false };
+}): Promise<{ recorded: boolean }> {
+  const recorded = await updatePairedNodeGenerationSurface({
+    ...params,
+    isCurrent: (surface) =>
+      surface.lastConnectedAtMs === params.connectedAtMs &&
+      params.disconnectedAtMs >= params.connectedAtMs,
+    update: (surface) => ({
+      ...surface,
+      lastDisconnectedAtMs: Math.max(
+        surface.lastDisconnectedAtMs ?? params.disconnectedAtMs,
+        params.disconnectedAtMs,
+      ),
+    }),
   });
+  return { recorded };
 }
 
 /** Rename a paired node display name while preserving approval metadata. */

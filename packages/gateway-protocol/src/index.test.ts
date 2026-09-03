@@ -169,8 +169,12 @@ describe("lazy protocol validators", () => {
   });
 
   it("validates session board face list and patch values", () => {
-    expectAccepted(validateSessionsListParams, [{ boardFace: "dashboard" }]);
-    expectRejected(validateSessionsListParams, [{ boardFace: "grid" }]);
+    expectAccepted(validateSessionsListParams, [
+      { boardFace: "dashboard" },
+      { hasBoard: true },
+      { hasBoard: false },
+    ]);
+    expectRejected(validateSessionsListParams, [{ boardFace: "grid" }, { hasBoard: "yes" }]);
     expectAccepted(validateSessionsPatchParams, [{ key: "agent:main:main", boardFace: "chat" }]);
     expectRejected(validateSessionsPatchParams, [{ key: "agent:main:main", boardFace: "grid" }]);
     // The schemas are closed objects; the pre-rename name must not slip back in.

@@ -1,5 +1,6 @@
 // Gateway node registry.
 // Tracks connected node clients, invoke requests, broadcasts, and system.run approvals.
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   addTimerTimeoutGraceMs,
   isFutureDateTimestampMs,
@@ -13,9 +14,14 @@ import type {
   NodePluginToolDescriptor,
   NodeSkillDescriptor,
 } from "../../packages/gateway-protocol/src/schema/nodes.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setActiveNodeContext } from "../infra/active-node-context.js";
 import type { PairedDeviceNodeBinding } from "../infra/device-pairing-node-state.js";
-import { NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
+import { isPrivateNodeInvokeCommand, NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
+import {
+  intersectNodePermissionSurface,
+  type NodeApprovalSurface,
+} from "../infra/node-pairing-surface.js";
 import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -23,12 +29,20 @@ import {
   type ComputerUseCapabilityDescriptor,
 } from "../plugins/computer-use-contract.js";
 import type { NodeHostStats } from "../shared/node-host-stats.js";
+import {
+  recordRemoteSkillNodeInfo,
+  removeRemoteNodeSkills,
+  replaceRemoteNodeSkills,
+} from "../skills/runtime/remote-skills.js";
+import {
+  resolveNodeCommandAllowlist,
+  retainFulfilledNodeCapabilities,
+} from "./node-command-policy.js";
 import { resolveEffectiveComputerUseDescriptor } from "./node-computer-use-descriptor.js";
 import { serializeNodeEvent } from "./node-invoke-request.js";
 import {
   createRegisteredNodePluginToolDescriptorMap,
   normalizeNodePluginToolDescriptors,
-  type NormalizedNodePluginTool,
   removeConnectedNodePluginTools,
   replaceConnectedNodePluginTools,
   type RegisteredNodePluginToolCommand,
@@ -94,11 +108,34 @@ export type NodeSession = {
 };
 
 type PairingBoundNodeSession = NodeSession & { pairingIdentity: string };
-const NODE_SESSION_WITHHELD_COMMANDS = new WeakMap<object, readonly string[]>();
+export type NodeSessionConnectParams = GatewayWsClient["connect"] &
+  Partial<
+    Pick<
+      NodeSession,
+      | "declaredCaps"
+      | "declaredCommands"
+      | "declaredComputerUse"
+      | "declaredPermissions"
+      | "sessionCapsCeiling"
+      | "sessionCommandsCeiling"
+      | "coreVersion"
+      | "uiVersion"
+    >
+  > & {
+    withheldCommands?: string[];
+  };
 
-/** Reads the private pre-pairing policy result retained for the current live session. */
+type NodeSessionPolicy = {
+  approvedCaps: string[];
+  approvedCommands: string[];
+  skills: NodeSkillDescriptor[];
+  withheldCommands: readonly string[];
+};
+const NODE_SESSION_POLICIES = new WeakMap<object, NodeSessionPolicy>();
+
+/** Reads commands withheld by current policy from the live session's declaration. */
 export function readNodeSessionWithheldCommands(node: object): readonly string[] {
-  return NODE_SESSION_WITHHELD_COMMANDS.get(node) ?? [];
+  return NODE_SESSION_POLICIES.get(node)?.withheldCommands ?? [];
 }
 
 type PairingBoundNodeSessionLease = {
@@ -168,6 +205,7 @@ type NodeSessionRegistrationOptions = {
   remoteIp?: string | undefined;
   pairingIdentity: string;
   pairingGeneration?: string | undefined;
+  approvedSurface?: NodeApprovalSurface;
 };
 
 function pairingBindingForSession(node: PairingBoundNodeSession): PairedDeviceNodeBinding {
@@ -194,8 +232,7 @@ export type NodeRegistryOptions = {
   listRegisteredNodePluginToolCommands?:
     | (() => readonly RegisteredNodePluginToolCommand[] | undefined)
     | undefined;
-  nodePluginToolsEnabled?: boolean;
-  nodeSkillsEnabled?: boolean;
+  getConfig?: () => OpenClawConfig;
   resolveCurrentPairingState?: (
     nodeId: string,
   ) => Promise<PairedDeviceNodeBindingSnapshot | undefined>;
@@ -261,6 +298,7 @@ export class NodeRegistry {
         currentNode: node,
       });
     },
+    isCommandAllowed: (nodeId, command) => this.isCommandAllowed(nodeId, command),
     sendInput: (invokeId, pending, seq, payloadJSON) => {
       const node = this.nodesById.get(pending.nodeId);
       return node
@@ -303,10 +341,14 @@ export class NodeRegistry {
   });
   private authorizedSystemRunEvents = new Map<string, AuthorizedSystemRunEvent>();
   private pairingGenerationEventChains = new Map<string, Promise<void>>();
+  private committedConfig: OpenClawConfig | undefined;
 
   constructor(private readonly options: NodeRegistryOptions = {}) {
+    this.committedConfig = options.getConfig?.();
     registerNodeRegistryPrivateRuntime(this, {
       getNode: (nodeId) => this.nodesById.get(nodeId),
+      isCommandAllowed: (nodeId, command) =>
+        this.isCommandAllowed(nodeId, command, this.options.getConfig?.()),
       listCurrentConnected: () => this.listCurrentConnected(),
       hasCurrentPairingStateResolver: Boolean(this.options.resolveCurrentPairingState),
       resolvePairingLease: async (node) => {
@@ -404,25 +446,46 @@ export class NodeRegistry {
     });
   }
 
-  private normalizePluginToolDescriptors(params: {
-    nodeId: string;
-    tools?: readonly NodePluginToolDescriptor[];
-    allowedCommands: readonly string[];
-  }): NormalizedNodePluginTool[] {
-    return normalizeNodePluginToolDescriptors({
-      ...params,
-      enabled: this.options.nodePluginToolsEnabled,
-      registeredDescriptors: createRegisteredNodePluginToolDescriptorMap(
-        this.options.listRegisteredNodePluginToolCommands?.(),
-      ),
+  private refreshSessionPolicy(node: NodeSession): void {
+    const policy = expectDefined(NODE_SESSION_POLICIES.get(node), "registered node policy missing");
+    const cfg = this.committedConfig;
+    const allowlist = cfg
+      ? resolveNodeCommandAllowlist(cfg, {
+          ...node,
+          caps: policy.approvedCaps,
+          commands: policy.approvedCommands,
+          approvedCommands: policy.approvedCommands,
+        })
+      : undefined;
+    const declaredCommands = node.sessionCommandsCeiling ?? node.declaredCommands;
+    node.commands = policy.approvedCommands.filter(
+      (command) => declaredCommands.includes(command) && (!allowlist || allowlist.has(command)),
+    );
+    if (allowlist) {
+      policy.withheldCommands = declaredCommands.filter((command) => !allowlist.has(command));
+    }
+    node.caps = retainFulfilledNodeCapabilities({
+      caps: policy.approvedCaps,
+      admittedCommands: node.commands,
+      withheldCommands: policy.withheldCommands,
     });
-  }
-
-  private replaceEffectiveNodePluginTools(node: NodeSession): void {
-    const normalized = this.normalizePluginToolDescriptors({
+    node.computerUse = resolveEffectiveComputerUseDescriptor({
+      commands: node.commands,
+      declared: node.declaredComputerUse,
+    });
+    Object.assign(node.client.connect, {
+      commands: node.commands,
+      caps: node.caps,
+      computerUse: node.computerUse,
+    });
+    const normalized = normalizeNodePluginToolDescriptors({
       nodeId: node.nodeId,
       tools: node.declaredNodePluginTools,
       allowedCommands: node.commands,
+      enabled: cfg?.gateway?.nodes?.pluginTools?.enabled,
+      registeredDescriptors: createRegisteredNodePluginToolDescriptorMap(
+        this.options.listRegisteredNodePluginToolCommands?.(),
+      ),
     });
     node.nodePluginTools = normalized.map((entry) => entry.descriptor);
     replaceConnectedNodePluginTools({
@@ -432,12 +495,39 @@ export class NodeRegistry {
       remoteIp: node.remoteIp,
       tools: normalized,
     });
+    node.nodeSkills = cfg?.gateway?.nodes?.allowSkills === false ? [] : policy.skills;
+    recordRemoteSkillNodeInfo(node);
+    replaceRemoteNodeSkills({
+      nodeId: node.nodeId,
+      displayName: node.displayName,
+      skills: node.nodeSkills,
+    });
   }
 
-  refreshNodePluginTools(): void {
-    for (const node of this.nodesById.values()) {
-      this.replaceEffectiveNodePluginTools(node);
+  private isCommandAllowed(nodeId: string, command: string, liveConfig?: OpenClawConfig): boolean {
+    // Pending work uses the committed surface; only new dispatches check liveConfig.
+    // A speculative candidate must not revoke an existing stream. Worker commands
+    // retain their private operational owner outside this public command surface.
+    if (!this.committedConfig || isPrivateNodeInvokeCommand(command)) {
+      return true;
     }
+    const node = this.nodesById.get(nodeId);
+    return Boolean(
+      node?.commands.includes(command) &&
+      (!liveConfig || resolveNodeCommandAllowlist(liveConfig, node).has(command)),
+    );
+  }
+
+  refreshRuntimePolicy(config = this.committedConfig): NodeSession[] {
+    // Plugin attachment can overlap speculative config publication. Only the
+    // committed reload owner supplies a new config; other refreshes reuse it.
+    this.committedConfig = config;
+    const nodes = this.listConnected();
+    for (const node of nodes) {
+      this.refreshSessionPolicy(node);
+    }
+    this.invokeStreams.reconcileRuntimePolicy();
+    return nodes;
   }
 
   /** Register a websocket client as the current connection for its node id. */
@@ -462,61 +552,36 @@ export class NodeRegistry {
     if (!opts.pairingIdentity) {
       throw new Error("node session registration requires pairing identity");
     }
-    const connect = client.connect;
+    const connect = client.connect as NodeSessionConnectParams;
     const nodeId = connect.device?.id ?? connect.client.id;
     const previousSession = this.nodesById.get(nodeId);
     const previousPairingGeneration = previousSession?.pairingGeneration;
-    const caps = Array.isArray(connect.caps) ? connect.caps : [];
-    const declaredCaps = Array.isArray((connect as { declaredCaps?: string[] }).declaredCaps)
-      ? ((connect as { declaredCaps?: string[] }).declaredCaps ?? [])
-      : caps;
-    const commands = Array.isArray((connect as { commands?: string[] }).commands)
-      ? ((connect as { commands?: string[] }).commands ?? [])
-      : [];
-    const declaredCommands = Array.isArray(
-      (connect as { declaredCommands?: string[] }).declaredCommands,
-    )
-      ? ((connect as { declaredCommands?: string[] }).declaredCommands ?? [])
-      : commands;
-    // SAFETY: reconciliation attaches this fact before admission, preserving policy-denial provenance.
-    const withheldCommandsValue = (connect as { withheldCommands?: string[] }).withheldCommands;
-    const withheldCommands = Array.isArray(withheldCommandsValue) ? withheldCommandsValue : [];
+    const caps = connect.caps ?? [];
+    const commands = connect.commands ?? [];
+    const declaredCaps = connect.declaredCaps ?? caps;
+    const declaredCommands = connect.declaredCommands ?? commands;
     const computerUse =
       connect.computerUse === undefined
         ? undefined
         : parseComputerUseCapabilityDescriptor(connect.computerUse);
-    const declaredComputerUseValue = (connect as { declaredComputerUse?: unknown })
-      .declaredComputerUse;
+    const declaredComputerUseValue = connect.declaredComputerUse;
     const declaredComputerUse =
       declaredComputerUseValue === undefined
         ? computerUse
         : parseComputerUseCapabilityDescriptor(declaredComputerUseValue);
     // Session ceilings preserve protocol compatibility across later pairing
     // approvals while declared* retains the durable approval surface.
-    const sessionCapsCeiling = Array.isArray(
-      (connect as { sessionCapsCeiling?: string[] }).sessionCapsCeiling,
-    )
-      ? ((connect as { sessionCapsCeiling?: string[] }).sessionCapsCeiling ?? [])
-      : declaredCaps;
-    const sessionCommandsCeiling = Array.isArray(
-      (connect as { sessionCommandsCeiling?: string[] }).sessionCommandsCeiling,
-    )
-      ? ((connect as { sessionCommandsCeiling?: string[] }).sessionCommandsCeiling ?? [])
-      : declaredCommands;
-    const permissions =
-      typeof (connect as { permissions?: Record<string, boolean> }).permissions === "object"
-        ? ((connect as { permissions?: Record<string, boolean> }).permissions ?? undefined)
-        : undefined;
-    const declaredPermissions =
-      typeof (connect as { declaredPermissions?: Record<string, boolean> }).declaredPermissions ===
-      "object"
-        ? ((connect as { declaredPermissions?: Record<string, boolean> }).declaredPermissions ??
-          undefined)
-        : permissions;
-    const pathEnv =
-      typeof (connect as { pathEnv?: string }).pathEnv === "string"
-        ? (connect as { pathEnv?: string }).pathEnv
-        : undefined;
+    const sessionCapsCeiling = connect.sessionCapsCeiling ?? declaredCaps;
+    const sessionCommandsCeiling = connect.sessionCommandsCeiling ?? declaredCommands;
+    const declaredPermissions = connect.declaredPermissions ?? connect.permissions;
+    const permissions = opts.approvedSurface
+      ? intersectNodePermissionSurface({
+          approved: opts.approvedSurface.permissions,
+          declared: declaredPermissions,
+        })
+      : connect.permissions;
+    connect.permissions = permissions;
+    const pathEnv = connect.pathEnv;
     const declaredNodePluginTools: NodePluginToolDescriptor[] = [];
     const nodePluginTools: NodePluginToolDescriptor[] = [];
     const nodeSkills: NodeSkillDescriptor[] = [];
@@ -531,8 +596,8 @@ export class NodeRegistry {
       displayName: connect.client.displayName,
       platform: connect.client.platform,
       version: connect.client.version,
-      coreVersion: (connect as { coreVersion?: string }).coreVersion,
-      uiVersion: (connect as { uiVersion?: string }).uiVersion,
+      coreVersion: connect.coreVersion,
+      uiVersion: connect.uiVersion,
       deviceFamily: connect.client.deviceFamily,
       modelIdentifier: connect.client.modelIdentifier,
       remoteIp: opts.remoteIp,
@@ -552,7 +617,18 @@ export class NodeRegistry {
       pathEnv,
       connectedAtMs: Date.now(),
     };
-    NODE_SESSION_WITHHELD_COMMANDS.set(session, withheldCommands);
+    // Preserve the approved declaration independently of policy, so re-enabling
+    // a command cannot invent approval or require this connection to republish.
+    NODE_SESSION_POLICIES.set(session, {
+      approvedCaps: (opts.approvedSurface?.caps ?? caps).filter((cap) =>
+        sessionCapsCeiling.includes(cap),
+      ),
+      approvedCommands: (opts.approvedSurface?.commands ?? commands).filter((command) =>
+        sessionCommandsCeiling.includes(command),
+      ),
+      skills: [],
+      withheldCommands: connect.withheldCommands ?? [],
+    });
     const replacesPresence = previousSession?.lastActiveAtMs !== undefined;
     forgetNodeRunnerInventory(this, client.connId);
     this.nodesById.set(nodeId, session);
@@ -579,13 +655,7 @@ export class NodeRegistry {
     } else {
       this.eventTransportsByConn.delete(client.connId);
     }
-    replaceConnectedNodePluginTools({
-      nodeId,
-      displayName: session.displayName,
-      platform: session.platform,
-      remoteIp: session.remoteIp,
-      tools: [],
-    });
+    this.refreshSessionPolicy(session);
     if (replacesPresence) {
       this.publishActiveNodeContext();
     }
@@ -607,6 +677,7 @@ export class NodeRegistry {
       const hadPresence = this.nodesById.get(nodeId)?.lastActiveAtMs !== undefined;
       this.nodesById.delete(nodeId);
       removeConnectedNodePluginTools(nodeId);
+      removeRemoteNodeSkills(nodeId);
       if (hadPresence) {
         this.publishActiveNodeContext();
       }
@@ -702,6 +773,7 @@ export class NodeRegistry {
     node.client.invalidatedReason ??= reason;
     forgetNodeRunnerInventory(this, node.connId);
     removeConnectedNodePluginTools(node.nodeId);
+    removeRemoteNodeSkills(node.nodeId);
     this.invokeStreams.handleDisconnect(node.connId);
     for (const [key, event] of this.authorizedSystemRunEvents) {
       if (event.connId === node.connId) {
@@ -992,11 +1064,11 @@ export class NodeRegistry {
     tools: readonly NodePluginToolDescriptor[],
   ): NodeSession | null {
     const node = this.nodesById.get(nodeId);
-    if (!node || node.connId !== connId) {
+    if (!node || node.connId !== connId || node.client.invalidated === true) {
       return null;
     }
-    node.declaredNodePluginTools = this.options.nodePluginToolsEnabled === false ? [] : [...tools];
-    this.replaceEffectiveNodePluginTools(node);
+    node.declaredNodePluginTools = [...tools];
+    this.refreshSessionPolicy(node);
     return node;
   }
 
@@ -1006,14 +1078,15 @@ export class NodeRegistry {
     skills: readonly NodeSkillDescriptor[],
   ): NodeSession | null {
     const node = this.nodesById.get(nodeId);
-    if (!node || node.connId !== connId) {
+    if (!node || node.connId !== connId || node.client.invalidated === true) {
       return null;
     }
-    node.nodeSkills = normalizeNodeSkillDescriptors({
-      nodeId,
-      skills,
-      enabled: this.options.nodeSkillsEnabled,
-    });
+    expectDefined(NODE_SESSION_POLICIES.get(node), "registered node policy missing").skills =
+      normalizeNodeSkillDescriptors({
+        nodeId,
+        skills,
+      });
+    this.refreshSessionPolicy(node);
     return node;
   }
   updateSurface(
@@ -1043,56 +1116,30 @@ export class NodeRegistry {
     }
 
     // Runtime approvals can only narrow capabilities/commands/permissions declared at connect.
+    const policy = expectDefined(NODE_SESSION_POLICIES.get(node), "registered node policy missing");
     const sessionCommandsCeiling = new Set(node.sessionCommandsCeiling ?? node.declaredCommands);
-    const nextCommands = surface.commands.filter((command) => sessionCommandsCeiling.has(command));
-    node.commands = nextCommands;
-    (node.client.connect as { commands?: string[] }).commands = nextCommands;
-    const nextComputerUse = resolveEffectiveComputerUseDescriptor({
-      commands: nextCommands,
-      declared: node.declaredComputerUse,
-    });
-    node.computerUse = nextComputerUse;
-    node.client.connect.computerUse = nextComputerUse;
-    this.replaceEffectiveNodePluginTools(node);
+    policy.approvedCommands = surface.commands.filter((command) =>
+      sessionCommandsCeiling.has(command),
+    );
 
     if ("caps" in surface) {
       const sessionCapsCeiling = new Set(node.sessionCapsCeiling ?? node.declaredCaps);
-      const nextCaps = (surface.caps ?? []).filter((capability) =>
+      policy.approvedCaps = (surface.caps ?? []).filter((capability) =>
         sessionCapsCeiling.has(capability),
       );
-      node.caps = nextCaps;
-      (node.client.connect as { caps?: string[] }).caps = nextCaps;
     }
+    this.refreshSessionPolicy(node);
 
     if ("permissions" in surface) {
-      if (surface.permissions === undefined) {
-        node.permissions = undefined;
-        (node.client.connect as { permissions?: Record<string, boolean> }).permissions = undefined;
-        this.clearPresenceIfAccessibilityUnavailable(node);
-      } else {
-        const declared = node.declaredPermissions ?? {};
-        const nextEntries: Array<[string, boolean]> = [];
-        for (const [key, declaredValue] of Object.entries(declared)) {
-          if (!declaredValue) {
-            nextEntries.push([key, false]);
-            continue;
-          }
-          const approvedValue = surface.permissions?.[key];
-          if (approvedValue) {
-            nextEntries.push([key, true]);
-            continue;
-          }
-          if (approvedValue !== undefined) {
-            nextEntries.push([key, false]);
-          }
-        }
-        const nextPermissions =
-          nextEntries.length > 0 ? Object.fromEntries(nextEntries) : undefined;
-        node.permissions = nextPermissions;
-        (node.client.connect as { permissions?: Record<string, boolean> }).permissions =
-          nextPermissions;
-        this.clearPresenceIfAccessibilityUnavailable(node);
-      }
+      node.permissions =
+        surface.permissions === undefined
+          ? undefined
+          : intersectNodePermissionSurface({
+              approved: surface.permissions,
+              declared: node.declaredPermissions,
+            });
+      node.client.connect.permissions = node.permissions;
+      this.clearPresenceIfAccessibilityUnavailable(node);
     }
 
     if (generationTransition) {
