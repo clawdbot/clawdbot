@@ -82,6 +82,8 @@ function renderSessionSection(params: {
   const presenceLabel = presence
     ? t(presence === "idle" ? "presence.idle" : "presence.rosterTitle")
     : undefined;
+  // The person button's explicit aria-label hides descendant text, so the live
+  // state is exposed as its accessible description via this indicator id.
   const presenceId =
     presence && personIdentity ? `sidebar-person-presence-${personIdentity.id}` : undefined;
   // Pinned rows render in the nav zone; renderHeader records whether this list
@@ -232,8 +234,6 @@ function renderSessionSection(params: {
                     >
                       ${chevron}
                     </button>
-                    <!-- The explicit label hides descendant text, so expose live presence
-                         as the button's accessible description. -->
                     <button
                       type="button"
                       class="sidebar-session-group-person"
