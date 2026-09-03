@@ -1362,6 +1362,47 @@ describe("fetchWithSsrFGuard hardening", () => {
     await result.release();
   });
 
+  it("rejects unsafe cross-origin redirect bodies before replay when requested", async () => {
+    const lookupFn = createPublicLookup();
+    const fetchImpl = vi.fn().mockResolvedValueOnce(
+      new Response(null, {
+        status: 307,
+        headers: { location: "https://cdn.example.com/upload-2" },
+      }),
+    );
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://api.example.com/upload",
+        fetchImpl,
+        lookupFn,
+        rejectCrossOriginUnsafeRedirectReplay: true,
+        init: {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: '{"secret":"123"}',
+        },
+      }),
+    ).rejects.toThrow("Refusing to follow cross-origin redirect for POST request body");
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects contradictory unsafe cross-origin redirect policies before fetching", async () => {
+    const fetchImpl = vi.fn();
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://api.example.com/upload",
+        fetchImpl,
+        allowCrossOriginUnsafeRedirectReplay: true,
+        rejectCrossOriginUnsafeRedirectReplay: true,
+      }),
+    ).rejects.toThrow("Cross-origin unsafe redirect replay cannot be both allowed and rejected");
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("drops unsafe bodies while stripping auth headers for cross-origin 308 redirects", async () => {
     const lookupFn = createPublicLookup();
     const fetchImpl = vi

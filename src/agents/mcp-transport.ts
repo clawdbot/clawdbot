@@ -14,6 +14,7 @@ import type { SessionMcpRequesterScope } from "./agent-bundle-mcp-types.js";
 import { resolveMcpAuthProfileId, withMcpAuthProfileBearer } from "./mcp-auth-profile.js";
 import {
   buildMcpHttpFetch,
+  buildMcpOAuthHttpFetch,
   withoutMcpAuthorizationHeader,
   withSameOriginMcpHttpHeaders,
 } from "./mcp-http-fetch.js";
@@ -197,8 +198,17 @@ export function resolveMcpTransport(
       ? withMcpOAuthBearer({
           fetchFn: resourceFetch,
           // Protected-resource discovery lives at the resource origin and may
-          // require the same routing headers. Cross-origin auth calls stay scrubbed.
-          authFetchFn: resourceFetch,
+          // require the same routing headers. Resource requests intentionally retain
+          // redirect-body replay for MCP compatibility, while credential-bearing
+          // auth redirects use the stricter fail-closed policy.
+          authFetchFn: buildMcpOAuthHttpFetch({
+            sslVerify: resolved.sslVerify,
+            clientCert: resolved.clientCert,
+            clientKey: resolved.clientKey,
+            resourceUrl: resolved.url,
+            timeoutMs: resolved.requestTimeoutMs,
+            headers,
+          }),
           identity: oauthIdentity,
           config: resolved.oauth,
         })

@@ -9,6 +9,7 @@ import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildMcpHttpFetch,
+  buildMcpOAuthHttpFetch,
   withoutMcpAuthorizationHeader,
   withSameOriginMcpHttpHeaders,
 } from "./mcp-http-fetch.js";
@@ -321,7 +322,9 @@ describe("MCP HTTP fetch helpers", () => {
     const resourceUrl = "https://mcp.example.com/mcp";
     const fetch = withMcpOAuthBearer({
       fetchFn: buildMcpHttpFetch({ resourceUrl }),
-      authFetchFn: buildMcpHttpFetch({ resourceUrl }),
+      authFetchFn: buildMcpOAuthHttpFetch({
+        resourceUrl,
+      }),
       identity: operatorMcpOAuthIdentity("docs", resourceUrl),
     });
 

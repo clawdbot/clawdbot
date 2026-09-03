@@ -27,6 +27,19 @@ const fetchWithUndiciGuard = async (
 
 const MCP_HTTP_MAX_REDIRECTS = 20;
 
+type McpHttpFetchParams = {
+  sslVerify?: boolean;
+  clientCert?: string;
+  clientKey?: string;
+  resourceUrl?: string;
+  timeoutMs?: number;
+};
+
+type McpOAuthHttpFetchParams = McpHttpFetchParams & {
+  resourceUrl: string;
+  headers?: Record<string, string>;
+};
+
 function resolveFetchRequest(input: RequestInfo | URL, init?: RequestInit) {
   if (input instanceof Request) {
     const request = new Request(input, init);
@@ -92,14 +105,10 @@ async function buildManagedMcpResponse(
   );
 }
 
-/** Builds an MCP fetch function with optional TLS/client-cert dispatcher support. */
-export function buildMcpHttpFetch(params: {
-  sslVerify?: boolean;
-  clientCert?: string;
-  clientKey?: string;
-  resourceUrl?: string;
-  timeoutMs?: number;
-}): FetchLike {
+function buildMcpHttpFetchWithRedirectPolicy(
+  params: McpHttpFetchParams,
+  redirectPolicy: "replay" | "reject",
+): FetchLike {
   const needsCustomDispatcher =
     params.sslVerify === false || Boolean(params.clientCert || params.clientKey);
   const scopedOrigin = params.resourceUrl ? new URL(params.resourceUrl).origin : undefined;
@@ -127,7 +136,9 @@ export function buildMcpHttpFetch(params: {
       init: request.init,
       fetchImpl: fetchWithUndiciGuard,
       maxRedirects: MCP_HTTP_MAX_REDIRECTS,
-      allowCrossOriginUnsafeRedirectReplay: true,
+      ...(redirectPolicy === "reject"
+        ? { rejectCrossOriginUnsafeRedirectReplay: true }
+        : { allowCrossOriginUnsafeRedirectReplay: true }),
       auditContext: "mcp-http",
       useEnvProxyForEligibleUrls: true,
       ...(request.signal ? { signal: request.signal } : {}),
@@ -138,6 +149,21 @@ export function buildMcpHttpFetch(params: {
     const guarded = await fetchWithSsrFGuard(guardedFetchOptions);
     return await buildManagedMcpResponse(guarded.response, guarded.release, guarded.refreshTimeout);
   };
+}
+
+/** Builds an MCP resource fetch with optional TLS/client-cert dispatcher support. */
+export function buildMcpHttpFetch(params: McpHttpFetchParams): FetchLike {
+  return buildMcpHttpFetchWithRedirectPolicy(params, "replay");
+}
+
+/** Builds an OAuth fetch with scoped resource headers and fail-closed redirect replay. */
+export function buildMcpOAuthHttpFetch(params: McpOAuthHttpFetchParams): FetchLike {
+  const { headers, ...fetchParams } = params;
+  return withSameOriginMcpHttpHeaders({
+    fetchFn: buildMcpHttpFetchWithRedirectPolicy(fetchParams, "reject"),
+    headers: withoutMcpAuthorizationHeader(headers),
+    resourceUrl: params.resourceUrl,
+  });
 }
 
 /** Removes Authorization from MCP headers before forwarding to non-authorized paths. */

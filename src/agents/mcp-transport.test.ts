@@ -410,6 +410,67 @@ describe("resolveMcpTransport", () => {
     expect(new Headers(runtimeFetchCall(3)?.[1]?.headers).get("x-tenant")).toBeNull();
   });
 
+  it.each([307, 308])(
+    "rejects cross-origin OAuth %s redirects that would replay a POST body",
+    async (status) => {
+      runtimeFetchMock
+        .mockResolvedValueOnce(redirectResponse("https://redirect.example/token", status))
+        .mockResolvedValueOnce(new Response("ok"));
+
+      resolveMcpTransport("probe", {
+        url: "https://mcp.example.com/mcp",
+        transport: "streamable-http",
+        auth: "oauth",
+      });
+
+      const oauthParams = oauthBearerMock.mock.calls.at(-1)?.[0] as
+        | { authFetchFn?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }
+        | undefined;
+      const tokenBody = new URLSearchParams({
+        code: "synthetic-code",
+        code_verifier: "synthetic-verifier",
+      }).toString();
+
+      await expect(
+        oauthParams?.authFetchFn?.("https://auth.example.com/token", {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+          body: tokenBody,
+        }),
+      ).rejects.toThrow("Refusing to follow cross-origin redirect for POST request body");
+
+      expect(runtimeFetchMock).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("preserves OAuth POST bodies across same-origin 307 redirects", async () => {
+    runtimeFetchMock
+      .mockResolvedValueOnce(redirectResponse("https://auth.example.com/regional-token", 307))
+      .mockResolvedValueOnce(new Response("ok"));
+
+    resolveMcpTransport("probe", {
+      url: "https://mcp.example.com/mcp",
+      transport: "streamable-http",
+      auth: "oauth",
+    });
+
+    const oauthParams = oauthBearerMock.mock.calls.at(-1)?.[0] as
+      | { authFetchFn?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }
+      | undefined;
+    const tokenBody = "code=synthetic-code&code_verifier=synthetic-verifier";
+
+    await oauthParams?.authFetchFn?.("https://auth.example.com/token", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: tokenBody,
+    });
+
+    expect(runtimeFetchMock).toHaveBeenCalledTimes(2);
+    expect(runtimeFetchCall(1)?.[0]).toBe("https://auth.example.com/regional-token");
+    expect(runtimeFetchCall(1)?.[1]?.method).toBe("POST");
+    expect(runtimeFetchCall(1)?.[1]?.body).toBe(tokenBody);
+  });
+
   it("merges SSE event-source headers case-insensitively so auth is not duplicated", async () => {
     // The SDK's EventSource can supply lowercase `authorization` while operator
     // config uses `Authorization`; the runtime fetch should see one header.

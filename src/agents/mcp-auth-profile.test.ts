@@ -34,7 +34,7 @@ describe("mcp auth profile bearer projection", () => {
   });
 
   it("projects existing MCP-native OAuth credentials without an auth profile", async () => {
-    const buildMcpHttpFetch = vi.spyOn(mcpHttpFetch, "buildMcpHttpFetch");
+    const buildMcpOAuthHttpFetch = vi.spyOn(mcpHttpFetch, "buildMcpOAuthHttpFetch");
     authMocks.resolveMcpOAuthAccessToken.mockResolvedValueOnce("native-access-token");
 
     const resolved = await resolveMcpBearerBundleConfig({
@@ -60,10 +60,11 @@ describe("mcp auth profile bearer projection", () => {
     expect(resolved.config.mcpServers.docs?.auth).toBeUndefined();
     expect(resolved.config.mcpServers.docs?.oauth).toBeUndefined();
     expect(Object.values(resolved.env ?? {})).toEqual(["native-access-token"]);
-    expect(buildMcpHttpFetch).toHaveBeenCalledWith(
+    expect(buildMcpOAuthHttpFetch).toHaveBeenCalledWith(
       expect.objectContaining({
         resourceUrl: "https://mcp.example.com/mcp",
         timeoutMs: 25,
+        headers: undefined,
       }),
     );
     expect(authMocks.resolveMcpOAuthAccessToken).toHaveBeenCalledWith(

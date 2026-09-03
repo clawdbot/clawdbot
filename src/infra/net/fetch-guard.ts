@@ -84,6 +84,8 @@ export type GuardedFetchOptions = {
    * Defaults to false.
    */
   allowCrossOriginUnsafeRedirectReplay?: boolean;
+  /** Reject cross-origin redirects that would replay an unsafe body. Mutually exclusive with allow. */
+  rejectCrossOriginUnsafeRedirectReplay?: boolean;
   timeoutMs?: number;
   signal?: AbortSignal;
   requireHttps?: boolean;
@@ -470,6 +472,12 @@ export async function fetchConfiguredLocalOriginWithSsrFGuard({
 async function fetchWithSsrFGuardInternal(
   params: GuardedFetchInternalOptions,
 ): Promise<GuardedFetchResult> {
+  if (
+    params.allowCrossOriginUnsafeRedirectReplay === true &&
+    params.rejectCrossOriginUnsafeRedirectReplay === true
+  ) {
+    throw new TypeError("Cross-origin unsafe redirect replay cannot be both allowed and rejected");
+  }
   const defaultFetch: FetchLike | undefined = params.fetchImpl ?? globalThis.fetch;
   if (!defaultFetch) {
     throw new Error("fetch is not available");
@@ -729,6 +737,18 @@ async function fetchWithSsrFGuardInternal(
         });
         currentInit = rewriteRedirectInitForMethod({ init: currentInit, status: response.status });
         if (nextParsedUrl.origin !== parsedUrl.origin) {
+          const redirectedMethod = currentInit?.method?.toUpperCase() ?? "GET";
+          const redirectedBody = currentInit?.body;
+          if (
+            params.rejectCrossOriginUnsafeRedirectReplay === true &&
+            redirectedMethod !== "GET" &&
+            redirectedMethod !== "HEAD" &&
+            redirectedBody != null
+          ) {
+            throw new Error(
+              `Refusing to follow cross-origin redirect for ${redirectedMethod} request body (${parsedUrl.origin} -> ${nextParsedUrl.origin})`,
+            );
+          }
           currentInit = rewriteRedirectInitForCrossOrigin({
             init: currentInit,
             allowUnsafeReplay: params.allowCrossOriginUnsafeRedirectReplay === true,
