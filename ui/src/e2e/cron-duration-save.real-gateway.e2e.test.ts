@@ -37,7 +37,7 @@ const suite = createControlUiE2eSuite({
     }
   },
 });
-const captureEnabled = process.env.OPENCLAW_UI_E2E_CAPTURE === "1";
+const captureEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const requireRecord = createRequireRecord("record", "expected-object-value");
 
 async function capture(page: Page, name: string, observed: unknown) {

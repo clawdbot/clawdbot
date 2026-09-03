@@ -27,7 +27,7 @@ function cronJob(id: string, name: string) {
   };
 }
 
-const captureDurationProofEnabled = process.env.OPENCLAW_UI_E2E_CAPTURE === "1";
+const captureDurationProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const requireDurationRecord = createRequireRecord("record", "expected-object-value");
 
 function durationResponses(jobs: unknown[]) {
