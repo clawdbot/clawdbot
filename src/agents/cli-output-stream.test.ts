@@ -101,6 +101,22 @@ function claudeTextDelta(text: string, index?: number | string) {
   });
 }
 
+function claudeThinkingDelta(thinking: string, index?: number) {
+  return claudeStreamEvent({
+    type: "content_block_delta",
+    ...(index === undefined ? {} : { index }),
+    delta: { type: "thinking_delta", thinking },
+  });
+}
+
+function claudeThinkingProgress(index?: number, estimatedTokens = 12) {
+  return claudeStreamEvent({
+    type: "content_block_delta",
+    ...(index === undefined ? {} : { index }),
+    delta: { type: "thinking_delta", thinking: "", estimated_tokens: estimatedTokens },
+  });
+}
+
 function claudeSyntheticNoResponse(text = "No response requested.") {
   return {
     type: "assistant",
@@ -352,6 +368,28 @@ describe("createCliJsonlStreamingParser", () => {
       ],
       terminal: false,
     },
+    {
+      name: "streamed thinking text without a result",
+      sessionId: "thinking-only",
+      frames: [
+        { type: "init", session_id: "thinking-only" },
+        claudeMessageStart("msg-1"),
+        claudeBlockStart({ type: "thinking", thinking: "" }, 0),
+        claudeThinkingDelta("Working through the edit", 0),
+      ],
+      terminal: false,
+    },
+    {
+      name: "token-only thinking progress without a result",
+      sessionId: "thinking-progress",
+      frames: [
+        { type: "init", session_id: "thinking-progress" },
+        claudeMessageStart("msg-1"),
+        claudeBlockStart({ type: "thinking", thinking: "" }, 0),
+        claudeThinkingProgress(0),
+      ],
+      terminal: false,
+    },
   ])(
     "classifies a stream ending without a result after $name",
     ({ frames, sessionId, terminal }) => {
@@ -363,7 +401,11 @@ describe("createCliJsonlStreamingParser", () => {
           sessionIdFields: ["session_id"],
         },
         providerId: "claude-cli",
+        // Mirror the runtime composition: the runner always wires thinking
+        // callbacks, so thinking-only activity must reach this classifier.
         onAssistantDelta: () => {},
+        onThinkingDelta: () => {},
+        onThinkingProgress: () => {},
       });
 
       parser.push(joinJsonlFrames(...frames, ""));

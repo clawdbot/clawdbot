@@ -80,6 +80,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
   let rawLines = 0;
   const texts: string[] = [];
   let sawCustomJsonlEvent = false;
+  let sawCompactionActivity = false;
   let sawGeminiStructuredOutput = false;
   let sawTerminalResult = false;
   let sawClaudeSyntheticNoResponse = false;
@@ -245,6 +246,10 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
           observeSessionId(parsed);
         }
         for (const event of lifecycle.events) {
+          // Compaction metadata is a control operation, not turn content; its
+          // outcome belongs to the compaction owner, so it must not feed the
+          // orphaned-exit empty-failure classification in getOutput().
+          sawCompactionActivity = true;
           params.onCompaction?.(cliOutputLifecycle.projectCliBackendLifecycleEvent(event));
         }
       }
@@ -701,22 +706,22 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       }
       if (isStreamJsonDialect(params)) {
         // A stream that ended without a result event but also without any turn
-        // content (assistant text or tool activity) is the orphaned-process
-        // signature of a mid-turn session rebuild. Marking it terminal records
-        // the empty-failure fact instead of a bare unknown reason; whether that
-        // clears the binding for a fresh retry stays with the backend's
-        // freshSessionRecovery policy.
-        const producedContent =
+        // activity (assistant text, thinking, tool activity, or compaction
+        // control metadata) is the orphaned-process signature of a mid-turn
+        // session rebuild. Marking it terminal records the empty-failure fact
+        // instead of a bare unknown reason; whether that clears the binding for
+        // a fresh retry stays with the backend's freshSessionRecovery policy.
+        const producedActivity =
           texts.length > 0 ||
-          toolTracker.pendingByIndex.size > 0 ||
-          toolTracker.startedIds.size > 0 ||
-          toolTracker.resultDeliveredIds.size > 0;
+          thinkingTracker.hasEmittedActivity ||
+          sawCompactionActivity ||
+          toolTracker.hasEmittedActivity;
         return {
           text: "",
           sessionId,
           usage,
           errorText: CLI_STREAM_JSON_MISSING_RESULT_ERROR,
-          ...(producedContent ? {} : { terminalFailure: { reason: "missing_result" as const } }),
+          ...(producedActivity ? {} : { terminalFailure: { reason: "missing_result" as const } }),
         };
       }
       const text = texts.join("\n").trim();

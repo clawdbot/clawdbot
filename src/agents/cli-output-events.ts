@@ -40,6 +40,10 @@ type ToolUseTracker = {
   nameById: Map<string, string>;
   startedIds: Set<string>;
   resultDeliveredIds: Set<string>;
+  // Cumulative whole-stream fact, kept in lockstep with the three collections
+  // above: the missing-result classifier reads it after pendingByIndex entries
+  // have been drained, so it must not depend on current key counts.
+  hasEmittedActivity: boolean;
 };
 
 export function createToolUseTracker(): ToolUseTracker {
@@ -48,6 +52,7 @@ export function createToolUseTracker(): ToolUseTracker {
     nameById: new Map(),
     startedIds: new Set(),
     resultDeliveredIds: new Set(),
+    hasEmittedActivity: false,
   };
 }
 
@@ -64,6 +69,7 @@ function emitToolStartOnce(
     return;
   }
   tracker.startedIds.add(toolCallId);
+  tracker.hasEmittedActivity = true;
   tracker.nameById.set(toolCallId, name);
   onToolUseStart?.({ toolCallId, name, kind, args });
 }
@@ -80,6 +86,7 @@ function emitToolResultOnce(
     return;
   }
   tracker.resultDeliveredIds.add(toolCallId);
+  tracker.hasEmittedActivity = true;
   onToolResult?.({
     toolCallId,
     name: tracker.nameById.get(toolCallId) ?? "",
@@ -276,6 +283,7 @@ export function dispatchClaudeCliStreamingToolEvent(params: {
         const toolCallId = typeof block.id === "string" ? block.id.trim() : "";
         const name = typeof block.name === "string" ? block.name.trim() : "";
         if (toolCallId && name) {
+          tracker.hasEmittedActivity = true;
           tracker.pendingByIndex.set(event.index, {
             toolCallId,
             name,
@@ -401,6 +409,10 @@ type ThinkingTracker = {
   currentSyntheticBlockIndex?: number;
   nextSyntheticBlockIndex: number;
   progressTokens: number;
+  // Cumulative across the whole stream, unlike the per-message fields above:
+  // the missing-result classifier reads it after a later message boundary has
+  // already reset emittedText/progressTokens, so it must survive those resets.
+  hasEmittedActivity: boolean;
 };
 
 export function createThinkingTracker(): ThinkingTracker {
@@ -409,6 +421,7 @@ export function createThinkingTracker(): ThinkingTracker {
     emittedText: "",
     nextSyntheticBlockIndex: 0,
     progressTokens: 0,
+    hasEmittedActivity: false,
   };
 }
 
@@ -482,6 +495,7 @@ function emitClaudeThinking(
 ): void {
   tracker.streamedByIndex.set(index, `${streamed}${delta}`);
   tracker.emittedText = assembleThinkingTextByIndex(tracker.streamedByIndex);
+  tracker.hasEmittedActivity = true;
   onThinkingDelta({ text: tracker.emittedText, delta, isReasoningSnapshot: true });
 }
 
@@ -498,6 +512,7 @@ function emitClaudeThinkingProgress(
   onThinkingProgress: (progress: CliThinkingProgress) => void,
 ): void {
   tracker.progressTokens += progressTokensDelta;
+  tracker.hasEmittedActivity = true;
   onThinkingProgress({ progressTokens: tracker.progressTokens });
 }
 
@@ -584,6 +599,7 @@ export function dispatchClaudeCliThinking(params: {
         continue;
       }
       tracker.emittedText = text;
+      tracker.hasEmittedActivity = true;
       params.onThinkingDelta({ text, delta: block.thinking, isReasoningSnapshot: true });
     }
   }
