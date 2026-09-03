@@ -27,8 +27,15 @@ export function resolveLineDurableReplyOptions(params: {
   if (params.replyToken && !params.replyTokenUsed) {
     return false;
   }
+  // Recovery replays a part by re-rendering it from the recorded payload, and a
+  // rich or media reply re-renders against live configuration. Widening the
+  // durable path to them is a separate contract change from resolving an
+  // interrupted send, so it stays on the inline path this fix does not touch.
+  if (hasLineChannelData(params.payload)) {
+    return false;
+  }
   const reply = resolveSendableOutboundReplyParts(params.payload);
-  if (!reply.hasText && !reply.hasMedia && !hasLineChannelData(params.payload)) {
+  if (reply.hasMedia || !reply.hasText) {
     return false;
   }
   return {
@@ -38,7 +45,6 @@ export function resolveLineDurableReplyOptions(params: {
     // already accepted. Without it an interrupted send stays unresolved forever.
     requiredCapabilities: deriveDurableFinalDeliveryRequirements({
       payload: params.payload,
-      payloadTransport: hasLineChannelData(params.payload),
       reconcileUnknownSend: true,
     }),
   };

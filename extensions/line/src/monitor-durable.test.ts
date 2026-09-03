@@ -36,7 +36,7 @@ describe("resolveLineDurableReplyOptions", () => {
     ).toBe(false);
   });
 
-  it("keeps rich and media replies durable now that every part is keyed", () => {
+  it("keeps rich and media replies on the legacy path", () => {
     expect(
       resolveLineDurableReplyOptions({
         payload: { text: "hello", channelData: { line: { quickReplies: ["One"] } } },
@@ -44,10 +44,7 @@ describe("resolveLineDurableReplyOptions", () => {
         to: "U123",
         replyTokenUsed: true,
       }),
-    ).toMatchObject({
-      to: "U123",
-      requiredCapabilities: { payload: true, reconcileUnknownSend: true },
-    });
+    ).toBe(false);
     expect(
       resolveLineDurableReplyOptions({
         payload: { text: "photo", mediaUrl: "https://example.com/image.png" },
@@ -55,10 +52,7 @@ describe("resolveLineDurableReplyOptions", () => {
         to: "U123",
         replyTokenUsed: true,
       }),
-    ).toMatchObject({
-      to: "U123",
-      requiredCapabilities: { media: true, reconcileUnknownSend: true },
-    });
+    ).toBe(false);
   });
 
   it("keeps non-final and empty replies on the legacy path", () => {
