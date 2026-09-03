@@ -317,9 +317,11 @@ describe("memory watcher kernel capacity degrade", () => {
     // other root must keep its forced rescans.
     // SAFETY: test-only removal mimicking one root's successful reattachment.
     const memoryRoot = readDegradedDirs(active).find((dir) => dir.endsWith("memory"));
-    (active as unknown as { capacityDegradedDirs: Set<string> }).capacityDegradedDirs.delete(
-      memoryRoot,
-    );
+    if (memoryRoot) {
+      (active as unknown as { capacityDegradedDirs: Set<string> }).capacityDegradedDirs.delete(
+        memoryRoot,
+      );
+    }
     expect(readDegradedDirs(active)).toHaveLength(1);
     // SAFETY: test-only write simulating the settle after the previous sync.
     (active as unknown as { dirty: boolean }).dirty = false;
@@ -404,9 +406,7 @@ describe("memory watcher kernel capacity degrade", () => {
 
     const active = await createManager(createWatchConfig());
     await vi.waitFor(() =>
-      expect(nativeWatchFactoryMock.mock.calls.some((call) => String(call[0]) === memoryDir)).toBe(
-        true,
-      ),
+      expect(nativeWatchFactoryMock.mock.calls.some((call) => call[0] === memoryDir)).toBe(true),
     );
     const rootWatcher = createdNativeWatchers.find((watcher) => watcher.dir === memoryDir);
     const chokidarBaseline = createdChokidarWatchers.length;
@@ -453,15 +453,18 @@ describe("memory watcher kernel capacity degrade", () => {
 
     const active = await createManager(createWatchConfig());
     await vi.waitFor(() =>
-      expect(nativeWatchFactoryMock.mock.calls.some((call) => String(call[0]) === memoryDir)).toBe(
-        true,
-      ),
+      expect(nativeWatchFactoryMock.mock.calls.some((call) => call[0] === memoryDir)).toBe(true),
     );
     const parentWatcher = createdNativeWatchers.find((watcher) => watcher.dir === workspaceDir);
     // Startup file watchers (MEMORY.md/USER.md) form the expected baseline.
     const chokidarBaseline = createdChokidarWatchers.length;
     // Replace the watched root so the parent watcher sees a fresh inode.
+    // The decoy directory first consumes the inode the removed directory
+    // held: tmpfs allocates freed inodes eagerly, so without it the
+    // recreated directory can reuse the same inode and the parent callback
+    // would legitimately treat the root as unchanged.
     await fs.rm(memoryDir, { recursive: true });
+    await fs.mkdir(path.join(workspaceDir, "inode-decoy"), { recursive: true });
     await fs.mkdir(memoryDir, { recursive: true });
     await fs.writeFile(path.join(memoryDir, "note.md"), "hello");
     // Every new fs.watch now fails with EMFILE.
@@ -523,7 +526,7 @@ describe("memory watcher kernel capacity degrade", () => {
         options: unknown,
         listener?: (eventType: string, filename: string | null) => void,
       ) => {
-        if (String(dir) === workspaceDir) {
+        if (dir === workspaceDir) {
           throw Object.assign(new Error(`simulated watch failure on ${dir}`), { code: "EMFILE" });
         }
         const watcher = makeNativeWatcherFor(dir);
@@ -562,7 +565,7 @@ describe("memory watcher kernel capacity degrade", () => {
         options: unknown,
         listener?: (eventType: string, filename: string | null) => void,
       ) => {
-        if (String(dir) === childDir) {
+        if (dir === childDir) {
           throw Object.assign(new Error(`simulated watch failure on ${dir}`), { code: "EMFILE" });
         }
         const watcher = makeNativeWatcherFor(dir);
