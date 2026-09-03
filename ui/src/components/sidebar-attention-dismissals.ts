@@ -6,18 +6,17 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import type { ScopeUpgradeState } from "../app/device-scope-upgrade-availability.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
-import type {
-  SidebarAttentionDismissal,
-  SidebarAttentionKind,
-} from "./sidebar-attention-entries.ts";
 
-export const SIDEBAR_ATTENTION_DISMISSAL_KINDS = [
+const SIDEBAR_ATTENTION_DISMISSAL_KINDS = [
   "cronFailed",
   "cronOverdue",
   "modelAuthExpired",
   "scopeUpgrade",
   "updateAvailable",
 ] as const;
+
+export type SidebarAttentionKind = (typeof SIDEBAR_ATTENTION_DISMISSAL_KINDS)[number];
+export type SidebarAttentionDismissal = { kind: SidebarAttentionKind; signature: string };
 
 export type SidebarAttentionDismissals = Partial<Record<SidebarAttentionKind, string[]>>;
 

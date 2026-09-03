@@ -1,11 +1,9 @@
 import {
   clearSidebarAttentionDismissal,
   resolveScopeUpgradeDismissal,
+  type SidebarAttentionDismissal,
 } from "../components/sidebar-attention-dismissals.ts";
-import type {
-  SidebarAttentionDismissal,
-  SidebarInboxEntry,
-} from "../components/sidebar-attention-entries.ts";
+import type { SidebarInboxEntry } from "../components/sidebar-attention-entries.ts";
 import type { AgentCapability } from "../lib/agents/index.ts";
 import type { AgentSelectionCapability } from "./agent-selection.ts";
 import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";

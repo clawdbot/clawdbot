@@ -26,12 +26,9 @@ import {
   loadDismissals,
   reconcileSidebarAttentionDismissals,
   resolveUpdateAttentionDismissal,
-} from "./sidebar-attention-dismissals.ts";
-import {
-  buildScopeUpgradeInboxEntry,
-  buildUpdateInboxEntry,
   type SidebarAttentionKind,
-} from "./sidebar-attention-entries.ts";
+} from "./sidebar-attention-dismissals.ts";
+import { buildScopeUpgradeInboxEntry, buildUpdateInboxEntry } from "./sidebar-attention-entries.ts";
 import { buildSidebarAttentionEntries } from "./sidebar-attention-items.ts";
 import { SidebarAttentionStoreController } from "./sidebar-attention-store.ts";
 import { resolveSidebarUpdateAttention } from "./sidebar-attention-update.ts";

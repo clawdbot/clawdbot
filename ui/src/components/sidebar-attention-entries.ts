@@ -6,14 +6,12 @@ import type { CustodianAlert } from "./custodian-alert-contract.ts";
 import type { IconName } from "./icons.ts";
 import {
   resolveScopeUpgradeDismissal,
-  type SIDEBAR_ATTENTION_DISMISSAL_KINDS,
+  type SidebarAttentionDismissal,
+  type SidebarAttentionKind,
 } from "./sidebar-attention-dismissals.ts";
 import type { IssueTab } from "./sidebar-issues-tabs.ts";
 
-export type SidebarAttentionKind = (typeof SIDEBAR_ATTENTION_DISMISSAL_KINDS)[number];
 type SidebarAttentionItemKind = Exclude<SidebarAttentionKind, "scopeUpgrade" | "updateAvailable">;
-
-export type SidebarAttentionDismissal = { kind: SidebarAttentionKind; signature: string };
 
 type SidebarInboxEntryBase<
   Category extends Exclude<IssueTab, "all">,

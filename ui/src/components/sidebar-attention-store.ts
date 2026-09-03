@@ -15,12 +15,12 @@ import {
   loadDismissals,
   reconcileSidebarAttentionDismissals,
   type SidebarAttentionDismissals,
+  type SidebarAttentionDismissal,
 } from "./sidebar-attention-dismissals.ts";
 import {
   buildScopeUpgradeInboxEntry,
   buildSidebarInboxEntries,
   buildUpdateInboxEntry,
-  type SidebarAttentionDismissal,
   type SidebarInboxEntry,
 } from "./sidebar-attention-entries.ts";
 import {

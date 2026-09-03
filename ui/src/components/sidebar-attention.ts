@@ -13,9 +13,9 @@ import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import "../styles/sidebar-attention-floating.css";
 import { icons } from "./icons.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
+import type { SidebarAttentionDismissal } from "./sidebar-attention-dismissals.ts";
 import {
   sidebarInboxTabCounts,
-  type SidebarAttentionDismissal,
   type SidebarAttentionItem,
   type SidebarInboxEntry,
 } from "./sidebar-attention-entries.ts";

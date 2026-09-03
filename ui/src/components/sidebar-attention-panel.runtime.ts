@@ -12,10 +12,10 @@ import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import "../styles/sidebar-issues.css";
 import { renderHubTabs } from "./hub-tabs.ts";
 import { icons } from "./icons.ts";
+import type { SidebarAttentionDismissal } from "./sidebar-attention-dismissals.ts";
 import {
   sidebarInboxEntryMatchesTab,
   sidebarInboxTabCounts,
-  type SidebarAttentionDismissal,
   type SidebarAttentionItem,
   type SidebarInboxEntry,
 } from "./sidebar-attention-entries.ts";
