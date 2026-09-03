@@ -104,7 +104,7 @@ describe("Codex app-server binding store", () => {
       })
       .strict();
     expect(priorBindingSchema.parse(stored.binding)).toEqual(stored.binding);
-    await expect(store.read(identity)).resolves.toEqual(stored.binding);
+    expect(store.read(identity)).toEqual(stored.binding);
   });
 
   it("rechecks resume authority after the lazy store resolves and before writing", async () => {
@@ -178,7 +178,7 @@ describe("Codex app-server binding store", () => {
         },
       );
       expect(state.lookup(bindingStoreKey(run))).toEqual(original);
-      await expect(store.read(run)).resolves.toMatchObject({
+      expect(store.read(run)).toMatchObject({
         agentWorkspaceDeveloperInstructions: frozenWorkspaceInstructions,
       });
       let retainedCommit: (() => void) | undefined;

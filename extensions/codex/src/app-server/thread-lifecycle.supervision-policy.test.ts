@@ -321,7 +321,7 @@ describe("Codex app-server supervised workspace policy", () => {
     });
     expect(materialized.pendingSupervisionBranch).toBeUndefined();
     expect(materialized.historyCoveredThrough).not.toBe(new Date(0).toISOString());
-    await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+    expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
       threadId: finalThreadId,
       model: "native-effective",
       modelProvider: "native-provider",
@@ -375,7 +375,7 @@ describe("Codex app-server supervised workspace policy", () => {
       conversationSourceTransferComplete: true,
       lifecycle: { action: "resumed" },
     });
-    await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+    expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
       appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(
         commonParams.appServer,
         agentDir,
