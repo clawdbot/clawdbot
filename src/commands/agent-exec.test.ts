@@ -6,7 +6,7 @@ import { Readable } from "node:stream";
 import { promisify } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { waitForDead, waitForPidFile } from "../../test/helpers/process-wait.js";
+import { waitForDead } from "../../test/helpers/process-wait.js";
 import { cleanupTempDirs, useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { AgentRunTerminalOutcomeError } from "../agents/agent-run-terminal-error.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../agents/harness/tool-surface-bridge.js";
@@ -18,8 +18,10 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { killPidIfAlive } from "../test-utils/process-tree.js";
 import {
   buildExecRunConfig,
   resolveAgentExecPrompt,
@@ -198,7 +200,7 @@ describe("agent exec strict result classification", () => {
 });
 
 describe("agent exec command composition", () => {
-  it("times out the selected CLI and cleans its process through agent exec", async () => {
+  it("reports a structured timeout through the real Claude CLI execution path", async () => {
     const root = tempDirs.make("openclaw-agent-exec-cli-timeout-");
     const binDir = path.join(root, "bin");
     const pidPath = path.join(root, "command.pid");
@@ -208,12 +210,22 @@ describe("agent exec command composition", () => {
     await fs.writeFile(
       claudePath,
       `#!/bin/sh
-if [ "$1" = "--version" ]; then
+if [ "$#" -eq 1 ] && [ "$1" = "--version" ]; then
   echo '2.1.98 (Claude Code)'
   exit 0
 fi
-printf '%s' "$$" > ${JSON.stringify(pidPath)}
-exec sleep 60
+if [ "$#" -eq 3 ] && [ "$1" = "auth" ] && [ "$2" = "status" ] && [ "$3" = "--json" ]; then
+  echo '{"loggedIn":true,"authMethod":"claude.ai","email":"fixture@example.test"}'
+  exit 0
+fi
+case "$1 $2 $3 $4 $5" in
+  "--output-format stream-json --verbose --input-format stream-json") ;;
+  *) echo 'Unexpected fake Claude invocation' >&2; exit 64 ;;
+esac
+sleep 60 &
+descendant=$!
+printf '%s\\n%s\\n' "$$" "$descendant" > ${JSON.stringify(pidPath)}
+wait "$descendant"
 `,
       "utf8",
     );
@@ -247,11 +259,26 @@ exec sleep 60
           { config: configPath, cwd: root, timeout: "1", json: true },
           runtime,
         );
-        // Preparation precedes the execution timeout. Only the executed command
-        // writes this receipt; the capability probe exits before writing it.
-        const commandPid = await waitForPidFile(pidPath, 3_000);
-        expect(commandPid).toBeGreaterThan(0);
-        await waitForDead(commandPid, 5_000);
+        // The deadline includes cold SDK construction, so execution may never
+        // write a receipt. Absence does not prove that no children were created.
+        const receipt = await fs.readFile(pidPath, "utf8").catch((error: unknown) => {
+          if (hasErrnoCode(error, "ENOENT")) {
+            return undefined;
+          }
+          throw error;
+        });
+        if (receipt !== undefined) {
+          const pids = receipt.trim().split("\n").map(Number);
+          expect(pids).toHaveLength(2);
+          for (const pid of pids) {
+            expect(Number.isSafeInteger(pid) && pid > 0).toBe(true);
+          }
+          try {
+            await Promise.all(pids.map((pid) => waitForDead(pid, 5_000)));
+          } finally {
+            pids.forEach(killPidIfAlive);
+          }
+        }
         return finished;
       },
     );
