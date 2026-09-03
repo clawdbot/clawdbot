@@ -402,14 +402,20 @@ export function mockCall(mock: unknown, label: string, index = 0): unknown[] {
 }
 
 export function getMockRuntimeIdentity() {
-  return { serverVersion: CODEX_APP_SERVER_VERSION };
+  return {
+    serverVersion: CODEX_APP_SERVER_VERSION,
+    userAgent: `codex-cli/${CODEX_APP_SERVER_VERSION}`,
+  };
 }
 
 export { mockClientRuntimeMethods, turnStartResult } from "./codex-app-server.test-fixtures.js";
 
-export function threadStartResult(threadId = "thread-1", options: { cwd?: string } = {}) {
+export function threadStartResult(
+  threadId = "thread-1",
+  options: { cwd?: string; instructionSources?: string[] } = {},
+) {
   const cwd = options.cwd ?? tempDir ?? "/tmp/openclaw-codex-test";
-  return createThreadStartResult(threadId, cwd);
+  return createThreadStartResult(threadId, cwd, options.instructionSources);
 }
 
 export function rateLimitsUpdated(resetsAt: number): CodexServerNotification {
@@ -642,7 +648,11 @@ export function createStartedThreadHarness(
   }, options);
 }
 
-export function createResumeHarness(threadId = "thread-existing") {
+export function createResumeHarness(
+  options: string | { threadId?: string; instructionSources?: string[] } = "thread-existing",
+) {
+  const threadId = typeof options === "string" ? options : (options.threadId ?? "thread-existing");
+  const instructionSources = typeof options === "string" ? undefined : options.instructionSources;
   return createAppServerHarness(
     async (method, params) => {
       if (method === "configRequirements/read") {
@@ -654,7 +664,9 @@ export function createResumeHarness(threadId = "thread-existing") {
       if (method === "thread/resume") {
         // Resume must echo the requested thread; a different id is rejected as
         // an unsafe subscription.
-        return threadStartResult((params as { threadId?: string })?.threadId ?? "thread-existing");
+        return threadStartResult((params as { threadId?: string })?.threadId ?? "thread-existing", {
+          instructionSources,
+        });
       }
       if (method === "turn/start") {
         return turnStartResult();

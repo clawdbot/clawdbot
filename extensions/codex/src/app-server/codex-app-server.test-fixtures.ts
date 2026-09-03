@@ -14,7 +14,10 @@ export function mockClientRuntimeMethods() {
   const getServerVersion = () => CODEX_APP_SERVER_VERSION;
   return {
     getInstanceId: () => "test-client-1",
-    getRuntimeIdentity: () => ({ serverVersion: getServerVersion() }),
+    getRuntimeIdentity: () => ({
+      serverVersion: getServerVersion(),
+      userAgent: `codex-cli/${getServerVersion()}`,
+    }),
     getServerVersion,
   };
 }

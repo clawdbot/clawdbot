@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CodexAppServerClient } from "./client.js";
+import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import {
   sessionBindingIdentity,
@@ -13,6 +15,10 @@ import {
   resetCodexTestBindingStore,
   testCodexAppServerBindingStore,
 } from "./session-binding.test-helpers.js";
+import {
+  getLeasedSharedCodexAppServerClient,
+  resetSharedCodexAppServerClientForTests,
+} from "./shared-client.js";
 import {
   createAppServerOptions,
   createParams,
@@ -38,7 +44,10 @@ async function seedPendingSupervisionBinding(params: {
 }) {
   const appServer = createSupervisionAppServerOptions();
   const pending = {
-    connectionFingerprint: buildCodexAppServerConnectionFingerprint(appServer),
+    connectionFingerprint: buildCodexAppServerConnectionFingerprint(
+      appServer,
+      params.attempt.agentDir,
+    ),
     ...params.pending,
   };
   const identity = sessionBindingIdentity({
@@ -79,7 +88,7 @@ function nativeThreadResult(threadId: string, model: string, modelProvider: stri
 
 function sourceThread(params: {
   threadId: string;
-  status?: "idle" | "active";
+  status?: "idle" | "active" | "notLoaded";
   turns?: Array<Record<string, unknown>>;
 }) {
   return {
@@ -98,6 +107,7 @@ describe("Codex app-server supervised workspace policy", () => {
   });
 
   afterEach(async () => {
+    resetSharedCodexAppServerClientForTests();
     resetThreadLifecycleTestFixtures();
     await fs.rm(tempDir, { recursive: true, force: true });
     vi.restoreAllMocks();
@@ -111,6 +121,10 @@ describe("Codex app-server supervised workspace policy", () => {
     const agentWorkspaceDeveloperInstructions = "Follow the frozen supervised AGENTS guidance.";
     const workspaceDir = path.join(tempDir, "workspace");
     const attempt = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    const agentDir = path.join(tempDir, "agent");
+    const codexHome = path.join(agentDir, "codex-home");
+    const rolloutPath = path.join(codexHome, "sessions", `${finalThreadId}.jsonl`);
+    attempt.agentDir = agentDir;
     attempt.modelId = "outer-global-default";
     const identity = await seedPendingSupervisionBinding({
       attempt,
@@ -141,27 +155,6 @@ describe("Codex app-server supervised workspace policy", () => {
         },
       ],
     });
-    const request = vi.fn(async (method: string, requestParams: unknown) => {
-      if (method === "thread/read") {
-        const threadId = (requestParams as { threadId?: string }).threadId;
-        return {
-          thread:
-            threadId === sourceThreadId
-              ? terminalSource
-              : sourceThread({ threadId: finalThreadId }),
-        };
-      }
-      if (method === "thread/fork") {
-        return nativeThreadResult(probeThreadId, "native-effective", "native-provider");
-      }
-      if (method === "thread/start" || method === "thread/resume") {
-        return nativeThreadResult(finalThreadId, "native-effective", "native-provider");
-      }
-      if (method === "thread/inject_items" || method === "thread/archive") {
-        return {};
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
     const dynamicTools = [
       {
         type: "function" as const,
@@ -170,8 +163,72 @@ describe("Codex app-server supervised workspace policy", () => {
         inputSchema: { type: "object", properties: {} },
       },
     ];
+    await fs.mkdir(path.dirname(rolloutPath), { recursive: true });
+    await fs.writeFile(
+      rolloutPath,
+      `${JSON.stringify({ type: "session_meta", payload: { id: finalThreadId, dynamic_tools: dynamicTools } })}\n`,
+    );
+    let harness!: ReturnType<typeof createFakeCodexAppServerClient>;
+    const request = vi.fn(async (method: string, requestParams: unknown) => {
+      if (method === "thread/read") {
+        const threadId = (requestParams as { threadId?: string }).threadId;
+        return {
+          thread:
+            threadId === sourceThreadId
+              ? terminalSource
+              : {
+                  ...sourceThread({ threadId: finalThreadId, status: "notLoaded" }),
+                  path: rolloutPath,
+                },
+        };
+      }
+      if (method === "thread/fork") {
+        return nativeThreadResult(probeThreadId, "native-effective", "native-provider");
+      }
+      if (method === "thread/unsubscribe") {
+        const threadId = (requestParams as { threadId?: string }).threadId;
+        if (!threadId) {
+          throw new Error("thread/unsubscribe requires a thread id");
+        }
+        await harness.notify({
+          method: "thread/status/changed",
+          params: { threadId, status: { type: "notLoaded" } },
+        });
+        return {};
+      }
+      if (method === "thread/start" || method === "thread/resume") {
+        const response = nativeThreadResult(finalThreadId, "native-effective", "native-provider");
+        return { ...response, thread: { ...response.thread, path: rolloutPath } };
+      }
+      if (method === "thread/inject_items" || method === "thread/archive") {
+        return {};
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    harness = createFakeCodexAppServerClient(request);
+    const runtimeIdentity = harness.client.getRuntimeIdentity();
+    Object.assign(harness.client, {
+      initialize: async () => undefined,
+      getRuntimeIdentity: () => ({ ...runtimeIdentity, codexHome }),
+      addTransportExitHandler: harness.client.addCloseHandler.bind(harness.client),
+      setThreadSessionRequestGuard: () => undefined,
+      close: () => harness.close(),
+    });
+    const start = vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(harness.client);
+    let client: CodexAppServerClient;
+    try {
+      client = await getLeasedSharedCodexAppServerClient({
+        startOptions: { ...createSupervisionAppServerOptions().start, command: process.execPath },
+        authProfileId: null,
+        agentDir,
+        config: {},
+      });
+    } finally {
+      start.mockRestore();
+    }
+    request.mockClear();
     const commonParams = {
-      client: { request } as never,
+      client,
       params: attempt,
       cwd: workspaceDir,
       dynamicTools,
@@ -190,9 +247,9 @@ describe("Codex app-server supervised workspace policy", () => {
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "thread/read",
       "thread/fork",
+      "thread/unsubscribe",
       "thread/start",
       "thread/inject_items",
-      "thread/archive",
     ]);
     expect(request.mock.calls[0]?.[1]).toEqual({
       threadId: sourceThreadId,
@@ -217,7 +274,8 @@ describe("Codex app-server supervised workspace policy", () => {
     expect(forkParams).not.toHaveProperty("modelProvider");
     expect(forkParams).not.toHaveProperty("dynamicTools");
     expect(forkParams).not.toHaveProperty("environments");
-    const startParams = request.mock.calls[2]?.[1] as Record<string, unknown>;
+    expect(request.mock.calls[2]?.[1]).toEqual({ threadId: probeThreadId });
+    const startParams = request.mock.calls[3]?.[1] as Record<string, unknown>;
     expect(startParams).toMatchObject({
       model: "native-effective",
       modelProvider: "native-provider",
@@ -234,7 +292,7 @@ describe("Codex app-server supervised workspace policy", () => {
       },
     });
     expect(startParams.model).not.toBe(attempt.modelId);
-    expect(request.mock.calls[3]?.[1]).toEqual({
+    expect(request.mock.calls[4]?.[1]).toEqual({
       threadId: finalThreadId,
       items: [
         {
@@ -250,9 +308,8 @@ describe("Codex app-server supervised workspace policy", () => {
         },
       ],
     });
-    expect(JSON.stringify(request.mock.calls[3]?.[1])).not.toContain("Private reasoning");
-    expect(JSON.stringify(request.mock.calls[3]?.[1])).not.toContain("secret-tool");
-    expect(request.mock.calls[4]?.[1]).toEqual({ threadId: probeThreadId });
+    expect(JSON.stringify(request.mock.calls[4]?.[1])).not.toContain("Private reasoning");
+    expect(JSON.stringify(request.mock.calls[4]?.[1])).not.toContain("secret-tool");
     expect(materialized).toMatchObject({
       threadId: finalThreadId,
       model: "native-effective",
@@ -271,7 +328,10 @@ describe("Codex app-server supervised workspace policy", () => {
       preserveNativeModel: true,
       agentWorkspaceDeveloperInstructions,
       conversationSourceTransferComplete: true,
-      appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(commonParams.appServer),
+      appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(
+        commonParams.appServer,
+        agentDir,
+      ),
     });
 
     request.mockClear();
@@ -280,12 +340,34 @@ describe("Codex app-server supervised workspace policy", () => {
       appServerRuntimeFingerprint: "codex-runtime-v2",
     });
 
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/read", "thread/resume"]);
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/read",
+      "thread/read",
+      "thread/resume",
+      "thread/inject_items",
+    ]);
     expect(request.mock.calls[0]?.[1]).toEqual({ threadId: finalThreadId, includeTurns: false });
-    expect(request.mock.calls[1]?.[1]).not.toHaveProperty("model");
-    expect(request.mock.calls[1]?.[1]).not.toHaveProperty("modelProvider");
-    expect(request.mock.calls[1]?.[1]).toMatchObject({
+    expect(request.mock.calls[1]?.[1]).toEqual({ threadId: finalThreadId, includeTurns: false });
+    expect(request.mock.calls[2]?.[1]).not.toHaveProperty("model");
+    expect(request.mock.calls[2]?.[1]).not.toHaveProperty("modelProvider");
+    expect(request.mock.calls[2]?.[1]).toMatchObject({
       developerInstructions: agentWorkspaceDeveloperInstructions,
+      config: { project_doc_max_bytes: 0 },
+    });
+    expect(request.mock.calls[3]?.[1]).toMatchObject({
+      threadId: finalThreadId,
+      items: [
+        {
+          type: "message",
+          role: "developer",
+          content: [
+            {
+              type: "input_text",
+              text: expect.stringContaining(agentWorkspaceDeveloperInstructions),
+            },
+          ],
+        },
+      ],
     });
     expect(resumed).toMatchObject({
       threadId: finalThreadId,
@@ -294,7 +376,10 @@ describe("Codex app-server supervised workspace policy", () => {
       lifecycle: { action: "resumed" },
     });
     await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
-      appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(commonParams.appServer),
+      appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(
+        commonParams.appServer,
+        agentDir,
+      ),
     });
   });
 });

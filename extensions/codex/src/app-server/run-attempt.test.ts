@@ -4869,10 +4869,10 @@ describe("runCodexAppServerAttempt", () => {
       );
       resumeParams.bootstrapWorkspaceDir = agentWorkspaceDir;
       setAgentWorkspaceForTest(resumeParams, agentWorkspaceDir);
-      const resumeHarness = createResumeHarness();
+      const resumeHarness = createResumeHarness("thread-1");
       const resumedRun = runCodexAppServerAttempt(resumeParams);
       await resumeHarness.waitForMethod("turn/start");
-      await resumeHarness.completeTurn({ threadId: "thread-1", turnId: "turn-2" });
+      await resumeHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
       await resumedRun;
 
       const threadResume = resumeHarness.requests.find(
@@ -4904,10 +4904,10 @@ describe("runCodexAppServerAttempt", () => {
 
     const lateGuidance = "This guidance belongs only to a new session.";
     await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), lateGuidance);
-    const resumeHarness = createResumeHarness();
+    const resumeHarness = createResumeHarness("thread-1");
     const resumedRun = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
     await resumeHarness.waitForMethod("turn/start");
-    await resumeHarness.completeTurn({ threadId: "thread-1", turnId: "turn-2" });
+    await resumeHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await resumedRun;
 
     const threadResume = resumeHarness.requests.find(
@@ -5059,14 +5059,17 @@ describe("runCodexAppServerAttempt", () => {
     );
     sandboxHarness.close(new Error("sandbox app-server process exited"));
 
-    const hostHarness = createResumeHarness({ instructionSources: [] });
+    const hostHarness = createResumeHarness({
+      threadId: "thread-sandbox-empty",
+      instructionSources: [],
+    });
     const hostParams = createParams(sessionFile, workspaceDir);
     hostParams.runtimePlan = createCodexRuntimePlanFixture();
     setCodexTestModelSupportsTools(hostParams, true);
     setAgentWorkspaceForTest(hostParams, workspaceDir);
     const hostRun = runCodexAppServerAttempt(hostParams, { pluginConfig });
     await hostHarness.waitForMethod("turn/start");
-    await hostHarness.completeTurn({ threadId: "thread-sandbox-empty", turnId: "turn-2" });
+    await hostHarness.completeTurn({ threadId: "thread-sandbox-empty", turnId: "turn-1" });
     await hostRun;
 
     expect(hostHarness.requests.map((request) => request.method)).toContain("thread/resume");
@@ -5105,10 +5108,10 @@ describe("runCodexAppServerAttempt", () => {
     ).toBe(131_072);
 
     await fs.writeFile(agentsPath, replacementGuidance);
-    const resumeHarness = createResumeHarness();
+    const resumeHarness = createResumeHarness("thread-1");
     const resumedRun = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
     await resumeHarness.waitForMethod("turn/start");
-    await resumeHarness.completeTurn({ threadId: "thread-1", turnId: "turn-2" });
+    await resumeHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await resumedRun;
 
     const threadResume = resumeHarness.requests.find(
@@ -5158,10 +5161,10 @@ describe("runCodexAppServerAttempt", () => {
     });
 
     await fs.writeFile(rootAgentsPath, replacementRootGuidance);
-    const resumeHarness = createResumeHarness();
+    const resumeHarness = createResumeHarness("thread-1");
     const resumedRun = runCodexAppServerAttempt(createNestedParams());
     await resumeHarness.waitForMethod("turn/start");
-    await resumeHarness.completeTurn({ threadId: "thread-1", turnId: "turn-2" });
+    await resumeHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await resumedRun;
 
     const threadResume = resumeHarness.requests.find(
@@ -5200,10 +5203,10 @@ describe("runCodexAppServerAttempt", () => {
     await firstRun;
 
     await fs.writeFile(path.join(agentWorkspaceDir, "AGENTS.md"), lateGuidance);
-    const resumeHarness = createResumeHarness();
+    const resumeHarness = createResumeHarness("thread-1");
     const resumedRun = runCodexAppServerAttempt(createCrossWorkspaceParams());
     await resumeHarness.waitForMethod("turn/start");
-    await resumeHarness.completeTurn({ threadId: "thread-1", turnId: "turn-2" });
+    await resumeHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await resumedRun;
 
     const threadResume = resumeHarness.requests.find(
@@ -5245,10 +5248,10 @@ describe("runCodexAppServerAttempt", () => {
         await fs.writeFile(agentsPath, "\n");
       }
 
-      const resumeHarness = createResumeHarness();
+      const resumeHarness = createResumeHarness("thread-1");
       const resumedRun = runCodexAppServerAttempt(createCrossWorkspaceParams());
       await resumeHarness.waitForMethod("turn/start");
-      await resumeHarness.completeTurn({ threadId: "thread-1", turnId: "turn-2" });
+      await resumeHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
       await resumedRun;
 
       const threadResume = resumeHarness.requests.find(
@@ -5296,7 +5299,7 @@ describe("runCodexAppServerAttempt", () => {
     );
     const ordinaryRun = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
     await ordinaryHarness.waitForMethod("turn/start");
-    await ordinaryHarness.completeTurn({ threadId: "thread-2", turnId: "turn-2" });
+    await ordinaryHarness.completeTurn({ threadId: "thread-2", turnId: "turn-1" });
     await ordinaryRun;
 
     expect(ordinaryHarness.requests.map((request) => request.method)).toContain("thread/start");
@@ -5340,7 +5343,7 @@ describe("runCodexAppServerAttempt", () => {
     isolatedParams.disableTools = true;
     const isolatedRun = runCodexAppServerAttempt(isolatedParams);
     await isolatedHarness.waitForMethod("turn/start");
-    await isolatedHarness.completeTurn({ threadId: "thread-isolated", turnId: "turn-2" });
+    await isolatedHarness.completeTurn({ threadId: "thread-isolated", turnId: "turn-1" });
     await isolatedRun;
 
     const isolatedStart = isolatedHarness.requests.find(
@@ -5355,10 +5358,10 @@ describe("runCodexAppServerAttempt", () => {
       agentWorkspaceDeveloperInstructions: expect.stringContaining(capturedGuidance),
     });
 
-    const resumeHarness = createResumeHarness();
+    const resumeHarness = createResumeHarness("thread-1");
     const resumedRun = runCodexAppServerAttempt(createCrossWorkspaceParams());
     await resumeHarness.waitForMethod("turn/start");
-    await resumeHarness.completeTurn({ threadId: "thread-1", turnId: "turn-3" });
+    await resumeHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await resumedRun;
     const resume = resumeHarness.requests.find((request) => request.method === "thread/resume");
     expect(
@@ -5732,11 +5735,12 @@ describe("runCodexAppServerAttempt", () => {
     expect(result.systemPromptReport?.skills).toMatchObject({ promptChars: 0, entries: [] });
     expect(result.systemPromptReport?.skills.hash).toMatch(/^[a-f0-9]{64}$/u);
     const resumeHarness = createResumeHarness({
+      threadId: "thread-1",
       instructionSources: [path.join(workspaceDir, "AGENTS.md")],
     });
     const resumedRun = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
     await resumeHarness.waitForMethod("turn/start");
-    await resumeHarness.completeTurn({ threadId: "thread-1", turnId: "turn-2" });
+    await resumeHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await resumedRun;
     const threadResume = resumeHarness.requests.find(
       (request) => request.method === "thread/resume",

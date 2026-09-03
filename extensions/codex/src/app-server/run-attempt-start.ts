@@ -13,8 +13,8 @@ import {
 } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import { joinPresentSections } from "./run-attempt-state.js";
+import { CodexThreadPolicyHandoffError } from "./thread-policy.js";
 import { recordCodexTrajectoryContext } from "./trajectory.js";
-import { shouldEnableCodexTurnLocalFinalization } from "./turn-local-finalization.js";
 
 export async function startCodexAttemptRuntime(resources: CodexAttemptResources) {
   const {
@@ -53,7 +53,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
   const { toolBridge, toolState } = attemptTools;
   const developerInstructions = joinPresentSections(
     turnState.promptBuild.developerInstructions,
-    attemptTools.scheduledConfiguredMcp?.diagnosticNotice,
+    attemptTools.configuredMcp?.diagnosticNotice,
   );
   const coldDeveloperInstructions = joinPresentSections(
     developerInstructions,
@@ -132,22 +132,15 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       nativeProjectDocsDisabledOnResume: context.nativeProjectDocsDisabledOnResume,
       buildFinalConfigPatch: buildNativeHookRelayFinalConfigPatch,
       nativeHookRelayRequired:
-        (params.operation !== "settled-tool-finalization" &&
-          shouldEnableCodexTurnLocalFinalization({
-            callback: params.onBeforeAgentFinalize,
-            revisionAttempt: params.beforeAgentFinalizeRevisionAttempts ?? 0,
-            ...(params.maxBeforeAgentFinalizeRevisions !== undefined
-              ? { maxRevisionAttempts: params.maxBeforeAgentFinalizeRevisions }
-              : {}),
-          })) ||
-        (connection.options.nativeHookRelay?.enabled !== false &&
-          params.pluginHarnessToolPolicyRestricted !== true &&
-          connection.nativeHookRelayEvents.includes("pre_tool_use") &&
-          (hasBeforeToolCallPolicy() ||
-            (appServer.loopDetectionPreToolUseRelay &&
-              Boolean(connection.sandboxSessionKey) &&
-              loopDetectionEnabled))),
+        connection.options.nativeHookRelay?.enabled !== false &&
+        params.pluginHarnessToolPolicyRestricted !== true &&
+        connection.nativeHookRelayEvents.includes("pre_tool_use") &&
+        (hasBeforeToolCallPolicy() ||
+          (appServer.loopDetectionPreToolUseRelay &&
+            Boolean(connection.sandboxSessionKey) &&
+            loopDetectionEnabled)),
       bundleMcpThreadConfig,
+      configuredMcpDynamicSurface: attemptTools.configuredMcp !== undefined,
       configuredMcpOwnershipVersion: attemptTools.configuredMcpOwnershipVersion,
       nativeToolSurfaceEnabled,
       nativeProviderWebSearchSupport,
@@ -253,7 +246,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       cwd: effectiveCwd,
       developerInstructions: joinPresentSections(
         buildRenderedCodexDeveloperInstructions(),
-        attemptTools.scheduledConfiguredMcp?.diagnosticNotice,
+        attemptTools.configuredMcp?.diagnosticNotice,
         state.thread.liveThreadOwnership ? undefined : context.frozenNativeProjectInstructions,
       ),
       prompt: turnState.codexTurnPromptText,
