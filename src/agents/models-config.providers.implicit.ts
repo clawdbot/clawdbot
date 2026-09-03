@@ -48,6 +48,7 @@ import {
   createProviderAuthResolver,
   resolveMissingProviderApiKey,
 } from "./models-config.providers.secrets.js";
+import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 
 const log = createSubsystemLogger("agents/model-providers");
 
@@ -88,6 +89,7 @@ type ImplicitProviderContext = ImplicitProviderParams & {
   providerDiscoveryScope?: ProviderDiscoveryScope;
   resolveProviderApiKey: ProviderApiKeyResolver;
   resolveProviderAuth: ProviderAuthResolver;
+  resolveProviderAuthProviderId: (provider: string) => string;
 };
 
 function resolveLiveProviderCatalogTimeoutMs(env: NodeJS.ProcessEnv): number | null {
@@ -300,6 +302,8 @@ async function resolvePluginImplicitProviders(
         resolveProviderApiKey: resolveCatalogProviderApiKey,
         resolveProviderAuth: (providerId, options) =>
           ctx.resolveProviderAuth(providerId?.trim() || provider.id, options),
+        resolveProviderAuthProviderId: (providerId) =>
+          ctx.resolveProviderAuthProviderId(providerId?.trim() || provider.id),
         reportCatalogOutcome: ctx.onProviderCatalogOutcome,
         timeoutMs: ctx.providerDiscoveryTimeoutMs ?? resolveLiveProviderCatalogTimeoutMs(ctx.env),
       });
@@ -505,6 +509,21 @@ export async function resolveImplicitProviders(
     params.workspaceDir,
     discoveryAuthEnv,
   ] as const;
+  const authAliasLookupParams = {
+    config: discoveryAuthConfig,
+    workspaceDir: params.workspaceDir,
+    env,
+    ...(params.pluginMetadataSnapshot
+      ? {
+          metadataSnapshot: {
+            plugins: params.pluginMetadataSnapshot.manifestRegistry.plugins,
+            owners: {
+              providerAuthAliases: params.pluginMetadataSnapshot.owners.providerAuthAliases,
+            },
+          },
+        }
+      : {}),
+  };
   const context: ImplicitProviderContext = {
     ...params,
     get authStore() {
@@ -514,6 +533,8 @@ export async function resolveImplicitProviders(
     ...(discoveryScope ? { providerDiscoveryScope: discoveryScope } : {}),
     resolveProviderApiKey: createProviderApiKeyResolver(...authInputs),
     resolveProviderAuth: createProviderAuthResolver(...authInputs),
+    resolveProviderAuthProviderId: (provider) =>
+      resolveProviderIdForAuth(provider, authAliasLookupParams),
   };
   const preparedStaticEntries = params.preparedStaticProviderCatalog
     ? params.preparedStaticProviderCatalog.entries.filter(

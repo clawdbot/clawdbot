@@ -66,6 +66,7 @@ function resolveCatalogAuthProfileOrder(params: {
       config: params.config,
       env: params.env,
     },
+    cooldownScope: "all-models",
     readinessMode: "read-only",
   });
 }

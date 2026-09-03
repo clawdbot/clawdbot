@@ -37,6 +37,19 @@ function isSafeProviderConfigKey(value: string): boolean {
   return value !== "" && !DANGEROUS_PROVIDER_KEYS.has(value);
 }
 
+function providerCatalogIdentityKeys(params: {
+  provider: ProviderPlugin;
+  providerId?: string;
+  resolveProviderAuthProviderId?: (providerId?: string) => string;
+}): string[] {
+  const requestedId = params.providerId?.trim() || params.provider.id;
+  const requested = normalizeProviderId(requestedId);
+  const authProvider = normalizeProviderId(
+    params.resolveProviderAuthProviderId?.(requestedId) ?? requestedId,
+  );
+  return [...new Set([requested, authProvider])];
+}
+
 type PreparedProviderStaticCatalogEntry = Readonly<{
   provider: ProviderPlugin;
   result: Awaited<ReturnType<typeof runProviderStaticCatalog>>;
@@ -164,22 +177,54 @@ export async function runProviderCatalog(params: {
   env: NodeJS.ProcessEnv;
   resolveProviderApiKey: ProviderCatalogContext["resolveProviderApiKey"];
   resolveProviderAuth: ProviderCatalogContext["resolveProviderAuth"];
+  resolveProviderAuthProviderId?: (providerId?: string) => string;
   reportCatalogOutcome?: (outcome: ProviderCatalogOutcome) => void;
 }) {
   const hook = resolveProviderCatalogHook(params.provider);
   if (!hook) {
     return undefined;
   }
+  // Hooks may resolve auth internally, but once a callback selects a profile,
+  // profile-scoped outcomes for that provider must retain that exact identity.
+  const selectedProfiles = new Map<string, Set<string>>();
+  const captureSelectedProfile = <T extends { profileId?: string }>(
+    providerId: string | undefined,
+    auth: T,
+  ): T => {
+    const profileId = auth.profileId?.trim();
+    if (!profileId) {
+      return auth;
+    }
+    for (const providerKey of providerCatalogIdentityKeys({
+      provider: params.provider,
+      providerId,
+      resolveProviderAuthProviderId: params.resolveProviderAuthProviderId,
+    })) {
+      const profiles = selectedProfiles.get(providerKey) ?? new Set<string>();
+      profiles.add(profileId);
+      selectedProfiles.set(providerKey, profiles);
+    }
+    return auth;
+  };
   const result = await hook.run({
     config: params.config,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
     env: params.env,
     ...(params.providerIds !== undefined ? { providerIds: params.providerIds } : {}),
-    resolveProviderApiKey: params.resolveProviderApiKey,
-    resolveProviderAuth: params.resolveProviderAuth,
+    resolveProviderApiKey: (providerId) =>
+      captureSelectedProfile(providerId, params.resolveProviderApiKey(providerId)),
+    resolveProviderAuth: (providerId, options) =>
+      captureSelectedProfile(providerId, params.resolveProviderAuth(providerId, options)),
   });
   for (const outcome of copyProviderCatalogOutcomes(result)) {
+    const outcomeProvider = normalizeProviderId(outcome.provider);
+    const selected = selectedProfiles.get(outcomeProvider);
+    if (outcome.profileId && selected?.size && !selected.has(outcome.profileId)) {
+      throw new Error(
+        `Provider catalog outcome did not match the selected authentication profile (${outcome.provider})`,
+      );
+    }
     if (
       params.providerIds !== undefined &&
       !params.providerIds.some(

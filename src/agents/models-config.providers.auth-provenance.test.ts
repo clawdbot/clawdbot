@@ -115,9 +115,12 @@ describe("models-config provider auth provenance", () => {
       publish: (agentDir?: string) => void;
       clear: () => void;
       cold: () => void;
-      discover: () => ReturnType<
+      discover: (
+        config?: OpenClawConfig,
+      ) => ReturnType<
         typeof import("./models-config.providers.implicit.js").resolveImplicitProviders
       >;
+      emitOutcome: () => void;
       plan: (
         source?: OpenClawConfig,
         prepared?: OpenClawConfig,
@@ -168,6 +171,7 @@ describe("models-config provider auth provenance", () => {
         [];
       const errors: unknown[] = [];
       const env: NodeJS.ProcessEnv = {};
+      let emitProfileOutcome = false;
       discovery.providers = [
         {
           id: provider,
@@ -192,13 +196,29 @@ describe("models-config provider auth provenance", () => {
                     };
                   },
                 });
-                return {
+                const result = {
                   provider: {
                     apiKey: auth.apiKey,
                     baseUrl: "https://catalog.example.test/v1",
                     models: [],
                   },
                 };
+                const selectedProfileId =
+                  "profileId" in auth && typeof auth.profileId === "string"
+                    ? auth.profileId
+                    : undefined;
+                return emitProfileOutcome && selectedProfileId
+                  ? {
+                      ...result,
+                      outcomes: [
+                        {
+                          provider,
+                          profileId: selectedProfileId,
+                          status: "ready" as const,
+                        },
+                      ],
+                    }
+                  : result;
               } catch (error) {
                 errors.push(error);
                 throw error;
@@ -243,14 +263,17 @@ describe("models-config provider auth provenance", () => {
                 reason: "secret reference was not found",
               },
             ]),
-          discover: () =>
+          discover: (config = {}) =>
             resolveImplicitProviders({
               agentDir,
               authStore: store,
-              config: {},
+              config,
               env,
               onProviderCatalogOutcome: (outcome) => outcomes.push(outcome),
             }),
+          emitOutcome: () => {
+            emitProfileOutcome = true;
+          },
           plan: (source = {}, prepared = source) =>
             planOpenClawModelsJson({
               context: {
@@ -499,13 +522,100 @@ describe("models-config provider auth provenance", () => {
         "api_key",
         callback,
         async (fixture) => {
+          fixture.emitOutcome();
           await fixture.discover();
           expect(fixture.authorization).toEqual([`Bearer ${fixture.runtimeKey}`]);
+          expect(fixture.outcomes).toEqual([
+            { provider: "openai", profileId: fixture.profileId, status: "ready" },
+          ]);
         },
         "proof-alias",
       );
     },
   );
+
+  it.each(["resolveProviderAuth", "resolveProviderApiKey"] as const)(
+    "applies stored catalog order through %s",
+    async (callback) => {
+      await withDiscoveryFixture("api_key", callback, async (fixture) => {
+        const backupProfileId = "openai:stored-first";
+        fixture.store.profiles[backupProfileId] = {
+          type: "api_key",
+          provider: "openai",
+          key: "stored-order-key",
+        };
+        fixture.store.order = {
+          openai: [backupProfileId, fixture.profileId],
+        };
+        fixture.emitOutcome();
+
+        await fixture.discover({
+          auth: {
+            order: {
+              openai: [fixture.profileId, backupProfileId],
+            },
+          },
+        });
+
+        expect(fixture.authorization).toEqual(["Bearer stored-order-key"]);
+        expect(fixture.outcomes).toEqual([
+          { provider: "openai", profileId: backupProfileId, status: "ready" },
+        ]);
+      });
+    },
+  );
+
+  it.each([
+    {
+      name: "keeps a profile with a one-model cooldown",
+      usage: {
+        cooldownUntil: Date.now() + 60_000,
+        cooldownReason: "rate_limit" as const,
+        cooldownModel: "gpt-5.5",
+      },
+      expectedProfile: "selected",
+      expectedKey: "runtime",
+    },
+    {
+      name: "demotes a profile-wide cooldown",
+      usage: {
+        cooldownUntil: Date.now() + 60_000,
+        cooldownReason: "rate_limit" as const,
+      },
+      expectedProfile: "backup",
+      expectedKey: "backup",
+    },
+  ])("$name during prepared catalog discovery", async ({ usage, expectedProfile, expectedKey }) => {
+    await withDiscoveryFixture("api_key", "resolveProviderAuth", async (fixture) => {
+      const backupProfileId = "openai:cooldown-backup";
+      fixture.store.profiles[backupProfileId] = {
+        type: "api_key",
+        provider: "openai",
+        key: "cooldown-backup-key",
+      };
+      fixture.store.usageStats = {
+        [fixture.profileId]: usage,
+      };
+      fixture.emitOutcome();
+
+      await fixture.discover({
+        auth: {
+          order: {
+            openai: [fixture.profileId, backupProfileId],
+          },
+        },
+      });
+
+      const expectedProfileId =
+        expectedProfile === "selected" ? fixture.profileId : backupProfileId;
+      const expectedAuthorization =
+        expectedKey === "runtime" ? `Bearer ${fixture.runtimeKey}` : "Bearer cooldown-backup-key";
+      expect(fixture.authorization).toEqual([expectedAuthorization]);
+      expect(fixture.outcomes).toEqual([
+        { provider: "openai", profileId: expectedProfileId, status: "ready" },
+      ]);
+    });
+  });
 
   const configRef = { source: "store", provider: "default", id: "CONFIG_KEY" } as const;
   const configWithKey = (
@@ -698,6 +808,21 @@ describe("models-config provider auth provenance", () => {
         order: {
           openai: [profileA, profileB],
         },
+      },
+    };
+    expect(createProviderAuthResolver({}, store, cooldownConfig)("openai")).toMatchObject({
+      apiKey: "key-a",
+      profileId: profileA,
+    });
+    expect(createProviderApiKeyResolver({}, store, cooldownConfig)("openai")).toMatchObject({
+      apiKey: "key-a",
+      profileId: profileA,
+    });
+
+    store.usageStats = {
+      [profileA]: {
+        cooldownUntil: Date.now() + 60_000,
+        cooldownReason: "rate_limit",
       },
     };
     expect(createProviderAuthResolver({}, store, cooldownConfig)("openai")).toMatchObject({

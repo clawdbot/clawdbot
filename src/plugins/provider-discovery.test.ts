@@ -189,6 +189,49 @@ describe("runProviderCatalog", () => {
     ]);
   });
 
+  it("rejects catalog outcomes attributed to a different selected profile", async () => {
+    const outcomes: ProviderCatalogOutcome[] = [];
+    const provider: ProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      auth: [],
+      catalog: {
+        run: async (ctx) => {
+          ctx.resolveProviderAuth("proof-alias");
+          return {
+            providers: {},
+            outcomes: [
+              {
+                provider: "openai",
+                profileId: "openai:profile-a",
+                status: "auth-rejected",
+              },
+            ],
+          };
+        },
+      },
+    };
+
+    await expect(
+      runProviderCatalog({
+        provider,
+        config: {},
+        env: {},
+        resolveProviderApiKey: () => ({ apiKey: undefined }),
+        resolveProviderAuth: () => ({
+          apiKey: "selected-key",
+          mode: "api_key",
+          profileId: "openai:profile-b",
+          source: "profile",
+        }),
+        resolveProviderAuthProviderId: (providerId) =>
+          providerId === "proof-alias" ? "openai" : (providerId ?? "openai"),
+        reportCatalogOutcome: (outcome) => outcomes.push(outcome),
+      }),
+    ).rejects.toThrow("did not match the selected authentication profile");
+    expect(outcomes).toEqual([]);
+  });
+
   it.each([
     { providerIds: ["OPENAI"], expected: ["openai"] },
     { providerIds: ["azure-openai"], expected: ["azure-openai"] },
