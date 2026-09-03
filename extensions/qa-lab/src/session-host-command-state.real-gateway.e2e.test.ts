@@ -79,7 +79,7 @@ suite.define(() => {
                 sshVerify: false,
               },
             },
-            reload: { mode: "hot" },
+            reload: { mode: "hybrid" },
           },
           agents: {
             ...config.agents,

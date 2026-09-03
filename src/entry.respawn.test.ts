@@ -385,7 +385,7 @@ describe("runCliRespawnPlan", () => {
     const child = new EventEmitter() as ChildProcess;
     const spawn = vi.fn(() => child);
     const attachChildProcessBridge = vi.fn();
-    const exit = vi.fn();
+    const exit = vi.fn<(code?: number) => never>();
     const writeError = vi.fn();
 
     runCliRespawnPlan(
@@ -398,7 +398,7 @@ describe("runCliRespawnPlan", () => {
       {
         spawn: spawn as unknown as typeof import("node:child_process").spawn,
         attachChildProcessBridge,
-        exit: exit as unknown as (code?: number) => never,
+        exit,
         writeError,
       },
     );

@@ -215,7 +215,7 @@ const CONTRACTS_CHANNEL_SESSION_VITEST_CONFIG =
   "test/vitest/vitest.contracts-channel-session.config.ts";
 const CONTRACTS_CHANNEL_SURFACE_VITEST_CONFIG =
   "test/vitest/vitest.contracts-channel-surface.config.ts";
-const CONTRACTS_PLUGIN_VITEST_CONFIG = "test/vitest/vitest.contracts-plugin.config.ts";
+export const CONTRACTS_PLUGIN_VITEST_CONFIG = "test/vitest/vitest.contracts-plugin.config.ts";
 const CRON_VITEST_CONFIG = "test/vitest/vitest.cron.config.ts";
 const DAEMON_VITEST_CONFIG = "test/vitest/vitest.daemon.config.ts";
 const E2E_VITEST_CONFIG = "test/vitest/vitest.e2e.config.ts";
@@ -2830,6 +2830,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     /^test\/vitest\/vitest\.contracts-paths\.mjs$/u,
     [
       "test-projects",
+      "test/vitest-projects-config.test.ts",
       "test/vitest/vitest.contracts-channel-surface.config.ts",
       "test/vitest/vitest.contracts-channel-config.config.ts",
       "test/vitest/vitest.contracts-channel-registry.config.ts",

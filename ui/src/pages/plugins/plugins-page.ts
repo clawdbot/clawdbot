@@ -106,7 +106,6 @@ class PluginsPage extends OpenClawLightDomElement {
       this.error = null;
       this.messages = {};
       this.pageNotice = null;
-      this.mcpController.resetMessage();
     },
     invalidateRequests: (change) =>
       this.invalidateRequests(change.snapshot.phase !== "connected" || !change.snapshot.client),
@@ -245,7 +244,7 @@ class PluginsPage extends OpenClawLightDomElement {
     ) {
       this.resetPluginIcons();
       this.busy = {};
-      this.mcpController.resetBusy();
+      this.mcpController.resetFeedback();
       this.debouncedSearchQuery = "";
     }
     if (shouldRefreshAfterChange) {

@@ -1254,6 +1254,8 @@ jobs:
           const runNodeFastCiRouting =
             runNode && parseBoolean(process.env.OPENCLAW_CI_RUN_NODE_FAST_CI_ROUTING);
           const runPluginContractShards = runNodeFull || runNodeFastPluginContracts;
+          const pluginContractShards = runPluginContractShards ? createPluginContractTestShards() : [];
+          const channelContractShards = runNodeFull ? createChannelContractTestShards() : [];
           const runMacos =
             parseBoolean(process.env.OPENCLAW_CI_RUN_MACOS) && !docsOnly && isCanonicalRepository;
           // Older selected checkouts report only run_macos; retain their native Node coverage.
@@ -1400,7 +1402,9 @@ jobs:
                 throw new Error(`Current PR CI target does not export ${name}`);
               }
             }
-            changedNodeTestShards = changedNodeTestPlan.createChangedNodeTestShards(changedPaths);
+            changedNodeTestShards = changedNodeTestPlan.createChangedNodeTestShards(changedPaths, {
+              dedicatedContractShards: [...pluginContractShards, ...channelContractShards],
+            });
             if (changedNodeTestShards === null) {
               changedExtensionFallbackShards =
                 changedNodeTestPlan.createChangedExtensionFallbackShards(changedPaths);
@@ -1528,7 +1532,6 @@ jobs:
           const runNodeCoreDist =
             (changedNodeTestShards !== null && runBuildArtifacts) ||
             nodeTestDistShards.length > 0;
-          const channelContractShards = runNodeFull ? createChannelContractTestShards() : [];
           const protocolCoverageRequested = runNode || runIosBuild || runAndroid;
           const runProtocolEventCoverage =
             protocolCoverageRequested &&
@@ -1590,7 +1593,7 @@ jobs:
             checks_fast_core_matrix: createMatrix(checksFastCoreTasks),
             run_plugin_contracts_shards: runPluginContractShards,
             plugin_contracts_matrix: createContractMatrix(
-              runPluginContractShards ? createPluginContractTestShards() : [],
+              pluginContractShards,
               "contracts-plugins",
             ),
             run_channel_contracts_shards: channelContractShards.length > 0,
