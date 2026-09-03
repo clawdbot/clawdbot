@@ -16,7 +16,11 @@ const fullReleaseValidationWorkflowPath = join(
   repoRoot,
   ".github/workflows/full-release-validation.yml",
 );
-const dockerSetupDockerfilePaths = ["Dockerfile", "scripts/docker/sandbox/Dockerfile"] as const;
+const dockerSetupDockerfilePaths = [
+  "Dockerfile",
+  "scripts/docker/sandbox/Dockerfile",
+  "Dockerfile.riscv64",
+] as const;
 
 function collapseDockerContinuations(dockerfile: string): string {
   return dockerfile.replace(/\\\r?\n[ \t]*/g, " ");
