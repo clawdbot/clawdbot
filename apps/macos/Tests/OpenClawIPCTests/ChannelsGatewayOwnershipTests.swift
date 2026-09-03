@@ -50,6 +50,8 @@ private final class ChannelsGatewayFixture: @unchecked Sendable {
     let calls = LockIsolated<[Call]>([])
     let acceptedWrites = LockIsolated<[Call]>([])
     let gate = ChannelsReplyGate()
+    let endpointGate = ChannelsReplyGate()
+    let holdNextEndpoint = LockIsolated(false)
     let heldMethod: LockIsolated<String?>
     let gateway: GatewayConnection
     let session: GatewayTestWebSocketSession
@@ -61,6 +63,8 @@ private final class ChannelsGatewayFixture: @unchecked Sendable {
         let calls = self.calls
         let acceptedWrites = self.acceptedWrites
         let gate = self.gate
+        let endpointGate = self.endpointGate
+        let holdNextEndpoint = self.holdNextEndpoint
         let session = GatewayTestWebSocketSession {
             let server = revision.value
             return GatewayTestWebSocketTask(sendHook: { socket, message, index in
@@ -107,6 +111,8 @@ private final class ChannelsGatewayFixture: @unchecked Sendable {
                     payload = ##"""
                     {"hash":"server-\##(server)","valid":true,"config":{"ui":{"seamColor":"#\##(server)11111"}}}
                     """##
+                case "config.schema":
+                    payload = #"{"schema":{"type":"object"},"uiHints":{},"version":"test","generatedAt":"test"}"#
                 case "config.set":
                     guard call.baseHash == "server-\(server)" else {
                         socket.emitReceiveSuccess(.string(
@@ -142,6 +148,11 @@ private final class ChannelsGatewayFixture: @unchecked Sendable {
         self.session = session
         self.gateway = GatewayConnection(
             testEndpointProvider: {
+                let shouldHold = holdNextEndpoint.withValue { hold in
+                    defer { hold = false }
+                    return hold
+                }
+                if shouldHold { await endpointGate.wait() }
                 let value = revision.value
                 return .init(
                     config: (URL(string: "ws://127.0.0.1:\(33000 + value)")!, nil, nil),
@@ -173,6 +184,105 @@ private final class ChannelsGatewayFixture: @unchecked Sendable {
 @Suite(.serialized)
 @MainActor
 struct ChannelsGatewayOwnershipTests {
+    @Test(arguments: [false, true])
+    func `queued config reads preserve edits unless a caller forces reload`(force: Bool) async throws {
+        try await self.withStore { fixture, store in
+            await store.loadConfig(force: false)
+            store.updateConfigValue(path: [.key("ui"), .key("seamColor")], value: "#aabbcc")
+            fixture.heldMethod.setValue("config.get")
+            let first = Task { await store.loadConfig(force: false, refresh: true) }
+            defer { first.cancel() }
+            try await self.waitUntil { fixture.gate.waiting.value }
+            let joinedStarted = LockIsolated(false)
+            let joined = Task {
+                joinedStarted.setValue(true)
+                await store.loadConfig(force: force, refresh: !force)
+                return !store.configDirty
+            }
+            defer { joined.cancel() }
+            while !joinedStarted.value {
+                await Task.yield()
+            }
+            let refreshStarted = LockIsolated(false)
+            let refresh = Task {
+                refreshStarted.setValue(true)
+                await store.loadConfig(force: false, refresh: true)
+            }
+            defer { refresh.cancel() }
+            while !refreshStarted.value {
+                await Task.yield()
+            }
+            fixture.gate.resume()
+            let discardedEdits = await joined.value
+            await first.value
+            await refresh.value
+            #expect(discardedEdits == force)
+            #expect(store.configDirty == !force)
+            #expect(store.configValue(at: [.key("ui"), .key("seamColor")]) as? String ==
+                (force ? "#111111" : "#aabbcc"))
+            #expect(fixture.calls.value.count { $0.method == "config.get" } == 3)
+            #expect(store.configStatus == nil)
+        }
+    }
+
+    @Test(arguments: ["config.get", "config.schema"])
+    func `retiring a held config read preserves the replacement read`(method: String) async throws {
+        try await self.withStore { fixture, store in
+            let originalSource = try #require(await store.resolveSource())
+            fixture.holdNextEndpoint.setValue(true)
+            let first = Task { await self.load(method: method, store: store) }
+            defer { first.cancel() }
+            try await self.waitUntil { fixture.endpointGate.waiting.value }
+            fixture.heldMethod.setValue(method)
+            fixture.revision.setValue(2)
+            let replacement = Task { await self.load(method: method, store: store) }
+            defer { replacement.cancel() }
+            try await self.waitUntil { fixture.gate.waiting.value }
+            let replacementSource = try #require(store.source)
+            try #require(replacementSource !== originalSource)
+            fixture.endpointGate.resume()
+            await first.value
+            #expect(store.owns(replacementSource))
+            #expect(method == "config.get" ? store.configLoading : store.configSchemaLoading)
+            fixture.gate.resume()
+            await replacement.value
+            #expect(method == "config.get" ? store.configLoaded : store.configSchema != nil)
+            #expect(store.configStatus == nil)
+            let reads = fixture.calls.value.filter { $0.method == method }
+            #expect(reads.count == 1)
+            #expect(reads.allSatisfy { $0.server == 2 })
+        }
+    }
+
+    @Test(arguments: ["config.get", "config.schema"], [false, true])
+    func `a joined config read survives cancellation before dispatch`(method: String, cancelFirst: Bool) async throws {
+        try await self.withStore { fixture, store in
+            let source = try #require(await store.resolveSource())
+            fixture.holdNextEndpoint.setValue(true)
+            let first = Task { await self.load(method: method, store: store) }
+            defer { first.cancel() }
+            try await self.waitUntil { fixture.endpointGate.waiting.value }
+            let joinedStarted = LockIsolated(false)
+            let joined = Task {
+                joinedStarted.setValue(true)
+                await self.load(method: method, store: store)
+                return method == "config.get" ? store.configLoaded : store.configSchema != nil
+            }
+            defer { joined.cancel() }
+            while !joinedStarted.value {
+                await Task.yield()
+            }
+            if cancelFirst { first.cancel() }
+            fixture.endpointGate.resume()
+            let joinedLoaded = await joined.value
+            await first.value
+            #expect(store.owns(source))
+            #expect(joinedLoaded)
+            #expect(store.configStatus == nil)
+            #expect(fixture.calls.value.count { $0.method == method } == 1)
+        }
+    }
+
     @Test(arguments: [false, true])
     func `channel status cannot publish after its Primary changes`(switchPrimary: Bool) async throws {
         try await self.withStore(heldMethod: "channels.status") { fixture, store in
@@ -394,6 +504,14 @@ struct ChannelsGatewayOwnershipTests {
         return (url, data)
     }
 
+    private func load(method: String, store: ChannelsStore) async {
+        if method == "config.get" {
+            await store.loadConfig(force: false)
+        } else {
+            await store.loadConfigSchema()
+        }
+    }
+
     private func withStore(
         heldMethod: String? = nil,
         rejectedMethod: String? = nil,
@@ -409,6 +527,7 @@ struct ChannelsGatewayOwnershipTests {
             let result: Result<Void, Error>
             do { result = try await .success(operation(fixture, store)) } catch { result = .failure(error) }
             fixture.gate.resume()
+            fixture.endpointGate.resume()
             await fixture.gateway.shutdown()
             await ConfigStore._testClearOverrides()
             try result.get()

@@ -303,7 +303,11 @@ final class ChannelsStore {
 
     var configStatus: String?
     var isSavingConfig = false
-    var configSchemaLoading = false
+    var configSchemaTask: Task<Void, Never>?
+    var configSchemaLoading: Bool {
+        self.configSchemaTask != nil
+    }
+
     var configSchema: ConfigSchemaNode?
     var configLookupRoot: ConfigSchemaLookupNode?
     var configLookupCache: [String: ConfigSchemaLookupNode] = [:]
@@ -316,10 +320,11 @@ final class ChannelsStore {
 
     var configUiHints: [String: ConfigUiHint] = [:]
     var configSchemaSourceKey: String?
-    var configSchemaLoadingSourceKey: String?
-    var configSchemaReloadPending = false
-    var configLoading = false
-    var configLoadingSourceKey: String?
+    var configTask: Task<Void, Never>?
+    var configLoading: Bool {
+        self.configTask != nil
+    }
+
     /// Coalesced re-load request while a config fetch is in flight: `refresh`
     /// refetches without overwriting a dirty local draft; `force` overwrites it.
     enum ConfigReloadRequest { case none, refresh, force }
@@ -409,12 +414,6 @@ final class ChannelsStore {
         self.telegramBusy = false
         self.configStatus = nil
         self.isSavingConfig = false
-        self.configSchemaLoading = false
-        self.configSchemaLoadingSourceKey = nil
-        self.configSchemaReloadPending = false
-        self.configLoading = false
-        self.configLoadingSourceKey = nil
-        self.configReloadPending = .none
         self.resetConfigSchemaCacheIfSourceChanged("")
         self.resetConfigCacheIfSourceChanged("")
         self.configSourceKey = nil

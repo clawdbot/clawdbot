@@ -2,39 +2,32 @@ import Foundation
 import OpenClawProtocol
 
 extension ChannelsStore {
-    func loadConfigSchema(force: Bool = false, source expected: Source? = nil) async {
+    func loadConfigSchema(source expected: Source? = nil) async {
         guard let source = await self.resolveSource(expected) else { return }
         let sourceKey = source.cacheKey
         self.resetConfigSchemaCacheIfSourceChanged(sourceKey)
-        if !force, self.configSchema != nil {
+        if self.configSchema != nil {
             return
         }
-        guard !self.queueConfigSchemaReloadIfLoading(sourceKey: sourceKey, force: force) else { return }
-        self.configSchemaLoading = true
-        self.configSchemaLoadingSourceKey = sourceKey
-        defer {
-            if self.owns(source) {
-                self.configSchemaLoading = false
-                self.configSchemaLoadingSourceKey = nil
-            }
+        if self.configSchemaTask == nil {
+            self.configSchemaTask = Task { await self.performConfigSchemaLoad(source: source) }
         }
+        await self.configSchemaTask?.value
+    }
 
-        while self.owns(source) {
-            do {
-                let res: ConfigSchemaResponse = try await self.gateway.requestDecoded(
-                    method: .configSchema,
-                    params: nil,
-                    timeoutMs: 8000,
-                    ifCurrentRoute: source.lease.route)
-                guard self.owns(source) else { return }
-                self.applyConfigSchemaResponse(res, sourceKey: sourceKey)
-            } catch {
-                guard self.owns(source) else { return }
-                self.configStatus = error.localizedDescription
-            }
-
-            guard self.configSchemaReloadPending else { break }
-            self.configSchemaReloadPending = false
+    private func performConfigSchemaLoad(source: Source) async {
+        defer { if self.owns(source) { self.configSchemaTask = nil } }
+        do {
+            let res: ConfigSchemaResponse = try await self.gateway.requestDecoded(
+                method: .configSchema,
+                params: nil,
+                timeoutMs: 8000,
+                ifCurrentRoute: source.lease.route)
+            guard self.owns(source) else { return }
+            self.applyConfigSchemaResponse(res, sourceKey: source.cacheKey)
+        } catch {
+            guard self.owns(source) else { return }
+            self.configStatus = error.localizedDescription
         }
     }
 
@@ -91,17 +84,22 @@ extension ChannelsStore {
         if !force, !refresh, self.configLoaded {
             return
         }
-        guard !self.queueConfigReloadIfLoading(sourceKey: sourceKey, force: force, refresh: refresh)
-        else { return }
-        self.configLoading = true
-        self.configLoadingSourceKey = sourceKey
-        defer {
-            if self.owns(source) {
-                self.configLoading = false
-                self.configLoadingSourceKey = nil
+        if self.configTask == nil {
+            // Source publication cancels SwiftUI callers. Keep the read and any
+            // explicit reloads owned by the Source, like path-scoped lookups.
+            self.configTask = Task {
+                await self.performConfigLoad(force: force, source: source)
             }
+        } else if force {
+            self.configReloadPending = .force
+        } else if refresh, self.configReloadPending == .none {
+            self.configReloadPending = .refresh
         }
+        await self.configTask?.value
+    }
 
+    private func performConfigLoad(force: Bool, source: Source) async {
+        defer { if self.owns(source) { self.configTask = nil } }
         var requestForce = force
         while self.owns(source) {
             do {
@@ -111,7 +109,7 @@ extension ChannelsStore {
                     timeoutMs: 10000,
                     ifCurrentRoute: source.lease.route)
                 guard self.owns(source) else { return }
-                self.applyConfigSnapshot(snap, sourceKey: sourceKey, force: requestForce)
+                self.applyConfigSnapshot(snap, sourceKey: source.cacheKey, force: requestForce)
             } catch {
                 guard self.owns(source) else { return }
                 self.configStatus = error.localizedDescription
@@ -264,6 +262,8 @@ extension ChannelsStore {
             return
         }
         guard cachedSourceKey != sourceKey else { return }
+        self.configSchemaTask?.cancel()
+        self.configSchemaTask = nil
         self.configSchema = nil
         self.configLookupRoot = nil
         self.configLookupCache.removeAll(keepingCapacity: true)
@@ -282,30 +282,15 @@ extension ChannelsStore {
             return
         }
         guard cachedSourceKey != sourceKey else { return }
+        self.configTask?.cancel()
+        self.configTask = nil
+        self.configReloadPending = .none
         self.configDocument = nil
         self.configRoot = [:]
         self.configDraft = [:]
         self.configDirty = false
         self.configLoaded = false
         self.configSourceKey = sourceKey
-    }
-
-    func queueConfigReloadIfLoading(sourceKey: String, force: Bool, refresh: Bool = false) -> Bool {
-        guard self.configLoading else { return false }
-        if force || self.configLoadingSourceKey != sourceKey {
-            self.configReloadPending = .force
-        } else if refresh, self.configReloadPending == .none {
-            self.configReloadPending = .refresh
-        }
-        return true
-    }
-
-    func queueConfigSchemaReloadIfLoading(sourceKey: String, force: Bool) -> Bool {
-        guard self.configSchemaLoading else { return false }
-        if force || self.configSchemaLoadingSourceKey != sourceKey {
-            self.configSchemaReloadPending = true
-        }
-        return true
     }
 
     static func normalizeConfigLookupPath(_ path: String) -> String {
