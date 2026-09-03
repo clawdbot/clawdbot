@@ -80,11 +80,13 @@ function useRegistry(registry: string): void {
 
 async function installNpmPlugin(params: {
   config?: OpenClawConfig;
+  expectedIntegrity?: string;
   npmRoot: string;
   spec: string;
 }) {
   return await installPluginFromNpmSpec({
     ...(params.config ? { config: params.config } : {}),
+    ...(params.expectedIntegrity ? { expectedIntegrity: params.expectedIntegrity } : {}),
     spec: params.spec,
     npmDir: params.npmRoot,
     logger: { info: () => {}, warn: () => {} },
@@ -952,5 +954,28 @@ describe("installPluginFromNpmSpec e2e", () => {
     const installedLockEntry = lock.packages?.[`node_modules/${packageName}`];
     expect(installedLockEntry?.integrity).toBe(versions[0]?.integrity);
     expect(installedLockEntry?.version).toBe("1.0.0");
+  });
+
+  it("rejects a trusted pin when a real registry omits dist.integrity", async () => {
+    const { rootDir, npmRoot } = await makeInstallFixture("missing-registry-integrity-e2e");
+    const packageName = uniquePackageName("missing-registry-integrity-plugin");
+    await useStaticRegistry(
+      await registryPackages(rootDir, [{ packageName, omitIntegrity: true }]),
+    );
+
+    const result = await installNpmPlugin({
+      spec: `${packageName}@1.0.0`,
+      expectedIntegrity: `sha512-${Buffer.alloc(64, 1).toString("base64")}`,
+      npmRoot,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: `aborted: npm package integrity missing for ${packageName}@1.0.0`,
+    });
+    await expect(fs.access(pluginNpmProjectRoot(npmRoot, packageName))).rejects.toHaveProperty(
+      "code",
+      "ENOENT",
+    );
   });
 });

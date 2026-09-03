@@ -3623,13 +3623,15 @@ jobs:
               fi
               ;;
             test-types)
-              # The github/hybrid planner profile moves the 14 serial core-test
-              # graphs (~70% of this lane) into the dedicated hosted stripes
-              # job; this row keeps the extensions/root/scripts tail. Targets
-              # without stripe support run the whole lane here.
+              # The github/hybrid jobs pair the first four core-test stripes;
+              # this row owns the fifth before extensions/scripts/root. Targets
+              # without stripe support keep the whole lane here.
               root_covered=false
               if [ "$HOSTED_RUNNER_STRIPES" = "true" ] &&
                 grep -q -- '--stripe' scripts/run-tsgo-core-test-shards.mts 2>/dev/null; then
+                # Core stripes retain their safeguards; only the existing tail
+                # inherits this step's OPENCLAW_LOCAL_CHECK=0.
+                env -u OPENCLAW_LOCAL_CHECK node scripts/run-tsgo-core-test-shards.mjs --stripe "5/5" --concurrency 2
                 pnpm tsgo:extensions:test
               else
                 pnpm check:test-types
@@ -3743,8 +3745,8 @@ jobs:
               --only=extensions --extension-stripe=${{ matrix.stripe }}/6 --threads=1
           fi
 
-  # Stripe core test-type graphs across five jobs; each graph can saturate a machine.
-  # check-test-types keeps the extensions/root/scripts tail in github/hybrid mode;
+  # Pair four original core stripes; check-test-types owns the fifth and its tail.
+  # Each stripe retains fresh compiler processes and its two-child limit;
   # all-Blacksmith mode uses one 32-vCPU test-types job for the full workload.
   check-test-types-hosted-core-shard:
     permissions:
@@ -3753,14 +3755,14 @@ jobs:
     needs: [preflight]
     if: ${{ needs.preflight.outputs.run_check == 'true' && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && (needs.preflight.outputs.frozen_target != 'true' || needs.preflight.outputs.hosted_runner_profile_contract == 'true') }}
     # The 8 label delivered only 2 CPUs/8 GiB; 32 delivered 8 CPUs/31 GiB.
-    # Preserve two graphs per stripe and hosted retries; see docs/ci.md#blacksmith-runner-capacity.
+    # Preserve two compiler children and hosted retries; see docs/ci.md#blacksmith-runner-capacity.
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-32vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
-      max-parallel: 5
+      max-parallel: 2
       matrix:
-        stripe: [1, 2, 3, 4, 5]
+        stripe: [1, 2]
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
@@ -3780,7 +3782,9 @@ jobs:
             echo "[skip] target does not support core test-type stripes"
             exit 0
           fi
-          node scripts/run-tsgo-core-test-shards.mjs --stripe "${{ matrix.stripe }}/5" --concurrency 2
+          for stripe in "$((2 * ${{ matrix.stripe }} - 1))" "$((2 * ${{ matrix.stripe }}))"; do
+            node scripts/run-tsgo-core-test-shards.mjs --stripe "$stripe/5" --concurrency 2
+          done
 
   check-additional-shard:
     permissions:
