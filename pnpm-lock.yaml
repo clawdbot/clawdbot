@@ -399,9 +399,6 @@ importers:
       '@sindresorhus/slugify':
         specifier: 2.2.0
         version: 2.2.0
-      '@slack/web-api':
-        specifier: 8.0.0
-        version: 8.0.0
       '@types/express':
         specifier: 5.0.6
         version: 5.0.6

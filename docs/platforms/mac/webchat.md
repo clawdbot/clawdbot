@@ -49,8 +49,9 @@ optional token or password; credentials are stored in the macOS Keychain.
 Secure profiles maintain their own system-trust-gated first-use certificate pin
 and do not inherit `gateway.remote.tlsFingerprint` from the primary Gateway.
 Dashboard windows enforce that same saved-profile pinning policy.
-Removing a profile also closes its open windows and shuts down its secondary
-connection.
+Removing a profile closes its native chat windows and shuts down its secondary
+connection. Dashboard windows showing that profile return to Primary.
+Updating a saved profile's credentials refreshes its open dashboard windows.
 
 Choose **File → New Gateway Window…** or press Cmd-N, then select one of those
 saved profiles. The picker remembers the most recently used profile. Every
@@ -66,6 +67,7 @@ The menu-bar app's configured Gateway remains the owner of Mac node
 capabilities and Talk Mode. Additional Gateway windows are operator-only, so a
 second Gateway cannot silently retarget global microphone or device controls.
 Listen/TTS and normal chat actions use the window's own Gateway connection.
+Inline widgets also load from that window's Gateway.
 
 ### Gateway picker
 
@@ -73,10 +75,19 @@ The dashboard header shows a Gateway picker when the Mac app has at least two
 configured Gateways. Choose a Gateway to replace the current dashboard in the
 same window, or Option-click it to open a separate dashboard window. **Set as
 primary…** makes the viewed token-authenticated profile the Mac app's primary
-Gateway after confirmation; this resets Talk Mode, the widget panel, and chat
-connections. While connected, the sidebar footer also shows the current Gateway
-and marks it when it is primary. Password-only profiles can be viewed but cannot
-be made primary.
+Gateway after confirmation. The app replaces the primary Gateway's credentials
+and closes its native chat window; independent saved-profile windows stay open.
+Dashboard windows displaying **Primary** follow the new connection, including
+windows opened separately. While connected, the sidebar footer also shows the
+current Gateway and marks it when it is primary. Password-only profiles can be
+viewed but cannot be made primary.
+
+Native dashboard commands such as New Session and the command palette act on
+the frontmost Gateway window.
+
+Native approval cards and dialogs apply only to the Gateway connection that
+requested them. Changing Primary does not transfer a pending approval to the
+new Gateway.
 
 ## Quick Chat bar
 

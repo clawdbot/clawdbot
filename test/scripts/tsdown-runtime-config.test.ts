@@ -1,6 +1,5 @@
 // Covers bundling rules encoded in the root tsdown config.
 import { readFileSync } from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
@@ -369,28 +368,6 @@ describe("tsdown config", () => {
     }
     const externalize = external;
     expect(externalize("jimp", undefined, false)).toBe(true);
-  });
-
-  it("keeps the externalized Slack Web API resolvable from root dist", () => {
-    const rootPackage = JSON.parse(
-      readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
-    ) as { devDependencies?: Record<string, string> };
-    const slackPackage = JSON.parse(
-      readFileSync(new URL("../../extensions/slack/package.json", import.meta.url), "utf8"),
-    ) as { dependencies?: Record<string, string> };
-    const slackWebApiVersion = slackPackage.dependencies?.["@slack/web-api"];
-
-    expect(rootPackage.devDependencies?.["@slack/web-api"]).toBe(slackWebApiVersion);
-
-    const requireFromRootDist = createRequire(
-      new URL("../../dist/private-qa-runtime.cjs", import.meta.url),
-    );
-    const resolvedPackage = JSON.parse(
-      readFileSync(requireFromRootDist.resolve("@slack/web-api/package.json"), "utf8"),
-    ) as { name?: string; version?: string };
-
-    expect(resolvedPackage.name).toBe("@slack/web-api");
-    expect(resolvedPackage.version).toBe(slackWebApiVersion);
   });
 
   it("bundles SDK-owned helpers while retaining fs-safe package ownership", () => {

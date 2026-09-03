@@ -2153,7 +2153,6 @@
     "@shikijs/engine-javascript": "4.4.3",
     "@shikijs/engine-oniguruma": "4.4.3",
     "@sindresorhus/slugify": "2.2.0",
-    "@slack/web-api": "8.0.0",
     "@types/express": "5.0.6",
     "@types/hosted-git-info": "3.0.5",
     "@types/jsdom": "30.0.0",

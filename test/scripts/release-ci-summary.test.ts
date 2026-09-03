@@ -3021,6 +3021,19 @@ describe("release CI summary child correlation", () => {
     },
   );
 
+  it("rejects an unreviewed self-declared Telegram waiver", () => {
+    const raw = rawManifest({});
+    raw.releaseProfile = "stable";
+    Object.assign(raw.validationInputs, {
+      telegramWaiver: "2026.10.1-owner-approved",
+      targetVersion: "2026.10.1",
+      releasePackageSpec: "openclaw@2026.10.1",
+    });
+    expect(() => validateParentManifest(raw, { runAttempt: 2, runId: "29090000000" })).toThrow(
+      /Telegram waiver/u,
+    );
+  });
+
   it.each([
     { label: "legacy manifest", version: 3 },
     { label: "stable profile", releaseProfile: "stable" },

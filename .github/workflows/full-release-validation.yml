@@ -34,7 +34,7 @@ on:
         default: false
         type: boolean
       telegram_waiver:
-        description: Telegram waiver <target-version>-owner-approved for stable/full; requires release-owner approval
+        description: Reviewed Telegram waiver (2026.8.1 or 2026.9.1) for stable/full validation
         required: false
         default: ""
         type: string

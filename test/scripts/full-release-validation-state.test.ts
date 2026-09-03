@@ -537,6 +537,7 @@ describe("full release execution plan", () => {
     { targetVersion: "2026.9.1-beta.1", telegramWaiver: "2026.9.1-beta.1-owner-approved" },
     { targetVersion: "2026.9.1-1", telegramWaiver: "2026.9.1-1-owner-approved" },
     { targetVersion: "2026.13.1", telegramWaiver: "2026.13.1-owner-approved" },
+    { targetVersion: "2026.10.1", telegramWaiver: "2026.10.1-owner-approved" },
     { targetVersion: "2026.8.1 ", telegramWaiver: "2026.8.1 -owner-approved" },
     { targetVersion: "2026.8.2" },
     { targetVersion: "2026.8.1-beta.3" },

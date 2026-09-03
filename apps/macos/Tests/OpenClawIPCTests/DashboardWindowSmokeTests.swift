@@ -1094,9 +1094,10 @@ extension DashboardWindowSmokeTests {
         let replacementServer = try await DashboardHTTPFixture.start()
         defer { replacementServer.stop() }
         let controller = self.makeShownController(server: server)
-        defer { controller.closeDashboard() }
+        let window = try #require(controller.window)
         let manager = DashboardManager._testMake()
         manager._testSetController(controller)
+        defer { manager.close() }
 
         await manager.handleEndpointState(.ready(
             mode: .remote,
@@ -1104,8 +1105,12 @@ extension DashboardWindowSmokeTests {
             token: "device-token",
             password: nil))
 
-        #expect(controller.currentURL.absoluteString == replacementServer.url("/#token=device-token").absoluteString)
-        let authScripts = controller._testUserScripts
+        let replacement = try #require(manager._testController())
+        #expect(replacement !== controller)
+        #expect(replacement.window === window)
+        #expect(window.isVisible)
+        #expect(replacement.currentURL.absoluteString == replacementServer.url("/#token=device-token").absoluteString)
+        let authScripts = replacement._testUserScripts
             .filter { $0.source.contains("__OPENCLAW_NATIVE_CONTROL_AUTH__") }
         #expect(authScripts.count == 1)
         // JSONSerialization escapes "/" so match on host:port, not the full origin.

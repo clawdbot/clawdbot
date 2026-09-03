@@ -52,7 +52,8 @@ extension ChannelsStore {
         self.startCount += 1
         guard self.startCount == 1 else { return }
         guard self.pollTask == nil else { return }
-        GatewayPushSubscription.restartTask(task: &self.gatewayPushTask) { [weak self] push in
+        GatewayPushSubscription.restartTask(task: &self.gatewayPushTask) { [weak self] delivery in
+            guard let push = delivery.push else { return }
             self?.handleGatewayPush(push)
         }
         self.pollTask = Task.detached { [weak self] in
