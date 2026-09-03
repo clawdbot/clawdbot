@@ -4166,12 +4166,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Jobs requesting the Blacksmith Windows class admit at most two project
-          # processes with one Vitest worker each; hosted fallbacks remain serial.
+          # Native allocation can be smaller than the runner label. Keep projects
+          # serial within each machine; the two matrix jobs still run concurrently.
           export OPENCLAW_TEST_PROJECTS_PARALLEL=1
-          if [[ "${RUNNER_ENVIRONMENT:-}" == "self-hosted" ]]; then
-            export OPENCLAW_TEST_PROJECTS_PARALLEL=2
-          fi
           case "$TASK" in
             # Linux owns the full repo test suite. Keep the Windows runner focused on
             # Windows-native process/path wrappers so platform regressions fail fast.

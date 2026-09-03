@@ -312,6 +312,7 @@ export async function prepareReplyAgentPayloads(state: {
         `configured model backend ${fallbackTransition.selectedModelRef} failed and fallback ${fallbackTransition.activeModelRef} produced no visible reply`,
       ),
     );
+    opts?.onAgentRunTerminalOutcome?.("failed");
     return returnPreparedFallbackPayload(silentFallbackFailurePayload);
   };
   const fallbackNoticeChanged =
@@ -444,6 +445,8 @@ export async function prepareReplyAgentPayloads(state: {
         "run_failed",
         new Error("interactive agent run completed without a visible reply"),
       );
+      // Filtering can turn a successful model result into a failed reply.
+      opts?.onAgentRunTerminalOutcome?.("failed");
     }
   }
 
