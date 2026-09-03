@@ -5217,6 +5217,207 @@ describe("requester settle wake trigger", () => {
     });
   });
 
+  type SettlementDriver = Parameters<
+    LifecycleControllerParams["maybeWakeRequesterAfterAllChildrenSettled"]
+  >[0];
+
+  function captureSettleWakeDriver(
+    entry: SubagentRunRecord,
+    runs: Map<string, SubagentRunRecord>,
+    overrides: {
+      resolveSubagentTask?: LifecycleControllerParams["resolveSubagentTask"];
+    } = {},
+  ): Promise<{ driver: SettlementDriver; settleWake: ReturnType<typeof vi.fn> }> {
+    let resolveDriver!: (value: SettlementDriver) => void;
+    const driverReady = new Promise<SettlementDriver>((resolve) => {
+      resolveDriver = resolve;
+    });
+    const settleWake = vi.fn(async (params: SettlementDriver) => {
+      resolveDriver(params);
+      return false;
+    });
+    const controller = createLifecycleController({
+      entry,
+      runs,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+      ...(overrides.resolveSubagentTask
+        ? { resolveSubagentTask: overrides.resolveSubagentTask }
+        : {}),
+    });
+    controller.resumeRequesterSettleWake(entry.runId, entry);
+    return driverReady.then((driver) => ({ driver, settleWake }));
+  }
+
+  it("settles an undelivered requester wake for an already-terminal non-success child without throwing", async () => {
+    // A child whose detached task already ended cancelled/timed-out/failed reaches
+    // requester settle while its own completion delivery is still pending. The
+    // success-only blocker (blockSubagentCompletionDelivery) refuses such a row
+    // with false: there is no still-owned success to protect, so we must settle the
+    // child's never-deliverable completion locally and clear requesterSettleWake
+    // instead of throwing into the batch rollback (the pre-fix sweep loop).
+    completionDeliveryMocks.blockSubagentCompletionDelivery.mockReturnValue(false);
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+      execution: {
+        status: "terminal",
+        endedAt: 4_000,
+        outcome: { status: "error", error: "child ended non-success" },
+      },
+      delivery: { status: "in_progress", disposition: "session_queued", generation: 1 },
+      requesterSettleWake: { status: "pending", attemptCount: 0, rearmGeneration: 1 },
+    });
+    const runs = new Map([[entry.runId, entry]]);
+    // An undelivered requester wake that cannot reach the requester surfaces as a
+    // delivered:false terminal outcome (requester session unavailable, attempts
+    // exhausted, non-retryable disposition). Only lifecycle lets the sweep settle.
+    const { driver, settleWake } = await captureSettleWakeDriver(entry, runs);
+    await waitForLifecycleState(() => expect(settleWake).toHaveBeenCalledOnce());
+
+    expect(() =>
+      driver.completeBatch([entry.runId], 1, {
+        delivered: false,
+        path: "none",
+        error: "requester settle wake attempts exhausted",
+      } as const),
+    ).not.toThrow();
+
+    // The child's own delivery is closed as failed/suppressed locally (the terminal
+    // detached task outcome is preserved untouched) and the wake clears durably so a
+    // later sweep does not reconcile the same batch forever.
+    expect(entry.suppressCompletionDelivery).toBe(true);
+    expect(entry.delivery).toMatchObject({
+      status: "failed",
+      lastError: "requester settle wake attempts exhausted",
+    });
+    expect(entry.requesterSettleWake).toBeUndefined();
+
+    // A second pass (e.g. a later sweep that retained a stale copy) is a clean no-op:
+    // no requesterSettleWake remains and the blocker is never re-invoked.
+    completionDeliveryMocks.blockSubagentCompletionDelivery.mockClear();
+    expect(() =>
+      driver.completeBatch([entry.runId], 1, {
+        delivered: false,
+        path: "none",
+        error: "stale sweep retry",
+      } as const),
+    ).not.toThrow();
+    expect(completionDeliveryMocks.blockSubagentCompletionDelivery).not.toHaveBeenCalled();
+    expect(entry.requesterSettleWake).toBeUndefined();
+  });
+
+  it("still runs the atomic blocker for a genuinely successful child whose undelivered wake settles", async () => {
+    // The successful child's completion is still a live owner, so the success-only
+    // blocker commits atomically (true) and lifecycle keeps the committed block
+    // intact while clearing the requester wake durably. (mockBlockedCompletionDeliveryOwner
+    // models that commit by marking the row's delivery failed + suppressCompletionDelivery.)
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+      execution: { status: "terminal", endedAt: 4_000, outcome: { status: "ok" } },
+      delivery: { status: "in_progress", disposition: "session_queued", generation: 1 },
+      requesterSettleWake: { status: "pending", attemptCount: 0, rearmGeneration: 1 },
+    });
+    const { driver, settleWake } = await captureSettleWakeDriver(
+      entry,
+      new Map([[entry.runId, entry]]),
+    );
+    await waitForLifecycleState(() => expect(settleWake).toHaveBeenCalledOnce());
+    expect(() =>
+      driver.completeBatch([entry.runId], 1, {
+        delivered: false,
+        path: "none",
+        error: "requester session unavailable",
+      } as const),
+    ).not.toThrow();
+
+    expect(completionDeliveryMocks.blockSubagentCompletionDelivery).toHaveBeenCalledWith({
+      subagent: entry,
+      taskId: "",
+      reason: "requester session unavailable",
+      disposition: undefined,
+    });
+    expect(entry.requesterSettleWake).toBeUndefined();
+  });
+
+  it("does not resurrect an already-settled successful sibling when its non-success sibling settles", async () => {
+    const successRunId = "run-success-committed";
+    const failedRunId = "run-failed-sibling";
+    // The successful sibling's completion is still a live owner: the blocker commits
+    // atomically (true). The already-terminal non-success sibling is refused (false)
+    // by the success-only blocker and must settle locally without resurrecting the
+    // successfully-blocked sibling's delivery state.
+    completionDeliveryMocks.blockSubagentCompletionDelivery.mockImplementation(
+      (args: { subagent: SubagentRunRecord }) => args.subagent.runId === successRunId,
+    );
+
+    const success = createRunEntry({
+      runId: successRunId,
+      endedAt: 4_000,
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+      execution: { status: "terminal", endedAt: 4_000, outcome: { status: "ok" } },
+      delivery: { status: "in_progress", disposition: "session_queued", generation: 1 },
+      requesterSettleWake: { status: "pending", attemptCount: 0, rearmGeneration: 1 },
+    });
+    const failed = createRunEntry({
+      runId: failedRunId,
+      endedAt: 4_000,
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+      execution: {
+        status: "terminal",
+        endedAt: 4_000,
+        outcome: { status: "error", error: "child cancelled" },
+      },
+      delivery: { status: "in_progress", disposition: "session_queued", generation: 1 },
+      requesterSettleWake: { status: "pending", attemptCount: 0, rearmGeneration: 1 },
+    });
+    const runs = new Map([
+      [success.runId, success],
+      [failed.runId, failed],
+    ]);
+
+    const { driver, settleWake } = await captureSettleWakeDriver(success, runs);
+    await waitForLifecycleState(() => expect(settleWake).toHaveBeenCalledOnce());
+
+    expect(() =>
+      driver.completeBatch([success.runId, failed.runId], 1, {
+        delivered: false,
+        path: "none",
+        error: "requester wake deferred too many times",
+      } as const),
+    ).not.toThrow();
+
+    // Success sibling: blocker committed (still invoked) for its genuine success.
+    expect(completionDeliveryMocks.blockSubagentCompletionDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({ subagent: success }),
+    );
+    // Non-success sibling: settled locally/failed/suppressed, no throw, wake cleared.
+    expect(failed.delivery).toMatchObject({ status: "failed" });
+    expect(failed.suppressCompletionDelivery).toBe(true);
+    expect(failed.requesterSettleWake).toBeUndefined();
+    // Mixing a non-success sibling into the batch never clears/resurrects the
+    // committed-success sibling — both wakes are durably drained.
+    expect(success.requesterSettleWake).toBeUndefined();
+
+    // The success sibling that committed a durable block stays settled under a
+    // follow-up sweep (no requesterSettleWake remains, no re-commit).
+    completionDeliveryMocks.blockSubagentCompletionDelivery.mockClear();
+    expect(() =>
+      driver.completeBatch([success.runId, failed.runId], 1, {
+        delivered: false,
+        path: "none",
+        error: "stale sweep",
+      } as const),
+    ).not.toThrow();
+    expect(completionDeliveryMocks.blockSubagentCompletionDelivery).not.toHaveBeenCalled();
+    expect(success.requesterSettleWake).toBeUndefined();
+    expect(failed.requesterSettleWake).toBeUndefined();
+  });
+
   it("retains a delete-mode child after no-wake until its requester turn settles", async () => {
     const entry = createRunEntry({
       requesterTurnRunId: "run-requester",

@@ -102,20 +102,47 @@ const completeRequesterSettleWakeBatch = (
         delivery.announcedAt = deliveredAt;
         delivery.lastError = undefined;
         delivery.lastDropReason = undefined;
+        settledDeliveries.push(entry);
       } else {
         const error = outcome.error ?? outcome.reason ?? "requester settle wake failed";
+        // Close a channel-blocked success atomically with its detached task
+        // projection. blockSubagentCompletionDelivery is the durable owner gate:
+        // it returns TRUE only when the DB run row is still a genuinely
+        // successful, generation-matching completion and in that case commits the
+        // failed subagent/task projection on the tied row. It returns FALSE
+        // whenever this batch row is no longer the live successful owner — its
+        // detached task already ended cancelled/timed-out/failed, no owner row is
+        // left, or a newer delivery generation superseded it. (REGRESSION: this
+        // branch used to throw on that FALSE return, rolling requesterSettleWake
+        // back to pending so the registry sweeper re-ran the same terminal batch
+        // forever. A FALSE return is not stale-generation churn a retry can win —
+        // no successful owner is left to protect — so fail this child's
+        // never-deliverable completion locally and let requesterSettleWake clear
+        // durably, preserving the child's already-durable terminal task outcome.)
         if (
-          !blockSubagentCompletionDelivery({
+          blockSubagentCompletionDelivery({
             subagent: entry,
             taskId: params.resolveSubagentTask(entry).task?.taskId ?? "",
             reason: error,
             disposition: outcome.disposition,
           })
         ) {
-          throw new Error(`subagent completion owner changed before settlement: ${runId}`);
+          // The blocker durably committed a failed projection for a still-owned
+          // success. Keep it out of the batch rollback so a later sibling's
+          // persistence failure cannot resurrect an already-committed block.
+          settledDeliveries.push(entry);
+        } else {
+          const delivery = ensureDeliveryState(entry);
+          delivery.status = "failed";
+          delivery.disposition = outcome.disposition ?? delivery.disposition;
+          delivery.lastError = error;
+          delivery.deliveredAt = undefined;
+          delivery.announcedAt = undefined;
+          entry.suppressCompletionDelivery = true;
+          // Local-only settle. It wrote no detached task/subagent projection, so
+          // it rolls back with the batch if a later sibling's persistence fails.
         }
       }
-      settledDeliveries.push(entry);
     }
     if (entry.requesterTurnRunId && entry.expectsCompletionMessage === true) {
       entry.retireAfterRequesterTurn =
