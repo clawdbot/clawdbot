@@ -1537,6 +1537,24 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     expect(stats?.cooldownUntil).toBeUndefined();
   });
 
+  it("uses local exponential backoff when OpenAI reports no reset", async () => {
+    const store = makeStore(undefined);
+    let now = 1_700_000_000_000;
+
+    for (const expectedDelay of [30_000, 60_000, 2 * 60_000]) {
+      mockWhamResponse(200, {
+        rate_limit: {
+          limit_reached: true,
+          primary_window: { used_percent: 100 },
+        },
+      });
+      clearExpiredCooldowns(store, now);
+      await markCodexFailureAt({ store, now });
+      expect((store.usageStats?.["openai:default"]?.cooldownUntil ?? 0) - now).toBe(expectedDelay);
+      now += expectedDelay + 1;
+    }
+  });
+
   it("probes WHAM before recording an OpenAI OAuth detail-less failure", async () => {
     const now = 1_700_000_000_000;
     const store = makeStore(undefined);
@@ -1661,14 +1679,14 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     expect(stats?.cooldownReason).toBe("rate_limit");
   });
 
-  it("maps other HTTP errors to a 5m cooldown", async () => {
+  it("uses local rate-limit backoff when the WHAM request fails", async () => {
     const now = 1_700_000_000_000;
     const store = makeStore({});
     mockWhamResponse(500);
 
     await markCodexFailureAt({ store, now });
 
-    expect(store.usageStats?.["openai:default"]?.cooldownUntil).toBe(now + 300_000);
+    expect(store.usageStats?.["openai:default"]?.cooldownUntil).toBe(now + 30_000);
   });
 
   it("cancels WHAM HTTP error response bodies", async () => {
@@ -1681,7 +1699,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     await markCodexFailureAt({ store, now });
 
     expect(cancel).toHaveBeenCalledOnce();
-    expect(store.usageStats?.["openai:default"]?.cooldownUntil).toBe(now + 300_000);
+    expect(store.usageStats?.["openai:default"]?.cooldownUntil).toBe(now + 30_000);
   });
 
   it("preserves a longer existing cooldown via max semantics", async () => {

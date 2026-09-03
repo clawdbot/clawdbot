@@ -289,6 +289,18 @@ function applyWhamCooldownResult(params: {
     };
   }
   const cooldownClassification = resolveWhamCooldownClassification(params.whamResult.reason);
+  if (
+    !cooldownClassification &&
+    !params.whamResult.available &&
+    params.computed.cooldownReason === "rate_limit"
+  ) {
+    // A failed or incomplete probe supplied no authoritative retry deadline.
+    // Keep the persisted local backoff instead of replacing it with a fixed delay.
+    return {
+      ...params.computed,
+      lastProbeAt: params.now,
+    };
+  }
   return {
     ...params.computed,
     lastProbeAt: params.now,
@@ -741,6 +753,8 @@ export function calculateAuthProfileCooldownMs(errorCount: number): number {
   return 5 * 60_000; // 5 minutes max
 }
 
+// Without a provider reset, grow failed half-open probes up to one billing day:
+// frequent retries risk metered fallback spend, while a finite cap still retries daily.
 const RATE_LIMIT_BACKOFF_BASE_MS = 30_000;
 const RATE_LIMIT_BACKOFF_MAX_MS = 24 * 60 * 60 * 1000;
 
