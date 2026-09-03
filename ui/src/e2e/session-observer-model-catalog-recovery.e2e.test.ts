@@ -128,6 +128,8 @@ suite.define(() => {
           .getByText("Explicit model catalog unavailable", { exact: true })
           .isVisible()
           .catch(() => false);
+        await picker.click();
+        await expect.poll(() => picker.getAttribute("open")).not.toBeNull();
         const finalOptions = (await picker.locator("wa-option").allTextContents()).map((text) =>
           text.trim(),
         );
@@ -138,7 +140,7 @@ suite.define(() => {
               cue.textContent = `models.list requests after recovery: ${requestCount}`;
             }
           }, finalRequestCount);
-          await section.screenshot({
+          await page.screenshot({
             animations: "disabled",
             path: path.join(suite.artifactDir, "02-after-recovery-poll.png"),
           });
@@ -155,7 +157,6 @@ suite.define(() => {
           "GPT Recovered",
         ]);
 
-        await picker.click();
         await picker.getByRole("option", { name: "GPT Recovered", exact: true }).click();
         const patchRequest = await gateway.waitForRequest("config.patch");
         expect(JSON.parse(String((patchRequest.params as { raw?: unknown }).raw))).toEqual({
