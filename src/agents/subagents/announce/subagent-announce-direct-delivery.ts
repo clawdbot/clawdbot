@@ -14,6 +14,7 @@ import { isCronRunSessionKey } from "../../../sessions/session-key-utils.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import { sessionDeliveryChannel } from "../../../utils/delivery-context.shared.js";
 import {
+  INTERNAL_MESSAGE_CHANNEL,
   isGatewayMessageChannel,
   normalizeMessageChannel,
 } from "../../../utils/message-channel.js";
