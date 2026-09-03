@@ -51,6 +51,54 @@ describe("CronPage task-lanes capability gate", () => {
     expect(page.cron.taskLanes).toMatchObject({ lanes: [], diagnostics: [] });
   });
 
+  it("does not race a slow cron.status when the operator refreshes", async () => {
+    let taskLanesCalls = 0;
+    let statusCalls = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "cron.status") {
+        statusCalls += 1;
+        // Hold the capability answer beyond the 150 ms reload debounce: by the
+        // time the unconfigured "false" lands, no lane request may be in
+        // flight and none may follow.
+        await new Promise((resolve) => {
+          setTimeout(resolve, 250);
+        });
+        return { enabled: true, jobs: 0, triggersEnabled: true, taskLanesConfigured: false };
+      }
+      if (method === "taskLanes.list") {
+        taskLanesCalls += 1;
+        return { lanes: [], diagnostics: [] };
+      }
+      if (method === "cron.list") {
+        return cronListResponse([]);
+      }
+      return {};
+    });
+    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
+    const page = createPage(createContext(gateway), { render: true });
+    await waitForCronPage(() => expect(statusCalls).toBeGreaterThan(0));
+
+    // cron.status is still pending; the operator refreshes anyway.
+    const refresh = page.querySelector<HTMLButtonElement>(".cron-refresh");
+    expect(refresh).not.toBeNull();
+    refresh!.click();
+    await page.updateComplete;
+    await new Promise((resolve) => {
+      setTimeout(resolve, 220);
+    });
+    // The debounce window elapsed while cron.status was unresolved: the gate
+    // must not have issued a lane request, and the resolved "false" must keep
+    // it that way.
+    expect(taskLanesCalls).toBe(0);
+    await waitForCronPage(() =>
+      expect(page.cron.cronStatus).toMatchObject({ taskLanesConfigured: false }),
+    );
+    await new Promise((resolve) => {
+      setTimeout(resolve, 200);
+    });
+    expect(taskLanesCalls).toBe(0);
+  });
+
   it("reloads externally edited lanes when the operator refreshes", async () => {
     const changedBoard = {
       lanes: [

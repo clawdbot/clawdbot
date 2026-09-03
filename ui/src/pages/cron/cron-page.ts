@@ -203,7 +203,9 @@ class CronPage extends OpenClawLightDomElement {
   // Task lanes reflect cron mutations (a run adds lane items); coalesce
   // bursts into one trailing reload so rapid actions stay one request.
   private scheduleTaskLanesReload() {
-    if (!this.taskLanesRequestAllowed()) {
+    // An unresolved cron.status cannot prove the capability either way, so it
+    // must not schedule a debounced request the gate would wave through later.
+    if (!this.cron.cronStatus || !this.taskLanesRequestAllowed()) {
       return;
     }
     if (this.taskLanesReloadTimer !== null) {
@@ -286,16 +288,18 @@ class CronPage extends OpenClawLightDomElement {
     const activeCronJobId = cronState.cronRunsScope === "job" ? cronState.cronRunsJobId : null;
     void this.loadRuns(activeCronJobId, options.coalesce);
     void this.context.channels.refresh(false);
-    // Externally edited boards change outside cron mutations, so the operator's
-    // explicit Refresh must also re-read the lane snapshot (no-op when the
-    // gateway reports the capability unconfigured).
-    this.scheduleTaskLanesReload();
     await Promise.all([
       this.runCronTask((current) => loadCronStatus(current, options)),
       this.runCronTask((current) =>
         loadCronJobsPage(current, { tableFilters: options.tableFilters }),
       ),
     ]);
+    // Externally edited boards change outside cron mutations, so the operator's
+    // explicit Refresh must also re-read the lane snapshot (no-op when the
+    // gateway reports the capability unconfigured). Scheduling only after the
+    // status refresh lands keeps the capability gate exact: a slow cron.status
+    // reporting false must win the race against the debounced lane request.
+    this.scheduleTaskLanesReload();
   }
 
   private loadRuns(jobId: string | null, coalesce = false) {
