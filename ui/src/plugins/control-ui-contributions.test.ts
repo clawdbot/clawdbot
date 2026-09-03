@@ -7,6 +7,7 @@ import type { GatewaySessionRow } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import { createAgentSelectionCapability } from "../app/agent-selection.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { t } from "../i18n/index.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
 import {
@@ -26,6 +27,92 @@ type ContributionsElement = LitElement & {
 };
 const sessionKey = "agent:main:main";
 const cleanups: (() => void)[] = [];
+
+it("opens customization once and retains reload state across close and reopen", async () => {
+  const listeners = new Set<() => void>();
+  const replacement = {
+    key: "fixture/composer",
+    pluginId: "fixture",
+    value: { surface: "composer", label: "Fixture composer" },
+  };
+  let selected: typeof replacement | undefined;
+  const pendingReload = createDeferred();
+  const plugins = {
+    hasPlugins: true,
+    errors: [],
+    canReload: true,
+    registrations: () => [replacement],
+    selectedReplacement: () => selected,
+    selectReplacement: vi.fn((_surface: string, key: string | null) => {
+      selected = key ? replacement : undefined;
+      listeners.forEach((listener) => listener());
+    }),
+    reload: vi.fn(() => pendingReload.promise),
+    refresh: vi.fn(async () => undefined),
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+  // SAFETY: this fixture supplies the only application service consumed by the manager.
+  const provider = createApplicationContextProvider({ plugins } as unknown as ApplicationContext);
+  // SAFETY: the imported contributions module registers this Lit element.
+  const manager = document.createElement("openclaw-plugin-manager") as LitElement;
+  const button = (label: string) => {
+    const found = [...manager.querySelectorAll("button")].find(
+      (element) => element.textContent?.trim() === label,
+    );
+    if (!found) {
+      throw new Error(`Missing button: ${label}`);
+    }
+    return found;
+  };
+  let mostDialogs = 0;
+  const observer = new MutationObserver(() => {
+    mostDialogs = Math.max(mostDialogs, manager.querySelectorAll("openclaw-modal-dialog").length);
+  });
+  observer.observe(manager, { childList: true, subtree: true });
+  provider.append(manager);
+  document.body.append(provider);
+  try {
+    await manager.updateComplete;
+    expect(manager.querySelector("openclaw-modal-dialog")).toBeNull();
+    button(t("pluginUi.customize")).click();
+    await vi.waitFor(() => expect(manager.querySelector("select")).not.toBeNull());
+    expect(mostDialogs).toBe(1);
+
+    const select = manager.querySelector<HTMLSelectElement>("select");
+    if (!select) {
+      throw new Error("Missing replacement selector");
+    }
+    select.value = replacement.key;
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(plugins.selectReplacement).toHaveBeenLastCalledWith("composer", replacement.key);
+    select.value = "";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(plugins.selectReplacement).toHaveBeenLastCalledWith("composer", null);
+
+    button(t("pluginUi.reload")).click();
+    expect(plugins.reload).toHaveBeenCalledOnce();
+    button(t("common.close")).click();
+    await vi.waitFor(() => expect(manager.querySelector("openclaw-modal-dialog")).toBeNull());
+    button(t("pluginUi.customize")).click();
+    await vi.waitFor(() => expect(button(t("pluginUi.reload")).disabled).toBe(true));
+    pendingReload.reject(new Error("Synthetic reload failure"));
+    await vi.waitFor(() =>
+      expect(manager.querySelector('[role="alert"]')?.textContent).toContain(
+        "Synthetic reload failure",
+      ),
+    );
+    expect(button(t("pluginUi.reload")).disabled).toBe(false);
+    button(t("common.retry")).click();
+    expect(plugins.refresh).toHaveBeenCalledOnce();
+    expect(mostDialogs).toBe(1);
+  } finally {
+    observer.disconnect();
+    pendingReload.resolve();
+  }
+});
 
 afterEach(() => {
   document.body.replaceChildren();

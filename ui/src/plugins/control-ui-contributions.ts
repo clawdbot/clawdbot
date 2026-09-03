@@ -3,7 +3,13 @@ import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { ControlUiAction } from "../../../src/plugin-sdk/control-ui.js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
+import {
+  isOptionalElementDefined,
+  LazyCustomElementRequestController,
+  type OptionalCustomElement,
+} from "../app/lazy-custom-element.ts";
 import { icons, type IconName } from "../components/icons.ts";
+import { renderLazyElementModal } from "../components/lazy-view-error.ts";
 import { t } from "../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { findUiSessionRow } from "../lib/sessions/route-navigation.ts";
@@ -214,11 +220,20 @@ class ControlUiPluginContributions extends OpenClawLightDomContentsElement {
   }
 }
 
+const PLUGIN_MANAGER_DIALOG = {
+  tagName: "openclaw-plugin-manager-dialog",
+  get label() {
+    return t("pluginUi.customize");
+  },
+  loadModule: () => import("./control-ui-manager-dialog.ts"),
+} satisfies OptionalCustomElement;
+
 class ControlUiPluginManager extends OpenClawLightDomContentsElement {
   @consume({ context: applicationContext, subscribe: true }) private context?: ApplicationContext;
   @state() private open = false;
-  @state() private reloading = false;
-  @state() private reloadError = "";
+  private readonly dialogLoader = new LazyCustomElementRequestController(this, () => {
+    this.open = false;
+  });
 
   constructor() {
     super();
@@ -228,103 +243,47 @@ class ControlUiPluginManager extends OpenClawLightDomContentsElement {
     );
   }
 
-  override render() {
+  private get available(): boolean {
     const runtime = this.context?.plugins;
-    const replacements = runtime?.registrations("replacements") ?? [];
-    if (!runtime || (!runtime.hasPlugins && !runtime.errors.length)) {
-      return nothing;
-    }
-    const surfaces = [...new Set(replacements.map((entry) => entry.value.surface))];
-    return html`<button
-        class="btn btn--sm plugin-ui-recovery"
-        type="button"
-        @click=${() => {
-          this.open = true;
-        }}
-      >
-        ${t("pluginUi.customize")}
-      </button>
-      ${this.open
-        ? html`<openclaw-modal-dialog
-            .label=${t("pluginUi.customize")}
-            @modal-cancel=${() => {
-              this.open = false;
+    return Boolean(runtime && (runtime.hasPlugins || runtime.errors.length));
+  }
+
+  override willUpdate() {
+    this.dialogLoader.requestWhileActive(
+      PLUGIN_MANAGER_DIALOG,
+      this.isConnected && this.available && this.open,
+    );
+  }
+
+  override disconnectedCallback() {
+    this.dialogLoader.requestWhileActive(PLUGIN_MANAGER_DIALOG, false);
+    super.disconnectedCallback();
+  }
+
+  override render() {
+    // The loader closes its modal after the registered element has rendered.
+    const showDialog = this.available && this.open && !this.dialogLoader.visibleState;
+    return html`${this.available
+      ? html`<button
+            class="btn btn--sm plugin-ui-recovery"
+            type="button"
+            @click=${() => {
+              this.open = true;
             }}
           >
-            <section class="card">
-              <h2>${t("pluginUi.customize")}</h2>
-              <p>${t("pluginUi.selectionScope")}</p>
-              ${surfaces.map(
-                (surface) => html`<label class="field"
-                  ><span>${t(`pluginUi.surface.${surface}`)}</span>
-                  <select
-                    @change=${(event: Event) =>
-                      runtime.selectReplacement(
-                        surface,
-                        // SAFETY: this handler is bound directly to the select element.
-                        (event.target as HTMLSelectElement).value || null,
-                      )}
-                  >
-                    <option value="" .selected=${!runtime.selectedReplacement(surface)}>
-                      ${t("pluginUi.builtin")}
-                    </option>
-                    ${replacements
-                      .filter((entry) => entry.value.surface === surface)
-                      .map(
-                        (entry) =>
-                          html`<option
-                            value=${entry.key}
-                            .selected=${runtime.selectedReplacement(surface)?.key === entry.key}
-                          >
-                            ${entry.value.label} (${entry.pluginId})
-                          </option>`,
-                      )}
-                  </select></label
-                >`,
-              )}
-              ${runtime.errors.map(
-                (entry) =>
-                  html`<p role="alert"><strong>${entry.pluginId}</strong>: ${entry.message}</p>`,
-              )}
-              ${this.reloadError ? html`<p role="alert">${this.reloadError}</p>` : nothing}
-              ${runtime.canReload
-                ? html`<button
-                    class="btn"
-                    ?disabled=${this.reloading}
-                    @click=${async () => {
-                      this.reloading = true;
-                      this.reloadError = "";
-                      try {
-                        await runtime.reload();
-                      } catch (error) {
-                        this.reloadError = error instanceof Error ? error.message : String(error);
-                      } finally {
-                        this.reloading = false;
-                      }
-                    }}
-                  >
-                    ${t("pluginUi.reload")}
-                  </button>`
-                : nothing}
-              <button
-                class="btn"
-                @click=${() => {
-                  void runtime.refresh();
-                }}
-              >
-                ${t("common.retry")}
-              </button>
-              <button
-                class="btn"
-                @click=${() => {
-                  this.open = false;
-                }}
-              >
-                ${t("common.close")}
-              </button>
-            </section>
-          </openclaw-modal-dialog>`
-        : nothing}`;
+            ${t("pluginUi.customize")}
+          </button>
+          ${renderLazyElementModal(this.dialogLoader)}`
+      : nothing}
+    ${isOptionalElementDefined(PLUGIN_MANAGER_DIALOG)
+      ? html`<openclaw-plugin-manager-dialog
+          .runtime=${this.context?.plugins}
+          .open=${showDialog}
+          @modal-cancel=${() => {
+            this.open = false;
+          }}
+        ></openclaw-plugin-manager-dialog>`
+      : nothing}`;
   }
 }
 

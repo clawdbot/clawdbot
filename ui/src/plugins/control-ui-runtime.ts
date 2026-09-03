@@ -2,7 +2,6 @@ import { CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS } from "../../../src/gateway/contro
 import type {
   ControlUiDisposer,
   ControlUiHost,
-  ControlUiPlugin,
   ControlUiReplacement,
   ControlUiSurface,
 } from "../../../src/plugin-sdk/control-ui.js";
@@ -177,15 +176,9 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
         }
       }
       this.publish();
-      const granted = new Set<string>();
       if (catalog.plugins.length) {
         const gatewayUrl = new URL(client.gatewayUrl, window.location.href);
-        if (gatewayUrl.protocol === "ws:") {
-          gatewayUrl.protocol = "http:";
-        }
-        if (gatewayUrl.protocol === "wss:") {
-          gatewayUrl.protocol = "https:";
-        }
+        gatewayUrl.protocol = gatewayUrl.protocol.replace(/^ws/u, "http");
         if (gatewayUrl.origin !== window.location.origin) {
           this.loadingCatalog = null;
           const error = new Error(
@@ -209,16 +202,14 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
         for (const descriptor of catalog.plugins) {
           const prefix = `/__openclaw__/plugins/control-ui/${encodeURIComponent(descriptor.pluginId)}/`;
           if (
-            !bootstrap.pluginAssetsRequireAuth ||
-            bootstrap.pluginFrameGrants.some(
+            bootstrap.pluginAssetsRequireAuth &&
+            !bootstrap.pluginFrameGrants.some(
               (grant) =>
                 grant.pluginId === descriptor.pluginId &&
                 grant.match === "prefix" &&
                 grant.path === prefix,
             )
           ) {
-            granted.add(descriptor.pluginId);
-          } else {
             this.loadingCatalog.delete(descriptor.pluginId);
             const error = new Error(
               `Native plugin asset grant unavailable: ${descriptor.pluginId}`,
@@ -239,7 +230,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
       const activations = catalog.plugins
         .filter(
           (descriptor) =>
-            granted.has(descriptor.pluginId) &&
+            installed.has(descriptor.pluginId) &&
             this.owners.get(descriptor.pluginId)?.descriptor.revision !== descriptor.revision,
         )
         .map((descriptor) => this.activate(descriptor, client, current));
@@ -298,59 +289,10 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
     try {
       const styles: HTMLLinkElement[] = [];
       const initialize = async (): Promise<ControlUiPluginOwner | undefined> => {
-        const { createControlUiPluginHost } = await import("./control-ui-host.ts");
-        if (!current() || abort.signal.aborted) {
-          return undefined;
-        }
-        const complete: ControlUiPluginOwner = Object.assign(owner, {
-          host: createControlUiPluginHost(this.getContext, this, owner),
-        });
-        const url = this.assetUrl(descriptor, descriptor.entryUrl);
-        for (const path of descriptor.styles) {
-          const link = document.createElement("link");
-          link.rel = "stylesheet";
-          link.media = "not all";
-          link.href = this.assetUrl(descriptor, path);
-          const loaded = new Promise<void>((resolve, reject) => {
-            link.addEventListener("load", () => resolve(), { once: true, signal: abort.signal });
-            link.addEventListener(
-              "error",
-              () => reject(new Error(`Could not load plugin stylesheet: ${descriptor.pluginId}`)),
-              { once: true, signal: abort.signal },
-            );
-            abort.signal.addEventListener(
-              "abort",
-              () => reject(new Error("Plugin UI activation ended.")),
-              { once: true },
-            );
-          });
-          document.head.append(link);
-          complete.disposers.add(() => link.remove());
-          styles.push(link);
-          await loaded;
-        }
-        const module: { default?: ControlUiPlugin } = await import(/* @vite-ignore */ url);
-        if (!current() || abort.signal.aborted) {
-          this.disposeOwner(complete);
-          return undefined;
-        }
-        if (
-          module.default?.id !== descriptor.pluginId ||
-          typeof module.default.activate !== "function"
-        ) {
-          throw new Error(
-            "Native UI entry must export its matching defineControlUiPlugin definition.",
-          );
-        }
-        const stop = await module.default.activate(complete.host);
-        if (stop) {
-          complete.disposers.add(stop);
-        }
-        if (!current() || abort.signal.aborted) {
-          this.disposeOwner(complete);
-          return undefined;
-        }
-        return complete;
+        const { initializeControlUiPlugin } = await import("./control-ui-host.ts");
+        return initializeControlUiPlugin(this.getContext, this, owner, styles, () =>
+          this.disposeOwner(owner),
+        );
       };
       const complete = await Promise.race([
         initialize(),
@@ -467,15 +409,6 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
         this.reportError(descriptor.pluginId, failure);
       }
     }
-  }
-
-  private assetUrl(descriptor: PluginAsset, path: string): string {
-    const url = new URL(path, window.location.href);
-    const prefix = `/__openclaw__/plugins/control-ui/${encodeURIComponent(descriptor.pluginId)}/${encodeURIComponent(descriptor.revision)}/`;
-    if (url.origin !== window.location.origin || !url.pathname.startsWith(prefix)) {
-      throw new Error("Native plugin assets must be served by this Control UI Gateway.");
-    }
-    return url.href;
   }
 
   isCurrent(owner: Omit<ControlUiPluginOwner, "host">): boolean {
