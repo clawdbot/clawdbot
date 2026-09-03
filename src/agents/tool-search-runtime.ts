@@ -157,9 +157,48 @@ function findEntry(
   }
   const namedEntry = namedEntries[0];
   if (!namedEntry) {
+    const mcpServerName = readDisconnectedMcpServerName(needle, entries);
+    if (mcpServerName) {
+      // A catalog id of `mcp:<server>:<tool>` identifies an MCP-provided tool. When it
+      // misses, the owning server is disconnected/unreachable and its tools were
+      // removed from the catalog. Report the outage instead of a generic unknown-tool
+      // error so the model stops re-searching and loops on the missing tool (#137398).
+      throw new ToolInputError(
+        `Tool "${needle}" is provided by the MCP server "${mcpServerName}", which is currently unavailable (disconnected or unreachable), so its tools are absent from the Tool Search catalog. ` +
+          "Do not retry tool_search or tool_call for it; report the MCP server outage and continue without it.",
+      );
+    }
     throw new ToolInputError(formatUnknownToolIdError(needle, entries, errorOptions));
   }
   return namedEntry;
+}
+
+/**
+ * Detect a tool lookup aimed at a currently-absent MCP server.
+ *
+ * MCP catalog ids use the `mcp:<server>:<tool>` shape (see makeCatalogId), so an
+ * id-prefixed miss names its owning server even though every entry of that server
+ * has already been dropped from the catalog. Name-only lookups cannot identify a
+ * server and stay on the generic unknown-tool path.
+ */
+function readDisconnectedMcpServerName(
+  needle: string,
+  entries: readonly ToolSearchCatalogEntry[],
+): string | undefined {
+  const match = needle.match(/^mcp:([^:]+):/);
+  const serverName = match?.[1];
+  if (!serverName) {
+    return undefined;
+  }
+  // The server is only "disconnected" when it owns no remaining catalog entries;
+  // a partial id typo against a healthy server keeps the generic error.
+  return entries.some(
+    (entry) =>
+      entry.source === "mcp" &&
+      (entry.mcp?.serverName === serverName || entry.sourceName === serverName),
+  )
+    ? undefined
+    : serverName;
 }
 
 function findEntryByExactId(
@@ -170,6 +209,13 @@ function findEntryByExactId(
   const needle = id.trim();
   const entry = catalog.entries.find((candidate) => candidate.id === needle);
   if (!entry) {
+    const mcpServerName = readDisconnectedMcpServerName(needle, catalog.entries);
+    if (mcpServerName) {
+      throw new ToolInputError(
+        `Tool "${needle}" is provided by the MCP server "${mcpServerName}", which is currently unavailable (disconnected or unreachable), so its tools are absent from the Tool Search catalog. ` +
+          "Do not retry tool_search or tool_call for it; report the MCP server outage and continue without it.",
+      );
+    }
     throw new ToolInputError(
       formatUnknownToolIdError(needle, catalog.entries, { ...errorOptions, exactIdOnly: true }),
     );
