@@ -4,8 +4,11 @@ import type { SessionsDeleteResult } from "../../../../packages/gateway-protocol
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { createSessionCapability } from "./index.ts";
-import { createGatewayHarness, sessionsResult } from "./session-capability.test-support.ts";
+import {
+  createGatewayHarness,
+  createTestSessionCapability,
+  sessionsResult,
+} from "./session-capability.test-support.ts";
 
 type RpcHandler = () => unknown;
 
@@ -29,7 +32,7 @@ function createMutationHarness(handlers: Record<string, RpcHandler>) {
     ...gatewayHarness,
     client,
     request,
-    sessions: createSessionCapability(gatewayHarness.gateway),
+    sessions: createTestSessionCapability(gatewayHarness.gateway),
   };
 }
 

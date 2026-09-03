@@ -3,9 +3,9 @@ import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-lis
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
-import { createSessionCapability } from "./index.ts";
 import {
   createSessionCapabilityHarness,
+  createTestSessionCapability,
   sessionsResult,
 } from "./session-capability.test-support.ts";
 
@@ -45,7 +45,7 @@ function sessionHarness(request: unknown) {
     hello: null,
   };
   let listener: ((next: typeof snapshot) => void) | undefined;
-  const sessions = createSessionCapability({
+  const sessions = createTestSessionCapability({
     snapshot,
     subscribe(next) {
       listener = next;

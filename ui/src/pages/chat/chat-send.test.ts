@@ -26,9 +26,9 @@ import {
   storageTargetForGateway,
   subscribeStoredChatOutboxChanges,
 } from "../../lib/chat/outbox-store.ts";
-import { createSessionCapability } from "../../lib/sessions/index.ts";
 import {
   createGatewayHarness,
+  createTestSessionCapability,
   sessionsResult as sessionListFixture,
 } from "../../lib/sessions/session-capability.test-support.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
@@ -1119,7 +1119,7 @@ describe("refreshChat", () => {
     });
     const client = clientWithRequest(request);
     const harness = createGatewayHarness(client);
-    const sessions = createSessionCapability(harness.gateway);
+    const sessions = createTestSessionCapability(harness.gateway);
     const { pane, state } = createTestChatPane({ client, sessions });
     state.sessionKey = "agent:work:main";
     state.assistantAgentId = "work";

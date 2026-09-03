@@ -52,7 +52,7 @@ async function mountActions(
     { ...gateway, connection: { gatewayUrl: "ws://fixture.invalid" } },
     agents,
   );
-  const sessions = createSessionCapability(gateway);
+  const sessions = createSessionCapability(gateway, agentSelection);
   const session: GatewaySessionRow = options.session ?? {
     key: sessionKey,
     kind: "direct",

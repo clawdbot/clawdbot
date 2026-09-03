@@ -7,8 +7,10 @@ import type { SessionsListResult } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import { createSessionCapability } from "../../lib/sessions/index.ts";
-import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
+import {
+  createTestSessionCapability,
+  sessionsResult,
+} from "../../lib/sessions/session-capability.test-support.ts";
 import {
   createContext,
   createGateway,
@@ -48,7 +50,7 @@ describe("sessions page archived deletion", () => {
       return {};
     });
     const { gateway } = createGateway({ request } as unknown as GatewayBrowserClient);
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
     const page = await createRenderedPage(
       createContext(gateway, sessions),
       sessionsResult([target], 1),

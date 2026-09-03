@@ -3,8 +3,11 @@ import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult, SessionsPatchResult } from "../../api/types.ts";
-import { createSessionCapability } from "./index.ts";
-import { createGatewayHarness, sessionsResult } from "./session-capability.test-support.ts";
+import {
+  createGatewayHarness,
+  createTestSessionCapability,
+  sessionsResult,
+} from "./session-capability.test-support.ts";
 
 it("keeps a confirmed permission mode when its list refresh fails", async () => {
   const key = "agent:main:permission-refresh";
@@ -42,7 +45,7 @@ it("keeps a confirmed permission mode when its list refresh fails", async () => 
     throw new Error(`Unexpected request: ${method}`);
   });
   const { gateway } = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
-  const sessions = createSessionCapability(gateway);
+  const sessions = createTestSessionCapability(gateway);
 
   await sessions.refresh({ force: true });
   const result = await sessions.patch(key, { permissionMode: "workspace" });
@@ -96,7 +99,7 @@ it("discards patch A and its refresh after patch B applies first", async () => {
     throw new Error(`Unexpected request: ${method}`);
   });
   const { gateway } = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
-  const sessions = createSessionCapability(gateway);
+  const sessions = createTestSessionCapability(gateway);
   await sessions.refresh({ force: true });
 
   const older = sessions.patch(key, { permissionMode: "workspace" });
@@ -164,7 +167,7 @@ it("discards patch A refresh failure after event B applies", async () => {
     throw new Error(`Unexpected request: ${method}`);
   });
   const { gateway } = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
-  const sessions = createSessionCapability(gateway);
+  const sessions = createTestSessionCapability(gateway);
   await sessions.refresh({ force: true });
 
   const older = sessions.patch(key, { permissionMode: "workspace" });

@@ -475,7 +475,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     }
   }
 
-  /** Chip switching selects the agent and refreshes its session list. */
+  /** Chip switching selects the agent for the application. */
   protected readonly expandAgent = (agentId: string) => {
     const context = this.context;
     if (!context) {
@@ -490,7 +490,6 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     this.sessionProjection.resetMembership();
     this.sessionData.visibleSessionLimits.clear();
     context.agentSelection.set(nextAgentId);
-    void this.sessionData.refreshSidebarSessions(nextAgentId);
   };
 
   expandedAgentId(): string {

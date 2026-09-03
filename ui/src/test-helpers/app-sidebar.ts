@@ -10,6 +10,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult, SessionsListResult } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import type { RouteId } from "../app-route-paths.ts";
+import { createAgentSelectionCapability } from "../app/agent-selection.ts";
 import { createApplicationConfigCapability } from "../app/config.ts";
 import type {
   ApplicationContext,
@@ -45,7 +46,7 @@ type SessionDeleteResult = Awaited<ReturnType<SessionCapability["delete"]>>;
 type SessionState = SessionCapability["state"];
 const sidebarSessionGatewayBindings = new WeakMap<
   SessionCapability,
-  (gateway: ApplicationGateway) => void
+  (gateway: ApplicationGateway, selection: ApplicationContext["agentSelection"]) => void
 >();
 
 export type SidebarLifecycleState = HTMLElement & {
@@ -417,13 +418,15 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     unsubscribeMessages,
   } as unknown as SessionCapability;
   let boundGateway: ApplicationGateway | null = null;
+  let boundSelection: ApplicationContext["agentSelection"] | null = null;
   const scopedClients = new WeakMap<GatewayBrowserClient, GatewayBrowserClient>();
-  sidebarSessionGatewayBindings.set(sessions, (gateway) => {
-    if (boundGateway === gateway) {
+  sidebarSessionGatewayBindings.set(sessions, (gateway, selection) => {
+    if (boundGateway === gateway && boundSelection === selection) {
       return;
     }
     scopedSessions?.dispose();
     boundGateway = gateway;
+    boundSelection = selection;
     const scopedClient = (client: GatewayBrowserClient | null): GatewayBrowserClient | null => {
       if (!client) {
         return null;
@@ -459,17 +462,20 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
       scopedClients.set(client, proxy);
       return proxy;
     };
-    scopedSessions = createSessionCapability({
-      get snapshot() {
-        const snapshot = gateway.snapshot;
-        return { ...snapshot, client: scopedClient(snapshot.client) };
+    scopedSessions = createSessionCapability(
+      {
+        get snapshot() {
+          const snapshot = gateway.snapshot;
+          return { ...snapshot, client: scopedClient(snapshot.client) };
+        },
+        subscribe: (listener) =>
+          gateway.subscribe((snapshot) =>
+            listener({ ...snapshot, client: scopedClient(snapshot.client) }),
+          ),
+        subscribeEvents: (listener) => gateway.subscribeEvents(listener),
       },
-      subscribe: (listener) =>
-        gateway.subscribe((snapshot) =>
-          listener({ ...snapshot, client: scopedClient(snapshot.client) }),
-        ),
-      subscribeEvents: (listener) => gateway.subscribeEvents(listener),
-    });
+      selection,
+    );
   });
   const publish = (statePatch: Partial<SessionState>) => {
     state = { ...state, ...statePatch };
@@ -527,8 +533,22 @@ export function createContext(
     subscribe: () => () => undefined,
   },
 ): ApplicationContext<RouteId> {
-  sidebarSessionGatewayBindings.get(sessions)?.(gateway);
   const selectedAgentId = sessions.state.agentId ?? "main";
+  const agents = {
+    state: {
+      client: gateway.snapshot.client,
+      connected: gateway.snapshot.phase === "connected",
+      agentsLoading: false,
+      agentsError: null,
+      agentsList,
+    },
+    subscribe: () => () => undefined,
+  };
+  const agentSelection = createAgentSelectionCapability(gateway, agents, {
+    load: () => selectedAgentId,
+    save: () => undefined,
+  });
+  sidebarSessionGatewayBindings.get(sessions)?.(gateway, agentSelection);
   return {
     config: createApplicationConfigCapability({ resourceBasePath: "" }),
     gateway,
@@ -540,23 +560,9 @@ export function createContext(
       errors: [],
     },
     placementStartup: { pause: vi.fn<ApplicationContext["placementStartup"]["pause"]>() },
-    agents: {
-      state: {
-        client: gateway.snapshot.client,
-        connected: gateway.snapshot.phase === "connected",
-        agentsLoading: false,
-        agentsError: null,
-        agentsList,
-      },
-      subscribe: () => () => undefined,
-    },
+    agents,
     agentIdentity,
-    agentSelection: {
-      state: { selectedId: selectedAgentId, scopeId: selectedAgentId },
-      set: () => undefined,
-      setScope: () => undefined,
-      subscribe: () => () => undefined,
-    },
+    agentSelection,
     scopeUpgrade: hiddenScopeUpgradeCapability,
     overlays: {
       snapshot: { approvalQueue },

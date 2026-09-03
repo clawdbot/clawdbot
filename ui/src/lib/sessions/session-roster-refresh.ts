@@ -1,7 +1,11 @@
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
 import { createSessionEventRefreshCoordinator } from "./event-refresh-coordinator.ts";
-import { appendSessionResults, reconcileRosterPresentationMetadata } from "./reconcile.ts";
+import {
+  appendSessionResults,
+  preserveCurrentSessionRow,
+  reconcileRosterPresentationMetadata,
+} from "./reconcile.ts";
 import type {
   SessionConnectionOwner,
   SessionConnectionScope,
@@ -12,12 +16,7 @@ import type {
   SessionRefreshOptions,
   SessionState,
 } from "./session-capability.ts";
-import {
-  normalizeAgentId,
-  parseAgentSessionKey,
-  resolveUiSelectedGlobalAgentId,
-  uiSessionRowMatchesSelectedChat,
-} from "./session-key.ts";
+import { normalizeAgentId } from "./session-key.ts";
 import {
   completeSessionRefreshWaiters,
   isPrimarySessionListQuery,
@@ -83,37 +82,6 @@ type ManagedSessionList = {
   pending: Promise<void> | null;
   queued: ManagedSessionListRefresh | null;
 };
-
-function preserveCurrentSessionRow(
-  result: SessionsListResult,
-  state: SessionState,
-  snapshot: SessionGateway["snapshot"],
-  backgroundHydrate: boolean,
-): SessionsListResult {
-  const currentKey = snapshot.sessionKey?.trim();
-  if (!currentKey) {
-    return result;
-  }
-  const parsedAgentId = parseAgentSessionKey(currentKey)?.agentId;
-  const currentAgentId = normalizeAgentId(
-    parsedAgentId ?? resolveUiSelectedGlobalAgentId(snapshot),
-  );
-  if (!parsedAgentId && normalizeAgentId(state.agentId ?? "") !== currentAgentId) {
-    return result;
-  }
-  const matchesCurrent = (row: GatewaySessionRow) =>
-    uiSessionRowMatchesSelectedChat(snapshot, row.key, currentKey, row.agentId);
-  const previousCurrentRow = state.result?.sessions.find(matchesCurrent);
-  if (
-    previousCurrentRow &&
-    (backgroundHydrate || previousCurrentRow.archived === true) &&
-    !result.sessions.some(matchesCurrent)
-  ) {
-    const sessions = [...result.sessions, previousCurrentRow];
-    return { ...result, count: sessions.length, sessions };
-  }
-  return result;
-}
 
 function isForegroundReplacement(options: SessionRefreshOptions): boolean {
   return options.append !== true && options.backgroundHydrate !== true;
@@ -344,7 +312,8 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     if (!backgroundHydrate) {
       lastListOptions = durableListOptions;
       listOptionsSource = "foreground";
-    } else if (listOptionsSource === "none") {
+    } else if (bootstrap || listOptionsSource === "none") {
+      // Reconnect may select a different agent; later event refreshes must use that query.
       lastListOptions = durableListOptions;
       listOptionsSource = "seeded";
     }

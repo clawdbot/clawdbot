@@ -3,8 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
-import { createSessionCapability } from "./index.ts";
-import { createGatewayHarness, sessionsResult } from "./session-capability.test-support.ts";
+import {
+  createGatewayHarness,
+  createTestSessionCapability,
+  sessionsResult,
+} from "./session-capability.test-support.ts";
 
 const key = "agent:main:unread-contract";
 
@@ -57,7 +60,7 @@ describe("session unread mutation capability", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway } = createGatewayHarness(client, ["sessions.patch"]);
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
 
     await sessions.patch(key, { unread: false }, { ...options, deferListRefresh: true });
 
@@ -75,7 +78,7 @@ describe("session unread mutation capability", () => {
       patchResponse: () => rejected.promise,
       serverUnread: () => true,
     });
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
 
     await sessions.refresh({ force: true });
     const operation = sessions.patch(key, { unread: false }, { deferListRefresh: true });
@@ -95,7 +98,7 @@ describe("session unread mutation capability", () => {
       patchResponse: () => committed.promise,
       serverUnread: () => serverUnread,
     });
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
 
     await sessions.refresh({ force: true });
     const operation = sessions.patch(key, { unread: false });
@@ -127,7 +130,7 @@ describe("session unread mutation capability", () => {
       patchResponse: () => committed.promise,
       serverUnread: () => true,
     });
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
 
     await sessions.refresh({ force: true });
     const operation = sessions.patch(key, { unread: false }, { expectedMarkedUnreadAt: 41 });

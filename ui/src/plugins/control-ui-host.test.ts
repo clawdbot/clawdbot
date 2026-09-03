@@ -8,9 +8,9 @@ import { createAgentSelectionCapability } from "../app/agent-selection.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { i18n } from "../i18n/index.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
-import { createSessionCapability } from "../lib/sessions/index.ts";
 import {
   createGatewayHarness,
+  createTestSessionCapability,
   sessionsResult,
 } from "../lib/sessions/session-capability.test-support.ts";
 import { createControlUiPluginHost } from "./control-ui-host.ts";
@@ -21,7 +21,7 @@ function createRosterHost(request: GatewayBrowserClient["request"]) {
   const client = { request } as GatewayBrowserClient;
   const { gateway } = createGatewayHarness(client);
   const agents = createAgentCapability(gateway);
-  const sessions = createSessionCapability(gateway);
+  const sessions = createTestSessionCapability(gateway);
   const context = { gateway, agents, sessions } as unknown as ApplicationContext<RouteId>;
   const abort = new AbortController();
   const owner = { client, abort, descriptor: { pluginId: "review" }, disposers: new Set() } as Omit<

@@ -271,7 +271,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       password: gateway.connection.password,
     }),
   });
-  const sessions = createSessionCapability(gateway);
+  const sessions = createSessionCapability(gateway, agentSelection);
   const runtimeConfig = createRuntimeConfigCapability(gateway);
   const overlays = createApplicationOverlays(gateway, {
     connectionBootstrap,

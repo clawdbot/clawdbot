@@ -14,76 +14,18 @@ import {
 } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { createSessionCapability } from "./index.ts";
-
-function emptySessionsResult(): SessionsListResult {
-  return {
-    ts: 1,
-    path: "(multiple)",
-    count: 0,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions: [],
-  };
-}
-
-function runningSessionsResult(): SessionsListResult {
-  return {
-    ...emptySessionsResult(),
-    count: 1,
-    sessions: [
-      {
-        key: "agent:main:main",
-        kind: "direct",
-        updatedAt: 1,
-        hasActiveRun: true,
-        activeRunIds: ["run-1"],
-        status: "running",
-        startedAt: 1,
-      },
-    ],
-  };
-}
-
-function createSubscriptionHydrationHarness(request: GatewayBrowserClient["request"]) {
-  const client = { request } as GatewayBrowserClient;
-  let snapshot = {
-    client: null as GatewayBrowserClient | null,
-    phase: "reconnecting" as "connected" | "reconnecting",
-    sessionKey: "agent:main:main",
-    assistantAgentId: "main" as string | null,
-    hello: null as GatewayHelloOk | null,
-  };
-  let gatewayListener: ((next: typeof snapshot) => void) | undefined;
-  const sessions = createSessionCapability({
-    get snapshot() {
-      return snapshot;
-    },
-    subscribe(listener) {
-      gatewayListener = listener;
-      return () => {
-        gatewayListener = undefined;
-      };
-    },
-    subscribeEvents: () => () => undefined,
-  });
-  return {
-    client,
-    sessions,
-    connect: () => {
-      snapshot = { ...snapshot, client, phase: "connected" };
-      gatewayListener?.(snapshot);
-    },
-    disconnect: () => {
-      snapshot = { ...snapshot, phase: "reconnecting" };
-      gatewayListener?.(snapshot);
-    },
-  };
-}
+import type { SessionCapability } from "./index.ts";
+import {
+  createSubscriptionHydrationHarness,
+  createTestSessionCapability,
+  runningSessionsResult,
+  sessionsResult,
+} from "./session-capability.test-support.ts";
 
 const targetedSessionReconciliationCases = [
   {
     description: "targeted session changes",
-    reconcile: (sessions: ReturnType<typeof createSessionCapability>) => {
+    reconcile: (sessions: SessionCapability) => {
       expect(
         sessions.reconcileChanged(
           {
@@ -101,7 +43,7 @@ const targetedSessionReconciliationCases = [
   },
   {
     description: "targeted run-terminal reconciliation",
-    reconcile: (sessions: ReturnType<typeof createSessionCapability>) => {
+    reconcile: (sessions: SessionCapability) => {
       expect(
         sessions.reconcileRunTerminal({
           sessionKeys: ["agent:main:main"],
@@ -117,7 +59,7 @@ const targetedSessionReconciliationCases = [
 describe("session connection hydration", () => {
   it("lets a queued foreground refresh supersede an owner-first bootstrap roster", async () => {
     const roster: SessionsListResult = {
-      ...emptySessionsResult(),
+      ...sessionsResult([], 1),
       count: 3,
       sessions: [
         {
@@ -142,7 +84,7 @@ describe("session connection hydration", () => {
     };
     const bootstrap = createDeferred<{ subscribed: true; list: SessionsListResult }>();
     const queuedResult: SessionsListResult = {
-      ...emptySessionsResult(),
+      ...sessionsResult([], 1),
       count: 1,
       sessions: [{ key: "agent:other:queued", kind: "direct", updatedAt: 4 }],
     };
@@ -152,7 +94,7 @@ describe("session connection hydration", () => {
         return await bootstrap.promise;
       }
       if (method === "sessions.list") {
-        return params?.search === "queued" ? await queuedList.promise : emptySessionsResult();
+        return params?.search === "queued" ? await queuedList.promise : sessionsResult([], 1);
       }
       throw new Error(`Unexpected request: ${method}`);
     });
@@ -166,7 +108,7 @@ describe("session connection hydration", () => {
       selfUser: { id: "operator", name: "Operator" },
     };
     let gatewayListener: ((next: typeof snapshot) => void) | undefined;
-    const sessions = createSessionCapability({
+    const sessions = createTestSessionCapability({
       get snapshot() {
         return snapshot;
       },
@@ -238,16 +180,19 @@ describe("session connection hydration", () => {
       hello: null as GatewayHelloOk | null,
     };
     let gatewayListener: ((next: typeof snapshot) => void) | undefined;
-    const sessions = createSessionCapability({
-      get snapshot() {
-        return snapshot;
+    const sessions = createTestSessionCapability(
+      {
+        get snapshot() {
+          return snapshot;
+        },
+        subscribe(listener) {
+          gatewayListener = listener;
+          return () => undefined;
+        },
+        subscribeEvents: () => () => undefined,
       },
-      subscribe(listener) {
-        gatewayListener = listener;
-        return () => undefined;
-      },
-      subscribeEvents: () => () => undefined,
-    });
+      "roboclaw",
+    );
 
     snapshot = { ...snapshot, client, phase: "connected" };
     gatewayListener?.(snapshot);
@@ -299,7 +244,7 @@ describe("session connection hydration", () => {
         selfUser: null as { id: string; name?: string } | null,
       };
       let gatewayListener: ((next: typeof snapshot) => void) | undefined;
-      const sessions = createSessionCapability({
+      const sessions = createTestSessionCapability({
         get snapshot() {
           return snapshot;
         },
@@ -322,7 +267,7 @@ describe("session connection hydration", () => {
       if (agentId === "work") {
         resolveList(result);
         await waitForFast(() => expect(sessions.state.result).toBe(result));
-        // The global route remains unchanged while the picker selects another roster.
+        // A foreground query can select a roster independently of the current route.
         snapshot = { ...snapshot, sessionKey: "global" };
         await sessions.refresh({ agentId, search: "selected", force: true });
         expect(sessions.state.agentId).toBe(agentId);
@@ -348,7 +293,7 @@ describe("session connection hydration", () => {
       await waitForFast(() => expect(sessions.state.agentId).toBe(agentId));
       expect(sessions.state.result?.sessions).toEqual([]);
 
-      // A new connection still derives scope from the current gateway route.
+      // A new connection returns to the application's selected agent.
       snapshot = { ...snapshot, phase: "reconnecting" };
       gatewayListener?.(snapshot);
       snapshot = { ...snapshot, phase: "connected", sessionKey: "agent:main:main" };
@@ -388,7 +333,7 @@ describe("session connection hydration", () => {
       selfUser: null as { id: string; name?: string } | null,
     };
     let gatewayListener: ((next: typeof snapshot) => void) | undefined;
-    const sessions = createSessionCapability({
+    const sessions = createTestSessionCapability({
       get snapshot() {
         return snapshot;
       },
@@ -417,7 +362,7 @@ describe("session connection hydration", () => {
 
   it("recovers primary and managed lists after retrying the current session observer", async () => {
     vi.useFakeTimers();
-    const result = emptySessionsResult();
+    const result = sessionsResult([], 1);
     const recoveredResult: SessionsListResult = {
       ...result,
       count: 1,
@@ -503,7 +448,7 @@ describe("session connection hydration", () => {
 
   it("recovers the roster after a subscription deadline without admitting late replies", async () => {
     vi.useFakeTimers();
-    const initialResult = emptySessionsResult();
+    const initialResult = sessionsResult([], 1);
     const recoveredResult: SessionsListResult = {
       ...initialResult,
       count: 1,
@@ -601,7 +546,7 @@ describe("session connection hydration", () => {
           return subscriptionCalls === 1 ? response : { subscribed: true };
         }
         if (method === "sessions.list") {
-          return emptySessionsResult();
+          return sessionsResult([], 1);
         }
         throw new Error(`Unexpected request: ${method}`);
       });
@@ -647,7 +592,7 @@ describe("session connection hydration", () => {
         return { subscribed: true };
       }
       if (method === "sessions.list") {
-        return emptySessionsResult();
+        return sessionsResult([], 1);
       }
       throw new Error(`Unexpected request: ${method}`);
     });
@@ -837,7 +782,7 @@ describe("session connection hydration", () => {
         if (listCalls > 1) {
           throw new Error("newer session list failure");
         }
-        return emptySessionsResult();
+        return sessionsResult([], 1);
       }
       throw new Error(`Unexpected request: ${method}`);
     });
@@ -888,7 +833,7 @@ describe("session connection hydration", () => {
         if (listCalls === 2) {
           throw sharedError;
         }
-        return listCalls === 3 ? await pendingCatchUpList : emptySessionsResult();
+        return listCalls === 3 ? await pendingCatchUpList : sessionsResult([], 1);
       }
       throw new Error(`Unexpected request: ${method}`);
     });
@@ -907,11 +852,11 @@ describe("session connection hydration", () => {
       expect(subscriptionCalls).toBe(2);
       expect(listCalls).toBe(3);
       expect(sessions.state.error).toBe("same failure message");
-      completeCatchUpList(emptySessionsResult());
+      completeCatchUpList(sessionsResult([], 1));
       await vi.advanceTimersByTimeAsync(0);
       expect(sessions.state.error).toBeNull();
     } finally {
-      completeCatchUpList(emptySessionsResult());
+      completeCatchUpList(sessionsResult([], 1));
       sessions.dispose();
       vi.useRealTimers();
     }
@@ -930,7 +875,7 @@ describe("session connection hydration", () => {
         return subscriptionCalls === 1 ? await retiredSubscription : { subscribed: true };
       }
       if (method === "sessions.list") {
-        return emptySessionsResult();
+        return sessionsResult([], 1);
       }
       throw new Error(`Unexpected request: ${method}`);
     });

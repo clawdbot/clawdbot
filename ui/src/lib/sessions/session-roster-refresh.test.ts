@@ -4,10 +4,10 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { createSessionCapability } from "./index.ts";
 import {
   createGatewayHarness,
   createSessionCapabilityHarness,
+  createTestSessionCapability,
   sessionsResult,
 } from "./session-capability.test-support.ts";
 
@@ -342,7 +342,7 @@ describe("session roster refresh", () => {
       const client = { request } as unknown as GatewayBrowserClient;
       const replacement = { request: replacementRequest } as unknown as GatewayBrowserClient;
       const { gateway, publish } = createGatewayHarness(client);
-      const sessions = createSessionCapability(gateway);
+      const sessions = createTestSessionCapability(gateway);
       const retired = vi.fn();
       const active = sessions.refresh({ search: "active", force: true });
       const first = sessions.refreshReplacement("unissued-first").then(retired);

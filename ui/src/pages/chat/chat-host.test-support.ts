@@ -3,7 +3,7 @@ import type { ModelCatalogEntry } from "../../api/types.ts";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { UiSettings } from "../../app/settings.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
-import { createSessionCapability } from "../../lib/sessions/index.ts";
+import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
@@ -69,7 +69,7 @@ export function createImmediateCommandHost(
   overrides: Partial<ChatHost> = {},
 ): ChatHost {
   const host = {
-    sessions: createSessionCapability({
+    sessions: createTestSessionCapability({
       snapshot: { client: null, phase: "reconnecting", hello: null },
       subscribe: () => () => undefined,
       subscribeEvents: () => () => undefined,
@@ -244,7 +244,7 @@ export function makeChatHost(
   };
   const sessions =
     hostOverrides.sessions ??
-    createSessionCapability({
+    createTestSessionCapability({
       snapshot: {
         client: host.client,
         phase: host.connected ? "connected" : "reconnecting",

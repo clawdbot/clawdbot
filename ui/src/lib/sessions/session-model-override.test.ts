@@ -4,8 +4,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { createSessionCapability } from "./index.ts";
-import { createGatewayHarness, sessionsResult } from "./session-capability.test-support.ts";
+import {
+  createGatewayHarness,
+  createTestSessionCapability,
+  sessionsResult,
+} from "./session-capability.test-support.ts";
 
 describe("session model override lifecycle", () => {
   it.each(["resolve", "reject"])(
@@ -27,7 +30,7 @@ describe("session model override lifecycle", () => {
         throw new Error(`Unexpected request: ${method}`);
       });
       const { gateway } = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
-      const sessions = createSessionCapability(gateway);
+      const sessions = createTestSessionCapability(gateway);
       await sessions.patch(key, { model: "openai/gpt-old" }, { deferListRefresh: true });
       const operation = sessions.patch(
         key,
@@ -65,7 +68,7 @@ describe("session model override lifecycle", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway, publish } = createGatewayHarness(client);
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
     const key = "agent:main:main";
     const inactiveKey = "agent:main:inactive";
     const inactiveOperation = sessions.patch(inactiveKey, { model: "openai/gpt-old-account" });
@@ -107,7 +110,7 @@ describe("session model override lifecycle", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway } = createGatewayHarness(client);
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
 
     await expect(sessions.patch(key, { model: "openai/gpt-new" })).resolves.toMatchObject({
       ok: true,
@@ -137,7 +140,7 @@ describe("session model override lifecycle", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { gateway, publish } = createGatewayHarness(client);
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
     const key = "agent:main:main";
 
     const operation = sessions.patch(

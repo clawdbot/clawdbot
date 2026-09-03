@@ -15,8 +15,11 @@ import type {
 } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
-import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
-import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
+import type { SessionCapability } from "../../lib/sessions/index.ts";
+import {
+  createTestSessionCapability,
+  sessionsResult,
+} from "../../lib/sessions/session-capability.test-support.ts";
 import type {
   SessionDeleteOutcome,
   SessionDeleteTarget,
@@ -65,7 +68,7 @@ async function createDeletionPage(rows: GatewaySessionRow[], agentId = "main") {
     throw new Error(`Unexpected request: ${method}`);
   });
   const mutableGateway = createGateway({ request } as unknown as GatewayBrowserClient);
-  const sessions = createSessionCapability(mutableGateway.gateway);
+  const sessions = createTestSessionCapability(mutableGateway.gateway, agentId);
   onTestFinished(() => sessions.dispose());
   const subscribeList = vi.spyOn(sessions, "subscribeList");
   vi.spyOn(sessions, "deleteMany");

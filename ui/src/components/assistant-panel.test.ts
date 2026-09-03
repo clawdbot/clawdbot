@@ -55,7 +55,10 @@ async function mountPanel(options: { global?: boolean } = {}) {
       },
     },
   );
-  const context = { ...baseContext, sessions: createSessionCapability(baseContext.gateway) };
+  const context = {
+    ...baseContext,
+    sessions: createSessionCapability(baseContext.gateway, baseContext.agentSelection),
+  };
   const provider = createApplicationContextProvider(context);
   const store = new CustodianSessionStore();
   const panel = document.createElement("openclaw-assistant-panel") as TestAssistantPanel;

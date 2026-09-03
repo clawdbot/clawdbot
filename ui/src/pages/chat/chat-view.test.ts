@@ -21,8 +21,9 @@ import {
   replaceSlashCommands,
   SLASH_COMMANDS,
 } from "../../lib/chat/commands.ts";
-import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
+import type { SessionCapability } from "../../lib/sessions/index.ts";
 import type { SessionPatchOptions } from "../../lib/sessions/patch.ts";
+import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalScopeConfigured,
@@ -451,7 +452,7 @@ function createChatHeaderState(
     throw new Error(`Unexpected request: ${method}`);
   });
   const client = { request } as unknown as GatewayBrowserClient;
-  const sessions = createSessionCapability({
+  const sessions = createTestSessionCapability({
     snapshot: { client, phase: "connected", hello: null },
     subscribe: () => () => undefined,
     subscribeEvents: () => () => undefined,

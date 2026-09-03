@@ -226,8 +226,8 @@ class OpenClawBoardView extends OpenClawLightDomElement {
     },
     movePointerDown: (widget, event) => this.beginGesture("move", widget, event),
     resizePointerDown: (widget, event) => this.beginGesture("resize", widget, event),
-    moveToTab: async (widget, tabId) => {
-      await this.applyOps(
+    moveToTab: async (widget, tabId) =>
+      this.applyOps(
         [
           {
             kind: "widget_move",
@@ -237,14 +237,12 @@ class OpenClawBoardView extends OpenClawLightDomElement {
           },
         ],
         t("board.announcement.moved", { title: widget.title || widget.name }),
-      );
-    },
-    resizeTo: async (widget, w, h) => {
-      await this.applyOps(
+      ),
+    resizeTo: async (widget, w, h) =>
+      this.applyOps(
         [{ kind: "widget_resize", name: widget.name, sizeW: w, sizeH: h, heightMode: "fixed" }],
         t("board.announcement.resized", { title: widget.title || widget.name }),
-      );
-    },
+      ),
     setHeightMode: async (widget, mode) => {
       // Pinning keeps the currently rendered auto height, not the stale stored
       // sizeH, so "fixed" freezes exactly what the user sees.
@@ -281,20 +279,17 @@ class OpenClawBoardView extends OpenClawLightDomElement {
         this.requestUpdate();
       }
     },
-    remove: async (widget) => {
-      await this.applyOps(
+    remove: async (widget) =>
+      this.applyOps(
         [{ kind: "widget_remove", name: widget.name }],
         t("board.announcement.removed", { title: widget.title || widget.name }),
-      );
-    },
+      ),
     nudge: async (widget, direction) => this.nudgeWidget(widget, direction),
     focus: (widget, direction) => this.focusWidget(widget, direction),
     focusChanged: (name) => {
       this.focusName = name;
     },
-    frameLoadFailed: async (name) => {
-      await this.callbacks?.frameLoadFailed?.(name);
-    },
+    frameLoadFailed: async (name) => this.callbacks?.frameLoadFailed?.(name),
     widgetAppView: async (name, revision) =>
       (await this.callbacks?.widgetAppView?.(name, revision)) ?? {
         status: "stale",

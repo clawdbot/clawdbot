@@ -3,8 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
-import { createSessionCapability } from "./index.ts";
-import { createGatewayHarness, sessionsResult } from "./session-capability.test-support.ts";
+import {
+  createGatewayHarness,
+  createTestSessionCapability,
+  sessionsResult,
+} from "./session-capability.test-support.ts";
 import type { SessionListSnapshot } from "./session-capability.ts";
 
 const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 200;
@@ -65,7 +68,7 @@ describe("session pin mutations", () => {
         patchResponse: () => committed.promise,
         serverPinned: () => serverPinned,
       });
-      const sessions = createSessionCapability(gateway);
+      const sessions = createTestSessionCapability(gateway);
 
       await sessions.refresh({ force: true });
       const operation = sessions.patch(key, { pinned: true });
@@ -96,7 +99,7 @@ describe("session pin mutations", () => {
       patchResponse: () => Promise.reject(new Error("pin rejected")),
       serverPinned: () => true,
     });
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
     // The archived/all sidebar reads its own snapshot, so the intent has to
     // reach that list and leave it on the same value the primary state shows.
     const filtered: SessionListSnapshot[] = [];
@@ -141,7 +144,7 @@ describe("session pin mutations", () => {
       throw new Error(`Unexpected request: ${method}`);
     });
     const { gateway } = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
     const filtered: SessionListSnapshot[] = [];
     const stopFiltered = sessions.subscribeList({ archivedFilter: "all" }, (snapshot) => {
       filtered.push(snapshot);
@@ -171,7 +174,7 @@ describe("session pin mutations", () => {
       patchResponse: (call) => (call === 1 ? pinCommitted.promise : unpinRejected.promise),
       serverPinned: () => serverPinned,
     });
-    const sessions = createSessionCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
 
     await sessions.refresh({ force: true });
     const pin = sessions.patch(key, { pinned: true });

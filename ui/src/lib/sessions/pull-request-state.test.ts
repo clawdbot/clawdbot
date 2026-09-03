@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
-import { createSessionCapability } from "./index.ts";
+import { createTestSessionCapability } from "./session-capability.test-support.ts";
 
 function sessionsResult(sessions: SessionsListResult["sessions"]): SessionsListResult {
   return {
@@ -52,7 +52,7 @@ function createGatewayHarness(client: GatewayBrowserClient) {
 describe("session pull-request state", () => {
   it("publishes state removal for client replacement and disconnect", () => {
     const harness = createGatewayHarness({} as GatewayBrowserClient);
-    const sessions = createSessionCapability(harness.gateway);
+    const sessions = createTestSessionCapability(harness.gateway);
     const listener = vi.fn();
     const summary = { numbers: [111532], state: "open" as const };
     sessions.subscribe(listener);
@@ -79,7 +79,7 @@ describe("session pull-request state", () => {
   });
 
   it("rejects an older pane's pull-request result", () => {
-    const sessions = createSessionCapability(
+    const sessions = createTestSessionCapability(
       createGatewayHarness({} as GatewayBrowserClient).gateway,
     );
     const key = "agent:main:shared-session";
@@ -104,7 +104,7 @@ describe("session pull-request state", () => {
       }
       throw new Error(`Unexpected request: ${method}`);
     });
-    const sessions = createSessionCapability(
+    const sessions = createTestSessionCapability(
       createGatewayHarness({ request } as unknown as GatewayBrowserClient).gateway,
     );
     const epoch = sessions.capturePullRequestEpoch(key);

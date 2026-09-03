@@ -537,10 +537,6 @@ enum class GatewayMethod(
   PluginApprovalWaitDecision("plugin.approval.waitDecision"),
   PluginApprovalResolve("plugin.approval.resolve"),
   PluginsUiDescriptors("plugins.uiDescriptors"),
-  PluginsControlUiList("plugins.controlUi.list"),
-  PluginsControlUiReload("plugins.controlUi.reload"),
-  PluginsControlUiReport("plugins.controlUi.report"),
-  PluginsControlUiStatus("plugins.controlUi.status"),
   PluginsSessionAction("plugins.sessionAction"),
   OpenclawChat("openclaw.chat"),
   OpenclawChatHistory("openclaw.chat.history"),
@@ -916,6 +912,10 @@ enum class GatewayMethod(
   TranscriptsGet("transcripts.get"),
   ModelsAuthOrderSet("models.authOrderSet"),
   CanvasDocumentView("canvas.document.view"),
+  PluginsControlUiList("plugins.controlUi.list"),
+  PluginsControlUiReload("plugins.controlUi.reload"),
+  PluginsControlUiReport("plugins.controlUi.report"),
+  PluginsControlUiStatus("plugins.controlUi.status"),
 }
 
 enum class GatewayEvent(
