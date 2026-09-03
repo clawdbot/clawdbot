@@ -6,6 +6,7 @@ import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.TalkSessionCancelOutputResult
 import ai.openclaw.app.gateway.chatSendAckHistorySinceSeconds
 import ai.openclaw.app.gateway.parseChatSendAck
+import ai.openclaw.app.i18n.LocaleResolvingStateFlow
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveNativeText
@@ -19,7 +20,6 @@ import android.media.AudioFocusRequest
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
-import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.os.Build
 import android.os.Bundle
@@ -39,6 +39,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -49,8 +50,10 @@ import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -70,7 +73,6 @@ import java.io.IOException
 import java.util.LinkedHashMap
 import java.util.Locale
 import java.util.UUID
-import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.coroutineContext
 
@@ -131,26 +133,15 @@ private enum class TalkStatusState {
   TalkFailure,
 }
 
+private class TalkStatusOwner(
+  val responseTurnId: String? = null,
+)
+
 private data class TalkStatus(
   val text: NativeText,
   val state: TalkStatusState,
   val awaitingAgent: Boolean = false,
-)
-
-private sealed interface RealtimePlaybackItem {
-  data class Audio(
-    val bytes: ByteArray,
-  ) : RealtimePlaybackItem
-
-  data class Mark(
-    val name: String,
-  ) : RealtimePlaybackItem
-}
-
-private data class PendingRealtimePlaybackMark(
-  val sessionId: String,
-  val name: String,
-  var targetFrame: Long? = null,
+  val owner: TalkStatusOwner = TalkStatusOwner(),
 )
 
 private class PushToTalkAudioSource(
@@ -158,29 +149,36 @@ private class PushToTalkAudioSource(
   private val writeStream: ParcelFileDescriptor.AutoCloseOutputStream,
   private val audioRecord: AudioRecord,
 ) {
-  private val finishRequested = AtomicBoolean(false)
-  private val inputFinished = AtomicBoolean(false)
-  private val descriptorClosed = AtomicBoolean(false)
+  private var finishRequested = false
+  private var inputFinished = false
+  private var descriptorClosed = false
   var pumpJob: Job? = null
 
+  @Synchronized
   fun requestFinish() {
-    if (!finishRequested.compareAndSet(false, true)) return
+    if (finishRequested) return
+    finishRequested = true
     runCatching { audioRecord.stop() }
   }
 
+  // close() must wait for a pump already inside release, not just observe its claim.
+  @Synchronized
   fun finishFromPump() {
-    if (!inputFinished.compareAndSet(false, true)) return
+    if (inputFinished) return
+    inputFinished = true
     runCatching { audioRecord.stop() }
     runCatching { audioRecord.release() }
     runCatching { writeStream.close() }
   }
 
+  @Synchronized
   fun close() {
     requestFinish()
     pumpJob?.cancel()
     finishFromPump()
     pumpJob = null
-    if (descriptorClosed.compareAndSet(false, true)) {
+    if (!descriptorClosed) {
+      descriptorClosed = true
       runCatching { readDescriptor.close() }
     }
   }
@@ -214,7 +212,7 @@ class TalkModeManager internal constructor(
   private val onAppliedAudioInputChanged: (String?) -> Unit = {},
   private val onBeforeSpeak: suspend () -> Unit = {},
   private val onAfterSpeak: suspend () -> Unit = {},
-  private val onStoppedByRelay: () -> Unit = {},
+  private val captureRelayStopNotification: () -> ((isCurrent: () -> Boolean) -> Unit) = { {} },
   private val talkSpeakClient: TalkSpeechSynthesizing = TalkSpeakClient(session = session),
   private val talkAudioPlayer: TalkAudioPlaying = TalkAudioPlayer(context),
   private val realtimeCaptureDispatcher: CoroutineDispatcher = Dispatchers.IO,
@@ -228,7 +226,6 @@ class TalkModeManager internal constructor(
     private const val chatFinalWaitMs = 45_000L
     private const val maxCachedRunCompletions = 128
     private const val maxConversationEntries = 40
-    private const val realtimePlaybackBufferMs = 240
     private const val realtimeUserFinalRewriteGraceMs = 1_500L
     private const val pushToTalkSampleRateHz = 16_000
     private const val pushToTalkReleaseGraceMs = 5_000L
@@ -271,17 +268,10 @@ class TalkModeManager internal constructor(
 
   private val playbackLock = Any()
 
-  @Volatile
-  private var currentStatus = TalkStatus(text = nativeText("Off"), state = TalkStatusState.Off)
-
-  private val _statusText = MutableStateFlow(currentStatus.text)
-  val statusText: StateFlow<String> = _statusText.resolveNativeText()
-
-  // Typed "waiting on the agent" signal for the waveform's Thinking phase, so
-  // UI never has to parse status strings. Every status change flows through
-  // setStatus; forgetting the flag fails safe (wave shows Listening/Idle).
-  private val _awaitingAgent = MutableStateFlow(false)
-  val awaitingAgent: StateFlow<Boolean> = _awaitingAgent
+  private val status = MutableStateFlow(TalkStatus(text = nativeText("Off"), state = TalkStatusState.Off))
+  private val currentStatus: TalkStatus get() = status.value
+  val statusText: StateFlow<String> = LocaleResolvingStateFlow(status) { it.text.resolveNativeText() }
+  val awaitingAgent: StateFlow<Boolean> = LocaleResolvingStateFlow(status) { it.awaitingAgent }
 
   private fun setStatus(
     text: NativeText,
@@ -291,10 +281,8 @@ class TalkModeManager internal constructor(
     setStatus(TalkStatus(text = text, state = state, awaitingAgent = awaitingAgent))
   }
 
-  private fun setStatus(status: TalkStatus) {
-    currentStatus = status
-    _statusText.value = status.text
-    _awaitingAgent.value = status.awaitingAgent
+  private fun setStatus(next: TalkStatus) {
+    status.value = next
   }
 
   private fun setTalkFailure(text: NativeText) {
@@ -325,7 +313,6 @@ class TalkModeManager internal constructor(
   private var lastTranscript: String = ""
   private var lastHeardAtMs: Long? = null
   private var lastSpokenText: String? = null
-  private var lastInterruptedAtSeconds: Double? = null
 
   // Interrupt-on-speech is disabled by default: starting a SpeechRecognizer during
   // TTS creates an audio session conflict on some OEMs. Can be enabled via gateway talk config.
@@ -341,13 +328,17 @@ class TalkModeManager internal constructor(
   private val completedRunTexts = LinkedHashMap<String, String>()
   private var configLoaded = false
   private val startGeneration = AtomicLong(0L)
+  private var relayStopNotification: ((() -> Boolean) -> Unit) = {}
   private val audioInputGeneration = AtomicLong(0L)
 
   @Volatile private var realtimeSessionId: String? = null
+  private var realtimeRequestLease: GatewaySession.RequestLease? = null
   private var realtimeCaptureJob: Job? = null
   private var realtimeAppendJob: Job? = null
   private val realtimeCapturePauseLock = Any()
-  private var realtimeCapturePause: RealtimeCapturePause? = null
+  internal val audioRetirement = AudioRetirement(scope)
+
+  @Volatile private var realtimeCapturePause: RealtimeCapturePause? = null
 
   private val finishingPttLock = Any()
 
@@ -360,8 +351,10 @@ class TalkModeManager internal constructor(
       parentScope = scope,
       requestGateway = ::requestGateway,
       onWorking = { session ->
-        if (realtimeSessionId == session.relaySessionId) {
-          setStatus(nativeText("Thinking…"), awaitingAgent = true)
+        synchronized(realtimeCapturePauseLock) {
+          if (realtimeSessionId == session.relaySessionId) {
+            setStatus(nativeText("Thinking…"), awaitingAgent = true)
+          }
         }
       },
       onError = { _, message -> Log.w(tag, message) },
@@ -378,21 +371,27 @@ class TalkModeManager internal constructor(
   private var realtimeUserEntryAwaitingFinal = false
   private var realtimeUserEntryAwaitingFinalStartedAtMs: Long? = null
   private var realtimeAssistantEntryId: String? = null
-  private val realtimePlaybackLock = Any()
-  private var realtimeAudioTrack: AudioTrack? = null
-  private var realtimeAudioQueue: Channel<RealtimePlaybackItem>? = null
-  private var realtimeAudioWriterJob: Job? = null
-  private var realtimePlaybackIdleJob: Job? = null
-  private var realtimeWrittenFrames = 0L
-  private val pendingRealtimePlaybackMarks = LinkedHashMap<String, PendingRealtimePlaybackMark>()
+
+  @Volatile private var realtimeAudioInput: AndroidAudioInputSession? = null
+
+  @Volatile private var localMediaPlaybackActive = false
+
+  @Volatile private var realtimePlayoutSession: RealtimePlayout.Session? = null
+  private val realtimePlayoutDelegate =
+    lazy {
+      RealtimePlayout(scope, realtimePlaybackDispatcher, realtimeSampleRateHz)
+    }
+  private val realtimePlayout by realtimePlayoutDelegate
 
   @Volatile private var pendingRealtimeOutputClear: CompletableDeferred<String?>? = null
 
-  @Volatile private var realtimeOutputTurnId: String? = null
-  private val realtimeOutputCancellationMutex = Mutex()
+  private data class RealtimeOutputTurn(
+    val id: String?,
+    val statusOwner: TalkStatusOwner,
+  )
 
-  @Volatile
-  private var realtimePlaybackEndsAtMs = 0L
+  @Volatile private var realtimeOutputTurn: RealtimeOutputTurn? = null
+  private val realtimeOutputCancellationMutex = Mutex()
 
   @Volatile
   private var realtimeOutputSuppressed = false
@@ -410,6 +409,7 @@ class TalkModeManager internal constructor(
     val token: Long,
     val job: Job,
     var phase: PlaybackPhase = PlaybackPhase.Preparing,
+    var releaseAudioFocus: (() -> Unit)? = null,
   )
 
   private var localPlayback: PlaybackLease? = null
@@ -418,23 +418,6 @@ class TalkModeManager internal constructor(
 
   @Volatile private var finalizeInFlight = false
   private var listenWatchdogJob: Job? = null
-
-  private var audioFocusRequest: AudioFocusRequest? = null
-  private val audioFocusListener =
-    AudioManager.OnAudioFocusChangeListener { focusChange ->
-      when (focusChange) {
-        AudioManager.AUDIOFOCUS_LOSS,
-        AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
-        -> {
-          if (_isSpeaking.value) {
-            Log.d(tag, "audio focus lost; stopping TTS")
-            stopSpeaking(resetInterrupt = true)
-          }
-        }
-
-        else -> { /* regained or duck — ignore */ }
-      }
-    }
 
   /** Updates the chat session used for TalkMode turns and wake-command replies. */
   fun setMainSessionKey(sessionKey: String?) {
@@ -457,16 +440,19 @@ class TalkModeManager internal constructor(
   }
 
   /** Stops continuous, one-shot, or push-to-talk capture regardless of the enabled flag. */
-  fun stopAllCapture() {
+  fun stopAllCapture(failure: NativeText? = null) {
     _isEnabled.value = false
     stop()
+    failure?.let(::setTalkFailure)
   }
 
   /** Cancels work carrying voice/session data before a replacement gateway can connect. */
   fun onGatewayScopeChanging() {
-    stopRealtimeRelay(closeSession = false)
+    synchronized(realtimeCapturePauseLock) {
+      gatewayGeneration.incrementAndGet()
+      stopRealtimeRelay(closeSession = false)
+    }
     realtimeAgentCoordinator.resetTransport()
-    gatewayGeneration.incrementAndGet()
     gatewayWorkJob.cancel()
     gatewayWorkJob = SupervisorJob()
     gatewayWorkScope = CoroutineScope(scope.coroutineContext + gatewayWorkJob)
@@ -489,20 +475,6 @@ class TalkModeManager internal constructor(
       session.request(method, paramsJson, timeoutMs)
     } else {
       session.requestForEndpoint(gatewayId, method, paramsJson, timeoutMs)
-    }
-  }
-
-  private suspend fun sendGatewayRequestFrame(
-    method: String,
-    paramsJson: String?,
-    timeoutMs: Long,
-    onError: (GatewaySession.ErrorShape) -> Unit,
-  ) {
-    val gatewayId = gatewayStableId()?.trim()?.takeIf { it.isNotEmpty() }
-    if (gatewayId == null) {
-      session.sendRequestFrame(method, paramsJson, timeoutMs, onError)
-    } else {
-      session.sendRequestFrameForEndpoint(gatewayId, method, paramsJson, timeoutMs, onError)
     }
   }
 
@@ -613,74 +585,79 @@ class TalkModeManager internal constructor(
         if (captureGeneration != startGeneration.get() || !canStartCapture()) {
           throw IllegalStateException("NODE_BACKGROUND_UNAVAILABLE: command requires foreground")
         }
-        stopSpeaking(resetInterrupt = false)
-        pttTimeoutJob?.cancel()
-        pttTimeoutJob = null
-        pttAutoStopEnabled = false
-        silenceJob?.cancel()
-        silenceJob = null
-        listeningMode = false
-        _isListening.value = false
-        finalizeInFlight = false
-        stopRequested = false
-        recognizer?.cancel()
-        recognizer?.destroy()
-        recognizer = null
-        closePushToTalkRung()
-        pttReleaseCompletion = null
-        pttFinalSegments.clear()
-        pttLivePartial = ""
-        lastTranscript = ""
-        lastHeardAtMs = null
-        activePttCaptureId = captureId
-        pttCompletion = completion
+        cancelActivePlayback()
+        // Capture outside pauseLock: Gateway enqueue takes its lifecycle lock before this owner lock.
+        val lease = session.captureRequestLease(gatewayStableId())
+        val finishPause =
+          synchronized(realtimeCapturePauseLock) {
+            if (captureGeneration != startGeneration.get() || !canStartCapture()) {
+              throw IllegalStateException("NODE_BACKGROUND_UNAVAILABLE: command requires foreground")
+            }
+            pttTimeoutJob?.cancel()
+            pttTimeoutJob = null
+            pttAutoStopEnabled = false
+            silenceJob?.cancel()
+            silenceJob = null
+            listeningMode = false
+            _isListening.value = false
+            finalizeInFlight = false
+            stopRequested = false
+            retireRecognizer()
+            closePushToTalkRung()
+            pttReleaseCompletion = null
+            pttFinalSegments.clear()
+            pttLivePartial = ""
+            lastTranscript = ""
+            lastHeardAtMs = null
+            activePttCaptureId = captureId
+            pttCompletion = completion
+            prepareRealtimeCapturePause(captureId, lease)
+          }
         try {
           // PTT owns the microphone until its turn finishes. Waiting here prevents
           // SpeechRecognizer from racing the realtime AudioRecord teardown.
           withContext(NonCancellable) {
-            pauseRealtimeCaptureForPushToTalk(captureId)
+            finishPause()
           }
-          if (
-            activePttCaptureId != captureId ||
-            captureGeneration != startGeneration.get() ||
-            !canStartCapture() ||
-            stopRequested
-          ) {
-            throw IllegalStateException("NODE_BACKGROUND_UNAVAILABLE: command requires foreground")
-          }
-          recognizer =
-            SpeechRecognizer.createSpeechRecognizer(context).also {
-              it.setRecognitionListener(recognitionListener(captureId))
+          synchronized(realtimeCapturePauseLock) {
+            if (
+              activePttCaptureId != captureId ||
+              captureGeneration != startGeneration.get() ||
+              !canStartCapture() ||
+              stopRequested
+            ) {
+              throw IllegalStateException("NODE_BACKGROUND_UNAVAILABLE: command requires foreground")
             }
-          startPushToTalkRecognition(captureId)
+            recognizer =
+              SpeechRecognizer.createSpeechRecognizer(context).also {
+                it.setRecognitionListener(recognitionListener(captureId, it))
+              }
+            startPushToTalkRecognition(captureId)
+            if (autoStopAfterMs != null) {
+              pttAutoStopEnabled = true
+              // Install one-shot jobs before yielding to lifecycle changes. Otherwise a
+              // background stop can run between capture startup and job registration.
+              startSilenceMonitor(captureId)
+              pttTimeoutJob =
+                gatewayWorkScope.launch {
+                  delay(autoStopAfterMs)
+                  if (pttAutoStopEnabled) {
+                    endPushToTalk(captureId)
+                  }
+                }
+            }
+          }
         } catch (err: Throwable) {
-          closePushToTalkRung()
-          runCatching { recognizer?.cancel() }
-          runCatching { recognizer?.destroy() }
-          recognizer = null
-          _isListening.value = false
-          listeningMode = false
-          clearListenWatchdog()
-          activePttCaptureId = null
-          pttCompletion = null
-          completion?.cancel()
-          resumeRealtimeCaptureAfterPushToTalk(captureId)
-          setStatus(if (_isEnabled.value) nativeText("Listening") else nativeText("Ready"))
-          throw err
-        }
-        setStatus(nativeText("Listening (PTT)"))
-        if (autoStopAfterMs != null) {
-          pttAutoStopEnabled = true
-          // Install one-shot jobs before yielding to lifecycle changes. Otherwise a
-          // background stop can run between capture startup and job registration.
-          startSilenceMonitor(captureId)
-          pttTimeoutJob =
-            gatewayWorkScope.launch {
-              delay(autoStopAfterMs)
-              if (pttAutoStopEnabled) {
-                endPushToTalk(captureId)
+          if (clearPushToTalkRecognition(captureId) != null) {
+            synchronized(realtimeCapturePauseLock) {
+              if (captureGeneration == startGeneration.get()) {
+                setStatus(if (_isEnabled.value) nativeText("Listening") else nativeText("Ready"))
               }
             }
+            resumeRealtimeCaptureAfterPushToTalk(captureId)
+          }
+          completion?.cancel()
+          throw err
         }
         PushToTalkStartResult.Started(TalkPttStartPayload(captureId = captureId))
       }
@@ -984,7 +961,7 @@ class TalkModeManager internal constructor(
     }
     if (!enabled) {
       stopRealtimePlayback()
-      stopSpeaking()
+      cancelActivePlayback()
     }
   }
 
@@ -1013,12 +990,18 @@ class TalkModeManager internal constructor(
   private fun start() {
     if (realtimeSessionId != null || realtimeCaptureJob?.isActive == true) return
     if (scope.coroutineContext[Job]?.isActive == false) return
-    val generation = startGeneration.incrementAndGet()
-    stopRequested = false
-    listeningMode = true
+    val notifyStopped = captureRelayStopNotification()
+    val generation =
+      synchronized(realtimeCapturePauseLock) {
+        relayStopNotification = notifyStopped
+        stopRequested = false
+        listeningMode = true
+        startGeneration.incrementAndGet()
+      }
     Log.d(tag, "start")
     gatewayWorkScope.launch {
       try {
+        audioRetirement.await()
         ensureConfigLoaded()
         if (generation != startGeneration.get() || !_isEnabled.value || stopRequested) return@launch
         if (realtimeRelayModelSupported) {
@@ -1028,59 +1011,82 @@ class TalkModeManager internal constructor(
         }
       } catch (err: Throwable) {
         if (err is CancellationException) return@launch
-        setStatus(nativeText("Start failed: \$message", err.message ?: err::class.simpleName.orEmpty()))
         Log.w(tag, "start failed: ${err.message ?: err::class.simpleName}")
-        stopRealtimeRelay(closeSession = false, preserveStatus = true)
-        disableRealtimeModeAndNotifyOwner()
+        disableRealtimeModeAndNotifyOwner(generation, nativeText("Start failed: \$message", err.message ?: err::class.simpleName.orEmpty()))
       }
     }
   }
 
   private fun stop() {
-    stopRequested = true
-    finalizeInFlight = false
-    listeningMode = false
-    activePttCaptureId = null
-    synchronized(finishingPttLock) {
-      finishingPttJob?.cancel()
-    }
-    pttAutoStopEnabled = false
-    pttCompletion?.cancel()
-    pttCompletion = null
-    startGeneration.incrementAndGet()
-    pttTimeoutJob?.cancel()
-    pttTimeoutJob = null
-    restartJob?.cancel()
-    restartJob = null
-    silenceJob?.cancel()
-    silenceJob = null
-    closePushToTalkRung()
-    pttReleaseCompletion?.cancel()
-    pttReleaseCompletion = null
-    pttFinalSegments.clear()
-    pttLivePartial = ""
-    lastTranscript = ""
-    lastHeardAtMs = null
-    _isListening.value = false
-    _inputLevel.value = 0f
-    setStatus(nativeText("Off"), state = TalkStatusState.Off)
-    stopRealtimeRelay()
-    stopSpeaking()
-    pendingRunId = null
-    pendingFinal?.cancel()
-    pendingFinal = null
-    synchronized(completedRunsLock) {
-      completedRunStates.clear()
-      completedRunTexts.clear()
-    }
-
-    mainHandler.post {
-      recognizer?.cancel()
-      recognizer?.destroy()
-      recognizer = null
-    }
+    val cancelled =
+      synchronized(realtimeCapturePauseLock) {
+        stopRequested = true
+        finalizeInFlight = false
+        listeningMode = false
+        activePttCaptureId = null
+        startGeneration.incrementAndGet()
+        val jobs =
+          listOfNotNull(
+            synchronized(finishingPttLock) { finishingPttJob },
+            pttCompletion,
+            pttReleaseCompletion,
+            pttTimeoutJob,
+            restartJob,
+            silenceJob,
+            pendingFinal,
+          )
+        pttAutoStopEnabled = false
+        pttCompletion = null
+        pttReleaseCompletion = null
+        pttTimeoutJob = null
+        restartJob = null
+        silenceJob = null
+        closePushToTalkRung()
+        pttFinalSegments.clear()
+        pttLivePartial = ""
+        lastTranscript = ""
+        lastHeardAtMs = null
+        _isListening.value = false
+        _inputLevel.value = 0f
+        setStatus(nativeText("Off"), state = TalkStatusState.Off)
+        stopRealtimeRelay()
+        pendingRunId = null
+        pendingFinal = null
+        synchronized(completedRunsLock) {
+          completedRunStates.clear()
+          completedRunTexts.clear()
+        }
+        retireRecognizer()
+        jobs
+      }
+    // Completion handlers and SystemSpeech's beforeSpeak callback can reenter capture ownership.
+    cancelled.forEach { it.cancel() }
+    cancelActivePlayback()
     systemSpeech.shutdown()
   }
+
+  private fun retireRecognizer() =
+    synchronized(realtimeCapturePauseLock) {
+      val retired = recognizer ?: return@synchronized
+      recognizer = null
+      val completion = CompletableDeferred<Unit>()
+      audioRetirement.retire(cleanup = completion)
+      val cleanup =
+        Runnable {
+          try {
+            retired.cancel()
+            retired.destroy()
+            completion.complete(Unit)
+          } catch (error: Exception) {
+            completion.completeExceptionally(error)
+          }
+        }
+      if (Looper.myLooper() == mainHandler.looper) {
+        cleanup.run()
+      } else if (!mainHandler.post(cleanup)) {
+        completion.completeExceptionally(IllegalStateException("Speech recognizer cleanup unavailable"))
+      }
+    }
 
   private suspend fun awaitRealtimeSessionId(timeoutMs: Long): String =
     withTimeout(timeoutMs) {
@@ -1097,9 +1103,8 @@ class TalkModeManager internal constructor(
 
   private suspend fun startRealtimeRelay(generation: Long) {
     if (!isConnected()) {
-      setStatus(nativeText("Gateway not connected"))
       Log.w(tag, "realtime start: gateway not connected")
-      disableRealtimeModeAndNotifyOwner()
+      disableRealtimeModeAndNotifyOwner(generation, nativeText("Gateway not connected"))
       return
     }
 
@@ -1107,24 +1112,26 @@ class TalkModeManager internal constructor(
       ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
         PackageManager.PERMISSION_GRANTED
     if (!micOk) {
-      setStatus(nativeText("Microphone permission required"))
       Log.w(tag, "realtime start: microphone permission required")
-      disableRealtimeModeAndNotifyOwner()
+      disableRealtimeModeAndNotifyOwner(generation, nativeText("Microphone permission required"))
       return
     }
 
     ensureConfigLoaded()
     cancelActivePlayback()
-    withContext(Dispatchers.Main) {
-      if (activePttCaptureId == null) {
-        recognizer?.cancel()
-        recognizer?.destroy()
-        recognizer = null
-      }
+    synchronized(realtimeCapturePauseLock) {
+      if (generation != startGeneration.get() || stopRequested) throw CancellationException("realtime talk stopped while connecting")
+      if (activePttCaptureId == null) retireRecognizer()
     }
+    audioRetirement.await()
 
-    setStatus(nativeText("Connecting…"), awaitingAgent = true)
+    synchronized(realtimeCapturePauseLock) {
+      if (generation != startGeneration.get() || !_isEnabled.value || stopRequested) throw CancellationException("realtime talk stopped while connecting")
+      setStatus(nativeText("Connecting…"), awaitingAgent = true)
+    }
     val language = realtimeTranscriptionLanguage(resolvedSpeechLocaleTag())
+    val lease = session.captureRequestLease(gatewayStableId()) ?: error("Gateway not connected")
+    val transportGeneration = gatewayGeneration.get()
     val payload =
       requestPhoneRealtimeSessionWithLanguageFallback(language) { requestedLanguage ->
         val params =
@@ -1135,7 +1142,14 @@ class TalkModeManager internal constructor(
             put("brain", JsonPrimitive("agent-consult"))
             requestedLanguage?.let { put("language", JsonPrimitive(it)) }
           }
-        requestGateway("talk.session.create", params.toString(), timeoutMs = 15_000)
+        lease.request("talk.session.create", params.toString(), timeoutMs = 15_000) { enqueue ->
+          synchronized(realtimeCapturePauseLock) {
+            if (generation != startGeneration.get() || transportGeneration != gatewayGeneration.get() || !_isEnabled.value || stopRequested) {
+              throw CancellationException("realtime talk stopped while connecting")
+            }
+            enqueue()
+          }
+        }
       }
     val root = json.parseToJsonElement(payload).asObjectOrNull()
     val relaySession = root?.get("relaySessionId").asStringOrNull()
@@ -1143,13 +1157,11 @@ class TalkModeManager internal constructor(
     if (sessionId.isNullOrBlank()) {
       throw IllegalStateException("talk.session.create returned no session id")
     }
-    if (generation != startGeneration.get() || !_isEnabled.value || stopRequested) {
-      closeRealtimeSession(sessionId)
-      throw CancellationException("realtime talk stopped while connecting")
-    }
-
-    val capturePaused =
+    val admitted =
       synchronized(realtimeCapturePauseLock) {
+        if (generation != startGeneration.get() || transportGeneration != gatewayGeneration.get() || !lease.isCurrent() || !_isEnabled.value || stopRequested) {
+          return@synchronized false
+        }
         // Session publication and capture installation are one transition. PTT
         // therefore either blocks startup or detaches every installed capture job.
         realtimeAgentCoordinator.beginSession(
@@ -1159,69 +1171,103 @@ class TalkModeManager internal constructor(
           ),
         )
         realtimeSessionId = sessionId
+        realtimeRequestLease = lease
+        realtimePlayoutSession = createRealtimePlayoutSession(sessionId, lease)
         val pause = realtimeCapturePause
         if (pause != null) {
           realtimeCapturePause = pause.copy(sessionId = sessionId)
           realtimeOutputSuppressed = true
-          true
         } else {
           realtimeOutputSuppressed = false
           _isListening.value = true
           setStatus(nativeText("Listening"))
           startRealtimeCaptureLocked(sessionId)
-          false
         }
+        true
       }
-    if (capturePaused) {
-      Log.d(tag, "realtime session ready; capture paused for PTT relaySessionId=$sessionId")
-      return
+    if (!admitted) {
+      // Stop never owned this session; the creator must close it even if its job was cancelled.
+      withContext(NonCancellable) {
+        runCatching { lease.request("talk.session.close", buildJsonObject { put("sessionId", JsonPrimitive(sessionId)) }.toString()) }
+      }
+      throw CancellationException("realtime talk stopped while connecting")
     }
-    Log.d(tag, "realtime session started relaySessionId=$sessionId")
+    Log.d(tag, "realtime session ready relaySessionId=$sessionId")
   }
 
   private suspend fun startNativeTalk(generation: Long) {
     if (!isConnected()) {
-      setStatus(nativeText("Gateway not connected"))
-      disableRealtimeModeAndNotifyOwner()
+      disableRealtimeModeAndNotifyOwner(generation, nativeText("Gateway not connected"))
       return
     }
     val micOk =
       ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
         PackageManager.PERMISSION_GRANTED
     if (!micOk) {
-      setStatus(nativeText("Microphone permission required"))
-      disableRealtimeModeAndNotifyOwner()
+      disableRealtimeModeAndNotifyOwner(generation, nativeText("Microphone permission required"))
       return
     }
     if (!SpeechRecognizer.isRecognitionAvailable(context)) {
-      setStatus(nativeText("Speech recognizer unavailable"))
-      disableRealtimeModeAndNotifyOwner()
+      disableRealtimeModeAndNotifyOwner(generation, nativeText("Speech recognizer unavailable"))
       return
     }
+    synchronized(realtimeCapturePauseLock) {
+      if (generation != startGeneration.get() || !_isEnabled.value || stopRequested) return
+      retireRecognizer()
+    }
+    audioRetirement.await()
     withContext(Dispatchers.Main) {
-      if (generation != startGeneration.get() || !_isEnabled.value || stopRequested) return@withContext
-      recognizer?.cancel()
-      recognizer?.destroy()
-      recognizer = SpeechRecognizer.createSpeechRecognizer(context).also { it.setRecognitionListener(listener) }
-      startListeningInternal(markListening = true)
+      synchronized(realtimeCapturePauseLock) {
+        if (generation != startGeneration.get() || !_isEnabled.value || stopRequested) return@withContext
+        recognizer = SpeechRecognizer.createSpeechRecognizer(context).also { it.setRecognitionListener(recognitionListener(null, it)) }
+        startListeningInternal(markListening = true)
+      }
     }
   }
 
-  private fun disableRealtimeModeAndNotifyOwner() {
-    if (!_isEnabled.value) return
+  private fun disableRealtimeModeAndNotifyOwner(
+    generation: Long,
+    status: NativeText,
+  ) {
+    val stopped =
+      synchronized(realtimeCapturePauseLock) {
+        if (generation != startGeneration.get()) return
+        setStatus(status)
+        stopRealtimeRelay(closeSession = false, preserveStatus = true)
+        disableRealtimeModeLocked()
+      }
+    stopped?.invoke()
+  }
+
+  /** Returned claim is checked by the outer capture owner under its own lock. */
+  private fun disableRealtimeModeLocked(): (() -> Unit)? {
+    if (!_isEnabled.value) return null
     _isEnabled.value = false
     _isListening.value = false
-    onStoppedByRelay()
+    val generation = startGeneration.get()
+    val notify = relayStopNotification
+    return { notify { synchronized(realtimeCapturePauseLock) { startGeneration.get() == generation && !_isEnabled.value } } }
   }
 
   private fun failRealtimeRelay(
     sessionId: String,
     message: String,
+    owner: RealtimePlayout.Session? = null,
+    inputGeneration: Long? = null,
   ) {
-    if (realtimeSessionId != sessionId) return
-    setTalkFailure(nativeText("Talk failed: \$message", message))
-    stopRealtimeRelay(cancelCapture = false, cancelAppend = false, preserveStatus = true)
-    disableRealtimeModeAndNotifyOwner()
+    val stopped =
+      synchronized(realtimeCapturePauseLock) {
+        if (realtimeSessionId != sessionId ||
+          (owner != null && realtimePlayoutSession !== owner) ||
+          (inputGeneration != null && audioInputGeneration.get() != inputGeneration)
+        ) {
+          return
+        }
+        setTalkFailure(nativeText("Talk failed: \$message", message))
+        stopRealtimeRelay(preserveStatus = true)
+        disableRealtimeModeLocked()
+      }
+    stopped?.invoke()
   }
 
   private fun realtimeCloseStatus(reason: String?): TalkStatus =
@@ -1248,7 +1294,9 @@ class TalkModeManager internal constructor(
   /** Caller holds [realtimeCapturePauseLock] so PTT cannot miss newly installed jobs. */
   @SuppressLint("MissingPermission")
   private fun startRealtimeCaptureLocked(sessionId: String) {
-    realtimeCaptureJob?.cancel()
+    val lease = realtimeRequestLease
+    audioRetirement.retire(realtimeCaptureJob, realtimeAudioInput)
+    realtimeAudioInput = null
     realtimeAppendJob?.cancel()
     val inputGeneration = audioInputGeneration.incrementAndGet()
     onAppliedAudioInputChanged(null)
@@ -1260,8 +1308,8 @@ class TalkModeManager internal constructor(
     realtimeAppendJob =
       gatewayWorkScope.launch(realtimeCaptureDispatcher) {
         for (frame in audioFrames) {
-          if (realtimeSessionId != sessionId) continue
-          if (isRealtimePlaybackActive()) continue
+          if (realtimeSessionId != sessionId || audioInputGeneration.get() != inputGeneration) continue
+          if (!shouldAppendRealtimeCapturedFrame(frame.size)) continue
           val audioBase64 = Base64.encodeToString(frame, Base64.NO_WRAP)
           val params =
             buildJsonObject {
@@ -1270,25 +1318,41 @@ class TalkModeManager internal constructor(
               put("timestamp", JsonPrimitive(SystemClock.elapsedRealtime()))
             }
           try {
-            sendGatewayRequestFrame(
+            session.sendRequestFrameForEndpoint(
+              lease?.endpointStableId,
               "talk.session.appendAudio",
               params.toString(),
               timeoutMs = 8_000,
+              withEnqueue = { enqueue ->
+                // Cancellation can claim capture while this frame waits for the socket.
+                synchronized(realtimeCapturePauseLock) {
+                  if (realtimeSessionId != sessionId || audioInputGeneration.get() != inputGeneration || !shouldAppendRealtimeCapturedFrame(frame.size)) {
+                    throw CancellationException("realtime audio frame superseded")
+                  }
+                  check(lease?.isCurrent() == true) { "realtime audio connection changed" }
+                  enqueue()
+                }
+              },
             ) { error ->
               Log.w(tag, "realtime appendAudio failed: ${error.message}")
-              failRealtimeRelay(sessionId, error.message)
+              failRealtimeRelay(sessionId, error.message, inputGeneration = inputGeneration)
             }
+          } catch (_: CancellationException) {
+            // A rejected frame does not end capture; actual job cancellation does.
+            currentCoroutineContext().ensureActive()
           } catch (err: Throwable) {
-            if (err is CancellationException) throw err
             Log.w(tag, "realtime appendAudio failed: ${err.message ?: err::class.simpleName}")
-            failRealtimeRelay(sessionId, err.message ?: err::class.simpleName ?: "request failed")
+            failRealtimeRelay(sessionId, err.message ?: err::class.simpleName ?: "request failed", inputGeneration = inputGeneration)
           }
         }
       }
     realtimeCaptureJob =
       gatewayWorkScope.launch(realtimeCaptureDispatcher) {
         var audioInput: AndroidAudioInputSession? = null
+        val captureJob = coroutineContext[Job]
+        val isCurrent = { captureJob?.isActive == true && audioInputGeneration.get() == inputGeneration && realtimeSessionId == sessionId }
         try {
+          audioRetirement.await()
           val frameBytes = realtimeSampleRateHz * 2 * realtimeAudioFrameMs / 1000
           val openedAudioInput =
             AndroidAudioInputSession.open(
@@ -1297,13 +1361,20 @@ class TalkModeManager internal constructor(
               frameBytes,
               preferredAudioInputDevice(),
               { key ->
-                if (audioInputGeneration.get() == inputGeneration) onAppliedAudioInputChanged(key)
+                if (isCurrent()) onAppliedAudioInputChanged(key)
               },
+              communication = true,
+              isCurrent = isCurrent,
+              onFocusLost = { failRealtimeRelay(sessionId, "audio focus lost", inputGeneration = inputGeneration) },
             )
           audioInput = openedAudioInput
+          synchronized(realtimeCapturePauseLock) {
+            if (!isCurrent()) return@launch
+            realtimeAudioInput = openedAudioInput
+          }
           val buffer = ByteArray(frameBytes)
           audioInput.startRecording()
-          while (coroutineContext.isActive && _isEnabled.value && realtimeSessionId == sessionId) {
+          while (isCurrent() && _isEnabled.value) {
             val read = audioInput.read(buffer, 0, buffer.size)
             if (read <= 0) continue
             _inputLevel.value = TalkAudioLevel.smoothed(_inputLevel.value, TalkAudioLevel.pcm16Level(buffer, read))
@@ -1313,18 +1384,34 @@ class TalkModeManager internal constructor(
         } catch (err: Throwable) {
           if (err is CancellationException) throw err
           Log.w(tag, "realtime capture failed: ${err.message ?: err::class.simpleName}")
-          failRealtimeRelay(sessionId, err.message ?: err::class.simpleName ?: "capture failed")
+          failRealtimeRelay(sessionId, err.message ?: err::class.simpleName ?: "capture failed", inputGeneration = inputGeneration)
         } finally {
           audioFrames.close()
+          synchronized(realtimeCapturePauseLock) {
+            if (realtimeAudioInput === audioInput) realtimeAudioInput = null
+          }
           audioInput?.close()
-          _inputLevel.value = 0f
+          if (audioInputGeneration.get() == inputGeneration) _inputLevel.value = 0f
         }
       }
   }
 
-  private fun shouldAppendRealtimeCapturedFrame(length: Int): Boolean = pendingRealtimeOutputClear == null && !isRealtimePlaybackActive() && length > 0
+  private fun shouldAppendRealtimeCapturedFrame(length: Int): Boolean =
+    length > 0 &&
+      pendingRealtimeOutputClear == null &&
+      realtimeCapturePause == null &&
+      !localMediaPlaybackActive &&
+      (!realtimePlayoutDelegate.isInitialized() || !realtimePlayout.isPlaying || realtimeAudioInput?.canCaptureDuringPlayback == true)
 
-  private fun isRealtimePlaybackActive(): Boolean = _isSpeaking.value || SystemClock.elapsedRealtime() < realtimePlaybackEndsAtMs
+  // Playback retains the response that admitted it, even after newer work starts.
+  private fun realtimeOutputStatusOwner(turnId: String?): TalkStatusOwner {
+    val output = realtimeOutputTurn
+    // Consult work has no provider response yet. Only subsequent output may adopt it;
+    // a terminal event or a previously queued playback callback cannot finish it.
+    val awaitingOutput = currentStatus.awaitingAgent && currentStatus.owner.responseTurnId == null
+    if (!turnId.isNullOrBlank() && output?.id == turnId && !awaitingOutput) return output.statusOwner
+    return currentStatus.owner.also { realtimeOutputTurn = RealtimeOutputTurn(turnId, it) }
+  }
 
   private fun handleRealtimeTalkEvent(payloadJson: String?) {
     if (payloadJson.isNullOrBlank()) return
@@ -1335,127 +1422,146 @@ class TalkModeManager internal constructor(
         null
       } ?: return
     val sessionId = obj["relaySessionId"].asStringOrNull() ?: obj["sessionId"].asStringOrNull()
-    val currentSessionId = realtimeSessionId
-    if (currentSessionId == null || sessionId != currentSessionId) return
+    var stopped: (() -> Unit)? = null
+    var afterDispatch: (() -> Unit)? = null
+    synchronized(realtimeCapturePauseLock) {
+      val currentSessionId = realtimeSessionId
+      if (currentSessionId == null || sessionId != currentSessionId) return
+      val owner = realtimePlayoutSession
+      val turnId = obj["talkEvent"].asObjectOrNull()?.get("turnId").asStringOrNull()
+      when (val type = obj["type"].asStringOrNull()) {
+        "ready" -> {
+          if (isRealtimeCapturePaused()) return
+          _isListening.value = true
+          setStatus(nativeText("Listening"))
+        }
 
-    when (val type = obj["type"].asStringOrNull()) {
-      "ready" -> {
-        if (isRealtimeCapturePaused()) return
-        _isListening.value = true
-        setStatus(nativeText("Listening"))
-      }
-
-      "inputAudio" -> {
-        synchronized(realtimeCapturePauseLock) {
+        "inputAudio" -> {
           if (realtimeCapturePause != null) return
           // Output remains suppressed through the cancelled pre-PTT turn. The
           // first accepted resumed frame establishes the next provider turn.
           realtimeOutputSuppressed = false
+          _isListening.value = true
         }
-        _isListening.value = true
-      }
 
-      "audio" -> {
-        if (realtimeOutputSuppressed) return
-        val turnId = obj["talkEvent"].asObjectOrNull()?.get("turnId").asStringOrNull() ?: return
-        if (turnId.isBlank()) return
-        realtimeOutputTurnId = turnId
-        finishRealtimeConversationEntry(VoiceConversationRole.User)
-        val audioBase64 = obj["audioBase64"].asStringOrNull() ?: return
-        val bytes =
-          try {
-            Base64.decode(audioBase64, Base64.DEFAULT)
-          } catch (err: Throwable) {
-            Log.w(tag, "realtime audio decode failed: ${err.message ?: err::class.simpleName}")
-            return
-          }
-        playRealtimeAudio(bytes)
-      }
-
-      "clear" -> {
-        val turnId = obj["talkEvent"].asObjectOrNull()?.get("turnId").asStringOrNull()
-        val activeTurnId = realtimeOutputTurnId
-        if (!turnId.isNullOrBlank() && activeTurnId != null && turnId != activeTurnId) return
-        val marks = takePendingRealtimePlaybackMarks()
-        stopRealtimePlayback()
-        realtimeOutputTurnId = null
-        acknowledgeRealtimePlaybackMarks(marks)
-        pendingRealtimeOutputClear?.complete(turnId)
-      }
-
-      "mark" -> {
-        val markName = obj["markName"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty) ?: return
-        queueRealtimePlaybackMark(sessionId, markName)
-      }
-
-      "transcript" -> {
-        val role = obj["role"].asStringOrNull()
-        val isFinal = obj["final"].asBooleanOrNull() == true
-        // A streaming (non-final) user transcript is the provider's speech
-        // signal; it raises the waveform floor like iOS endpointing does.
-        if (role == "user") {
-          _speechActive.value = !isFinal
+        "responseStarted" -> {
+          val responseTurnId = obj["turnId"].asStringOrNull()?.takeIf(String::isNotBlank) ?: return
+          if (realtimeOutputSuppressed || realtimeOutputTurn?.id == responseTurnId) return
+          setStatus(TalkStatus(nativeText("Thinking…"), TalkStatusState.Active, awaitingAgent = true, owner = TalkStatusOwner(responseTurnId)))
+          realtimeOutputStatusOwner(responseTurnId)
         }
-        val text = realtimeTranscriptText(obj["text"].asStringOrNull(), isFinal)
-        var assistantText: String? = null
-        if (text != null) {
-          when (role) {
-            "user" -> {
-              upsertRealtimeConversation(VoiceConversationRole.User, text, isFinal)
-            }
 
-            "assistant" -> {
-              finishRealtimeConversationEntry(VoiceConversationRole.User)
-              assistantText = upsertRealtimeConversation(VoiceConversationRole.Assistant, text, isFinal)
+        "audio" -> {
+          if (realtimeOutputSuppressed) return
+          if (turnId.isNullOrBlank()) return
+          val statusOwner = realtimeOutputStatusOwner(turnId)
+          finishRealtimeConversationEntry(VoiceConversationRole.User)
+          val audioBase64 = obj["audioBase64"].asStringOrNull() ?: return
+          val bytes =
+            try {
+              Base64.decode(audioBase64, Base64.DEFAULT)
+            } catch (err: Throwable) {
+              Log.w(tag, "realtime audio decode failed: ${err.message ?: err::class.simpleName}")
+              return
             }
+          if (playbackEnabled) afterDispatch = owner?.let { realtimePlayout.audio(it, bytes, statusOwner) }
+        }
+
+        "audioDone" -> {
+          val output = realtimeOutputTurn?.takeIf { !turnId.isNullOrBlank() && it.id == turnId } ?: return
+          // Empty responses settle too; queued PCM still owns its physical drain.
+          afterDispatch = owner?.let { realtimePlayout.refreshState(it, output.statusOwner) }
+        }
+
+        "clear" -> {
+          val cancelsTurn = obj["talkEvent"].asObjectOrNull()?.get("type").asStringOrNull() == "turn.cancelled"
+          val activeTurnId = realtimeOutputTurn?.id
+          if (cancelsTurn && !turnId.isNullOrBlank() && activeTurnId != null && turnId != activeTurnId) return
+          // Provider clears flush the sink; only turn.cancelled acknowledges cancellation.
+          val pending = pendingRealtimeOutputClear.takeIf { cancelsTurn && !turnId.isNullOrBlank() }
+          val cleared = stopRealtimePlayback(owner)
+          afterDispatch = {
+            cleared.invokeOnCompletion { error -> pending?.complete(if (error == null) turnId else null) }
           }
         }
-        if (assistantText != null) {
-          _lastAssistantText.value = assistantText.trim()
+
+        "mark" -> {
+          val markName = obj["markName"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty) ?: return
+          afterDispatch = owner?.let { realtimePlayout.mark(it, markName) }
         }
-        if (isFinal && role == "user") {
-          setStatus(nativeText("Thinking…"), awaitingAgent = true)
-        } else if (isFinal && role == "assistant") {
-          scheduleRealtimePlaybackIdle()
+
+        "transcript" -> {
+          val role = obj["role"].asStringOrNull()
+          val isFinal = obj["final"].asBooleanOrNull() == true
+          val statusOwner = if (role == "assistant") realtimeOutputStatusOwner(turnId) else currentStatus.owner
+          // A streaming (non-final) user transcript is the provider's speech
+          // signal; it raises the waveform floor like iOS endpointing does.
+          if (role == "user") {
+            _speechActive.value = !isFinal
+          }
+          val text = realtimeTranscriptText(obj["text"].asStringOrNull(), isFinal)
+          var assistantText: String? = null
+          if (text != null) {
+            when (role) {
+              "user" -> {
+                upsertRealtimeConversation(VoiceConversationRole.User, text, isFinal)
+              }
+
+              "assistant" -> {
+                finishRealtimeConversationEntry(VoiceConversationRole.User)
+                assistantText = upsertRealtimeConversation(VoiceConversationRole.Assistant, text, isFinal)
+              }
+            }
+          }
+          if (assistantText != null) {
+            _lastAssistantText.value = assistantText.trim()
+          }
+          if (isFinal && role == "assistant") {
+            // Final text can precede audio; refresh after queued playback without closing the turn.
+            afterDispatch = owner?.let { realtimePlayout.refreshState(it, statusOwner) }
+          }
         }
-      }
 
-      "toolCall" -> {
-        val callId = obj["callId"].asStringOrNull() ?: return
-        val name = obj["name"].asStringOrNull() ?: return
-        realtimeAgentCoordinator.handleToolCall(
-          callId = callId,
-          name = name,
-          args = obj["args"],
-          forced = obj["forced"].asBooleanOrNull() == true,
-        )
-      }
-
-      "toolResult" -> {}
-
-      "error" -> {
-        val message = obj["message"].asStringOrNull() ?: "realtime talk error"
-        setTalkFailure(nativeText("Talk failed: \$message", message))
-        Log.w(tag, "realtime error: $message")
-      }
-
-      "close" -> {
-        val closeReason = obj["reason"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
-        val closeStatus =
-          currentStatus.takeIf { it.state == TalkStatusState.TalkFailure } ?: realtimeCloseStatus(closeReason)
-        Log.d(tag, "realtime close reason=$closeReason")
-        stopRealtimeRelay(closeSession = false, preserveStatus = true)
-        if (_isEnabled.value) {
-          _isEnabled.value = false
-          setStatus(closeStatus)
-          onStoppedByRelay()
+        "toolCall" -> {
+          val callId = obj["callId"].asStringOrNull() ?: return
+          val name = obj["name"].asStringOrNull() ?: return
+          realtimeAgentCoordinator.handleToolCall(
+            callId = callId,
+            name = name,
+            args = obj["args"],
+            forced = obj["forced"].asBooleanOrNull() == true,
+          )
         }
-      }
 
-      else -> {
-        if (type != null) Log.d(tag, "ignored realtime event type=$type")
+        "toolResult" -> {
+          Unit
+        }
+
+        "error" -> {
+          val message = obj["message"].asStringOrNull() ?: "realtime talk error"
+          setTalkFailure(nativeText("Talk failed: \$message", message))
+          Log.w(tag, "realtime error: $message")
+        }
+
+        "close" -> {
+          val closeReason = obj["reason"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
+          val closeStatus =
+            currentStatus.takeIf { it.state == TalkStatusState.TalkFailure } ?: realtimeCloseStatus(closeReason)
+          Log.d(tag, "realtime close reason=$closeReason")
+          stopRealtimeRelay(closeSession = false, preserveStatus = true)
+          if (_isEnabled.value) {
+            setStatus(closeStatus)
+            stopped = disableRealtimeModeLocked()
+          }
+        }
+
+        else -> {
+          if (type != null) Log.d(tag, "ignored realtime event type=$type")
+        }
       }
     }
+    afterDispatch?.invoke()
+    stopped?.invoke()
   }
 
   private fun realtimeTranscriptPayload(
@@ -1471,324 +1577,156 @@ class TalkModeManager internal constructor(
       put("final", JsonPrimitive(true))
     }.toString()
 
-  private fun playRealtimeAudio(bytes: ByteArray) {
-    if (!playbackEnabled || realtimeOutputSuppressed || bytes.isEmpty()) return
-    val queue = ensureRealtimeAudioQueue()
-    if (!queue.trySend(RealtimePlaybackItem.Audio(bytes)).isSuccess) {
-      Log.w(tag, "realtime audio queue full")
-    }
-  }
-
-  private fun queueRealtimePlaybackMark(
+  private fun createRealtimePlayoutSession(
     sessionId: String,
-    markName: String,
-  ) {
-    synchronized(realtimePlaybackLock) {
-      pendingRealtimePlaybackMarks[markName] =
-        PendingRealtimePlaybackMark(
-          sessionId = sessionId,
-          name = markName,
-        )
-    }
-    if (!ensureRealtimeAudioQueue().trySend(RealtimePlaybackItem.Mark(markName)).isSuccess) {
-      val mark = synchronized(realtimePlaybackLock) { pendingRealtimePlaybackMarks.remove(markName) }
-      acknowledgeRealtimePlaybackMarks(listOfNotNull(mark))
-    }
-  }
+    lease: GatewaySession.RequestLease,
+  ): RealtimePlayout.Session {
+    val generation = gatewayGeneration.get()
+    val workScope = gatewayWorkScope
+    lateinit var owner: RealtimePlayout.Session
 
-  private fun ensureRealtimeAudioQueue(): Channel<RealtimePlaybackItem> =
-    synchronized(realtimePlaybackLock) {
-      realtimeAudioQueue
-        ?: Channel<RealtimePlaybackItem>(Channel.UNLIMITED).also { queue ->
-          realtimeAudioQueue = queue
-          realtimeAudioWriterJob =
-            gatewayWorkScope.launch(realtimePlaybackDispatcher) {
-              for (item in queue) {
-                when (item) {
-                  is RealtimePlaybackItem.Audio -> {
-                    if (!playbackEnabled || realtimeOutputSuppressed || realtimeSessionId == null) continue
-                    try {
-                      writeRealtimeAudio(item.bytes)
-                    } catch (err: CancellationException) {
-                      throw err
-                    } catch (err: Throwable) {
-                      Log.w(tag, "realtime audio playback failed: ${err.message ?: err::class.java.simpleName}")
-                    }
-                  }
-
-                  is RealtimePlaybackItem.Mark -> {
-                    prepareRealtimePlaybackMark(item.name)
-                  }
+    fun isCurrent() = realtimePlayoutSession === owner && realtimeSessionId == sessionId && gatewayGeneration.get() == generation
+    owner =
+      RealtimePlayout.Session(
+        onState = { playing, level, statusOwner ->
+          synchronized(realtimeCapturePauseLock) {
+            if (isCurrent()) {
+              setRealtimePlaying(playing)
+              _outputLevel.value = level
+              // Device completion is physical; it cannot finish a newer user request's status.
+              status.update { current ->
+                if (_isEnabled.value && current.owner === statusOwner) {
+                  current.copy(text = if (playing) nativeText("Speaking…") else nativeText("Listening"), state = TalkStatusState.Active, awaitingAgent = false)
+                } else {
+                  current
                 }
               }
             }
-        }
-    }
-
-  private fun writeRealtimeAudio(bytes: ByteArray) {
-    synchronized(realtimePlaybackLock) {
-      val track =
-        realtimeAudioTrack ?: run {
-          val minBuffer =
-            AudioTrack.getMinBufferSize(
-              realtimeSampleRateHz,
-              AudioFormat.CHANNEL_OUT_MONO,
-              AudioFormat.ENCODING_PCM_16BIT,
-            )
-          val bufferSizeBytes =
-            maxOf(
-              minBuffer * 2,
-              realtimeSampleRateHz * 2 * realtimePlaybackBufferMs / 1000,
-              bytes.size * 4,
-            )
-          val created =
-            AudioTrack
-              .Builder()
-              .setAudioAttributes(
-                AudioAttributes
-                  .Builder()
-                  .setUsage(AudioAttributes.USAGE_MEDIA)
-                  .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                  .build(),
-              ).setAudioFormat(
-                AudioFormat
-                  .Builder()
-                  .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                  .setSampleRate(realtimeSampleRateHz)
-                  .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                  .build(),
-              ).setTransferMode(AudioTrack.MODE_STREAM)
-              .setBufferSizeInBytes(bufferSizeBytes)
-              .build()
-          realtimeAudioTrack = created
-          realtimeWrittenFrames = 0L
-          created
-        }
-      var writtenBytes = 0
-      while (writtenBytes < bytes.size) {
-        val written = track.write(bytes, writtenBytes, bytes.size - writtenBytes)
-        if (written <= 0) {
-          Log.w(tag, "realtime audio write failed: $written")
-          break
-        }
-        writtenBytes += written
-      }
-      if (writtenBytes <= 0) return
-      if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
-        track.play()
-      }
-      // Blocking MODE_STREAM writes are playback-paced once the track buffer
-      // fills, so per-write metering tracks what the speaker actually plays.
-      _outputLevel.value =
-        TalkAudioLevel.smoothed(_outputLevel.value ?: 0f, TalkAudioLevel.pcm16Level(bytes, writtenBytes))
-      setRealtimePlaying(true)
-      setStatus(nativeText("Speaking…"))
-      val durationMs = ((writtenBytes / 2.0) / realtimeSampleRateHz * 1000.0).toLong()
-      realtimeWrittenFrames += writtenBytes / 2L
-      val now = SystemClock.elapsedRealtime()
-      realtimePlaybackEndsAtMs = maxOf(now, realtimePlaybackEndsAtMs) + durationMs
-      scheduleRealtimePlaybackIdle()
-    }
-  }
-
-  private fun prepareRealtimePlaybackMark(markName: String) {
-    val completed =
-      synchronized(realtimePlaybackLock) {
-        val mark = pendingRealtimePlaybackMarks[markName] ?: return
-        mark.targetFrame = realtimeWrittenFrames
-        takeCompletedRealtimePlaybackMarksLocked()
-      }
-    acknowledgeRealtimePlaybackMarks(completed)
-    scheduleRealtimePlaybackIdle()
-  }
-
-  private fun takeCompletedRealtimePlaybackMarksLocked(): List<PendingRealtimePlaybackMark> {
-    val playedFrames = realtimeAudioTrack?.playbackHeadPosition?.toLong()?.and(0xffff_ffffL) ?: realtimeWrittenFrames
-    val completed =
-      pendingRealtimePlaybackMarks.values.filter { mark ->
-        val targetFrame = mark.targetFrame
-        targetFrame != null && playedFrames >= targetFrame
-      }
-    completed.forEach { pendingRealtimePlaybackMarks.remove(it.name) }
-    return completed
-  }
-
-  private fun takePendingRealtimePlaybackMarks(): List<PendingRealtimePlaybackMark> =
-    synchronized(realtimePlaybackLock) {
-      val marks = pendingRealtimePlaybackMarks.values.toList()
-      pendingRealtimePlaybackMarks.clear()
-      marks
-    }
-
-  private fun acknowledgeRealtimePlaybackMarks(marks: List<PendingRealtimePlaybackMark>) {
-    for (mark in marks) {
-      gatewayWorkScope.launch {
-        try {
-          val acknowledge = realtimeMarkAcknowledger
-          if (acknowledge != null) {
-            acknowledge(mark.sessionId, mark.name)
-          } else {
-            val params =
-              buildJsonObject {
-                put("sessionId", JsonPrimitive(mark.sessionId))
-                put("markName", JsonPrimitive(mark.name))
-              }
-            requestGateway("talk.session.acknowledgeMark", params.toString(), timeoutMs = 8_000)
           }
-        } catch (err: Throwable) {
-          if (err is CancellationException) throw err
-          Log.d(tag, "realtime mark acknowledgement ignored: ${err.message ?: err::class.simpleName}")
-        }
-      }
-    }
-  }
-
-  private fun scheduleRealtimePlaybackIdle() {
-    realtimePlaybackIdleJob?.cancel()
-    realtimePlaybackIdleJob =
-      gatewayWorkScope.launch {
-        while (true) {
-          delay(20)
-          val (completed, idle) =
-            synchronized(realtimePlaybackLock) {
-              val playbackTimeElapsed = SystemClock.elapsedRealtime() >= realtimePlaybackEndsAtMs
-              val completed = takeCompletedRealtimePlaybackMarksLocked()
-              // AudioTrack may lag the duration estimate by its device buffer. Keep
-              // polling until queued marks prove the speaker reached the barrier.
-              val awaitingPlaybackMark = pendingRealtimePlaybackMarks.values.any { it.targetFrame != null }
-              val playbackIdle = playbackTimeElapsed && !awaitingPlaybackMark
-              if (playbackIdle) {
-                setRealtimePlaying(false)
-                _outputLevel.value = null
+        },
+        onMark = { markName ->
+          workScope.launch {
+            try {
+              if (isCurrent() && owner.active) {
+                val acknowledge = realtimeMarkAcknowledger
+                if (acknowledge != null) {
+                  acknowledge(sessionId, markName)
+                } else {
+                  val params =
+                    buildJsonObject {
+                      put("sessionId", JsonPrimitive(sessionId))
+                      put("markName", JsonPrimitive(markName))
+                    }
+                  // The lease binds the physical socket; the enqueue check binds its live relay.
+                  lease.request("talk.session.acknowledgeMark", params.toString(), 8_000) { enqueue ->
+                    synchronized(realtimeCapturePauseLock) {
+                      if (!isCurrent() || !owner.active) throw CancellationException("realtime session replaced")
+                      enqueue()
+                    }
+                  }
+                }
               }
-              completed to playbackIdle
+            } catch (error: Throwable) {
+              if (error is CancellationException) throw error
+              Log.d(tag, "realtime mark acknowledgement ignored: ${error.message ?: error::class.simpleName}")
             }
-          acknowledgeRealtimePlaybackMarks(completed)
-          if (idle) {
-            if (_isEnabled.value && realtimeSessionId != null) {
-              setStatus(nativeText("Listening"))
-            }
-            return@launch
           }
-        }
-      }
+        },
+        onFailure = { message -> failRealtimeRelay(sessionId, message, owner) },
+      )
+    return owner
   }
 
-  private fun stopRealtimePlayback() {
-    val audioQueue = realtimeAudioQueue
-    val audioWriterJob = realtimeAudioWriterJob
-    realtimeAudioQueue = null
-    realtimeAudioWriterJob = null
-    audioQueue?.close()
-    audioWriterJob?.cancel()
-    realtimePlaybackIdleJob?.cancel()
-    realtimePlaybackIdleJob = null
-    realtimePlaybackEndsAtMs = 0L
-    synchronized(realtimePlaybackLock) {
-      realtimeAudioTrack?.let { track ->
-        try {
-          track.pause()
-          track.flush()
-          track.stop()
-        } catch (_: Throwable) {
-        }
-        track.release()
-      }
-      realtimeAudioTrack = null
-      realtimeWrittenFrames = 0L
-      setRealtimePlaying(false)
+  private fun stopRealtimePlayback(owner: RealtimePlayout.Session? = realtimePlayoutSession): Deferred<Unit> =
+    synchronized(realtimeCapturePauseLock) {
+      audioRetirement.retire(cleanup = owner?.takeIf { realtimePlayoutDelegate.isInitialized() }?.let { realtimePlayout.clear(it) })
     }
-    _outputLevel.value = null
-    if (_isEnabled.value) {
-      setStatus(nativeText("Listening"))
-    }
-  }
 
   private fun stopRealtimeRelay(
     closeSession: Boolean = true,
-    cancelCapture: Boolean = true,
-    cancelAppend: Boolean = true,
     preserveStatus: Boolean = false,
-  ) {
-    // Preserve the canonical status as one value so cleanup cannot split its
-    // user-visible text from typed failure and awaiting-agent semantics.
+  ) = synchronized(realtimeCapturePauseLock) {
     val status = currentStatus
-    val (sessionId, captureJobs) =
-      synchronized(realtimeCapturePauseLock) {
-        val currentSessionId = realtimeSessionId
-        val currentCaptureJobs = realtimeCaptureJob to realtimeAppendJob
-        realtimeSessionId = null
-        realtimeCaptureJob = null
-        realtimeAppendJob = null
-        realtimeCapturePause = null
-        currentSessionId to currentCaptureJobs
+    val sessionId = realtimeSessionId
+    realtimeSessionId = null
+    realtimeRequestLease = null
+    audioInputGeneration.incrementAndGet()
+    onAppliedAudioInputChanged(null)
+    val cleared =
+      realtimePlayoutSession?.let {
+        it.active = false
+        if (realtimePlayoutDelegate.isInitialized()) realtimePlayout.clear(it, acknowledge = false) else null
       }
+    audioRetirement.retire(realtimeCaptureJob, realtimeAudioInput, cleared)
+    realtimeAudioInput = null
+    realtimePlayoutSession = null
+    realtimeCaptureJob = null
+    realtimeAppendJob?.cancel()
+    realtimeAppendJob = null
+    realtimeCapturePause = null
     realtimeOutputSuppressed = false
-    realtimeOutputTurnId = null
+    realtimeOutputTurn = null
     pendingRealtimeOutputClear?.cancel()
     pendingRealtimeOutputClear = null
-    if (cancelCapture) {
-      captureJobs.first?.cancel()
-    }
-    if (cancelAppend) {
-      captureJobs.second?.cancel()
-    }
     realtimeAgentCoordinator.endSession(sessionId)
     realtimeUserEntryId = null
     realtimeUserEntryAwaitingFinal = false
     realtimeUserEntryAwaitingFinalStartedAtMs = null
     realtimeAssistantEntryId = null
-    takePendingRealtimePlaybackMarks()
     _speechActive.value = false
     _inputLevel.value = 0f
-    stopRealtimePlayback()
-    if (preserveStatus) {
-      setStatus(status)
-    }
+    setRealtimePlaying(false)
+    _outputLevel.value = null
+    if (preserveStatus) setStatus(status)
     _isListening.value = false
     if (closeSession && !sessionId.isNullOrBlank()) {
-      gatewayWorkScope.launch {
-        closeRealtimeSession(sessionId)
-      }
+      gatewayWorkScope.launch { closeRealtimeSession(sessionId) }
     }
   }
 
-  internal suspend fun pauseRealtimeCaptureForPushToTalk(captureId: String) {
-    val cancellationSessionId = realtimeSessionId
-    val cancellationTurnId = realtimeOutputTurnId?.trim()?.takeIf(String::isNotEmpty)
-    val captureJobs =
+  internal fun prepareRealtimeCapturePause(
+    captureId: String,
+    lease: GatewaySession.RequestLease?,
+  ): suspend () -> Unit {
+    val pause: RealtimeCapturePause
+    val cancellationTurnId: String?
+    val retirement: Deferred<Unit>
+    val appendJob =
       synchronized(realtimeCapturePauseLock) {
-        val currentSessionId = realtimeSessionId
-        val currentCaptureJobs = realtimeCaptureJob to realtimeAppendJob
-        realtimeCapturePause = RealtimeCapturePause(sessionId = currentSessionId, pttCaptureId = captureId)
+        pause = RealtimeCapturePause(sessionId = realtimeSessionId, pttCaptureId = captureId)
+        cancellationTurnId = realtimeOutputTurn?.id
+        realtimeCapturePause = pause
+        audioInputGeneration.incrementAndGet()
+        onAppliedAudioInputChanged(null)
         realtimeOutputSuppressed = true
+        stopRealtimePlayback()
+        retirement = audioRetirement.retire(realtimeCaptureJob, realtimeAudioInput)
+        realtimeAudioInput = null
         realtimeCaptureJob = null
-        realtimeAppendJob = null
-        currentCaptureJobs
+        realtimeAppendJob.also { realtimeAppendJob = null }
       }
-    stopRealtimePlayback()
-    val (captureJob, appendJob) = captureJobs
-    captureJob?.cancelAndJoin()
-    appendJob?.cancelAndJoin()
-    // Stop input first so no frame can create new provider output while the
-    // cancellation boundary is being established.
-    if (
-      !cancelRealtimeOutput(
-        reason = "android-push-to-talk",
-        sessionId = cancellationSessionId,
-        turnId = cancellationTurnId,
-      )
-    ) {
-      Log.w(tag, "realtime output cancellation was not confirmed; closing relay")
-      stopRealtimeRelay(preserveStatus = true)
-      synchronized(realtimeCapturePauseLock) {
-        realtimeCapturePause =
-          RealtimeCapturePause(
-            sessionId = null,
-            pttCaptureId = captureId,
-            restartRelay = true,
-          )
-        realtimeOutputSuppressed = true
+    return {
+      audioRetirement.await(retirement)
+      appendJob?.cancelAndJoin()
+      // Stop input first so no frame can create new provider output while the
+      // cancellation boundary is being established.
+      if (
+        !cancelRealtimeOutput(
+          reason = "android-push-to-talk",
+          sessionId = pause.sessionId,
+          turnId = cancellationTurnId,
+          lease = lease,
+          isCurrent = { realtimeCapturePause === pause },
+        )
+      ) {
+        synchronized(realtimeCapturePauseLock) {
+          // Cancellation can finish after Off/On has admitted a replacement relay.
+          if (realtimeCapturePause !== pause) return@synchronized
+          Log.w(tag, "realtime output cancellation was not confirmed; closing relay")
+          stopRealtimeRelay(preserveStatus = true)
+          realtimeCapturePause = pause.copy(sessionId = null, restartRelay = true)
+          realtimeOutputSuppressed = true
+        }
       }
     }
   }
@@ -1796,6 +1734,7 @@ class TalkModeManager internal constructor(
   private fun isRealtimeCapturePaused(): Boolean = synchronized(realtimeCapturePauseLock) { realtimeCapturePause != null }
 
   internal fun resumeRealtimeCaptureAfterPushToTalk(captureId: String) {
+    val generation = startGeneration.get()
     val outcome =
       synchronized(realtimeCapturePauseLock) {
         val current = realtimeCapturePause ?: return@synchronized RealtimeCaptureResume.Skipped
@@ -1840,9 +1779,7 @@ class TalkModeManager internal constructor(
       }
 
       RealtimeCaptureResume.Disconnected -> {
-        setStatus(nativeText("Gateway not connected"))
-        stopRealtimeRelay(preserveStatus = true)
-        disableRealtimeModeAndNotifyOwner()
+        disableRealtimeModeAndNotifyOwner(generation, nativeText("Gateway not connected"))
       }
     }
   }
@@ -2095,7 +2032,8 @@ class TalkModeManager internal constructor(
   private fun startPushToTalkRecognition(
     captureId: String,
     firstCandidate: PushToTalkRecognitionCandidate? = null,
-  ) {
+  ) = synchronized(realtimeCapturePauseLock) {
+    if (activePttCaptureId != captureId || pttReleaseCompletion != null || stopRequested) return@synchronized
     val recognizerInstance = recognizer ?: error("Speech recognizer unavailable")
     var lastFailure: Throwable? = null
     for (candidate in pushToTalkCandidates(firstCandidate)) {
@@ -2118,7 +2056,7 @@ class TalkModeManager internal constructor(
         recognizerInstance.startListening(pushToTalkRecognizerIntent(rung))
         _isListening.value = true
         setStatus(nativeText("Listening (PTT)"))
-        return
+        return@synchronized
       } catch (err: Throwable) {
         lastFailure = err
         closePushToTalkRung()
@@ -2273,21 +2211,24 @@ class TalkModeManager internal constructor(
       gatewayWorkScope.launch {
         delay(delayMs)
         mainHandler.post {
-          if (activePttCaptureId != captureId || pttReleaseCompletion != null || stopRequested) return@post
-          try {
-            startPushToTalkRecognition(captureId, firstCandidate)
-          } catch (err: Throwable) {
-            _isListening.value = false
-            setTalkFailure(nativeText("Talk failed: \$message", err.message ?: err::class.simpleName.orEmpty()))
+          synchronized(realtimeCapturePauseLock) {
+            if (activePttCaptureId != captureId || pttReleaseCompletion != null || stopRequested) return@post
+            try {
+              startPushToTalkRecognition(captureId, firstCandidate)
+            } catch (err: Throwable) {
+              _isListening.value = false
+              setTalkFailure(nativeText("Talk failed: \$message", err.message ?: err::class.simpleName.orEmpty()))
+            }
           }
         }
       }
   }
 
-  private fun closePushToTalkRung() {
-    (pttRecognitionRung as? PushToTalkRecognitionRung.RawAudioSegmented)?.source?.close()
-    pttRecognitionRung = null
-  }
+  private fun closePushToTalkRung() =
+    synchronized(realtimeCapturePauseLock) {
+      (pttRecognitionRung as? PushToTalkRecognitionRung.RawAudioSegmented)?.source?.close()
+      pttRecognitionRung = null
+    }
 
   private fun commitPushToTalkLivePartial() {
     val partial = pttLivePartial.trim()
@@ -2359,7 +2300,7 @@ class TalkModeManager internal constructor(
     }
     if (_isSpeaking.value && interruptOnSpeech) {
       if (shouldInterrupt(trimmed)) {
-        stopSpeaking()
+        cancelActivePlayback()
       }
       return
     }
@@ -2426,16 +2367,9 @@ class TalkModeManager internal constructor(
     setStatus(nativeText("Thinking…"), awaitingAgent = true)
     lastTranscript = ""
     lastHeardAtMs = null
-    // Release SpeechRecognizer before making the API call and playing TTS.
-    // Must use withContext(Main) — not post() — so we WAIT for destruction before
-    // proceeding. A fire-and-forget post() races with TTS startup: the recognizer
-    // stays alive, picks up TTS audio as speech (onBeginningOfSpeech), and the
-    // OS kills the AudioTrack write (returns 0) on OxygenOS/OnePlus devices.
-    withContext(Dispatchers.Main) {
-      recognizer?.cancel()
-      recognizer?.destroy()
-      recognizer = null
-    }
+    // Do not start synthesis while native recognition is still queued for teardown on Main.
+    retireRecognizer()
+    audioRetirement.await()
 
     ensureConfigLoaded()
     val prompt = buildPrompt(transcript)
@@ -2558,29 +2492,32 @@ class TalkModeManager internal constructor(
   }
 
   private fun clearPushToTalkRecognition(captureId: String): ClearedPushToTalkCapture? {
-    if (activePttCaptureId != captureId) return null
-    val transcript = PushToTalkTranscriptMerger.merge(pttFinalSegments, pttLivePartial)
-    val completion = pttCompletion
-    pttTimeoutJob?.cancel()
-    pttTimeoutJob = null
-    pttAutoStopEnabled = false
-    pttCompletion = null
-    pttReleaseCompletion?.cancel()
-    pttReleaseCompletion = null
-    activePttCaptureId = null
-    _isListening.value = false
-    listeningMode = false
-    clearListenWatchdog()
-    recognizer?.cancel()
-    recognizer?.destroy()
-    recognizer = null
-    closePushToTalkRung()
-    pttFinalSegments.clear()
-    pttLivePartial = ""
-    lastTranscript = ""
-    lastHeardAtMs = null
-    _inputLevel.value = 0f
-    return ClearedPushToTalkCapture(transcript = transcript, completion = completion)
+    val (cleared, release) =
+      synchronized(realtimeCapturePauseLock) {
+        if (activePttCaptureId != captureId) return null
+        val transcript = PushToTalkTranscriptMerger.merge(pttFinalSegments, pttLivePartial)
+        val completion = pttCompletion
+        pttTimeoutJob?.cancel()
+        pttTimeoutJob = null
+        pttAutoStopEnabled = false
+        pttCompletion = null
+        val release = pttReleaseCompletion
+        pttReleaseCompletion = null
+        activePttCaptureId = null
+        _isListening.value = false
+        listeningMode = false
+        clearListenWatchdog()
+        retireRecognizer()
+        closePushToTalkRung()
+        pttFinalSegments.clear()
+        pttLivePartial = ""
+        lastTranscript = ""
+        lastHeardAtMs = null
+        _inputLevel.value = 0f
+        ClearedPushToTalkCapture(transcript = transcript, completion = completion) to release
+      }
+    release?.cancel()
+    return cleared
   }
 
   private fun finishPushToTalk(
@@ -2625,10 +2562,6 @@ class TalkModeManager internal constructor(
         "Talk Mode active. Reply in a concise, spoken tone.",
         "You may optionally prefix the response with JSON (first line) to set ElevenLabs voice (id or alias), e.g. {\"voice\":\"<id>\",\"once\":true}.",
       )
-    lastInterruptedAtSeconds?.let {
-      lines.add("Assistant speech interrupted at ${"%.1f".format(it)}s.")
-      lastInterruptedAtSeconds = null
-    }
     lines.add("")
     lines.add(transcript)
     return lines.joinToString("\n")
@@ -2852,9 +2785,13 @@ class TalkModeManager internal constructor(
           failure?.let { setStatus(it) }
         }
       }
-      if (shouldResumeAfterSpeak) {
-        withContext(NonCancellable) {
-          onAfterSpeak()
+      try {
+        lease.releaseAudioFocus?.invoke()
+      } finally {
+        if (shouldResumeAfterSpeak) {
+          withContext(NonCancellable) {
+            onAfterSpeak()
+          }
         }
       }
     }
@@ -2882,10 +2819,11 @@ class TalkModeManager internal constructor(
       publishSpeakingState()
     }
 
-  // Called under playbackLock; realtime producers enter only from realtimePlaybackLock.
+  // Called under playbackLock; the capture gate reads the same local playback fact.
   // Either source can keep speaking after the other source completes or is cancelled.
   private fun publishSpeakingState() {
-    _isSpeaking.value = realtimePlaying || localPlayback?.phase == PlaybackPhase.Playing
+    localMediaPlaybackActive = localPlayback?.phase == PlaybackPhase.Playing
+    _isSpeaking.value = realtimePlaying || localMediaPlaybackActive
   }
 
   private fun markAudioPlaybackStarting(playbackToken: Long) {
@@ -2896,39 +2834,50 @@ class TalkModeManager internal constructor(
       lease.phase = PlaybackPhase.Playing
       publishSpeakingState()
       setStatus(nativeText("Speaking…"))
+      requestAudioFocusForTts(lease)
     }
     ensureInterruptListener()
-    requestAudioFocusForTts()
   }
 
   fun stopTts() {
-    val sessionId = realtimeSessionId
-    val turnId = realtimeOutputTurnId?.trim()?.takeIf(String::isNotEmpty)
-    realtimeOutputSuppressed = true
-    stopRealtimePlayback()
-    if (sessionId != null && turnId != null) {
-      scope.launch {
-        cancelRealtimeOutput(
-          reason = "android-stop-tts",
-          sessionId = sessionId,
-          turnId = turnId,
-        )
+    val lease = session.captureRequestLease(gatewayStableId())
+    synchronized(realtimeCapturePauseLock) {
+      val sessionId = realtimeSessionId
+      val output = realtimeOutputTurn
+      realtimeOutputSuppressed = true
+      stopRealtimePlayback()
+      setStatus(currentStatus.copy(text = nativeText("Listening"), state = TalkStatusState.Active, awaitingAgent = false))
+      if (sessionId != null && output?.id != null) {
+        scope.launch {
+          cancelRealtimeOutput(
+            reason = "android-stop-tts",
+            sessionId = sessionId,
+            turnId = output.id,
+            lease = lease,
+            isCurrent = { realtimeSessionId == sessionId && realtimeOutputTurn === output },
+          )
+        }
       }
     }
-    stopSpeaking(resetInterrupt = true)
-    setStatus(nativeText("Listening"))
+    cancelActivePlayback()
   }
 
   private suspend fun cancelRealtimeOutput(
     reason: String,
     sessionId: String?,
     turnId: String?,
+    lease: GatewaySession.RequestLease?,
+    isCurrent: () -> Boolean,
   ): Boolean =
     realtimeOutputCancellationMutex.withLock {
       sessionId ?: return@withLock true
       turnId ?: return@withLock false
+      lease ?: return@withLock false
       val clear = CompletableDeferred<String?>()
-      pendingRealtimeOutputClear = clear
+      synchronized(realtimeCapturePauseLock) {
+        if (!isCurrent() || !lease.isCurrent()) return@withLock false
+        pendingRealtimeOutputClear = clear
+      }
       try {
         val params =
           buildJsonObject {
@@ -2936,7 +2885,13 @@ class TalkModeManager internal constructor(
             put("reason", JsonPrimitive(reason))
             put("turnId", JsonPrimitive(turnId))
           }
-        val response = requestGateway("talk.session.cancelOutput", params.toString(), timeoutMs = 5_000)
+        val response =
+          lease.request("talk.session.cancelOutput", params.toString(), timeoutMs = 5_000) { enqueue ->
+            synchronized(realtimeCapturePauseLock) {
+              if (!isCurrent()) throw CancellationException("realtime output owner replaced")
+              enqueue()
+            }
+          }
         val result = requireAcceptedRealtimeOutputCancellation(response, turnId)
         if (result.status == "stale" || result.status == "idle") return@withLock true
         // The response confirms provider cancellation; clear confirms that the
@@ -2957,19 +2912,11 @@ class TalkModeManager internal constructor(
         Log.d(tag, "realtime cancelOutput failed: ${err.message ?: err::class.simpleName}")
         false
       } finally {
-        if (pendingRealtimeOutputClear === clear) {
-          pendingRealtimeOutputClear = null
+        synchronized(realtimeCapturePauseLock) {
+          if (pendingRealtimeOutputClear === clear) pendingRealtimeOutputClear = null
         }
       }
     }
-
-  private fun stopSpeaking(resetInterrupt: Boolean = true) {
-    if (resetInterrupt && _isSpeaking.value) {
-      lastInterruptedAtSeconds = null
-    }
-    cancelActivePlayback()
-    abandonAudioFocus()
-  }
 
   internal fun shouldAllowSpeechInterrupt(): Boolean = !finalizeInFlight && !isRealtimeCapturePaused()
 
@@ -2978,8 +2925,9 @@ class TalkModeManager internal constructor(
     listenWatchdogJob = null
   }
 
-  private fun requestAudioFocusForTts(): Boolean {
-    val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return true
+  private fun requestAudioFocusForTts(lease: PlaybackLease) {
+    if (realtimeAudioInput != null) return
+    val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
     val req =
       AudioFocusRequest
         .Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
@@ -2989,21 +2937,16 @@ class TalkModeManager internal constructor(
             .setUsage(AudioAttributes.USAGE_MEDIA)
             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
             .build(),
-        ).setOnAudioFocusChangeListener(audioFocusListener)
-        .build()
-    audioFocusRequest = req
+        ).setOnAudioFocusChangeListener { change ->
+          if (change == AudioManager.AUDIOFOCUS_LOSS || change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) {
+            lease.job.cancel(CancellationException("audio focus lost"))
+          }
+        }.build()
+    // Android keys focus by listener identity. Old cleanup and callbacks must
+    // retain this playback's request rather than touching its replacement.
+    lease.releaseAudioFocus = { am.abandonAudioFocusRequest(req) }
     val result = am.requestAudioFocus(req)
     Log.d(tag, "audio focus request result=$result")
-    return result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED || result == AudioManager.AUDIOFOCUS_REQUEST_DELAYED
-  }
-
-  private fun abandonAudioFocus() {
-    val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
-    audioFocusRequest?.let {
-      am.abandonAudioFocusRequest(it)
-      Log.d(tag, "audio focus abandoned")
-    }
-    audioFocusRequest = null
   }
 
   private fun shouldInterrupt(transcript: String): Boolean {
@@ -3099,155 +3042,158 @@ class TalkModeManager internal constructor(
     // Starting a recognizer during finalization or a paused PTT turn can kill
     // TTS playback and compete with the realtime recorder for microphone ownership.
     mainHandler.post {
-      // Recheck after dispatch so a listener queued before PTT cannot reclaim
-      // the microphone while the full PTT turn still owns it.
-      if (stopRequested || !shouldAllowSpeechInterrupt()) return@post
-      if (!SpeechRecognizer.isRecognitionAvailable(context)) return@post
-      try {
-        if (recognizer == null) {
-          recognizer = SpeechRecognizer.createSpeechRecognizer(context).also { it.setRecognitionListener(listener) }
+      synchronized(realtimeCapturePauseLock) {
+        // Recheck after dispatch so a listener queued before PTT cannot reclaim
+        // the microphone while the full PTT turn still owns it.
+        if (stopRequested || !shouldAllowSpeechInterrupt()) return@post
+        if (!SpeechRecognizer.isRecognitionAvailable(context)) return@post
+        try {
+          if (recognizer == null) {
+            recognizer = SpeechRecognizer.createSpeechRecognizer(context).also { it.setRecognitionListener(recognitionListener(null, it)) }
+          }
+          recognizer?.cancel()
+          startListeningInternal(markListening = false)
+        } catch (_: Throwable) {
+          // ignore
         }
-        recognizer?.cancel()
-        startListeningInternal(markListening = false)
-      } catch (_: Throwable) {
-        // ignore
       }
     }
   }
 
-  private val listener = recognitionListener(captureId = null)
-
-  private fun recognitionListener(captureId: String?): RecognitionListener =
+  private fun recognitionListener(
+    captureId: String?,
+    owner: SpeechRecognizer,
+  ): RecognitionListener =
     object : RecognitionListener {
-      override fun onReadyForSpeech(params: Bundle?) {
-        if (!acceptRecognitionCallback(captureId)) return
-        // Only a live listening session may claim the status; a speech-interrupt
-        // recognizer readying during playback must not touch Thinking state.
-        if (activePttCaptureId != null && _isListening.value) {
-          setStatus(nativeText("Listening (PTT)"))
-        } else if (_isEnabled.value && _isListening.value) {
-          setStatus(nativeText("Listening"))
+      override fun onReadyForSpeech(params: Bundle?) =
+        withCurrentRecognition(owner, captureId) {
+          // Only a live listening session may claim the status; a speech-interrupt
+          // recognizer readying during playback must not touch Thinking state.
+          if (activePttCaptureId != null && _isListening.value) {
+            setStatus(nativeText("Listening (PTT)"))
+          } else if (_isEnabled.value && _isListening.value) {
+            setStatus(nativeText("Listening"))
+          }
         }
-      }
 
-      override fun onBeginningOfSpeech() {
-        if (!acceptRecognitionCallback(captureId)) return
-      }
+      override fun onBeginningOfSpeech() {}
 
-      override fun onRmsChanged(rmsdB: Float) {
-        if (!acceptRecognitionCallback(captureId)) return
-        if (activePttCaptureId != null && pttRecognitionRung !is PushToTalkRecognitionRung.RawAudioSegmented) {
-          _inputLevel.value = ((rmsdB + 2f) / 12f).coerceIn(0f, 1f)
+      override fun onRmsChanged(rmsdB: Float) =
+        withCurrentRecognition(owner, captureId) {
+          if (activePttCaptureId != null && pttRecognitionRung !is PushToTalkRecognitionRung.RawAudioSegmented) {
+            _inputLevel.value = ((rmsdB + 2f) / 12f).coerceIn(0f, 1f)
+          }
         }
-      }
 
       override fun onBufferReceived(buffer: ByteArray?) {}
 
-      override fun onEndOfSpeech() {
-        if (!acceptRecognitionCallback(captureId)) return
-        clearListenWatchdog()
-        _inputLevel.value = 0f
-        if (activePttCaptureId != null) return
-        // Don't restart while a transcript is being processed — the recognizer
-        // competing for audio resources kills AudioTrack PCM playback.
-        if (!finalizeInFlight) {
-          scheduleRestart()
-        }
-      }
-
-      override fun onError(error: Int) {
-        if (!acceptRecognitionCallback(captureId)) return
-        if (stopRequested) return
-        _isListening.value = false
-        _inputLevel.value = 0f
-        val pushToTalkActive = activePttCaptureId != null
-        if (pushToTalkActive) {
-          pttReleaseCompletion?.let {
-            it.complete(Unit)
-            return
+      override fun onEndOfSpeech() =
+        withCurrentRecognition(owner, captureId) {
+          clearListenWatchdog()
+          _inputLevel.value = 0f
+          if (activePttCaptureId != null) return@withCurrentRecognition
+          // Don't restart while a transcript is being processed — the recognizer
+          // competing for audio resources kills AudioTrack PCM playback.
+          if (!finalizeInFlight) {
+            scheduleRestart()
           }
         }
-        if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
-          setStatus(nativeText("Microphone permission required"))
-          return
-        }
 
-        setStatus(
-          when (error) {
-            SpeechRecognizer.ERROR_AUDIO -> nativeText("Audio error")
+      override fun onError(error: Int) =
+        withCurrentRecognition(owner, captureId) {
+          if (stopRequested) return@withCurrentRecognition
+          _isListening.value = false
+          _inputLevel.value = 0f
+          val pushToTalkActive = activePttCaptureId != null
+          if (pushToTalkActive) {
+            pttReleaseCompletion?.let {
+              it.complete(Unit)
+              return@withCurrentRecognition
+            }
+          }
+          if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
+            setStatus(nativeText("Microphone permission required"))
+            return@withCurrentRecognition
+          }
 
-            SpeechRecognizer.ERROR_CLIENT -> nativeText("Client error")
+          setStatus(
+            when (error) {
+              SpeechRecognizer.ERROR_AUDIO -> nativeText("Audio error")
 
-            SpeechRecognizer.ERROR_NETWORK -> nativeText("Network error")
+              SpeechRecognizer.ERROR_CLIENT -> nativeText("Client error")
 
-            SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> nativeText("Network timeout")
+              SpeechRecognizer.ERROR_NETWORK -> nativeText("Network error")
 
-            SpeechRecognizer.ERROR_NO_MATCH,
-            SpeechRecognizer.ERROR_SPEECH_TIMEOUT,
-            -> if (pushToTalkActive) nativeText("Listening (PTT)") else nativeText("Listening")
+              SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> nativeText("Network timeout")
 
-            SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> nativeText("Recognizer busy")
+              SpeechRecognizer.ERROR_NO_MATCH,
+              SpeechRecognizer.ERROR_SPEECH_TIMEOUT,
+              -> if (pushToTalkActive) nativeText("Listening (PTT)") else nativeText("Listening")
 
-            SpeechRecognizer.ERROR_SERVER -> nativeText("Server error")
+              SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> nativeText("Recognizer busy")
 
-            else -> nativeText("Speech error (\$error)", error)
-          },
-        )
-        if (pushToTalkActive) {
-          schedulePushToTalkRestart(
-            delayMs = 600L,
-            advanceRung = pttRecognitionRung !is PushToTalkRecognitionRung.RestartingSingleSession,
+              SpeechRecognizer.ERROR_SERVER -> nativeText("Server error")
+
+              else -> nativeText("Speech error (\$error)", error)
+            },
           )
-          return
+          if (pushToTalkActive) {
+            schedulePushToTalkRestart(
+              delayMs = 600L,
+              advanceRung = pttRecognitionRung !is PushToTalkRecognitionRung.RestartingSingleSession,
+            )
+            return@withCurrentRecognition
+          }
+          scheduleRestart(delayMs = 600)
         }
-        scheduleRestart(delayMs = 600)
-      }
 
-      override fun onResults(results: Bundle?) {
-        if (!acceptRecognitionCallback(captureId)) return
-        val list = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty()
-        list.firstOrNull()?.let { handleTranscript(it, isFinal = true) }
-        if (activePttCaptureId != null) {
+      override fun onResults(results: Bundle?) =
+        withCurrentRecognition(owner, captureId) {
+          val list = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty()
+          list.firstOrNull()?.let { handleTranscript(it, isFinal = true) }
+          if (activePttCaptureId != null) {
+            _isListening.value = false
+            _inputLevel.value = 0f
+            pttReleaseCompletion?.let {
+              it.complete(Unit)
+              return@withCurrentRecognition
+            }
+            schedulePushToTalkRestart(
+              delayMs = pushToTalkRestartDelayMs,
+              advanceRung = pttRecognitionRung !is PushToTalkRecognitionRung.RestartingSingleSession,
+            )
+            return@withCurrentRecognition
+          }
+          scheduleRestart()
+        }
+
+      override fun onPartialResults(partialResults: Bundle?) =
+        withCurrentRecognition(owner, captureId) {
+          val list = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty()
+          list.firstOrNull()?.let { handleTranscript(it, isFinal = false) }
+        }
+
+      override fun onSegmentResults(segmentResults: Bundle) =
+        withCurrentRecognition(owner, captureId) {
+          if (activePttCaptureId == null) return@withCurrentRecognition
+          val list = segmentResults.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty()
+          list.firstOrNull()?.let { handleTranscript(it, isFinal = true) }
+        }
+
+      override fun onEndOfSegmentedSession() =
+        withCurrentRecognition(owner, captureId) {
+          if (activePttCaptureId == null) return@withCurrentRecognition
           _isListening.value = false
           _inputLevel.value = 0f
           pttReleaseCompletion?.let {
             it.complete(Unit)
-            return
+            return@withCurrentRecognition
           }
           schedulePushToTalkRestart(
-            delayMs = pushToTalkRestartDelayMs,
-            advanceRung = pttRecognitionRung !is PushToTalkRecognitionRung.RestartingSingleSession,
+            delayMs = 180L,
+            advanceRung = shouldAdvancePushToTalkRungAfterSegmentedSession(pttRecognitionRung?.candidate ?: return@withCurrentRecognition),
           )
-          return
         }
-        scheduleRestart()
-      }
-
-      override fun onPartialResults(partialResults: Bundle?) {
-        if (!acceptRecognitionCallback(captureId)) return
-        val list = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty()
-        list.firstOrNull()?.let { handleTranscript(it, isFinal = false) }
-      }
-
-      override fun onSegmentResults(segmentResults: Bundle) {
-        if (!acceptRecognitionCallback(captureId) || activePttCaptureId == null) return
-        val list = segmentResults.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty()
-        list.firstOrNull()?.let { handleTranscript(it, isFinal = true) }
-      }
-
-      override fun onEndOfSegmentedSession() {
-        if (!acceptRecognitionCallback(captureId) || activePttCaptureId == null) return
-        _isListening.value = false
-        _inputLevel.value = 0f
-        pttReleaseCompletion?.let {
-          it.complete(Unit)
-          return
-        }
-        schedulePushToTalkRestart(
-          delayMs = 180L,
-          advanceRung = shouldAdvancePushToTalkRungAfterSegmentedSession(pttRecognitionRung?.candidate ?: return),
-        )
-      }
 
       override fun onEvent(
         eventType: Int,
@@ -3255,9 +3201,18 @@ class TalkModeManager internal constructor(
       ) {}
     }
 
-  // SpeechRecognizer can post callbacks after destroy. Binding each listener to its
-  // capture prevents a retired session from mutating normal Talk or the next PTT hold.
-  private fun acceptRecognitionCallback(captureId: String?): Boolean = captureId == activePttCaptureId
+  // A destroyed recognizer can still deliver queued callbacks, including continuous Talk's null PTT id.
+  private inline fun withCurrentRecognition(
+    owner: SpeechRecognizer,
+    captureId: String?,
+    action: () -> Unit,
+  ) {
+    // SDK recognition callbacks and SystemSpeechSpeaker.beforeSpeak both run on Main; keep that ordering.
+    synchronized(realtimeCapturePauseLock) {
+      if (recognizer !== owner || captureId != activePttCaptureId) return
+      action()
+    }
+  }
 }
 
 private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject

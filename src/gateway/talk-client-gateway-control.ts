@@ -48,6 +48,7 @@ import { ADMIN_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 import { resolveOwnedActiveTalkRunTarget } from "./server-methods/talk-client-run-ownership.js";
 import { formatError } from "./server-utils.js";
+import { prepareTalkAgentConsultTranscript } from "./talk-agent-consult-transcript.js";
 import { registerTalkConnectionCleanup } from "./talk-session-registry.js";
 import type { PreparedTalkSessionTarget } from "./talk-session-target.types.js";
 
@@ -146,7 +147,11 @@ function createTalkClientAgentRuntime(params: {
     runParams.abortSignal?.addEventListener("abort", close, { once: true });
     try {
       runParams.abortSignal?.throwIfAborted();
-      return await execution.runEmbeddedAgent({ ...runParams, preparedRunAdmission });
+      return await execution.runEmbeddedAgent({
+        ...runParams,
+        preparedRunAdmission,
+        prepareAssistantTranscriptMessage: prepareTalkAgentConsultTranscript,
+      });
     } finally {
       runParams.abortSignal?.removeEventListener("abort", close);
       close();

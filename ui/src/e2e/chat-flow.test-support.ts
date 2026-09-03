@@ -25,6 +25,24 @@ export {
 
 export const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
+export async function captureUiProof(
+  owner: { readonly artifactDir: string },
+  page: Page,
+  directory: string,
+  fileName: string,
+): Promise<void> {
+  if (!captureUiProofEnabled) {
+    return;
+  }
+  const artifactDir = path.join(owner.artifactDir, directory);
+  await mkdir(artifactDir, { recursive: true });
+  await page.screenshot({
+    animations: "disabled",
+    fullPage: true,
+    path: path.join(artifactDir, fileName),
+  });
+}
+
 export function createChatFlowE2eSuite() {
   return createControlUiE2eSuite({
     name: "Control UI mocked Gateway E2E",
