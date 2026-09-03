@@ -544,6 +544,7 @@ async function patchSqliteSessionEntrySnapshot(
       previousIdentity = new Map(fresh.map((row) => [row.sessionKey, row.entry]));
       const selectedPreviousEntry = fresh[0]?.entry ?? writeBase;
       const persisted = writeSessionEntry(writeDatabase, sessionKey, next, {
+        ...(options.consumePendingReset ? { consumePendingReset: true } : {}),
         previousEntry: selectedPreviousEntry,
       });
       wrote = true;

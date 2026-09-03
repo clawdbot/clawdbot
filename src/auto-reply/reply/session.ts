@@ -767,13 +767,14 @@ async function initSessionStateAttemptLocked(
     !freshEntry &&
     canReuseExistingEntry &&
     entryFreshness?.fresh === false &&
-    entryFreshness.staleReason != null &&
     activeReplyOperation?.phase !== "queued" &&
     activeReplyOperation?.sessionId === entry?.sessionId;
-  // Implicit daily/idle rollover must not rename a transcript while that exact
-  // session's active writer is still running. Admission will steer/wait/queue;
-  // queued pre-dispatch reservations still let the current turn roll over.
+  // An implicit reset must not append a boundary or interrupt this exact active writer.
+  // A bare stale result is the legacy updatedAt=0 pending-reset tombstone.
   const effectiveFreshEntry = deferImplicitRolloverForActiveRun ? true : freshEntry;
+  // Keep the owed reset pending until the active writer completes.
+  const retainPendingResetMarker =
+    deferImplicitRolloverForActiveRun && !isNewSession && entry?.updatedAt === 0;
   // Capture the current session entry before any reset so its transcript can be
   // archived afterward.  We need to do this for both explicit resets (/new, /reset)
   // and for scheduled/daily resets where the session has become stale (!freshEntry).
@@ -917,7 +918,7 @@ async function initSessionStateAttemptLocked(
     ...creationStamp,
     sessionId,
     lifecycleRevision: isNewSession ? crypto.randomUUID() : baseEntry?.lifecycleRevision,
-    updatedAt: Date.now(),
+    updatedAt: retainPendingResetMarker ? 0 : Date.now(),
     sessionStartedAt: isNewSession
       ? now
       : (baseEntry?.sessionStartedAt ?? lifecycleTimestamps.sessionStartedAt),
