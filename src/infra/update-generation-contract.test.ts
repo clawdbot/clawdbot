@@ -128,6 +128,13 @@ describe("durable update generation transaction contract", () => {
     const previous = selection("a");
     const candidate = selection("b");
     let record = append(null, intent(previous, true));
+    expect(
+      adjudicateUpdateGenerationTransaction(record, {
+        selector: previous,
+        generations: [],
+        bindingConverged: true,
+      }),
+    ).toMatchObject({ action: "resume-materialization", role: "candidate" });
     record = append(
       record,
       receipt("generation-materialization-intent", 1, {
@@ -258,6 +265,13 @@ describe("durable update generation transaction contract", () => {
         selector: previous,
         generations: [],
         bindingConverged: false,
+      }),
+    ).toMatchObject({ action: "persist-binding-intent" });
+    expect(
+      adjudicateUpdateGenerationTransaction(record, {
+        selector: previous,
+        generations: [],
+        bindingConverged: true,
       }),
     ).toMatchObject({ action: "persist-binding-intent" });
     record = append(

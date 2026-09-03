@@ -154,12 +154,12 @@ export function adjudicateUpdateGenerationTransaction(
       : { action: "select-baseline", reason: "baseline selector replacement is pending" };
   }
   if (latest.kind === "baseline-selected") {
-    return physical.bindingConverged
-      ? { action: "record-binding-completed", reason: "stable bindings already converge" }
-      : {
-          action: "persist-binding-intent",
-          reason: "baseline is selected before binding migration",
-        };
+    return {
+      action: "persist-binding-intent",
+      reason: physical.bindingConverged
+        ? "stable bindings converge but their durable intent is not recorded"
+        : "baseline is selected before binding migration",
+    };
   }
   if (latest.kind === "binding-intent") {
     return physical.bindingConverged
@@ -216,7 +216,7 @@ export function adjudicateUpdateGenerationTransaction(
   }
   return {
     action: "resume-materialization",
-    role: "previous",
+    role: state.intent.stableBindingAlreadyVerified ? "candidate" : "previous",
     reason: "transaction intent is durable",
   };
 }
