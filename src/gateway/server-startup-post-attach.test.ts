@@ -3844,7 +3844,7 @@ describe("startGatewayPostAttachRuntime", () => {
       let healthy = false;
       let wallClockMs = 10_000;
       vi.spyOn(Date, "now").mockImplementation(() => wallClockMs);
-      vi.spyOn(performance, "now").mockReturnValue(0);
+      const monotonicNow = vi.spyOn(performance, "now").mockReturnValue(0);
       hoisted.getAcpRuntimeBackend.mockImplementation((id?: string) => ({
         id: id ?? "acpx",
         runtime: {},
@@ -3879,7 +3879,7 @@ describe("startGatewayPostAttachRuntime", () => {
       expect(hoisted.reconcilePendingSessionIdentities).not.toHaveBeenCalled();
 
       wallClockMs += shiftedWallClockMs;
-      vi.mocked(performance.now).mockReturnValue(monotonicMs);
+      monotonicNow.mockReturnValue(monotonicMs);
       if (!timedOut) {
         await new Promise<void>((resolve) => {
           setTimeout(resolve, 60);
