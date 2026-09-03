@@ -20,8 +20,10 @@ describe("channel ingress monitor start capacity", () => {
   // claim, so the drain no longer serializes it. Counting it against startLimit
   // lets a handful of waiting deliveries stall every other lane until they
   // finish - the shape LINE's forming image sets hit. The discount reaches the
-  // drains that declare `deferredLaneOccupancy: "release"` (line, slack,
-  // telegram); a drain that holds its lane keeps the plain startLimit.
+  // drains that declare `deferredLaneOccupancy: "release"` and set a startLimit
+  // (line, telegram); slack declares the release but sets no limit, so its
+  // budget is zero and the gate never runs. A drain that holds its lane keeps
+  // the plain startLimit.
   it("keeps claiming other lanes while deferred deliveries wait", async () => {
     const queue = createChannelIngressQueue<StoredEvent>({
       channelId: "test",
