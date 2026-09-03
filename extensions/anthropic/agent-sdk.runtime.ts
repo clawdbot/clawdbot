@@ -152,11 +152,14 @@ function resolveClaudeAgentSdkOptions(
     permissionMode: "default",
     settingSources: ["user"],
     spawnClaudeCodeProcess: processOwner.spawn,
-    systemPrompt: {
-      type: "preset",
-      preset: "claude_code",
-      append: context.systemPrompt,
-    },
+    // Replace Claude Code's preset harness prompt entirely rather than appending
+    // to it. OpenClaw already ships a full system prompt for the `cli_backend`
+    // surface (tool guidance, skills usage, identity), so keeping the
+    // `claude_code` preset alongside it means every turn runs with two system
+    // prompts. It also let the Claude Code harness identity surface to end
+    // users ("I don't have image access in this CLI context"). A string
+    // `systemPrompt` is a full custom prompt per the Agent SDK contract.
+    systemPrompt: context.systemPrompt,
     canUseTool: (toolName, input, request) =>
       authorizeClaudeAgentSdkTool({
         currentTurn,
@@ -407,12 +410,11 @@ function resolveClaudeAgentSdkOptions(
     options.extraArgs = extraArgs;
   }
   if (excludeDynamicSystemPromptSections) {
-    options.systemPrompt = {
-      type: "preset",
-      preset: "claude_code",
-      append: context.systemPrompt,
-      excludeDynamicSections: true,
-    };
+    // Same replacement as above; with a string prompt the dynamic-sections
+    // toggle is moot (there is no preset to trim), but this branch would
+    // otherwise re-introduce the `claude_code` preset for newer Claude Code
+    // versions that support the flag.
+    options.systemPrompt = context.systemPrompt;
   }
   return options;
 }
