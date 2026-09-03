@@ -6,6 +6,7 @@ import { writeSubagentSessionEntry } from "../src/agents/subagents/registry/suba
 import { saveSubagentRegistryToSqlite } from "../src/agents/subagents/registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../src/agents/subagents/registry/subagent-registry.types.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
+import type { Deferred } from "../src/shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
 import {
   createOpenClawTestInstance,
@@ -177,7 +178,7 @@ function createTestConfig(baseUrl: string): OpenClawConfig {
 }
 
 async function startHeldModelServer(): Promise<HeldModelServer> {
-  const releases: Array<ReturnType<typeof createDeferred>> = [];
+  const releases: Deferred[] = [];
   const requestBodies: string[] = [];
   let active = 0;
   let activeRestored = 0;
@@ -238,7 +239,7 @@ async function startHeldModelServer(): Promise<HeldModelServer> {
   const address = server.address() as AddressInfo;
   const releaseAll = () => {
     for (const release of releases) {
-      release?.resolve();
+      release?.resolve(undefined);
     }
   };
   return {
@@ -246,7 +247,7 @@ async function startHeldModelServer(): Promise<HeldModelServer> {
     countRequestsContaining: (marker) =>
       requestBodies.filter((body) => body.includes(marker)).length,
     peakRestored: () => peakRestored,
-    release: (index) => releases[index]?.resolve(),
+    release: (index) => releases[index]?.resolve(undefined),
     releaseAll,
     requestCount: () => requestCount,
     url: `http://127.0.0.1:${address.port}`,
