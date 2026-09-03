@@ -529,9 +529,12 @@ function buildOpenAICodexStaticProviderConfig(): ModelProviderConfig {
       if (isOpenAIPlatformOnlyRouteModelId(modelId)) {
         return [];
       }
-      // Static OAuth rows are offline hints, not entitlement claims. Keep only
-      // the proven GPT-5.6 subscription route; live discovery may add others.
-      if (modelId.startsWith("gpt-5.6") && modelId !== OPENAI_GPT_56_SOL_MODEL_ID) {
+      // Offline hints cover established subscription routes. Astra's phased
+      // rollout and other GPT-5.6 tiers require successful account discovery.
+      if (
+        modelId === OPENAI_GPT_6_ASTRA_MODEL_ID ||
+        (modelId.startsWith("gpt-5.6") && modelId !== OPENAI_GPT_56_SOL_MODEL_ID)
+      ) {
         return [];
       }
       return [normalizeOpenAICodexCatalogModel(model)];
