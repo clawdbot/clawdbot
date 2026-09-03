@@ -169,9 +169,11 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
         fileWatchPaths.add(dir);
       }
     }
-    if (fileWatchPaths.size > 0 && !capacityDegraded) {
+    if (fileWatchPaths.size > 0 && !capacityDegraded && this.capacityDegradedDirs.size === 0) {
       // Under exhausted kernel watch capacity every chokidar per-file watch
       // would fail identically; interval sync covers those paths instead.
+      // The degraded-roots set also covers late degradation from inside a
+      // nominally attached root (e.g. synchronous parent-watch failure).
       this.attachMemoryChokidarPaths(Array.from(fileWatchPaths), markDirty);
     }
     this.scheduleMemoryWatchPressureStartupCheck();
@@ -436,6 +438,16 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
       });
       pair.parent = attachedParent;
     } catch (err) {
+      if (isKernelWatchCapacityError(err)) {
+        // The kernel cannot grant the parent watch even at creation time:
+        // root replacement would stay uncovered and a retry cannot succeed
+        // under the same limit. Degrade the tree to forced polling.
+        this.closeNativeMemoryWatchPair(pair);
+        if (!this.closed) {
+          this.degradeMemoryWatchToPollingSync(pair.dir, markDirty);
+        }
+        return;
+      }
       // Parent watcher couldn't start (e.g. parentDir not accessible).
       // The main watcher still works for non-replacement events; just
       // log and continue.

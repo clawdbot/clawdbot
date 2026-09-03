@@ -511,6 +511,42 @@ describe("memory watcher kernel capacity degrade", () => {
     expect(readIntervalTimer(active)).toBeTruthy();
   });
 
+  it("parent-watcher creation capacity failure degrades the tree", async () => {
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    await setupCapacityWorkspace();
+
+    // The main directory watch attaches fine, but creating the parent
+    // watcher itself throws EMFILE synchronously.
+    nativeWatchFactoryMock.mockImplementation(
+      (
+        dir: string,
+        options: unknown,
+        listener?: (eventType: string, filename: string | null) => void,
+      ) => {
+        if (String(dir) === workspaceDir) {
+          throw Object.assign(new Error(`simulated watch failure on ${dir}`), { code: "EMFILE" });
+        }
+        const watcher = makeNativeWatcherFor(dir);
+        if (listener) {
+          watcher.rememberListener(listener);
+        }
+        createdNativeWatchers.push(watcher);
+        return watcher;
+      },
+    );
+
+    const active = await createManager(createWatchConfig());
+
+    await vi.waitFor(() => {
+      const degraded = memoryLoggerWarn.mock.calls.some((call) =>
+        String(call[0]).includes("kernel watch capacity exhausted"),
+      );
+      expect(degraded).toBe(true);
+    });
+    expect(createdChokidarWatchers).toHaveLength(0);
+    expect(readIntervalTimer(active)).toBeTruthy();
+  });
+
   it("linux child-directory capacity failure degrades the whole tree", async () => {
     Object.defineProperty(process, "platform", { value: "linux", configurable: true });
     await setupCapacityWorkspace();
