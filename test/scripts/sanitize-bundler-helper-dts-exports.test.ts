@@ -1,16 +1,9 @@
 import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   findUndeclaredBundlerHelperDtsExports,
   sanitizeBundlerHelperDtsExports,
 } from "../../scripts/lib/sanitize-bundler-helper-dts-exports.mts";
-
-const fixturePath = join(
-  dirname(fileURLToPath(import.meta.url)),
-  "../fixtures/published-2026.8.2-undeclared-exportall.d.ts",
-);
 
 describe("sanitizeBundlerHelperDtsExports", () => {
   it("flags and removes an undeclared __exportAll named export", () => {
@@ -70,9 +63,12 @@ describe("sanitizeBundlerHelperDtsExports", () => {
   });
 
   it("clears the published 2026.8.2 undeclared __exportAll export shape", () => {
-    const source = readFileSync(fixturePath, "utf8");
+    const source = readFileSync(
+      new URL("../fixtures/published-2026.8.2-undeclared-exportall.d.ts", import.meta.url),
+      "utf8",
+    );
     expect(source).toContain("__exportAll as ud");
-    expect(findUndeclaredBundlerHelperDtsExports(source, fixturePath)).toEqual([
+    expect(findUndeclaredBundlerHelperDtsExports(source)).toEqual([
       { name: "__exportAll", line: 5 },
     ]);
     const sanitized = sanitizeBundlerHelperDtsExports(source);
@@ -80,6 +76,6 @@ describe("sanitizeBundlerHelperDtsExports", () => {
     expect(sanitized.sourceText).toContain("SessionDiscussionProvider as uc");
     expect(sanitized.sourceText).toContain("DispatchReplyWithDispatcher as ui");
     expect(sanitized.sourceText).not.toContain("__exportAll");
-    expect(findUndeclaredBundlerHelperDtsExports(sanitized.sourceText, fixturePath)).toEqual([]);
+    expect(findUndeclaredBundlerHelperDtsExports(sanitized.sourceText)).toEqual([]);
   });
 });

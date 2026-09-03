@@ -9,9 +9,9 @@
 import ts from "typescript";
 
 /** Runtime helpers that must never appear as undeclared declaration exports. */
-export const BUNDLER_RUNTIME_HELPER_EXPORT_NAMES = ["__exportAll"] as const;
+const BUNDLER_RUNTIME_HELPER_EXPORT_NAMES = ["__exportAll"] as const;
 
-export type BundlerRuntimeHelperExportName = (typeof BUNDLER_RUNTIME_HELPER_EXPORT_NAMES)[number];
+type BundlerRuntimeHelperExportName = (typeof BUNDLER_RUNTIME_HELPER_EXPORT_NAMES)[number];
 
 const HELPER_NAME_SET = new Set<string>(BUNDLER_RUNTIME_HELPER_EXPORT_NAMES);
 
