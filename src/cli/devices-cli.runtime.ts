@@ -36,6 +36,7 @@ import {
 import { formatCliCommand } from "./command-format.js";
 import { callGatewayFromCliWithTransport } from "./gateway-rpc.js";
 import { formatConnectionFlagReminder } from "./nodes-cli/cli-utils.js";
+import { formatPairingApproveCommand } from "./pairing-command-format.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
 
 type DevicesRpcOpts = {
@@ -136,15 +137,6 @@ const callGatewayCli = async (
     sharedStateMode: "read-only",
   });
 
-function buildNodeApproveCommand(opts: DevicesRpcOpts, requestId: string): string {
-  const args = ["openclaw", "nodes", "approve", requestId];
-  const timeout = normalizeOptionalString(opts.timeout);
-  if (timeout && timeout !== String(DEFAULT_DEVICES_TIMEOUT_MS)) {
-    args.push("--timeout", timeout);
-  }
-  return formatCliCommand(args.map(quoteCliArg).join(" "));
-}
-
 function stringsMatch(left: unknown, right: unknown): boolean {
   const normalizedLeft = normalizeOptionalString(left);
   const normalizedRight = normalizeOptionalString(right);
@@ -176,7 +168,7 @@ function buildPendingNodeApprovalNotice(
       normalizeOptionalString(device.nodeSurface?.displayName) ??
       normalizeOptionalString(device.displayName) ??
       device.deviceId,
-    command: buildNodeApproveCommand(opts, requestId),
+    command: formatPairingApproveCommand("nodes", requestId, { timeout: opts.timeout }),
     connectionReminder: formatConnectionFlagReminder(opts),
   };
 }
@@ -279,16 +271,16 @@ function buildFallbackStateMismatchError(
   // each rejected connect re-mints the request, so the held id is stale rather
   // than foreign. Only an empty list suggests a genuinely different store, and
   // shared-auth flags are only a fix when the gateway actually uses shared auth.
-  const guidance =
-    pendingRequestIds.length > 0
-      ? [
-          "That request was superseded by a newer pending request.",
-          `Approve the current request instead: openclaw devices approve ${pendingRequestIds[0]}`,
-        ]
-      : [
-          "The running gateway may be using a different OPENCLAW_PROFILE or OPENCLAW_STATE_DIR than this CLI.",
-          "Rerun with the gateway's profile/state-dir; if the gateway uses shared auth, pass --token/--password to approve through it.",
-        ];
+  const currentRequestId = pendingRequestIds[0];
+  const guidance = currentRequestId
+    ? [
+        "That request was superseded by a newer pending request.",
+        `Approve the current request instead: ${formatPairingApproveCommand("devices", currentRequestId)}`,
+      ]
+    : [
+        "The running gateway may be using a different OPENCLAW_PROFILE or OPENCLAW_STATE_DIR than this CLI.",
+        "Rerun with the gateway's profile/state-dir; if the gateway uses shared auth, pass --token/--password to approve through it.",
+      ];
   return new Error([heading, ...guidance].join("\n"));
 }
 
@@ -754,22 +746,6 @@ function lookupPairedDevice(
   return paired;
 }
 
-function buildExplicitApproveCommand(opts: DevicesRpcOpts, requestId: string): string {
-  const args = ["openclaw", "devices", "approve", requestId];
-  const url = normalizeOptionalString(opts.url);
-  if (url) {
-    args.push("--url", url);
-  }
-  const timeout = normalizeOptionalString(opts.timeout);
-  if (timeout && timeout !== String(DEFAULT_DEVICES_TIMEOUT_MS)) {
-    args.push("--timeout", timeout);
-  }
-  if (opts.json === true) {
-    args.push("--json");
-  }
-  return args.map(quoteCliArg).join(" ");
-}
-
 function formatAuthFlagReminder(opts: DevicesRpcOpts): string {
   const flags: string[] = [];
   if (normalizeOptionalString(opts.token)) {
@@ -1015,7 +991,7 @@ export async function runDevicesApproveCommand(
       req,
       lookupPairedDevice(indexPairedDevices(pairingList?.paired), req),
     );
-    const approveCommand = buildExplicitApproveCommand(opts, req.requestId);
+    const approveCommand = formatPairingApproveCommand("devices", req.requestId, opts);
     const authReminder = formatAuthFlagReminder(opts);
     if (opts.json) {
       defaultRuntime.writeJson({

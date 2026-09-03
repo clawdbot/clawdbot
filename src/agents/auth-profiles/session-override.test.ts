@@ -12,7 +12,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   authStoreMocks,
   clearSessionAuthProfileOverride,
-  createAuthStore,
   createAuthStoreWithProfiles,
   createAutomaticSessionEntry,
   prepareCooldownAuthState,
@@ -55,37 +54,6 @@ describe("resolveSessionAuthProfileOverride", () => {
         return;
       }
       throw new Error("Expected auth-profiles.json to be absent");
-    });
-  });
-
-  it("keeps user override when provider alias differs", async () => {
-    await withAuthState(async (state) => {
-      const agentDir = state.agentDir();
-      await fs.mkdir(agentDir, { recursive: true });
-      authStoreMocks.state.hasSource = true;
-      authStoreMocks.state.store = createAuthStore();
-
-      const sessionEntry: SessionEntry = {
-        sessionId: "s1",
-        updatedAt: Date.now(),
-        authProfileOverride: "zai:work",
-        authProfileOverrideSource: "user",
-      };
-      const sessionStore = { "agent:main:main": sessionEntry };
-
-      const resolved = await resolveSession({
-        cfg: {} as OpenClawConfig,
-        provider: "z.ai",
-        agentDir,
-        sessionEntry,
-        sessionStore,
-        sessionKey: "agent:main:main",
-        storePath: undefined,
-        isNewSession: false,
-      });
-
-      expect(resolved).toBe("zai:work");
-      expect(sessionEntry.authProfileOverride).toBe("zai:work");
     });
   });
 
@@ -243,48 +211,6 @@ describe("resolveSessionAuthProfileOverride", () => {
       expect(resolved).toBe(TEST_SECONDARY_PROFILE_ID);
       expect(sessionEntry.authProfileOverride).toBe(TEST_SECONDARY_PROFILE_ID);
       expect(sessionEntry.authProfileOverrideSource).toBe("user");
-    });
-  });
-
-  it("keeps session override when CLI provider aliases the stored profile provider", async () => {
-    await withAuthState(async (state) => {
-      const agentDir = state.agentDir();
-      await fs.mkdir(agentDir, { recursive: true });
-      authStoreMocks.state.hasSource = true;
-      authStoreMocks.state.store = createAuthStoreWithProfiles({
-        profiles: {
-          [TEST_PRIMARY_PROFILE_ID]: {
-            type: "api_key",
-            provider: "openai",
-            key: "sk-codex",
-          },
-        },
-        order: {
-          "codex-cli": [TEST_PRIMARY_PROFILE_ID],
-        },
-      });
-
-      const sessionEntry: SessionEntry = {
-        sessionId: "s1",
-        updatedAt: Date.now(),
-        authProfileOverride: TEST_PRIMARY_PROFILE_ID,
-        authProfileOverrideSource: "auto",
-      };
-      const sessionStore = { "agent:main:main": sessionEntry };
-
-      const resolved = await resolveSession({
-        cfg: {} as OpenClawConfig,
-        provider: "codex-cli",
-        agentDir,
-        sessionEntry,
-        sessionStore,
-        sessionKey: "agent:main:main",
-        storePath: undefined,
-        isNewSession: false,
-      });
-
-      expect(resolved).toBe(TEST_PRIMARY_PROFILE_ID);
-      expect(sessionEntry.authProfileOverride).toBe(TEST_PRIMARY_PROFILE_ID);
     });
   });
 

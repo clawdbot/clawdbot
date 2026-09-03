@@ -35,7 +35,6 @@ const gatewayRuntimeIdentity = vi.hoisted(() => vi.fn());
 const dispatchChild = vi.hoisted(() => vi.fn());
 const spawnCallerIdentity = vi.hoisted(() => vi.fn());
 const spawnArgs = vi.hoisted(() => vi.fn());
-const githubPublicationRequest = vi.hoisted(() => vi.fn());
 const scopedSessionAccess = vi.hoisted(() =>
   vi.fn(async (params: { run: () => Promise<unknown> }) => await params.run()),
 );
@@ -118,7 +117,6 @@ const fixtureMocks = {
   dispatchChild,
   spawnCallerIdentity,
   spawnArgs,
-  githubPublicationRequest,
   scopedSessionAccess,
 };
 
@@ -219,67 +217,6 @@ describe("worker session tool topology", () => {
     expect(gatewayCreate).not.toHaveBeenCalled();
     expect(dispatchChild).not.toHaveBeenCalled();
     expect(gatewayRequest).not.toHaveBeenCalled();
-  });
-
-  it("records publication intent with the exact claim and no credential fields", async () => {
-    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
-
-    const result = await execute({
-      identity,
-      toolName: "github_publish",
-      request: {
-        toolCallId: "publish-cloud-work",
-        title: "Publish the cloud fix",
-      },
-    });
-
-    expect(JSON.parse(result.resultJson)).toMatchObject({
-      details: { requestId: "publication-1", status: "requested" },
-    });
-    expect(githubPublicationRequest).toHaveBeenCalledWith({
-      claim: sourceClaim,
-      sessionKey: SOURCE.sessionKey,
-      agentId: SOURCE.agentId,
-      idempotencyKey: "publish-cloud-work",
-      title: "Publish the cloud fix",
-      assertCurrent: expect.any(Function),
-    });
-    expect(JSON.stringify(githubPublicationRequest.mock.calls)).not.toContain("token");
-  });
-
-  it("revalidates publication authority after awaited Gateway work", async () => {
-    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
-    githubPublicationRequest.mockImplementationOnce(async (request) => {
-      placements.closeWorkerTurnToolAdmission(sourceClaim);
-      request.assertCurrent?.();
-      return {
-        requestId: "unreachable",
-        status: "requested",
-        message: "unreachable",
-      };
-    });
-
-    await expect(
-      execute({
-        identity,
-        toolName: "github_publish",
-        request: { toolCallId: "publish-lost-authority" },
-      }),
-    ).rejects.toThrow("Worker session tool authority changed");
-  });
-
-  it("rejects publication when the exact turn was not granted the tool", async () => {
-    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
-    placements.authorizeWorkerTurnTools(sourceClaim, ["sessions_send"]);
-
-    await expect(
-      execute({
-        identity,
-        toolName: "github_publish",
-        request: { toolCallId: "publish-without-authority" },
-      }),
-    ).rejects.toThrow("Worker session tool authority changed");
-    expect(githubPublicationRequest).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(
@@ -405,7 +342,7 @@ describe("worker session tool topology", () => {
       sessionSpawnContext: {
         inheritedToolPolicy: {
           version: 1,
-          allow: ["sessions_spawn", "sessions_send", "github_publish"],
+          allow: ["sessions_spawn", "sessions_send"],
           deny: [],
         },
       },

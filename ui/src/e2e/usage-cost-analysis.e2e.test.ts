@@ -530,7 +530,7 @@ suite.define(() => {
     );
   });
 
-  it("keeps selected provider alternatives visible and finds quoted session labels", async () => {
+  it("edits equivalent provider filters and finds quoted session labels", async () => {
     const date = dayOffset(0);
     const updatedAt = Date.now();
     const sessions = [
@@ -608,6 +608,21 @@ suite.define(() => {
         }
 
         const query = page.locator(".usage-query-input");
+        await page.keyboard.press("Escape");
+        for (const token of ["PROVIDER:OpenAI", 'provider:"openai"']) {
+          await query.fill(`${token} provider:anthropic`);
+          await query.press("Enter");
+          await expect
+            .poll(async () => (await sessionLabels.allTextContents()).toSorted())
+            .toEqual(["Research Review", "Team Planning"]);
+          await providerFilter.locator(".usage-filter-trigger").click();
+          const openai = providerFilter.locator('wa-dropdown-item[value="option:openai"]');
+          await expect.poll(() => openai.getAttribute("aria-checked")).toBe("true");
+          await openai.click();
+          await expect.poll(() => sessionLabels.allTextContents()).toEqual(["Research Review"]);
+          await expect.poll(() => query.inputValue()).toBe("provider:anthropic ");
+          await page.keyboard.press("Escape");
+        }
         await query.fill('label:"Team Planning"');
         await query.press("Enter");
         await expect.poll(() => sessionLabels.allTextContents()).toEqual(["Team Planning"]);

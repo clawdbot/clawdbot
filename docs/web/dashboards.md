@@ -69,6 +69,9 @@ never needs the agent.
   medium, large, extra large) from the widget menu. Nobody places pixels —
   not you, not the agent. On narrow boards, widgets stack at full width in
   their saved order; widening the board restores their saved column widths.
+- **Automatic height.** HTML widgets adjust their height to fit their content.
+  Resizing by handle or choosing a size preset fixes the height. Choose
+  **Auto height** from the widget menu to fit the content again.
 - **Tabs.** A board can have several pages — say, an overview tab and a
   focused tab with one big widget. Each tab remembers its own chat-dock
   position.

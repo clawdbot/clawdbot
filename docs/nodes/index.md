@@ -53,6 +53,13 @@ Pending pairing requests expire 5 minutes after the device's last retry — a de
   - non-exec node commands: `operator.pairing` + `operator.write`
   - `system.run` / `system.run.prepare` / `system.which`: `operator.pairing` + `operator.admin`
 
+Connected CLI node hosts and the macOS app report CPU count, load averages,
+memory, and home-volume disk capacity every 60 seconds, starting on connection.
+The Gateway exposes the latest snapshot as `hostStats` in `node.list` and
+`node.describe`; it disappears on disconnect and is not persisted. Windows omits
+load averages, and unavailable disk capacity is omitted. See
+[Node host stats](/gateway/protocol#node-host-stats) for the wire contract.
+
 ## Version skew and upgrade order
 
 The Gateway WebSocket accepts authenticated node clients across an N-1 protocol window.

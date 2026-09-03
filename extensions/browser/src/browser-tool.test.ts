@@ -3,7 +3,9 @@ import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveBrowserToolTimeoutMs } from "./browser-tool.routing.js";
 import type { BrowserActionPathResult } from "./browser/client-actions-types.js";
+import { resolveBrowserConfig } from "./browser/config.js";
 
 const browserClientMocks = vi.hoisted(() => ({
   browserCloseTab: vi.fn(async (..._args: unknown[]) => ({})),
@@ -1422,13 +1424,13 @@ describe("browser tool snapshot maxChars", () => {
       "host-tab-compensate",
       {
         profile: "work-actual",
-        timeoutMs: undefined,
+        timeoutMs: 60_000,
       },
     );
     expect(toolCommonMocks.fetchBrowserJson).toHaveBeenLastCalledWith("/tabs/open?profile=work", {
       method: "POST",
       body: JSON.stringify({ url: "https://example.com" }),
-      timeoutMs: undefined,
+      timeoutMs: 60_000,
       signal: controller.signal,
     });
   });
@@ -5346,4 +5348,40 @@ describe("browser observation actions and tab previews", () => {
       stats: { chars: 5, refs: 0 },
     });
   });
+});
+
+describe("resolveBrowserToolTimeoutMs", () => {
+  const resolvedBrowser = resolveBrowserConfig({ enabled: true });
+
+  it("keeps the caller-supplied deadline even for persistent-Playwright profiles", () => {
+    const timeoutMs = resolveBrowserToolTimeoutMs({
+      requestedTimeoutMs: 45_000,
+      action: "tabs",
+      isUserBrowserProfile: false,
+      usesPersistentPlaywright: true,
+      isNodeProxy: false,
+      resolvedBrowser,
+    });
+    expect(timeoutMs).toBe(45_000);
+  });
+
+  it.each([
+    ["persistent tab listing", "tabs", true, false, 60_000],
+    ["persistent lifecycle action", "status", true, false, undefined],
+    ["proxied profile listing", "profiles", false, true, 60_000],
+    ["managed tab listing", "tabs", false, false, undefined],
+  ] as const)(
+    "resolves the %s budget",
+    (_label, action, usesPersistentPlaywright, isNodeProxy, expected) => {
+      const timeoutMs = resolveBrowserToolTimeoutMs({
+        requestedTimeoutMs: undefined,
+        action,
+        isUserBrowserProfile: false,
+        usesPersistentPlaywright,
+        isNodeProxy,
+        resolvedBrowser,
+      });
+      expect(timeoutMs).toBe(expected);
+    },
+  );
 });

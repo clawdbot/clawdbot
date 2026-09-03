@@ -310,6 +310,11 @@ describe("write-unified-entry-dts", () => {
     const env = { OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "fixture-a" };
     const initial = runUnifiedWriter(root, env);
     expect(initial.status, initial.stdout + initial.stderr).toBe(0);
+    for (const group of TSDOWN_NON_SDK_DTS_CONFIG_GROUPS) {
+      expect(initial.stderr).toContain(
+        `[tsdown-unified] ${group}: cache miss (record-unavailable)`,
+      );
+    }
     expect(
       (initial.stdout + initial.stderr).match(/\[tsdown-build\] invocation \d\/6 finished/gu),
     ).toHaveLength(6);
@@ -318,6 +323,9 @@ describe("write-unified-entry-dts", () => {
     const before = treeHashes(path.join(root, "dist"));
     const repeated = runUnifiedWriter(root, env);
     expect(repeated.status, repeated.stdout + repeated.stderr).toBe(0);
+    for (const group of TSDOWN_NON_SDK_DTS_CONFIG_GROUPS) {
+      expect(repeated.stderr).toContain(`[tsdown-unified] ${group}: cache hit (fresh-cache)`);
+    }
     expect(repeated.stdout + repeated.stderr).not.toContain("[tsdown-build] invocation");
     expect(treeHashes(path.join(root, "dist"))).toEqual(before);
     expectStagingClean(root);

@@ -26,10 +26,12 @@ import {
   projectCliBackendEvent,
   projectCliTaggedReasoning,
 } from "./cli-output-events.js";
+import * as cliOutputLifecycle from "./cli-output-lifecycle.js";
 import {
   decodeCliRecords,
   isClaudeStreamJsonDialect,
   isClaudeStreamJsonResult,
+  isClaudeSyntheticNoResponse,
   isClaudeSubagentRecord,
   isGeminiStreamJsonDialect,
   isStreamJsonDialect,
@@ -56,22 +58,6 @@ const CLI_STREAM_JSON_OUTPUT_LIMITS = Object.freeze({
   maxPendingLineChars: CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
   maxTurnLines: CLI_STREAM_JSON_DEFAULT_MAX_TURN_LINES,
 } satisfies CliStreamJsonOutputLimits);
-
-function isClaudeSyntheticNoResponse(parsed: Record<string, unknown>): boolean {
-  if (parsed.type !== "assistant" || !isRecord(parsed.message)) {
-    return false;
-  }
-  const message = parsed.message;
-  if (message.model !== "<synthetic>" || !Array.isArray(message.content)) {
-    return false;
-  }
-  return (
-    message.content.length === 1 &&
-    isRecord(message.content[0]) &&
-    message.content[0].type === "text" &&
-    message.content[0].text === "No response requested."
-  );
-}
 
 /** Frames arbitrary stdout chunks while bounding each individual raw JSONL line. */
 function frameBoundedCliJsonlChunk(
@@ -274,8 +260,38 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     return false;
   };
 
+  const observeSessionId = (parsed: Record<string, unknown>) => {
+    const parsedSessionId = pickCliSessionId(parsed, params.backend);
+    if (parsedSessionId && parsedSessionId !== sessionId) {
+      sessionId = parsedSessionId;
+      params.onSessionId?.(parsedSessionId);
+    }
+  };
+
   const handleCustomJsonlLine = (line: string, rawLine: string): boolean => {
     if (parseErrorText) {
+      return true;
+    }
+    const lifecycle = cliOutputLifecycle.parseCliBackendLifecycleLine({
+      line,
+      backendId: params.providerId,
+      backend: params.backend,
+      parse: params.parseJsonlLifecycleEvent,
+    });
+    if (lifecycle) {
+      if ("errorText" in lifecycle) {
+        parseErrorText = lifecycle.errorText;
+      } else {
+        if (claudeStreamJson && !accountClaudeJsonlLine(rawLine.length)) {
+          return true;
+        }
+        for (const parsed of decodeCliRecords(line)) {
+          observeSessionId(parsed);
+        }
+        for (const event of lifecycle.events) {
+          params.onCompaction?.(cliOutputLifecycle.projectCliBackendLifecycleEvent(event));
+        }
+      }
       return true;
     }
     if (!params.parseJsonlEvent) {
@@ -313,14 +329,10 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     if (parseErrorText) {
       return;
     }
-    const parsedSessionId = pickCliSessionId(parsed, params.backend);
     if (parsed.type === "result" && isStreamJsonDialect(params)) {
       sawTerminalResult = true;
     }
-    if (parsedSessionId && parsedSessionId !== sessionId) {
-      sessionId = parsedSessionId;
-      params.onSessionId?.(parsedSessionId);
-    }
+    observeSessionId(parsed);
     const nextUsage = readCliUsage(parsed);
     const isClaudeTerminalResult =
       isClaudeStreamJsonDialect({

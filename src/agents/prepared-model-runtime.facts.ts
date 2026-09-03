@@ -164,6 +164,7 @@ export async function prepareWorkspaceBuildGroup(
     preferBuiltPluginArtifacts?: boolean;
     includeCredentialProviders?: boolean;
     getConfiguredHarnessRuntimes?: () => readonly string[];
+    basePluginIds?: readonly string[];
   } = {},
   loadInboundPluginRegistry?: PreparedInboundRegistryLoader,
   reusablePluginGeneration?: PreparedModelRuntimePluginGeneration,
@@ -205,6 +206,7 @@ export async function prepareWorkspaceBuildGroup(
     preferBuiltPluginArtifacts,
     reusablePluginGeneration,
     options.getConfiguredHarnessRuntimes,
+    options.basePluginIds,
   );
   const reuseRuntimeFacts =
     reusablePluginGeneration && runtimePluginRegistry === reusablePluginGeneration.pluginRegistry;

@@ -43,6 +43,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GitHubToolIdentityConfig } from "../config/types.tools.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import { assertGitHubCliAvailable } from "./github-cli-preflight.js";
 import { pollGitHubDeviceFlow, startGitHubDeviceFlow } from "./github-oauth-device-flow.js";
 import {
   authorizationStillOwned,
@@ -534,6 +535,7 @@ export function createGitHubOAuthLifecycle(params: {
       if (stopping) {
         throw new Error("GitHub authorization lifecycle is stopping.");
       }
+      assertGitHubCliAvailable();
       const expectedIdentity = structuredClone(
         resolveConfiguredGitHubToolIdentity({ config: params.getConfig(), ...input }) ?? null,
       );

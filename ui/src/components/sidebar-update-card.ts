@@ -4,7 +4,6 @@ import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import {
   hasNativeUpdateBridge,
   NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT,
-  NATIVE_UPDATE_DECLINED_EVENT,
 } from "../app/native-link-routing.ts";
 import { confirmAndStartUpdate, type UpdateProgress } from "../app/update-confirmation.ts";
 import type { ApplicationStatusBanner } from "../app/update-overlay-helpers.ts";
@@ -38,10 +37,8 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) onHoldUpdate: () => Promise<boolean> = async () => false;
   @property({ attribute: false }) onReviewUpdate: () => void = () => undefined;
   @property({ attribute: false }) onDismiss: (() => void) | undefined = undefined;
-  @property({ attribute: false }) recoverNativeDecline = true;
   @state() private holdingCampaignId: string | null = null;
   @state() private nativeUpdateAvailable = hasNativeUpdateBridge();
-  private nativeUpdateDeclined = false;
   private readonly countdownPolling = new PollController(
     this,
     1_000,
@@ -50,35 +47,16 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
   );
 
   private readonly handleNativeUpdateAvailabilityChanged = () => {
-    this.nativeUpdateDeclined = false;
     this.nativeUpdateAvailable = hasNativeUpdateBridge();
-  };
-
-  // The Mac app only declines an update it was already handed, so this is the
-  // tail of a confirmed click. Re-confirming here would ask twice for one action.
-  private readonly handleNativeUpdateDeclined = () => {
-    this.nativeUpdateDeclined = true;
-    this.nativeUpdateAvailable = false;
-    if (
-      (this.updateAvailable || this.updateSchedule?.campaign) &&
-      !this.updateBusy &&
-      this.canUpdate &&
-      !this.refreshRequired
-    ) {
-      this.onUpdate();
-    }
   };
 
   override connectedCallback() {
     super.connectedCallback();
-    this.nativeUpdateAvailable = !this.nativeUpdateDeclined && hasNativeUpdateBridge();
+    this.nativeUpdateAvailable = hasNativeUpdateBridge();
     window.addEventListener(
       NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT,
       this.handleNativeUpdateAvailabilityChanged,
     );
-    if (this.recoverNativeDecline) {
-      window.addEventListener(NATIVE_UPDATE_DECLINED_EVENT, this.handleNativeUpdateDeclined);
-    }
   }
 
   override disconnectedCallback() {
@@ -86,9 +64,6 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
       NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT,
       this.handleNativeUpdateAvailabilityChanged,
     );
-    if (this.recoverNativeDecline) {
-      window.removeEventListener(NATIVE_UPDATE_DECLINED_EVENT, this.handleNativeUpdateDeclined);
-    }
     super.disconnectedCallback();
   }
 
@@ -131,7 +106,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
       updateSchedule: this.updateSchedule,
       // Read the bridge at click time: a Mac app that installed it
       // after the last availability event still owns this update.
-      viaNativeApp: !this.nativeUpdateDeclined && hasNativeUpdateBridge(),
+      viaNativeApp: hasNativeUpdateBridge(),
     });
   };
 

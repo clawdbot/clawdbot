@@ -16,6 +16,7 @@ import {
   getSessionWorkAdmissionOwnerRelease,
 } from "../sessions/session-lifecycle-admission.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { countPendingQueueItems } from "../utils/queue-helpers.js";
 import { getGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
@@ -183,11 +184,12 @@ it(
 
       const canceledRunId = "webchat-canceled-during-recovery";
       const survivorRunId = "webchat-survives-recovery";
+      const expectedQueuedMessages = new Map([
+        [canceledRunId, canceledMessage],
+        [survivorRunId, survivorMessage],
+      ]);
       await Promise.all(
-        [
-          [canceledRunId, canceledMessage],
-          [survivorRunId, survivorMessage],
-        ].map(async ([runId, message]) => {
+        Array.from(expectedQueuedMessages, async ([runId, message]) => {
           await expect(
             client.request("chat.send", {
               sessionKey,
@@ -202,8 +204,14 @@ it(
       );
       await vi.waitFor(() => {
         const queue = getExistingFollowupQueue(sessionKey);
+        // Active sources remain in items; started ACKs can precede queue admission.
+        expect(queue?.items).toHaveLength(expectedQueuedMessages.size);
+        expect(new Map(queue?.items.map(({ messageId, prompt }) => [messageId, prompt]))).toEqual(
+          expectedQueuedMessages,
+        );
         expect(queue?.inFlight).toHaveLength(1);
-        expect(queue?.items).toHaveLength(1);
+        expect(countPendingQueueItems(queue?.items ?? [], queue?.inFlight)).toBe(1);
+        expect(targetRequests).toHaveLength(1);
       });
       replacementOwner = await beginSessionWorkAdmission({
         scope: storePath,

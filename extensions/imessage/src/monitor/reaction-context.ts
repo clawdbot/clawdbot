@@ -1,4 +1,5 @@
 // Imessage plugin module implements reaction context behavior.
+import { normalizeIMessageGuid } from "../message-guid.js";
 import type { IMessagePayload } from "./types.js";
 
 export type IMessageReactionContext = {
@@ -29,9 +30,7 @@ const TAPBACK_TEXT_PATTERNS: Array<{
 ];
 
 function normalizeReactionValue(value: unknown): string | undefined {
-  return typeof value === "string"
-    ? value.trim().replace(/^p:\d+\//iu, "") || undefined
-    : undefined;
+  return typeof value === "string" ? normalizeIMessageGuid(value) || undefined : undefined;
 }
 
 function resolveReactionTargetGuidCandidates(...values: unknown[]): string[] {
@@ -44,7 +43,7 @@ function resolveReactionTargetGuidCandidates(...values: unknown[]): string[] {
     if (!raw) {
       continue;
     }
-    const normalized = raw.replace(/^p:\d+\//iu, "");
+    const normalized = normalizeIMessageGuid(raw);
     for (const candidate of [normalized, raw]) {
       if (candidate && !candidates.includes(candidate)) {
         candidates.push(candidate);

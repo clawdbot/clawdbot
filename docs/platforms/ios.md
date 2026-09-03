@@ -258,6 +258,12 @@ deletes the bootstrap credential. Direct mode covers only the commands below.
 Chat, Talk, approvals, and the existing `watch.*` notification flow remain
 iPhone-relay features and still require the paired iPhone.
 
+A `watch.notify` receipt reports Watch transport delivery or queuing, not
+completion of the best-effort iPhone notification mirror. Cancellation is
+checked before starting a new Watch transfer or phone mirror; it cannot recall
+work already handed to WatchConnectivity. Once the phone mirror is handed off,
+it proceeds independently of the invoke.
+
 Direct watchOS node commands:
 
 | Surface       | Commands                       | Notes                                                   |
@@ -309,6 +315,8 @@ Expected operator flow:
 When iOS wakes the app for a silent push, background refresh, or significant-location event, the app attempts a short node reconnect and then calls `node.event` with `event: "node.presence.alive"`. The gateway records this as `lastSeenAtMs`/`lastSeenReason` on the paired node/device metadata only after the authenticated node device identity is known.
 
 The app treats a background wake as successfully recorded only when the gateway response includes `handled: true`. Older gateways may acknowledge `node.event` with `{ "ok": true }`; that response is compatible but does not count as a durable last-seen update.
+
+Background refresh wakes are requested through the system BackgroundTasks scheduler whenever the app moves to the background, after a silent push that could not be applied, and again after each refresh run; iOS decides when they actually execute. They stop if Background App Refresh is turned off for OpenClaw in iOS Settings, leaving push and significant-location wakes.
 
 Compatibility note:
 

@@ -10,10 +10,7 @@ import {
   projectSqliteSessionParticipantsBatch,
 } from "./session-accessor.sqlite-participant-projection.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
-import {
-  parseSessionEntryJson,
-  sessionEntryMetadataJson,
-} from "./session-accessor.sqlite-status.js";
+import { parseSessionEntryJson, selectSessionEntryRows } from "./session-accessor.sqlite-status.js";
 import type { SessionEntry } from "./types.js";
 
 type SessionEntryCacheDatabase = Pick<OpenClawAgentDatabase, "agentId" | "db">;
@@ -127,55 +124,20 @@ export function trackSessionEntryCacheWrite(
     : { before, after: readSessionNodesGeneration(database.db) };
 }
 
-function parseSessionEntryProjection(
-  row: Parameters<typeof parseSessionEntryJson>[0],
-  projection: "full" | "list" = "list",
-): SessionEntry | null {
-  const entry = parseSessionEntryJson(row);
-  if (entry && projection === "list") {
-    // Drop caller-owned prompt payloads before either a reload or a tracked write publishes.
-    delete entry.skillsSnapshot;
-    delete entry.systemPromptReport;
-  }
-  return entry;
-}
-
-function selectSessionEntrySnapshotRows(
-  database: SessionEntryCacheDatabase,
-  projection: "full" | "list" = "list",
-) {
-  const db = getSessionKysely(database.db);
-  return db
-    .selectFrom("session_nodes")
-    .select("session_key")
-    .select(projection === "full" ? "entry_json" : sessionEntryMetadataJson)
-    .$if(hasSqliteSessionOwnerColumns(database.db), (query) =>
-      query.select([
-        "owner_actor_type",
-        "owner_actor_id",
-        "owner_assigned_by_type",
-        "owner_assigned_by_id",
-        "owner_assigned_at",
-      ]),
-    );
-}
-
 function loadSessionEntrySnapshot(
   database: SessionEntryCacheDatabase,
   projection: "full" | "list" = "list",
 ): SessionEntryCacheSnapshot {
   const rows = iterateSqliteQuerySync(
     database.db,
-    selectSessionEntrySnapshotRows(database, projection)
-      .select("updated_at")
-      .orderBy("session_key"),
+    selectSessionEntryRows(database, projection).select("updated_at").orderBy("session_key"),
   );
   const parsedEntries = new Map<string, SessionEntry>();
   const keys: string[] = [];
   // Stream raw JSON so a full read never holds both serialized and parsed store-wide payloads.
   for (const row of rows) {
     keys.push(row.session_key);
-    const entry = parseSessionEntryProjection(row, projection);
+    const entry = parseSessionEntryJson(row, projection);
     if (!entry) {
       continue;
     }
@@ -250,10 +212,7 @@ function publishSqliteSessionEntryCacheUpsert(
           .limit(1),
       ).rows[0]
     : undefined;
-  const parsedEntry = parseSessionEntryProjection({
-    entry_json: JSON.stringify(metadata),
-    ...ownerRow,
-  });
+  const parsedEntry = parseSessionEntryJson({ entry_json: JSON.stringify(metadata), ...ownerRow });
   if (!parsedEntry) {
     publishTrackedCacheUpdate(database, () => sessionEntryCaches.delete(database.db));
     return;

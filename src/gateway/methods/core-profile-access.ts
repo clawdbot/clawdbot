@@ -1,4 +1,4 @@
-import { isSessionProfileDependentMethod } from "../session-sharing-target-input.js";
+import { isSessionProfileDependentMethod } from "../session-method-policy.js";
 
 const PROFILE_DEPENDENT_CORE_METHODS = new Set([
   "agent.wait",

@@ -16,11 +16,11 @@ export const CRABBOX_DESKTOP_WARMUP_TIMEOUT_MS =
   CRABBOX_WARMUP_ATTEMPTS *
   (CRABBOX_ACQUISITION_ENVELOPE_MS + CRABBOX_DESKTOP_BOOTSTRAP_TIMEOUT_MS);
 export const CRABBOX_LIFECYCLE_TIMEOUT_MS = 60_000;
-// Managed stop owns a five-minute completion deadline. Allow CLI startup/finalization
-// before process termination; SDK child settlement remains a separate outer allowance.
-const CRABBOX_MANAGED_STOP_TIMEOUT_MS = 5 * 60_000;
-const CRABBOX_STOP_EXIT_GRACE_MS = 10_000;
-export const CRABBOX_STOP_TIMEOUT_MS = CRABBOX_MANAGED_STOP_TIMEOUT_MS + CRABBOX_STOP_EXIT_GRACE_MS;
+// Crabbox stop resolves twice (10s each), cleans the guest (35s), retries release
+// (five 60s attempts + 20s backoff per normal/admin client), then observes cleanup for 5m.
+// Reserve all phases plus 10s exit grace; SDK child settlement stays separate.
+export const CRABBOX_STOP_TIMEOUT_MS =
+  2 * 10_000 + 35_000 + 2 * (5 * 60_000 + 20_000) + 5 * 60_000 + 10_000;
 // Process timeout begins termination; allow the SDK's 300ms grace and Windows'
 // 5s taskkill to settle before core reports the provider result.
 export const CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS = 10_000;
@@ -76,7 +76,7 @@ export function resolveCrabboxProvisionCallTimeoutMs(
     CRABBOX_NODE_ENROLLMENT_TIMEOUT_MS +
     CRABBOX_NODE_ENROLLMENT_DIAGNOSTIC_TIMEOUT_MS +
     CRABBOX_STOP_TIMEOUT_MS +
-    // Diagnostics and stop can each time out before their child/tree settles.
-    2 * CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS
+    // Diagnostics, heartbeat cancellation, and stop retain child/tree settlement.
+    3 * CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS
   );
 }

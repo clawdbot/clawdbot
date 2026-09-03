@@ -387,7 +387,7 @@ openclaw plugins list --json
 </ParamField>
 
 <Note>
-`plugins list` reads the persisted local plugin registry first, with a manifest-only derived fallback when the registry is missing or invalid. It is useful for checking whether a plugin is installed, enabled, and visible to cold startup planning, but it is not a live runtime probe of an already-running Gateway process. After changing plugin code, enablement, hook policy, or `plugins.load.paths`, restart the Gateway that serves the channel before expecting new `register(api)` code or hooks to run. For remote/container deployments, verify you are restarting the actual `openclaw gateway run` child, not only a wrapper process.
+`plugins list` reads the persisted local plugin registry first, with a manifest-only derived fallback when the registry is missing or invalid. It is useful for checking whether a plugin is installed, enabled, and visible to cold startup planning, but it is not a live runtime probe of an already-running Gateway process. After changing plugin code or `plugins.load.paths`, restart the Gateway that serves the channel before expecting new `register(api)` code or hooks to run. With the default hybrid reload mode, enablement and hook policy changes hot-reload the existing plugin runtime unless the plugin declares a restart-triggering prefix. For remote/container deployments, verify you are restarting the actual `openclaw gateway run` child, not only a wrapper process.
 
 `plugins list --json` includes each plugin's `dependencyStatus` from `package.json`
 `dependencies` and `optionalDependencies`. OpenClaw checks whether those package
@@ -529,6 +529,8 @@ See [Plugin shapes](/plugins/architecture#plugin-shapes) for more on the capabil
 
 <Note>
 The `--json` flag outputs a machine-readable report suitable for scripting and auditing. `inspect --all` renders a fleet-wide table with shape, capability kinds, compatibility notices, bundle capabilities, and hook summary columns. `info` is an alias for `inspect`.
+
+Global discovery diagnostics go to stderr, including with `--json`. This explains partial inventory when workspace discovery has no selected system owner, even when no plugins are found. Plugin-specific diagnostics stay in each report. Policy fields use the same case-insensitive plugin ID matching as runtime configuration; the reported plugin ID retains its declared spelling.
 </Note>
 
 ## Doctor

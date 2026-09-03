@@ -921,7 +921,7 @@ function buildConfigMocks(options: { swarmEnabled?: boolean; workboardEnabled?: 
   const config = {
     logging: { level: "info", consoleTimestamps: true },
     messages: { queueLimit: 5, responsePrefix: "" },
-    gateway: { port: 18789, bind: "127.0.0.1" },
+    gateway: { port: 18789, bind: "127.0.0.1", publicOrigin: "https://gateway.example" },
     agents: { defaults: { thinkingDefault: "medium" } },
     commands: { native: "auto", nativeSkills: "auto" },
     models: { mode: "merge" },
@@ -1041,6 +1041,9 @@ function buildConfigMocks(options: { swarmEnabled?: boolean; workboardEnabled?: 
         properties: {
           port: { type: "integer", title: "Port", minimum: 1, maximum: 65535 },
           bind: { type: "string", title: "Bind address" },
+          // Zod's .url() emits `format`; keep one such leaf in the fixture so the
+          // form stays provably editable for plugin URL/email settings.
+          publicOrigin: { type: "string", title: "Public origin", format: "uri" },
         },
       },
       agents: {
@@ -1806,6 +1809,13 @@ async function createChatPickerScenario(
       execCwd: "/Users/demo/Work/openclaw",
       lastReadAt: baseTime - 120_000,
       owner: { actor: MOCK_ACTOR_PETER },
+      participantCount: 4,
+      participants: [
+        { identity: { type: "profile", id: "profile-mira" }, label: "Mira" },
+        { identity: { type: "profile", id: "profile-riley" }, label: "Riley" },
+        { identity: { type: "profile", id: "profile-sam" }, label: "Sam" },
+        { identity: { type: "profile", id: "profile-lee" }, label: "Lee" },
+      ],
       observerDigest: {
         headline: "Done: fixed the flaky retry-window test",
         health: "done",
@@ -2399,6 +2409,7 @@ async function createChatPickerScenario(
                 { kind: "local", name: "main" },
                 { kind: "local", name: "steipete/place-picker" },
               ],
+              repositoryStatus: "git",
               defaultBranch: "main",
               headBranch: "main",
             },
@@ -2411,6 +2422,7 @@ async function createChatPickerScenario(
                 { kind: "local", name: "main" },
                 { kind: "local", name: "steipete/storage-selector-design" },
               ],
+              repositoryStatus: "git",
               defaultBranch: "main",
               headBranch: "main",
             },

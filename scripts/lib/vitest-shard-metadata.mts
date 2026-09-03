@@ -136,6 +136,8 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/cli/cron-output.process.test.ts", 23],
   // The cold source proof in run 33492093127 took 198.88s; keep it alone.
   ["src/cli/gateway-backed-exit.process.test.ts", 200],
+  // Retain the original isolation budget until the split has measured timings.
+  ["src/cli/gateway-backed-exit-health.process.test.ts", 200],
   ["src/cli/gateway-cli/run-loop.direct-stop-active-work.process.test.ts", 4],
   ["src/cli/gateway-cli/shutdown-hard-exit.process.test.ts", 1],
   ["src/cli/help-exit.process.test.ts", 27],

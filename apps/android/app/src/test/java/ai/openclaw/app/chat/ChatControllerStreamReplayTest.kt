@@ -35,6 +35,11 @@ class ChatControllerStreamReplayTest {
       message.role to text
     }
 
+  private fun sessionMessagePayload(
+    sessionKey: String,
+    agentId: String = "main",
+  ): String = """{"sessionKey":"$sessionKey","agentId":"$agentId","messageId":"voice-4","messageSeq":4,"message":{"role":"assistant","content":[{"type":"text","text":"second answer"}],"__openclaw":{"id":"voice-4","seq":4}},"session":{"key":"$sessionKey","sessionId":"session-voice","agentId":"$agentId"}}"""
+
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
   fun cleanRunStreamsV3AndV4DeltasThenConvergesToHistoryWithoutDuplicates() =
@@ -499,8 +504,8 @@ class ChatControllerStreamReplayTest {
       }
 
       controller.handleGatewayEvent(
-        "chat",
-        chatTerminalPayload("main", runId = "external-run", seq = 1),
+        "session.message",
+        sessionMessagePayload("main"),
       )
       runCurrent() // history refetch for "main" is now suspended on the gate
       assertEquals(2, gateway.callCount("chat.history"))
@@ -693,29 +698,110 @@ class ChatControllerStreamReplayTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
-  fun unknownTerminalRefreshesIdleTranscript() =
+  fun externalTranscriptEventsRefreshIdleHistory() =
+    runTest {
+      val sessionKey = "agent:main:node-voice-test"
+      val initial =
+        listOf(
+          ReplayHistoryMessage("user", "first question", 1_000, entryId = "voice-1"),
+          ReplayHistoryMessage("assistant", "first answer", 2_000, entryId = "voice-2"),
+        )
+      val updated =
+        initial +
+          listOf(
+            ReplayHistoryMessage("user", "second question", 3_000, entryId = "voice-3"),
+            ReplayHistoryMessage("assistant", "second answer", 4_000, entryId = "voice-4"),
+          )
+      val events =
+        listOf(
+          "session.message" to sessionMessagePayload(sessionKey),
+          "session.message" to
+            """{"sessionKey":"$sessionKey","agentId":"main","messageId":"voice-4","messageSeq":4,"message":{"role":"assistant","content":[{"type":"text","text":"second answer"}]}}""",
+          "sessions.changed" to
+            """{"sessionKey":"$sessionKey","agentId":"main","phase":"message","session":{"key":"$sessionKey","sessionId":"session-voice","agentId":"main"}}""",
+          "sessions.changed" to """{"sessionKey":"$sessionKey","agentId":"main","phase":"message"}""",
+          "chat" to chatTerminalPayload(sessionKey, "external-run", seq = 1, assistantText = "second answer"),
+        )
+      for ((event, payload) in events) {
+        val gateway = ScriptedGateway(json)
+        gateway.respondWith("chat.history", historyResponse("session-voice", initial))
+        val controller = newController(gateway)
+        controller.load(sessionKey)
+        runCurrent()
+        assertEquals(initial.map { it.role to it.text }, transcript(controller))
+        val initialIds = controller.messages.value.map { it.id }
+
+        gateway.respondWith("chat.history", historyResponse("session-voice", updated))
+        controller.handleGatewayEvent(event, payload)
+        runCurrent()
+
+        assertEquals("$event must refresh the selected transcript", updated.map { it.role to it.text }, transcript(controller))
+        assertEquals(
+          initialIds,
+          controller.messages.value
+            .take(initial.size)
+            .map { it.id },
+        )
+        assertNull(controller.errorText.value)
+      }
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun durableMessagesRefreshHistoryWithoutTakingOverLocalRun() =
     runTest {
       val gateway = ScriptedGateway(json)
-      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
+      val initial = listOf(ReplayHistoryMessage("assistant", "earlier reply", 1_000))
+      gateway.respondWith("chat.history", historyResponse("session-global", initial))
+      gateway.respondChatSend(status = "started")
       val controller = newController(gateway)
-      controller.load("main")
-      runCurrent()
+      try {
+        controller.load("global")
+        runCurrent()
 
-      gateway.respondWith(
-        "chat.history",
-        historyResponse(
-          "session-1",
-          listOf(ReplayHistoryMessage("assistant", "from another client", 2_000)),
-        ),
-      )
-      controller.handleGatewayEvent(
-        "chat",
-        chatTerminalPayload("main", "external-run", seq = 1, assistantText = "from another client"),
-      )
-      runCurrent()
+        assertTrue(controller.sendMessageAwaitAcceptance("local question", "off", emptyList()))
+        val runId = requireNotNull(gateway.lastRunId)
+        val optimisticId =
+          controller.messages.value
+            .last()
+            .id
+        controller.handleGatewayEvent("chat", chatDeltaPayload("global", runId, 1, "working", "working"))
+        controller.handleGatewayEvent(
+          "agent",
+          """{"sessionKey":"global","runId":"$runId","stream":"tool","data":{"phase":"start","name":"exec","toolCallId":"local-tool"}}""",
+        )
+        val pendingTools = controller.pendingToolCalls.value
+        assertEquals(1, pendingTools.size)
+        val updated = initial + ReplayHistoryMessage("assistant", "second answer", 2_000, entryId = "voice-4")
+        gateway.respondWith("chat.history", historyResponse("session-global", updated, inFlightRun = runId to "stale history text"))
+        val historyRequests = gateway.callCount("chat.history")
 
-      assertEquals(listOf("assistant" to "from another client"), transcript(controller))
-      assertNull(controller.errorText.value)
+        controller.handleGatewayEvent("session.message", sessionMessagePayload("global", agentId = "other"))
+        controller.handleGatewayEvent("session.message", sessionMessagePayload("agent:main:other"))
+        runCurrent()
+        assertEquals(historyRequests, gateway.callCount("chat.history"))
+
+        controller.handleGatewayEvent("session.message", sessionMessagePayload("global"))
+        runCurrent()
+        advanceTimeBy(750)
+        runCurrent()
+
+        assertEquals(updated.map { it.role to it.text } + ("user" to "local question"), transcript(controller))
+        assertEquals(historyRequests + 1, gateway.callCount("chat.history"))
+        assertEquals(
+          optimisticId,
+          controller.messages.value
+            .last()
+            .id,
+        )
+        assertEquals("working", controller.streamingAssistantText.value)
+        assertEquals(pendingTools, controller.pendingToolCalls.value)
+        assertEquals(1, controller.pendingRunCount.value)
+        assertEquals("global", controller.sessionKey.value)
+        assertNull(controller.errorText.value)
+      } finally {
+        controller.onDisconnected("test cleanup")
+      }
     }
 
   @Test

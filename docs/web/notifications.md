@@ -44,7 +44,7 @@ After subscribing, **Settings → Notifications** exposes two preference layers:
 - **Account defaults** follow a durable authenticated user profile across devices. They control approval requests and updates, agent completion, agent questions, scheduled-task failures, background-task failures, lock-screen detail, quiet hours, timezone, and an optional agent allowlist.
 - **This browser or app** can mute one browser profile or installed Home Screen app, add a source label, or override individual categories without changing the account defaults. Native OpenClaw app notifications are configured separately.
 
-Owner-style Gateways without a durable user profile keep the same controls, but store them only with the current browser subscription. Preferences never grant access: every delivery still rechecks the paired device, current role and scopes, authenticated profile, and session visibility. Multi-user events without an authoritative session owner are suppressed instead of being broadcast to every operator.
+Single-user Gateways use their durable owner profile for account defaults, so those preferences follow the owner across devices. Connections without a profile keep the controls but store preferences only with the current browser subscription. Preferences never grant access: every delivery still rechecks the paired device, current role and scopes, authenticated profile, and session visibility. Multi-user events without an authoritative session owner are suppressed instead of being broadcast to every operator.
 
 The default preserves the original behavior: approval request and resolution notifications are enabled, while newly added attention categories are opt-in. Quiet hours suppress matching sends rather than queueing stale alerts for later delivery.
 
@@ -80,6 +80,14 @@ The macOS app also asks automatically on your first chat send, but only while pe
 4. Select **Send test** to post a local OpenClaw notification.
 
 If the permission shows **Denied**, macOS will not re-prompt: select **Open System Settings**, allow notifications for OpenClaw there, and switch back — the page rechecks permission when the app regains focus. This permission belongs to macOS, not to Gateway config.
+
+### Background session completion
+
+When you start a session in the background from **New Session**, the macOS app posts a native notification after that run finishes, provided notification permission is already granted. Keep the originating dashboard loaded while it runs; you can minimize its window or work in another app. An in-app completion message also appears. Selecting the session before it finishes suppresses its completion notice.
+
+The native notification uses generic text, without the session title, prompt, or response. Select it to open the session on its originating Gateway, including when that window has since closed. If that Gateway connection changed or the notification expired after an app restart, open the session from the correct Gateway's session list instead.
+
+This is the **New Session** background-start flow, not a native notification for every chat response. Browser **Agent finished** preferences remain separate. Completing a background run never opens a new permission prompt; enable notifications in Settings first.
 
 ## Troubleshooting
 

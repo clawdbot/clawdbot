@@ -91,6 +91,22 @@ describe("createApplicationGateway connection phase", () => {
     expect(gateway.snapshot.phase).toBe("offline");
   });
 
+  it("passes native client identity and bounded scopes to the gateway client", () => {
+    const clientOptions = {
+      clientName: "openclaw-ios" as const,
+      mode: "ui" as const,
+      platform: "iOS 27.0.0",
+      deviceFamily: "iPhone",
+      instanceId: "ios-installation",
+      scopes: ["operator.read", "operator.write"],
+    };
+    const { gateway, current } = createStore({ clientOptions });
+
+    gateway.start();
+
+    expect(current().opts).toMatchObject(clientOptions);
+  });
+
   it("keeps legacy version fallback on reconnect instead of first admission", () => {
     const { gateway, current } = createStore();
     gateway.start();

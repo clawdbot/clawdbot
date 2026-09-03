@@ -254,6 +254,11 @@ is always emitted at `info` level regardless of
 `OPENCLAW_DEBUG_MODEL_TRANSPORT`, so basic model transport hygiene is visible
 without debug flags.
 
+`[anthropic] replayed thinking dropped: N block(s)` is a warning when Anthropic
+reports dropping invalidated thinking from replay. It includes the mismatch
+reasons and up to five affected message paths, not the thinking content. No
+debug flag is required.
+
 ### Trace correlation
 
 File logs are JSONL. When a log call carries a valid diagnostic trace context,
@@ -272,6 +277,36 @@ Talk lifecycle log records also flow to diagnostics-otel log export when
 OpenTelemetry log export is enabled, using the same bounded attributes as file
 logs. Configure `diagnostics.otel.logsExporter` to choose OTLP, stdout JSONL, or
 both sinks.
+
+### Slow reply preparation
+
+When a reply spends a long time preparing, inspect the normal Gateway logs:
+
+```bash
+openclaw logs --follow --plain | rg 'timings|agent turn milestone|liveness warning'
+```
+
+Reply resolver, dispatch, and agent-turn preparation milestones include stage
+durations, elapsed time, and available run/session identifiers. Without profiler
+flags, they warn at 10 seconds elapsed or 5 seconds in one preparation stage. Codex preparation also
+logs each completed slow stage immediately, including failures, and emits a
+`native-turn-handoff` summary before submitting the native turn. Timing records
+contain stage names and identifiers, not prompts or tool arguments.
+
+Use the first `turn_accepted`, `model_call_started`, `tool_execution_started`, and
+`assistant_output_started` milestones to separate startup from later activity.
+Delayed first assistant/tool activity is logged once at `info` by default,
+because provider and tool latency is not itself a preparation warning.
+These are runtime observations: native turn acceptance does not prove that a
+provider request has started. Whole-turn summaries remain profiler-only because
+their totals include model and tool time. Compare the individual preparation
+stages before attributing a long turn to Gateway startup. A simultaneous
+`liveness warning` with high event-loop delay
+can explain delays across several sessions.
+
+For shorter delays, [profiler flags](/diagnostics/flags#profiler-flags) lower the
+warning thresholds. They are not required to diagnose a multi-second startup
+stall.
 
 ### Model call size and timing
 

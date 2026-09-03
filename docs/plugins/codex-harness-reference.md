@@ -184,8 +184,12 @@ codex app-server --listen stdio://
 ```
 
 This keeps the app-server version tied to the official `codex` plugin instead of
-whichever separate Codex CLI happens to be installed locally. Set
-`appServer.command` only when you intentionally want a different executable.
+whichever separate Codex CLI happens to be installed locally. OpenClaw resolves
+`@openai/codex/bin/codex.js` from the loader-selected plugin root using Node
+package resolution, including npm-hoisted and pnpm-linked dependencies. It does
+not search `.bin` shims or global `PATH` for managed startup. On Windows, Node
+runs the same package entrypoint without requiring a `codex.cmd` shim.
+Set `appServer.command` only when you intentionally want a different executable.
 Ordinary managed turns with the default isolated agent home prefer this pinned
 package even when a macOS desktop bundle is installed. When
 [Computer Use](/plugins/codex-computer-use) is enabled, or when `homeScope` is
@@ -595,7 +599,10 @@ and settled-turn finalization use private temporary homes and OpenClaw auth
 even when ordinary sessions share the user home. A Chat created
 through Codex Sessions uses its private supervision connection instead, which
 preserves the native connection's auth and provider configuration for the
-canonical branch and future resumes.
+canonical branch and future resumes. If that supervised turn finishes tool work
+without a final answer, OpenClaw does not borrow host credentials to generate
+one. It delivers the [settled-tool fallback](/plugins/codex-harness-runtime#final-answers-after-settled-tool-work)
+without repeating completed actions.
 
 In a model-locked supervised Chat, `codex_threads` cannot attach a different
 fork or archive the Chat's bound native thread. List and metadata-only read

@@ -127,7 +127,9 @@ function pluginOwnsProviderRef(plugin: PluginManifestRecord, normalizedProvider:
   return false;
 }
 
-function resolvesRuntimeModelCatalogAugment(plugin: PluginManifestRecord): boolean {
+export function manifestPluginResolvesRuntimeModelCatalogAugment(
+  plugin: PluginManifestRecord,
+): boolean {
   return (
     plugin.modelCatalog?.runtimeAugment === true ||
     (plugin.origin !== "bundled" && plugin.providers.length > 0)
@@ -759,7 +761,7 @@ export function resolveCatalogHookProviderPluginIds(params: {
   );
   const runtimeAugmentPluginIds = new Set(
     manifestRegistry.plugins.flatMap((plugin) =>
-      resolvesRuntimeModelCatalogAugment(plugin) ? [plugin.id] : [],
+      manifestPluginResolvesRuntimeModelCatalogAugment(plugin) ? [plugin.id] : [],
     ),
   );
   const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);

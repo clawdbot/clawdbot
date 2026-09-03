@@ -2568,6 +2568,7 @@ final class NodeAppModel {
 
         let shouldSpeak = params.speak ?? true
         let status = await notificationAuthorizationStatus()
+        try Task.checkCancellation()
         let notificationsAllowed = Self.isNotificationServingEnabled(status)
         if !notificationsAllowed, !shouldSpeak {
             return BridgeInvokeResponse(
@@ -2599,6 +2600,9 @@ final class NodeAppModel {
         }
 
         if shouldSpeak {
+            try Task.checkCancellation()
+            // This synchronous handoff commits speech, like enqueueing a notification;
+            // playback intentionally outlives the command's immediate receipt.
             let toSpeak = text
             Task { @MainActor in
                 try? await TalkSystemSpeechSynthesizer.shared.speak(text: toSpeak)
@@ -3212,38 +3216,34 @@ extension NodeAppModel {
                         code: .invalidRequest,
                         message: "INVALID_REQUEST: empty watch notification"))
             }
-            do {
-                let gatewayStableID = currentWatchChatGatewayStableID()
-                self.watchMessageOutbox.recordPromptRoute(
-                    promptID: normalizedParams.promptId,
-                    gatewayStableID: gatewayStableID)
-                let result = try await watchMessagingService.sendNotification(
-                    id: req.id,
-                    params: normalizedParams,
-                    gatewayStableID: gatewayStableID)
-                if result.queuedForDelivery || !result.deliveredImmediately {
-                    let invokeID = req.id
-                    Task { @MainActor in
-                        await WatchPromptNotificationBridge.scheduleMirroredWatchPromptNotificationIfNeeded(
-                            invokeID: invokeID,
-                            params: normalizedParams,
-                            gatewayStableID: gatewayStableID,
-                            sendResult: result)
-                    }
+            let gatewayStableID = currentWatchChatGatewayStableID()
+            self.watchMessageOutbox.recordPromptRoute(
+                promptID: normalizedParams.promptId,
+                gatewayStableID: gatewayStableID)
+            let result = try await watchMessagingService.sendNotification(
+                id: req.id,
+                params: normalizedParams,
+                gatewayStableID: gatewayStableID)
+            try Task.checkCancellation()
+            if result.queuedForDelivery || !result.deliveredImmediately {
+                let invokeID = req.id
+                let notificationCenter = self.notificationCenter
+                // Watch delivery is committed. The accepted best-effort phone mirror
+                // intentionally outlives this invoke's receipt and cancellation owner.
+                Task { @MainActor in
+                    await WatchPromptNotificationBridge.scheduleMirroredWatchPromptNotificationIfNeeded(
+                        invokeID: invokeID,
+                        params: normalizedParams,
+                        gatewayStableID: gatewayStableID,
+                        sendResult: result,
+                        notificationCenter: notificationCenter)
                 }
-                let payload = OpenClawWatchNotifyPayload(
-                    deliveredImmediately: result.deliveredImmediately,
-                    queuedForDelivery: result.queuedForDelivery,
-                    transport: result.transport)
-                return try Self.successfulInvokeResponse(req, payload: payload)
-            } catch {
-                return BridgeInvokeResponse(
-                    id: req.id,
-                    ok: false,
-                    error: OpenClawNodeError(
-                        code: .unavailable,
-                        message: error.localizedDescription))
             }
+            let payload = OpenClawWatchNotifyPayload(
+                deliveredImmediately: result.deliveredImmediately,
+                queuedForDelivery: result.queuedForDelivery,
+                transport: result.transport)
+            return try Self.successfulInvokeResponse(req, payload: payload)
         default:
             return Self.unknownInvokeResponse(req)
         }

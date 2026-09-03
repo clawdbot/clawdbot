@@ -3,6 +3,9 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../shared/deferred.js";
+import { APNG_BYTES } from "./http-image.test-support.js";
+import { AUTH_NONE, sendRequest, withGatewayServer } from "./server-http.test-harness.js";
 
 const mocks = vi.hoisted(() => ({
   authorize: vi.fn(),
@@ -60,6 +63,10 @@ const ICON_ROUTES = [
     pathname: `/__openclaw__/catalog-icon/${encodeURIComponent(CATALOG_ICON_URL)}`,
   },
 ] as const;
+const ALL_ICON_ROUTES = [
+  ...ICON_ROUTES,
+  { label: "favicon", pathname: "/__openclaw__/link-favicon/example.com" },
+];
 const INVALID_ICON_ROUTES = [
   { label: "blank plugin id", pathname: "/__openclaw__/plugin-icon/" },
   { label: "invalid plugin id", pathname: "/__openclaw__/plugin-icon/%20" },
@@ -121,8 +128,11 @@ beforeEach(() => {
   });
 });
 
-function request(pathname: string, options?: { token?: string; method?: string }) {
-  const headers: Record<string, string> = {};
+function request(
+  pathname: string,
+  options?: { token?: string; method?: string; headers?: Record<string, string> },
+) {
+  const headers: Record<string, string> = { ...options?.headers };
   if (options?.token === undefined) {
     headers.Authorization = "Bearer test-token";
   } else if (options.token) {
@@ -202,6 +212,41 @@ describe("Control UI plugin and catalog icon routes", () => {
     expect(fetchOptions).not.toHaveProperty("ssrfPolicy");
   });
 
+  it("keeps the Gateway responsive while rejecting an adversarial SVG favicon", async () => {
+    const validationStarted = createDeferredCore();
+    mocks.readRemoteMediaBuffer.mockImplementationOnce(async () => {
+      validationStarted.resolve();
+      return {
+        buffer: Buffer.from(`<!--${"--><!--".repeat(26)}-->X`),
+        contentType: "image/svg+xml",
+      };
+    });
+
+    await withGatewayServer({
+      prefix: "link-favicon-svg-validation-",
+      resolvedAuth: AUTH_NONE,
+      overrides: {
+        controlUiEnabled: true,
+        controlUiBasePath: "",
+        getRuntimeConfig: () => ({}),
+      },
+      run: async (gateway) => {
+        const started = process.hrtime.bigint();
+        const favicon = sendRequest(gateway, {
+          path: "/__openclaw__/link-favicon/example.com",
+        });
+        await validationStarted.promise;
+        const health = sendRequest(gateway, { path: "/healthz" });
+        const [faviconResponse, healthResponse] = await Promise.all([favicon, health]);
+        const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+
+        expect(faviconResponse.res.statusCode).toBe(404);
+        expect(healthResponse.res.statusCode).toBe(200);
+        expect(elapsedMs).toBeLessThan(500);
+      },
+    });
+  });
+
   it("serves standard ICO favicon bytes without invoking raster processing", async () => {
     configForRequest = () => ({
       gateway: { controlUi: { automaticallyFetchFavicons: true } },
@@ -218,6 +263,33 @@ describe("Control UI plugin and catalog icon routes", () => {
     expect(Buffer.from(await response.arrayBuffer())).toEqual(ICO_BYTES);
     expect(mocks.encodeImage).not.toHaveBeenCalled();
   });
+
+  it.each(
+    ALL_ICON_ROUTES.flatMap(({ label, pathname }) =>
+      ["image/png", "image/apng; charset=binary"].map((contentType) => ({
+        label,
+        pathname,
+        contentType,
+      })),
+    ),
+  )(
+    "normalizes APNG $label bytes declared as $contentType to PNG",
+    async ({ pathname, contentType }) => {
+      mocks.readRemoteMediaBuffer.mockResolvedValueOnce({ buffer: APNG_BYTES, contentType });
+      mocks.encodeImage.mockResolvedValue({ data: PNG_BYTES });
+
+      const response = await request(pathname);
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toBe("image/png");
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(PNG_BYTES);
+      const head = await request(pathname, { method: "HEAD" });
+      expect(head.status).toBe(200);
+      expect(head.headers.get("content-type")).toBe("image/png");
+      expect(head.headers.get("content-length")).toBe(String(PNG_BYTES.byteLength));
+      expect((await head.arrayBuffer()).byteLength).toBe(0);
+    },
+  );
 
   it("negatively caches failed link favicon fetches", async () => {
     configForRequest = () => ({
@@ -248,7 +320,7 @@ describe("Control UI plugin and catalog icon routes", () => {
   );
 
   it.each(
-    ICON_ROUTES.flatMap(({ label, pathname }) =>
+    ALL_ICON_ROUTES.flatMap(({ label, pathname }) =>
       (["GET", "HEAD"] as const).map((method) => ({ label, method, pathname })),
     ),
   )(
@@ -260,7 +332,11 @@ describe("Control UI plugin and catalog icon routes", () => {
         return null;
       });
 
-      const response = await request(pathname, { method, token: "" });
+      const response = await request(pathname, {
+        method,
+        token: "",
+        headers: { "If-None-Match": "*" },
+      });
 
       expect(response.status).toBe(401);
       expect(mocks.resolveIconUrl).not.toHaveBeenCalled();
@@ -270,19 +346,21 @@ describe("Control UI plugin and catalog icon routes", () => {
   );
 
   it.each(
-    ICON_ROUTES.flatMap(({ label, pathname }) =>
-      (["image/png", "image/svg+xml"] as const).map((contentType) => ({
+    ALL_ICON_ROUTES.flatMap(({ label, pathname }) =>
+      (["image/png", "image/svg+xml", "image/x-icon"] as const).map((contentType) => ({
         contentType,
         label,
         pathname,
       })),
     ),
   )(
-    "preserves every $contentType $label GET header on a bodyless HEAD",
+    "preserves $contentType $label GET/HEAD headers and revalidates cached bytes",
     async ({ contentType, pathname }) => {
       const svg = "<svg xmlns='http://www.w3.org/2000/svg'></svg>";
       if (contentType === "image/svg+xml") {
         mocks.readRemoteMediaBuffer.mockResolvedValue({ buffer: Buffer.from(svg), contentType });
+      } else if (contentType === "image/x-icon") {
+        mocks.readRemoteMediaBuffer.mockResolvedValue({ buffer: ICO_BYTES, contentType });
       }
 
       const get = await request(pathname);
@@ -297,14 +375,31 @@ describe("Control UI plugin and catalog icon routes", () => {
         "content-security-policy",
         "content-type",
         "cross-origin-resource-policy",
+        "etag",
         "x-content-type-options",
       ]) {
         expect(head.headers.get(name), name).toBe(get.headers.get(name));
       }
       const expectedBody =
-        contentType === "image/svg+xml" ? Buffer.from(svg) : NORMALIZED_PNG_BYTES;
+        contentType === "image/svg+xml"
+          ? Buffer.from(svg)
+          : contentType === "image/x-icon"
+            ? ICO_BYTES
+            : NORMALIZED_PNG_BYTES;
       expect(Buffer.from(await get.arrayBuffer())).toEqual(expectedBody);
       expect((await head.arrayBuffer()).byteLength).toBe(0);
+      const etag = get.headers.get("etag");
+      expect(etag).toBeTruthy();
+      for (const method of ["GET", "HEAD"]) {
+        const cached = await request(pathname, {
+          method,
+          headers: { "If-None-Match": `W/${etag}` },
+        });
+        expect(cached.status).toBe(304);
+        expect(cached.headers.get("etag")).toBe(etag);
+        expect(cached.headers.get("content-security-policy")).toContain("sandbox");
+        expect((await cached.arrayBuffer()).byteLength).toBe(0);
+      }
       expect(mocks.readRemoteMediaBuffer).toHaveBeenCalledTimes(1);
     },
   );
@@ -389,17 +484,6 @@ describe("Control UI plugin and catalog icon routes", () => {
     expect(Buffer.from(await response.arrayBuffer()).toString()).toBe(svg);
   });
 
-  it("reuses successful icon bytes from the bounded process cache", async () => {
-    configForRequest = () => ({});
-    const first = await request("/__openclaw__/plugin-icon/firecrawl");
-    const second = await request("/__openclaw__/plugin-icon/firecrawl");
-
-    expect(first.status).toBe(200);
-    expect(second.status).toBe(200);
-    expect(mocks.resolveIconUrl).toHaveBeenCalledTimes(2);
-    expect(mocks.readRemoteMediaBuffer).toHaveBeenCalledTimes(1);
-  });
-
   it.each(ICON_ROUTES)(
     "shares one $label icon download across concurrent GET and HEAD",
     async ({ pathname }) => {
@@ -463,14 +547,21 @@ describe("Control UI plugin and catalog icon routes", () => {
   it("refreshes cached icon bytes after the cache lifetime", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     try {
+      mocks.encodeImage.mockResolvedValueOnce({ data: PNG_BYTES });
       const first = await request("/__openclaw__/plugin-icon/firecrawl");
+      const etag = first.headers.get("etag");
       const cached = await request("/__openclaw__/plugin-icon/firecrawl");
       now.mockReturnValue(1_000 + PLUGIN_ICON_CACHE_TTL_MS + 1);
-      const refreshed = await request("/__openclaw__/plugin-icon/firecrawl");
+      const refreshed = await request("/__openclaw__/plugin-icon/firecrawl", {
+        headers: { "If-None-Match": etag ?? "" },
+      });
 
       expect(first.status).toBe(200);
       expect(cached.status).toBe(200);
+      expect(cached.headers.get("etag")).toBe(etag);
       expect(refreshed.status).toBe(200);
+      expect(refreshed.headers.get("etag")).not.toBe(etag);
+      expect(Buffer.from(await refreshed.arrayBuffer())).toEqual(NORMALIZED_PNG_BYTES);
       expect(mocks.readRemoteMediaBuffer).toHaveBeenCalledTimes(2);
     } finally {
       now.mockRestore();

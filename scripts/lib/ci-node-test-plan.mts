@@ -170,6 +170,7 @@ const EXCLUDED_PROJECT_CONFIGS = new Set([
 ]);
 const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
 const BUNDLED_NODE_TEST_RUNNER = "blacksmith-4vcpu-ubuntu-2404";
+const EXTRA_LARGE_NODE_TEST_RUNNER = "blacksmith-32vcpu-ubuntu-2404";
 // Startup-core transforms the broad gateway graph before its assertions run.
 // Keep enough CPU here to avoid spending minutes in Vitest imports on 4 vCPU.
 const GATEWAY_STARTUP_CORE_RUNNER = DEFAULT_NODE_TEST_RUNNER;
@@ -194,64 +195,62 @@ const COMPACT_EMBEDDED_GROUP_NAMES = [
 const MAX_BUNDLED_NODE_TEST_PATTERNS = 64;
 // Compact bundles trade a little serial work for fewer ephemeral runner registrations.
 // Keep runner classes and subprocess isolation intact while bounding each combined job.
-// Default Blacksmith plans pack the Blacksmith base hints with 200s/276s
-// admission caps. GitHub-hosted plans use direct hosted hints with 94s/114s
-// packing caps. Hybrid keeps the expanded topology but packs its attempt-1
-// Blacksmith rows with the refit Blacksmith estimates below.
+// Two-slot Blacksmith jobs admit 300s of aggregate work. Serial jobs retain
+// 200s/276s caps; expanded profiles retain 210s and their existing estimates.
 const COMPACT_LARGE_NODE_TEST_JOB_SECONDS = 200;
 const COMPACT_SMALL_NODE_TEST_JOB_SECONDS = 276;
-export const COMPACT_EXPANDED_LARGE_NODE_TEST_JOB_SECONDS = 94;
-const COMPACT_EXPANDED_SMALL_NODE_TEST_JOB_SECONDS = 114;
+const COMPACT_PARALLEL_NODE_TEST_JOB_SECONDS = 300;
+const COMPACT_EXPANDED_NODE_TEST_JOB_SECONDS = 210;
 const COMPACT_GITHUB_GROUP_SECONDS_SCALE = 1.6;
 const COMPACT_HYBRID_GROUP_SECONDS_SCALE = 0.87;
 // Split groups above this hosted prediction before packing. Hybrid reuses the
 // hosted-derived splits so retries cannot reunite an oversized hosted group.
 const COMPACT_GITHUB_MAX_PREDICTED_SECONDS = 150;
-// Trusted forks can use the GitHub profile on Blacksmith, so both compact
-// caps remain part of the conservative runner-registration budget.
-const COMPACT_GITHUB_NODE_TEST_JOB_CAP = 112;
-const COMPACT_HYBRID_NODE_TEST_JOB_CAP = 96;
+// Trusted forks can use the GitHub profile on Blacksmith. Every compact
+// profile must fit the same runner-registration allowance.
+const COMPACT_NODE_TEST_JOB_CAP = 80;
 const COMPACT_NODE_TEST_JOB_GROUPS = 10;
 const COMPACT_TOOLING_NODE_TEST_GROUPS = 16;
 const COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES = 120;
-// These owners inherited 8-vCPU capacity from compact row ordinals. Keep it
-// with the workload when packing changes; hosted stripes follow their parent.
-const COMPACT_LARGE_NODE_TEST_OWNERS = new Map([
+// Keep capacity with the workload when packing changes; hosted stripes follow
+// their parent's profile policy without changing test or worker boundaries.
+const COMPACT_NODE_TEST_OWNER_RUNNERS = new Map([
   [
     "blacksmith",
-    new Set([
-      "agentic-agents-core-isolated",
-      "agentic-cli",
-      "agentic-commands-doctor",
-      "agentic-commands-doctor-sessions-cron",
-      "agentic-commands-doctor-sessions-cron-memory",
-      "agentic-commands-doctor-sessions-cron-sqlite",
-      "agentic-commands-doctor-platform",
-      "agentic-commands-status-tools",
-      "agentic-control-plane-auth-node",
-      "agentic-control-plane-http-plugin-ws",
-      "agentic-control-plane-runtime-ui-tools",
-      "auto-reply-reply-agent-runner",
-      "core-runtime-infra-heartbeat-runner",
-      "core-runtime-infra-storage-state",
-      "core-runtime-infra-system-runtime",
+    new Map([
+      ["agentic-agents-core-isolated", DEFAULT_NODE_TEST_RUNNER],
+      ["agentic-agents-support", EXTRA_LARGE_NODE_TEST_RUNNER],
+      ["agentic-cli", DEFAULT_NODE_TEST_RUNNER],
+      ["agentic-commands-doctor", DEFAULT_NODE_TEST_RUNNER],
+      ["agentic-commands-doctor-sessions-cron", DEFAULT_NODE_TEST_RUNNER],
+      ["agentic-commands-doctor-sessions-cron-memory", DEFAULT_NODE_TEST_RUNNER],
+      ["agentic-commands-doctor-sessions-cron-sqlite", DEFAULT_NODE_TEST_RUNNER],
+      ["agentic-commands-doctor-platform", DEFAULT_NODE_TEST_RUNNER],
+      ["agentic-commands-status-tools", DEFAULT_NODE_TEST_RUNNER],
+      ["agentic-control-plane-auth-node", DEFAULT_NODE_TEST_RUNNER],
+      ["agentic-control-plane-http-plugin-ws", DEFAULT_NODE_TEST_RUNNER],
+      ["agentic-control-plane-runtime-ui-tools", DEFAULT_NODE_TEST_RUNNER],
+      ["auto-reply-reply-agent-runner", DEFAULT_NODE_TEST_RUNNER],
+      ["core-runtime-infra-heartbeat-runner", DEFAULT_NODE_TEST_RUNNER],
+      ["core-runtime-infra-storage-state", DEFAULT_NODE_TEST_RUNNER],
+      ["core-runtime-infra-system-runtime", DEFAULT_NODE_TEST_RUNNER],
     ]),
   ],
   [
     "hybrid",
-    new Set([
-      "agentic-commands-doctor-config-state",
-      "agentic-commands-doctor-platform",
-      "agentic-control-plane-runtime-shared-token",
-      "core-runtime-cron-service",
+    new Map([
+      ["agentic-commands-doctor-config-state", DEFAULT_NODE_TEST_RUNNER],
+      ["agentic-commands-doctor-platform", DEFAULT_NODE_TEST_RUNNER],
+      ["agentic-control-plane-runtime-shared-token", DEFAULT_NODE_TEST_RUNNER],
+      ["core-runtime-cron-service", DEFAULT_NODE_TEST_RUNNER],
     ]),
   ],
   [
     "github",
-    new Set([
-      "agentic-agents-tools",
-      "core-runtime-cron-service",
-      "core-runtime-infra-storage-state",
+    new Map([
+      ["agentic-agents-tools", DEFAULT_NODE_TEST_RUNNER],
+      ["core-runtime-cron-service", DEFAULT_NODE_TEST_RUNNER],
+      ["core-runtime-infra-storage-state", DEFAULT_NODE_TEST_RUNNER],
     ]),
   ],
 ]);
@@ -638,6 +637,13 @@ const COMPACT_PUSH_EXCLUDED_SHARDS = new Set([
   ),
   "core-tooling-isolated",
 ]);
+// Serial or worker-pinned owners exceeded their intended job walls in run
+// 33676780376. Reuse file splitting on Blacksmith without raising worker counts.
+const COMPACT_BLACKSMITH_SPLIT_OWNERS = new Set([
+  "agentic-control-plane-agent-chat",
+  "agentic-gateway-core-3",
+  "core-runtime-infra-storage-state",
+]);
 // Spawn/signal-timing suites (process-group waits, PTY smoke) flake when a
 // concurrent sibling Vitest run competes for the 4 vCPU runner. Pack them
 // into bins the shard runner executes at concurrency 1.
@@ -653,6 +659,10 @@ export function isExclusiveCompactShardName(shardName: string): boolean {
 
 function isExclusiveCompactGroup(group: NodeTestShardGroup): boolean {
   return isExclusiveCompactShardName(group.shard_name);
+}
+
+function isParallelCompactGroup(group: NodeTestShardGroup): boolean {
+  return !isExclusiveCompactGroup(group) && !group.requiresDist && !group.pretestBuildMode;
 }
 
 // Spawn/signal/PTY-timing suites also flake under high in-process worker
@@ -2117,13 +2127,18 @@ export function createVitestCacheWarmGroups(): Array<{
 }
 
 function resolveCiNodeTestRunner(shard: NodeTestShard, compactProfile?: string): string {
+  const ownerRunner = COMPACT_NODE_TEST_OWNER_RUNNERS.get(compactProfile ?? "")?.get(
+    shard.shardName,
+  );
+  if (ownerRunner) {
+    return ownerRunner;
+  }
   if (
-    compactProfile !== undefined &&
-    (COMPACT_LARGE_NODE_TEST_OWNERS.get(compactProfile)?.has(shard.shardName) ||
-      (compactProfile === "blacksmith" &&
-        shard.includePatterns?.includes("src/cli/update-dry-run-state.process.test.ts")) ||
-      (compactProfile === "hybrid" &&
-        shard.includePatterns?.includes("src/cli/gateway-backed-exit.process.test.ts")))
+    (compactProfile === "blacksmith" &&
+      shard.includePatterns?.includes("src/cli/update-dry-run-state.process.test.ts")) ||
+    (compactProfile === "hybrid" &&
+      (shard.includePatterns?.includes("src/cli/gateway-backed-exit.process.test.ts") ||
+        shard.includePatterns?.includes("src/cli/gateway-backed-exit-health.process.test.ts")))
   ) {
     return DEFAULT_NODE_TEST_RUNNER;
   }
@@ -2136,6 +2151,22 @@ function resolveCiNodeTestRunner(shard: NodeTestShard, compactProfile?: string):
     shard.includePatterns?.includes("test/scripts/write-unified-entry-dts.test.ts")
     ? DEFAULT_NODE_TEST_RUNNER
     : BUNDLED_NODE_TEST_RUNNER;
+}
+
+function resolveCiNodeTestRunnerClass(runner: string) {
+  const name =
+    runner === EXTRA_LARGE_NODE_TEST_RUNNER
+      ? "large32"
+      : runner.includes("-8vcpu-")
+        ? "large"
+        : "small";
+  // Each runner bucket starts numbering at one; distinct classes need distinct
+  // names while larger requests retain the conservative large-job budget.
+  return {
+    name,
+    secondsCap:
+      name === "small" ? COMPACT_SMALL_NODE_TEST_JOB_SECONDS : COMPACT_LARGE_NODE_TEST_JOB_SECONDS,
+  };
 }
 
 function bundleNameForConfigs(configs: string[]): string {
@@ -2306,7 +2337,7 @@ export function createNodeTestShardBundles(
       }
     }
 
-    const runnerClass = group.runner.includes("-8vcpu-") ? "large" : "small";
+    const { name: runnerClass } = resolveCiNodeTestRunnerClass(group.runner);
     const bundleName = `${bundleNameForConfigs(group.configs)}-${runnerClass}`;
     for (const [index, bin] of bins.entries()) {
       const shardName = `bundle-${bundleName}-${index + 1}`;
@@ -2567,6 +2598,7 @@ function createCompactNodeTestShardBundles(
   options: NodeTestPlanOptions,
   compactMode: CompactNodeTestPlanMode,
 ): CompactNodeTestShard[] {
+  const isBlacksmithProfile = (options.runnerBackend ?? "blacksmith") === "blacksmith";
   const shards = createNodeTestShards(options).filter(
     (shard) => compactMode !== "push" || !COMPACT_PUSH_EXCLUDED_SHARDS.has(shard.shardName),
   );
@@ -2594,6 +2626,7 @@ function createCompactNodeTestShardBundles(
     // consumers still use the complete-file splitter for oversized test work.
     const plannedGroups =
       usesExpandedRunnerProfile(options.runnerBackend) ||
+      COMPACT_BLACKSMITH_SPLIT_OWNERS.has(group.shard_name) ||
       runtimePartition !== undefined ||
       (group.pretestBuildMode !== undefined && group.includePatterns === undefined)
         ? splitOversizedCompactGroup(group, options.runnerBackend, runtimePartition)
@@ -2647,23 +2680,33 @@ function createCompactNodeTestShardBundles(
           a.shard_name.localeCompare(b.shard_name),
       );
     const bins = packNodeTestGroups(sortedGroups, (candidate, group) => {
+      // Only runtime consumers share preparation; ordinary partners would inherit
+      // the slower serial runner instead of their two-slot capacity.
+      if (
+        isBlacksmithProfile &&
+        Boolean(candidate[0].pretestBuildMode) !== Boolean(group.pretestBuildMode)
+      ) {
+        return false;
+      }
       const exclusive = isExclusiveCompactGroup(group);
-      const secondsCap = exclusive
+      const serialSecondsCap = exclusive
         ? COMPACT_EXCLUSIVE_JOB_SECONDS
         : usesExpandedRunnerProfile(options.runnerBackend)
-          ? group.runner.includes("-8vcpu-")
-            ? COMPACT_EXPANDED_LARGE_NODE_TEST_JOB_SECONDS
-            : COMPACT_EXPANDED_SMALL_NODE_TEST_JOB_SECONDS
-          : group.runner.includes("-8vcpu-")
-            ? COMPACT_LARGE_NODE_TEST_JOB_SECONDS
-            : COMPACT_SMALL_NODE_TEST_JOB_SECONDS;
+          ? COMPACT_EXPANDED_NODE_TEST_JOB_SECONDS
+          : resolveCiNodeTestRunnerClass(group.runner).secondsCap;
+      const combined = [...candidate, group];
+      const parallel =
+        isBlacksmithProfile &&
+        combined.every(isParallelCompactGroup) &&
+        combined.every((entry) => estimateBinSeconds([entry]) <= serialSecondsCap);
+      const secondsCap = parallel ? COMPACT_PARALLEL_NODE_TEST_JOB_SECONDS : serialSecondsCap;
       const family = compactStripeFamily(group);
       return (
         isExclusiveCompactGroup(candidate[0]) === exclusive &&
         (family === undefined ||
           candidate.every((entry) => compactStripeFamily(entry) !== family)) &&
         candidate.length < COMPACT_NODE_TEST_JOB_GROUPS &&
-        estimateBinSeconds([...candidate, group]) <= secondsCap
+        estimateBinSeconds(combined) <= secondsCap
       );
     });
     bins.sort(
@@ -2672,42 +2715,44 @@ function createCompactNodeTestShardBundles(
 
     for (const [index, bin] of bins.entries()) {
       const [firstGroup] = bin;
-      const runnerClass = firstGroup.runner.includes("-8vcpu-") ? "large" : "small";
+      const { name: runnerClass } = resolveCiNodeTestRunnerClass(firstGroup.runner);
       const distSuffix = firstGroup.requiresDist ? "-dist" : "";
       const checkName = `checks-node-compact-${runnerClass}${distSuffix}-${index + 1}`;
       const runner = firstGroup.runner;
       const pretestBuildMode = mergeVitestPretestBuildModes(
         bin.map((group) => group.pretestBuildMode),
       );
+      // The runner admits overlap only after measuring capacity; exclusive and
+      // runtime-building jobs stay serial regardless of the requested class.
+      const planConcurrency =
+        isBlacksmithProfile && bin.length > 1 && bin.every(isParallelCompactGroup) ? 2 : 1;
+      // Tooling's nested compilers need host capacity while keeping serial isolation.
+      // Promote only the emitted runner so packing, names and timing keys stay stable.
+      const capacityRunner =
+        planConcurrency === 2 ||
+        (isBlacksmithProfile && bin.some((group) => group.configs.includes(TOOLING_CONFIG)))
+          ? EXTRA_LARGE_NODE_TEST_RUNNER
+          : runner;
       compactJobs.push({
         checkName,
         groups: bin,
         ...(pretestBuildMode ? { pretestBuildMode } : {}),
         requiresDist: firstGroup.requiresDist,
-        runner,
+        runner: capacityRunner,
         shardName: `compact-${runnerClass}${distSuffix}-${index + 1}`,
         // Whole-config groups run entire suites; keep their generous timeout.
         ...(bin.some((group) => !group.includePatterns)
           ? { timeoutMinutes: COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES }
           : {}),
-        // Every compact bin runs its plans serially. Overlapping two Vitest
-        // runs on one runner starves timing-sensitive tests on both runner
-        // classes (worker-startup timeouts on 4 vCPU, UI-animation and
-        // lock-timing flakes on 8 vCPU), and the packed weights are
-        // contention-inflated so serializing is roughly wall-neutral.
-        planConcurrency: 1,
+        planConcurrency,
         predictedSeconds: estimateBinSeconds(bin),
       });
     }
   }
 
-  const jobCap =
-    options.runnerBackend === "github"
-      ? COMPACT_GITHUB_NODE_TEST_JOB_CAP
-      : COMPACT_HYBRID_NODE_TEST_JOB_CAP;
-  if (usesExpandedRunnerProfile(options.runnerBackend) && compactJobs.length > jobCap) {
+  if (compactJobs.length > COMPACT_NODE_TEST_JOB_CAP) {
     throw new Error(
-      `compact ${options.runnerBackend} node test plan exceeds ${jobCap} jobs (${compactJobs.length} planned)`,
+      `compact ${options.runnerBackend ?? "blacksmith"} node test plan exceeds ${COMPACT_NODE_TEST_JOB_CAP} jobs (${compactJobs.length} planned)`,
     );
   }
 

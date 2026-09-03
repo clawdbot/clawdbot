@@ -400,7 +400,7 @@ describe("runGlobalPackageUpdateSteps", () => {
           "npm",
           "i",
           "-g",
-          "--allow-scripts=./openclaw-2.0.0.tgz",
+          `--allow-scripts=${path.join(packDir, "openclaw-2.0.0.tgz")}`,
           "--prefix",
           stagePrefix,
           path.join(packDir, "openclaw-2.0.0.tgz"),

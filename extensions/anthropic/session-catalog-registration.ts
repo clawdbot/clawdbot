@@ -19,6 +19,7 @@ import {
   CLAUDE_SESSION_READ_COMMAND,
   CLAUDE_SESSIONS_LIST_COMMAND,
   CLAUDE_TERMINAL_RESUME_COMMAND,
+  CLAUDE_TERMINAL_START_COMMAND,
 } from "./session-catalog-shared.js";
 
 const CLAUDE_SESSIONS_CAPABILITY = "claude-sessions";
@@ -114,6 +115,15 @@ function createClaudeSessionNodeHostCommands(): OpenClawPluginNodeHostCommand[] 
       handle: async (paramsJSON, io) =>
         await (await loadClaudeSessionNodeCommands()).resumeClaudeSession(paramsJSON, io),
     },
+    {
+      command: CLAUDE_TERMINAL_START_COMMAND,
+      cap: CLAUDE_SESSIONS_CAPABILITY,
+      dangerous: false,
+      duplex: true,
+      isAvailable: ({ env }) => Boolean(resolveClaudeTerminalExecutable(env)),
+      handle: async (paramsJSON, io) =>
+        await (await loadClaudeSessionNodeCommands()).startClaudeSession(paramsJSON, io),
+    },
   ];
 }
 
@@ -125,10 +135,25 @@ export function createClaudeSessionNodeInvokePolicies(): OpenClawPluginNodeInvok
         CLAUDE_SESSION_READ_COMMAND,
         CLAUDE_CLI_NODE_RUN_COMMAND,
         CLAUDE_TERMINAL_RESUME_COMMAND,
+        CLAUDE_TERMINAL_START_COMMAND,
       ],
       defaultPlatforms: ["macos", "linux", "windows"],
-      handle: (context) =>
-        context.command === CLAUDE_TERMINAL_RESUME_COMMAND ? { ok: true } : context.invokeNode(),
+      handle: (context) => {
+        if (context.command === CLAUDE_TERMINAL_START_COMMAND) {
+          return context.client?.scopes?.includes("operator.admin") &&
+            context.config.gateway?.cliAgents?.enabled === true &&
+            context.config.gateway?.terminal?.enabled !== false
+            ? { ok: true }
+            : {
+                ok: false,
+                message:
+                  "Native terminal start requires operator.admin and enabled CLI agents and terminals",
+              };
+        }
+        return context.command === CLAUDE_TERMINAL_RESUME_COMMAND
+          ? { ok: true }
+          : context.invokeNode();
+      },
     },
   ];
 }

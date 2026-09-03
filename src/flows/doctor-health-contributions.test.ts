@@ -11,10 +11,10 @@ import { migrateLegacySecretRefEnvMarkers } from "../secrets/legacy-secretref-en
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
+import { createDoctorHealthContribution } from "./doctor-health-contribution.js";
 import { resolveDoctorContributionHealthChecks } from "./doctor-health-contributions.js";
 import {
   createDoctorConfigFixture,
-  createDoctorHealthContribution,
   createDoctorHealthFlowContext,
   createDoctorLintContext,
   resolveDoctorHealthContributions,
@@ -1589,7 +1589,11 @@ describe("doctor health contributions", () => {
     };
     mocks.gatherDaemonStatus.mockResolvedValueOnce({
       gateway: { version: "2026.6.1" },
-      pluginVersionDrift,
+      pluginVersionRestartReadiness: {
+        status: "resolved",
+        report: pluginVersionDrift,
+        runningGatewayVersion: "2026.6.1",
+      },
     });
     mocks.collectWorkspaceStatusHealthFindings.mockResolvedValueOnce([
       {
@@ -1620,7 +1624,11 @@ describe("doctor health contributions", () => {
       findings: [expect.objectContaining({ checkId: "core/doctor/workspace-status" })],
     });
     expect(mocks.collectWorkspaceStatusHealthFindings).toHaveBeenCalledWith(ctx.cfg, {
-      pluginVersionDrift,
+      pluginVersionReadiness: {
+        status: "resolved",
+        report: pluginVersionDrift,
+        runningGatewayVersion: "2026.6.1",
+      },
     });
     expect(mocks.gatherDaemonStatus).toHaveBeenCalledWith({
       rpc: {
@@ -1631,6 +1639,49 @@ describe("doctor health contributions", () => {
       requireRpc: false,
       deep: false,
       allowExecSecretRefs: true,
+      pluginVersionTarget: "restart",
+    });
+  });
+
+  it("reports plugin drift against the service version that will run after restart", async () => {
+    const contribution = requireDoctorContribution("doctor:workspace-status");
+    mocks.gatherDaemonStatus.mockResolvedValueOnce({
+      gateway: { version: "2026.5.2" },
+      pluginVersionRestartReadiness: {
+        status: "resolved",
+        runningGatewayVersion: "2026.5.2",
+        report: {
+          gatewayVersion: "2026.6.1",
+          drifts: [
+            {
+              pluginId: "whatsapp",
+              installedVersion: "2026.5.2",
+              gatewayVersion: "2026.6.1",
+              source: "npm",
+            },
+          ],
+        },
+      },
+    });
+    const cfg = { plugins: { entries: { whatsapp: { enabled: true } } } };
+
+    await contribution.run(createDoctorHealthFlowContext({ cfg }));
+
+    expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, {
+      pluginVersionReadiness: {
+        status: "resolved",
+        runningGatewayVersion: "2026.5.2",
+        report: {
+          gatewayVersion: "2026.6.1",
+          drifts: [
+            expect.objectContaining({
+              pluginId: "whatsapp",
+              installedVersion: "2026.5.2",
+              gatewayVersion: "2026.6.1",
+            }),
+          ],
+        },
+      },
     });
   });
 
@@ -1650,7 +1701,7 @@ describe("doctor health contributions", () => {
     };
     mocks.gatherDaemonStatus.mockResolvedValueOnce({
       gateway: { version: "2026.6.1" },
-      pluginVersionDrift,
+      pluginVersionRestartReadiness: { status: "resolved", report: pluginVersionDrift },
     });
     const cfg = { plugins: { entries: { codex: { enabled: true } } } };
 
@@ -1676,27 +1727,31 @@ describe("doctor health contributions", () => {
       requireRpc: false,
       deep: false,
       allowExecSecretRefs: false,
+      pluginVersionTarget: "restart",
     });
     expect(fetchNpmPackageTargetStatus).toHaveBeenCalledWith({
       packageName: "@openclaw/codex",
       target: "2026.6.1",
     });
     expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, {
-      pluginVersionDrift: {
-        ...pluginVersionDrift,
-        drifts: [
-          expect.objectContaining({
-            targetResolution: expect.objectContaining({
-              status: "unresolved",
-              error: expect.stringContaining("HTTP 404"),
+      pluginVersionReadiness: {
+        status: "resolved",
+        report: {
+          ...pluginVersionDrift,
+          drifts: [
+            expect.objectContaining({
+              targetResolution: expect.objectContaining({
+                status: "unresolved",
+                error: expect.stringContaining("HTTP 404"),
+              }),
             }),
-          }),
-        ],
+          ],
+        },
       },
     });
   });
 
-  it("omits daemon-context plugin drift when gateway version used the fallback", async () => {
+  it("keeps post-restart plugin readiness when the Gateway is stopped", async () => {
     const contribution = requireDoctorContribution("doctor:workspace-status");
     const pluginVersionDrift = {
       gatewayVersion: "2026.5.2-test",
@@ -1711,7 +1766,7 @@ describe("doctor health contributions", () => {
     };
     mocks.gatherDaemonStatus.mockResolvedValueOnce({
       gateway: { version: null },
-      pluginVersionDrift,
+      pluginVersionRestartReadiness: { status: "resolved", report: pluginVersionDrift },
     });
     const cfg = { plugins: { entries: { codex: { enabled: true } } } };
 
@@ -1723,11 +1778,11 @@ describe("doctor health contributions", () => {
     );
 
     expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, {
-      pluginVersionDrift: undefined,
+      pluginVersionReadiness: { status: "resolved", report: pluginVersionDrift },
     });
   });
 
-  it("omits daemon-context plugin drift when probe auth was skipped", async () => {
+  it("keeps post-restart plugin readiness when the Gateway probe is unavailable", async () => {
     const contribution = requireDoctorContribution("doctor:workspace-status");
     const pluginVersionDrift = {
       gatewayVersion: "2026.6.1",
@@ -1743,7 +1798,7 @@ describe("doctor health contributions", () => {
     mocks.gatherDaemonStatus.mockResolvedValueOnce({
       gateway: {},
       rpc: { authWarning: "exec SecretRef probe auth skipped" },
-      pluginVersionDrift,
+      pluginVersionRestartReadiness: { status: "resolved", report: pluginVersionDrift },
     });
     const cfg = { plugins: { entries: { codex: { enabled: true } } } };
 
@@ -1755,7 +1810,19 @@ describe("doctor health contributions", () => {
     );
 
     expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, {
-      pluginVersionDrift: undefined,
+      pluginVersionReadiness: { status: "resolved", report: pluginVersionDrift },
+    });
+  });
+
+  it("omits plugin readiness when status fails before applicability is known", async () => {
+    const contribution = requireDoctorContribution("doctor:workspace-status");
+    mocks.gatherDaemonStatus.mockRejectedValueOnce(new Error("service inspection failed"));
+    const cfg = {};
+
+    await contribution.run(createDoctorHealthFlowContext({ cfg }));
+
+    expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, {
+      pluginVersionReadiness: undefined,
     });
   });
 
@@ -1773,7 +1840,7 @@ describe("doctor health contributions", () => {
 
     expect(mocks.gatherDaemonStatus).not.toHaveBeenCalled();
     expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, {
-      pluginVersionDrift: undefined,
+      pluginVersionReadiness: undefined,
     });
   });
 
@@ -1787,7 +1854,7 @@ describe("doctor health contributions", () => {
 
     expect(mocks.gatherDaemonStatus).not.toHaveBeenCalled();
     expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, {
-      pluginVersionDrift: undefined,
+      pluginVersionReadiness: undefined,
     });
 
     const ctx = createDoctorLintContext({
@@ -1800,7 +1867,7 @@ describe("doctor health contributions", () => {
 
     expect(mocks.gatherDaemonStatus).not.toHaveBeenCalled();
     expect(mocks.collectWorkspaceStatusHealthFindings).toHaveBeenCalledWith(cfg, {
-      pluginVersionDrift: undefined,
+      pluginVersionReadiness: undefined,
     });
   });
 
@@ -1819,7 +1886,7 @@ describe("doctor health contributions", () => {
     };
     mocks.gatherDaemonStatus.mockResolvedValueOnce({
       gateway: { version: "2026.6.1" },
-      pluginVersionDrift,
+      pluginVersionRestartReadiness: { status: "resolved", report: pluginVersionDrift },
     });
     const cfg = {
       gateway: {
@@ -1848,8 +1915,11 @@ describe("doctor health contributions", () => {
       requireRpc: false,
       deep: false,
       allowExecSecretRefs: false,
+      pluginVersionTarget: "restart",
     });
-    expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, { pluginVersionDrift });
+    expect(mocks.noteWorkspaceStatus).toHaveBeenCalledWith(cfg, {
+      pluginVersionReadiness: { status: "resolved", report: pluginVersionDrift },
+    });
   });
 
   it("ignores remote-only exec SecretRefs for local daemon-context plugin drift probes", async () => {
@@ -1883,6 +1953,7 @@ describe("doctor health contributions", () => {
       requireRpc: false,
       deep: false,
       allowExecSecretRefs: false,
+      pluginVersionTarget: "restart",
     });
   });
 

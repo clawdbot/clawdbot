@@ -706,14 +706,16 @@ describe("session accessor seam", () => {
 
   it("opens a borrowed read view with raw exact-key probes and deferred enumeration", async () => {
     const mixedKey = "agent:main:matrix:channel:!RoomAbC:example.org";
+    const skillsSnapshot = { prompt: "saved skill prompt", skills: [] };
     await upsertSessionEntryCore(
       { sessionKey: mixedKey, storePath },
-      { sessionId: "mixed-session", updatedAt: 10 },
+      { sessionId: "mixed-session", updatedAt: 10, skillsSnapshot },
     );
 
     const view = openSessionEntryReadView({ storePath });
 
     expect(view.get(mixedKey)?.sessionId).toBe("mixed-session");
+    expect(view.get(mixedKey)?.skillsSnapshot).toEqual(skillsSnapshot);
     // Raw probe contract: unlike loadSessionEntry, no folded-alias or
     // canonical-key resolution happens on get.
     expect(view.get(mixedKey.toLowerCase())).toBeUndefined();
@@ -723,6 +725,9 @@ describe("session accessor seam", () => {
         entry: expect.objectContaining({ sessionId: "mixed-session" }),
       },
     ]);
+    const metadata = openSessionEntryReadView({ storePath, projection: "list" });
+    expect(metadata.get(mixedKey)?.skillsSnapshot).toBeUndefined();
+    expect(metadata.entries()).toEqual([{ sessionKey: mixedKey, entry: metadata.get(mixedKey) }]);
   });
 
   it("keeps case-distinct Matrix sessions separate under nested agent ownership", async () => {

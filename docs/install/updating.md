@@ -301,6 +301,9 @@ This avoids npm overlaying a new package onto stale files from the old one. If
 the install command fails, OpenClaw retries once with `--omit=optional`, which
 helps hosts where native optional dependencies cannot compile.
 
+For local tarball targets on npm 12, the archive filename and every parent
+directory must be comma-free. See [Installer path requirements](/install/installer).
+
 OpenClaw-managed npm update and plugin-update commands also clear npm's
 `min-release-age` supply-chain quarantine (or the older `before` config key)
 for the child npm process. That policy exists for general protection, but an
@@ -484,7 +487,7 @@ only when the connected remote Gateway is at least as new as the app.
 openclaw doctor
 ```
 
-Migrates config, audits DM policies, and checks gateway health. Details: [Doctor](/gateway/doctor)
+Migrates config, audits DM policies, and checks gateway health. Doctor also compares active official plugins with the OpenClaw package the managed service will load after restart. Resolve any plugin restart-readiness warning before continuing. Details: [Doctor](/gateway/doctor)
 
 If you use the unpacked Chrome extension, also run `openclaw browser doctor --browser-profile chrome`.
 For a version-mismatch warning, reload the extension from `chrome://extensions`;

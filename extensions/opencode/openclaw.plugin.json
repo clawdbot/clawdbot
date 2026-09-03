@@ -6,7 +6,10 @@
   "enabledByDefault": true,
   "providers": ["opencode"],
   "providerEndpoints": [
-    { "endpointClass": "opencode-native", "hostSuffixes": ["opencode.ai"] }
+    {
+      "endpointClass": "opencode-native",
+      "baseUrls": ["https://opencode.ai/zen", "https://opencode.ai/zen/v1"]
+    }
   ],
   "providerRequest": {
     "providers": { "opencode": { "family": "opencode" } }

@@ -1089,13 +1089,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     ]) {
       expect(fullReleaseWorkflow.jobs[jobName]["runs-on"]).toBe("ubuntu-24.04");
     }
-    expect(fullReleaseWorkflow.jobs.release_checks_independent["runs-on"]).toBe(
-      "blacksmith-4vcpu-ubuntu-2404",
-    );
-    expect(fullReleaseWorkflow.jobs.release_checks_candidate["runs-on"]).toBe(
-      "blacksmith-4vcpu-ubuntu-2404",
-    );
-    expect(fullReleaseWorkflow.jobs.performance["runs-on"]).toBe("blacksmith-4vcpu-ubuntu-2404");
     expect(fullReleaseWorkflow.jobs.normal_ci["timeout-minutes"]).toBe(15);
     expect(fullReleaseWorkflow.jobs.normal_ci.needs).toEqual(["resolve_target", "evidence_reuse"]);
     expect(fullReleaseWorkflow.jobs.normal_ci.if).toContain(

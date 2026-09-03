@@ -55,6 +55,13 @@ Provider and channel execution paths must use the active runtime config snapshot
 
 ## Reusable runtime utilities
 
+Native command probes can use `signalProcessTree` from
+`openclaw/plugin-sdk/process-runtime`. Its `onComplete` callback runs after Unix
+signaling or the bounded Windows `taskkill` attempt, not proof that every process
+exited. Keep the probe pending through cleanup, use `detached: true` only for a
+process group you created, and start Windows tree termination while its root is
+still alive.
+
 Channel plugins that deliver agent replies directly can call
 `renderPresentationForDelivery(handler, payload)` from
 `openclaw/plugin-sdk/interactive-runtime` at delivery, after modifying hooks. Supply

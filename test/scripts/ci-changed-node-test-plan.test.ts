@@ -482,7 +482,7 @@ describe("CI changed Node test plan", () => {
     );
   });
 
-  it("keeps fallback config processes serial while packing bounded independent pairs", () => {
+  it("keeps fallback config processes serial while filling independent job budgets", () => {
     const shards = createChangedExtensionFallbackShards([
       "scripts/lib/ci-changed-node-test-plan.mts",
     ]);
@@ -518,17 +518,8 @@ describe("CI changed Node test plan", () => {
         .toSorted((left, right) => left.shard_name.localeCompare(right.shard_name));
 
     expect(executionDescriptors(groups)).toEqual(executionDescriptors(fallbackGroups(original)));
-    for (const config of [
-      "test/vitest/vitest.extension-codex.config.ts",
-      "test/vitest/vitest.extension-matrix.config.ts",
-      "test/vitest/vitest.extension-telegram.config.ts",
-    ]) {
-      expect(shards.filter((shard) => shard.configs.includes(config))).toEqual(
-        original.filter((shard) => shard.configs.includes(config)),
-      );
-    }
-    expect(shards).toHaveLength(original.length - bundles.length);
     expect(shards.length).toBeGreaterThan(1);
+    expect(shards.length).toBeLessThanOrEqual(50);
     expect(shards.every((shard) => !shard.targets)).toBe(true);
     expect(groups.every((group) => group.configs.length === 1)).toBe(true);
     expect(shards.every((shard) => shard.planConcurrency === 1)).toBe(true);
@@ -536,9 +527,11 @@ describe("CI changed Node test plan", () => {
     expect(new Set(groups.map((group) => group.shard_name)).size).toBe(groups.length);
     expect(bundles.length).toBeGreaterThan(0);
     for (const bundle of bundles) {
-      expect(bundle.groups).toHaveLength(2);
-      expect(new Set(bundle.groups!.flatMap((group) => group.configs)).size).toBe(2);
-      expect(bundle.predictedSeconds).toBeLessThanOrEqual(94);
+      expect(bundle.groups!.length).toBeGreaterThan(1);
+      expect(new Set(bundle.groups!.flatMap((group) => group.configs)).size).toBe(
+        bundle.groups!.length,
+      );
+      expect(bundle.predictedSeconds).toBeLessThanOrEqual(150);
       expect(bundle.configs).toEqual([]);
       expect(bundle.pretestBuildMode).toBeUndefined();
       expect(bundle.groups!.every((group) => !group.pretestBuildMode)).toBe(true);
@@ -546,6 +539,19 @@ describe("CI changed Node test plan", () => {
       expect(bundle.groups!.every((group) => group.requiresDist === bundle.requiresDist)).toBe(
         true,
       );
+    }
+    for (const [index, shard] of shards.entries()) {
+      for (const other of shards.slice(index + 1)) {
+        const combined = fallbackGroups([shard, other]);
+        const canShareJob =
+          !shard.pretestBuildMode &&
+          !other.pretestBuildMode &&
+          shard.runner === other.runner &&
+          shard.requiresDist === other.requiresDist &&
+          new Set(combined.flatMap((group) => group.configs)).size === combined.length &&
+          shard.predictedSeconds! + other.predictedSeconds! <= 150;
+        expect(canShareJob, `${shard.shardName} and ${other.shardName} fit one job`).toBe(false);
+      }
     }
   });
 

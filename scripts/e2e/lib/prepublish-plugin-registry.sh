@@ -90,6 +90,7 @@ NODE
 
   mkdir -p "$registry_root"
   local port_file="$registry_root/port" log_file="$registry_root/server.log"
+  local merge_upstream="${OPENCLAW_NPM_REGISTRY_MERGE_UPSTREAM:-versions}"
   local dist_tags="${OPENCLAW_NPM_REGISTRY_DIST_TAGS-}"
   if [ -z "${OPENCLAW_NPM_REGISTRY_DIST_TAGS+x}" ]; then
     dist_tags="beta=$candidate_version"
@@ -99,7 +100,7 @@ NODE
   fi
   rm -f "$port_file"
   OPENCLAW_NPM_REGISTRY_DIST_TAGS="$dist_tags" \
-    OPENCLAW_NPM_REGISTRY_MERGE_UPSTREAM="${artifact_dir:+1}" \
+    OPENCLAW_NPM_REGISTRY_MERGE_UPSTREAM="${artifact_dir:+$merge_upstream}" \
     OPENCLAW_NPM_REGISTRY_UPSTREAM="${OPENCLAW_NPM_REGISTRY_UPSTREAM:-https://registry.npmjs.org}" \
     node "$server_script" "$port_file" "${registry_args[@]}" >"$log_file" 2>&1 &
   local server_pid="$!"
@@ -152,7 +153,7 @@ openclaw_prepublish_plugin_registry_run_mounted() (
   trap 'exit 129' HUP
   # Before lane code selects an update target, published baseline selectors must
   # remain published; exact candidate dependencies are already in the package set.
-  OPENCLAW_NPM_REGISTRY_DIST_TAGS="" \
+  OPENCLAW_NPM_REGISTRY_DIST_TAGS="" OPENCLAW_NPM_REGISTRY_MERGE_UPSTREAM=1 \
     openclaw_prepublish_plugin_registry_start_mounted "$registry_root" registry_pid '[]'
   if [ -n "$registry_pid" ]; then
     export OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL="$NPM_CONFIG_REGISTRY"

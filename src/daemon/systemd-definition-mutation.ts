@@ -259,7 +259,17 @@ export async function withSystemdDefinitionMutation<T>(
       const directory = await fs.realpath(path.dirname(file));
       const temporary = path.join(directory, `${path.basename(file)}.${randomUUID()}.tmp`);
       try {
-        await fs.writeFile(temporary, contents, { flag: "wx", mode });
+        // Keep owner-write during preparation so the descriptor can be reopened
+        // even when the final snapshot mode is read-only.
+        await fs.writeFile(temporary, contents, { flag: "wx", mode: mode | 0o200 });
+        const temporaryHandle = await fs.open(temporary, constants.O_WRONLY | constants.O_NOFOLLOW);
+        try {
+          // Creation mode is filtered by umask. Apply the admitted mode through
+          // the already-open inode so rollback restores the exact snapshot mode.
+          await temporaryHandle.chmod(mode);
+        } finally {
+          await temporaryHandle.close();
+        }
         const written = await fs.lstat(temporary);
         await refresh(true);
         // Locks coordinate OpenClaw writers, not external editors: POSIX rename

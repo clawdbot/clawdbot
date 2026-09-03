@@ -257,14 +257,36 @@ see Anthropic's [migration guide](https://platform.claude.com/docs/en/models/fab
 
 Fable 5.1 binds retained thinking to the preceding system prompt, tools, and
 conversation history. Changing that prefix can invalidate later thinking
-blocks. Claude Code manages this history for the CLI runtime. In OpenClaw's
-embedded runtime, client-side compaction removes stale thinking signatures;
-a provider-confirmed thinking rejection can trigger one retry without prior
-thinking and persist the successful repair. Adaptive mode remains enabled,
-but a response may contain no thinking block. In the embedded runtime,
-switching between pinned Fable versions drops model-bound thinking while
-keeping the visible conversation. Integrations that build Messages API
+blocks. Claude Code manages this history for the CLI runtime. OpenClaw's
+embedded runtime persists hidden runtime-context carriers after their user turn
+and keeps earlier carriers and inline inbound metadata in place. Direct
+Anthropic API-key requests with adaptive thinking send the
+`thinking-binding-controls-2026-08-01` beta and
+`thinking.block_binding.prefix_mismatch_behavior: "drop_block"`. Anthropic drops
+invalidated replayed thinking server-side, and OpenClaw logs a warning with the
+count and up to five affected paths. These controls are not sent for OAuth,
+proxies, Bedrock, Vertex, Foundry, or budget-based or disabled thinking.
+Client-side compaction removes stale thinking signatures; a provider-confirmed
+thinking rejection can still trigger one retry without prior thinking and
+persist the successful repair. Adaptive mode remains enabled,
+but a response may contain no thinking block. Integrations that build Messages API
 requests directly should follow Anthropic's [preserved-thinking rules](https://platform.claude.com/docs/en/build-with-claude/thinking#preserved-thinking).
+
+Fable 5.1 thinking is also bound to the model that produced it. Switching a
+session from Fable 5.1 to any other model (Opus 5, Sonnet 5, Fable 5, or
+older) continues the visible conversation without Fable's earlier reasoning;
+Anthropic drops those blocks unbilled, and OpenClaw's embedded runtime omits
+them from the replay for the same result. The reverse move keeps reasoning:
+Fable 5.1 reads thinking produced by Opus 5, Sonnet 5, Opus 4.8, and Fable 5,
+so a session that moves onto Fable 5.1 replays that history intact. Switching
+away and back does not restore the pre-switch Fable reasoning: the switch
+changes the system prompt, which invalidates every earlier Fable block. On
+direct API-key routes Anthropic drops those blocks server-side and OpenClaw
+logs the drop; elsewhere, organizations that enforce the prefix check reject
+the request once and the embedded runtime retries without prior thinking.
+Changing the thinking level with `/think` has the same effect. Pick the model
+and thinking level when you start the session when reasoning continuity
+matters.
 
 ## Claude sessions across computers
 

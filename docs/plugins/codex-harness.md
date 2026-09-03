@@ -457,8 +457,9 @@ for the current Codex rules.
 
 For an ordinary policy-restricted turn, OpenClaw disables Codex native Code
 Mode, removes environment selections, disables and verifies inherited and
-configured MCP servers, disables native hook relays, and filters OpenClaw
-dynamic tools through the effective policy. The bounded workspace `AGENTS.md`
+native configured MCP servers, and disables native hook relays. Static configured
+MCP tools that pass the effective policy move to OpenClaw's dynamic surface for
+that turn. Other OpenClaw dynamic tools use the same policy. The bounded workspace `AGENTS.md`
 snapshot still reaches the model as thread-level developer instructions because
 project instructions are context, not tool authority.
 

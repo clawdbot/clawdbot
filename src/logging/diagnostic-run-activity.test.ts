@@ -34,10 +34,7 @@ import {
   startDiagnosticRunActivityTracking,
   stopDiagnosticRunActivityTracking,
 } from "./diagnostic-run-activity.js";
-import {
-  markDiagnosticModelStartedForTest,
-  markDiagnosticRunProgressForTest,
-} from "./diagnostic-run-activity.test-support.js";
+import { markDiagnosticModelStartedForTest } from "./diagnostic-run-activity.test-support.js";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -566,13 +563,14 @@ describe("repeated request liveness", () => {
     });
   });
 
-  it("defaults omitted progress to liveness and reserves clearing for explicit semantic progress", () => {
+  it("defaults omitted progress to liveness and reserves clearing for core semantic progress", async () => {
     const ref = {
       sessionId: "progress-default-session",
       sessionKey: "agent:main:progress-default",
     };
     const runId = "progress-default-run";
 
+    startDiagnosticRunActivityTracking();
     markDiagnosticEmbeddedRunStarted({ ...ref, runId });
     for (let attempt = 0; attempt < 2; attempt += 1) {
       markDiagnosticModelStartedForTest({
@@ -590,25 +588,26 @@ describe("repeated request liveness", () => {
       repeatedRequestNoProgressAgeMs: expect.any(Number),
     });
 
-    markDiagnosticRunProgressForTest({
+    emitCoreSemanticRunProgressDiagnosticEvent({
       ...ref,
       runId,
       reason: "assistant:progress",
-      progressKind: "semantic",
     });
+    await waitForDiagnosticEventsDrained();
     expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
       lastProgressReason: "assistant:progress",
       repeatedRequestNoProgressAgeMs: undefined,
     });
   });
 
-  it("ages repeated requests across mechanical progress until semantic progress arrives", () => {
+  it("ages repeated requests across mechanical progress until semantic progress arrives", async () => {
     vi.useFakeTimers();
     const startedAt = Date.parse("2026-08-04T00:00:00Z");
     vi.setSystemTime(startedAt);
     const ref = { sessionId: "retry-session", sessionKey: "agent:main:retry" };
     const runId = "retry-run";
 
+    startDiagnosticRunActivityTracking();
     markDiagnosticEmbeddedRunStarted({ ...ref, runId });
     markDiagnosticModelStartedForTest({
       ...ref,
@@ -643,12 +642,13 @@ describe("repeated request liveness", () => {
       repeatedRequestNoProgressAgeMs: 5 * 60_000,
     });
 
-    markDiagnosticRunProgressForTest({
+    emitCoreSemanticRunProgressDiagnosticEvent({
       ...ref,
       runId,
       reason: "assistant:progress",
-      progressKind: "semantic",
     });
+    await vi.advanceTimersByTimeAsync(0);
+    await waitForDiagnosticEventsDrained();
     expect(
       getDiagnosticSessionActivitySnapshot(ref).repeatedRequestNoProgressAgeMs,
     ).toBeUndefined();
@@ -712,12 +712,13 @@ describe("repeated request liveness", () => {
     ).toBeGreaterThanOrEqual(0);
   });
 
-  it("ignores turn observations and clears request evidence across owner lifecycle", () => {
+  it("ignores turn observations and clears request evidence across owner lifecycle", async () => {
     vi.useFakeTimers();
     const startedAt = Date.parse("2026-08-04T01:00:00Z");
     vi.setSystemTime(startedAt);
     const ref = { sessionId: "owner-session", sessionKey: "agent:main:owner" };
 
+    startDiagnosticRunActivityTracking();
     markDiagnosticEmbeddedRunStarted({ ...ref, runId: "first-owner" });
     for (let attempt = 0; attempt < 2; attempt += 1) {
       markDiagnosticModelStartedForTest({
@@ -773,12 +774,13 @@ describe("repeated request liveness", () => {
       observationUnit: "request",
     });
     vi.setSystemTime(startedAt + 7 * 60_000);
-    markDiagnosticRunProgressForTest({
+    emitCoreSemanticRunProgressDiagnosticEvent({
       ...ref,
       runId: "first-owner",
       reason: "delayed-old-owner-output",
-      progressKind: "semantic",
     });
+    await vi.advanceTimersByTimeAsync(0);
+    await waitForDiagnosticEventsDrained();
     expect(getDiagnosticSessionActivitySnapshot(ref).repeatedRequestNoProgressAgeMs).toBe(60_000);
     expect(
       clearDiagnosticEmbeddedRunActivityForSession({
@@ -912,7 +914,7 @@ describe("repeated request liveness", () => {
     });
   });
 
-  it("requires an owned semantic event across merged session aliases", () => {
+  it("preserves request evidence for ownerless liveness and blank semantic owners across aliases", async () => {
     vi.useFakeTimers();
     const startedAt = Date.parse("2026-08-04T02:00:00Z");
     vi.setSystemTime(startedAt);
@@ -920,6 +922,7 @@ describe("repeated request liveness", () => {
     const sessionKey = "agent:main:merge";
     const runId = "merge-run";
 
+    startDiagnosticRunActivityTracking();
     markDiagnosticEmbeddedRunStarted({ sessionId, runId });
     for (let attempt = 0; attempt < 2; attempt += 1) {
       markDiagnosticModelStartedForTest({
@@ -930,19 +933,19 @@ describe("repeated request liveness", () => {
         observationUnit: "request",
       });
     }
-    markDiagnosticRunProgressForTest({
+    markDiagnosticRunProgress({
       sessionId,
       sessionKey,
-      reason: "ownerless:semantic",
-      progressKind: "semantic",
+      reason: "ownerless:liveness",
     });
-    markDiagnosticRunProgressForTest({
+    emitCoreSemanticRunProgressDiagnosticEvent({
       sessionId,
       sessionKey,
       runId: "   ",
       reason: "whitespace-owner:semantic",
-      progressKind: "semantic",
     });
+    await vi.advanceTimersByTimeAsync(0);
+    await waitForDiagnosticEventsDrained();
 
     vi.setSystemTime(startedAt + 6 * 60_000);
     expect(getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey })).toMatchObject({
@@ -950,12 +953,13 @@ describe("repeated request liveness", () => {
       repeatedRequestNoProgressAgeMs: 6 * 60_000,
     });
 
-    markDiagnosticRunProgressForTest({
+    emitCoreSemanticRunProgressDiagnosticEvent({
       sessionKey,
       runId: `  ${runId}  `,
       reason: "owned:semantic",
-      progressKind: "semantic",
     });
+    await vi.advanceTimersByTimeAsync(0);
+    await waitForDiagnosticEventsDrained();
     expect(getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey })).toMatchObject({
       lastProgressReason: "owned:semantic",
       repeatedRequestNoProgressAgeMs: undefined,

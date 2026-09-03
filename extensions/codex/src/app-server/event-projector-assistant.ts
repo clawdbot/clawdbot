@@ -26,8 +26,14 @@ export class CodexAssistantProjection {
   private latestTerminalAssistantCandidateSuperseded = false;
   private terminalAssistantCandidateEarlierActiveItemIds = new Set<string>();
   private pendingRawTerminalAssistantEchoItemId: string | undefined;
-  private readonly lastCommentaryProgressEventByItem = new Map<string, string>();
-  private readonly lastAnswerCandidateEventByItem = new Map<string, string>();
+  private readonly lastCommentaryProgressEventByItem = new Map<
+    string,
+    { phase: "update" | "end"; text: string }
+  >();
+  private readonly lastAnswerCandidateEventByItem = new Map<
+    string,
+    { status: AnswerCandidateStatus; text: string }
+  >();
   private visibleAnswerCandidateItemId: string | undefined;
   // Codex emits each typed item completion before its matching raw response item.
   // Pair by protocol order because contributors may rewrite only the typed text.
@@ -96,10 +102,10 @@ export class CodexAssistantProjection {
       this.emitCommentaryProgress({ itemId, text, phase: "update" });
       return;
     }
-    if (this.isFinalAnswerAssistantItem(itemId)) {
+    const knownFinalAnswer = this.isFinalAnswerAssistantItem(itemId);
+    if (knownFinalAnswer) {
       this.emitAnswerCandidate(itemId, "candidate");
     }
-    const knownFinalAnswer = this.shouldStreamAssistantPartial(itemId);
     const replace =
       this.streamedPartialAssistantItemId !== undefined &&
       this.streamedPartialAssistantItemId !== itemId;
@@ -501,10 +507,6 @@ export class CodexAssistantProjection {
     return this.assistantPhaseByItem.get(itemId) === "final_answer";
   }
 
-  private shouldStreamAssistantPartial(itemId: string): boolean {
-    return this.assistantPhaseByItem.get(itemId) === "final_answer";
-  }
-
   private emitCommentaryProgress(params: {
     itemId: string;
     text: string;
@@ -514,11 +516,14 @@ export class CodexAssistantProjection {
     // Codex completes an item with the same text as its last delta. Channels
     // need that boundary before their first notifying post, so agents must not
     // collapse completion into a text-only duplicate or invent a timer instead.
-    const signature = `${params.phase}\0${progressText}`;
-    if (!progressText || this.lastCommentaryProgressEventByItem.get(params.itemId) === signature) {
+    const previous = this.lastCommentaryProgressEventByItem.get(params.itemId);
+    if (!progressText || (previous?.phase === params.phase && previous.text === progressText)) {
       return;
     }
-    this.lastCommentaryProgressEventByItem.set(params.itemId, signature);
+    this.lastCommentaryProgressEventByItem.set(params.itemId, {
+      phase: params.phase,
+      text: progressText,
+    });
     this.emitAgentEvent({
       stream: "item",
       data: {
@@ -541,11 +546,11 @@ export class CodexAssistantProjection {
       this.supersedeVisibleAnswerCandidate();
       this.visibleAnswerCandidateItemId = itemId;
     }
-    const signature = `${status}\0${text}`;
-    if (this.lastAnswerCandidateEventByItem.get(itemId) === signature) {
+    const previous = this.lastAnswerCandidateEventByItem.get(itemId);
+    if (previous?.status === status && previous.text === text) {
       return;
     }
-    this.lastAnswerCandidateEventByItem.set(itemId, signature);
+    this.lastAnswerCandidateEventByItem.set(itemId, { status, text });
     this.emitAgentEvent({
       stream: "item",
       data: {

@@ -99,7 +99,7 @@ const NPM_PACK_QUIET_FLAGS = ["--json", "--loglevel=error"] as const;
 async function resolveNpmUpdateLifecyclePolicy(params: {
   installTarget: ResolvedGlobalInstallTarget;
 }): Promise<{
-  policy: "unflagged" | "allow-scripts" | null;
+  policy: ReturnType<typeof resolveNpmLifecyclePolicyGate>["policy"];
   failedStep: PackageUpdateStepResult | null;
 }> {
   const gate = resolveNpmLifecyclePolicyGate(params.installTarget);

@@ -200,7 +200,37 @@ suite.define(() => {
     await availableItem.getByRole("button", { name: "Request admin" }).waitFor();
   });
 
-  it("keeps a pending admin request across Inbox presenters and Settings", async () => {
+  it("resurfaces Request admin after a dismissed incident clears directly in Settings", async () => {
+    const context = await createContext();
+    const dismissPage = await context.newPage();
+    await installMockGateway(dismissPage, { operatorScopes: LIMITED_SCOPES });
+    await dismissPage.goto(`${suite.server.baseUrl}activity`);
+    const dismissedItem = await openLimitedAccessItem(await openInbox(dismissPage));
+    await dismissedItem.getByRole("button", { name: "Request admin" }).waitFor();
+    await dismissedItem.getByRole("button", { name: "Dismiss Limited access" }).click();
+    await expect
+      .poll(() => dismissPage.locator(".sidebar-issues-button").getAttribute("aria-label"))
+      .toBe("0 inbox items");
+    await dismissPage.close();
+
+    const clearedPage = await context.newPage();
+    await installMockGateway(clearedPage, { operatorScopes: FULL_SCOPES });
+    await clearedPage.goto(`${suite.server.baseUrl}settings/appearance`);
+    await waitForControlUiSettingsTakeover(clearedPage);
+    expect(await clearedPage.locator("openclaw-sidebar-attention").count()).toBe(0);
+    await clearedPage.close();
+
+    const recurrencePage = await context.newPage();
+    await installMockGateway(recurrencePage, { operatorScopes: LIMITED_SCOPES });
+    await recurrencePage.goto(`${suite.server.baseUrl}activity`);
+
+    const inbox = recurrencePage.locator(".sidebar-issues-button");
+    await expect.poll(() => inbox.getAttribute("aria-label")).toBe("1 inbox item");
+    const recurrentItem = await openLimitedAccessItem(await openInbox(recurrencePage));
+    await recurrentItem.getByRole("button", { name: "Request admin" }).waitFor();
+  });
+
+  it("keeps a pending admin request while Inbox presenters change", async () => {
     const context = await createContext();
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -240,12 +270,15 @@ suite.define(() => {
       .getByRole("menuitem", { exact: true, name: "Settings" })
       .click();
     await waitForControlUiSettingsTakeover(page);
-    const settingsItem = await openLimitedAccessItem(await openInbox(page));
-    await waitForPendingUpgradeItem(settingsItem);
-    await waitForAnimations(page.locator("#sidebar-issues-panel"));
-    await captureProof(page, "settings-inbox-upgrade-pending.png");
+    expect(await page.locator(".sidebar-issues-button").count()).toBe(0);
+    await captureProof(page, "settings-without-inbox-pending.png");
     expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(1);
     expect(await gateway.getRequests("device.scopes.waitUpgrade")).toHaveLength(1);
+
+    await page.keyboard.press("Escape");
+    await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
+    const returnedItem = await openLimitedAccessItem(await openInbox(page));
+    await waitForPendingUpgradeItem(returnedItem);
 
     await gateway.setOperatorScopes(FULL_SCOPES);
     await gateway.resolveDeferred("device.scopes.waitUpgrade", {
@@ -376,7 +409,7 @@ suite.define(() => {
     },
   );
 
-  it("keeps Inbox reachable at the bottom left during onboarding", async () => {
+  it("keeps Request admin in the onboarding header Inbox", async () => {
     const context = await createContext();
     const page = await context.newPage();
     await installMockGateway(page, {
@@ -388,11 +421,14 @@ suite.define(() => {
     expect(
       await page.getByText("Update the Gateway to continue setup with OpenClaw.").count(),
     ).toBe(0);
-    const inbox = page.locator(".sidebar-attention--floating .sidebar-issues-button");
-    await expect.poll(() => inbox.getAttribute("aria-label")).toBe("1 inbox item");
+    const onboardingInbox = page.locator(
+      ".custodian__header-actions > openclaw-sidebar-attention:not(.sidebar-attention--floating)",
+    );
+    await onboardingInbox.locator(".sidebar-issues-button").waitFor();
+    expect(await page.locator(".sidebar-attention--floating").count()).toBe(0);
     const item = await openLimitedAccessItem(await openInbox(page));
     await item.getByRole("button", { name: "Request admin" }).waitFor();
-    await captureProof(page, "onboarding-inbox-limited-access.png");
+    await captureProof(page, "onboarding-header-inbox-limited-access.png");
   });
 
   it("offers the admin upgrade without crypto.subtle", async () => {
