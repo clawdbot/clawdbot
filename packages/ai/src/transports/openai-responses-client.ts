@@ -499,11 +499,12 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
                 `sessionIdHash=${redactIdentifier(options?.sessionId)} ` +
                 `headersHash=${redactIdentifier(JSON.stringify(Object.entries(websocketHeaders ?? {}).toSorted(([a], [b]) => a.localeCompare(b))))}`,
             );
+            const trackedWebSocketStream = responseModelTracker.track(undefined, websocket.stream);
             responseStream = {
               async *[Symbol.asyncIterator]() {
                 let providerAccepted = false;
                 try {
-                  for await (const event of websocket.stream) {
+                  for await (const event of trackedWebSocketStream) {
                     if (!providerAccepted) {
                       providerAccepted = true;
                       await notifyProviderStreamOpened({

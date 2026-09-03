@@ -116,15 +116,21 @@ let previousHost: ReturnType<typeof getAiTransportHost>;
 const modelFetch = vi.fn<typeof fetch>();
 
 beforeEach(async () => {
-  // Load the completion runtime before installing the fixture host; the application
-  // bootstrap configures the production host during its first import.
-  await import("../../agents/simple-completion-runtime.js");
+  // Initialize the lazily loaded agent host before installing the fixture override;
+  // otherwise the first completion replaces this host and selects native WebSocket.
+  await import("../../agents/ai-transport-runtime-host.js");
   previousHost = getAiTransportHost();
   modelFetch.mockReset();
   modelFetch.mockImplementation(async () => completedResponse());
   configureAiTransportHost({
     ...previousHost,
     buildModelFetch: () => modelFetch,
+    plugin: {
+      ...previousHost.plugin,
+      resolveProviderStream: () => undefined,
+      resolveTransportTurnState: () => undefined,
+      wrapSimpleCompletionStream: () => undefined,
+    },
   });
   mocks.resolveSimpleCompletionSelectionForAgent.mockReset();
   mocks.resolveSimpleCompletionSelectionForAgent.mockReturnValue({
@@ -151,6 +157,7 @@ describe("runtime.llm.complete managed ChatGPT OAuth model identity", () => {
     const result = await llm.complete({
       messages: [{ role: "user", content: "Classify this fixture." }],
       requiredAuthMode: "oauth",
+      signal: AbortSignal.timeout(30_000),
       responseFormat: {
         type: "json_schema",
         json_schema: {
@@ -168,6 +175,7 @@ describe("runtime.llm.complete managed ChatGPT OAuth model identity", () => {
       responseModel,
       stopReason: "stop",
     });
+    expect(modelFetch).toHaveBeenCalledTimes(1);
   });
 
   it("requires the selected credential to use the requested OAuth mode", async () => {

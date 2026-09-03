@@ -104,12 +104,15 @@ export function createResponseModelTracker(enabled = true) {
     begin,
     observeEvent,
     resolve,
-    track(response: Response, stream: AsyncIterable<unknown>): AsyncIterable<unknown> {
+    track(
+      response: Pick<Response, "headers"> | undefined,
+      stream: AsyncIterable<unknown>,
+    ): AsyncIterable<unknown> {
       if (!enabled) {
         return stream;
       }
       return (async function* () {
-        begin(response.headers);
+        begin(response?.headers);
         for await (const event of stream) {
           observeEvent(event);
           yield event;
