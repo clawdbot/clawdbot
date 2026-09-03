@@ -397,8 +397,10 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
  * LINE has no read-only "was this accepted?" endpoint, so reconciliation reissues
  * the requests the interrupted send recorded, under the very keys it used: a push
  * LINE already accepted answers 409 with its original receipt, and one that never
- * landed is delivered now. Nothing is re-derived, because the live send and this
- * replay would not enumerate the same pushes from the payload alone.
+ * landed is delivered now. The fan-out is re-rendered from the recorded payload
+ * and checked push by push against the record, so a replay that no longer
+ * reproduces what LINE was asked to deliver refuses instead of hiding new
+ * content behind a key LINE has already answered.
  */
 async function reconcileLineUnknownSend(
   ctx: ChannelMessageUnknownSendContext,
