@@ -12,12 +12,13 @@ export function resolveFinalReplyReconciliation(params: {
 }) {
   const deliveredBlockReplyTexts = params.state.deliveredBlockReplyTexts.filter(Boolean);
   const attemptedBlockReplyTexts = (params.state.attemptedBlockReplyTexts ?? []).filter(Boolean);
-  const effectiveDeliveredBlockReplyTexts =
-    attemptedBlockReplyTexts.length > 0
-      ? attemptedBlockReplyTexts
-      : deliveredBlockReplyTexts.length > 0
-        ? deliveredBlockReplyTexts
-        : params.state.deferredBlockReplyTexts;
+  let effectiveDeliveredBlockReplyTexts = params.state.deferredBlockReplyTexts;
+  if (deliveredBlockReplyTexts.length > 0) {
+    effectiveDeliveredBlockReplyTexts = deliveredBlockReplyTexts;
+  }
+  if (attemptedBlockReplyTexts.length > 0) {
+    effectiveDeliveredBlockReplyTexts = attemptedBlockReplyTexts;
+  }
   const deliveredCanonicalPrefix = (() => {
     if (!params.finalAssistantText || effectiveDeliveredBlockReplyTexts.length === 0) {
       return undefined;
@@ -59,22 +60,26 @@ export function resolveFinalReplyReconciliation(params: {
     textEndDeliveredText == null
       ? undefined
       : stripContinuationSignalFromDisplayText(textEndDeliveredText);
-  const normalizeTerminalComparison = (value: string) =>
-    normalizeTextForComparison(value).replace(/[.!?]+$/u, "");
+  function normalizeTerminalComparison(value: string): string {
+    return normalizeTextForComparison(value).replace(/[.!?]+$/u, "");
+  }
   const finalTextMatchesDelivered =
     textEndDeliveredVisibleText != null &&
     (normalizeTextForComparison(params.finalAssistantText) ===
       normalizeTextForComparison(textEndDeliveredVisibleText) ||
       normalizeTerminalComparison(params.finalAssistantText) ===
         normalizeTerminalComparison(textEndDeliveredVisibleText));
-  const finalTextCorrection = finalTextMatchesDelivered
-    ? ""
-    : textEndDeliveredVisibleText &&
-        params.finalAssistantText.startsWith(textEndDeliveredVisibleText)
-      ? params.finalAssistantText.slice(textEndDeliveredVisibleText.length)
-      : params.finalAssistantText !== textEndDeliveredVisibleText
-        ? params.finalAssistantText
-        : "";
+  let finalTextCorrection = "";
+  if (!finalTextMatchesDelivered) {
+    if (
+      textEndDeliveredVisibleText &&
+      params.finalAssistantText.startsWith(textEndDeliveredVisibleText)
+    ) {
+      finalTextCorrection = params.finalAssistantText.slice(textEndDeliveredVisibleText.length);
+    } else if (params.finalAssistantText !== textEndDeliveredVisibleText) {
+      finalTextCorrection = params.finalAssistantText;
+    }
+  }
   const deliveredReplyDirectives = params.state.lastDeliveredAssistantReplyDirectives;
   const deferredReplyDirectives = params.state.deferredAssistantReplyDirectives;
   const undeliveredMediaUrls = params.mediaUrls.filter(

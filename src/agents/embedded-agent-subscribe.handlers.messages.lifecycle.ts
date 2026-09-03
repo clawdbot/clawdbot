@@ -55,8 +55,6 @@ import {
 import type { AgentEvent, AgentMessage } from "./runtime/index.js";
 import { summarizeToolValidationError } from "./tool-error-summary.js";
 
-const resolveCommentaryDisplayText = (text: string, _options?: { final?: boolean }) =>
-  stripContinuationSignalFromDisplayText(text);
 export function handleMessageStart(
   ctx: EmbeddedAgentSubscribeContext,
   evt: AgentEvent & { message: AgentMessage },
@@ -460,7 +458,7 @@ export function handleMessageEnd(
       replyToTag,
       replyToCurrent,
     } = splitResult;
-    const displayTextRaw = resolveCommentaryDisplayText(cleanedTextLocal, { final: true });
+    const displayTextRaw = stripContinuationSignalFromDisplayText(cleanedTextLocal);
     const displayTextLocal =
       emitOptions?.trimLeadingWhitespace === true && !displayTextRaw.trimStart().startsWith("[[")
         ? displayTextRaw.trimStart()
@@ -570,7 +568,7 @@ export function handleMessageEnd(
     if (!bufferedResult) {
       return bufferedResult;
     }
-    const bufferedRawText = bufferedResult?.text ?? "";
+    const bufferedRawText = bufferedResult.text ?? "";
     const leadingWhitespace = bufferedRawText.match(/^\s+/u)?.[0] ?? "";
     const strippedBufferedText = bufferedRawText ? splitMediaFromOutput(bufferedRawText).text : "";
     const bufferedTextWithWhitespace =
@@ -582,16 +580,10 @@ export function handleMessageEnd(
     const bufferedText = bufferedTextWithWhitespace.trimStart().startsWith("[[")
       ? bufferedTextWithWhitespace
       : bufferedTextWithWhitespace.trimStart();
-    return bufferedResult
-      ? {
-          ...bufferedResult,
-          text: bufferedText,
-        }
-      : {
-          text: bufferedText,
-          replyToTag: false,
-          isSilent: false,
-        };
+    return {
+      ...bufferedResult,
+      text: bufferedText,
+    };
   };
 
   const hasBufferedBlockReply = textEndDeliveredText == null && ctx.blockChunker.hasBuffered();
