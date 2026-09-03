@@ -2,6 +2,7 @@ import {
   isFastModeAutoProgressPayload,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
+import { resolveToolErrorSuppression } from "../../agents/tool-error-policy.js";
 import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
 import { type AgentPlanStep, formatPlanChecklistLines } from "../../channels/streaming.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
@@ -352,6 +353,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
       ? (applyMergePatch(runtimeReplyConfig, params.configOverride) as OpenClawConfig)
       : runtimeReplyConfig,
   );
+  const suppressToolErrors = resolveToolErrorSuppression(replyConfig, state.sessionAgentId);
   state.recordAgentDispatchStarted();
   const nextState = extendPreparedDispatchState(state, {
     sendPlanUpdate,
@@ -359,6 +361,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     resolveToolDeliveryPayload,
     typing,
     shouldSuppressProgressDelivery,
+    suppressToolErrors,
     suppressToolErrorWarnings,
     onToolResultFromReplyOptions,
     onPlanUpdateFromReplyOptions,

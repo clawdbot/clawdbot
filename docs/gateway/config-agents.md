@@ -1057,6 +1057,7 @@ for provider examples and precedence.
         thinkingDefault: "high", // per-agent thinking level override
         reasoningDefault: "on", // per-agent reasoning visibility override
         fastModeDefault: false, // per-agent fast mode override
+        messages: { suppressToolErrors: true }, // hide automatic tool-error warnings
         params: { cacheRetention: "none" }, // overrides matching defaults.models params by key
         tts: {
           providers: {
@@ -1105,6 +1106,7 @@ for provider examples and precedence.
 - `thinkingDefault`: optional per-agent default thinking level (`off | minimal | low | medium | high | xhigh | adaptive | max`). Overrides `agents.defaults.thinkingDefault` for this agent when no per-message or session override is set. The selected provider/model profile controls which values are valid; for Google Gemini, `adaptive` keeps provider-owned dynamic thinking (`thinkingLevel` omitted on Gemini 3/3.1, `thinkingBudget: -1` on Gemini 2.5).
 - `reasoningDefault`: optional per-agent default reasoning visibility (`on | off | stream`). Overrides `agents.defaults.reasoningDefault` for this agent when no per-message or session reasoning override is set.
 - `fastModeDefault`: optional per-agent default for fast mode (`"auto" | true | false`). Overrides `agents.defaults.fastModeDefault` for this agent when no per-message or session fast-mode override is set.
+- `messages.suppressToolErrors`: optional per-agent tool-error visibility override. Set `true` to hide automatic tool-error progress and terminal fallback warnings for this agent, or `false` to keep them even when global `messages.suppressToolErrors` is `true`. Omit it to inherit the global setting. Tool failures remain in agent context and logs.
 - `models`: optional per-agent model catalog/runtime overrides keyed by full `provider/model` ids. Use `models["provider/model"].agentRuntime` for per-agent runtime exceptions. `models["provider/model"].codeMode` accepts `true` or `false` and takes precedence over the agent's `tools.codeMode` activation, the shared model override, and the global default. Omit it to inherit; it does not affect Codex native Code Mode.
 - `runtime`: optional per-agent runtime descriptor. Use `type: "acp"` with `runtime.acp` defaults (`agent`, `backend`, `mode`, `cwd`) when the agent should default to ACP harness sessions.
 - `identity.avatar`: workspace-relative path, `http(s)` URL, or `data:` URI.
@@ -1446,7 +1448,7 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
 - `messages.visibleReplies`: controls visible source replies across direct, group, and channel conversations (`"message_tool"` requires `message(action=send)` for visible output; `"automatic"` posts normal replies as before).
 - `messages.usageTemplate` / `messages.responseUsage`: custom `/usage` footer template and default per-reply usage mode (`off | tokens | full`, plus legacy `on` alias for `tokens`).
 - `messages.groupChat.mentionPatterns` / `historyLimit`: group-message mention triggers and history window sizing.
-- `messages.suppressToolErrors`: when `true`, suppresses `⚠️` tool-error warnings shown to the user (the agent still sees errors in context and can retry). Default: `false`.
+- `messages.suppressToolErrors`: when `true`, suppresses `⚠️` tool-error warnings shown to the user (the agent still sees errors in context and can retry). Default: `false`. `agents.entries.*.messages.suppressToolErrors` can override this setting for one agent in either direction.
 
 ### TTS (text-to-speech)
 

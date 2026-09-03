@@ -27,6 +27,12 @@ function expectSchemaFailurePath(result: SchemaParseResult, expectedPathPrefix: 
 }
 
 describe("agent defaults schema", () => {
+  it("accepts a per-agent tool-error visibility override", () => {
+    expect(
+      AgentEntrySchema.parse({ id: "group", messages: { suppressToolErrors: true } }).messages,
+    ).toEqual({ suppressToolErrors: true });
+  });
+
   it("preserves separate run directories through config validation and list projection", () => {
     const result = validateConfigObject({
       agents: {

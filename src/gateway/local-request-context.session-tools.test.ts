@@ -48,6 +48,9 @@ async function withSessionToolsFixture(run: (cfg: OpenClawConfig) => Promise<voi
           other: { workspace: state.path("other-workspace") },
         },
       },
+      // Browser cleanup has dedicated lifecycle coverage; keep this session-authority
+      // fixture from activating the bundled browser runtime during every deletion.
+      plugins: { entries: { browser: { enabled: false } } },
       tools: { sessions: { visibility: "all" } },
     };
     await state.writeConfig(cfg);

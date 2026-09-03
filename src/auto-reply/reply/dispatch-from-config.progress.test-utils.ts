@@ -1253,6 +1253,52 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "handled" });
   });
 
+  it.each([
+    { agentValue: true, globalValue: false, suppressed: true },
+    { agentValue: false, globalValue: true, suppressed: false },
+  ])(
+    "uses per-agent tool error suppression=$agentValue before global=$globalValue",
+    async ({ agentValue, globalValue, suppressed }) => {
+      setNoAbort();
+      const dispatcher = createDispatcher();
+      const onToolResult = vi.fn();
+      const ctx = buildTestCtx({
+        Provider: "telegram",
+        ChatType: "direct",
+        SessionKey: "agent:main:main",
+      });
+      const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+        await opts?.onToolResult?.({ text: "⚠️ 🛠️ sqlite3 failed", isError: true });
+        return { text: "handled" } satisfies ReplyPayload;
+      };
+
+      await dispatchReplyFromConfig({
+        ctx,
+        cfg: {
+          agents: {
+            defaults: { verboseDefault: "on" },
+            entries: { main: { messages: { suppressToolErrors: agentValue } } },
+          },
+          messages: { suppressToolErrors: globalValue },
+        } as OpenClawConfig,
+        dispatcher,
+        replyResolver,
+        replyOptions: { onToolResult },
+      });
+
+      if (suppressed) {
+        expect(onToolResult).not.toHaveBeenCalled();
+        expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+      } else {
+        expect(onToolResult).toHaveBeenCalledWith({
+          text: "⚠️ 🛠️ sqlite3 failed",
+          isError: true,
+        });
+      }
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "handled" });
+    },
+  );
+
   it("keeps message-tool-only failed tool output compact in normal verbose mode", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {

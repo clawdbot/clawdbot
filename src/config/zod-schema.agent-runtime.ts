@@ -964,6 +964,12 @@ export const AgentEntrySchema = z
     heartbeat: HeartbeatSchema,
     identity: IdentitySchema,
     groupChat: GroupChatSchema.unwrap().omit({ visibleReplies: true }).optional(),
+    messages: z
+      .object({
+        suppressToolErrors: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     subagents: z
       .object({
         delegationMode: z.enum(["suggest", "prefer"]).optional(),

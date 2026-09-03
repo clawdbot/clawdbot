@@ -53,6 +53,7 @@ import {
 } from "../../embedded-agent-utils.js";
 import { isTimeoutErrorMessage } from "../../failover/classify.js";
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
+import { resolveToolErrorSuppression } from "../../tool-error-policy.js";
 import type { ToolErrorSummary } from "../../tool-error-summary.js";
 import { buildSourceReplyPayloadState } from "./source-reply-payloads.js";
 import { buildFailureWarning } from "./tool-error-warning.js";
@@ -372,7 +373,7 @@ export function buildEmbeddedRunPayloads(params: {
       : buildFailureWarning({
           lastToolError: params.lastToolError,
           hasUserFacingReply,
-          suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
+          suppressToolErrors: resolveToolErrorSuppression(params.config, params.agentId),
           suppressToolErrorWarnings: params.suppressToolErrorWarnings,
           verboseLevel: params.verboseLevel,
           useMarkdown,

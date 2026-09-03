@@ -12,7 +12,7 @@ import type {
 import type { AgentModelConfig, AgentSandboxConfig } from "./types.agents-shared.js";
 import type { DmScope, GroupScope, HumanDelayConfig, IdentityConfig } from "./types.base.js";
 import type { MemorySearchConfig } from "./types.memory.js";
-import type { GroupChatConfig } from "./types.messages.js";
+import type { GroupChatConfig, MessagesConfig } from "./types.messages.js";
 import type { SkillsLimitsConfig } from "./types.skills.js";
 import type { AgentToolsConfig } from "./types.tools.js";
 import type { TtsConfig } from "./types.tts.js";
@@ -145,6 +145,8 @@ export type AgentConfig = {
   heartbeat?: Omit<NonNullable<AgentDefaultsConfig["heartbeat"]>, "agentId">;
   identity?: IdentityConfig;
   groupChat?: Omit<GroupChatConfig, "visibleReplies">;
+  /** Optional per-agent overrides for user-visible message policy. */
+  messages?: Pick<MessagesConfig, "suppressToolErrors">;
   subagents?: {
     /** Prompt-only guidance for how strongly this agent should delegate work. */
     delegationMode?: SubagentDelegationMode;

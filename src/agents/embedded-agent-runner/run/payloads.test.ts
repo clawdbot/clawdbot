@@ -877,6 +877,33 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
+  it("suppresses terminal tool errors for one agent when the global setting is off", () => {
+    expectNoPayloads({
+      agentId: "group",
+      lastToolError: { toolName: "browser", error: "connection timeout" },
+      config: {
+        messages: { suppressToolErrors: false },
+        agents: { entries: { group: { messages: { suppressToolErrors: true } } } },
+      },
+    });
+  });
+
+  it("keeps terminal tool errors for one agent when the global setting is on", () => {
+    const payloads = buildPayloads({
+      agentId: "personal",
+      lastToolError: { toolName: "browser", error: "connection timeout" },
+      config: {
+        messages: { suppressToolErrors: true },
+        agents: { entries: { personal: { messages: { suppressToolErrors: false } } } },
+      },
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Browser",
+      absentDetail: "connection timeout",
+    });
+  });
+
   it("keeps non-exec mutating tool failures visible", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "write", error: "permission denied" },

@@ -331,6 +331,9 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Optional per-agent default reasoning visibility (on|off|stream). Applies when no per-message or session reasoning override is set.",
   "agents.entries.*.fastModeDefault":
     'Optional per-agent default for fast mode ("auto", true, or false). Applies when no per-message or session fast-mode override is set.',
+  "agents.entries.*.messages": "Optional per-agent overrides for user-visible message policy.",
+  "agents.entries.*.messages.suppressToolErrors":
+    "Per-agent tool-error warning policy. An explicit true or false overrides messages.suppressToolErrors for this agent; omission inherits the global setting.",
   "agents.defaults.fastModeDefault":
     'Default fast-mode policy for the agent loop ("auto", true, or false). Individual agent entries override it.',
   "agents.entries.*.runtime":

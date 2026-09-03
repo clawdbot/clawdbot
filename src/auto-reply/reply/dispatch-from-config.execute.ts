@@ -64,6 +64,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     shouldForwardProgressCallback,
     shouldRouteToOriginating,
     shouldSuppressDefaultToolProgressMessages,
+    suppressToolErrors,
     trackDispatchLifecycleWork,
     typing,
     wasReplyDeliveredAsBlock,
@@ -193,10 +194,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     // Buffered commentary preceded this tool; land it before the summary.
                     await flushPendingCommentaryProgress();
                     // Tool-error suppression covers visible progress and warnings regardless of source delivery mode.
-                    if (
-                      payload.isError === true &&
-                      replyConfig.messages?.suppressToolErrors === true
-                    ) {
+                    if (payload.isError === true && suppressToolErrors) {
                       return;
                     }
                     const isFastModeAutoProgress = isFastModeAutoProgressPayload(payload);
