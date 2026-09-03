@@ -310,7 +310,6 @@ extensions/discord/src/activities/register.ts	1
 extensions/discord/src/activities/store.ts	1
 extensions/discord/src/api.ts	3
 extensions/discord/src/approval-handler.runtime.ts	4
-extensions/discord/src/approval-native.ts	1
 extensions/discord/src/audit-core.ts	2
 extensions/discord/src/channel-actions.ts	1
 extensions/discord/src/channel.ts	3
@@ -527,7 +526,6 @@ extensions/googlechat/src/accounts.ts	1
 extensions/googlechat/src/actions.ts	1
 extensions/googlechat/src/approval-card-actions.ts	1
 extensions/googlechat/src/approval-handler.runtime.ts	1
-extensions/googlechat/src/approval-native.ts	1
 extensions/googlechat/src/google-auth.runtime.ts	7
 extensions/googlechat/src/monitor-access.ts	1
 extensions/googlechat/src/monitor-event.ts	2
@@ -543,7 +541,6 @@ extensions/imessage/src/actions-contract.ts	1
 extensions/imessage/src/actions.runtime.ts	2
 extensions/imessage/src/actions.ts	1
 extensions/imessage/src/approval-handler.runtime.ts	2
-extensions/imessage/src/approval-native.ts	1
 extensions/imessage/src/approval-polls.ts	6
 extensions/imessage/src/approval-reaction-poller.ts	1
 extensions/imessage/src/approval-reactions.ts	2
@@ -620,7 +617,7 @@ extensions/logbook/src/store.ts	4
 extensions/matrix/src/actions.ts	3
 extensions/matrix/src/approval-auth.ts	1
 extensions/matrix/src/approval-handler.runtime.ts	8
-extensions/matrix/src/approval-native.ts	7
+extensions/matrix/src/approval-native.ts	6
 extensions/matrix/src/approval-reactions.ts	1
 extensions/matrix/src/auth-precedence.ts	1
 extensions/matrix/src/channel-account-paths.ts	1
@@ -1076,7 +1073,6 @@ extensions/searxng/src/config.ts	1
 extensions/searxng/src/searxng-client.ts	3
 extensions/signal/src/accounts.ts	3
 extensions/signal/src/approval-handler.runtime.ts	2
-extensions/signal/src/approval-native.ts	1
 extensions/signal/src/approval-reactions.ts	1
 extensions/signal/src/channel.ts	2
 extensions/signal/src/client-container.ts	34
@@ -1093,7 +1089,7 @@ extensions/slack/src/actions.ts	9
 extensions/slack/src/approval-actions.ts	1
 extensions/slack/src/approval-handler.runtime.ts	1
 extensions/slack/src/approval-native-gates.ts	1
-extensions/slack/src/approval-native.ts	2
+extensions/slack/src/approval-native.ts	1
 extensions/slack/src/blocks-fallback.ts	1
 extensions/slack/src/blocks-input.ts	2
 extensions/slack/src/blocks-render.ts	1
@@ -1180,7 +1176,6 @@ extensions/telegram/src/account-throttler.ts	4
 extensions/telegram/src/action-runtime.ts	6
 extensions/telegram/src/api-fetch.ts	1
 extensions/telegram/src/approval-handler.runtime.ts	2
-extensions/telegram/src/approval-native.ts	1
 extensions/telegram/src/audit-membership-runtime.ts	1
 extensions/telegram/src/audit.ts	1
 extensions/telegram/src/bot-core.ts	1
@@ -1323,7 +1318,6 @@ extensions/whatsapp/src/account-config.ts	1
 extensions/whatsapp/src/agent-tools-call.ts	1
 extensions/whatsapp/src/agent-tools-login.ts	6
 extensions/whatsapp/src/approval-handler.runtime.ts	1
-extensions/whatsapp/src/approval-native.ts	1
 extensions/whatsapp/src/auth-store.ts	3
 extensions/whatsapp/src/auto-reply/monitor.ts	2
 extensions/whatsapp/src/auto-reply/monitor/inbound-dispatch.ts	4
