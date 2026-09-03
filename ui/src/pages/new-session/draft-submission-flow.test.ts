@@ -637,10 +637,6 @@ describe("DraftSubmissionFlow", () => {
         });
       },
     );
-    const preload = vi.fn(
-      async (_routeId: string, _options?: Parameters<ApplicationContext["preload"]>[1]) =>
-        undefined,
-    );
     const setSessionKey = vi.fn((sessionKey: string) => {
       context.gateway.snapshot.sessionKey = sessionKey;
     });
@@ -712,7 +708,6 @@ describe("DraftSubmissionFlow", () => {
       },
       config: { current: {} },
       navigateAndWait,
-      preload,
     } as unknown as ApplicationContext;
     const host = new TestReactiveControllerHost();
     const gateway = new DraftGatewayState(
@@ -819,11 +814,9 @@ describe("DraftSubmissionFlow", () => {
     if (background) {
       await vi.waitFor(() => expect(start).toHaveBeenCalledOnce());
       expect(navigateAndWait).not.toHaveBeenCalled();
-      expect(preload).not.toHaveBeenCalled();
     } else {
       await vi.waitFor(() => expect(navigateAndWait).toHaveBeenCalledOnce());
-      expect(preload).toHaveBeenCalledWith("chat", navigateAndWait.mock.calls[0]?.[1]);
-      expect(preload.mock.invocationCallOrder[0]).toBeLessThan(
+      expect(setSessionKey.mock.invocationCallOrder[0]).toBeLessThan(
         navigateAndWait.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
       );
     }
@@ -873,7 +866,6 @@ describe("DraftSubmissionFlow", () => {
     } else {
       expect(setSessionKey).toHaveBeenCalledWith(start.mock.calls[0]?.[0].recovery.sessionKey);
       expect(selectAgent).toHaveBeenCalledWith("cloud");
-      expect(preload).toHaveBeenCalledOnce();
     }
 
     if (navigationError) {
