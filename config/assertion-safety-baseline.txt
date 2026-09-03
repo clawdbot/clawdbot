@@ -2096,7 +2096,7 @@ src/agents/worktrees/run-lease.ts	1
 src/audit/execution-identity-admission.ts	3
 src/audit/execution-identity-context-build.ts	3
 src/auto-reply/chunk.ts	4
-src/auto-reply/command-auth.ts	5
+src/auto-reply/command-auth.ts	3
 src/auto-reply/command-turn-context.ts	1
 src/auto-reply/commands-registry.ts	1
 src/auto-reply/heartbeat-filter.ts	4
@@ -2162,8 +2162,7 @@ src/auto-reply/reply/get-reply-run-helpers.ts	1
 src/auto-reply/reply/get-reply.ts	2
 src/auto-reply/reply/history.ts	2
 src/auto-reply/reply/inbound-context.ts	8
-src/auto-reply/reply/inbound-meta.ts	1
-src/auto-reply/reply/mentions.ts	2
+src/auto-reply/reply/mentions.ts	1
 src/auto-reply/reply/model-selection.ts	3
 src/auto-reply/reply/queue/drain.ts	2
 src/auto-reply/reply/queue/enqueue.ts	1
@@ -2235,15 +2234,13 @@ src/channels/plugins/contracts/trace/delivery-trace.ts	1
 src/channels/plugins/dm-access.ts	3
 src/channels/plugins/helpers.ts	3
 src/channels/plugins/legacy-config.ts	4
-src/channels/plugins/lifecycle-startup.ts	1
 src/channels/plugins/message-action-discovery.ts	4
 src/channels/plugins/message-action-dispatch.ts	5
 src/channels/plugins/meta-normalization.ts	1
 src/channels/plugins/package-state-probes.ts	2
 src/channels/plugins/read-only-command-defaults.ts	2
 src/channels/plugins/read-only.ts	6
-src/channels/plugins/registry-loaded.ts	3
-src/channels/plugins/registry.ts	3
+src/channels/plugins/registry.ts	1
 src/channels/plugins/session-thread-info-loaded.ts	1
 src/channels/plugins/setup-contract.ts	3
 src/channels/plugins/setup-helpers.ts	4
