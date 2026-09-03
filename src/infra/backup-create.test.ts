@@ -3198,9 +3198,7 @@ describe("createBackupArchive", () => {
           );
           expect(managedAsset.sourcePath).toBe(canonicalExternalSourcePath);
           if (volatile) {
-            expect(result.assets).toContainEqual(
-              expect.objectContaining({ kind, sourcePath: sourcePath }),
-            );
+            expect(result.assets).toContainEqual(expect.objectContaining({ kind, sourcePath }));
             const neighborArchiveSuffix = path
               .relative(state.stateDir, path.dirname(sourcePath))
               .split(path.sep)

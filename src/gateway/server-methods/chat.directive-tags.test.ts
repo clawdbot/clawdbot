@@ -50,7 +50,10 @@ import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
-import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import {
+  getActiveSessionWorkAdmissionCount,
+  runExclusiveSessionLifecycleMutation,
+} from "../../sessions/session-lifecycle-admission.js";
 import { projectAssistantDisplayContent } from "../../shared/assistant-display-content.js";
 import {
   disposeOpenClawAgentDatabaseByPath,
@@ -65,6 +68,7 @@ import { createChatRunState } from "../server-chat-state.js";
 import { STALE_WORKER_BUILD_REASON } from "../worker-environments/admission.js";
 import { agentWaitHandler } from "./agent-wait.js";
 import { handleChatSend, handleTrustedInternalChatSend } from "./chat-send-handler.js";
+import { readChatSendDedupeResponse } from "./chat-send-pre-admission.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 type ProjectedDispatchParams = Parameters<
@@ -1348,7 +1352,10 @@ async function runNonStreamingChatSend(params: {
   }
   if (waitFor === "dedupe") {
     await waitForAssertion(() => {
-      expect(params.context.dedupe.has(`chat:${params.idempotencyKey}`)).toBe(true);
+      // Admission retains request identity before a terminal response exists.
+      expect(
+        readChatSendDedupeResponse(params.context.dedupe, params.idempotencyKey),
+      ).toBeDefined();
     });
     return undefined;
   }
@@ -1454,6 +1461,15 @@ beforeAll(() => {
   });
 });
 
+afterEach(async () => {
+  // ACKs and terminal errors can precede detached transcript cleanup.
+  await waitForAssertion(() => expect(getActiveSessionWorkAdmissionCount()).toBe(0));
+  replyRunRegistryTesting.resetReplyRunRegistry();
+  mockState.reset();
+  bindingMocks.resolveByConversation.mockReset();
+  bindingMocks.resolveByConversation.mockReturnValue(null);
+});
+
 afterAll(async () => {
   try {
     expect(getTotalPendingReplies()).toBe(0);
@@ -1470,13 +1486,6 @@ afterAll(async () => {
 });
 
 describe("chat directive tag stripping for non-streaming final payloads", () => {
-  afterEach(() => {
-    replyRunRegistryTesting.resetReplyRunRegistry();
-    mockState.reset();
-    bindingMocks.resolveByConversation.mockReset();
-    bindingMocks.resolveByConversation.mockReturnValue(null);
-  });
-
   it("carries an internal runtime tool cap into agent dispatch", async () => {
     const { send } = await createSqliteChatRequest("openclaw-chat-send-runtime-tools-");
 
@@ -2688,7 +2697,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       { agentId: "main", dropIfSlow: true },
     ]);
     await waitForAssertion(() => {
-      expect(context.dedupe.has("chat:idem-command-session-metadata")).toBe(true);
+      expect(
+        readChatSendDedupeResponse(context.dedupe, "idem-command-session-metadata"),
+      ).toBeDefined();
     });
   });
 
@@ -7139,7 +7150,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await waitForAssertion(() => {
       expect(mockState.maxActiveSaveMediaCalls).toBe(1);
       expect(mockState.savedMediaCalls).toHaveLength(2);
-      expect(context.dedupe.has("chat:idem-image-serial-save")).toBe(true);
+      expect(readChatSendDedupeResponse(context.dedupe, "idem-image-serial-save")).toBeDefined();
     });
   });
 

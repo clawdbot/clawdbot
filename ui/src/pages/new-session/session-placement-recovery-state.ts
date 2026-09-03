@@ -1,3 +1,4 @@
+import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import {
   clearSessionPlacementRecovery,
@@ -27,6 +28,7 @@ export class PendingSessionPlacementRecoveryState {
   sessionKey = "";
   messageId = "";
   message = "";
+  mentions: readonly HumanMention[] | undefined;
   attachments: unknown[] | undefined;
   target: SessionPlacementTarget | null = null;
   agentId = "";
@@ -62,6 +64,7 @@ export class PendingSessionPlacementRecoveryState {
     this.sessionKey = "";
     this.messageId = "";
     this.message = "";
+    this.mentions = undefined;
     this.attachments = undefined;
     this.target = null;
     this.agentId = "";
@@ -93,6 +96,7 @@ export class PendingSessionPlacementRecoveryState {
     agentId: string;
     target: SessionPlacementTarget;
     message: string;
+    mentions?: readonly HumanMention[];
     attachments?: unknown[];
     gatewayUrl: string;
     recoveryScope: string;
@@ -116,6 +120,9 @@ export class PendingSessionPlacementRecoveryState {
       sessionKey,
       messageId: generateUUID(),
       message: params.message,
+      ...(params.mentions?.length
+        ? { mentions: params.mentions.map((mention) => ({ ...mention })) }
+        : {}),
       attachments: params.attachments,
       target: params.target,
       agentId: params.agentId,
@@ -163,6 +170,9 @@ export class PendingSessionPlacementRecoveryState {
       sessionKey,
       messageId: this.messageId,
       message: this.message,
+      ...(this.mentions?.length
+        ? { mentions: this.mentions.map((mention) => ({ ...mention })) }
+        : {}),
       attachments: this.attachments ? [...this.attachments] : undefined,
       target: { ...this.target },
       agentId: this.agentId,
@@ -179,6 +189,7 @@ export class PendingSessionPlacementRecoveryState {
     this.sessionKey = recovery.sessionKey;
     this.messageId = recovery.messageId;
     this.message = recovery.message;
+    this.mentions = recovery.mentions;
     this.attachments = recovery.attachments;
     this.target = { ...recovery.target };
     this.agentId = recovery.agentId;

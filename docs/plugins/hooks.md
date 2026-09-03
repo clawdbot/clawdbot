@@ -700,7 +700,7 @@ harness-native shell. It receives:
 - `event.sessionKey`
 - `event.toolName`, currently always `"exec"`
 - `event.host`, one of `"gateway"`, `"sandbox"`, or `"node"`
-- context fields such as `ctx.agentId`, `ctx.sessionKey`,
+- context fields such as `ctx.agentId`, `ctx.sessionKey`, `ctx.sessionId`,
   `ctx.messageProvider`, and `ctx.channelId`
 
 Return a `Record<string, string>` to merge into the exec environment. Handlers

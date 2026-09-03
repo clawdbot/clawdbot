@@ -39,8 +39,8 @@ type ChatModelControlsProps = {
   modelCatalogState?: ChatModelCatalogState;
   modelOverrides?: Readonly<Record<string, string | null | undefined>>;
   modelSelectionLocked?: boolean;
-  modelSelectionTarget?: SessionsListResult["defaults"]["modelSelectionTarget"];
   modelSelectionRuntimeId?: string;
+  modelSelectionTarget?: SessionsListResult["defaults"]["modelSelectionTarget"];
   modelPickerTargetGroups?: readonly ChatModelPickerTargetGroup[];
   modelPickerOpen?: boolean;
   modelSwitching: boolean;
@@ -161,6 +161,21 @@ function resolveChatModelPickerLabel(
 function formatPickerModelLabel(label: string): string {
   const match = /^Default \((.+)\)$/u.exec(label);
   return match?.[1] ?? label;
+}
+
+function resolveModelSelectionScopeDescription(
+  target: SessionsListResult["defaults"]["modelSelectionTarget"],
+): string | undefined {
+  switch (target) {
+    case "session":
+      return t("chat.modelControls.selectionScopeSession");
+    case "agent":
+      return t("chat.modelControls.selectionScopeAgent");
+    case "global":
+      return t("chat.modelControls.selectionScopeGlobal");
+    default:
+      return undefined;
+  }
 }
 
 function resolveCatalogTriggerStatus(
@@ -433,7 +448,9 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         modelCatalogState: managedCatalog,
         open: props.modelPickerOpen,
         modelSelectionLocked: props.modelSelectionLocked === true,
-        modelSelectionTarget: props.modelSelectionTarget,
+        selectionScopeDescription: resolveModelSelectionScopeDescription(
+          props.modelSelectionTarget,
+        ),
         modelOptions,
         targetGroups: props.modelPickerTargetGroups,
         selectedModelValue: pickerValue,

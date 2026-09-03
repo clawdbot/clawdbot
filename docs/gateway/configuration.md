@@ -686,12 +686,16 @@ newer config is applied. If that work needs restart recovery, the RPC returns
 the active revision.
 
 `config.patch` also accepts `replacePaths`, an array of config paths whose array
-replacement is intentional. If a patch would replace or delete an existing array
-with fewer entries, the Gateway rejects the write unless that exact path appears
-in `replacePaths`; nested arrays under array entries use `[]`, such as
-`agents.entries.*.skills`. This prevents truncated `config.get` snapshots from
-silently clobbering routing or allowlist arrays. Use `config.apply` when you
-intend to replace the full config.
+replacement or deletion is intentional. If a patch removes existing array entries
+or deletes an array, the Gateway rejects the write unless that exact array path
+appears in `replacePaths`. Deleting a containing object requires its contained
+array paths, including empty arrays. Deleting a whole array requires only its own
+path, not paths to arrays nested inside its entries. Use exact record keys, such
+as `agents.entries.main.skills`. For ID-merged entry updates, nested array paths
+use `[]`, such as `models.providers.custom.models[].input`. Parent paths and `*`
+wildcards do not authorize descendant arrays. This prevents truncated
+`config.get` snapshots from silently clobbering routing or allowlist arrays. Use
+`config.apply` when you intend to replace the full config.
 
 Arrays of objects with stable `id` fields merge by ID unless their path appears
 in `replacePaths`. These updates preserve authored fields in untouched entries;

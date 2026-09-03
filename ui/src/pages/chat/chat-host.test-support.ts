@@ -2,6 +2,7 @@ import { vi } from "vitest";
 import type { ModelCatalogEntry } from "../../api/types.ts";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { UiSettings } from "../../app/settings.ts";
+import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { createSessionCapability } from "../../lib/sessions/index.ts";
 import {
   createGatewayRequestMock,
@@ -33,6 +34,69 @@ export function makeRequestMock(handlers: RequestHandlers = {}): GatewayRequestM
 }
 
 type RequestMock = ReturnType<typeof makeRequestMock>;
+
+export function createBrowserAnnotationAttachment(
+  id: string,
+  modelContext: string,
+): ChatAttachment {
+  return {
+    id,
+    dataUrl: "data:image/png;base64,aQ==",
+    mimeType: "image/png",
+    browserAnnotation: {
+      modelContext,
+      title: `Page ${id}`,
+      displayUrl: `https://example.com/${id}`,
+      markedRegionCount: 1,
+      inspectedElement: false,
+    },
+  };
+}
+
+export function findChatSendPayload(host: {
+  request: { mock: { calls: ReadonlyArray<readonly [string, unknown?]> } };
+}): Record<string, unknown> {
+  const call = host.request.mock.calls.find(([method]) => method === "chat.send");
+  if (!call?.[1] || typeof call[1] !== "object") {
+    throw new Error("Expected chat.send payload");
+  }
+  return call[1] as Record<string, unknown>;
+}
+
+export function createImmediateCommandHost(
+  command: string,
+  attachment: ChatAttachment,
+  overrides: Partial<ChatHost> = {},
+): ChatHost {
+  const host = {
+    sessions: createSessionCapability({
+      snapshot: { client: null, phase: "reconnecting", hello: null },
+      subscribe: () => () => undefined,
+      subscribeEvents: () => () => undefined,
+    }),
+    client: null,
+    connected: true,
+    sessionKey: "agent:main",
+    chatLoading: false,
+    chatMessage: command,
+    chatMessages: [],
+    chatLocalInputHistoryBySession: {},
+    chatInputHistorySessionKey: null,
+    chatInputHistoryItems: null,
+    chatInputHistoryIndex: -1,
+    chatDraftBeforeHistory: null,
+    chatAttachments: [attachment],
+    chatQueue: [],
+    chatRunId: null,
+    chatSending: false,
+    chatStream: null,
+    chatModelCatalog: [],
+    hello: null,
+    refreshSessionsAfterChat: new Map(),
+    ...overrides,
+  } satisfies Partial<ChatHost>;
+  return host as ChatHost;
+}
 
 type TestChatHost = Omit<ChatHost, "settings"> & {
   applySettings: (patch: Partial<UiSettings>) => void;

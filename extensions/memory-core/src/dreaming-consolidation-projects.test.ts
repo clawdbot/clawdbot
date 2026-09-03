@@ -2,12 +2,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { applyMemoryConsolidationPlan } from "./dreaming-consolidation.js";
 import type { PromotionCandidate } from "./short-term-promotion.js";
-import {
-  consolidateMemoryForTests as consolidateMemory,
-  createMemoryCoreTestHarness,
-} from "./test-helpers.js";
+import { consolidateMemoryForTests as consolidateMemory } from "./test-helpers.js";
 
-const { createTempWorkspace } = createMemoryCoreTestHarness();
 const logger = { info: vi.fn(), warn: vi.fn() };
 
 type ConsolidationPrompt = {
@@ -62,28 +58,15 @@ function createPromptResponder(
     }>;
   },
 ) {
-  const responses = new Map<string, string>();
   return {
-    run: vi.fn(async (options: unknown) => {
-      const { message, sessionKey } = options as { message: string; sessionKey: string };
-      responses.set(
-        sessionKey,
-        JSON.stringify(respond(JSON.parse(message) as ConsolidationPrompt)),
-      );
-      return { runId: sessionKey };
-    }),
-    waitForRun: vi.fn(async () => ({ status: "ok" })),
-    getSessionMessages: vi.fn(async (options: unknown) => {
-      const { sessionKey } = options as { sessionKey: string };
-      return { messages: [{ role: "assistant", content: responses.get(sessionKey) ?? "" }] };
-    }),
-    deleteSession: vi.fn(async (_options: unknown) => undefined),
+    complete: vi.fn(async (options: { message: string }) => ({
+      text: JSON.stringify(respond(JSON.parse(options.message) as ConsolidationPrompt)),
+    })),
   };
 }
 
 describe("memory consolidation project groups", () => {
   it("consolidates global and project candidates in deterministic isolated passes", async () => {
-    const workspaceDir = await createTempWorkspace("memory-consolidation-project-groups-");
     const existingMemory = "# Memory\n\n- Existing global fact.\n";
     const candidates = [
       projectCandidate("beta", "Beta deployment uses blue.", "github.com/acme/beta"),
@@ -102,7 +85,6 @@ describe("memory consolidation project groups", () => {
 
     const plan = await consolidateMemory({
       subagent,
-      workspaceDir,
       existingMemory,
       candidates,
       maxPriorEntryLossFraction: 0.25,
@@ -114,18 +96,11 @@ describe("memory consolidation project groups", () => {
       return;
     }
 
-    const promptedGroups = subagent.run.mock.calls.map(([options]) => {
+    const promptedGroups = subagent.complete.mock.calls.map(([options]) => {
       const prompt = JSON.parse((options as { message: string }).message) as ConsolidationPrompt;
       return prompt.candidates.map((item) => item.projectKey);
     });
     expect(promptedGroups).toEqual([[null], ["github.com/acme/alpha"], ["github.com/acme/beta"]]);
-    expect(
-      subagent.run.mock.calls.every(
-        ([options]) =>
-          (options as { disableTools?: boolean; promptMode?: string }).disableTools === true &&
-          (options as { promptMode?: string }).promptMode === "minimal",
-      ),
-    ).toBe(true);
 
     const result = applyMemoryConsolidationPlan({
       existingMemory,
@@ -147,7 +122,6 @@ describe("memory consolidation project groups", () => {
   });
 
   it("rejects a cross-project merge after completing the isolated group passes", async () => {
-    const workspaceDir = await createTempWorkspace("memory-consolidation-project-reject-");
     const betaPrior = "- Shared deployment uses blue. <!-- project: github.com/acme/beta -->";
     const existingMemory = `# Memory\n\n${betaPrior}\n- Two.\n- Three.\n- Four.\n`;
     const candidates = [
@@ -176,7 +150,6 @@ describe("memory consolidation project groups", () => {
     await expect(
       consolidateMemory({
         subagent,
-        workspaceDir,
         existingMemory,
         candidates,
         maxPriorEntryLossFraction: 0.25,
@@ -184,14 +157,13 @@ describe("memory consolidation project groups", () => {
         logger,
       }),
     ).resolves.toBeNull();
-    expect(subagent.run).toHaveBeenCalledTimes(3);
+    expect(subagent.complete).toHaveBeenCalledTimes(3);
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("output crosses project groups for candidate alpha"),
     );
   });
 
   it("rejects groups whose code-applied aggregate exceeds the memory budget", async () => {
-    const workspaceDir = await createTempWorkspace("memory-consolidation-project-budget-");
     const existingMemory = "# Memory\n";
     const candidates = [
       projectCandidate("global", "Use metric units globally."),
@@ -215,7 +187,6 @@ describe("memory consolidation project groups", () => {
 
     const fullPlan = await consolidateMemory({
       subagent: createBudgetSubagent(),
-      workspaceDir,
       existingMemory,
       candidates,
       maxPriorEntryLossFraction: 0.25,
@@ -233,7 +204,6 @@ describe("memory consolidation project groups", () => {
     await expect(
       consolidateMemory({
         subagent: createBudgetSubagent(),
-        workspaceDir,
         existingMemory,
         candidates,
         maxPriorEntryLossFraction: 0.25,

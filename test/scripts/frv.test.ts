@@ -224,7 +224,7 @@ function rootRun(
 function preflightMethods(
   children: ReturnType<typeof child>[],
   childRun: (entry: ReturnType<typeof child>) => Record<string, unknown>,
-  options: { failFast?: boolean; childRunIdOverride?: string } = {},
+  options: { failFast?: boolean; childRunIdOverride?: string; ciReleaseScope?: string } = {},
 ) {
   const byRunId = new Map(children.map((entry) => [entry.runId, entry]));
   const parentJobs = [
@@ -257,6 +257,9 @@ function preflightMethods(
       return [
         `TARGET_SHA: ${TARGET_SHA}`,
         ...(entry.key === "productPerformance" ? ["-f publish_reports=false"] : []),
+        ...(entry.key === "normalCi" && options.ciReleaseScope
+          ? [`CI_RELEASE_SCOPE: ${options.ciReleaseScope}`]
+          : []),
         `Dispatched ${entry.workflow}: https://github.com/${REPOSITORY}/actions/runs/${runId} (attempt 1)`,
       ].join("\n");
     },
@@ -590,6 +593,21 @@ describe("FRV continuation preflight", () => {
         }),
       }),
     ).rejects.toThrow("release child is not uniquely emitted by its parent job");
+  });
+
+  it("binds the normal CI dispatch scope to the plan's coverage policy", async () => {
+    const selected = child("normalCi", "101");
+    const stablePlan = { ...plan([selected]), coveragePolicy: "npm-stable-v1" };
+    const methods = (scope: string) =>
+      preflightMethods([selected], (entry) => runFor(entry, 1, "failure"), {
+        ciReleaseScope: scope,
+      });
+    await expect(
+      preflightContinuation(stablePlan, "77", methods("npm-stable")),
+    ).resolves.toBeDefined();
+    await expect(preflightContinuation(stablePlan, "77", methods("full"))).rejects.toThrow(
+      "release normal CI dispatch scope differs from its coverage policy",
+    );
   });
 });
 

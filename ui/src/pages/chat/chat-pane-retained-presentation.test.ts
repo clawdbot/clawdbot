@@ -102,8 +102,8 @@ describe("chat pane retained presentation lifecycle", () => {
           mounted.handleDocumentKeydown(key);
         }
       }
-      expect(page.state.handleChatDraftChange).toHaveBeenCalledExactlyOnceWith("page");
-      expect(dock.state.handleChatDraftChange).toHaveBeenCalledExactlyOnceWith("dock");
+      expect(page.state.handleChatDraftChange).toHaveBeenCalledExactlyOnceWith("page", []);
+      expect(dock.state.handleChatDraftChange).toHaveBeenCalledExactlyOnceWith("dock", []);
       for (const { focus } of panes) {
         expect(focus).toHaveBeenCalledOnce();
       }
@@ -251,7 +251,7 @@ describe("chat pane retained presentation lifecycle", () => {
     Object.defineProperty(pane, "active", { configurable: true, value: true });
     await Promise.resolve();
 
-    expect(state.handleChatDraftChange).toHaveBeenCalledWith("continue from the catalog");
+    expect(state.handleChatDraftChange).toHaveBeenCalledWith("continue from the catalog", []);
     expect(state.handleSendChat).toHaveBeenCalledOnce();
   });
 
@@ -344,20 +344,34 @@ describe("chat pane retained presentation lifecycle", () => {
     expect(announcement.getAttribute("aria-live")).toBe("off");
   });
 
-  it("does not stage a created-session handoff when its logical pane rejects navigation", async () => {
-    const sessions = {
-      create: vi.fn().mockResolvedValue("agent:main:rejected-created-session"),
-    } as unknown as SessionCapability;
-    const { pane } = createTestChatPane({ client: {} as GatewayBrowserClient, sessions });
-    advertiseSessionCreate(pane);
-    pane.onPaneSessionChange = vi.fn(() => false);
+  it.each([false, true])(
+    "stages a created-session draft only when its pane accepts navigation (%s)",
+    async (accepted) => {
+      const nextSessionKey = "agent:main:created-session";
+      const sessions = {
+        create: vi.fn().mockResolvedValue(nextSessionKey),
+      } as unknown as SessionCapability;
+      const { pane, state } = createTestChatPane({ client: {} as GatewayBrowserClient, sessions });
+      advertiseSessionCreate(pane);
+      pane.onPaneSessionChange = vi.fn(() => accepted);
+      state.chatMessage = "@Alex continue";
+      const mention = { profileId: "original-profile", start: 0, end: 5 };
+      state.chatMentions = [mention];
 
-    await expect(pane.createSession()).resolves.toBe(false);
+      await expect(pane.createSession()).resolves.toBe(accepted);
+      mention.profileId = "replacement-profile";
 
-    expect(
-      consumePaneSessionHandoff(pane.context, pane.paneId, "agent:main:rejected-created-session"),
-    ).toBeNull();
-  });
+      expect(consumePaneSessionHandoff(pane.context, pane.paneId, nextSessionKey)).toEqual(
+        accepted
+          ? {
+              attachments: [],
+              draft: "@Alex continue",
+              mentions: [{ profileId: "original-profile", start: 0, end: 5 }],
+            }
+          : null,
+      );
+    },
+  );
 });
 
 function advertiseSessionCreate(pane: TestChatPane) {

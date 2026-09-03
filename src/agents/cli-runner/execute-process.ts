@@ -179,6 +179,7 @@ export async function executeCliProcess(params: {
   const pluginTimeout: { error?: FailoverError } = {};
   let terminalInterruption: CliTerminalInterruption | undefined;
   let result: RunExit;
+  runParams.assertCurrent?.();
   params.diagnostics?.observeRequestPayload(params.stdin ?? params.argsPrompt ?? "");
   if (params.nodePlacement) {
     const nodeRun = await executeNodeClaudeRun({
@@ -265,6 +266,7 @@ export async function executeCliProcess(params: {
     try {
       const managedRun = await supervisor.spawn({
         runId: runParams.runId,
+        assertCurrent: runParams.assertCurrent,
         sessionId: runParams.sessionId,
         backendId: context.backendResolved.id,
         scopeKey,

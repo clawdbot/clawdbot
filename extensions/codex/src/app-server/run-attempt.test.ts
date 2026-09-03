@@ -7412,7 +7412,7 @@ describe("runCodexAppServerAttempt", () => {
         rolloutPath,
         JSON.stringify({
           type: "session_meta",
-          payload: { id: "thread-existing", model_provider: "openai", dynamic_tools: [] },
+          payload: { id: "thread-existing", model_provider: "openai" },
         }) + "\n",
       );
       const pluginConfig = {

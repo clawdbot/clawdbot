@@ -2,8 +2,15 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext, ApplicationGateway } from "../app/context.ts";
 import { i18n } from "../i18n/index.ts";
+import type {
+  ConfigPatchBuilder,
+  ConfigPatchOptions,
+} from "../lib/config/config-gateway-operations.ts";
+import { createConfigCapabilityHarness, deferred } from "../lib/config/config-test-harness.ts";
+import { buildRemoveMcpServerPatch, patchMcpServers } from "../lib/config/mcp-servers.ts";
 import {
   createApplicationContextProvider,
   type ApplicationContextProvider,
@@ -16,9 +23,7 @@ type McpServersCard = HTMLElementTagNameMap["openclaw-mcp-servers-card"];
 type RuntimeConfigHarness = {
   runtimeConfig: ApplicationContext["runtimeConfig"];
   ensureLoaded: ReturnType<typeof vi.fn<() => Promise<void>>>;
-  patch: ReturnType<
-    typeof vi.fn<(options: { raw: Record<string, unknown>; note: string }) => Promise<boolean>>
-  >;
+  patch: ReturnType<typeof vi.fn<(options: ConfigPatchOptions) => Promise<boolean>>>;
 };
 
 function createGateway(options: { connected?: boolean; admin?: boolean } = {}): ApplicationGateway {
@@ -56,28 +61,20 @@ function createGateway(options: { connected?: boolean; admin?: boolean } = {}): 
 
 function createRuntimeConfig(config: Record<string, unknown>): RuntimeConfigHarness {
   const ensureLoaded = vi.fn(async () => undefined);
-  const patch = vi.fn<
-    (options: { raw: Record<string, unknown>; note: string }) => Promise<boolean>
-  >(async () => true);
+  const patch = vi.fn<(options: ConfigPatchOptions) => Promise<boolean>>(async () => true);
   const listeners = new Set<() => void>();
   const state = {
     configSnapshot: { sourceConfig: config, hash: "base" },
     lastError: null as string | null,
   };
-  const patchFromSnapshot = vi.fn(
-    async (
-      build: (
-        config: Readonly<Record<string, unknown>>,
-      ) => { options: { raw: Record<string, unknown>; note: string } } | { error: string },
-    ) => {
-      const built = build(config);
-      if ("error" in built) {
-        state.lastError = built.error;
-        return false;
-      }
-      return patch(built.options);
-    },
-  );
+  const patchFromSnapshot = vi.fn(async (build: ConfigPatchBuilder) => {
+    const built = build(config);
+    if ("error" in built) {
+      state.lastError = built.error;
+      return false;
+    }
+    return patch(built.options);
+  });
   const runtimeConfig = {
     state,
     ensureLoaded,
@@ -387,9 +384,25 @@ describe("openclaw-mcp-servers-card", () => {
     });
   });
 
-  it("removes a server with an explicit merge-patch null", async () => {
+  it.each([
+    { name: "HTTP", server: { url: "https://mcp.example.test/mcp" }, replacePaths: [] },
+    {
+      name: "stdio with nested filters",
+      server: {
+        command: "node",
+        args: ["synthetic-server.mjs"],
+        toolFilter: { include: ["search"], exclude: ["admin_*"] },
+      },
+      replacePaths: [
+        "mcp.servers.docs.args",
+        "mcp.servers.docs.toolFilter.include",
+        "mcp.servers.docs.toolFilter.exclude",
+      ],
+    },
+  ])("removes a $name server with exact array intent", async ({ server, replacePaths }) => {
+    const retained = { command: "node", args: ["retained.mjs"] };
     const { card, harness } = await mountCard({
-      config: { mcp: { servers: { docs: { url: "https://mcp.example.com/mcp" } } } },
+      config: { mcp: { servers: { docs: server, retained } } },
     });
 
     actionButton(card, "Remove docs").click();
@@ -398,7 +411,85 @@ describe("openclaw-mcp-servers-card", () => {
     expect(firstPatchCall(harness)).toEqual({
       raw: { mcp: { servers: { docs: null } } },
       note: "mcp settings: remove server docs",
+      ...(replacePaths.length ? { replacePaths } : {}),
     });
+  });
+
+  it("builds removal intent from the snapshot after queued writes settle", async () => {
+    const retained = { command: "node", args: ["retained.mjs"], opaque: null };
+    let config: Record<string, unknown> = {
+      mcp: { servers: { docs: { command: "node", args: ["initial.mjs"] }, retained } },
+    };
+    let hash = "before";
+    const gate = deferred<void>();
+    const patches: unknown[] = [];
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "config.get") {
+        return {
+          config,
+          sourceConfig: config,
+          raw: JSON.stringify(config),
+          hash,
+          valid: true,
+          issues: [],
+        };
+      }
+      if (method !== "config.patch") {
+        throw new Error(`Unexpected request ${method}`);
+      }
+      patches.push(params);
+      if (patches.length === 1) {
+        await gate.promise;
+        config = {
+          mcp: {
+            servers: {
+              docs: { command: "node", args: ["updated.mjs"], toolFilter: { include: ["search"] } },
+              retained,
+            },
+          },
+        };
+        hash = "queued-write";
+      } else {
+        config = { mcp: { servers: { retained } } };
+        hash = "removed";
+      }
+      return { ok: true, config, hash };
+    });
+    const { runtimeConfig } = createConfigCapabilityHarness(
+      request as GatewayBrowserClient["request"],
+    );
+    try {
+      await runtimeConfig.ensureLoaded();
+      const priorWrite = runtimeConfig.patch({
+        raw: {
+          mcp: {
+            servers: { docs: { args: ["updated.mjs"], toolFilter: { include: ["search"] } } },
+          },
+        },
+        note: "update server",
+        replacePaths: ["mcp.servers.docs.args"],
+      });
+      const removal = patchMcpServers(runtimeConfig, {
+        buildPatch: (servers) => buildRemoveMcpServerPatch(servers, "docs"),
+        note: "remove server",
+      });
+      await waitForFast(() => expect(patches).toHaveLength(1));
+      gate.resolve();
+      await expect(priorWrite).resolves.toBe(true);
+      await expect(removal).resolves.toEqual({ ok: true });
+      expect(patches).toHaveLength(2);
+      expect(patches[1]).toMatchObject({
+        baseHash: "queued-write",
+        raw: JSON.stringify({ mcp: { servers: { docs: null } } }),
+        replacePaths: ["mcp.servers.docs.args", "mcp.servers.docs.toolFilter.include"],
+      });
+      expect(runtimeConfig.state.configSnapshot?.sourceConfig).toEqual({
+        mcp: { servers: { retained } },
+      });
+    } finally {
+      gate.resolve();
+      runtimeConfig.dispose();
+    }
   });
 
   it("disables mutation controls without operator.admin access", async () => {

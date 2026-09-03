@@ -258,6 +258,7 @@ export function createExecRequestPreparation(params: {
     } catch {
       return execParams;
     }
+    const sessionId = context?.hookContext?.sessionId ?? params.defaults?.sessionId;
     const rawPluginEnv = await hookRunner.runResolveExecEnv(
       {
         sessionKey: context?.hookContext?.sessionKey ?? params.defaults?.sessionKey,
@@ -267,6 +268,7 @@ export function createExecRequestPreparation(params: {
       {
         agentId: context?.hookContext?.agentId ?? params.agentId,
         sessionKey: context?.hookContext?.sessionKey ?? params.defaults?.sessionKey,
+        ...(sessionId ? { sessionId } : {}),
         messageProvider: params.defaults?.messageProvider,
         channelId: params.defaults?.currentChannelId ?? context?.hookContext?.channelId,
         ...(params.defaults?.channelContext

@@ -1,6 +1,6 @@
 // Control Ui Mock Dev script supports OpenClaw repository automation.
 import { createHash } from "node:crypto";
-import { rmSync } from "node:fs";
+import fs, { rmSync } from "node:fs";
 import { mkdir, mkdtemp } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,6 +23,7 @@ import {
   controlUiSessionPath,
   createControlUiMockBootstrapConfig,
   createControlUiMockGatewayInitScript,
+  createControlUiMockSameOriginGatewayScript,
   type ControlUiMockGatewayScenario,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../ui/src/test-helpers/control-ui-session-fixtures.ts";
@@ -3140,10 +3141,16 @@ function createMockGatewayPlugin(
   fixture?: CliOptions["fixture"],
 ): Plugin {
   const initScript = escapeScriptContent(createControlUiMockGatewayInitScript(scenario));
+  const sameOriginGatewayScript = escapeScriptContent(createControlUiMockSameOriginGatewayScript());
   const statefulInitScript = escapeScriptContent(
     createControlUiPreviewInitScript() + skillLibraryMockInitScript(scenario.models),
   );
   const bootstrapBody = JSON.stringify(createControlUiMockBootstrapConfig(scenario));
+  const pluginIconIds = new Set(
+    buildPluginCatalogMock()
+      .plugins.filter((plugin) => plugin.hasIcon)
+      .map((plugin) => plugin.id),
+  );
   const attachmentThemeToggle =
     fixture === "attachments"
       ? `    <style data-openclaw-control-ui-mock-theme-toggle>
@@ -3183,6 +3190,27 @@ function createMockGatewayPlugin(
       : "";
   return {
     configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const prefix = "/__openclaw__/plugin-icon/";
+        const pathname = new URL(req.url ?? "/", "http://openclaw.invalid").pathname;
+        if (!pathname.startsWith(prefix)) {
+          next();
+          return;
+        }
+        const pluginId = decodeURIComponent(pathname.slice(prefix.length));
+        if (!pluginIconIds.has(pluginId)) {
+          next();
+          return;
+        }
+        const icon = path.join(repoRoot, "extensions", pluginId, "assets", "icon.png");
+        if (!fs.existsSync(icon)) {
+          next();
+          return;
+        }
+        res.statusCode = 200;
+        res.setHeader("content-type", "image/png");
+        res.end(fs.readFileSync(icon));
+      });
       server.middlewares.use(CONTROL_UI_BOOTSTRAP_CONFIG_PATH, (_req, res) => {
         res.statusCode = 200;
         res.setHeader("content-type", "application/json");
@@ -3197,7 +3225,7 @@ function createMockGatewayPlugin(
     transformIndexHtml(html) {
       return html.replace(
         "</head>",
-        `${attachmentThemeToggle}    <script data-openclaw-control-ui-mock-locale>\n      try { localStorage.setItem("openclaw.i18n.locale", "en"); } catch {}\n    </script>\n    <script data-openclaw-control-ui-mock-gateway>\n${initScript}\n${statefulInitScript}\n    </script>\n  </head>`,
+        `${attachmentThemeToggle}    <script data-openclaw-control-ui-mock-locale>\n      try { localStorage.setItem("openclaw.i18n.locale", "en"); } catch {}\n    </script>\n    <script data-openclaw-control-ui-mock-gateway>\n${sameOriginGatewayScript}\n${initScript}\n${statefulInitScript}\n    </script>\n  </head>`,
       );
     },
   };

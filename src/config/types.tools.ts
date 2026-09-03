@@ -506,23 +506,26 @@ export type ToolsConfig = {
   /** Message tool configuration. */
   message?: MessageToolsConfig;
   agentToAgent?: {
-    /** Enable agent-to-agent messaging tools. Default: false. */
+    /** Default: true. False blocks ordinary cross-agent session tool access; requester-owned native subagent and ACP child sessions remain reachable under tree/all visibility. */
     enabled?: boolean;
-    /** Allowlist of agent ids or patterns (implementation-defined). */
+    /**
+     * Agent ids or `*` glob patterns; the requesting and target agent must both match.
+     * Omitted or empty counts as unset: every agent pair is allowed by default; blank entries deny.
+     */
     allow?: string[];
   };
   /**
    * Session tool visibility controls which sessions can be targeted by session tools
-   * (sessions_list, sessions_history, sessions_search, sessions_send).
+   * (sessions_list, sessions_history, sessions_search, sessions_send, session_status).
    *
-   * Default: "agent" (all sessions belonging to the current agent).
+   * Default: "all" (all sessions on the Gateway, with cross-agent access scoped by agentToAgent).
    */
   sessions?: {
     /**
      * - "self": only the current session
      * - "tree": current session + sessions spawned by this session
-     * - "agent": any session belonging to the current agent id (default; can include other users)
-     * - "all": any session (cross-agent still requires tools.agentToAgent)
+     * - "agent": any session belonging to the current agent id (can include other users)
+     * - "all": any session (default; cross-agent access is governed by tools.agentToAgent)
      */
     visibility?: SessionsToolsVisibility;
   };

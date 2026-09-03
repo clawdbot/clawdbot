@@ -83,6 +83,10 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   board: () => import("./server-methods/board.js").then((module) => module.boardHandlers),
   audit: () => import("./server-methods/audit.js").then((module) => module.auditHandlers),
   users: () => import("./server-methods/users.js").then((module) => module.usersHandlers),
+  "users-mentionable": () =>
+    import("./server-methods/users-mentionable.js").then(
+      (module) => module.usersMentionableHandlers,
+    ),
   attach: () => import("./server-methods/attach.js").then((module) => module.attachHandlers),
   channels: () => import("./server-methods/channels.js").then((module) => module.channelsHandlers),
   "channel-pairing": () =>
@@ -121,6 +125,7 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   logs: () => import("./server-methods/logs.js").then((module) => module.logsHandlers),
   "memory-search": () =>
     import("./server-methods/memory-search.js").then((module) => module.memorySearchHandlers),
+  mentions: () => import("./server-methods/mentions.js").then((module) => module.mentionHandlers),
   terminal: () => import("./server-methods/terminal.js").then((module) => module.terminalHandlers),
   transcripts: () =>
     import("./server-methods/transcripts.js").then((module) => module.transcriptsHandlers),
@@ -434,12 +439,6 @@ export function createRequestGatewayMethodRegistry(
     }
   }
   const coreDescriptors = createCoreGatewayMethodDescriptors(coreDescriptorHandlers);
-  for (const descriptor of coreDescriptors) {
-    const extraHandler = extraHandlers?.[descriptor.name];
-    if (extraHandler && !pluginMethodNames.has(descriptor.name)) {
-      descriptor.handler = extraHandler;
-    }
-  }
   const coreMethodNames = new Set(coreDescriptors.map((descriptor) => descriptor.name));
   const auxHandlers = Object.fromEntries(
     extraHandlerEntries.filter(

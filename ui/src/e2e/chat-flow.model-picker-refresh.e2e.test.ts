@@ -24,7 +24,7 @@ async function screenshot(page: Page, name: string) {
 }
 
 suite.define(() => {
-  it("discloses and preserves the Gateway-resolved target across touch selection and reload", async () => {
+  it("preserves the Gateway-resolved target without exposing it in the picker", async () => {
     const context = await suite.newBrowserContext({
       hasTouch: true,
       locale: "en-US",
@@ -75,8 +75,9 @@ suite.define(() => {
         'openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker',
       );
       await picker.locator('[data-chat-model-select="true"]').tap();
-      await picker.getByText("Global default", { exact: true }).waitFor();
-      await screenshot(page, "05-global-target-before-touch-selection.png");
+      await picker.getByRole("option", { name: "GPT-5.6 Terra", exact: true }).waitFor();
+      await expect.poll(() => picker.locator("[data-chat-model-selection-target]").count()).toBe(0);
+      await screenshot(page, "05-picker-before-touch-selection.png");
 
       await picker.getByRole("option", { name: "GPT-5.6 Terra", exact: true }).tap();
       const request = await gateway.waitForRequest("sessions.patch");
@@ -89,7 +90,7 @@ suite.define(() => {
           picker.locator('[data-chat-model-select="true"]').getAttribute("data-chat-select-value"),
         )
         .toBe("openai/gpt-5.6-terra");
-      await screenshot(page, "06-global-target-after-touch-selection.png");
+      await screenshot(page, "06-picker-after-touch-selection.png");
 
       await gateway.setSessionsListResponse({
         ts: 2,
@@ -114,14 +115,14 @@ suite.define(() => {
       await page.reload();
       picker = page.locator('openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker');
       await picker.locator('[data-chat-model-select="true"]').tap();
-      await picker.getByText("Global default", { exact: true }).waitFor();
       await picker.getByRole("button", { name: "Reset session model", exact: true }).waitFor();
+      await expect.poll(() => picker.locator("[data-chat-model-selection-target]").count()).toBe(0);
       await expect
         .poll(() =>
           picker.locator('[data-chat-model-select="true"]').getAttribute("data-chat-select-value"),
         )
         .toBe("openai/gpt-5.6-terra");
-      await screenshot(page, "07-global-target-after-reload.png");
+      await screenshot(page, "07-picker-after-reload.png");
       await page.setViewportSize({ height: 900, width: 400 });
       const footer = picker.locator(".chat-controls__model-provenance");
       await expect
@@ -143,6 +144,36 @@ suite.define(() => {
         )
         .toBe(true);
       await screenshot(page, "08-compact-footer-mobile.png");
+      const configureModels = picker
+        .getByRole("button", { name: "Configure models", exact: true })
+        .first();
+      await expect
+        .poll(() =>
+          configureModels.evaluate((button) => {
+            const heading = button.closest<HTMLElement>("[data-chat-model-provider]");
+            if (!heading) {
+              return Number.POSITIVE_INFINITY;
+            }
+            return heading.getBoundingClientRect().right - button.getBoundingClientRect().right;
+          }),
+        )
+        .toBeLessThanOrEqual(11);
+      await expect
+        .poll(() =>
+          configureModels.locator("svg").evaluate((icon) => icon.getBoundingClientRect().width),
+        )
+        .toBeLessThanOrEqual(12);
+      await configureModels.hover();
+      await page.waitForTimeout(800);
+      const configureModelsTooltip = page.locator("wa-tooltip[open]").filter({
+        hasText: "Configure models",
+      });
+      await expect.poll(() => configureModelsTooltip.count()).toBe(0);
+      await screenshot(page, "09-configure-models-no-tooltip.png");
+      await configureModels.tap();
+      await expect.poll(() => page.url()).toContain("model-setup");
+      await page.locator("openclaw-model-setup-page .model-setup").waitFor({ state: "visible" });
+      await screenshot(page, "10-model-setup-navigation.png");
     } finally {
       await context.close();
     }

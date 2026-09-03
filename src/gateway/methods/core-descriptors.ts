@@ -657,6 +657,10 @@ const CORE_GATEWAY_METHOD_SPECS = [
     "2026.8",
     { controlPlaneWrite: true },
   ],
+  ["users.mentionable", "users-mentionable", "operator.read", "2026.8", { startup: true }],
+  ["mentions.list", "mentions", "operator.read", "2026.8", { startup: true }],
+  // Dismissal only changes the caller's temporary Inbox, not session or shared state.
+  ["mentions.dismiss", "mentions", "operator.read", "2026.8", { startup: true }],
   // Meeting notes share the trusted operator domain, like workspace/session reads.
   // Strong user/tenant isolation requires separate Gateways; see operator-scopes.md.
   ["transcripts.list", "transcripts", "operator.read", "2026.8"],

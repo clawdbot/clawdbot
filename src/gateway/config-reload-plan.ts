@@ -97,6 +97,7 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
   { prefix: "gateway.tools", kind: "hot" },
   { prefix: "gateway.cliAgents", kind: "hot" },
   { prefix: "gateway.controlUi.environment", kind: "hot" },
+  { prefix: "gateway.controlUi.communityInvite", kind: "hot" },
   { prefix: "gateway.controlUi.github", kind: "hot" },
   { prefix: "gateway.controlUi.toolTitles", kind: "hot" },
   { prefix: "gateway.controlUi.sessionObserver", kind: "hot" },

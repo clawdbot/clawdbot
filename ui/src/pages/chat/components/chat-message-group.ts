@@ -520,7 +520,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                     who,
                     // Only other people's messages: your own name links nowhere useful.
                     isPeerGroup && group.sender?.identity?.type === "profile"
-                      ? personActivityLink(group.sender.identity.id, opts.personActivity)
+                      ? personActivityLink(group.sender.identity.id, opts.personActivity, who)
                       : null,
                     "chat-sender-name",
                   )}

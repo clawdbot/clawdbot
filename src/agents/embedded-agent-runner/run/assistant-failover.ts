@@ -16,6 +16,7 @@ import {
   isTimeoutErrorMessage,
   type FailoverReason,
 } from "../../embedded-agent-helpers.js";
+import { buildAssistantFailoverSignal } from "../../embedded-agent-helpers/assistant-message-failures.js";
 import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
 import { classifyRateLimitWindow, resolveRetryAfterMs } from "../../failover/retry-evidence.js";
@@ -111,6 +112,11 @@ export async function handleAssistantFailover(params: {
   }) => Promise<boolean>;
 }): Promise<AssistantFailoverOutcome> {
   const terminal = projectAgentRunAttemptTerminal(params.terminal);
+  // Routing reasons group several HTTP failures; retain the provider's status
+  // when constructing the error so fallback summaries do not invent a timeout.
+  const assistantStatus = params.lastAssistant
+    ? buildAssistantFailoverSignal(params.lastAssistant).status
+    : undefined;
   const externalAbort = terminal.externalAbort || params.signalOwnedInterruption;
   let overloadProfileRotations = params.overloadProfileRotations;
   let decision = params.initialDecision;
@@ -178,7 +184,7 @@ export async function handleAssistantFailover(params: {
         overloadProfileRotations > params.overloadProfileRotationLimit &&
         params.fallbackConfigured
       ) {
-        const status = resolveFailoverStatus("overloaded");
+        const status = assistantStatus ?? resolveFailoverStatus("overloaded");
         params.warn(
           `overload profile rotation cap reached for ${sanitizeForLog(params.provider)}/${sanitizeForLog(params.modelId)} after ${overloadProfileRotations} rotations; escalating to model fallback`,
         );
@@ -273,7 +279,9 @@ export async function handleAssistantFailover(params: {
   if (decision.action === "fallback_model") {
     const message = resolveAssistantFailoverErrorMessage(params);
     const status =
-      resolveFailoverStatus(decision.reason) ?? (isTimeoutErrorMessage(message) ? 408 : undefined);
+      assistantStatus ??
+      resolveFailoverStatus(decision.reason) ??
+      (isTimeoutErrorMessage(message) ? 408 : undefined);
     params.logAssistantFailoverDecision("fallback_model", {
       status,
       retryCount: params.getTransientRetryCount(),
@@ -311,7 +319,9 @@ export async function handleAssistantFailover(params: {
       const message = resolveAssistantFailoverErrorMessage(params);
       const reason = resolveSurfaceErrorReason(decision.reason, params);
       const status =
-        resolveFailoverStatus(reason) ?? (isTimeoutErrorMessage(message) ? 408 : undefined);
+        assistantStatus ??
+        resolveFailoverStatus(reason) ??
+        (isTimeoutErrorMessage(message) ? 408 : undefined);
       const shouldSuspend =
         Boolean(params.sessionKey) && (reason === "rate_limit" || reason === "billing");
 

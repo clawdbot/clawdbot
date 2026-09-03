@@ -77,7 +77,9 @@ import {
   attachGatewayLocalUserIngress,
   prepareGatewayLocalUserIngress,
 } from "./local-user-ingress.js";
+import { createMentionInbox } from "./mention-inbox.js";
 import { sessionLog } from "./server-methods/sessions-shared.js";
+import { identifiedClient } from "./server-methods/sessions-sharing.test-support.js";
 import { listSessionGroups } from "./session-groups.js";
 import {
   resolveSessionMutationAuthorization,
@@ -6381,6 +6383,71 @@ test("sessions.create can start the first agent turn from an initial task", asyn
   expect(wait.payload?.status).toBe("ok");
 
   ws.close();
+});
+
+test("sessions.create commits its selected first-message mentions to the recipient Inbox", async () => {
+  const { storePath } = await createSessionStoreDir();
+  testState.agentsConfig = { list: [{ id: "main", default: true }] };
+  const alice = ensureProfileForEmail("alice@create-mentions.example.test");
+  const bob = ensureProfileForEmail("bob@create-mentions.example.test");
+  const sender = { ...identifiedClient(alice.id, "Alice"), connId: "alice-create" };
+  const recipient = { ...identifiedClient(bob.id, "Bob"), connId: "bob-create" };
+  const inbox = createMentionInbox({
+    gatewayInstanceId: "first-message-mentions",
+    getRuntimeConfig,
+    getClients: () => [sender, recipient],
+    broadcastToConnIds: vi.fn(),
+  });
+  const context = {
+    mentionInbox: inbox,
+    chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
+  };
+  let key: string | undefined;
+  try {
+    const created = await directSessionReq<{ key: string; sessionId: string; runStarted: boolean }>(
+      "sessions.create",
+      {
+        agentId: "main",
+        message: "@Bob review this",
+        mentions: [{ profileId: bob.id, start: 0, end: 4 }],
+      },
+      { client: sender, context, isWebchatConnect: () => true },
+    );
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+    expect(created.payload?.runStarted).toBe(true);
+    key = created.payload?.key;
+    expect(inbox.list(recipient)).toMatchObject({
+      ok: true,
+      value: {
+        items: [{ senderProfileId: alice.id, sessionKey: key, excerpt: "@Bob review this" }],
+      },
+    });
+    expect(inbox.list(sender)).toMatchObject({ ok: true, value: { items: [] } });
+  } finally {
+    await waitForCreatedSessionRun(context, storePath, key);
+    inbox.dispose();
+  }
+});
+
+test("sessions.create rejects stale mention spans before creating a session", async () => {
+  await createSessionStoreDir();
+  testState.agentsConfig = { list: [{ id: "main", default: true }] };
+  const sender = identifiedClient(ensureProfileForEmail("alice@invalid-mentions.example.test").id);
+  const created = await directSessionReq(
+    "sessions.create",
+    {
+      agentId: "main",
+      message: "token was removed",
+      mentions: [{ profileId: "bob", start: 0, end: 4 }],
+    },
+    { client: sender },
+  );
+  expect(created).toMatchObject({
+    ok: false,
+    error: { message: expect.stringContaining("Select the people again") },
+  });
+  const listed = await directSessionReq<{ sessions: unknown[] }>("sessions.list", {});
+  expect(listed.payload?.sessions).toEqual([]);
 });
 
 test("sessions.create forwards an attachment-only first turn", async () => {

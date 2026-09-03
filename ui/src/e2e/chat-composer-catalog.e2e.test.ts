@@ -142,7 +142,9 @@ suite.define(() => {
       expect(await gateway.getRequests("models.list")).toHaveLength(0);
 
       const composer = page.locator(".agent-chat__input");
-      const providers = composer.locator("[data-chat-model-provider]");
+      const providers = composer.locator(
+        "[data-chat-model-provider] .chat-controls__provider-label",
+      );
       await expect
         .poll(async () => (await providers.allTextContents()).map((label) => label.trim()))
         .toEqual(["OpenAI"]);
@@ -171,6 +173,7 @@ suite.define(() => {
           id: "gpt-5.6-sol",
           name: "GPT-5.6 Sol",
           provider: "openai",
+          contextWindow: 1_000_000,
           available: false,
           unavailableReason: "missing-auth" as const,
         },
@@ -178,6 +181,7 @@ suite.define(() => {
           id: "gpt-5.6-luna",
           name: "GPT-5.6 Luna",
           provider: "openai",
+          contextWindow: 1_000_000,
           available: false,
           unavailableReason: "missing-auth" as const,
         },
@@ -223,7 +227,21 @@ suite.define(() => {
       await expect.poll(() => options.last().isVisible()).toBe(true);
       await expect.poll(() => options.first().textContent()).toContain("GPT-5.6 Sol");
       await expect.poll(() => options.first().textContent()).toContain("Default");
-      await expect.poll(() => options.first().textContent()).toContain("Sign-in needed");
+      await expect
+        .poll(() =>
+          options.evaluateAll((rows) =>
+            rows.every((row) => {
+              const warning = row.querySelector("[data-chat-model-auth-warning]");
+              return (
+                warning?.textContent?.trim() === "Sign-in needed" &&
+                warning.querySelector("svg") !== null &&
+                row.querySelector(".chat-controls__model-option-meta") === null &&
+                !row.textContent?.includes("1M")
+              );
+            }),
+          ),
+        )
+        .toBe(true);
       await expect
         .poll(() =>
           options.evaluateAll(
