@@ -24,7 +24,8 @@ vi.mock("../../agents/prepared-model-catalog.js", () => ({
   loadPublishedPreparedModelCatalogOwnerSnapshot: catalogMocks.loadPublishedOwner,
 }));
 
-const { buildPreparedModelsProviderData } = await import("./commands-models.js");
+const { buildPreparedModelsProviderData, resolveModelsCommandReply } =
+  await import("./commands-models.js");
 
 const staleCfg = {
   agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
@@ -95,6 +96,45 @@ describe("/models browse catalog recovery", () => {
     expect(catalogMocks.loadPublishedOwner).not.toHaveBeenCalled();
   });
 
+  it("carries the command-selected directory into current-owner recovery", async () => {
+    catalogMocks.loadSnapshot
+      .mockRejectedValueOnce(new PreparedModelCatalogConfigReplacedError("/tmp/selected-agent"))
+      .mockResolvedValueOnce({
+        entries: [{ provider: "openai", id: "gpt-5.6-luna", name: "Current Luna" }],
+        routeVariants: [],
+      });
+    catalogMocks.loadPublishedOwner.mockResolvedValueOnce({
+      agentDir: "/tmp/current-agent",
+      config: replacementCfg,
+    });
+
+    await resolveModelsCommandReply({
+      cfg: staleCfg,
+      commandBodyNormalized: "/models",
+      agentId: "worker",
+      agentDir: "/tmp/selected-agent",
+      workspaceDir: "/tmp/selected-workspace",
+    });
+
+    expect(catalogMocks.loadSnapshot.mock.calls[0]?.[0]).toMatchObject({
+      agentId: "worker",
+      agentDir: "/tmp/selected-agent",
+      config: staleCfg,
+      workspaceDir: "/tmp/selected-workspace",
+    });
+    expect(catalogMocks.loadPublishedOwner).toHaveBeenCalledWith({
+      agentId: "worker",
+      readOnly: true,
+      workspaceDir: "/tmp/selected-workspace",
+    });
+    expect(catalogMocks.loadSnapshot.mock.calls[1]?.[0]).toMatchObject({
+      agentId: "worker",
+      agentDir: "/tmp/current-agent",
+      config: replacementCfg,
+      workspaceDir: "/tmp/selected-workspace",
+    });
+  });
+
   it.each([
     ["config replacement", () => new PreparedModelCatalogConfigReplacedError("/tmp/agent-dir")],
     [
@@ -155,10 +195,11 @@ describe("/models browse catalog recovery", () => {
         routeVariants: [],
       });
     catalogMocks.loadPublishedOwner
-      .mockResolvedValueOnce({ config: intermediateCfg })
-      .mockResolvedValueOnce({ config: currentCfg });
+      .mockResolvedValueOnce({ agentDir: "/tmp/intermediate-agent", config: intermediateCfg })
+      .mockResolvedValueOnce({ agentDir: "/tmp/current-agent", config: currentCfg });
 
     const data = await buildPreparedModelsProviderData(staleCfg, "worker", {
+      agentDir: "/tmp/selected-agent",
       workspaceDir: "/tmp/selected-workspace",
     });
 
@@ -175,6 +216,18 @@ describe("/models browse catalog recovery", () => {
       expect(params).not.toHaveProperty("config");
       expect(params).not.toHaveProperty("agentDir");
     }
+    expect(catalogMocks.loadSnapshot.mock.calls[0]?.[0]).toMatchObject({
+      agentId: "worker",
+      agentDir: "/tmp/selected-agent",
+      config: staleCfg,
+      workspaceDir: "/tmp/selected-workspace",
+    });
+    expect(catalogMocks.loadSnapshot.mock.calls[1]?.[0]).toMatchObject({
+      agentId: "worker",
+      agentDir: "/tmp/intermediate-agent",
+      config: intermediateCfg,
+      workspaceDir: "/tmp/selected-workspace",
+    });
     expect(catalogMocks.loadSnapshot.mock.calls[2]?.[0]).toMatchObject({
       agentId: "worker",
       agentDir: "/tmp/current-agent",

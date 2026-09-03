@@ -76,6 +76,7 @@ type PreparedModelsProviderData = ModelsProviderData & {
 };
 
 type ModelsBrowseOptions = {
+  agentDir?: string;
   view?: "default" | "all";
   workspaceDir?: string;
 };
@@ -176,16 +177,21 @@ export async function buildPreparedModelsProviderData(
 ): Promise<PreparedModelsProviderData> {
   const deadlineMs =
     options.view === "all" ? undefined : Date.now() + MODEL_CATALOG_BROWSE_TIMEOUT_MS;
+  let currentAgentDir = options.agentDir;
   let currentConfig = cfg;
+  const buildCurrentData = (control: { catalogFallback?: boolean; deadlineMs?: number }) =>
+    buildPreparedDataForConfig(
+      currentConfig,
+      agentId,
+      { ...options, agentDir: currentAgentDir },
+      control,
+    );
   for (;;) {
     if (deadlineMs !== undefined && Date.now() >= deadlineMs) {
-      return buildPreparedDataForConfig(currentConfig, agentId, options, {
-        catalogFallback: true,
-        deadlineMs,
-      });
+      return buildCurrentData({ catalogFallback: true, deadlineMs });
     }
     try {
-      return await buildPreparedDataForConfig(currentConfig, agentId, options, { deadlineMs });
+      return await buildCurrentData({ deadlineMs });
     } catch (error) {
       if (!isPreparedModelCatalogOwnerReplacement(error)) {
         throw error;
@@ -197,12 +203,10 @@ export async function buildPreparedModelsProviderData(
       workspaceDir: options.workspaceDir,
     });
     if (!owner) {
-      return buildPreparedDataForConfig(currentConfig, agentId, options, {
-        catalogFallback: true,
-        deadlineMs,
-      });
+      return buildCurrentData({ catalogFallback: true, deadlineMs });
     }
     currentConfig = owner.config;
+    currentAgentDir = owner.agentDir;
   }
 }
 
@@ -260,6 +264,7 @@ async function buildPreparedDataForConfig(
   const cliRuntimeProviders = new Set(
     listCliRuntimeModelBackendBindings().map((binding) => normalizeProviderId(binding.runtime)),
   );
+  const agentDir = options.agentDir ?? (agentId ? resolveAgentDir(cfg, agentId) : undefined);
 
   let loadedOwner: PreparedModelRuntimeSnapshot | undefined;
   const timeoutMs = control.deadlineMs === undefined ? undefined : control.deadlineMs - Date.now();
@@ -275,7 +280,8 @@ async function buildPreparedDataForConfig(
               config: cfg,
               readOnly,
               refreshFullCatalog: "stale",
-              ...(agentId ? { agentId, agentDir: resolveAgentDir(cfg, agentId) } : {}),
+              ...(agentId ? { agentId } : {}),
+              ...(agentDir ? { agentDir } : {}),
               ...(options.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
             });
             return loadedOwner.modelCatalog;
@@ -695,6 +701,7 @@ export async function resolveModelsCommandReply(params: {
     params.cfg,
     params.agentId,
     {
+      agentDir: params.agentDir,
       ...(parsed.action === "list" && parsed.all ? { view: "all" as const } : {}),
       workspaceDir: params.workspaceDir,
     },
