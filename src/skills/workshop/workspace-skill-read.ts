@@ -6,8 +6,8 @@ import {
   assertInsideSkillsRoot,
   readWorkspaceSkillFile,
 } from "../lifecycle/workspace-skill-write.js";
+import { resolveSkillManifestMetadata } from "../loading/frontmatter.js";
 import type { Skill } from "../loading/skill-contract.js";
-import { resolveSkillKey } from "../loading/frontmatter.js";
 import { loadSkillRootRecords } from "../loading/workspace-skill-loader.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
 
@@ -57,7 +57,9 @@ export function listWritableWorkshopSkillSummaries(
   return records
     .map(({ skill, frontmatter }) => ({
       name: skill.name,
-      skillKey: resolveSkillKey(skill, frontmatter),
+      skillKey: frontmatter
+        ? (resolveSkillManifestMetadata(frontmatter)?.skillKey ?? skill.name)
+        : skill.name,
       description: skill.description,
       baseDir: skill.baseDir,
       filePath: skill.filePath,

@@ -8,7 +8,7 @@ import type { SkillWorkshopPreparedPatch } from "../../skills/workshop/types.js"
 import { readWritableWorkshopSkill } from "../../skills/workshop/workspace-skill-read.js";
 import { readToolStringParam, ToolInputError, type AnyAgentTool } from "./common.js";
 
-type WritableSkillPatchTarget = Awaited<ReturnType<typeof readWritableWorkspaceSkill>>;
+type WritableSkillPatchTarget = Awaited<ReturnType<typeof readWritableWorkshopSkill>>;
 
 const PATCH_CONTEXT_PREFIX = [
   "Prepared patch context. This is a bounded excerpt, not the complete skill.",

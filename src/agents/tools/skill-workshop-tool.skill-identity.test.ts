@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { writeWorkspaceSkills } from "../../skills/test-support/e2e-test-helpers.js";
+import { writeSkill } from "../../skills/test-support/e2e-test-helpers.js";
 import { readProposalFrontmatter } from "../../skills/workshop/frontmatter.js";
 import { inspectSkillProposal } from "../../skills/workshop/service.js";
+import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createSkillWorkshopTool } from "./skill-workshop-tool.js";
 
@@ -19,28 +20,32 @@ it.each([
       async (state) => {
         const oldString = "Check the starting conditions.";
         const newString = "Check the starting conditions and record the result.";
-        await writeWorkspaceSkills(state.workspaceDir, [
-          {
+        const workshopDir = resolveWorkshopSkillsDir({}, "main", state.env);
+        await Promise.all([
+          writeSkill({
+            dir: path.join(workshopDir, "alpha-guide"),
             name: "alpha-guide",
             description: "Intended procedure",
             metadata: '{"openclaw":{"skillKey":"beta-guide"}}',
             body: `# Alpha\n\n${oldString}\n`,
-          },
-          {
+          }),
+          writeSkill({
+            dir: path.join(workshopDir, "beta-guide"),
             name: "beta-guide",
             description: "Other procedure",
             metadata: '{"openclaw":{"skillKey":"beta-key"}}',
             body: `# Beta\n\n${oldString}\n`,
-          },
+          }),
         ]);
         const paths = ["alpha-guide", "beta-guide"].map((name) =>
-          path.join(state.workspaceDir, "skills", name, "SKILL.md"),
+          path.join(workshopDir, name, "SKILL.md"),
         );
         const originals = await Promise.all(paths.map((file) => fs.readFile(file, "utf8")));
         const tool = createSkillWorkshopTool({
           workspaceDir: state.workspaceDir,
           config: {},
           env: state.env,
+          agentId: "main",
           proposalOnly: true,
           updateProposals: true,
           proposalMutationBudget: { remaining: 1 },
@@ -131,6 +136,7 @@ it("keeps an existing skill name through proposal revision and apply", async () 
         workspaceDir: state.workspaceDir,
         config: {},
         env: state.env,
+        agentId: "main",
         updateProposals: true,
       });
       const created = await tool.execute("seed-create", {
