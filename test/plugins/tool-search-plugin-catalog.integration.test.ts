@@ -1,17 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { createTestPluginApi } from "../plugin-sdk/plugin-test-api.js";
-import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tool-metadata.js";
-import type { OpenClawPluginApi } from "../plugins/types.js";
-import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
-import { finalizeAgentTools } from "./agent-tools.finalize.js";
-import { applyToolPolicyPipeline } from "./tool-policy-pipeline.js";
+import { finalizeAgentTools } from "../../src/agents/agent-tools.finalize.js";
+import { applyToolPolicyPipeline } from "../../src/agents/tool-policy-pipeline.js";
 import {
   applyToolSearchCatalog,
   clearToolSearchCatalog,
   createToolSearchCatalogRef,
   createToolSearchTools,
-} from "./tool-search.js";
-import type { AnyAgentTool } from "./tools/common.js";
+} from "../../src/agents/tool-search.js";
+import type { AnyAgentTool } from "../../src/agents/tools/common.js";
+import { createTestPluginApi } from "../../src/plugin-sdk/plugin-test-api.js";
+import { getPluginToolMeta, setPluginToolMeta } from "../../src/plugins/tool-metadata.js";
+import type { OpenClawPluginApi } from "../../src/plugins/types.js";
+import { loadBundledPluginFacade } from "../../src/test-utils/bundled-plugin-public-surface.js";
 
 describe("public plugin registrations in Tool Search", () => {
   it.each(["feishu", "file-transfer"])(
