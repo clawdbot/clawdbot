@@ -2557,6 +2557,7 @@ jobs:
           ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts
           ui/src/e2e/session-progress-hovercard.real-gateway.e2e.test.ts
           extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts
+          extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts
           extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts
 
       - name: Upload sanitized Control UI real-Gateway proof

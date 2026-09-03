@@ -788,6 +788,7 @@ describe("DraftSubmissionFlow", () => {
           recoveryScope: "",
         },
         agentsHydrated: place?.agentsHydrated ?? false,
+        runtimeId: place?.devicePlacementRuntime()?.id ?? "",
       }),
       {
         requestUpdate: vi.fn(),

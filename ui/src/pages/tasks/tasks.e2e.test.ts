@@ -187,7 +187,7 @@ suite.define(() => {
       expect(await gateway.getRequests("tasks.list")).toContainEqual({
         id: expect.any(String),
         method: "tasks.list",
-        params: { agentId: "main", limit: 200, status: terminalStatuses },
+        params: { agentId: "main", limit: 200, sortBy: "endedAt", status: terminalStatuses },
       });
     } finally {
       await context.close();
@@ -404,6 +404,7 @@ suite.define(() => {
                   agentId: "main",
                   limit: 200,
                   status: ["completed", "failed", "timed_out", "cancelled"],
+                  sortBy: "endedAt",
                 },
                 response: { tasks: [completedTask, failedTask] },
               },
@@ -459,6 +460,7 @@ suite.define(() => {
           agentId: "main",
           limit: 200,
           status: ["completed", "failed", "timed_out", "cancelled"],
+          sortBy: "endedAt",
         },
       });
       await page.screenshot({

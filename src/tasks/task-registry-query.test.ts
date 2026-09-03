@@ -99,6 +99,46 @@ describe("listTaskRecordPage", () => {
     }
   });
 
+  it("selects the terminal page by completion instead of later activity", async () => {
+    const tasks = [
+      {
+        taskId: "finished-newest",
+        endedAt: 300,
+        lastEventAt: 100,
+      },
+      {
+        taskId: "legacy-terminal",
+        endedAt: undefined,
+        lastEventAt: 250,
+      },
+      {
+        taskId: "finished-middle",
+        endedAt: 200,
+        lastEventAt: 200,
+      },
+    ].map(
+      ({ taskId, endedAt, lastEventAt }): TaskRecord => ({
+        taskId,
+        runtime: "cli",
+        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        task: taskId,
+        status: "succeeded",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "done_only",
+        createdAt: 0,
+        endedAt,
+        lastEventAt,
+      }),
+    );
+    configureTaskSnapshot(tasks);
+
+    const page = await readTaskPage({ offset: 0, limit: 2, sortBy: "endedAt" });
+
+    expect(page.tasks.map((task) => task.taskId)).toEqual(["finished-newest", "legacy-terminal"]);
+  });
+
   it("does not use the executor as the requester owner for a legacy bare task", async () => {
     const task: TaskRecord = {
       taskId: "task-legacy-owner",

@@ -307,7 +307,6 @@ export async function prepareGatewayKernelState(params: {
   const {
     bindHost,
     controlUiEnabled,
-    strictTransportSecurityHeader,
     controlUiBasePath,
     controlUiRoot: controlUiRootOverride,
     resolvedAuth,
@@ -493,7 +492,6 @@ export async function prepareGatewayKernelState(params: {
     controlUiRoot: controlUiRootLifecycle.state,
     openAiChatCompletionsEnabled: opts.openAiChatCompletionsEnabled,
     openResponsesEnabled: opts.openResponsesEnabled,
-    strictTransportSecurityHeader,
     resolvedAuth,
     rateLimiter: authRateLimiter,
     joinRateLimiter: browserAuthRateLimiter,
@@ -572,7 +570,6 @@ export async function prepareGatewayKernelState(params: {
     bindHost,
     controlUiEnabled,
     controlUiRootLifecycle,
-    strictTransportSecurityHeader,
     controlUiBasePath,
     resolvedAuth,
     tailscaleConfig,

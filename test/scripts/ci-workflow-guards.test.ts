@@ -11272,6 +11272,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         "--",
         ":(glob)ui/src/**/*.e2e.test.ts",
         "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
+        "extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts",
         "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
       ],
       { encoding: "utf8" },
@@ -11379,6 +11380,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(config.test?.include).toEqual([
       "ui/src/**/*.e2e.test.ts",
       "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
+      "extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts",
       "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
     ]);
     expect(projects.map((project) => project.test.name)).toEqual([

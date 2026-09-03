@@ -124,6 +124,7 @@ async function loadTaskSnapshotOnce(
       "tasks.list",
       {
         status: RECENT_TASK_STATUSES,
+        sortBy: "endedAt",
         limit: 200,
         ...(params.agentId ? { agentId: params.agentId } : {}),
       },

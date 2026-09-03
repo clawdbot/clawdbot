@@ -3249,6 +3249,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     "code_mode",
     "code_mode_only",
     "computer_use",
+    "context_management",
     "current_time_reminder",
     "default_mode_request_user_input",
     "deferred_executor",

@@ -13,6 +13,7 @@ import { copyMarkdownLabel, handleCopyButton } from "../../../components/copy-bu
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
+import { releaseMarkdownTables } from "../../../components/markdown-tables.ts";
 import type { PersonActivityRouting } from "../../../components/person-activity-link.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
@@ -202,6 +203,8 @@ export function dismissThreadPortals(paneId?: string, owner?: ParentNode): void 
 
 export function resetTranscriptSession(paneId: string, owner?: ParentNode): void {
   dismissThreadPortals(paneId, owner);
+  // Retained panes keep their DOM, so their native table modals need explicit retirement.
+  owner?.querySelectorAll<HTMLElement>(".chat-thread").forEach(releaseMarkdownTables);
   const state = transcriptStates.get(paneId);
   if (state) {
     // Search input belongs to the outgoing transcript. Other fields are pane

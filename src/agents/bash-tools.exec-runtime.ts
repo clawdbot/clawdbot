@@ -49,6 +49,7 @@ import {
 import {
   appendExecTimeoutRetryGuidance,
   renderExecExitLabel,
+  renderExecOutputText,
   renderExecUpdateText,
 } from "./bash-tools.exec-output.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
@@ -569,7 +570,7 @@ function buildExecExitOutcome(params: {
       exitSignal: params.exit.exitSignal,
       exitReason: params.exit.reason,
       durationMs: params.durationMs,
-      aggregated: params.aggregated + exitMsg,
+      aggregated: (exitMsg ? renderExecOutputText(params.aggregated) : params.aggregated) + exitMsg,
       timedOut: false,
       noOutputTimedOut: params.exit.noOutputTimedOut,
     };

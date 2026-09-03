@@ -11,6 +11,7 @@ import type { TlsOptions } from "node:tls";
 import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { isCanvasDocumentHttpPath } from "../canvas/constants.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createDiagnosticTraceContext,
@@ -154,7 +155,6 @@ export function createGatewayHttpServer(opts: {
   controlUiRoot?: ControlUiRootState;
   openAiChatCompletionsEnabled?: boolean;
   openResponsesEnabled?: boolean;
-  strictTransportSecurityHeader?: string;
   handleHooksRequest: HooksRequestHandler;
   handleMcpOAuthCallbackRequest?: McpOAuthCallbackHandler;
   handleWatchNodeRequest?: WatchNodeHttpRequestHandler;
@@ -188,7 +188,6 @@ export function createGatewayHttpServer(opts: {
     controlUiEnabled,
     controlUiBasePath,
     controlUiRoot,
-    strictTransportSecurityHeader,
     handleHooksRequest,
     handlePluginRequest,
     shouldEnforcePluginGatewayAuth,
@@ -244,9 +243,9 @@ export function createGatewayHttpServer(opts: {
     res: ServerResponse,
     expectation?: "continue" | "reject",
   ) {
-    setDefaultSecurityHeaders(res, {
-      strictTransportSecurity: strictTransportSecurityHeader,
-    });
+    // Read only the published snapshot: even liveness and rejection responses need
+    // current headers without depending on config IO or auth resolution.
+    setDefaultSecurityHeaders(res, getRuntimeConfigSnapshot()?.gateway?.http?.securityHeaders);
     // Preserve Node's version/token classification while deferring its response
     // until admission; reparsing Expect here would change HTTP/1.0 semantics.
     if (expectation === "reject") {

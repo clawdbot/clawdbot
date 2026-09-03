@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { stableStringify } from "@openclaw/normalization-core";
 import {
   type FastMode,
@@ -43,7 +44,9 @@ import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   createSessionEntryWithTranscript,
+  deleteSessionEntryLifecycle,
   listSessionEntriesReadOnly,
+  patchSessionEntryCore,
   resolveSessionEntryAccessTarget,
 } from "../config/sessions/session-accessor.js";
 import { createSessionDiffBaselineCaptureClaim } from "../config/sessions/session-diff-baseline-capture.js";
@@ -61,6 +64,7 @@ import {
   hasInternalHookListeners,
   triggerInternalHook,
 } from "../hooks/internal-hooks.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   isIncognitoSessionKey,
   isSubagentSessionKey,
@@ -325,6 +329,8 @@ export async function createGatewaySession(params: {
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
   /** Trusted in-process initializer; never populated from public Gateway params. */
   initialEntry?: TrustedInitialSessionEntry;
+  /** Keep a new ordinary session unusable until afterCreate succeeds, or roll it back. */
+  atomicInitialization?: true;
   /** Public callers need admin before reconfiguring an adopted keyed session. */
   allowExistingModelSelection?: boolean;
   /** Admitted operator scopes; omitted only by trusted in-process callers. */
@@ -404,6 +410,15 @@ export async function createGatewaySession(params: {
         ),
       };
     }
+  }
+  if (params.atomicInitialization === true && (!params.afterCreate || params.initialEntry)) {
+    return {
+      ok: false,
+      error: errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "atomic initialization requires afterCreate and cannot use trusted initial state",
+      ),
+    };
   }
   const loweredRequestedKey = normalizeOptionalLowercaseString(requestedKey);
   const explicitTargetKey = requestedKey
@@ -1230,6 +1245,7 @@ export async function createGatewaySession(params: {
           ...(params.initialEntry?.initializationPending === true
             ? { initializationPending: true }
             : {}),
+          ...(params.atomicInitialization === true ? { initializationPending: true } : {}),
           ...(params.initialEntry?.modelSelectionLocked === true
             ? { modelSelectionLocked: true }
             : {}),
@@ -1484,6 +1500,100 @@ export async function createGatewaySession(params: {
   });
   if (!result.ok) {
     return result;
+  }
+  if (params.atomicInitialization === true) {
+    if (result.resetExisting || !createdContext || !params.afterCreate) {
+      return {
+        ok: false,
+        error: errorShape(
+          ErrorCodes.UNAVAILABLE,
+          "atomic session initialization did not create a session",
+        ),
+      };
+    }
+    const initializingSession = createdContext;
+    const stored = loadGatewaySessionEntryReadOnly(initializingSession.key, {
+      agentId: initializingSession.agentId,
+    }).entry;
+    if (
+      !stored ||
+      stored.sessionId !== initializingSession.entry.sessionId ||
+      stored.initializationPending !== true
+    ) {
+      return {
+        ok: false,
+        error: errorShape(ErrorCodes.UNAVAILABLE, "atomic session initialization lost its owner"),
+      };
+    }
+    const expectedEntry = structuredClone(stored);
+    try {
+      await params.afterCreate(initializingSession);
+      const finalized = await patchSessionEntryCore(
+        { sessionKey: initializingSession.key, storePath: initializingSession.storePath },
+        (current) => {
+          if (!isDeepStrictEqual(current, expectedEntry)) {
+            throw new Error(
+              `created session ${initializingSession.key} changed before finalization`,
+            );
+          }
+          return { initializationPending: undefined };
+        },
+        {
+          preserveActivity: true,
+          requireWriteSuccess: true,
+          ...(params.commitGuard ? { assertCommitAllowed: params.commitGuard } : {}),
+        },
+      );
+      if (!finalized) {
+        throw new Error(
+          `created session ${initializingSession.key} disappeared before finalization`,
+        );
+      }
+      return {
+        ...result,
+        entry: projectPublicSessionEntry(finalized),
+        postCommit: { status: "completed" },
+      };
+    } catch (error) {
+      try {
+        const rollback = await deleteSessionEntryLifecycle({
+          agentId: initializingSession.agentId,
+          archiveTranscript: false,
+          deleteTranscriptWithoutArchive: true,
+          expectedEntry,
+          expectedSessionId: expectedEntry.sessionId,
+          expectedUpdatedAt: expectedEntry.updatedAt,
+          requireWriteSuccess: true,
+          storePath: initializingSession.storePath,
+          target: {
+            canonicalKey: initializingSession.key,
+            storeKeys: [initializingSession.key],
+          },
+        });
+        if (!rollback.deleted) {
+          throw new Error(`created session ${initializingSession.key} changed before rollback`, {
+            cause: error,
+          });
+        }
+      } catch (rollbackError) {
+        return {
+          ok: false,
+          error: errorShape(
+            ErrorCodes.UNAVAILABLE,
+            `session initialization failed and rollback did not complete: ${formatErrorMessage(
+              new AggregateError([error, rollbackError]),
+            )}`,
+          ),
+        };
+      }
+      return {
+        ok: false,
+        error: errorShape(
+          ErrorCodes.UNAVAILABLE,
+          `session initialization failed: ${formatErrorMessage(error)}`,
+        ),
+      };
+    }
   }
   if (result.resetExisting || !createdContext || !params.afterCreate) {
     return { ...result, postCommit: { status: "completed" } };

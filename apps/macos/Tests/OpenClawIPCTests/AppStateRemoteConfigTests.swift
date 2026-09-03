@@ -226,6 +226,67 @@ struct AppStateRemoteConfigTests {
         }
     }
 
+    @Test(arguments: [nil, "wss://previous.example.test"] as [String?])
+    func `incomplete direct URL edits survive sync until completed`(savedURL: String?) async {
+        let configPath = TestIsolation.tempConfigPath()
+        await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
+            var remote: [String: Any] = ["transport": "direct"]
+            remote["url"] = savedURL
+            #expect(OpenClawConfigFile.saveDict(["gateway": ["mode": "remote", "remote": remote]]))
+            let state = AppState(preview: true)
+            state._testEnableGatewayConfigSync()
+
+            for draft in ["w", "ws", "wss", "wss:", "wss:/", "wss://"] {
+                state.remoteUrl = draft
+                await state._testAwaitGatewayConfigSync()
+
+                #expect(state.remoteUrl == draft)
+                #expect(state._testDirtyGatewayConfigFields == ["gateway.remote.url"])
+                #expect(!state.gatewayConfigIsCurrentForRouting)
+                #expect(GatewayRemoteConfig.resolveUrlString(root: OpenClawConfigFile.loadDict()) == savedURL)
+            }
+
+            state.remoteUrl += "gateway.example.test"
+            await state._testAwaitGatewayConfigSync()
+            #expect(state.remoteUrl == "wss://gateway.example.test")
+            #expect(state._testDirtyGatewayConfigFields.isEmpty)
+            #expect(state.gatewayConfigIsCurrentForRouting)
+            #expect(GatewayRemoteConfig.resolveUrlString(root: OpenClawConfigFile.loadDict()) == state.remoteUrl)
+        }
+    }
+
+    @Test
+    func `incomplete direct URL retains ownership across external config edits`() async {
+        let configPath = TestIsolation.tempConfigPath()
+        await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
+            var remote = ["transport": "direct", "url": "wss://previous.example.test", "token": "old-token"]
+            #expect(OpenClawConfigFile.saveDict(["gateway": ["mode": "remote", "remote": remote]]))
+            let state = AppState(preview: true)
+            state._testEnableGatewayConfigSync()
+            state.remoteUrl = "wss://"
+            await state._testAwaitGatewayConfigSync()
+
+            remote["token"] = "new-token"
+            #expect(OpenClawConfigFile.saveDict(["gateway": ["mode": "remote", "remote": remote]]))
+            state._testApplyConfigFromDisk()
+            #expect(state.remoteUrl == "wss://")
+            #expect(state.remoteToken == "new-token")
+            #expect(state.gatewayConfigConflict == nil)
+
+            remote["url"] = "wss://external.example.test"
+            #expect(OpenClawConfigFile.saveDict(["gateway": ["mode": "remote", "remote": remote]]))
+            state._testApplyConfigFromDisk()
+            #expect(state.remoteUrl == "wss://")
+            #expect(state._testConflictedGatewayConfigFields == ["gateway.remote.url"])
+            #expect(!state.keepGatewayConfigEdits())
+            #expect(GatewayRemoteConfig.resolveUrlString(root: OpenClawConfigFile.loadDict()) == remote["url"])
+            #expect(state.useFileGatewayConfigConflict())
+            #expect(state.remoteUrl == remote["url"])
+            #expect(state._testDirtyGatewayConfigFields.isEmpty)
+            #expect(state.gatewayConfigIsCurrentForRouting)
+        }
+    }
+
     @Test
     func `successful gateway config sync clears dirty fields`() async {
         let configPath = TestIsolation.tempConfigPath()
@@ -413,8 +474,8 @@ struct AppStateRemoteConfigTests {
             #expect(state.gatewayConfigConflict?.fieldNames == ["Identity file", "Gateway token"])
             #expect(state.gatewayConfigConflict?.message ==
                 "These settings changed outside the app while you were editing: " +
-                    "Identity file and Gateway token. " +
-                    "Choose which version to keep.")
+                "Identity file and Gateway token. " +
+                "Choose which version to keep.")
             #expect(!state._testGatewayConfigIsCurrentForRouting)
 
             state._testEnableGatewayConfigSync()

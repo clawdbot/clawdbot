@@ -160,7 +160,7 @@ type FakeGatewayOptions = {
   silenceFirstTranscript?: boolean;
   silenceFirstLiveEvent?: boolean;
   silenceFirstInference?: boolean;
-  silenceSessionToolResponses?: number;
+  dropSessionToolResponses?: number;
   transcriptFailureAtRequest?: number;
   liveResyncAckedSeq?: number;
   liveResyncResponses?: number;
@@ -467,7 +467,9 @@ class FakeWorkerGateway {
       this.sessionSpawnRequests.length +
       this.sessionSendRequests.length +
       this.portalRequests.length;
-    if (requestCount <= (this.options.silenceSessionToolResponses ?? 0)) {
+    if (requestCount <= (this.options.dropSessionToolResponses ?? 0)) {
+      // Lose the response after recording its request, without a heartbeat race.
+      socket.terminate();
       return;
     }
     this.send(socket, {
@@ -1295,57 +1297,53 @@ describe("worker runtime", () => {
       },
     },
   ])("replays the same durable $name operation across response loss", async (testCase) => {
-    const { gateway, launch } = await setup({
-      heartbeatIntervalMs: 1,
-      ignoreHeartbeat: true,
-      silenceSessionToolResponses: 2,
-    });
+    const { gateway, launch } = await setup({ dropSessionToolResponses: 2 });
     const connection = createWorkerConnection({
       endpoint: { kind: "unix", socketPath: gateway.socketPath },
       connectParams: buildWorkerConnectParams(launch),
-      requestTimeoutMs: 25,
       reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
     });
     const states: WorkerConnectionState["kind"][] = [];
     connection.onStateChange((state) => states.push(state.kind));
-    await connection.start();
+    try {
+      await connection.start();
 
-    const response = await testCase.invoke(connection);
+      const response = await testCase.invoke(connection);
 
-    expect(response).toMatchObject({
-      ok: true,
-      payload: { resultJson: expect.stringContaining("child accepted") },
-    });
-    expect(gateway.connectionCount).toBe(3);
-    expect(states).toContain("reconnecting");
-    expect(testCase.requests(gateway)).toEqual([
-      testCase.request,
-      testCase.request,
-      testCase.request,
-    ]);
-    await connection.stop();
+      expect(response).toMatchObject({
+        ok: true,
+        payload: { resultJson: expect.stringContaining("child accepted") },
+      });
+      expect(gateway.connectionCount).toBe(3);
+      expect(states.filter((state) => state === "ready")).toHaveLength(3);
+      expect(testCase.requests(gateway)).toEqual([
+        testCase.request,
+        testCase.request,
+        testCase.request,
+      ]);
+    } finally {
+      await connection.stop();
+    }
   });
 
   it("never replays a portal operation after its response is lost", async () => {
-    const { gateway, launch } = await setup({
-      heartbeatIntervalMs: 1,
-      ignoreHeartbeat: true,
-      silenceSessionToolResponses: 1,
-    });
+    const { gateway, launch } = await setup({ dropSessionToolResponses: 1 });
     const connection = createWorkerConnection({
       endpoint: { kind: "unix", socketPath: gateway.socketPath },
       connectParams: buildWorkerConnectParams(launch),
-      requestTimeoutMs: 25,
       reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
     });
-    await connection.start();
-    const request = { toolCallId: "call-portal-once", action: "open" as const, port: 3000 };
+    try {
+      await connection.start();
+      const request = { toolCallId: "call-portal-once", action: "open" as const, port: 3000 };
 
-    await expect(connection.requestPortal(request)).rejects.toMatchObject({
-      name: "WorkerConnectionInterruptedError",
-    });
-    expect(gateway.portalRequests).toEqual([request]);
-    await connection.stop();
+      await expect(connection.requestPortal(request)).rejects.toMatchObject({
+        name: "WorkerConnectionInterruptedError",
+      });
+      expect(gateway.portalRequests).toEqual([request]);
+    } finally {
+      await connection.stop();
+    }
   });
 
   it("fail-stops a stale mid-run transcript without duplicating or rebasing the paid tail", async () => {

@@ -1913,6 +1913,8 @@ function installControlUiMockGateway(
           shared: { source: "system-configured", accountId: 1, login: "system-bot" },
           pendingPersonal: null,
         };
+      case "users.list":
+        return { profiles: [] };
       case "users.github.status":
       case "tools.github.status": {
         const system = {

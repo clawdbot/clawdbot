@@ -103,6 +103,7 @@ const serialBundledFile = "ui/src/e2e/chat-stream-runtime-budgets.e2e.test.ts";
 const privateFile = "ui/src/e2e/approval-bootstrap.e2e.test.ts";
 const qaLabFiles = [
   "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
+  "extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts",
   "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
 ];
 
@@ -409,11 +410,9 @@ describe("Control UI E2E resource ownership", () => {
     ).toEqual(
       realGateway.toSorted().map((file) => ({
         file,
-        project:
-          file.endsWith("/mcp-app-conformance.e2e.test.ts") ||
-          file.endsWith("/cron-duration-save.real-gateway.e2e.test.ts")
-            ? "ui-e2e-serial-standalone"
-            : "ui-e2e-serial",
+        project: uiE2ePrivateServerTestFiles.includes(file)
+          ? "ui-e2e-serial-standalone"
+          : "ui-e2e-serial",
       })),
     );
     const skipped = probeOwnership({ skipRealGateway: true });

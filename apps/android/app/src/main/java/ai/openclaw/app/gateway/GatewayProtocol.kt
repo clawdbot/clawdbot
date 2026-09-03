@@ -936,6 +936,7 @@ enum class GatewayEvent(
   NodePairRequested("node.pair.requested"),
   NodePairResolved("node.pair.resolved"),
   NodePresence("node.presence"),
+  NodeHostStats("node.hostStats"),
   NodeRunnerInventoryChanged("node.runnerInventory.changed"),
   NodeInvokeCancel("node.invoke.cancel"),
   NodeInvokeInput("node.invoke.input"),

@@ -261,6 +261,12 @@ async function executeAgentTurnInternalLoop(
   const signalExecutionPhaseForTyping = (
     info: Parameters<NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>>[0],
   ) => {
+    agentTurnTiming.logExecutionPhaseIfSlow({
+      runId,
+      sessionId: params.followupRun.run.sessionId,
+      sessionKey: params.sessionKey,
+      phase: info.phase,
+    });
     const startupPhase = resolveRunStartupPhase(info.phase);
     if (startupPhase && startupPhase !== lastRunStartupPhase) {
       lastRunStartupPhase = startupPhase;

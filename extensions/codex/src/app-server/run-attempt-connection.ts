@@ -75,9 +75,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     offAnnounced: false,
     resetAnnounced: false,
   };
-  const preDynamicStartupStages = createCodexDynamicToolBuildStageTracker({
-    enabled: profilerEnabled,
-  });
+  const preDynamicStartupStages = createCodexDynamicToolBuildStageTracker();
   const runtimeArtifactRequest =
     params.captureRuntimeArtifact || params.expectedRuntimeArtifact
       ? params.expectedRuntimeArtifact
