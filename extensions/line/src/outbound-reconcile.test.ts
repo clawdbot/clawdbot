@@ -173,6 +173,33 @@ describe("LINE unknown-send reconciliation", () => {
     ).toEqual(["replayed-1", "replayed-2"]);
   });
 
+  it("keys every push a payload fans out into, whatever kind it is", async () => {
+    await linePlugin.outbound?.sendPayload?.({
+      cfg: CFG,
+      to: TARGET,
+      text: "caption",
+      payload: {
+        text: "caption",
+        mediaUrl: "https://example.com/image.png",
+        channelData: { line: { flexMessage: { altText: "alt", contents: { type: "bubble" } } } },
+      },
+      deliveryQueueId: QUEUE_ID,
+      deliveryPartIndex: 0,
+      deliveryPartCount: 1,
+    });
+
+    // A media or card push is replayed under the same key a text push is, and the
+    // adapter declares it reconciles those kinds; a push that skipped the recorder
+    // would be replayed under a fresh key LINE cannot deduplicate.
+    const keys = pushedRequests().map((request) => request.retryKey);
+    expect(keys.length).toBeGreaterThan(1);
+    expect(keys).toEqual(
+      keys.map((_, pushIndex) =>
+        resolveLinePushRetryKey({ deliveryQueueId: QUEUE_ID, partIndex: 0, pushIndex }),
+      ),
+    );
+  });
+
   it("refuses a delivery that carried no durable record instead of replaying it", async () => {
     // A recorded push lands before the marker that routes a delivery here, so an
     // empty record means core withheld the queue id and those pushes went out

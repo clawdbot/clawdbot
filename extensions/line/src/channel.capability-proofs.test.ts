@@ -175,10 +175,12 @@ describe("line message adapter capability contracts", () => {
     }
   });
 
-  it("opts an ordinary queued send into reconciliation, not only callers that ask", () => {
-    // Core enables reconciliation when the caller requires it or the channel opts in.
-    // Only agent replies require it, so without the opt-in every other queued send —
-    // `message send`, cron and task notifications — is dead-lettered after a crash.
+  it("keeps the declaration an ordinary queued send is reconciled through", () => {
+    // Core enables reconciliation when the caller requires it or the channel opts
+    // in, and only agent replies require it. This asserts the declaration, not the
+    // routing: what the flag does to a `message send` or a cron notification is
+    // core's to decide, and the reconciler it selects is exercised in
+    // outbound-reconcile.test.ts.
     expect(linePlugin.message?.durableFinal).toMatchObject({
       automaticUnknownSendReconciliation: true,
       capabilities: { reconcileUnknownSend: true, afterCommit: true },
