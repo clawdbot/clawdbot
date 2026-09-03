@@ -161,12 +161,17 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   };
   const promptBuildMessages =
     pruneProcessedHistoryImages(input.activeSession.messages) ?? input.activeSession.messages;
-  const promptEvent = { prompt: attempt.prompt, messages: promptBuildMessages };
+  const promptEvent = {
+    prompt: attempt.prompt,
+    transcriptPrompt: attempt.transcriptPrompt ?? attempt.prompt,
+    messages: promptBuildMessages,
+  };
   const hookResult = preserveExactPrompt
     ? undefined
     : await resolvePromptBuildHookResult({
         config: attempt.config ?? getRuntimeConfig(),
         prompt: attempt.prompt,
+        transcriptPrompt: attempt.transcriptPrompt ?? attempt.prompt,
         messages: promptBuildMessages,
         hookCtx,
         hookRunner: input.hookRunner,
@@ -212,7 +217,14 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     authorizedHookResult?.appendContext,
   );
   const hasPromptBuildContext =
-    Boolean(promptBuildPrependContext?.trim()) || Boolean(promptBuildAppendContext?.trim());
+    hookResult?.prompt !== undefined ||
+    Boolean(promptBuildPrependContext?.trim()) ||
+    Boolean(promptBuildAppendContext?.trim());
+
+  if (hookResult?.prompt !== undefined) {
+    effectivePrompt = hookResult.prompt;
+    log.debug(`hooks: replaced prompt (${hookResult.prompt.length} chars)`);
+  }
 
   if (promptBuildPrependContext) {
     effectivePrompt = `${promptBuildPrependContext}\n\n${effectivePrompt}`;

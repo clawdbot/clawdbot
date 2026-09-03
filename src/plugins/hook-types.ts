@@ -258,6 +258,8 @@ export const isPluginHookReplyDispatchKind = (kind: unknown): kind is PluginHook
 
 export type PluginToolMatcher = readonly [string, ...string[]];
 
+export type PluginHookFailurePolicy = "fail-open" | "fail-closed";
+
 export type PluginHookRegistrationOptions<K extends PluginHookName> = {
   priority?: number;
   registrationId?: string;
@@ -280,6 +282,12 @@ export type PluginHookRegistrationOptions<K extends PluginHookName> = {
   (K extends "before_tool_call" | "after_tool_call"
     ? { matcher?: PluginToolMatcher }
     : { matcher?: never }) &
+  (K extends "message_sending"
+    ? {
+        /** Suppress delivery when this enforcement handler throws or times out. */
+        failurePolicy?: PluginHookFailurePolicy;
+      }
+    : { failurePolicy?: never }) &
   (K extends "before_prompt_build"
     ? {
         /** Run only after the host has finalized the turn's policy-filtered tool surface. */
@@ -1390,6 +1398,7 @@ export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = 
   matcher?: PluginToolMatcher;
   priority?: number;
   timeoutMs?: number;
+  failurePolicy?: PluginHookFailurePolicy;
   eligibleTriggers?: readonly PluginHookAgentTrigger[];
   eligibleDispatchKinds?: readonly PluginHookReplyDispatchKind[];
   requiresToolAuthority?: true;

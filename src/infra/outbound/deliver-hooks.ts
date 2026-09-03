@@ -117,6 +117,7 @@ export function buildProjectedInboundMessageSendingBeforeDeliver(
       replyToId: payload.replyToId ?? finalized.ReplyToIdFull ?? finalized.ReplyToId,
       threadId: finalized.MessageThreadId,
       sessionKey: finalized.SessionKey,
+      gatewayClientScopes: finalized.GatewayClientScopes,
     });
     if (hookResult.cancelled) {
       return null;
@@ -136,6 +137,7 @@ export async function applyMessageSendingHook(params: {
   replyToId?: string | null;
   threadId?: string | number | null;
   sessionKey?: string;
+  gatewayClientScopes?: readonly string[];
 }): Promise<{
   cancelled: boolean;
   cancelReason?: string;
@@ -169,6 +171,7 @@ export async function applyMessageSendingHook(params: {
         channelId: params.channel,
         accountId: params.accountId ?? undefined,
         conversationId: params.to,
+        ...(params.gatewayClientScopes ? { gatewayClientScopes: params.gatewayClientScopes } : {}),
         ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
       },
     );

@@ -103,6 +103,83 @@ describe("message_sending hook runner", () => {
     }
   });
 
+  it("fails closed when an enforcement handler throws", async () => {
+    const logger = { warn: vi.fn(), error: vi.fn() };
+    const second = vi.fn().mockResolvedValue({ content: "must not send" });
+    const { runner } = createHookRunnerWithRegistry(
+      [
+        {
+          hookName: "message_sending",
+          handler: vi.fn().mockRejectedValue(new Error("policy unavailable")),
+          failurePolicy: "fail-closed",
+        },
+        { hookName: "message_sending", handler: second },
+      ],
+      { logger },
+    );
+
+    await expect(
+      runner.runMessageSending({ to: "user-123", content: "original content" }, demoChannelCtx),
+    ).resolves.toEqual({
+      cancel: true,
+      cancelReason: "message_sending_hook_failed_closed",
+      metadata: { pluginId: "test-plugin" },
+    });
+    expect(second).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith(
+      "[hooks] message_sending handler from test-plugin failed closed: policy unavailable",
+    );
+  });
+
+  it("propagates ordinary handler errors when catching is disabled", async () => {
+    const { runner } = createHookRunnerWithRegistry(
+      [
+        {
+          hookName: "message_sending",
+          handler: vi.fn().mockRejectedValue(new Error("handler failed")),
+        },
+      ],
+      { catchErrors: false },
+    );
+
+    await expect(
+      runner.runMessageSending({ to: "user-123", content: "original content" }, demoChannelCtx),
+    ).rejects.toThrow("handler failed");
+  });
+
+  it("fails closed after an enforcement handler timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const firstStarted = createDeferred();
+      const { runner } = createHookRunnerWithRegistry([
+        {
+          hookName: "message_sending",
+          handler: vi.fn(() => {
+            firstStarted.resolve();
+            return new Promise<PluginHookMessageSendingResult>(() => {});
+          }),
+          failurePolicy: "fail-closed",
+        },
+      ]);
+
+      const resultPromise = runner.runMessageSending(
+        { to: "user-123", content: "original content" },
+        demoChannelCtx,
+      );
+      await firstStarted.promise;
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      await expect(resultPromise).resolves.toEqual({
+        cancel: true,
+        cancelReason: "message_sending_hook_failed_closed",
+        metadata: { pluginId: "test-plugin" },
+      });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("preserves a handler-specific timeout longer than the default", async () => {
     vi.useFakeTimers();
     try {

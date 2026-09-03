@@ -1982,12 +1982,21 @@ describe("prepareCliRunContext", () => {
     });
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
-      runBeforePromptBuild: vi.fn(async ({ messages }: { messages: unknown[] }) => ({
-        prependContext: `history:${messages.length}`,
-        systemPrompt: "hook system",
-        prependSystemContext: "prepend system",
-        appendSystemContext: "append system",
-      })),
+      runBeforePromptBuild: vi.fn(
+        async ({
+          messages,
+          transcriptPrompt,
+        }: {
+          messages: unknown[];
+          transcriptPrompt?: string;
+        }) => ({
+          prompt: `<read_only><message>${transcriptPrompt}</message></read_only>`,
+          prependContext: `history:${messages.length}`,
+          systemPrompt: "hook system",
+          prependSystemContext: "prepend system",
+          appendSystemContext: "append system",
+        }),
+      ),
     };
     mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
 
@@ -2005,7 +2014,9 @@ describe("prepareCliRunContext", () => {
       },
     });
 
-    expect(context.params.prompt).toBe("history:2\n\nlatest ask");
+    expect(context.params.prompt).toBe(
+      "history:2\n\n<read_only><message>latest ask</message></read_only>",
+    );
     expect(context.contextEngineTurnPrompt).toBe("latest ask");
     expect(context.systemPrompt).toBe(
       `${wrappedPluginSystemContext("prepend system")}\n\nhook system\n\n${wrappedPluginSystemContext("append system")}${SYSTEM_PROMPT_CACHE_BOUNDARY}\nCurrent model identity: test-cli/test-model. If asked what model you are, answer with this value for the current run.`,
@@ -2016,6 +2027,7 @@ describe("prepareCliRunContext", () => {
     >;
     expect(beforePromptBuildCalls[0]?.[0]).toEqual({
       prompt: "latest ask",
+      transcriptPrompt: "latest ask",
       messages: [
         { role: "user", content: "earlier context", timestamp: 1 },
         {

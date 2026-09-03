@@ -71,6 +71,22 @@ describe("phase hooks merger", () => {
       },
     },
     {
+      name: "before_prompt_build keeps the higher-priority prompt replacement",
+      hookName: "before_prompt_build" as const,
+      hooks: [
+        { pluginId: "low", result: { prompt: "low replacement" }, priority: 1 },
+        { pluginId: "high", result: { prompt: "high replacement" }, priority: 10 },
+      ],
+      expected: {
+        prompt: "high replacement",
+        systemPrompt: undefined,
+        prependContext: undefined,
+        appendContext: undefined,
+        prependSystemContext: undefined,
+        appendSystemContext: undefined,
+      },
+    },
+    {
       name: "before_prompt_build concatenates prependContext and preserves systemPrompt precedence",
       hookName: "before_prompt_build" as const,
       hooks: [

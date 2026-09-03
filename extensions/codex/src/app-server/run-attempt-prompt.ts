@@ -188,6 +188,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   const buildPromptFromCurrentInputs = async () => {
     const result = await resolveAgentHarnessBeforePromptBuildResult({
       prompt: prependCurrentInboundContext(promptState.promptText, params.currentInboundContext),
+      transcriptPrompt: params.transcriptPrompt ?? params.prompt,
       developerInstructions: {
         build: ({ toolsAllow }) => {
           if (isRestrictivePromptToolsAllow(toolsAllow)) {

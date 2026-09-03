@@ -82,6 +82,7 @@ export async function createCopilotSessionSetup(params: {
     }
     promptBuild = await resolveAgentHarnessBeforePromptBuildResult({
       prompt: input.prompt,
+      transcriptPrompt: input.transcriptPrompt ?? input.prompt,
       developerInstructions: {
         build: ({ toolsAllow }) => {
           promptPolicyResult = promptToolPolicy.apply({ toolsAllow, forceToolNames });

@@ -61,6 +61,8 @@ export type PluginHookMessageContext = {
   channelId: string;
   accountId?: string;
   conversationId?: string;
+  /** Gateway scopes attached to an operator-originated delivery, when present. */
+  gatewayClientScopes?: readonly string[];
   /**
    * Canonical session key for this conversation — the same value the agent
    * runtime sees as `params.sessionKey` for the run that produced the

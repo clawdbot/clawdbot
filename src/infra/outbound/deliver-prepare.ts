@@ -192,6 +192,7 @@ export async function prepareOutboundPayloadBatch(
         replyToId: resolveCurrentReplyTo(replyPayload).replyToId,
         threadId: params.threadId,
         sessionKey: sessionKeyForHooks,
+        gatewayClientScopes: params.gatewayClientScopes,
       });
     } catch (error) {
       // Modifier handlers are fail-open. Only a host invariant failure can

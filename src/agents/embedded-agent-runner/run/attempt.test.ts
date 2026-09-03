@@ -125,6 +125,7 @@ describe("resolvePromptBuildHookResult", () => {
     const hookRunner = {
       hasHooks: vi.fn(() => true),
       runBeforePromptBuild: vi.fn(async () => ({
+        prompt: "replacement prompt",
         prependContext: "prompt context",
         appendContext: "prompt append context",
         prependSystemContext: "prompt prepend",
@@ -135,11 +136,17 @@ describe("resolvePromptBuildHookResult", () => {
     const result = await resolvePromptBuildHookResult({
       config: {},
       prompt: "hello",
+      transcriptPrompt: "transcript hello",
       messages: [],
       hookCtx: {},
       hookRunner,
     });
 
+    expect(result.prompt).toBe("replacement prompt");
+    expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledWith(
+      { prompt: "hello", transcriptPrompt: "transcript hello", messages: [] },
+      {},
+    );
     expect(result.prependContext).toBe("prompt context");
     expect(result.appendContext).toBe("prompt append context");
     expect(result.prependSystemContext).toBe(wrappedPluginSystemContext("prompt prepend"));

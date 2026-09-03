@@ -5501,6 +5501,24 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
+  it("threads Gateway operator scopes into the message_sending hook context", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "message_sending",
+    );
+    installTextOutbound({ channel: "matrix", messageId: "mx-scoped", roomId: "!room" });
+
+    await deliverMatrix({
+      to: "!room",
+      payloads: [{ text: "operator message" }],
+      gatewayClientScopes: ["operator.write"],
+    });
+
+    expect(hookMocks.runner.runMessageSending).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({ gatewayClientScopes: ["operator.write"] }),
+    );
+  });
+
   it("forwards session.key (canonical) into message_sending ctx and never falls back to policyKey", async () => {
     // Contract test for OutboundSessionContext.key semantics:
     // session.key MUST reach plugins via ctx.sessionKey, even when a
@@ -5622,6 +5640,45 @@ describe("deliverOutboundPayloads", () => {
     expect(low).not.toHaveBeenCalled();
     expect(sendMatrix).not.toHaveBeenCalled();
     expect(hookMocks.runner.runMessageSent).not.toHaveBeenCalled();
+  });
+
+  it("suppresses delivery and records the enforcing plugin when a fail-closed hook fails", async () => {
+    const hookRegistry = createEmptyPluginRegistry();
+    addTestHook({
+      registry: hookRegistry,
+      pluginId: "outbound-policy",
+      hookName: "message_sending",
+      handler: vi.fn().mockRejectedValue(new Error("policy unavailable")),
+      failurePolicy: "fail-closed",
+    });
+    const realRunner = createHookRunner(hookRegistry);
+    hookMocks.runner.hasHooks.mockImplementation((hookName?: string) =>
+      realRunner.hasHooks((hookName ?? "") as never),
+    );
+    hookMocks.runner.runMessageSending.mockImplementation((event, ctx) =>
+      realRunner.runMessageSending(event as never, ctx as never),
+    );
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
+    const outcomes: unknown[] = [];
+
+    await expect(
+      deliverMatrix({
+        deps: { matrix: sendMatrix },
+        onPayloadDeliveryOutcome: (outcome) => outcomes.push(outcome),
+      }),
+    ).resolves.toEqual([]);
+
+    expect(sendMatrix).not.toHaveBeenCalled();
+    expect(outcomes).toEqual([
+      expect.objectContaining({
+        status: "suppressed",
+        reason: "cancelled_by_message_sending_hook",
+        hookEffect: {
+          cancelReason: "message_sending_hook_failed_closed",
+          metadata: { pluginId: "outbound-policy" },
+        },
+      }),
+    ]);
   });
 
   it("keeps text-only error payloads on the normal text path by default", async () => {

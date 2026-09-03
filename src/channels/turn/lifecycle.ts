@@ -336,6 +336,7 @@ async function applyRoutedDirectMessageSending(params: {
       params.turn.ctxPayload.ReplyToId,
     threadId: params.turn.ctxPayload.MessageThreadId,
     sessionKey: params.turn.routeSessionKey,
+    gatewayClientScopes: params.turn.ctxPayload.GatewayClientScopes,
   });
   if (hookResult.cancelled) {
     return {

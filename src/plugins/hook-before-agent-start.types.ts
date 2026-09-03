@@ -20,12 +20,16 @@ export type PluginHookBeforeModelResolveResult = {
 
 // before_prompt_build hook
 export type PluginHookBeforePromptBuildEvent = {
+  /** Current user text as persisted in the transcript, before model-only context is assembled. */
+  transcriptPrompt?: string;
   prompt: string;
   /** Session messages prepared for this run. */
   messages: unknown[];
 };
 
 export type PluginHookBeforePromptBuildResult = {
+  /** Replace the current model prompt without changing the persisted transcript text. */
+  prompt?: string;
   systemPrompt?: string;
   prependContext?: string;
   appendContext?: string;

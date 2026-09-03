@@ -32,6 +32,7 @@ type AgentHarnessDeveloperInstructionBuilder = {
 /** Runs before-prompt hooks and returns the adjusted prompt fields. */
 export async function resolveAgentHarnessBeforePromptBuildResult(params: {
   prompt: string;
+  transcriptPrompt?: string;
   developerInstructions: string | AgentHarnessDeveloperInstructionBuilder;
   messages: unknown[];
   ctx: AgentHarnessHookContext;
@@ -62,6 +63,7 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
   const hookCtx = buildAgentHookContext(params.ctx);
   const promptEvent = {
     prompt: params.prompt,
+    ...(params.transcriptPrompt !== undefined ? { transcriptPrompt: params.transcriptPrompt } : {}),
     messages: params.messages,
   };
 
@@ -124,10 +126,10 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
     promptBuildResult?.appendContext,
     authorizedPromptBuildResult?.appendContext,
   ]);
-  const prompt =
-    joinPresentTextSegments([promptPrefix, params.prompt, promptSuffix]) ?? params.prompt;
+  const modelPrompt = promptBuildResult?.prompt ?? params.prompt;
+  const prompt = joinPresentTextSegments([promptPrefix, modelPrompt, promptSuffix]) ?? modelPrompt;
   const promptInputStart =
-    params.prompt.length === 0
+    modelPrompt.length === 0
       ? (promptPrefix?.length ?? 0)
       : promptPrefix
         ? promptPrefix.length + 2
@@ -145,7 +147,7 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
       ]) ?? systemPrompt,
     promptInputRange: {
       start: promptInputStart,
-      end: promptInputStart + params.prompt.length,
+      end: promptInputStart + modelPrompt.length,
     },
   };
 }

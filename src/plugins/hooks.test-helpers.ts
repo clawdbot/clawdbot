@@ -3,7 +3,12 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry.js";
 import { createPluginRecord } from "./status.test-helpers.js";
-import type { PluginHookAgentTrigger, PluginHookRegistration, PluginToolMatcher } from "./types.js";
+import type {
+  PluginHookAgentTrigger,
+  PluginHookFailurePolicy,
+  PluginHookRegistration,
+  PluginToolMatcher,
+} from "./types.js";
 
 export function createMockPluginRegistry(
   hooks: Array<{
@@ -14,6 +19,7 @@ export function createMockPluginRegistry(
     priority?: number;
     registrationId?: string;
     timeoutMs?: number;
+    failurePolicy?: PluginHookFailurePolicy;
     eligibleTriggers?: readonly PluginHookAgentTrigger[];
     requiresToolAuthority?: true;
   }>,
@@ -41,6 +47,7 @@ export function createMockPluginRegistry(
       priority: h.priority ?? 0,
       ...(h.registrationId ? { registrationId: h.registrationId } : {}),
       ...(h.timeoutMs !== undefined ? { timeoutMs: h.timeoutMs } : {}),
+      ...(h.failurePolicy ? { failurePolicy: h.failurePolicy } : {}),
       ...(h.eligibleTriggers !== undefined ? { eligibleTriggers: h.eligibleTriggers } : {}),
       ...(h.requiresToolAuthority ? { requiresToolAuthority: true } : {}),
       source: "test",
@@ -56,6 +63,7 @@ export function addTestHook(params: {
   priority?: number;
   registrationId?: string;
   timeoutMs?: number;
+  failurePolicy?: PluginHookFailurePolicy;
   eligibleTriggers?: readonly PluginHookAgentTrigger[];
   requiresToolAuthority?: true;
 }) {
@@ -67,6 +75,7 @@ export function addTestHook(params: {
     priority: params.priority ?? 0,
     ...(params.registrationId ? { registrationId: params.registrationId } : {}),
     ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
+    ...(params.failurePolicy ? { failurePolicy: params.failurePolicy } : {}),
     ...(params.eligibleTriggers !== undefined ? { eligibleTriggers: params.eligibleTriggers } : {}),
     ...(params.requiresToolAuthority ? { requiresToolAuthority: true } : {}),
     source: "test",

@@ -410,6 +410,9 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     if (opts?.matcher && hookName !== "before_tool_call" && hookName !== "after_tool_call") {
       reportRegistrationWarning(record, `typed hook "${hookName}" ignores tool matcher`);
     }
+    if (opts?.failurePolicy && hookName !== "message_sending") {
+      reportRegistrationWarning(record, `typed hook "${hookName}" ignores failure policy`);
+    }
     record.hookCount += 1;
     registry.typedHooks.push({
       pluginId: record.id,
@@ -419,6 +422,9 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       ...(matcher ? { matcher } : {}),
       priority: opts?.priority,
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      ...(hookName === "message_sending" && opts?.failurePolicy
+        ? { failurePolicy: opts.failurePolicy }
+        : {}),
       ...(eligibleTriggers ? { eligibleTriggers } : {}),
       ...(eligibleDispatchKinds ? { eligibleDispatchKinds } : {}),
       ...(hookName === "before_prompt_build" && opts?.requiresToolAuthority === true
