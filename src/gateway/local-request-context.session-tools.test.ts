@@ -97,9 +97,9 @@ describe("built-in session tool role authority", () => {
               () => context,
             );
           }
-          // Keep real creation and its response identity; fail only the initial
-          // task boundary so this proof needs no provider or worker process.
-          const { task: _task, ...creation } = params;
+          // Keep real creation with default model selection and its response identity.
+          // Initial task dispatch and explicit-model catalog preparation are outside rollback.
+          const { task: _task, model: _model, ...creation } = params;
           const created = await callAgentToolGatewayRequest<SessionsCreateResult>({
             method,
             params: creation,
