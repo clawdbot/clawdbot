@@ -45,8 +45,8 @@ describe("resolveAuthProfileOrder — cooldown auto-expiry", () => {
     // Should no longer report as in cooldown
     expect(isProfileInCooldown(store, "anthropic:default")).toBe(false);
 
-    // Rate-limit backoff persists until the half-open probe succeeds.
-    expect(store.usageStats?.["anthropic:default"]?.errorCount).toBe(4);
+    // Only rate-limit backoff persists until the half-open probe succeeds.
+    expect(store.usageStats?.["anthropic:default"]?.errorCount).toBe(0);
     expect(store.usageStats?.["anthropic:default"]?.failureCounts).toEqual({ rate_limit: 4 });
     expect(store.usageStats?.["anthropic:default"]?.cooldownUntil).toBeUndefined();
   });
