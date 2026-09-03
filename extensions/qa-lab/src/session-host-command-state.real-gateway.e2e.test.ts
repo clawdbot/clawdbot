@@ -1,13 +1,7 @@
+import crypto from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
-import {
-  loadOrCreateDeviceIdentity,
-  NODE_RUNNER_INVENTORY_UPDATE_METHOD,
-  NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
-  NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-  type DeviceIdentity,
-} from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_MODES,
@@ -18,11 +12,19 @@ import { createQaGatewayChild } from "../api.ts";
 
 const COMMAND = "codex.exec-server.stdio.v1";
 const MODEL = "openai/gpt-5.6-luna";
+const NODE_RUNNER_INVENTORY_UPDATE_METHOD = "node.runnerInventory.update";
+const NODE_WORKER_ENVIRONMENT_SESSION_VERSION = 1;
+const NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE = "node-worker-supervisor-v6";
 const REQUEST_TIMEOUT_MS = 20_000;
 const TEST_TIMEOUT_MS = 180_000;
 const helloCounts = new WeakMap<GatewayClient, number>();
 
 const gatewayOwners: ReturnType<typeof createQaGatewayChild>[] = [];
+type DeviceIdentity = {
+  deviceId: string;
+  privateKeyPem: string;
+  publicKeyPem: string;
+};
 
 afterEach(async () => {
   for (const owner of gatewayOwners.splice(0)) {
@@ -94,15 +96,9 @@ suite.define(() => {
       const operator = await connectOperator(gateway);
       const clients: GatewayClient[] = [operator];
       try {
-        const undeclaredIdentity = loadOrCreateDeviceIdentity({
-          path: path.join(gateway.tempRoot, "undeclared.sqlite"),
-        });
-        const pendingIdentity = loadOrCreateDeviceIdentity({
-          path: path.join(gateway.tempRoot, "pending.sqlite"),
-        });
-        const unauthorizedIdentity = loadOrCreateDeviceIdentity({
-          path: path.join(gateway.tempRoot, "unauthorized.sqlite"),
-        });
+        const undeclaredIdentity = createDeviceIdentity();
+        const pendingIdentity = createDeviceIdentity();
+        const unauthorizedIdentity = createDeviceIdentity();
 
         const undeclaredNode = await connectPairedNode({
           displayName: "Undeclared command",
@@ -442,4 +438,15 @@ async function waitForReconnect(client: GatewayClient, previousCount: number): P
     interval: 100,
     timeout: 60_000,
   });
+}
+
+function createDeviceIdentity(): DeviceIdentity {
+  const { privateKey, publicKey } = crypto.generateKeyPairSync("ed25519");
+  const publicKeyPem = publicKey.export({ format: "pem", type: "spki" }).toString();
+  const publicKeyRaw = publicKey.export({ format: "der", type: "spki" }).subarray(-32);
+  return {
+    deviceId: crypto.createHash("sha256").update(publicKeyRaw).digest("hex"),
+    privateKeyPem: privateKey.export({ format: "pem", type: "pkcs8" }).toString(),
+    publicKeyPem,
+  };
 }
