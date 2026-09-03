@@ -3,11 +3,14 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { SessionEntry } from "../config/sessions.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { ensureProfileForEmail, linkEmail, resolveUserProfileId } from "../state/user-profiles.js";
+import type { GatewayClient } from "./server-methods/types.js";
+import { createSessionListEntryFilter } from "./session-sharing.js";
 import { listSessionsFromStoreAsync } from "./session-utils.js";
 
 const roots = createTempDirTracker();
@@ -186,4 +189,94 @@ it("leaves missing and invalid person references unresolved without creating pro
     expect(result.sessions).toEqual([]);
   }
   expect(fs.existsSync(path.join(stateRoot, "state", "openclaw.sqlite"))).toBe(false);
+});
+
+it.each([
+  { hidden: "draft", durable: false },
+  { hidden: "incognito", durable: false },
+  { hidden: "draft", durable: true },
+  { hidden: "incognito", durable: true },
+])("does not resolve hidden $hidden identities (durable=$durable)", async ({ hidden, durable }) => {
+  const visibleId = "12345678-a123-4123-8123-123456789abc";
+  const hiddenId = "12345678-a123-4123-8123-123456789def";
+  createProfile(visibleId);
+  if (durable) {
+    createProfile(hiddenId);
+  }
+  const visibility = createSessionListEntryFilter({
+    client: {
+      connect: { scopes: ["operator.read"] },
+      authenticatedUserProfile: { profileId: visibleId },
+    } as GatewayClient,
+  });
+  const entryFilter = vi.fn(visibility);
+  const store: Record<string, SessionEntry> = {
+    "agent:main:visible": {
+      sessionId: "visible",
+      updatedAt: Date.now(),
+      visibility: "shared",
+      participants: [{ identity: { type: "profile", id: visibleId } }],
+    },
+    "agent:main:hidden": {
+      sessionId: "hidden",
+      updatedAt: Date.now(),
+      visibility: hidden === "draft" ? "draft" : "shared",
+      incognito: hidden === "incognito" ? true : undefined,
+      participants: [{ identity: { type: "profile", id: hiddenId } }],
+    },
+  };
+  for (const reference of ["12345678a123", hiddenId, hiddenId.replaceAll("-", "")]) {
+    entryFilter.mockClear();
+    const result = await listSessionsFromStoreAsync({
+      cfg: {},
+      storePath: stateRoot,
+      store,
+      entryFilter,
+      opts: { includePeople: true, involvingProfileId: reference, search: "no-matching-session" },
+    });
+    expect(result.involvingProfileId, reference).toBe(
+      reference === "12345678a123" ? visibleId : undefined,
+    );
+    expect(result.sessions).toEqual([]);
+    expect(result.people).toEqual([]);
+    expect(entryFilter).toHaveBeenCalledTimes(2);
+  }
+});
+
+it("resolves merge aliases for visible owners without considering hidden profiles", async () => {
+  const source = "12345678-a123-4123-8123-123456789abc";
+  const hidden = "12345678-a123-4123-8123-123456789def";
+  const target = "87654321-a123-4123-8123-123456789abc";
+  for (const id of [source, hidden, target]) {
+    createProfile(id);
+  }
+  linkEmail(`${source}@activity.test`, target);
+  const entryFilter = createSessionListEntryFilter({
+    client: {
+      connect: { scopes: ["operator.read"] },
+      authenticatedUserProfile: { profileId: target },
+    } as GatewayClient,
+  });
+  const result = await listSessionsFromStoreAsync({
+    cfg: {},
+    storePath: stateRoot,
+    entryFilter,
+    store: {
+      "agent:main:owned": {
+        sessionId: "owned",
+        updatedAt: Date.now(),
+        visibility: "shared",
+        owner: { actor: { type: "human", id: target } },
+      },
+      "agent:main:hidden": {
+        sessionId: "hidden",
+        updatedAt: Date.now(),
+        visibility: "draft",
+        participants: [{ identity: { type: "profile", id: hidden } }],
+      },
+    },
+    opts: { includePeople: true, involvingProfileId: "12345678a123" },
+  });
+  expect(result.involvingProfileId).toBe(target);
+  expect(result.sessions.map((row) => row.key)).toEqual(["agent:main:owned"]);
 });

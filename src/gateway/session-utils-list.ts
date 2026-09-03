@@ -1,6 +1,5 @@
 import { performance } from "node:perf_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
-import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -16,10 +15,7 @@ import {
 import { shouldKeepSubagentRunChildLink } from "../agents/subagents/registry/subagent-run-liveness.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import type { SessionEntry } from "../config/sessions.js";
-import {
-  MAX_SESSION_PARTICIPANTS,
-  sessionCreatorProfileId,
-} from "../config/sessions/session-entry-provenance.js";
+import { MAX_SESSION_PARTICIPANTS } from "../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPinnedActivePluginRegistryWorkspaceDir } from "../plugins/runtime-workspace-state.js";
 import {
@@ -31,7 +27,6 @@ import {
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { SESSIONS_LIST_OWNER_LIMIT } from "../shared/session-list-limits.js";
 import type { SessionOwnerFacetIdentity } from "../shared/session-types.js";
-import { resolveUserProfileReference } from "../state/user-profile-list.js";
 import {
   projectSessionOwner,
   addSessionOwnerFacetIdentity,
@@ -39,7 +34,7 @@ import {
   projectSessionParticipants,
   projectSessionPeople,
   projectSessionPeopleFacet,
-  projectSessionParticipant,
+  resolveSessionListProfileReference,
 } from "./session-identity-projection.js";
 import { type SessionEntryPair, sortAndLimitSessionEntries } from "./session-list-order.js";
 import {
@@ -165,45 +160,6 @@ function resolveSessionsListWindowLimit(limit: number | undefined, offset: numbe
   return Number.isFinite(windowLimit) ? Math.min(windowLimit, Number.MAX_SAFE_INTEGER) : undefined;
 }
 
-function resolveSessionListProfileReference(
-  reference: string,
-  store: Record<string, SessionEntry>,
-  identities: Map<string, SessionActorProfileIdentity | undefined>,
-): Result<string | undefined, "ambiguous"> {
-  const exact = projectSessionParticipant({ type: "profile", id: reference }, identities);
-  if (identities.get(reference)) {
-    return ok(exact.identity.id);
-  }
-  const prefix = /^[0-9a-f]{8,32}$/.test(reference);
-  const matches = new Set<string>();
-  // Qualified associations outlive profile rows. Resolve over retained identities
-  // before filters so an orphan cannot disappear or borrow another person's prefix.
-  for (const entry of Object.values(store)) {
-    const ids = [
-      sessionCreatorProfileId(entry.createdActor),
-      ...(entry.participants ?? []).flatMap(({ identity }) =>
-        identity.type === "profile" ? [identity.id] : [],
-      ),
-    ];
-    for (const id of ids) {
-      if (id === reference) {
-        return ok(exact.identity.id);
-      }
-      if (id && prefix && id.replaceAll("-", "").toLowerCase().startsWith(reference)) {
-        matches.add(projectSessionParticipant({ type: "profile", id }, identities).identity.id);
-      }
-    }
-  }
-  const durable = resolveUserProfileReference(reference);
-  if (!durable.ok) {
-    return durable;
-  }
-  if (durable.value) {
-    matches.add(durable.value);
-  }
-  return matches.size > 1 ? err("ambiguous") : ok(matches.values().next().value);
-}
-
 function filterSessionEntries(params: {
   cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
@@ -213,6 +169,7 @@ function filterSessionEntries(params: {
   configuredAgentIds?: ReadonlySet<string>;
   getRowContext?: SessionListRowContextProvider;
   entryFilter?: (key: string, entry: SessionEntry) => boolean;
+  restrictProfileReferences?: boolean;
   involvingActorId?: string;
   ownerFirstActorId?: string;
 }): Pick<
@@ -250,18 +207,34 @@ function filterSessionEntries(params: {
   const configuredAgentIds = params.configuredAgentIds ?? new Set(listAgentIds(cfg));
   const identities =
     params.userProfileIdentityById ?? new Map<string, SessionActorProfileIdentity | undefined>();
+  const visibleEntries = Object.entries(store).filter(
+    ([key, entry]) => params.entryFilter?.(key, entry) ?? true,
+  );
+  const allowedProfileIds =
+    opts.involvingProfileId && params.restrictProfileReferences
+      ? new Set(
+          visibleEntries.flatMap(([, entry]) => {
+            const owner = projectSessionOwner(entry, identities, cfg, configuredAgentIds)?.actor;
+            return projectSessionPeople(entry, identities, cfg, owner).map(
+              (person) => person.identity.id,
+            );
+          }),
+        )
+      : undefined;
   const profileReference = opts.involvingProfileId
-    ? resolveSessionListProfileReference(opts.involvingProfileId, store, identities)
+    ? resolveSessionListProfileReference(
+        opts.involvingProfileId,
+        visibleEntries,
+        identities,
+        allowedProfileIds,
+      )
     : undefined;
   if (profileReference && !profileReference.ok) {
     throw new Error("Person link is ambiguous. Use a longer profile ID in the Activity URL.");
   }
   const selectedProfileId = profileReference?.value;
 
-  for (const [key, entry] of Object.entries(store)) {
-    if (params.entryFilter && !params.entryFilter(key, entry)) {
-      continue;
-    }
+  for (const [key, entry] of visibleEntries) {
     if (
       isCronRunSessionKey(key) ||
       (!includeGlobal && key === "global") ||
@@ -449,6 +422,7 @@ function selectSessionEntries(params: {
   userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
   configuredAgentIds?: ReadonlySet<string>;
   entryFilter?: (key: string, entry: SessionEntry) => boolean;
+  restrictProfileReferences?: boolean;
   involvingActorId?: string;
   ownerFirstActorId?: string;
 }): SessionEntrySelection {
@@ -512,6 +486,8 @@ function prepareSessionList(params: ListSessionsFromStoreParams) {
     opts,
     now,
     entryFilter,
+    // This wrapper also tracks incognito for unrestricted callers; preserve the original scope.
+    restrictProfileReferences: params.entryFilter !== undefined,
     defaultLimit: SESSIONS_LIST_DEFAULT_LIMIT,
     getRowContext:
       hasSpawnedByFilter || Boolean(normalizeOptionalString(opts.search))
@@ -621,7 +597,10 @@ export function filterAndSortSessionEntries(params: {
   getRowContext?: SessionListRowContextProvider;
   involvingActorId?: string;
 }): [string, SessionEntry][] {
-  return selectSessionEntries(params).entries;
+  return selectSessionEntries({
+    ...params,
+    restrictProfileReferences: params.entryFilter !== undefined,
+  }).entries;
 }
 
 /** Projects lightweight list rows while sharing the event loop with other requests. */

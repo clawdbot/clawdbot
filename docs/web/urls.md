@@ -152,6 +152,9 @@ Prefixes from 8 through 32 hexadecimal characters are accepted. If a prefix
 matches several profiles, Activity shows an error instead of choosing a person.
 Recorded profile identities in retained sessions still resolve if their profile
 row is missing; they also participate in ambiguity checks before session filters.
+For restricted readers, lookup uses only caller-visible session associations;
+hidden draft and incognito sessions cannot affect resolution or ambiguity.
+Search, time windows, and pagination do not narrow that visibility scope.
 Use a longer prefix, the full 32-character compact UUID, or the full dashed
 UUID to select the exact profile. Names never break a tie.
 

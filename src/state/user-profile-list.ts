@@ -216,14 +216,23 @@ export function getUserProfileDisplay(
 /** Activity references are display navigation, never authentication identifiers. */
 export function resolveUserProfileReference(
   reference: string,
-  options: OpenClawStateDatabaseOptions = {},
+  options: OpenClawStateDatabaseOptions & { allowedProfileIds?: ReadonlySet<string> } = {},
 ): Result<string | undefined, "ambiguous"> {
+  const { allowedProfileIds } = options;
+  if (allowedProfileIds?.size === 0) {
+    return ok(undefined);
+  }
   return (
     withExistingOpenClawStateDatabaseReadOnly(({ db }): Result<string | undefined, "ambiguous"> => {
       if (!tableExists(db, "user_profiles")) {
         return ok(undefined);
       }
-      const profiles = userProfilesDb(db).selectFrom("user_profiles");
+      let profiles = userProfilesDb(db).selectFrom("user_profiles");
+      if (allowedProfileIds) {
+        profiles = profiles.where((eb) =>
+          eb(eb.fn.coalesce("merged_into", "id"), "in", [...allowedProfileIds]),
+        );
+      }
       const exact = selectResolvedUserProfile(
         db,
         reference,
@@ -244,8 +253,8 @@ export function resolveUserProfileReference(
       ]
         .filter(Boolean)
         .join("-");
-      // Tombstones retain old links; aliases of one merge head are one match.
-      // Resolve over durable profiles so time, search, and facet caps cannot choose a person.
+      // Tombstones retain old links; aliases of one allowed merge head are one match.
+      // Time, search, and facet caps must not choose a person within that visibility scope.
       const matches = executeSqliteQuerySync(
         db,
         profiles
