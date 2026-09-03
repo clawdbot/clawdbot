@@ -1,4 +1,4 @@
-import { SESSION_PARTICIPANT_LIMIT } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
+import { SESSION_EXPANDED_PARTICIPANT_LIMIT } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import type { SkillLibrarySelection } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import type { HookExternalContentSource } from "../../security/external-content.js";
 
@@ -20,7 +20,7 @@ export function sessionCreatorProfileId(
 }
 
 export type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
-export const MAX_SESSION_PARTICIPANTS = SESSION_PARTICIPANT_LIMIT;
+export const MAX_SESSION_PARTICIPANTS = SESSION_EXPANDED_PARTICIPANT_LIMIT;
 
 export type SessionOwnerAssignment = {
   actor: SessionActor;

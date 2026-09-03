@@ -2,8 +2,11 @@ import { Type, type Static } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
-/** Shared storage and wire bound for one session's retained participant identities. */
-export const SESSION_PARTICIPANT_LIMIT = 32;
+/** Released v4 wire bound for the compact session-row participant summary. */
+export const SESSION_PARTICIPANT_LIMIT = 4;
+
+/** Storage and expanded-projection bound for one session's retained participant identities. */
+export const SESSION_EXPANDED_PARTICIPANT_LIMIT = 32;
 
 /** Product identity, independent of display metadata and authorization. */
 export const SessionParticipantIdentitySchema = Type.Union([

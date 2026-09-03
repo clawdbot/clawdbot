@@ -177,18 +177,20 @@ function sessionAttribution(
   const creatorLabel = creator?.label?.trim() || creator?.id?.trim();
   const participantIds = new Set<string>();
   let excludedProjectedCount = 0;
-  const participants = (row.participants ?? []).filter((participant) => {
-    const id = JSON.stringify(participant.identity);
-    if (participantIds.has(id)) {
-      return false;
-    }
-    participantIds.add(id);
-    if (excludesParticipant(participant, creator, selfUserId)) {
-      excludedProjectedCount += 1;
-      return false;
-    }
-    return true;
-  });
+  const participants = (row.expandedParticipants ?? row.participants ?? []).filter(
+    (participant) => {
+      const id = JSON.stringify(participant.identity);
+      if (participantIds.has(id)) {
+        return false;
+      }
+      participantIds.add(id);
+      if (excludesParticipant(participant, creator, selfUserId)) {
+        excludedProjectedCount += 1;
+        return false;
+      }
+      return true;
+    },
+  );
   const participantCount = Math.max(
     participants.length,
     (row.participantCount ?? 0) - excludedProjectedCount,

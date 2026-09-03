@@ -571,6 +571,12 @@ describe("renderSessionHovercard", () => {
             { identity: { type: "profile", id: "mira" }, label: "Mira" },
             { identity: { type: "profile", id: "riley" }, label: "Riley" },
             { identity: { type: "profile", id: "sam" }, label: "Sam" },
+          ],
+          expandedParticipants: [
+            { identity: { type: "profile", id: "self" }, label: "You" },
+            { identity: { type: "profile", id: "mira" }, label: "Mira" },
+            { identity: { type: "profile", id: "riley" }, label: "Riley" },
+            { identity: { type: "profile", id: "sam" }, label: "Sam" },
             { identity: { type: "profile", id: "lee" }, label: "Lee" },
           ],
           participantCount: 5,

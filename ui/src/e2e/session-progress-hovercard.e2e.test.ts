@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import {
@@ -167,6 +168,14 @@ suite.define(() => {
     const now = Date.now();
     const selectedSessionKey = "agent:main:selected";
     const sessionKey = "agent:main:other-session";
+    const participants: SessionParticipant[] = [
+      { identity: { type: "profile", id: "profile-ada" }, label: "Ada King" },
+      { identity: { type: "profile", id: "profile-self" }, label: "You" },
+      { identity: { type: "profile", id: "profile-mira" }, label: "Mira" },
+      { identity: { type: "profile", id: "profile-riley" }, label: "Riley" },
+      { identity: { type: "profile", id: "profile-sam" }, label: "Sam" },
+      { identity: { type: "profile", id: "profile-lee" }, label: "Lee" },
+    ];
     const initialMarkdown = [
       "**Building** phase 2",
       "",
@@ -257,14 +266,8 @@ suite.define(() => {
                 kind: "direct",
                 label: "Other session",
                 displayName: "Other session",
-                participants: [
-                  { identity: { type: "profile", id: "profile-ada" }, label: "Ada King" },
-                  { identity: { type: "profile", id: "profile-self" }, label: "You" },
-                  { identity: { type: "profile", id: "profile-mira" }, label: "Mira" },
-                  { identity: { type: "profile", id: "profile-riley" }, label: "Riley" },
-                  { identity: { type: "profile", id: "profile-sam" }, label: "Sam" },
-                  { identity: { type: "profile", id: "profile-lee" }, label: "Lee" },
-                ],
+                participants: participants.slice(0, 4),
+                expandedParticipants: participants,
                 participantCount: 6,
                 startedAt: now - 89 * 24 * 60 * 60_000,
                 updatedAt: now - 21 * 24 * 60 * 60_000,
