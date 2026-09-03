@@ -77,6 +77,44 @@ describe("buildPendingApprovalView", () => {
     });
   });
 
+  it("builds system-agent pending views with allow-once and deny only", () => {
+    const request = {
+      id: "system-change-1",
+      createdAtMs: 1,
+      expiresAtMs: 2,
+      request: {
+        title: "Apply proposed change",
+        description: "Rewrite the scheduler to prefer cooperative yields.",
+        command: "rewrite scheduler",
+        proposalHash: "hash-1",
+        sessionId: "session-1",
+        allowedDecisions: ["allow-once", "deny"] as const,
+      },
+    };
+
+    const view = buildPendingApprovalView(request);
+
+    expect(view.approvalKind).toBe("system-agent");
+    if (view.approvalKind !== "system-agent") {
+      throw new Error("expected system-agent approval view");
+    }
+    expect(view.operationSummary).toBe("Rewrite the scheduler to prefer cooperative yields.");
+    expect(view.actions.map((action) => action.action)).toEqual([
+      {
+        type: "approval",
+        approvalId: "system-change-1",
+        approvalKind: "system-agent",
+        decision: "allow-once",
+      },
+      {
+        type: "approval",
+        approvalId: "system-change-1",
+        approvalKind: "system-agent",
+        decision: "deny",
+      },
+    ]);
+  });
+
   const approvalRequestBase = { id: "approval-id", createdAtMs: 1, expiresAtMs: 2 };
 
   it.each([

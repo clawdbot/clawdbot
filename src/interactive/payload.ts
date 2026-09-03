@@ -542,7 +542,7 @@ function normalizePresentationAction(raw: unknown): MessagePresentationAction | 
     if (
       typeof approvalId !== "string" ||
       !isWellFormedApprovalId(approvalId) ||
-      (approvalKind !== "exec" && approvalKind !== "plugin") ||
+      (approvalKind !== "exec" && approvalKind !== "plugin" && approvalKind !== "system-agent") ||
       (decision !== "allow-once" && decision !== "allow-always" && decision !== "deny")
     ) {
       return undefined;

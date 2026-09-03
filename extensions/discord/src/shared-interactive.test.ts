@@ -308,6 +308,39 @@ describe("buildDiscordInteractiveComponents", () => {
     });
   });
 
+  it("renders system-agent approvals as actionable Discord controls", () => {
+    const rendered = buildDiscordPresentationComponents({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Allow Once",
+              action: {
+                type: "approval",
+                approvalId: "change-1",
+                approvalKind: "system-agent",
+                decision: "allow-once",
+              },
+              value: "/approve change-1 allow-once",
+              style: "success",
+            },
+          ],
+        },
+      ],
+    });
+
+    const firstBlock = rendered?.blocks?.[0];
+    const customId =
+      firstBlock?.type === "actions" ? firstBlock.buttons?.[0]?.internalCustomId : undefined;
+    expect(customId).toBe("execapproval:kind=system-agent;id=change-1;action=allow-once");
+    expect(parseExecApprovalData(parseCustomId(customId ?? "").data)).toEqual({
+      approvalId: "change-1",
+      approvalKind: "system-agent",
+      action: "allow-once",
+    });
+  });
+
   it("renders typed approvals as actionable transport-private Discord controls", () => {
     const rendered = buildDiscordPresentationComponents({
       blocks: [
