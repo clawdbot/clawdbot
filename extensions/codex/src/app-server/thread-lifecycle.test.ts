@@ -472,6 +472,7 @@ describe("Codex ring-zero thread config", () => {
       expect(config?.["tools.experimental_request_user_input.enabled"]).toBe(false);
       expect(config?.["features.multi_agent"]).toBe(false);
       expect(config?.["features.multi_agent_v2"]).toBe(false);
+      expect(config?.["features.context_management"]).toBe(false);
       expect(config?.["features.goals"]).toBe(false);
       expect(config?.["orchestrator.mcp.enabled"]).toBe(false);
       expect(config?.["orchestrator.skills.enabled"]).toBe(false);
@@ -659,6 +660,7 @@ describe("Codex delegation capability", () => {
     const appServer = createAppServerOptions() as never;
     const config = {
       "features.apps": true,
+      "features.context_management": { experimental_mode: true },
       "features.current_time_reminder": true,
       "features.deferred_executor": true,
       "features.hooks": true,
@@ -703,6 +705,7 @@ describe("Codex delegation capability", () => {
       for (const disabledFeature of [
         "agents.enabled",
         "features.apps",
+        "features.context_management",
         "features.current_time_reminder",
         "features.deferred_executor",
         "features.hooks",
@@ -750,6 +753,7 @@ describe("Codex delegation capability", () => {
     ];
     for (const normal of normalRequests) {
       expect(normal.config?.["features.apps"]).toBe(true);
+      expect(normal.config?.["features.context_management"]).toEqual({ experimental_mode: true });
       expect(normal.config?.["features.image_generation"]).toBe(true);
       expect(normal.config?.["features.multi_agent"]).toBe(true);
       expect(normal.config?.["features.multi_agent_v2"]).toBe(true);
