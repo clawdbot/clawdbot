@@ -40,11 +40,14 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
-type LiveSubagentModelConfig = {
-  modelKey: string;
-  provider: "openai" | "google" | "ollama";
-  requiredEnv?: "OPENAI_API_KEY" | "GEMINI_API_KEY" | "GOOGLE_API_KEY";
-};
+type LiveSubagentModelConfig =
+  | { modelKey: string; provider: "ollama" }
+  | { modelKey: string; provider: "openai"; requiredEnv: "OPENAI_API_KEY" }
+  | {
+      modelKey: string;
+      provider: "google";
+      requiredEnv: "GEMINI_API_KEY" | "GOOGLE_API_KEY";
+    };
 type LiveSubagentModelProviders = NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>;
 
 function resolveLiveSubagentModelConfig(): LiveSubagentModelConfig {
@@ -65,7 +68,7 @@ function resolveLiveSubagentModelConfig(): LiveSubagentModelConfig {
 function requireLiveSubagentAuth(config: LiveSubagentModelConfig): void {
   // Live E2E runs need the provider credential that matches the selected model
   // family; fail early before gateway startup.
-  if (config.requiredEnv) {
+  if (config.provider !== "ollama") {
     expect(process.env[config.requiredEnv]?.trim(), config.requiredEnv).toBeTruthy();
   }
 }
