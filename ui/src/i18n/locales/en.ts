@@ -831,6 +831,7 @@ export const en: TranslationMap & {
     hint: "Pick where this session works, then say what to do.",
     agent: "Agent",
     agents: "Agents",
+    workspaceGroupNamed: "Workspace group: {group}",
     where: "Where",
     environments: "Environments",
     gateway: "Gateway · local",

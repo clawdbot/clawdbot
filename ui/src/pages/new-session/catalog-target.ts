@@ -216,6 +216,20 @@ function renderTarget(data?: NewSessionRouteData) {
   </span>`;
 }
 
+function renderGroup(data?: NewSessionRouteData) {
+  const group = data?.group?.trim();
+  if (!group) {
+    return nothing;
+  }
+  return html`<span
+    class="new-session-page__trigger new-session-page__runtime new-session-page__group"
+    title=${t("newSession.workspaceGroupNamed", { group })}
+  >
+    <span class="new-session-page__target-icon" aria-hidden="true">${icons.users}</span>
+    <span class="new-session-page__trigger-label">${group}</span>
+  </span>`;
+}
+
 export function renderBar(params: {
   data?: NewSessionRouteData;
   agentSelect: unknown;
@@ -228,7 +242,7 @@ export function renderBar(params: {
   return html`
     <div class="new-session-page__triggers">
       ${renderTarget(params.data)} ${isTarget(params.data) ? nothing : params.agentSelect}
-      ${params.placeSelect}
+      ${renderGroup(params.data)} ${params.placeSelect}
       ${pending
         ? html`<span class="new-session-page__catalog-unavailable">
             ${t("newSession.catalogUnavailable")}

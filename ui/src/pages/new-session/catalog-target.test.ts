@@ -1,3 +1,4 @@
+import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
@@ -6,6 +7,7 @@ import {
   GroupRouteRevalidation,
   resolveAgentId,
   resolveCreateTarget,
+  renderBar,
   routeKey,
   routeKeyFromSearch,
 } from "./catalog-target.ts";
@@ -182,5 +184,55 @@ describe("new-session catalog target", () => {
     coordinator.synchronize(sessions);
 
     await vi.waitFor(() => expect(revalidate).toHaveBeenCalledTimes(2));
+  });
+
+  it("shows the workspace group in the new-session context bar", () => {
+    const container = document.createElement("div");
+    render(
+      renderBar({
+        data: {
+          agentId: "main",
+          requestedAgentId: "main",
+          catalogId: "",
+          group: "Mason",
+          groupStatus: "resolved",
+          model: "",
+          catalogLabel: "",
+          startTerminal: false,
+        },
+        agentSelect: "agent",
+        placeSelect: "place",
+        retrying: false,
+        onRetry: () => undefined,
+      }),
+      container,
+    );
+
+    const group = container.querySelector(".new-session-page__group");
+    expect(group?.textContent?.trim()).toBe("Mason");
+    expect(group?.getAttribute("title")).toBe("Workspace group: Mason");
+  });
+
+  it("omits workspace group context for ordinary new sessions", () => {
+    const container = document.createElement("div");
+    render(
+      renderBar({
+        data: {
+          agentId: "main",
+          requestedAgentId: "main",
+          catalogId: "",
+          model: "",
+          catalogLabel: "",
+          startTerminal: false,
+        },
+        agentSelect: "agent",
+        placeSelect: "place",
+        retrying: false,
+        onRetry: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.querySelector(".new-session-page__group")).toBeNull();
   });
 });
