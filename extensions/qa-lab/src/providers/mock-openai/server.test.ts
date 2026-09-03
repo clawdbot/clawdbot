@@ -8,7 +8,7 @@ import { WebSocket } from "ws";
 import { readQaMockRequestCursor } from "../shared/debug-request-cursor.js";
 import { adaptAnthropicToolCallIds } from "./mock-anthropic-wire.js";
 import type { StreamEvent } from "./mock-openai-contracts.js";
-import { QA_TOOL_SEARCH_SECONDARY_TARGET, readTargetFromPrompt } from "./mock-openai-tooling.js";
+import { readTargetFromPrompt } from "./mock-openai-tooling.js";
 import { startQaMockOpenAiServer } from "./server.js";
 
 type MockServer = { baseUrl: string };
@@ -5433,7 +5433,7 @@ Update and merge these partial structured summaries.`,
     expect(String(toolPlanOutput.arguments)).toContain("current");
   });
 
-  it("plans one structured batch search for the Tool Search gateway fixture", async () => {
+  it("plans one structured scalar search for the Tool Search gateway fixture", async () => {
     const server = await startMockServer();
     const targetTool = "fake_plugin_tool_17";
 
@@ -5450,10 +5450,8 @@ Update and merge these partial structured summaries.`,
     expect(toolPlanOutput.type).toBe("function_call");
     expect(toolPlanOutput.name).toBe("tool_search");
     expect(JSON.parse(String(toolPlanOutput.arguments))).toEqual({
-      queries: [
-        { query: targetTool, limit: 1 },
-        { query: QA_TOOL_SEARCH_SECONDARY_TARGET, limit: 1 },
-      ],
+      query: targetTool,
+      limit: 1,
     });
   });
 
@@ -5481,7 +5479,7 @@ Update and merge these partial structured summaries.`,
     });
   });
 
-  it("calls the selected catalog tool after a structured batch search", async () => {
+  it("calls the selected catalog tool after a structured scalar search", async () => {
     const server = await startMockServer();
     const targetTool = "fake_plugin_tool_17";
 
@@ -5498,25 +5496,9 @@ Update and merge these partial structured summaries.`,
           type: "function_call",
           call_id: "call_tool_search_1",
           name: "tool_search",
-          arguments: JSON.stringify({
-            queries: [
-              { query: targetTool, limit: 1 },
-              { query: QA_TOOL_SEARCH_SECONDARY_TARGET, limit: 1 },
-            ],
-          }),
+          arguments: JSON.stringify({ query: targetTool, limit: 1 }),
         },
-        makeToolOutputWithCallId(
-          "call_tool_search_1",
-          JSON.stringify({
-            results: [
-              { query: targetTool, candidates: [{ name: targetTool }] },
-              {
-                query: QA_TOOL_SEARCH_SECONDARY_TARGET,
-                candidates: [{ name: QA_TOOL_SEARCH_SECONDARY_TARGET }],
-              },
-            ],
-          }),
-        ),
+        makeToolOutputWithCallId("call_tool_search_1", JSON.stringify([{ name: targetTool }])),
       ],
     });
 
@@ -5543,12 +5525,9 @@ Update and merge these partial structured summaries.`,
           type: "function_call",
           call_id: "call_tool_search_1",
           name: "tool_search",
-          arguments: JSON.stringify({ queries: [{ query: targetTool, limit: 1 }] }),
+          arguments: JSON.stringify({ query: targetTool, limit: 1 }),
         },
-        makeToolOutputWithCallId(
-          "call_tool_search_1",
-          JSON.stringify({ results: [{ query: targetTool, candidates: [] }] }),
-        ),
+        makeToolOutputWithCallId("call_tool_search_1", JSON.stringify([])),
       ],
     });
 

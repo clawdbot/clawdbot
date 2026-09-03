@@ -10,7 +10,6 @@ import {
   outputText,
   outputToolNames,
 } from "./fixture-utils.js";
-import { QA_TOOL_SEARCH_SECONDARY_TARGET } from "./providers/mock-openai/mock-openai-tooling.js";
 import {
   qaMockRequestCursorUrl,
   qaMockRequestsAfterUrl,
@@ -18,7 +17,7 @@ import {
 } from "./providers/shared/debug-request-cursor.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 import {
-  assertToolSearchBatchLaneResult,
+  assertToolSearchStructuredLaneResult,
   assertToolSearchLaneResults,
   fetchJson,
   readToolSearchGatewayFetchLimits,
@@ -391,6 +390,7 @@ describe("qa fixture response helpers", () => {
 
 describe("tool search gateway e2e lane assertions", () => {
   const targetTool = "fake_plugin_tool_17";
+  const otherTool = "fake_plugin_tool_01";
   const targetToolIdentity = {
     source: "plugin",
     pluginId: "tool-search-e2e-fixture",
@@ -432,9 +432,9 @@ describe("tool search gateway e2e lane assertions", () => {
     ).not.toThrow();
   });
 
-  it("accepts one structured batch search followed by one catalog call", () => {
+  it("accepts one structured scalar search followed by one catalog call", () => {
     expect(() =>
-      assertToolSearchBatchLaneResult({
+      assertToolSearchStructuredLaneResult({
         targetTool,
         tools: {
           status: "completed",
@@ -446,24 +446,8 @@ describe("tool search gateway e2e lane assertions", () => {
           providerDirectoryContainsTarget: true,
           providerPlannedTools: ["tool_search", "tool_call"],
           providerRawBytes: 4_000,
-          providerToolOutputSnippet: JSON.stringify({
-            results: [
-              { query: targetTool, candidates: [{ name: targetTool }] },
-              {
-                query: QA_TOOL_SEARCH_SECONDARY_TARGET,
-                candidates: [{ name: QA_TOOL_SEARCH_SECONDARY_TARGET }],
-              },
-            ],
-          }),
-          providerToolSearchResult: {
-            results: [
-              { query: targetTool, candidates: [{ name: targetTool }] },
-              {
-                query: QA_TOOL_SEARCH_SECONDARY_TARGET,
-                candidates: [{ name: QA_TOOL_SEARCH_SECONDARY_TARGET }],
-              },
-            ],
-          },
+          providerToolOutputSnippet: JSON.stringify([{ name: targetTool }]),
+          providerToolSearchResult: [{ name: targetTool }],
           sessionLogToolMentions: {
             tool_search: 1,
             tool_call: 1,
@@ -476,7 +460,7 @@ describe("tool search gateway e2e lane assertions", () => {
 
   it("rejects structured proof that splits discovery across outer calls", () => {
     expect(() =>
-      assertToolSearchBatchLaneResult({
+      assertToolSearchStructuredLaneResult({
         targetTool,
         tools: {
           status: "completed",
@@ -488,9 +472,8 @@ describe("tool search gateway e2e lane assertions", () => {
           providerDirectoryContainsTarget: true,
           providerPlannedTools: ["tool_search", "tool_search", "tool_call"],
           providerRawBytes: 4_000,
-          providerToolOutputSnippet: JSON.stringify({
-            results: [{ query: targetTool, candidates: [{ name: targetTool }] }],
-          }),
+          providerToolOutputSnippet: JSON.stringify([{ name: targetTool }]),
+          providerToolSearchResult: [{ name: targetTool }],
           sessionLogToolMentions: {
             tool_search: 2,
             tool_call: 1,
@@ -498,76 +481,39 @@ describe("tool search gateway e2e lane assertions", () => {
           },
         },
       }),
-    ).toThrow("structured lane did not use one batch search");
+    ).toThrow("structured lane did not use one scalar search");
   });
 
   it.each([
     {
-      label: "omits a grouped result",
+      label: "returns no candidate",
       status: "completed",
       plannedTools: ["tool_search", "tool_call"],
-      result: { results: [{ query: targetTool, candidates: [{ name: targetTool }] }] },
+      result: [],
       mentions: { tool_search: 1, tool_call: 1, [targetTool]: 1 },
-      error: "did not return both grouped search results",
+      error: "did not return the target scalar search result",
     },
     {
-      label: "reorders grouped results",
+      label: "returns the wrong candidate",
       status: "completed",
       plannedTools: ["tool_search", "tool_call"],
-      result: {
-        results: [
-          {
-            query: QA_TOOL_SEARCH_SECONDARY_TARGET,
-            candidates: [{ name: QA_TOOL_SEARCH_SECONDARY_TARGET }],
-          },
-          { query: targetTool, candidates: [{ name: targetTool }] },
-        ],
-      },
+      result: [{ name: otherTool }],
       mentions: { tool_search: 1, tool_call: 1, [targetTool]: 1 },
-      error: "did not return both grouped search results",
-    },
-    {
-      label: "reuses the first query candidate for the second group",
-      status: "completed",
-      plannedTools: ["tool_search", "tool_call"],
-      result: {
-        results: [
-          { query: targetTool, candidates: [{ name: targetTool }] },
-          { query: QA_TOOL_SEARCH_SECONDARY_TARGET, candidates: [{ name: targetTool }] },
-        ],
-      },
-      mentions: { tool_search: 1, tool_call: 1, [targetTool]: 1 },
-      error: "did not return both grouped search results",
+      error: "did not return the target scalar search result",
     },
     {
       label: "calls before searching",
       status: "completed",
       plannedTools: ["tool_call", "tool_search"],
-      result: {
-        results: [
-          { query: targetTool, candidates: [{ name: targetTool }] },
-          {
-            query: QA_TOOL_SEARCH_SECONDARY_TARGET,
-            candidates: [{ name: QA_TOOL_SEARCH_SECONDARY_TARGET }],
-          },
-        ],
-      },
+      result: [{ name: targetTool }],
       mentions: { tool_search: 1, tool_call: 1, [targetTool]: 1 },
-      error: "did not use one batch search followed by one catalog call",
+      error: "did not use one scalar search followed by one catalog call",
     },
     {
       label: "omits bridge telemetry",
       status: "completed",
       plannedTools: ["tool_search", "tool_call"],
-      result: {
-        results: [
-          { query: targetTool, candidates: [{ name: targetTool }] },
-          {
-            query: QA_TOOL_SEARCH_SECONDARY_TARGET,
-            candidates: [{ name: QA_TOOL_SEARCH_SECONDARY_TARGET }],
-          },
-        ],
-      },
+      result: [{ name: targetTool }],
       mentions: { tool_search: 0, tool_call: 0, [targetTool]: 1 },
       error: "session log did not record search and call mentions",
     },
@@ -575,15 +521,7 @@ describe("tool search gateway e2e lane assertions", () => {
       label: "returns an incomplete response",
       status: "incomplete",
       plannedTools: ["tool_search", "tool_call"],
-      result: {
-        results: [
-          { query: targetTool, candidates: [{ name: targetTool }] },
-          {
-            query: QA_TOOL_SEARCH_SECONDARY_TARGET,
-            candidates: [{ name: QA_TOOL_SEARCH_SECONDARY_TARGET }],
-          },
-        ],
-      },
+      result: [{ name: targetTool }],
       mentions: { tool_search: 1, tool_call: 1, [targetTool]: 1 },
       error: "did not complete successfully",
     },
@@ -591,7 +529,7 @@ describe("tool search gateway e2e lane assertions", () => {
     "rejects structured proof that $label",
     ({ status, plannedTools, result, mentions, error }) => {
       expect(() =>
-        assertToolSearchBatchLaneResult({
+        assertToolSearchStructuredLaneResult({
           targetTool,
           tools: {
             status,
@@ -624,17 +562,9 @@ describe("tool search gateway e2e lane assertions", () => {
       directoryContainsTarget: false,
     },
   ])("rejects structured proof that $label", ({ declaredToolNames, directoryContainsTarget }) => {
-    const result = {
-      results: [
-        { query: targetTool, candidates: [{ name: targetTool }] },
-        {
-          query: QA_TOOL_SEARCH_SECONDARY_TARGET,
-          candidates: [{ name: QA_TOOL_SEARCH_SECONDARY_TARGET }],
-        },
-      ],
-    };
+    const result = [{ name: targetTool }];
     expect(() =>
-      assertToolSearchBatchLaneResult({
+      assertToolSearchStructuredLaneResult({
         targetTool,
         tools: {
           status: "completed",
@@ -654,17 +584,9 @@ describe("tool search gateway e2e lane assertions", () => {
   });
 
   it("rejects structured proof without a typed target tool result", () => {
-    const result = {
-      results: [
-        { query: targetTool, candidates: [{ name: targetTool }] },
-        {
-          query: QA_TOOL_SEARCH_SECONDARY_TARGET,
-          candidates: [{ name: QA_TOOL_SEARCH_SECONDARY_TARGET }],
-        },
-      ],
-    };
+    const result = [{ name: targetTool }];
     expect(() =>
-      assertToolSearchBatchLaneResult({
+      assertToolSearchStructuredLaneResult({
         targetTool,
         tools: {
           status: "completed",
@@ -683,17 +605,9 @@ describe("tool search gateway e2e lane assertions", () => {
   });
 
   it("rejects structured tools.effective ownership outside the fixture plugin", () => {
-    const result = {
-      results: [
-        { query: targetTool, candidates: [{ name: targetTool }] },
-        {
-          query: QA_TOOL_SEARCH_SECONDARY_TARGET,
-          candidates: [{ name: QA_TOOL_SEARCH_SECONDARY_TARGET }],
-        },
-      ],
-    };
+    const result = [{ name: targetTool }];
     expect(() =>
-      assertToolSearchBatchLaneResult({
+      assertToolSearchStructuredLaneResult({
         targetTool,
         tools: {
           status: "completed",

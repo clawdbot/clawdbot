@@ -8,6 +8,7 @@ import {
   collectUniqueCatalogToolNames,
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
+  TOOL_SEARCH_BATCH_TOOL_NAME,
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
 } from "../../tool-search.js";
@@ -17,6 +18,7 @@ import { collectAllowedToolNames } from "../tool-name-allowlist.js";
 export const TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES = [
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
+  TOOL_SEARCH_BATCH_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_CALL_RAW_TOOL_NAME,
 ];

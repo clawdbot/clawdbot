@@ -1,12 +1,11 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Guard } from "typebox/guard";
+import type { ToolSearchConfig } from "./tool-search-types.js";
 import {
   MAX_TOOL_SEARCH_BATCH_QUERIES,
   MAX_TOOL_SEARCH_BATCH_QUERY_BYTES,
   MAX_TOOL_SEARCH_BATCH_QUERY_GRAPHEMES,
   MAX_TOOL_SEARCH_RESULTS,
-  type ToolSearchConfig,
-  type ToolSearchRequest,
 } from "./tool-search-types.js";
 import { asToolParamsRecord, ToolInputError } from "./tools/common.js";
 
@@ -20,46 +19,24 @@ export function readToolSearchLimit(value: unknown, config: ToolSearchConfig): n
   return Math.min(value, config.maxSearchLimit);
 }
 
-function readBatchToolSearchQuery(value: unknown, field: string, maxGraphemes?: number): string {
+function readBatchToolSearchQuery(value: unknown, field: string): string {
   if (typeof value !== "string" || !value.trim()) {
     throw new ToolInputError(`${field} must be a non-empty string.`);
   }
   const query = value.trim();
-  if (maxGraphemes !== undefined && !Guard.IsMaxLength(query, maxGraphemes)) {
-    throw new ToolInputError(`${field} must not exceed ${maxGraphemes} characters.`);
+  if (!Guard.IsMaxLength(query, MAX_TOOL_SEARCH_BATCH_QUERY_GRAPHEMES)) {
+    throw new ToolInputError(
+      `${field} must not exceed ${MAX_TOOL_SEARCH_BATCH_QUERY_GRAPHEMES} characters.`,
+    );
   }
   return query;
 }
 
-function readToolSearchArgs(
+export function readToolSearchBatchRequest(
   args: unknown,
   config: ToolSearchConfig,
-): { query: string; limit: number } {
+): Array<{ query: string; limit: number }> {
   const params = asToolParamsRecord(args);
-  const query = params.query;
-  if (typeof query !== "string") {
-    throw new ToolInputError("query must be a string.");
-  }
-  const options = isRecord(params.options) ? params.options : undefined;
-  return {
-    query,
-    limit: readToolSearchLimit(params.limit ?? options?.limit, config),
-  };
-}
-
-export function readToolSearchRequest(args: unknown, config: ToolSearchConfig): ToolSearchRequest {
-  const params = asToolParamsRecord(args);
-  const hasQuery = params.query !== undefined;
-  const hasQueries = params.queries !== undefined;
-  if (hasQuery === hasQueries) {
-    throw new ToolInputError("provide exactly one of query or queries.");
-  }
-  if (hasQuery) {
-    return { kind: "single", search: readToolSearchArgs(params, config) };
-  }
-  if (params.limit !== undefined || params.options !== undefined) {
-    throw new ToolInputError("set limit on each batch query, not on the batch request.");
-  }
   if (!Array.isArray(params.queries) || params.queries.length === 0) {
     throw new ToolInputError("queries must be a non-empty array.");
   }
@@ -73,11 +50,7 @@ export function readToolSearchRequest(args: unknown, config: ToolSearchConfig): 
     if (!isRecord(value)) {
       throw new ToolInputError(`queries[${index}] must be an object.`);
     }
-    const query = readBatchToolSearchQuery(
-      value.query,
-      `queries[${index}].query`,
-      MAX_TOOL_SEARCH_BATCH_QUERY_GRAPHEMES,
-    );
+    const query = readBatchToolSearchQuery(value.query, `queries[${index}].query`);
     try {
       return { query, limit: readToolSearchLimit(value.limit, config) };
     } catch (error) {
@@ -100,5 +73,5 @@ export function readToolSearchRequest(args: unknown, config: ToolSearchConfig): 
       `serialized batch query text may use at most ${MAX_TOOL_SEARCH_BATCH_QUERY_BYTES} UTF-8 bytes.`,
     );
   }
-  return { kind: "batch", searches };
+  return searches;
 }

@@ -48,6 +48,7 @@ import { formatToolSearchControlResult, type ToolSearchRuntime } from "./tool-se
 import {
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
+  TOOL_SEARCH_BATCH_TOOL_NAME,
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
   type ToolSearchCatalogEntry,
@@ -304,6 +305,7 @@ export function applyCodeModeCatalog(params: {
       isCodeModeControlTool(tool) ||
       (tool.name !== TOOL_SEARCH_CODE_MODE_TOOL_NAME &&
         tool.name !== TOOL_SEARCH_RAW_TOOL_NAME &&
+        tool.name !== TOOL_SEARCH_BATCH_TOOL_NAME &&
         tool.name !== TOOL_DESCRIBE_RAW_TOOL_NAME &&
         tool.name !== TOOL_CALL_RAW_TOOL_NAME),
   );

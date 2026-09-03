@@ -28,6 +28,7 @@ import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../../tool-search-types.js";
 import {
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
+  TOOL_SEARCH_BATCH_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
   type ToolSearchCatalogToolExecutor,
 } from "../../tool-search.js";
@@ -222,7 +223,12 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
       controlNames: codeModeControlsEnabledForRun
         ? [CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME]
         : toolSearchConfig.mode === "directory"
-          ? [TOOL_SEARCH_RAW_TOOL_NAME, TOOL_DESCRIBE_RAW_TOOL_NAME, TOOL_CALL_RAW_TOOL_NAME]
+          ? [
+              TOOL_SEARCH_RAW_TOOL_NAME,
+              TOOL_SEARCH_BATCH_TOOL_NAME,
+              TOOL_DESCRIBE_RAW_TOOL_NAME,
+              TOOL_CALL_RAW_TOOL_NAME,
+            ]
           : undefined,
       explicitAllowlistSources: explicitToolAllowlistSources,
     });

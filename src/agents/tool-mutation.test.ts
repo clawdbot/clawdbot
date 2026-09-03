@@ -257,6 +257,7 @@ describe("tool mutation helpers", () => {
       "sessions_search",
       "tool_describe",
       "tool_search",
+      "tool_search_batch",
     ]) {
       expect(isReplaySafeToolCall(toolName, {}), toolName).toBe(true);
     }

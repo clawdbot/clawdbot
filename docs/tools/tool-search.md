@@ -76,10 +76,10 @@ normal policy, approval, hook, logging, and result handling still apply.
 
 - `code`: exposes `tool_search_code`, the default compact JavaScript bridge,
   alongside the capability directory and direct-only tools.
-- `tools`: exposes `tool_search`, `tool_describe`, and `tool_call` as plain
+- `tools`: exposes `tool_search`, `tool_search_batch`, `tool_describe`, and `tool_call` as plain
   structured tools for providers that should not receive code, alongside the
   capability directory and direct-only tools.
-- `directory`: exposes `tool_search`, `tool_describe`, and `tool_call` plus a
+- `directory`: exposes `tool_search`, `tool_search_batch`, `tool_describe`, and `tool_call` plus a
   bounded, cache-stable prompt directory. Core coding primitives, direct-only
   tools, and tools required by the run's delivery policy remain visible; other
   schemas stay deferred.
@@ -111,7 +111,7 @@ Tool Search changes the shape:
 - direct tools: the model sees every selected schema before the first token
 - Tool Search code mode: the model sees one compact code tool, a bounded
   capability directory, a short API contract, and any direct-only tools
-- Tool Search tools mode: the model sees three compact structured fallback
+- Tool Search tools mode: the model sees four compact structured fallback
   tools, the same capability directory, and any direct-only tools
 - Tool Search directory mode: the model sees a bounded directory plus
   search/describe/call controls, policy-required direct tools, and any
@@ -211,11 +211,12 @@ all non-throwing variants or omit it for unstable results. See
 The structured fallback mode exposes the same operations as tools:
 
 - `tool_search`
+- `tool_search_batch`
 - `tool_describe`
 - `tool_call`
 
-`tool_search` accepts either the existing single-query shape or a batch of
-independent queries:
+`tool_search` exposes one provider-portable model-facing request shape: a
+required scalar `query` with an optional `limit`:
 
 ```json
 {
@@ -224,33 +225,36 @@ independent queries:
 }
 ```
 
+Model-facing calls return the compact candidate array directly. Omitted limits
+use `searchDefaultLimit`, and explicit limits may not exceed `maxSearchLimit`.
+The scalar handler canonicalizes calls to these advertised fields, so a
+provider compatibility pass that removes object-closure keywords cannot route
+undeclared batch fields into the scalar parser.
+
+`tool_search_batch` preserves one-call multi-query discovery with its own
+provider-portable request shape. It requires one `queries` array, whose entries
+each carry a `query` and optional `limit`:
+
 ```json
 {
   "queries": [
     { "query": "today's calendar events", "limit": 3 },
-    { "query": "Slack messages needing attention", "limit": 3 }
+    { "query": "messages needing attention", "limit": 3 }
   ]
 }
 ```
 
-Single-query calls continue to return the compact candidate array directly.
-Batch calls return `{ results: [{ query, candidates }] }` in request order. Each
-query uses the same effective catalog, ranking, filtering, and per-query limit
-as an ordinary search; a candidate may appear in more than one result group.
-Descriptions are compacted before output. If the complete batch would exceed
-the 4,000-character response budget, lower-ranked candidates are removed and
-the response includes `truncated: true`. A result group that lost candidates
-also includes `truncated: true`, so an empty truncated group cannot be mistaken
-for a query that had no matches.
-Omitted per-query limits use `searchDefaultLimit`. The effective limits in one
-batch may request at most 50 candidates in total. A batch accepts at most 16
-queries, with at most 512 characters per query and 512 UTF-8 bytes across the
-serialized query list. Invalid batches fail as one request, while a valid query
-with no matches returns an empty `candidates` array.
+The batch tool accepts at most 16 queries and 50 requested candidates, with
+bounded query text and a 4,000-character response budget. It returns
+`{ results: [{ query, candidates }] }` in request order and marks truncated
+groups when candidates must be omitted. Keeping scalar and batch discovery as
+separate tools avoids ambiguous schema-valid states without relying on
+provider-sensitive `anyOf` or `oneOf` constructs.
 
 Directory mode exposes:
 
 - `tool_search`
+- `tool_search_batch`
 - `tool_describe`
 - `tool_call`
 
@@ -377,8 +381,9 @@ Code mode attaches a `telemetry` object to every `tool_search_code` result:
   session, carried across calls rather than reset per call
 
 `tools` and `directory` mode emit no telemetry object; their `tool_search`,
-`tool_describe`, and `tool_call` results carry only the catalog data for that
-operation. OpenClaw does not record serialized tool or prompt byte counts. The
+`tool_search_batch`, `tool_describe`, and `tool_call` results carry only the
+catalog data for that operation. OpenClaw does not record serialized tool or
+prompt byte counts. The
 [E2E scenario](#e2e-validation) measures provider payload bytes separately from
 the mock provider lane, not from the runtime.
 
@@ -413,8 +418,8 @@ The regression proves:
 4. Tool Search exposes only the compact bridge plus any direct-only tools.
 5. The Tool Search request payload is smaller for the large fake catalog.
 6. Session logs show the expected tool-call counts and bridged call telemetry.
-7. Structured mode resolves two queries with one `tool_search` call before the
-   selected plugin tool runs through `tool_call`.
+7. Structured mode resolves scalar or batched queries with `tool_search` or
+   `tool_search_batch` before the selected plugin tool runs through `tool_call`.
 
 ## Failure behavior
 

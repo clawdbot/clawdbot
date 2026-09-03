@@ -15,7 +15,6 @@ import {
   subtractMentionCounts,
   type QaFixtureFetchJsonOptions,
 } from "./fixture-utils.js";
-import { QA_TOOL_SEARCH_SECONDARY_TARGET } from "./providers/mock-openai/mock-openai-tooling.js";
 import {
   qaMockRequestCursorUrl,
   qaMockRequestsAfterUrl,
@@ -617,7 +616,7 @@ export function assertToolSearchLaneResults(params: {
   }
 }
 
-export function assertToolSearchBatchLaneResult(params: {
+export function assertToolSearchStructuredLaneResult(params: {
   tools: LaneResultSummary & Pick<LaneResult, "status" | "providerDeclaredToolNames">;
   targetTool: string;
 }) {
@@ -649,34 +648,18 @@ export function assertToolSearchBatchLaneResult(params: {
       tools.providerPlannedTools.filter((name) => name === "tool_call").length === 1 &&
       tools.providerPlannedTools.indexOf("tool_search") <
         tools.providerPlannedTools.indexOf("tool_call"),
-    `structured lane did not use one batch search followed by one catalog call: ${debug()}`,
+    `structured lane did not use one scalar search followed by one catalog call: ${debug()}`,
   );
-  const batchResult = tools.providerToolSearchResult;
-  const groups =
-    isRecord(batchResult) && Array.isArray(batchResult.results) ? batchResult.results : [];
-  const targetGroup = groups[0];
-  const catalogGroup = groups[1];
+  const candidates = Array.isArray(tools.providerToolSearchResult)
+    ? tools.providerToolSearchResult
+    : [];
   assert(
-    groups.length === 2 &&
-      isRecord(targetGroup) &&
-      targetGroup.query === targetTool &&
-      Array.isArray(targetGroup.candidates) &&
-      targetGroup.candidates.length === 1 &&
-      targetGroup.candidates.some(
+    candidates.length === 1 &&
+      candidates.some(
         (candidate) =>
           isRecord(candidate) && (candidate.name === targetTool || candidate.id === targetTool),
-      ) &&
-      isRecord(catalogGroup) &&
-      catalogGroup.query === QA_TOOL_SEARCH_SECONDARY_TARGET &&
-      Array.isArray(catalogGroup.candidates) &&
-      catalogGroup.candidates.length === 1 &&
-      catalogGroup.candidates.some(
-        (candidate) =>
-          isRecord(candidate) &&
-          (candidate.name === QA_TOOL_SEARCH_SECONDARY_TARGET ||
-            candidate.id === QA_TOOL_SEARCH_SECONDARY_TARGET),
       ),
-    `structured lane did not return both grouped search results: ${debug()}`,
+    `structured lane did not return the target scalar search result: ${debug()}`,
   );
   const toolCallResult = tools.providerToolCallResult;
   const calledTool = isRecord(toolCallResult) ? toolCallResult.tool : undefined;
