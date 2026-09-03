@@ -10,6 +10,7 @@ import {
   installMockGateway,
   pollLocatorText,
   replaceGatewayClient,
+  waitForGatewayRecoveryScope,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
@@ -84,9 +85,8 @@ suite.define(() => {
 
       const request = await gateway.waitForRequest("projects.register");
       expect(request.params).toEqual({ path: repoRoot });
-      await expect.poll(async () => (await gateway.getRequests("projects.list")).length).toBe(2);
       await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("openclaw");
-      expect(await trigger.getAttribute("data-project-id")).toBe("recorded-openclaw");
+      await expect.poll(() => trigger.getAttribute("data-project-id")).toBe("recorded-openclaw");
     } finally {
       await context.close();
     }
@@ -203,7 +203,8 @@ suite.define(() => {
           await expect.poll(() => tooltipTitleText(local)).toBe("Gateway · QA-Gateway");
           const catalogRequests = (await gateway.getRequests("environments.list")).length;
           await page.evaluate(() => window.dispatchEvent(new Event("test-release-recovery-scope")));
-          await gateway.waitForRequest("environments.list", { after: catalogRequests });
+          await waitForGatewayRecoveryScope(page);
+          expect(await gateway.getRequests("environments.list")).toHaveLength(catalogRequests);
           await page.keyboard.press("Escape");
         }
         await page.locator("#new-session-project-trigger").click();

@@ -61,7 +61,7 @@ describe("anthropic session catalog lazy imports", () => {
     expect(catalogImports).toBe(0);
     expect(nodeCommandImports).toBe(0);
     expect(catalogs).toHaveLength(1);
-    expect(nodeCommands).toHaveLength(3);
+    expect(nodeCommands).toHaveLength(4);
     expect(nodePolicies).toHaveLength(1);
 
     await expect(catalogs[0]?.list({ agentId: "main" })).resolves.toEqual([]);

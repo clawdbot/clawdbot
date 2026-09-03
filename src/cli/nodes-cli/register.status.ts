@@ -11,9 +11,8 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../../runtime.js";
 import { shortenHomeInString } from "../../utils.js";
-import { formatCliCommand } from "../command-format.js";
+import { formatPairingApproveCommand } from "../pairing-command-format.js";
 import { parseDurationMs } from "../parse-duration.js";
-import { quoteCliArg } from "../quote-cli-arg.js";
 import { formatConnectionFlagReminder, getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { formatPermissions, parseNodeList, parsePairingList } from "./format.js";
 import { renderPendingPairingRequestsTable } from "./pairing-render.js";
@@ -27,8 +26,6 @@ import type { NodeListNode, NodesRpcOpts, PairedNode } from "./types.js";
 
 type PairedNodeListRow = PairedNode & Partial<NodeListNode>;
 type NodeApprovalState = NonNullable<NodeListNode["approvalState"]>;
-
-const DEFAULT_NODES_RPC_TIMEOUT_MS = 10_000;
 
 function formatVersionLabel(raw: string) {
   const trimmed = raw.trim();
@@ -116,9 +113,9 @@ function formatNodeTerminalLabel(node: { nodeId: string; displayName?: string })
   return sanitizeTerminalText(label);
 }
 
-function formatLastActive(now: number, lastActiveAtMs: unknown): string | null {
-  return typeof lastActiveAtMs === "number" && Number.isFinite(lastActiveAtMs)
-    ? formatTimeAgo(Math.max(0, now - lastActiveAtMs))
+function formatNodeTimeAgo(now: number, timestamp: unknown): string | null {
+  return typeof timestamp === "number" && Number.isFinite(timestamp)
+    ? formatTimeAgo(Math.max(0, now - timestamp))
     : null;
 }
 
@@ -147,19 +144,6 @@ function isPendingApprovalState(
   return state === "pending-approval" || state === "pending-reapproval";
 }
 
-function formatPendingApprovalCommand(raw: unknown, opts: NodesRpcOpts): string | null {
-  const requestId = normalizeOptionalString(raw);
-  if (!requestId) {
-    return null;
-  }
-  const args = ["openclaw", "nodes", "approve", requestId];
-  const timeout = normalizeOptionalString(opts.timeout);
-  if (timeout && timeout !== String(DEFAULT_NODES_RPC_TIMEOUT_MS)) {
-    args.push("--timeout", timeout);
-  }
-  return formatCliCommand(args.map(quoteCliArg).join(" "));
-}
-
 function parseSinceMs(raw: string | undefined, label: string): number | undefined {
   if (raw === undefined) {
     return undefined;
@@ -171,6 +155,23 @@ function parseSinceMs(raw: string | undefined, label: string): number | undefine
   }
 }
 
+function matchesNodeConnectionFilter(
+  node: NodeListNode,
+  connectedOnly: boolean,
+  sinceMs: number | undefined,
+  now: number,
+): boolean {
+  if (connectedOnly && !node.connected) {
+    return false;
+  }
+  // Older gateways lack the recorded lastConnectedAtMs field.
+  const lastConnectedAtMs = node.lastConnectedAtMs ?? node.connectedAtMs;
+  return (
+    sinceMs === undefined ||
+    (typeof lastConnectedAtMs === "number" && now - lastConnectedAtMs <= sinceMs)
+  );
+}
+
 function mergePairedNodeWithEffectiveNode(
   paired: PairedNode | undefined,
   effective: NodeListNode,
@@ -179,7 +180,9 @@ function mergePairedNodeWithEffectiveNode(
     ...paired,
     ...effective,
     createdAtMs: paired?.createdAtMs,
-    lastConnectedAtMs: paired?.lastConnectedAtMs ?? effective.connectedAtMs,
+    // node.list can record a connection newer than the separate pairing snapshot.
+    lastConnectedAtMs:
+      effective.lastConnectedAtMs ?? paired?.lastConnectedAtMs ?? effective.connectedAtMs,
     displayName: effective.displayName ?? paired?.displayName,
     platform: effective.platform ?? paired?.platform,
     version: effective.version ?? paired?.version,
@@ -252,26 +255,9 @@ export function registerNodesStatusCommands(nodes: Command) {
           const tableWidth = getTerminalTableWidth();
           const now = Date.now();
           const nodesLocal = parseNodeList(result);
-          const filtered = nodesLocal.filter((n) => {
-            if (connectedOnly && !n.connected) {
-              return false;
-            }
-            if (sinceMs !== undefined) {
-              // The gateway records lastConnectedAtMs on every node.list row
-              // (max of stored pairing history and live connection); joining a
-              // second pairing-scoped RPC re-derived that fact and made
-              // --last-connected fail for read-scoped callers. connectedAtMs
-              // covers gateways predating the recorded field.
-              const lastConnectedAtMs = n.lastConnectedAtMs ?? n.connectedAtMs;
-              if (typeof lastConnectedAtMs !== "number") {
-                return false;
-              }
-              if (now - lastConnectedAtMs > sinceMs) {
-                return false;
-              }
-            }
-            return true;
-          });
+          const filtered = nodesLocal.filter((node) =>
+            matchesNodeConnectionFilter(node, connectedOnly, sinceMs, now),
+          );
 
           if (opts.json) {
             const ts = typeof obj.ts === "number" ? obj.ts : Date.now();
@@ -295,7 +281,7 @@ export function registerNodesStatusCommands(nodes: Command) {
             const versions = formatNodeVersions(n);
             const pathEnv = formatPathEnv(n.pathEnv, n.platform);
             const client = formatClientLabel(n);
-            const lastActive = formatLastActive(now, n.lastActiveAtMs);
+            const lastActive = formatNodeTimeAgo(now, n.lastActiveAtMs);
             const detailParts = [
               client ? `client: ${client}` : null,
               n.deviceFamily ? `device: ${n.deviceFamily}` : null,
@@ -352,8 +338,11 @@ export function registerNodesStatusCommands(nodes: Command) {
           );
           for (const node of filtered) {
             const approvalState = formatNodeApprovalState(node.approvalState);
-            const approveCommand = formatPendingApprovalCommand(node.pendingRequestId, opts);
-            if (isPendingApprovalState(approvalState) && approveCommand) {
+            const requestId = normalizeOptionalString(node.pendingRequestId);
+            if (isPendingApprovalState(approvalState) && requestId) {
+              const approveCommand = formatPairingApproveCommand("nodes", requestId, {
+                timeout: opts.timeout,
+              });
               const action = approvalState === "pending-reapproval" ? "Reapproval" : "Approval";
               defaultRuntime.log(
                 warn(
@@ -407,9 +396,10 @@ export function registerNodesStatusCommands(nodes: Command) {
             ? obj.pendingDeclaredCommands.map(String).filter(Boolean).toSorted()
             : [];
           const pendingPerms = formatPermissions(obj.pendingDeclaredPermissions);
-          const approveCommand = isPendingApprovalState(approvalState)
-            ? formatPendingApprovalCommand(pendingRequestId, opts)
-            : null;
+          const approveCommand =
+            isPendingApprovalState(approvalState) && pendingRequestId
+              ? formatPairingApproveCommand("nodes", pendingRequestId, { timeout: opts.timeout })
+              : null;
           const connectionReminder = approveCommand ? formatConnectionFlagReminder(opts) : null;
           const family = typeof obj.deviceFamily === "string" ? obj.deviceFamily : null;
           const model = typeof obj.modelIdentifier === "string" ? obj.modelIdentifier : null;
@@ -424,7 +414,7 @@ export function registerNodesStatusCommands(nodes: Command) {
               uiVersion?: string;
             },
           );
-          const lastActive = formatLastActive(Date.now(), obj.lastActiveAtMs);
+          const lastActive = formatNodeTimeAgo(Date.now(), obj.lastActiveAtMs);
 
           const { heading, ok, warn, muted } = getNodesTheme();
           const status = `${paired ? ok("paired") : warn("unpaired")} · ${
@@ -526,28 +516,9 @@ export function registerNodesStatusCommands(nodes: Command) {
             ? parseNodeList(await callNodeDiagnosticsGatewayCli("node.list", opts, {}))
             : await tryReadNodeList(opts);
           const effectivePairedRows = mergePairedNodesWithEffectiveNodes(paired, effectiveNodes);
-          const filteredPaired = effectivePairedRows.filter((node) => {
-            if (connectedOnly) {
-              if (!node.connected) {
-                return false;
-              }
-            }
-            if (sinceMs !== undefined) {
-              const lastConnectedAtMs =
-                typeof node.lastConnectedAtMs === "number"
-                  ? node.lastConnectedAtMs
-                  : typeof node.connectedAtMs === "number"
-                    ? node.connectedAtMs
-                    : undefined;
-              if (typeof lastConnectedAtMs !== "number") {
-                return false;
-              }
-              if (now - lastConnectedAtMs > sinceMs) {
-                return false;
-              }
-            }
-            return true;
-          });
+          const filteredPaired = effectivePairedRows.filter((node) =>
+            matchesNodeConnectionFilter(node, connectedOnly, sinceMs, now),
+          );
           const filteredLabel =
             hasFilters && filteredPaired.length !== effectivePairedRows.length
               ? ` (of ${effectivePairedRows.length})`
@@ -583,23 +554,13 @@ export function registerNodesStatusCommands(nodes: Command) {
           }
 
           if (filteredPaired.length > 0) {
-            const pairedTableRows = filteredPaired.map((n) => {
-              const lastConnectedAtMs =
-                typeof n.lastConnectedAtMs === "number"
-                  ? n.lastConnectedAtMs
-                  : typeof n.connectedAtMs === "number"
-                    ? n.connectedAtMs
-                    : undefined;
-              return {
-                Node: formatNodeTerminalLabel(n),
-                Id: sanitizeTerminalText(n.nodeId),
-                IP: sanitizeTerminalText(n.remoteIp ?? ""),
-                LastConnect:
-                  typeof lastConnectedAtMs === "number"
-                    ? formatTimeAgo(Math.max(0, now - lastConnectedAtMs))
-                    : muted("unknown"),
-              };
-            });
+            const pairedTableRows = filteredPaired.map((n) => ({
+              Node: formatNodeTerminalLabel(n),
+              Id: sanitizeTerminalText(n.nodeId),
+              IP: sanitizeTerminalText(n.remoteIp ?? ""),
+              LastConnect:
+                formatNodeTimeAgo(now, n.lastConnectedAtMs ?? n.connectedAtMs) ?? muted("unknown"),
+            }));
             defaultRuntime.log("");
             defaultRuntime.log(heading("Paired"));
             defaultRuntime.log(

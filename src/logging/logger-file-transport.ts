@@ -172,10 +172,10 @@ function claimQueuedEntries(): FileLogQueueEntry[] {
   return entries;
 }
 
-function rotateIfNeeded(entry: FileLogQueueEntry, cursor: FileCursor, synchronous: boolean): void {
+function prepareWrite(entry: FileLogQueueEntry, cursor: FileCursor, synchronous: boolean): number {
   const payloadBytes = Buffer.byteLength(entry.payload, "utf8");
   if (cursor.bytes === 0 || cursor.bytes + payloadBytes <= entry.maxFileBytes) {
-    return;
+    return payloadBytes;
   }
   if (rotateLogFile(entry.file)) {
     cursor.bytes = 0;
@@ -183,12 +183,12 @@ function rotateIfNeeded(entry: FileLogQueueEntry, cursor: FileCursor, synchronou
   } else {
     warnAboutRotationFailure(entry, synchronous);
   }
+  return payloadBytes;
 }
 
 async function writeEntries(entries: FileLogQueueEntry[], generation: number): Promise<void> {
   const cursors = new Map<string, FileCursor>();
-  let index = 0;
-  while (index < entries.length) {
+  for (let index = 0; index < entries.length; index += 1) {
     if (generation !== drainGeneration || processExiting) {
       return;
     }
@@ -204,8 +204,7 @@ async function writeEntries(entries: FileLogQueueEntry[], generation: number): P
       }
       cursors.set(entry.file, cursor);
     }
-    rotateIfNeeded(entry, cursor, false);
-    const payloadBytes = Buffer.byteLength(entry.payload, "utf8");
+    const payloadBytes = prepareWrite(entry, cursor, false);
     activeAppendInFlight = true;
     try {
       await appendFile({ filePath: entry.file, content: entry.payload });
@@ -216,17 +215,16 @@ async function writeEntries(entries: FileLogQueueEntry[], generation: number): P
       warnAboutAppendFailure(entry, false);
     } finally {
       activeAppendInFlight = false;
+      // Drains share entries; release settled text even while a later append is still pending.
+      entry.payload = "";
     }
     activeIndex = index + 1;
-    index += 1;
   }
 }
 
 function writeEntriesSync(entries: FileLogQueueEntry[]): void {
   const cursors = new Map<string, FileCursor>();
-  let index = 0;
-  while (index < entries.length) {
-    const entry = entries[index];
+  for (const entry of entries) {
     if (!entry) {
       return;
     }
@@ -235,8 +233,7 @@ function writeEntriesSync(entries: FileLogQueueEntry[]): void {
       cursor = { bytes: getCurrentLogFileBytesSync(entry.file) };
       cursors.set(entry.file, cursor);
     }
-    rotateIfNeeded(entry, cursor, true);
-    const payloadBytes = Buffer.byteLength(entry.payload, "utf8");
+    const payloadBytes = prepareWrite(entry, cursor, true);
     try {
       appendRegularFileSync({ filePath: entry.file, content: entry.payload });
       cursor.bytes += payloadBytes;
@@ -245,7 +242,7 @@ function writeEntriesSync(entries: FileLogQueueEntry[]): void {
       // Match the old best-effort transport: a failed append must not stop later records.
       warnAboutAppendFailure(entry, true);
     }
-    index += 1;
+    entry.payload = "";
   }
 }
 
@@ -340,6 +337,8 @@ function enqueueFileLog(entry: FileLogQueueEntry): void {
   if (queue.length >= maxQueuedRecords) {
     const dropped = queue[queueStart];
     if (dropped) {
+      // The overflow marker retains this entry's metadata, so release its discarded text now.
+      dropped.payload = "";
       droppedTarget ??= dropped;
       droppedCount += 1;
     }

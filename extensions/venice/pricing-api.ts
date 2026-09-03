@@ -68,9 +68,8 @@ export function parseVeniceModelPricing(value: unknown): ModelDefinitionConfig["
 export function parseVenicePricingCatalog(
   payload: unknown,
 ): Map<string, ModelDefinitionConfig["cost"]> | undefined {
-  return normalizeModelPricingCatalog(
-    asOptionalRecord(payload)?.data,
-    parseVeniceModelPricing,
-    (model) => (model.type === "text" ? asOptionalRecord(model.model_spec)?.pricing : undefined),
-  );
+  return normalizeModelPricingCatalog(asOptionalRecord(payload)?.data, parseVeniceModelPricing, {
+    readPricing: (model) =>
+      model.type === "text" ? asOptionalRecord(model.model_spec)?.pricing : undefined,
+  });
 }

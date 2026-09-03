@@ -364,14 +364,31 @@ describe("agentCliCommand", () => {
     expect(zeroTimeoutGatewayRequestMs).toBe(2_147_000_000);
   });
 
-  it("rejects a blank agent before selecting a local or Gateway target", async () => {
-    await expect(agentCliCommand({ message: "hi", agent: "" }, runtime)).rejects.toThrow(
-      "--agent must not be blank",
-    );
-
-    expect(callGateway).not.toHaveBeenCalled();
-    expect(agentCommand).not.toHaveBeenCalled();
-  });
+  it.each([
+    ["agent", "--agent"],
+    ["sessionId", "--session-id"],
+    ["sessionKey", "--session-key"],
+    ["to", "--to"],
+  ] as const)(
+    "rejects blank %s selectors before local or Gateway dispatch",
+    async (option, flag) => {
+      await withTempStore(async () => {
+        mockGatewaySuccessReply();
+        for (const local of [false, true]) {
+          for (const value of ["", "   "]) {
+            await expect(
+              agentCliCommand(
+                { message: "hi", to: "agent:main:explicit-target", local, [option]: value },
+                runtime,
+              ),
+            ).rejects.toThrow(`${flag} must not be blank`);
+          }
+        }
+        expect(callGateway).not.toHaveBeenCalled();
+        expect(agentCommand).not.toHaveBeenCalled();
+      });
+    },
+  );
 
   it("clamps oversized gateway timeout seconds at the command boundary", async () => {
     await withTempStore(async () => {

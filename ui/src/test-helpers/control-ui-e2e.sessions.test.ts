@@ -13,6 +13,7 @@ type Controls = {
   resolveDeferred: (method: string, payload?: unknown) => void;
   rejectDeferred: (method: string) => void;
   setMethodResponse: (method: string, payload: unknown) => void;
+  setSessionsListResponse: (payload: { sessions: unknown[] }) => void;
 };
 const flush = () =>
   new Promise<void>((resolve) => {
@@ -143,6 +144,27 @@ it.for(["rows", "static list"])(
   },
 );
 
+it("returns a missing descriptor without materializing an unseeded session", async ({
+  connect,
+}) => {
+  const { request } = await connect({
+    defaultAgentId: "ops",
+    sessionKey: notes.key,
+    sessions: [notes],
+  });
+  const missingKey = "agent:ops:main";
+
+  expect((await request("sessions.describe", { key: missingKey })).payload).toEqual({
+    session: null,
+  });
+  expect((await request("sessions.list")).payload.sessions).toEqual([
+    expect.objectContaining(notes),
+  ]);
+  expect((await request("chat.history", { sessionKey: missingKey })).payload).not.toHaveProperty(
+    "sessionInfo",
+  );
+});
+
 it.for(["cases", "sequence"])(
   "does not invent metadata for %s-only rows",
   async (kind, { connect }) => {
@@ -162,7 +184,6 @@ it.for(["cases", "sequence"])(
             : { sequence: [list, { sessions: [] }] },
       },
     });
-    const identity = { key: row.key, sessionId: row.sessionId };
     for (const method of ["chat.startup", "chat.history"]) {
       // A sessionInfo is a complete row replacement at the UI boundary, not a patch.
       expect((await request(method, { sessionKey: row.key })).payload).not.toHaveProperty(
@@ -170,9 +191,8 @@ it.for(["cases", "sequence"])(
       );
     }
     expect((await request("sessions.list")).payload.sessions).toEqual([row]);
-    expect((await request("sessions.describe", { key: row.key })).payload.session).toEqual(
-      identity,
-    );
+    // Wire-only list responses do not declare a canonical stored row for describe.
+    expect((await request("sessions.describe", { key: row.key })).payload.session).toBeNull();
   },
 );
 
@@ -341,6 +361,39 @@ it("does not commit rejected patches or unresolved deferrals", async ({ connect 
   expect((await request("sessions.list")).payload).toMatchObject({
     sessions: [{ pinned: true, pinnedAt: expect.any(Number) }],
   });
+  const beforeStalePatch = (await request("sessions.list")).payload.sessions;
+  expect(
+    await request("sessions.patch", {
+      key: notes.key,
+      expectedSessionId: "retired-generation",
+      label: "Wrong generation",
+    }),
+  ).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+  expect((await request("sessions.list")).payload.sessions).toEqual(beforeStalePatch);
+  const replacementSessionId = "replacement-generation";
+  controls.setSessionsListResponse({
+    sessions: [{ ...notes, sessionId: replacementSessionId }],
+  });
+  expect(
+    await request("sessions.patch", {
+      key: notes.key,
+      expectedSessionId: replacementSessionId,
+      label: "Replacement label",
+    }),
+  ).toMatchObject({ ok: true });
+  expect((await request("sessions.list")).payload.sessions).toEqual([
+    expect.objectContaining({ sessionId: replacementSessionId, label: "Replacement label" }),
+  ]);
+  for (const method of ["sessions.describe", "chat.history", "chat.startup"]) {
+    const params = method === "sessions.describe" ? { key: notes.key } : { sessionKey: notes.key };
+    expect((await request(method, params)).payload).toEqual(
+      expect.objectContaining(
+        method === "sessions.describe"
+          ? { session: expect.objectContaining({ sessionId: replacementSessionId }) }
+          : { sessionId: replacementSessionId },
+      ),
+    );
+  }
 });
 
 it("replays later commits onto an injected list without adopting its stale generation", async ({
@@ -351,15 +404,58 @@ it("replays later commits onto an injected list without adopting its stale gener
   const stale = { ...notes, archived: false, sessionId: "retired-generation" };
   controls.setMethodResponse("sessions.list", { sessions: [stale] });
   expect((await request("sessions.list")).payload.sessions).toEqual([
-    expect.objectContaining(stale),
+    expect.objectContaining({ ...stale, archived: true }),
   ]);
+  expect(
+    await request("sessions.patch", {
+      key: notes.key,
+      expectedSessionId: stale.sessionId,
+      label: "Wrong generation",
+    }),
+  ).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
   await request("sessions.patch", { key: notes.key, label: "Renamed" });
   expect((await request("sessions.list")).payload.sessions).toEqual([
-    expect.objectContaining({ ...stale, label: "Renamed" }),
+    expect.objectContaining({ ...stale, archived: true, label: "Renamed" }),
   ]);
   expect((await request("sessions.describe", { key: notes.key })).payload).toMatchObject({
     session: { sessionId: notes.sessionId, archived: true, label: "Renamed" },
   });
+});
+
+it("replaces canonical rows and membership without retaining omitted fields", async ({
+  connect,
+}) => {
+  const omitted = { key: "agent:ops:omitted", sessionId: "omitted-generation" };
+  const scenario = { sessions: [notes, omitted] };
+  const { request, controls } = await connect(scenario);
+  await request("sessions.patch", { key: notes.key, color: "purple", label: "Patched" });
+  await request("sessions.create", { key: "agent:ops:materialized", label: "Materialized" });
+  const replacement = { key: notes.key, sessionId: notes.sessionId, label: "Exact replacement" };
+
+  controls.setSessionsListResponse({ sessions: [replacement] });
+
+  const assertReplacement = async (currentRequest: typeof request) => {
+    expect((await currentRequest("sessions.list")).payload.sessions).toEqual([replacement]);
+    expect((await currentRequest("sessions.describe", { key: notes.key })).payload.session).toEqual(
+      replacement,
+    );
+    for (const method of ["chat.history", "chat.startup"]) {
+      expect((await currentRequest(method, { sessionKey: notes.key })).payload).toMatchObject({
+        sessionId: notes.sessionId,
+        sessionInfo: replacement,
+      });
+    }
+    for (const key of [omitted.key, "agent:ops:materialized"]) {
+      expect((await currentRequest("sessions.describe", { key })).payload.session).toBeNull();
+      expect(
+        (await currentRequest("chat.startup", { sessionKey: key })).payload,
+      ).not.toHaveProperty("sessionInfo");
+    }
+  };
+  await assertReplacement(request);
+
+  const reloaded = await connect(scenario);
+  await assertReplacement(reloaded.request);
 });
 
 it("commits only successful patchMany targets", async ({ connect }) => {

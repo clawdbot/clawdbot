@@ -6,6 +6,7 @@ import { selectApplicationSession } from "../app/agent-selection.ts";
 import {
   applicationContext,
   type ApplicationContext,
+  type ApplicationGatewaySnapshot,
   type ApplicationNavigationOptions,
 } from "../app/context.ts";
 import type { CatalogOpenTarget } from "../app/settings.ts";
@@ -29,6 +30,7 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) connected = false;
   @property({ attribute: false }) offline = false;
   @property({ attribute: false }) restartPending = false;
+  @property({ attribute: false }) suspensionPhase: ApplicationGatewaySnapshot["suspensionPhase"];
   @property({ attribute: false }) queuedOutboxCount = 0;
   @property({ attribute: false }) lastError: string | null = null;
   @property({ attribute: false }) outboxAttentionCountForSession = (_sessionKey: string) => 0;
@@ -54,7 +56,9 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
     | ((listener: (progress: UpdateProgress) => void) => () => void)
     | undefined = undefined;
   @property({ attribute: false }) onOpenApprovals?: () => void;
+  @property({ attribute: false }) onOpenPalette?: () => void;
   @property({ attribute: false }) onRetryConnect?: () => void;
+  @property({ attribute: false }) onToggleSidebar?: () => void;
   @property({ attribute: false }) onOpenNewSession?: (
     agentId: string,
     target?: NewSessionTarget,

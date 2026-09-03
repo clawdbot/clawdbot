@@ -31,6 +31,13 @@ availability, Blacksmith control-plane health, and downstream queue drains.
 
 ## Rejected Experiments
 
+- **Hosted Mac exact dependencies (2026-09-01):** The same-head publisher and
+  consumer in [run 33458856298](https://github.com/openclaw/openclaw/actions/runs/33458856298)
+  successfully saved and restored a 1.66-GB dependency archive, but setup took
+  142s versus 86s with the ordinary store cache. Extraction took 82s versus 27s;
+  install improved only from 43s to 35s. Keep hosted Mac jobs on the ordinary
+  store cache. Reconsider only with measured total setup savings, including
+  transfer, extraction and frozen reconciliation, not a successful cache hit.
 - **Actions-artifact checkout (2026-08-16):** Do not recommend replacing the
   shared Blacksmith Git fetch with a preflight-produced workspace or `.git`
   artifact. [PR #124818](https://github.com/openclaw/openclaw/pull/124818)
@@ -177,29 +184,96 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   or standalone admission job. The protected `vitest-cache-warm` workflow
   publishes the immutable semantic dependency archive after setup succeeds,
   before build and transform warming. Preflight and downstream Node jobs are
-  restore-only consumers on eligible self-hosted runners; exact misses and
-  hosted/fork/manual paths use the ordinary pnpm-store cache.
-- Hybrid first attempts route `preflight`, `security-fast`, and `ci-gate` to
-  the existing 4-vCPU Blacksmith runner after measured hosted queue delays.
-  Contributor trust, manual/non-canonical fallbacks, hosted retries, and the
-  `github` outage override remain intact. Budget all three registrations.
+  restore-only consumers on eligible self-hosted runners. Exact misses and
+  hosted paths, including Mac Node jobs, use the ordinary pnpm-store cache.
+- `ci-gate` follows `preflight` routing for every non-`github` value, including
+  the existing 4-vCPU Blacksmith runner, contributor-trust checks, hosted
+  dispatch/retry/fork fallbacks, and non-canonical fallbacks; `security-fast`
+  stays hosted outside eligible hybrid first attempts. This avoids a second
+  hosted assignment wave. Security hooks use pinned installed packages and
+  local hook definitions, without remote Git initialization. The `github` outage override remains
+  intact. Budget two control-job registrations per eligible Blacksmith run and
+  three per eligible hybrid first attempt.
   The aggregate uses `!cancelled()` to report failed prerequisites without
   holding a superseded run open after workflow cancellation.
-- CI matrix caps: fast/check lanes at 12, Node test shards at 28 on Blacksmith
-  and 96 with the GitHub or hybrid planner profile, Windows at 2, and Android
-  at 2. The compact row budgets are 112 for hosted-only GitHub and 96 for
-  hybrid; the higher hosted row budget does not increase concurrency.
+- CI matrix caps: fast/check lanes at 12, Node test shards at 96, Windows at 2,
+  and Android at 2. Every compact profile has an enforced 80-row budget, plugin
+  fallback has a 50-row budget, and the final Node matrix enforces 64 push or
+  120 PR rows, including precise plans. Excess inventory fails preflight.
 - Windows keeps two disjoint file inventories. Jobs requesting the existing
   Blacksmith class admit at most two project processes with one Vitest worker
   each; hosted fallbacks remain serial. Runtime preparation completes before
   project readers start. Native proof must cover available CPUs/RAM, concurrent
   fixture memory and cleanup. This adds no runner registrations.
+- macOS Swift uses two mandatory matrix phases with `max-parallel: 2`:
+  release compilation and the complete shared/app test workload. This adds one
+  registration per eligible Blacksmith native run: up to four across the two
+  active and two pending main slots, plus one for each eligible trusted PR.
+  Build caches are phase-owned; only the release phase writes the shared
+  SwiftPM dependency cache.
+- iOS Release, Debug/simulator tests, and both screenshot shards always use
+  `macos-26`. Repeated Blacksmith admission stalls were recovered by the same
+  hosted image; do not require a failed first attempt to select that capacity.
+  The current non-Node inventory is 85 rows, or 86 for historical UI targets.
+  Excluding those four hosted rows leaves at most 82 potentially eligible jobs.
+  The enforced Node caps therefore give 146 registrations per main run and
+  202 per PR: `4 × 146 + 21 × 202 = 4,826` in the retained peak arrival
+  envelope. The old 19-arrival estimate is obsolete. The remaining 1,174 below
+  the 6,000 reference target must cover adjacent repositories, releases and
+  carryover; the bounded 2026-09-02 census did not prove that upper bound.
+  Treat a single PR concurrency trial separately from a global rollout.
+  A shared-token quota response does not establish organization-wide usage.
+  Budget all six npm qualification jobs and the actual full-release children;
+  ordinary manual check rows can still use Blacksmith outside hybrid mode.
 - Canonical PR Node tests use one precise changed-target job when possible;
-  broad, deleted, unknown, or planner-failed changes fall back to the compact
-  full-suite plan. Targeted plans retain the full built-artifact
+  broad, deleted or unknown changes fall back to the compact full-suite plan
+  plus affected plugin coverage. Current PR planner errors fail preflight.
+  Targeted plans retain the full built-artifact
   boundary gate. `main` uses compact integration; manual and release runs use
   full named shards.
+- The combined Node matrix admits compact and plugin descriptors by estimated
+  duration within the same cap. Catch-all, QA and provider configs use the
+  existing 90-file job budget with native Vitest sharding; retain complete
+  config discovery, exclusions and process isolation. Count every appended
+  plugin row, including the five added QA/provider rows, in the burst envelope.
+- Plugin fallback pairs retain separate child processes, including process-bounded
+  configs. Their budget remains 150 predicted seconds while expanded compact
+  jobs use 210. Runtime preparation stays separate; no process/file/worker
+  limits are relaxed. The complete supplemental boundary list runs in one job
+  with four concurrent checks and one full-root focused-rule scan.
+- Measured Blacksmith chat/session, Gateway core-3 and infrastructure storage/state
+  outliers reuse the existing file splitter. Preserve serial execution, worker
+  pins and complete timing-history floors; no blanket increase in sharding.
+- Blacksmith compact bins with multiple ordinary groups request the existing
+  32-vCPU class and two child slots while retaining their logical names, 200/276s
+  packing and complete inventories. Exclusive groups and jobs with runtime
+  preparation stay serial. The canonical shard executor admits two CI children
+  only with at least eight available CPUs and 24 GiB actual memory; otherwise it
+  admits one. Inner project parallelism stays one and each child keeps two
+  Vitest workers. Hosted and hybrid plans remain serial. This adds no jobs;
+  elapsed time, peak memory and cleanup still need native proof.
+- The whole Blacksmith agent-support group requests `blacksmith-32vcpu-ubuntu-2404`.
+  Its file inventory and resource-derived worker policy remain unchanged.
+- Numbered Blacksmith tooling bins request the same 32-vCPU class after packing.
+  Keep their logical classes, names, file inventories, serial project/file
+  execution and two-worker pins. This adds no jobs and does not promote hosted
+  or hybrid tooling. The native two-CPU/8-GB tails require a larger-host timing
+  comparison; capacity alone is not a measured speedup.
+- The Docker seed job requests `blacksmith-32vcpu-ubuntu-2404`; its weighted
+  scheduler and serial declaration compiler policy stay unchanged.
+- Eligible Control UI E2E rows request the 32-vCPU class, retaining the same
+  backend/event/contributor routing, twelve current shards and two/one-worker
+  project limits. The browser-extension row stays on 8 and real-Gateway on 16.
+  The measured two-CPU UI tails require native timing on the larger class;
+  this adds no registrations and does not refresh stale timing weights.
 - `build-artifacts` on `blacksmith-32vcpu-ubuntu-2404`.
+- CPU-heavy test-type, core test-type stripe, runtime-topology, and npm preflight
+  jobs request `blacksmith-32vcpu-ubuntu-2404`. The 2026-09-01 x64 probe
+  [run 33538827388](https://github.com/openclaw/openclaw/actions/runs/33538827388)
+  measured requested 8/16/32 labels delivering 2/4/8 CPUs respectively. Treat
+  larger requests as a measured capacity workaround, never as worker counts.
+  Keep existing routing, fanout, and resource-based worker limits; reassess
+  sizing after provider allocation changes. See `docs/ci.md` for the full table.
 - lower-weight Node/check shards on `blacksmith-4vcpu-ubuntu-2404`.
 - heavy retained Linux/Android shards on `blacksmith-8vcpu-ubuntu-2404`.
 - CodeQL Critical Quality on `ubuntu-24.04` with no `blacksmith-` labels.

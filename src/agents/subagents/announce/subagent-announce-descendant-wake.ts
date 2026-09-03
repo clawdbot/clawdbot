@@ -111,7 +111,9 @@ export async function runDescendantWake(params: {
             idempotencyKey: buildAnnounceIdempotencyKey(`${params.announceId}:wake`),
           },
           {
+            cancelOnDeadline: true,
             operatorRoleActor: { kind: "system" },
+            signal: params.signal,
             timeoutMs: announceTimeoutMs,
             resolveGatewayContext: params.resolveGatewayContext,
           },

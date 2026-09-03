@@ -245,6 +245,14 @@ Camera devices must be readable by the service user, commonly through the `video
 
 `camera.snap` and `camera.clip` also require explicit Gateway arming through `gateway.nodes.commands.allow`. See [Camera capture](/nodes/camera) and [Location command](/nodes/location-command) for payloads, limits, and errors.
 
+## Retired Linux Canvas
+
+The bundled Linux Canvas bridge and its desktop Canvas window have been removed.
+For inline widgets in the Control UI, use [`show_widget`](/tools/show-widget).
+The separate [macOS widget panel](/platforms/mac/canvas) requires a connected
+Mac and is render-only. These widget surfaces do not restore the former Linux
+Canvas bridge or its A2UI push commands.
+
 ## Install
 
 - [Getting Started](/start/getting-started)
@@ -322,6 +330,7 @@ Covered child process surfaces:
 - Supervisor-managed command children
 - PTY shell children
 - MCP stdio server children
+- Managed local model and embedding service children
 - OpenClaw-launched browser/Chrome processes (via the plugin SDK process runtime)
 
 The wrapper is Linux-only and skipped when `/bin/sh` is unavailable, or when
@@ -330,6 +339,13 @@ the child env sets `OPENCLAW_CHILD_OOM_SCORE_ADJ` to `0`, `false`, `no`, or
 Use this opt-out only for controlled diagnosis: it removes child-first OOM
 protection and makes the Gateway more likely to be selected as the victim under
 real memory pressure.
+
+Managed local model and embedding services fall back to direct spawn when their
+effective environment defines `SHELLOPTS`, `BASHOPTS`, a `BASH_FUNC_*` key, or
+a reserved `OC_INTERNAL_OOM_EXEC_{BASH_ENV,ENV,CDPATH,PS4}` carrier. Exact
+environment fidelity and shell startup safety take precedence in these cases,
+so OpenClaw does not attempt to change `oom_score_adj`; use the verification
+below to check the child's effective value.
 
 Verify a child process:
 

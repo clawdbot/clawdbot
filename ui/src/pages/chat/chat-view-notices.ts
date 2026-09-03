@@ -92,12 +92,12 @@ function renderErrorNotice(
         ? html`<details class="chat-error__content">
             <summary class="chat-error__summary">
               <strong>${summary}</strong>
-              <span>${t("chat.errorDetails")}</span>
+              <span>${t("chat.details")}</span>
               <span class="chat-error__chevron" aria-hidden="true">${icons.chevronDown}</span>
+              ${renderCopyButton(error, t("chat.copyError"))}
             </summary>
             <pre class="chat-error__diagnostic" tabindex="0" aria-label=${t("chat.errorDetails")}>
 ${displayError}</pre>
-            ${renderCopyButton(error, t("chat.copyError"))}
           </details>`
         : html`<span class="chat-error__content"
             ><strong>${summary}</strong>${renderCopyButton(error, t("chat.copyError"))}</span

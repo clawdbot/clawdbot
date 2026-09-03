@@ -22,8 +22,10 @@ import {
 } from "./crabbox-worker-profile.js";
 import { createCrabboxWorkerProvider, resolveOpenClawRoot } from "./crabbox-worker-provider.js";
 import {
+  CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS,
   CRABBOX_LIFECYCLE_TIMEOUT_MS,
   CRABBOX_MACHINE_CATALOG_TIMEOUT_MS,
+  CRABBOX_STOP_TIMEOUT_MS,
   resolveCrabboxProvisionBaseTimeoutMs,
 } from "./crabbox-worker-timeouts.js";
 
@@ -1963,25 +1965,25 @@ describe("Crabbox worker provider", () => {
   });
 
   const provisionTimeoutCases = [
-    { name: "normal without setup", profile: { ...PROFILE }, minutes: 72 },
+    { name: "normal without setup", profile: { ...PROFILE }, minutes: 84 },
     {
       name: "normal with setup",
       profile: { ...PROFILE, setup: "install-node" },
-      minutes: 87,
+      minutes: 99,
     },
-    { name: "desktop without setup", profile: { ...PROFILE, desktop: true }, minutes: 137 },
+    { name: "desktop without setup", profile: { ...PROFILE, desktop: true }, minutes: 149 },
     {
       name: "desktop with setup",
       profile: { ...PROFILE, desktop: true, setup: "install-node" },
-      minutes: 152,
+      minutes: 164,
     },
   ] satisfies Array<{ name: string; profile: WorkerProfile; minutes: number }>;
   it.each(provisionTimeoutCases)(
-    "includes warmup, lifecycle, setup, and node enrollment for $name",
+    "includes provision phases and cleanup for $name",
     ({ profile, minutes }) => {
       const provider = providerWithRunner(async () => commandResult());
 
-      expect(provider.resolveProvisionTimeoutMs?.(profile)).toBe(minutes * 60_000 + 30_000);
+      expect(provider.resolveProvisionTimeoutMs?.(profile)).toBe(minutes * 60_000 + 15_000);
     },
   );
 
@@ -2078,7 +2080,7 @@ describe("Crabbox worker provider", () => {
         provider: providerId,
         desktop: true,
       }),
-    ).toBe(137 * 60_000 + 30_000);
+    ).toBe(149 * 60_000 + 15_000);
     expect(setupOrder).toEqual(["desktop", "enrollment"]);
   });
 
@@ -2325,19 +2327,19 @@ describe("Crabbox worker provider", () => {
       providerId: "aws",
       warmupTimeoutMs: 50 * 60_000,
       lifecycleTimeoutMs: 60_000,
-      provisionTimeoutMs: 72 * 60_000 + 30_000,
+      provisionTimeoutMs: 84 * 60_000 + 15_000,
     },
     {
       providerId: "hetzner",
       warmupTimeoutMs: 50 * 60_000,
       lifecycleTimeoutMs: 60_000,
-      provisionTimeoutMs: 72 * 60_000 + 30_000,
+      provisionTimeoutMs: 84 * 60_000 + 15_000,
     },
     {
       providerId: "machine0",
       warmupTimeoutMs: 50 * 60_000,
       lifecycleTimeoutMs: 5 * 60_000,
-      provisionTimeoutMs: 81 * 60_000 + 30_000,
+      provisionTimeoutMs: 93 * 60_000 + 15_000,
     },
   ])(
     "runs one fixed $providerId warmup, ignores its output, and inspects only the canonical id",
@@ -2427,7 +2429,7 @@ describe("Crabbox worker provider", () => {
       await expect(provider.destroy(lease)).resolves.toBeUndefined();
       expect(calls.slice(3).map(({ argv, options }) => [argv[1], options.timeoutMs])).toEqual([
         ["inspect", lifecycleTimeoutMs],
-        ["stop", 310_000],
+        ["stop", CRABBOX_STOP_TIMEOUT_MS],
       ]);
     },
   );
@@ -2539,8 +2541,11 @@ describe("Crabbox worker provider", () => {
           }),
         ).rejects.toMatchObject({ code: "cleanup_indeterminate", leaseId: LEASE_ID });
 
-        expect(cleanupTimeoutMs).toBe(310_000);
-        expect(provider.resolveProvisionTimeoutMs?.(profile)).toBe(elapsedMs);
+        expect(cleanupTimeoutMs).toBe(CRABBOX_STOP_TIMEOUT_MS);
+        // This fresh failed enrollment has no heartbeat to drain; replays can have one.
+        expect(provider.resolveProvisionTimeoutMs?.(profile)).toBe(
+          elapsedMs + CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS,
+        );
       } finally {
         now.mockRestore();
       }

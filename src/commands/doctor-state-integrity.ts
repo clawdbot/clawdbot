@@ -67,6 +67,7 @@ import {
   runPluginSessionStateDoctorRepairs,
 } from "./doctor-session-state-providers.js";
 import { countLabel } from "./doctor-state-integrity-format.js";
+import { collectRetainedUnconfiguredAgentDatabaseWarnings } from "./doctor-unconfigured-agent-databases.js";
 
 const STATE_INTEGRITY_CHECK_ID = "core/doctor/state-integrity";
 
@@ -320,39 +321,6 @@ function countJsonlLines(filePath: string): number {
   } finally {
     fs.closeSync(fd);
   }
-}
-
-function findOtherStateDirs(stateDir: string): string[] {
-  const resolvedState = path.resolve(stateDir);
-  const roots =
-    process.platform === "darwin" ? ["/Users"] : process.platform === "linux" ? ["/home"] : [];
-  const found: string[] = [];
-  for (const root of roots) {
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(root, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const entry of entries) {
-      if (!entry.isDirectory()) {
-        continue;
-      }
-      if (entry.name.startsWith(".")) {
-        continue;
-      }
-      const candidates = [".openclaw"].map((dir) => path.resolve(root, entry.name, dir));
-      for (const candidate of candidates) {
-        if (candidate === resolvedState) {
-          continue;
-        }
-        if (existsDir(candidate)) {
-          found.push(candidate);
-        }
-      }
-    }
-  }
-  return found;
 }
 
 function isPathUnderRoot(targetPath: string, rootPath: string): boolean {
@@ -1259,20 +1227,12 @@ export async function noteStateIntegrity(
     }
   }
 
-  const extraStateDirs = new Set<string>();
-  if (path.resolve(stateDir) !== path.resolve(defaultStateDir)) {
-    if (existsDir(defaultStateDir)) {
-      extraStateDirs.add(defaultStateDir);
-    }
-  }
-  for (const other of findOtherStateDirs(stateDir)) {
-    extraStateDirs.add(other);
-  }
-  if (extraStateDirs.size > 0) {
+  // Compare only the effective home's default; other accounts do not share this history.
+  if (path.resolve(stateDir) !== path.resolve(defaultStateDir) && existsDir(defaultStateDir)) {
     warnings.push(
       [
         "- Multiple state directories detected. This can split session history.",
-        ...Array.from(extraStateDirs).map((dir) => `  - ${shortenHomePath(dir)}`),
+        `  - ${shortenHomePath(defaultStateDir)}`,
         `  Active state dir: ${displayStateDir}`,
       ].join("\n"),
     );
@@ -1288,6 +1248,9 @@ export async function noteStateIntegrity(
         `  Restore the missing agents.list entries or remove stale dirs after confirming they are no longer needed: ${shortenHomePath(path.join(stateDir, "agents"))}`,
       ].join("\n"),
     );
+  }
+  if (stateDirExists) {
+    warnings.push(...collectRetainedUnconfiguredAgentDatabaseWarnings({ cfg, env }));
   }
 
   const compatibilityAgentId = resolveSessionStoreCompatibilityAgentId(cfg);

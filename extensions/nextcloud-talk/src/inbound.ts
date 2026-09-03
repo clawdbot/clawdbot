@@ -15,6 +15,7 @@ import {
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
+import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -47,24 +48,6 @@ type NextcloudTalkRoomMatch = ReturnType<typeof resolveNextcloudTalkRoomMatch>;
 
 function hasAllowEntries(entries: string[]): boolean {
   return normalizeNextcloudTalkAllowlist(entries).length > 0;
-}
-
-function resolveNextcloudTalkSlashCommandBody(rawBody: string): string {
-  // Talk wraps user text in a structured payload. Decode only slash commands so
-  // agent/history text keeps the authoritative payload and its rich-object metadata.
-  if (!rawBody.startsWith("{")) {
-    return rawBody;
-  }
-  try {
-    const structuredBody: unknown = JSON.parse(rawBody);
-    if (!isRecord(structuredBody) || !Object.hasOwn(structuredBody, "parameters")) {
-      return rawBody;
-    }
-    const message = typeof structuredBody.message === "string" ? structuredBody.message.trim() : "";
-    return message.startsWith("/") ? message : rawBody;
-  } catch {
-    return rawBody;
-  }
 }
 
 function roomRoutes(params: {
@@ -187,7 +170,14 @@ export async function handleNextcloudTalkInbound(params: {
     cfg: config as OpenClawConfig,
     surface: CHANNEL_ID,
   });
-  const commandBody = resolveNextcloudTalkSlashCommandBody(rawBody);
+  // Talk encodes message text and rich parameters inside object.content. Keep
+  // the raw payload for the agent; command detection and execution share decoded text.
+  const structuredBody = rawBody.startsWith("{") ? safeParseJson<unknown>(rawBody) : undefined;
+  const structuredText =
+    isRecord(structuredBody) && Object.hasOwn(structuredBody, "parameters")
+      ? normalizeOptionalString(structuredBody.message)
+      : undefined;
+  const commandBody = structuredText?.startsWith("/") ? structuredText : rawBody;
   const hasControlCommand = core.channel.text.hasControlCommand(
     commandBody,
     config as OpenClawConfig,

@@ -515,9 +515,9 @@ describe("delivery-queue storage", () => {
           availableAt: originalExpiry,
         });
         await expect(renewDeliveryPlatformSendLease(id, stateDir, claimId)).resolves.toBe(
-          Date.now() + 30_000,
+          Date.now() + 60_000,
         );
-        expect(readQueuedEntry(stateDir, id).availableAt).toBe(Date.now() + 30_000);
+        expect(readQueuedEntry(stateDir, id).availableAt).toBe(Date.now() + 60_000);
       } finally {
         vi.useRealTimers();
       }

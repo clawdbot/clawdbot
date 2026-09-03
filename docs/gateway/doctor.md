@@ -157,7 +157,7 @@ Flags:
   </Accordion>
   <Accordion title="Config and migrations">
     - Config normalization for legacy value shapes.
-    - Safe migration of legacy default HTTPS Tailscale Serve routes from a LAN-bound Gateway to managed loopback ingress. Retired named-Service config is removed with managed ingress disabled until the operator chooses a device route; custom external routes receive manual guidance.
+    - Inspection of legacy default HTTPS Tailscale Serve routes from a LAN-bound Gateway. Doctor does not change these routes because status shape cannot prove ownership; after confirming a stale route, clear only its root handler and configure managed loopback ingress manually. Retired named-Service config is removed with managed ingress disabled until the operator chooses a device route; custom external routes receive manual guidance.
     - Talk config migration from legacy flat `talk.*` fields into `talk.provider` + `talk.providers.<provider>`.
     - Browser migration checks for legacy Chrome extension configs, owned native-bootstrap registration drift, and Chrome MCP readiness.
     - OpenCode provider override warnings (`models.providers.opencode` / `opencode-zen` / `opencode-go`).
@@ -253,6 +253,8 @@ That stages grounded durable candidates into the short-term dreaming store while
     Startup does not migrate configs using `$include`, configs in Nix mode, or configs last written by a newer OpenClaw version. It also skips automatic config migration while an update is in progress and plugin validation is deferred; the post-update doctor run owns that repair. If any validation or legacy-key issue remains after migration, startup leaves the config unchanged, refuses to start, and prints the `openclaw doctor --fix` hint. An interactive terminal can still offer to run doctor and retry once for configs that need other repairs; headless services stop with the hint.
 
     Other commands that encounter legacy keys still ask you to run `openclaw doctor`. Doctor explains the issues, shows its migrations, and rewrites `~/.openclaw/openclaw.json` with the updated schema. Cron job store migrations are also handled by `openclaw doctor --fix`; automatic config-key migration does not import legacy session stores or repair services.
+
+    Per-agent migrations apply to both keyed `agents.entries` and legacy `agents.list` rosters, including rosters that already set `agents.ownership: "explicit"`. For example, Doctor preserves an agent's legacy `memorySearch` settings under `memory.search` and converts `sandbox.perSession` to `sandbox.scope`. Existing values at the current config paths take precedence.
 
     <Note>
       Doctor only carries automatic migrations for roughly two months after a
@@ -356,10 +358,20 @@ That stages grounded durable candidates into the short-term dreaming store while
       destinations instead of claiming those legacy values were moved.
     </Note>
 
+    Per-agent `memorySearch` migrations work with both old `agents.list` rosters and keyed `agents.entries`. Doctor preserves explicit `memory.search` settings when merging legacy values, including environment references moved to the new paths. When repairs affect only per-agent settings, single-file agent includes stay in their included file.
+
+    The retired `tools.message.allowCrossContextSend` flag migrates at both root and per-agent scopes. Doctor preserves the effective cross-context permissions, including an agent's `false` override of a root `true` flag.
+
     Account-default guidance for multi-account channels:
 
     - If two or more `channels.<channel>.accounts` entries are configured without `channels.<channel>.defaultAccount` or `accounts.default`, doctor warns that fallback routing can pick an unexpected account.
     - If `channels.<channel>.defaultAccount` is set to an unknown account ID, doctor warns and lists configured account IDs.
+
+    In multi-agent configs, `doctor --fix` adds a missing account-scoped routing
+    binding when all matchable narrower bindings for that channel/account explicitly
+    name one configured agent. Existing routes remain unchanged. Accounts with no
+    owner evidence or conflicting owners need an explicit binding; Doctor does
+    not infer their owner from roster order or another channel/account.
 
   </Accordion>
   <Accordion title="2b. OpenCode provider overrides">
@@ -427,7 +439,7 @@ That stages grounded durable candidates into the short-term dreaming store while
 
     Legacy session-file import and repair belong to explicit Doctor runs. Gateway and local CLI startup use SQLite; they do not import, restore, or rewrite session JSON/JSONL files. When startup finds a legacy session store, it refuses readiness and prints the Doctor command for the active profile instead of serving empty history. Stop the Gateway, back up its state, and run `openclaw doctor --fix` before restarting it to upgrade old session history. The [targeted migration sequence](/cli/doctor#session-sqlite-migration) provides inspection and validation evidence. Current SQLite maintenance does not require legacy files to remain on disk.
 
-    Doctor reports individual channel migration-plan failures while continuing plans for unrelated sources, including those from the same plugin. Plans sharing the failed source are deferred, and source cleanup waits for its last consumer to finish without reported failures or incomplete imports. A startup migration warning still blocks Gateway readiness; resolve the reported failure and run `openclaw doctor --fix` before retrying startup.
+    Doctor reports individual channel migration-plan failures while continuing plans for unrelated sources, including those from the same plugin. Plans sharing the failed source are deferred, and source cleanup waits for its last consumer to finish without reported failures or incomplete imports. Advisory startup migration warnings allow the Gateway to start degraded. Startup logs the warnings once with the exact repair command; `openclaw status` and `openclaw doctor` show the running Gateway's warning report. Run `openclaw doctor --fix` against the same state/config, then restart the Gateway. Warning-bearing work is not marked complete and is retried on a later startup. Migration errors that leave required state unsafe to read, including failed shared-schema repair, still refuse startup.
 
     Doctor emits warnings when migrations leave legacy folders behind as backups. WhatsApp auth is intentionally only migrated via `openclaw doctor`. Talk provider/provider-map normalization compares by structural equality, so key-order-only diffs no longer trigger repeat no-op `doctor --fix` changes.
 
@@ -475,7 +487,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     - **Session directory permissions**: checks existing session and store directories for writability. Missing archive directories are healthy on fresh profiles and are created when needed.
     - **Legacy transcript mismatch**: warns when recent legacy session entries have missing transcript files. SQLite-owned sessions do not require archived JSONL files.
     - **Legacy main session "1-line JSONL"**: flags when an unimported main transcript has only one line (history was not accumulating).
-    - **Multiple state dirs**: warns when multiple `~/.openclaw` folders exist across home directories, or when `OPENCLAW_STATE_DIR` points elsewhere (history can split between installs).
+    - **Multiple state dirs**: warns when the active state directory differs from the effective home's default `~/.openclaw` directory and that default exists (history can split between installs). The effective home honors `OPENCLAW_HOME`, `HOME`, and `USERPROFILE`; Doctor does not enumerate other accounts' home directories.
     - **Remote mode reminder**: if `gateway.mode=remote`, doctor reminds you to run it on the remote host (the state lives there).
     - **Config file permissions**: warns if `~/.openclaw/openclaw.json` is group/world readable and offers to tighten to `600`.
 
@@ -501,6 +513,8 @@ That stages grounded durable candidates into the short-term dreaming store while
 
     Doctor can also reinstall missing downloadable plugins when config references them but the local plugin registry cannot find them (material `plugins.entries`, configured channel/provider/search settings, configured agent runtimes). During package updates, doctor avoids reinstalling plugin packages while the core package is being swapped; run `openclaw doctor --fix` again after the update if a configured plugin still needs recovery. Outside the container image startup exception below, gateway startup and config reload do not run package repair; plugin installs remain explicit doctor/install/update work.
 
+    Doctor also refreshes stale official runtime plugins that are bound to the current OpenClaw release cohort. This repair uses the declared current target on the recorded registry and verifies that artifact independently of the old installation. An existing exact npm pin becomes the exact replacement version; ordinary missing-plugin repairs preserve the recorded target and integrity. Capability consent still applies.
+
     Containerized gateway startup has a narrow upgrade exception: when `openclaw gateway run` starts on a new OpenClaw version, it runs safe state migrations and the existing post-core plugin convergence before readiness, then records a per-version checkpoint. This startup pass can clean stale bundled-plugin records, repair local plugin links, reinstall configured plugin packages when the convergence path requires it, and check active plugin payloads. If startup cannot repair safely, run the same image once with `openclaw doctor --fix` against the same mounted state/config before restarting the container normally.
 
   </Accordion>
@@ -524,6 +538,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     - paired records missing an active token for an approved role
     - paired tokens whose scopes drift outside the approved pairing baseline
     - local cached device-token entries for the current machine that predate a gateway-side token rotation or carry stale scope metadata
+    - a retired `identity/device-auth.json` file that is still present and blocks inspection of locally cached tokens, including in remote Gateway mode; stop the Gateway and run `openclaw doctor --fix` to finish migration or cleanup
 
     Doctor does not auto-approve pair requests or auto-rotate device tokens. It prints the exact next steps:
 
@@ -537,6 +552,13 @@ That stages grounded durable candidates into the short-term dreaming store while
   </Accordion>
   <Accordion title="9. Security warnings">
     Doctor emits a Security note only when it finds a warning, such as a provider open to DMs without an allowlist or a dangerously configured policy. Use `openclaw security audit` for the full security inventory.
+
+    Missing multi-agent DM routing ownership is reported as a finding. It does
+    not stop the remaining channel security checks or pending state migrations.
+    Configure the reported account binding before expecting that route to work.
+    Telegram account discovery preserves the legacy default-agent account choice
+    during upgrade previews without requiring an ambient agent.
+
   </Accordion>
   <Accordion title="10. systemd linger (Linux)">
     If running as a systemd user service, doctor ensures lingering is enabled so the gateway stays alive after logout.
@@ -598,7 +620,7 @@ That stages grounded durable candidates into the short-term dreaming store while
 
     Use `openclaw memory status --deep` to verify embedding readiness at runtime.
 
-    Embedding-provider readiness is a health check, not a state migration. Gateway startup does not initialize memory embedding providers during migration preflight, so auth-profile SecretRefs can activate afterward. If embeddings remain unavailable, memory sync preserves an existing semantic index rather than replacing it with FTS-only data. Genuine migration warnings still block Gateway readiness.
+    Embedding-provider readiness is a health check, not a state migration. Gateway startup does not initialize memory embedding providers during migration preflight, so auth-profile SecretRefs can activate afterward. If embeddings remain unavailable, memory sync preserves an existing semantic index rather than replacing it with FTS-only data. Migration warnings allow degraded startup; errors that leave required state unsafe to read still block Gateway readiness.
 
   </Accordion>
   <Accordion title="14. Channel status warnings">

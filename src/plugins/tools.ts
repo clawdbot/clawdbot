@@ -1,14 +1,8 @@
 /** Builds agent tools registered by plugins, preserving plugin scope around callbacks and descriptors. */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  normalizeUniqueStringEntries,
-  uniqueStrings,
-} from "@openclaw/normalization-core/string-normalization";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../agents/glob-pattern.js";
-import {
-  DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
-  normalizeToolPolicyName,
-} from "../agents/tool-policy.js";
+import { normalizeToolPolicyName } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { normalizeConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -49,7 +43,7 @@ import {
   type PluginToolDescriptorConfigCacheKeyMemo,
   writeCachedPluginToolDescriptors,
 } from "./tool-descriptor-cache.js";
-import { isPluginToolAllowed } from "./tool-grant-allowlist.js";
+import { createPluginToolAllowlist, type PluginToolAllowlist } from "./tool-grant-allowlist.js";
 import { copyPluginToolMeta, setPluginToolMeta } from "./tool-metadata.js";
 import type { OpenClawPluginToolContext } from "./types.js";
 
@@ -244,10 +238,6 @@ function blocksHostRestrictedConversationReadRegistration(params: {
   );
 }
 
-function normalizeAllowlist(list?: string[]) {
-  return new Set(normalizeUniqueStringEntries((list ?? []).map(normalizeToolPolicyName)));
-}
-
 function normalizeDenylist(list?: string[]) {
   return compileGlobPatterns({
     raw: list,
@@ -279,10 +269,6 @@ function denylistBlocksPluginTool(params: {
     denylistBlocksPlugin({ pluginId: params.pluginId, denylist: params.denylist }) ||
     denylistBlocksName(params.toolName, params.denylist)
   );
-}
-
-function allowlistIncludesDefaultPluginTools(allowlist: Set<string>): boolean {
-  return allowlist.size === 0 || allowlist.has(DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY);
 }
 
 function isManifestToolOptional(plugin: PluginManifestRecord, toolName: string): boolean {
@@ -322,48 +308,6 @@ function isTrustedManifestLocalMediaTool(params: {
     params.manifestPlugin?.origin === "bundled" &&
     params.manifestPlugin.contracts?.tools?.includes(params.toolName) === true
   );
-}
-
-function isOptionalToolAllowed(params: {
-  toolName: string;
-  pluginId: string;
-  allowlist: Set<string>;
-}): boolean {
-  if (params.allowlist.size === 0) {
-    return false;
-  }
-  if (params.allowlist.has("*")) {
-    return true;
-  }
-  if (isPluginToolAllowed(params.allowlist, params.pluginId, params.toolName)) {
-    return true;
-  }
-  const pluginKey = normalizeToolPolicyName(params.pluginId);
-  if (params.allowlist.has(pluginKey)) {
-    return true;
-  }
-  return params.allowlist.has("group:plugins");
-}
-
-function isOptionalToolEntryPotentiallyAllowed(params: {
-  names: readonly string[];
-  pluginId: string;
-  allowlist: Set<string>;
-}): boolean {
-  if (params.allowlist.size === 0) {
-    return false;
-  }
-  if (params.allowlist.has("*")) {
-    return true;
-  }
-  const pluginKey = normalizeToolPolicyName(params.pluginId);
-  if (params.allowlist.has(pluginKey) || params.allowlist.has("group:plugins")) {
-    return true;
-  }
-  if (params.names.length === 0) {
-    return true;
-  }
-  return params.names.some((name) => isPluginToolAllowed(params.allowlist, params.pluginId, name));
 }
 
 function readPluginToolName(tool: unknown): string {
@@ -546,34 +490,29 @@ function pluginToolNamesMatchAllowlist(params: {
   names: readonly string[];
   pluginId: string;
   optional: boolean;
-  allowlist: Set<string>;
+  allowlist: PluginToolAllowlist;
 }): boolean {
-  if (!params.optional && allowlistIncludesDefaultPluginTools(params.allowlist)) {
-    return true;
-  }
-  return isOptionalToolEntryPotentiallyAllowed(params);
+  return (
+    (!params.optional && params.allowlist.includesDefaults) ||
+    (params.allowlist.size > 0 &&
+      (params.names.length === 0 ||
+        params.names.some((name) => params.allowlist.allowsTool(params.pluginId, name))))
+  );
 }
 
 function listManifestToolNamesForAllowlist(params: {
   plugin: PluginManifestRecord;
   toolNames: readonly string[];
   pluginId: string;
-  allowlist: Set<string>;
+  allowlist: PluginToolAllowlist;
 }): string[] {
-  if (params.toolNames.length === 0) {
-    return [];
-  }
-  if (params.allowlist.has("*") || params.allowlist.has("group:plugins")) {
-    return [...params.toolNames];
-  }
-  const pluginKey = normalizeToolPolicyName(params.pluginId);
-  if (params.allowlist.has(pluginKey)) {
+  if (params.allowlist.allowsPlugin(params.pluginId)) {
     return [...params.toolNames];
   }
   const matchedToolNames = params.toolNames.filter((name) =>
-    isPluginToolAllowed(params.allowlist, params.pluginId, name),
+    params.allowlist.allowsTool(params.pluginId, name),
   );
-  if (!allowlistIncludesDefaultPluginTools(params.allowlist)) {
+  if (!params.allowlist.includesDefaults) {
     return matchedToolNames;
   }
   const defaultToolNames = params.toolNames.filter(
@@ -621,13 +560,12 @@ function resolvePluginToolRuntimePluginIds(params: {
   availabilityConfig?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
-  toolAllowlist?: string[];
+  allowlist: PluginToolAllowlist;
   toolDenylist?: string[];
   hasAuthForProvider?: (providerId: string) => boolean;
   snapshot?: PluginMetadataManifestView;
 }): string[] {
   const pluginIds = new Set<string>();
-  const allowlist = normalizeAllowlist(params.toolAllowlist);
   const denylist = normalizeDenylist(params.toolDenylist);
   const normalizedPlugins = normalizePluginsConfig(params.config?.plugins);
   const snapshot =
@@ -656,7 +594,7 @@ function resolvePluginToolRuntimePluginIds(params: {
       toolNames,
       plugin,
       pluginId: plugin.id,
-      allowlist,
+      allowlist: params.allowlist,
     }).filter(
       (toolName) =>
         !denylistBlocksPluginTool({
@@ -729,13 +667,15 @@ function createCachedDescriptorPluginTool(params: {
   loadContext: ReturnType<typeof resolvePluginRuntimeLoadContext>;
   runtimeOptions: PluginLoadOptions["runtimeOptions"];
 }): AnyAgentTool {
-  const { descriptor } = params.descriptor;
+  const { descriptor, displaySummary, hideFromChannelProgress } = params.descriptor;
   const pluginId = descriptor.owner.kind === "plugin" ? descriptor.owner.pluginId : "";
   const toolName = descriptor.name;
   const tool: AnyAgentTool = {
     name: descriptor.name,
     label: descriptor.title ?? descriptor.name,
     description: descriptor.description,
+    ...(displaySummary ? { displaySummary } : {}),
+    ...(hideFromChannelProgress === true ? { hideFromChannelProgress } : {}),
     parameters: descriptor.inputSchema as never,
     ...(descriptor.outputSchema ? { outputSchema: descriptor.outputSchema as never } : {}),
     ...(params.descriptor.requiredClientCaps
@@ -820,9 +760,6 @@ function createCachedDescriptorPluginTool(params: {
       throw new Error(`plugin tool runtime missing (${pluginId}): ${toolName}`);
     },
   };
-  if (params.descriptor.displaySummary) {
-    tool.displaySummary = params.descriptor.displaySummary;
-  }
   setPluginToolMeta(tool, {
     pluginId,
     ...(params.plugin.kind ? { kind: params.plugin.kind } : {}),
@@ -848,7 +785,7 @@ function resolveCachedPluginTools(params: {
   config: PluginLoadOptions["config"];
   availabilityConfig: PluginLoadOptions["config"];
   env: NodeJS.ProcessEnv;
-  allowlist: Set<string>;
+  allowlist: PluginToolAllowlist;
   denylist: ReturnType<typeof normalizeDenylist>;
   hasAuthForProvider?: (providerId: string) => boolean;
   onlyPluginIds: readonly string[];
@@ -954,11 +891,7 @@ function resolveCachedPluginTools(params: {
       }
       if (
         cachedDescriptor.optional &&
-        !isOptionalToolAllowed({
-          toolName: cachedDescriptor.descriptor.name,
-          pluginId: plugin.id,
-          allowlist: params.allowlist,
-        })
+        !params.allowlist.allowsTool(plugin.id, cachedDescriptor.descriptor.name)
       ) {
         continue;
       }
@@ -1075,6 +1008,7 @@ function resolvePluginToolLoadState(params: {
       env: NodeJS.ProcessEnv;
       loadOptions: PluginLoadOptions;
       onlyPluginIds: string[];
+      allowlist: PluginToolAllowlist;
       runtimeOptions: PluginLoadOptions["runtimeOptions"];
       snapshot: PluginMetadataManifestView;
     }
@@ -1107,12 +1041,13 @@ function resolvePluginToolLoadState(params: {
           workspaceDir: context.workspaceDir,
           env,
         });
+  const allowlist = createPluginToolAllowlist(params.toolAllowlist);
   const onlyPluginIds = resolvePluginToolRuntimePluginIds({
     config: context.config,
     availabilityConfig: params.context.runtimeConfig ?? context.config,
     workspaceDir: context.workspaceDir,
     env,
-    toolAllowlist: params.toolAllowlist,
+    allowlist,
     toolDenylist: params.toolDenylist,
     hasAuthForProvider: params.hasAuthForProvider,
     snapshot,
@@ -1123,7 +1058,7 @@ function resolvePluginToolLoadState(params: {
     onlyPluginIds,
     runtimeOptions,
   });
-  return { context, env, loadOptions, onlyPluginIds, runtimeOptions, snapshot };
+  return { context, env, loadOptions, onlyPluginIds, allowlist, runtimeOptions, snapshot };
 }
 
 export function ensureStandalonePluginToolRegistryLoaded(params: {
@@ -1167,7 +1102,7 @@ export function resolvePluginTools(params: {
   if (!loadState) {
     return [];
   }
-  const { context, env, onlyPluginIds, runtimeOptions, snapshot } = loadState;
+  const { context, env, onlyPluginIds, allowlist, runtimeOptions, snapshot } = loadState;
   const tools: AnyAgentTool[] = [];
   const existing = params.existingToolNames ?? new Set<string>();
   const existingNormalized = new Set(Array.from(existing, (tool) => normalizeToolPolicyName(tool)));
@@ -1175,7 +1110,6 @@ export function resolvePluginTools(params: {
   // guard below cannot fire against the plugin's own tools (a plugin may
   // register several tools, one of which shares the plugin id, e.g. canvas).
   const pluginToolOwnersByName = new Map<string, string>();
-  const allowlist = normalizeAllowlist(params.toolAllowlist);
   const denylist = normalizeDenylist(params.toolDenylist);
   const configCacheKeyMemo = createPluginToolDescriptorConfigCacheKeyMemo();
   const clientCaps = new Set(params.clientCaps ?? []);
@@ -1372,11 +1306,7 @@ export function resolvePluginTools(params: {
           const normalizedToolName = normalizeToolPolicyName(toolName);
           if (
             isManifestToolOptional(manifestPlugin, toolName) &&
-            !isOptionalToolAllowed({
-              toolName,
-              pluginId: entry.pluginId,
-              allowlist,
-            })
+            !allowlist.allowsTool(entry.pluginId, toolName)
           ) {
             return false;
           }
@@ -1406,11 +1336,7 @@ export function resolvePluginTools(params: {
     );
     const list = entry.optional
       ? policyAvailableList.filter((tool) =>
-          isOptionalToolAllowed({
-            toolName: readPluginToolName(tool),
-            pluginId: entry.pluginId,
-            allowlist,
-          }),
+          allowlist.allowsTool(entry.pluginId, readPluginToolName(tool)),
         )
       : policyAvailableList;
     const clientAvailableList = list.filter((tool) =>

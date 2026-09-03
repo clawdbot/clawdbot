@@ -324,12 +324,7 @@ function escapeZshCompletionChoice(choice: string): string {
 function generateZshSubcmdList(cmd: Command): string {
   const list = visibleCompletionCommands(cmd)
     .flatMap((c) => {
-      const desc = c
-        .description()
-        .replace(/\\/g, "\\\\")
-        .replace(/'/g, "'\\''")
-        .replace(/\[/g, "\\[")
-        .replace(/\]/g, "\\]");
+      const desc = escapeZshDoubleQuotedDescription(c.description()).replace(/'/g, "'\\''");
       return commandNameVariants(c).map((name) => `'${name}[${desc}]'`);
     })
     .join(" ");
@@ -397,22 +392,42 @@ ${funcName}() {
 function generateBashCompletion(program: Command): string {
   const rootCmd = program.name();
   const { root, descendants: contexts } = collectShellCompletionCommandTree(program);
-  const rootCompletions = root.completions;
-  const rootValueOptions = root.valueOptions;
   const commandPathUpdate = generateBashCommandPathUpdate(contexts);
   const choiceCompletion = generateBashOptionChoiceCompletion([root, ...contexts]);
   return `
 _${rootCmd}_completion() {
-    local cur opts command_path candidate_path value_options word flag i
+    local cur opts command_path candidate_path value_options word flag i cword remaining_line word_prefix
     local choice_flag choice_prefix choice_completion_prefix short_group short_flag short_index
+    local -a words=()
+    # Before Bash 4.3, COMP_POINT is a byte offset; string spans must use the same units.
+    if ((BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 3))); then
+        local LC_ALL=C
+    fi
     COMPREPLY=()
-    cur="\${COMP_WORDS[COMP_CWORD]}"
-    opts="${rootCompletions.join(" ")}"
-    value_options="${rootValueOptions.join(" ")}"
+    remaining_line="\${COMP_LINE}"
+    # Rejoin '=' and ':' wordbreaks, preserving redirections and whitespace boundaries.
+    # Bash versions split '=' differently; $2 remains the fragment Readline will replace.
+    for ((i = 0; i <= COMP_CWORD; i++)); do
+        word="\${COMP_WORDS[i]}"
+        if ((i > 0)) && [[ -n "\${word}" && "\${remaining_line}" == "\${word}"* &&
+            ( "\${word}" =~ ^[=:]+$ || "\${COMP_WORDS[i-1]}" =~ ^[=:]+$ ) ]]; then
+            words[\${#words[@]}-1]+="\${word}"
+        else
+            words+=("\${word}")
+        fi
+        remaining_line="\${remaining_line#*"\${word}"}"
+    done
+    cword=$((\${#words[@]} - 1))
+    cur="\${words[cword]}"
+    # COMP_WORDS includes text after the cursor; only the prefix participates in completion.
+    cur="\${cur:0:\${#cur} + COMP_POINT - \${#COMP_LINE} + \${#remaining_line}}"
+    word_prefix="\${cur%"$2"}"
+    opts="${root.completions.join(" ")}"
+    value_options="${root.valueOptions.join(" ")}"
     command_path=""
 
-    for ((i = 1; i < COMP_CWORD; i++)); do
-        word="\${COMP_WORDS[i]}"
+    for ((i = 1; i < cword; i++)); do
+        word="\${words[i]}"
         if [[ \${word} == -* ]]; then
             flag="\${word%%=*}"
             if [[ \${word} != *=* && " \${value_options} " == *" \${flag} "* ]]; then
@@ -421,52 +436,39 @@ _${rootCmd}_completion() {
             continue
         fi
 
-        if [[ -n "\${command_path}" ]]; then
-            candidate_path="\${command_path} \${word}"
-        else
-            candidate_path="\${word}"
-        fi
-
+        candidate_path="\${command_path:+\${command_path} }\${word}"
 ${commandPathUpdate}
     done
 
-    choice_flag="\${COMP_WORDS[COMP_CWORD-1]}"
+    choice_flag="\${words[cword-1]}"
     choice_prefix="\${cur}"
     choice_completion_prefix=""
-    if [[ "\${cur}" == -*=* ]]; then
+    if [[ "\${cur}" == --*=* ]]; then
         choice_flag="\${cur%%=*}"
         choice_prefix="\${cur#*=}"
         choice_completion_prefix="\${choice_flag}="
-    elif [[ "\${choice_flag}" == "=" ]]; then
-        choice_flag="\${COMP_WORDS[COMP_CWORD-2]}"
     fi
-    if [[ "\${choice_flag}" == -??* && "\${choice_flag}" != --* ]]; then
-        short_group="\${choice_flag#-}"
+    for short_group in "\${choice_flag}" "\${cur}"; do
+        [[ "\${short_group}" == -??* && "\${short_group}" != --* ]] || continue
+        short_group="\${short_group#-}"
         for ((short_index = 0; short_index < \${#short_group}; short_index++)); do
             short_flag="-\${short_group:short_index:1}"
             if [[ " \${value_options} " == *" \${short_flag} "* ]]; then
-                if ((short_index == \${#short_group} - 1)); then
+                if [[ "\${cur}" == "-\${short_group}" ]]; then
+                    choice_flag="\${short_flag}"
+                    choice_prefix="\${short_group:short_index+1}"
+                    choice_completion_prefix="-\${short_group:0:short_index+1}"
+                elif ((short_index == \${#short_group} - 1)); then
                     choice_flag="\${short_flag}"
                 fi
                 break
             fi
         done
-    fi
-    if [[ "\${cur}" == -??* && "\${cur}" != --* && "\${cur}" != *=* ]]; then
-        short_group="\${cur#-}"
-        for ((short_index = 0; short_index < \${#short_group}; short_index++)); do
-            short_flag="-\${short_group:short_index:1}"
-            if [[ " \${value_options} " == *" \${short_flag} "* ]]; then
-                choice_flag="\${short_flag}"
-                choice_prefix="\${short_group:short_index+1}"
-                choice_completion_prefix="-\${short_group:0:short_index+1}"
-                break
-            fi
-        done
-    fi
+    done
 
 ${choiceCompletion}
     COMPREPLY=( $(compgen -W "\${opts}" -- "\${cur}") )
+    COMPREPLY=("\${COMPREPLY[@]#"\${word_prefix}"}")
 }
 
 complete -F _${rootCmd}_completion ${rootCmd}
@@ -487,10 +489,11 @@ function generateBashOptionChoiceCompletion(contexts: ShellCompletionContext[]):
             : `[[ \${#COMPREPLY[@]} -gt 0 || -n "\${choice_completion_prefix}" || "\${choice_prefix}" != -* ]]`;
           return `            ${optionFlags})
                 local -a choice_values=(${escapedChoices})
-                local choice
+                local choice completion
                 for choice in "\${choice_values[@]}"; do
                     if [[ "\${choice}" == "\${choice_prefix}"* ]]; then
-                        COMPREPLY+=("\${choice_completion_prefix}\${choice}")
+                        completion="\${choice_completion_prefix}\${choice}"
+                        COMPREPLY+=("\${completion#"\${word_prefix}"}")
                     fi
                 done
                 if ${shouldReturn}; then
@@ -509,35 +512,20 @@ ${optionCases}
   return cases ? `    case "\${command_path}" in\n${cases}\n    esac\n` : "";
 }
 
-function generateBashCompletionContextCases(contexts: ShellCompletionContext[]): string {
-  const segments = contexts.map((context) => {
+function generateBashCommandPathUpdate(contexts: ShellCompletionContext[]): string {
+  const cases = contexts.map((context) => {
     const patterns = context.pathVariants
       .map((commandPath) => `"${commandPath.join(" ")}"`)
       .join("|");
-    return `              ${patterns})
-                opts="${context.completions.join(" ")}"
-                value_options="${context.valueOptions.join(" ")}"
-                ;;`;
-  });
-  return segments.join("\n");
-}
-
-function generateBashCommandPathUpdate(contexts: ShellCompletionContext[]): string {
-  if (contexts.length === 0) {
-    return "";
-  }
-  const commandPathPatterns = contexts
-    .flatMap((context) => context.pathVariants)
-    .map((commandPath) => `"${commandPath.join(" ")}"`)
-    .join("|");
-  return `        case "\${candidate_path}" in
-          ${commandPathPatterns})
+    return `          ${patterns})
             command_path="\${candidate_path}"
-            case "\${command_path}" in
-${generateBashCompletionContextCases(contexts)}
-            esac
-            ;;
-        esac`;
+            opts="${context.completions.join(" ")}"
+            value_options="${context.valueOptions.join(" ")}"
+            ;;`;
+  });
+  return cases.length
+    ? `        case "\${candidate_path}" in\n${cases.join("\n")}\n        esac`
+    : "";
 }
 
 function generatePowerShellCompletion(program: Command): string {

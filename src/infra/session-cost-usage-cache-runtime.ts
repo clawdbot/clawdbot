@@ -164,7 +164,7 @@ export async function loadSessionCostSummariesFromCache(params: {
     const file = files[index];
     const stored = file ? rollups.get(file.filePath) : undefined;
     if (!file || !stored || !isUsageCostRollupFresh({ stored, file })) {
-      staleFiles.add(file?.filePath ?? session.sessionFile);
+      staleFiles.add(file?.sourcePath ?? session.sessionFile);
       return null;
     }
     cachedFiles += 1;
@@ -271,8 +271,6 @@ function scheduleUsageCostRefresh(
   state.timer = timer;
 }
 
-const usageCostRefreshRuntime = { refreshCostUsageCacheForAgent };
-
 async function runQueuedUsageCostRefresh(
   refreshKey: string,
   state: UsageCostRefreshState,
@@ -287,7 +285,7 @@ async function runQueuedUsageCostRefresh(
         state.pendingSessionFiles.clear();
       }
       state.fullRefreshRequested = false;
-      const result = await usageCostRefreshRuntime.refreshCostUsageCacheForAgent({
+      const result = await refreshCostUsageCacheForAgent({
         config: state.config,
         agentId: state.agentId,
         databasePath: state.databasePath,
@@ -322,21 +320,4 @@ async function runQueuedUsageCostRefresh(
       usageCostRefreshes.delete(refreshKey);
     }
   }
-}
-
-function clearUsageCostRefreshesForTest(): void {
-  for (const state of usageCostRefreshes.values()) {
-    if (state.timer) {
-      clearTimeout(state.timer);
-    }
-  }
-  usageCostRefreshes.clear();
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.sessionCostUsageTestApi")] = {
-    requestCostUsageCacheRefresh,
-    usageCostRefreshRuntime,
-    clearUsageCostRefreshesForTest,
-  };
 }

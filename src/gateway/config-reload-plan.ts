@@ -90,6 +90,22 @@ const PLUGIN_INSTALL_TIMESTAMP_KEYS = ["installedAt", "resolvedAt"] as const;
 const BASE_RELOAD_RULES: ReloadRule[] = [
   { prefix: "gateway.remote", kind: "none" },
   { prefix: "gateway.reload", kind: "none" },
+  // Request policy reads the published config; listeners and startup-owned
+  // resources retain the broad Gateway restart rule below.
+  { prefix: "gateway.http.endpoints", kind: "hot" },
+  { prefix: "gateway.tools", kind: "hot" },
+  { prefix: "gateway.cliAgents", kind: "hot" },
+  { prefix: "gateway.controlUi.environment", kind: "hot" },
+  { prefix: "gateway.controlUi.github", kind: "hot" },
+  { prefix: "gateway.controlUi.toolTitles", kind: "hot" },
+  { prefix: "gateway.controlUi.sessionObserver", kind: "hot" },
+  { prefix: "gateway.controlUi.embedSandbox", kind: "hot" },
+  { prefix: "gateway.controlUi.allowExternalEmbedUrls", kind: "hot" },
+  { prefix: "gateway.controlUi.automaticallyFetchFavicons", kind: "hot" },
+  { prefix: "gateway.nodes.browser", kind: "hot" },
+  // Pairing approvals retain policy across async probes and store locks, so
+  // pairing settings must keep restart ownership until the approval owner fences them.
+  { prefix: "gateway.push.apns.relay", kind: "hot" },
   // gateway.terminal.* deliberately has no rule here: it falls through to the
   // `gateway` restart rule below. The terminal drives the Control UI CSP (WASM
   // permissions) and the bootstrap availability flag, both fixed at document
@@ -180,6 +196,7 @@ const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
 ];
 
 let cachedReloadRules: ReloadRule[] | null = null;
+let cachedRefinementPrefixes: string[] = [];
 let cachedRegistry: ReturnType<typeof getActivePluginHttpRouteRegistry> | null = null;
 let cachedGatewayRegistryVersion = -1;
 
@@ -191,6 +208,7 @@ function listReloadRules(): ReloadRule[] {
   // version changes; cache them to keep every config diff cheap.
   if (registry !== cachedRegistry || gatewayRegistryVersion !== cachedGatewayRegistryVersion) {
     cachedReloadRules = null;
+    cachedRefinementPrefixes = [];
     cachedRegistry = registry;
     cachedGatewayRegistryVersion = gatewayRegistryVersion;
   }
@@ -275,8 +293,14 @@ function listReloadRules(): ReloadRule[] {
   // Narrow config contracts must override broad owner fallbacks. Sort once per
   // registry snapshot so the hot path can retain first-match semantics.
   rules.sort((a, b) => b.prefix.length - a.prefix.length);
+  cachedRefinementPrefixes = rules.map((rule) => rule.prefix);
   cachedReloadRules = rules;
   return rules;
+}
+
+export function listConfigReloadRefinementPrefixes(): string[] {
+  listReloadRules();
+  return cachedRefinementPrefixes;
 }
 
 function matchRule(path: string): ReloadRule | null {

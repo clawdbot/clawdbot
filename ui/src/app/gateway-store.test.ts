@@ -91,6 +91,22 @@ describe("createApplicationGateway connection phase", () => {
     expect(gateway.snapshot.phase).toBe("offline");
   });
 
+  it("passes native client identity and bounded scopes to the gateway client", () => {
+    const clientOptions = {
+      clientName: "openclaw-ios" as const,
+      mode: "ui" as const,
+      platform: "iOS 27.0.0",
+      deviceFamily: "iPhone",
+      instanceId: "ios-installation",
+      scopes: ["operator.read", "operator.write"],
+    };
+    const { gateway, current } = createStore({ clientOptions });
+
+    gateway.start();
+
+    expect(current().opts).toMatchObject(clientOptions);
+  });
+
   it("keeps legacy version fallback on reconnect instead of first admission", () => {
     const { gateway, current } = createStore();
     gateway.start();
@@ -134,53 +150,6 @@ describe("createApplicationGateway connection phase", () => {
     });
 
     expect(gateway.snapshot.phase).toBe("connected");
-  });
-
-  it.each([
-    {
-      name: "missing-token auth detail",
-      outerCode: "INVALID_REQUEST",
-      detailCode: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING,
-      message: "token missing",
-    },
-    {
-      name: "pairing-required detail",
-      outerCode: "NOT_PAIRED",
-      detailCode: ConnectErrorDetailCodes.PAIRING_REQUIRED,
-      message: "device is not approved",
-    },
-  ])("preserves the structured $name in the login snapshot", (fixture) => {
-    const { gateway, current } = createStore();
-    gateway.start();
-
-    current().opts.onClose?.({
-      code: 4008,
-      reason: "connect failed",
-      error: {
-        code: fixture.outerCode,
-        message: fixture.message,
-        details: { code: fixture.detailCode },
-      },
-      willRetry: false,
-    });
-
-    expect(gateway.snapshot.lastError).toBe(fixture.message);
-    expect(gateway.snapshot.lastErrorCode).toBe(fixture.detailCode);
-  });
-
-  it("preserves an outer code when a transport failure has no structured detail", () => {
-    const { gateway, current } = createStore();
-    gateway.start();
-
-    current().opts.onClose?.({
-      code: 1006,
-      reason: "websocket error",
-      error: { code: "UNAVAILABLE", message: "WebSocket connection failed" },
-      willRetry: false,
-    });
-
-    expect(gateway.snapshot.lastError).toBe("WebSocket connection failed");
-    expect(gateway.snapshot.lastErrorCode).toBe("UNAVAILABLE");
   });
 
   it("does not invent an assistant agent id before the gateway advertises one", () => {

@@ -235,6 +235,9 @@ complete drain loop.
 Collector children are ordinary isolated sub-agent sessions with a different
 completion path. They write a durable collector result for the parent to
 await instead of announcing or steering a reply back into the parent session.
+The accepted spawn receipt describes this path: collect the result with
+`agents_wait`, or await `agents.run()` in OpenClaw Code Mode. Do not use
+`sessions_yield` to wait for collectors; they do not send completion notifications.
 
 The target agent resolves in this order:
 

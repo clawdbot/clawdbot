@@ -52,6 +52,7 @@ import {
   buildGatewayReloadPlan,
   type ChannelKind,
   isNoopGatewayReloadPlan,
+  listConfigReloadRefinementPrefixes,
   resolveConfigReloadMetadata,
 } from "./config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "./config-reload-settings.js";
@@ -179,8 +180,8 @@ describe("diffConfigPaths", () => {
     { prev: {}, next: { mcp: { apps: { enabled: true } } } },
     { prev: { mcp: { apps: { enabled: true } } }, next: {} },
   ])("preserves the Apps restart boundary for whole MCP changes", ({ prev, next }) => {
-    const changedPaths = diffGatewayReloadPaths(prev, next);
-    expect(changedPaths).toEqual(["mcp", "mcp.apps"]);
+    const changedPaths = diffGatewayReloadPaths(prev, next, listConfigReloadRefinementPrefixes());
+    expect(changedPaths).toEqual(["mcp.apps"]);
     expect(buildGatewayReloadPlan(changedPaths).restartReasons).toContain("mcp.apps");
   });
 
@@ -196,7 +197,11 @@ describe("diffConfigPaths", () => {
       [configure("first"), configure("second"), true],
       [configure("first", "before"), configure("first", "after"), false],
     ] as const) {
-      expect(buildGatewayReloadPlan(diffGatewayReloadPaths(prev, next)).reloadPlugins).toBe(reload);
+      expect(
+        buildGatewayReloadPlan(
+          diffGatewayReloadPaths(prev, next, listConfigReloadRefinementPrefixes()),
+        ).reloadPlugins,
+      ).toBe(reload);
     }
   });
 
@@ -262,7 +267,11 @@ describe("diffConfigPaths", () => {
       expectedPaths: ["session.scope", "session.store"],
     },
   ])("preserves hook policy dependencies when it $name", ({ prev, next, expectedPaths }) => {
-    const changedPaths = diffGatewayReloadPaths(prev as OpenClawConfig, next as OpenClawConfig);
+    const changedPaths = diffGatewayReloadPaths(
+      prev as OpenClawConfig,
+      next as OpenClawConfig,
+      listConfigReloadRefinementPrefixes(),
+    );
 
     for (const expectedPath of expectedPaths) {
       expect(changedPaths).toContain(expectedPath);
@@ -347,6 +356,12 @@ describe("buildGatewayReloadPlan", () => {
       registration: { restartPrefixes: ["plugins.entries.canvas"] },
       source: "test",
     },
+    {
+      pluginId: "codex",
+      pluginName: "Codex",
+      registration: { noopPrefixes: ["plugins.entries.codex.config.codexPlugins"] },
+      source: "test",
+    },
   ];
 
   beforeEach(() => {
@@ -397,7 +412,20 @@ describe("buildGatewayReloadPlan", () => {
 
   it.each([
     "gateway.port",
+    "gateway.bind",
+    "gateway.tls.enabled",
     "gateway.terminal.enabled",
+    "gateway.controlUi.enabled",
+    "gateway.controlUi.basePath",
+    "gateway.controlUi.root",
+    "gateway.controlUi.allowedOrigins",
+    "gateway.http.securityHeaders.strictTransportSecurity",
+    "gateway.nodes.commands.allow",
+    "gateway.nodes.pairing.autoApproveLocal",
+    "gateway.nodes.pairing.autoApproveCidrs",
+    "gateway.nodes.pairing.sshVerify",
+    "gateway.nodes.pluginTools.enabled",
+    "gateway.nodes.allowSkills",
     "cloudWorkers.profiles.aws.settings.class",
     "browser.enabled",
     "plugins.installs.telegram.installPath",
@@ -413,6 +441,97 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartReasons).toEqual([path]);
     expect(plan.hotReasons).toStrictEqual([]);
   });
+
+  it.each([
+    "gateway.http.endpoints.chatCompletions.enabled",
+    "gateway.http.endpoints.responses.enabled",
+    "gateway.http.endpoints.responses.files.maxBytes",
+    "gateway.tools.allow",
+    "gateway.tools.deny",
+    "gateway.cliAgents.enabled",
+    "gateway.controlUi.environment.label",
+    "gateway.controlUi.github.token",
+    "gateway.controlUi.toolTitles",
+    "gateway.controlUi.sessionObserver",
+    "gateway.controlUi.embedSandbox",
+    "gateway.controlUi.allowExternalEmbedUrls",
+    "gateway.controlUi.automaticallyFetchFavicons",
+    "gateway.nodes.browser.mode",
+    "gateway.nodes.browser.node",
+    "gateway.push.apns.relay.baseUrl",
+  ])("hot-applies Gateway request policy without restarting subsystems: %s", (path) => {
+    const plan = buildGatewayReloadPlan([path]);
+
+    expect(plan).toMatchObject({
+      restartGateway: false,
+      restartReasons: [],
+      hotReasons: [path],
+      noopPaths: [],
+      restartHeartbeat: false,
+      restartCron: false,
+      reloadHooks: false,
+      reloadPlugins: false,
+      disposeMcpRuntimes: false,
+      restartChannels: new Set(),
+      restartChannelAccounts: new Map(),
+    });
+    expect(resolveConfigReloadMetadata(path).kind).toBe("hot");
+  });
+
+  it.each([
+    {
+      name: "only request policies",
+      config: {
+        gateway: {
+          tools: { deny: ["sessions_list"] },
+          http: { endpoints: { responses: { enabled: true } } },
+          controlUi: { environment: { label: "Test", color: "teal" }, sessionObserver: false },
+          nodes: { browser: { mode: "off" } },
+        },
+      },
+      restartReasons: [],
+    },
+    {
+      name: "request policies and startup settings",
+      config: {
+        gateway: {
+          port: 18791,
+          http: {
+            endpoints: { responses: { enabled: true } },
+            securityHeaders: { strictTransportSecurity: "max-age=31536000" },
+          },
+          controlUi: { environment: { label: "Test", color: "teal" }, basePath: "/chat" },
+          nodes: { pairing: { sshVerify: false } },
+        },
+      },
+      restartReasons: [
+        "gateway.port",
+        "gateway.http.securityHeaders",
+        "gateway.controlUi.basePath",
+        "gateway.nodes.pairing",
+      ],
+    },
+  ] satisfies { name: string; config: OpenClawConfig; restartReasons: string[] }[])(
+    "preserves $name when adding or removing Gateway config",
+    ({ config, restartReasons }) => {
+      for (const [previous, next] of [
+        [{}, config],
+        [config, {}],
+      ] as const) {
+        const changedPaths = diffGatewayReloadPaths(
+          previous,
+          next,
+          listConfigReloadRefinementPrefixes(),
+        );
+        const plan = buildGatewayReloadPlan(changedPaths);
+
+        expect(plan.restartReasons).toEqual(restartReasons);
+        expect(plan.restartGateway).toBe(restartReasons.length > 0);
+        expect(plan.hotReasons).toContain("gateway.http.endpoints");
+        expect(plan.hotReasons).toContain("gateway.controlUi.environment");
+      }
+    },
+  );
 
   it.each([
     {
@@ -593,7 +712,7 @@ describe("buildGatewayReloadPlan", () => {
     [{ agents: { defaults: { mediaMaxMb: 4 } } }, { agents: {} }],
     [{ agents: { defaults: { mediaMaxMb: 4 } } }, { agents: { defaults: { mediaMaxMb: 1 } } }],
   ])("refreshes every channel when the global media limit changes: %j → %j", (prev, next) => {
-    const paths = diffGatewayReloadPaths(prev, next);
+    const paths = diffGatewayReloadPaths(prev, next, listConfigReloadRefinementPrefixes());
     expect(paths).toContain("agents.defaults.mediaMaxMb");
     const plan = buildGatewayReloadPlan(paths);
     expect(plan.restartGateway).toBe(false);
@@ -804,6 +923,111 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartReasons).toEqual([path]);
     expect(plan.hotReasons).toStrictEqual([]);
   });
+
+  const codexEntryConfig = (config?: Record<string, unknown>) => ({
+    plugins: {
+      entries: {
+        codex: config ? { config } : {},
+      },
+    },
+  });
+
+  it.each([
+    {
+      name: "plugin restart",
+      config: { plugins: { entries: { canvas: { enabled: true } } } },
+      paths: ["plugins.entries.canvas"],
+      kind: "restart",
+      channels: [],
+    },
+    {
+      name: "plugin hot",
+      config: { browser: { profiles: { qa: { cdpUrl: "http://127.0.0.1:9222" } } } },
+      paths: ["browser.profiles"],
+      kind: "hot",
+      channels: [],
+    },
+    {
+      name: "plugin none",
+      config: codexEntryConfig({ codexPlugins: { enabled: true } }),
+      paths: ["plugins.entries.codex.config.codexPlugins"],
+      kind: "none",
+      channels: [],
+    },
+    {
+      name: "channel hot",
+      config: { channels: { telegram: { enabled: true } } },
+      paths: ["channels.telegram"],
+      kind: "hot",
+      channels: ["telegram"],
+    },
+    {
+      name: "channel noop",
+      config: { channels: { whatsapp: { replyToMode: "all" } } },
+      paths: ["channels.whatsapp.replyToMode"],
+      kind: "none",
+      channels: [],
+    },
+  ] as const)(
+    "preserves registered $name boundaries through parent creation and removal",
+    ({ config, paths, kind, channels }) => {
+      for (const [previous, next] of [
+        [{}, config],
+        [config, {}],
+      ] as const) {
+        const changedPaths = diffGatewayReloadPaths(
+          previous,
+          next,
+          listConfigReloadRefinementPrefixes(),
+        );
+        const plan = buildGatewayReloadPlan(changedPaths);
+
+        expect(changedPaths).toEqual(paths);
+        expect(changedPaths.map((path) => resolveConfigReloadMetadata(path).kind)).toEqual([kind]);
+        expect(plan.restartGateway).toBe(kind === "restart");
+        expect(plan.restartChannels).toEqual(new Set(channels));
+        expect(plan.noopPaths).toEqual(kind === "none" ? paths : []);
+      }
+    },
+  );
+
+  it.each([
+    {
+      name: "creates config on first install",
+      previous: {},
+      next: codexEntryConfig({ codexPlugins: { enabled: true } }),
+      expectedPaths: ["plugins.entries.codex.config.codexPlugins"],
+    },
+    {
+      name: "changes existing sub-plugin policy",
+      previous: codexEntryConfig({ codexPlugins: { enabled: false } }),
+      next: codexEntryConfig({ codexPlugins: { enabled: true } }),
+      expectedPaths: ["plugins.entries.codex.config.codexPlugins.enabled"],
+    },
+    {
+      name: "keeps a mixed first-install write reloadable",
+      previous: {},
+      next: codexEntryConfig({
+        codexPlugins: { enabled: true },
+        appServer: { transport: "websocket" },
+      }),
+      expectedPaths: [
+        "plugins.entries.codex.config.codexPlugins",
+        "plugins.entries.codex.config.appServer",
+      ],
+      reloadPlugins: true,
+    },
+  ])(
+    "classifies Codex config when it $name",
+    ({ previous, next, expectedPaths, reloadPlugins }) => {
+      const paths = diffGatewayReloadPaths(previous, next, listConfigReloadRefinementPrefixes());
+      const plan = buildGatewayReloadPlan(paths);
+
+      expect(paths).toEqual(expectedPaths);
+      expect(plan.reloadPlugins).toBe(reloadPlugins ?? false);
+      expect(isNoopGatewayReloadPlan(plan)).toBe(reloadPlugins !== true);
+    },
+  );
 
   it("uses default reload settings when config is unset", () => {
     expect(resolveGatewayReloadSettings({})).toMatchObject({ mode: "hybrid", debounceMs: 300 });
@@ -5070,7 +5294,10 @@ describe("startGatewayConfigReloader", () => {
 
     expect(harness.onHotReload).not.toHaveBeenCalled();
     const [plan, restartedConfig] = getOnlyRestartCall(harness);
-    expect(plan.changedPaths).toEqual(["plugins.entries", "plugins.installs.lossless-claw"]);
+    expect(plan.changedPaths).toEqual([
+      "plugins.entries.lossless-claw",
+      "plugins.installs.lossless-claw",
+    ]);
     expect(plan.restartGateway).toBe(true);
     expect(plan.restartReasons).toEqual(["plugins.installs.lossless-claw"]);
     expect(restartedConfig).toBe(nextConfig);
@@ -5600,7 +5827,9 @@ describe("startGatewayConfigReloader skills invalidation", () => {
 
     const after = getSkillsSnapshotVersion();
     expect(after).toBeGreaterThan(before);
-    expect(log.info).toHaveBeenCalledWith("skills snapshot invalidated by config change (skills)");
+    expect(log.info).toHaveBeenCalledWith(
+      expect.stringContaining("skills snapshot invalidated by config change"),
+    );
 
     await reloader.stop();
   });

@@ -63,6 +63,7 @@ type ChatTurnRouterOptions = {
 };
 
 type CaptureRuntime = RuntimeEnv & { read: () => string };
+type PersistentApplyGuard = () => void;
 
 function createCaptureRuntime(): CaptureRuntime {
   const lines: string[] = [];
@@ -177,6 +178,7 @@ export class ChatTurnRouter {
   async resolveOperatorApproval(
     decision: "allow-once" | "allow-always" | "deny" | null,
     proposalHash: string,
+    beforePersistentApply?: PersistentApplyGuard,
   ): Promise<SystemAgentChatReply | null> {
     return await resolveOperatorApprovalDecision({
       decision,
@@ -185,11 +187,11 @@ export class ChatTurnRouter {
       clear: () => this.clearPendingProposals(),
       apply: async (operation) => {
         this.proposalResolution = "approved";
-        return await this.applyApprovedPersistentOperation(operation);
+        return await this.applyApprovedPersistentOperation(operation, beforePersistentApply);
       },
       denied: () => {
         this.proposalResolution = "declined";
-        return { text: "Denied. No change.", action: "none" as const };
+        return { text: "Denied. No change.", action: "none" as const, applied: false };
       },
     });
   }
@@ -312,12 +314,13 @@ export class ChatTurnRouter {
 
   private async applyApprovedPersistentOperation(
     operation: SystemAgentOperation,
+    beforePersistentApply?: PersistentApplyGuard,
   ): Promise<SystemAgentChatReply> {
     if (!isPersistentSystemAgentOperation(operation)) {
       throw new Error("OpenClaw host received a non-persistent approved operation.");
     }
     const capture = createCaptureRuntime();
-    const result = await this.executeOperation(operation, capture, true);
+    const result = await this.executeOperation(operation, capture, true, beforePersistentApply);
     const verify = result?.applied ? await this.callbacks.verifyConfigAfterWrite() : null;
     const followUp = this.armFollowUp(result?.followUp);
     const baseText = [capture.read() || "Applied. Audit entry written.", verify, followUp]
@@ -335,6 +338,7 @@ export class ChatTurnRouter {
           `Your agent is hatching — handing you over now. ${this.agentHandoffReturnHint()}`,
         ].join("\n\n"),
         action: "open-tui",
+        applied: true,
         agentDraft: "hatch",
         handoff: {
           kind: "open-tui",
@@ -344,7 +348,7 @@ export class ChatTurnRouter {
         },
       };
     }
-    return { text: baseText, action: "none" };
+    return { text: baseText, action: "none", applied: result?.applied === true };
   }
 
   async resolveAssistantTurn(
@@ -578,15 +582,17 @@ export class ChatTurnRouter {
     operation: SystemAgentOperation,
     capture: CaptureRuntime,
     approved: boolean,
+    beforePersistentApply?: PersistentApplyGuard,
   ): Promise<SystemAgentOperationResult | undefined> {
     try {
       const execute = this.dependencies.executeOperation ?? executeSystemAgentOperation;
+      if (approved) {
+        await this.callbacks.requirePersistentApplyInference(capture);
+      }
       return await execute(operation, capture, {
         approved,
         deps: this.commandDeps(),
-        beforePersistentApply: async () => {
-          await this.callbacks.requirePersistentApplyInference(capture);
-        },
+        beforePersistentApply,
         onVerifiedInferenceChanged: this.callbacks.rebindVerifiedInference,
       });
     } catch (error) {
@@ -625,12 +631,10 @@ export class ChatTurnRouter {
     };
   }
 
-  private commandDeps(): SystemAgentCommandDeps | undefined {
-    if (!this.options.deps && !this.options.surface) {
-      return undefined;
-    }
+  private commandDeps(): SystemAgentCommandDeps {
     return {
       ...this.options.deps,
+      loadOverview: this.callbacks.loadOverview,
       ...(this.options.surface ? { setupSurface: this.options.surface } : {}),
     };
   }

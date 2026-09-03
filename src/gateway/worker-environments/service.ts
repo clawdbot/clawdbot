@@ -8,6 +8,7 @@ import type {
   WorkerTranscriptCommitParams,
   WorkerTranscriptCommitResult,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { WorkerSkillWorkshopParams } from "../../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
 import { onSessionIdentityMutation } from "../../config/sessions/session-accessor.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { withTimeout } from "../../infra/fs-safe.js";
@@ -104,6 +105,12 @@ type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOptions & {
   placementStore?: WorkerSessionPlacementGate;
   executeSessionTool?: (
     params:
+      | {
+          identity: WorkerConnectionIdentity;
+          toolName: "skill_workshop";
+          request: WorkerSkillWorkshopParams;
+          signal?: AbortSignal;
+        }
       | {
           identity: WorkerConnectionIdentity;
           toolName: "sessions_spawn";

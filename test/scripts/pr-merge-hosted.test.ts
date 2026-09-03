@@ -164,6 +164,16 @@ describePosix("native hosted merge handoff", () => {
         (event) => event.kind === "gh" && event.args?.[0] === "pr" && event.args[1] === "merge",
       );
     expect(mergeCalls).toHaveLength(1);
+    const events = f.events().slice(before);
+    const reviewReads = events
+      .map((event, index) => ({ event, index }))
+      .filter(({ event }) => event.kind === "review-comments");
+    expect(reviewReads).toHaveLength(2);
+    expect(reviewReads[1]?.index).toBeLessThan(
+      events.findIndex(
+        (event) => event.kind === "gh" && event.args?.[0] === "pr" && event.args[1] === "merge",
+      ),
+    );
     expect(mergeCalls[0]?.args).toEqual([
       "pr",
       "merge",

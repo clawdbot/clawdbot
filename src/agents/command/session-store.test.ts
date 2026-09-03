@@ -11,9 +11,9 @@ import {
 } from "../../config/sessions.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { clearCliSessionInStore, persistCliSessionBindingResult } from "../cli-session-store.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import {
-  clearCliSessionInStore,
   consumeCliSessionForkInStore,
   persistCliSessionForkSuccessorInStore,
   restoreCliSessionForkInStore,
@@ -22,7 +22,8 @@ import {
 } from "./session-store.js";
 import { resolveSession } from "./session.js";
 
-const { listSessionEntriesCore, loadSessionEntry, replaceSessionEntry } = sessionAccessor;
+const { listSessionEntriesCore, loadSessionEntry, patchSessionEntryCore, replaceSessionEntry } =
+  sessionAccessor;
 
 vi.mock("../model-selection.js", () => ({
   isCliProvider: (provider: string, _cfg?: OpenClawConfig) =>
@@ -93,7 +94,11 @@ async function seedSessionStore(
   entries: Record<string, SessionEntry>,
 ): Promise<void> {
   for (const [sessionKey, entry] of Object.entries(entries)) {
-    await replaceSessionEntry({ storePath, sessionKey }, entry);
+    await patchSessionEntryCore({ storePath, sessionKey }, () => entry, {
+      fallbackEntry: entry,
+      replaceEntry: true,
+      skipMaintenance: true,
+    });
   }
 }
 
@@ -470,10 +475,15 @@ describe("updateSessionStoreAfterAgentRun", () => {
         result,
       });
 
-      const persisted = loadPersistedSessionStore(storePath);
-      expect(Object.keys(persisted)).toHaveLength(42);
-      expect(persisted[sessionKey]?.sessionId).toBe(sessionId);
-      expect(persisted["agent:main:stale:44"]).toBeUndefined();
+      await vi.waitFor(
+        () => {
+          const persisted = loadPersistedSessionStore(storePath);
+          expect(Object.keys(persisted)).toHaveLength(42);
+          expect(persisted[sessionKey]?.sessionId).toBe(sessionId);
+          expect(persisted["agent:main:stale:44"]).toBeUndefined();
+        },
+        { timeout: 5_000 },
+      );
     });
   });
 
@@ -754,11 +764,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
 
   it("persists claude-cli session bindings when the backend is configured", async () => {
     await withTempSessionStore(async ({ storePath }) => {
-      const cfg = {
-        agents: {
-          defaults: {},
-        },
-      } as OpenClawConfig;
       const sessionKey = "agent:main:explicit:test-claude-cli";
       const sessionId = "test-openclaw-session";
       const sessionStore: Record<string, SessionEntry> = {
@@ -783,14 +788,13 @@ describe("updateSessionStoreAfterAgentRun", () => {
         },
       };
 
-      await updateSessionStoreAfterAgentRun({
-        cfg,
-        sessionId,
+      await persistCliSessionBindingResult({
+        assertSettlementCurrent: () => {},
+        expectedSession: sessionStore[sessionKey],
+        provider: "claude-cli",
         sessionKey,
         storePath,
         sessionStore,
-        defaultProvider: "claude-cli",
-        defaultModel: "claude-sonnet-4-6",
         result,
       });
 
@@ -813,11 +817,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
 
   it("clears stale CLI bindings when a successful run reports an unflushed replacement", async () => {
     await withTempSessionStore(async ({ storePath }) => {
-      const cfg = {
-        agents: {
-          defaults: {},
-        },
-      } as OpenClawConfig;
       const sessionKey = "agent:main:explicit:test-clear-unflushed-cli";
       const sessionId = "test-openclaw-session";
       const sessionStore: Record<string, SessionEntry> = {
@@ -854,14 +853,13 @@ describe("updateSessionStoreAfterAgentRun", () => {
         },
       };
 
-      await updateSessionStoreAfterAgentRun({
-        cfg,
-        sessionId,
+      await persistCliSessionBindingResult({
+        assertSettlementCurrent: () => {},
+        expectedSession: sessionStore[sessionKey],
+        provider: "claude-cli",
         sessionKey,
         storePath,
         sessionStore,
-        defaultProvider: "claude-cli",
-        defaultModel: "claude-sonnet-4-6",
         result,
       });
 
@@ -1079,10 +1077,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
               provider: "claude-cli",
               model: "claude-sonnet-4-6",
               sessionId: "claude-cli-session-1",
-              cliSessionBinding: {
-                sessionId: "claude-cli-session-1",
-                authEpoch: "auth-epoch-1",
-              },
             },
           },
         } as never,
@@ -1094,15 +1088,15 @@ describe("updateSessionStoreAfterAgentRun", () => {
       });
 
       expect(second.sessionKey).toBe(first.sessionKey);
-      expect(second.sessionEntry?.cliSessionBindings?.["claude-cli"]).toEqual({
-        sessionId: "claude-cli-session-1",
-        authEpoch: "auth-epoch-1",
+      expect(second.sessionEntry).toMatchObject({
+        modelProvider: "claude-cli",
+        model: "claude-sonnet-4-6",
       });
 
       const persisted = loadPersistedSessionEntry(storePath, first.sessionKey!);
-      expect(persisted?.cliSessionBindings?.["claude-cli"]).toEqual({
-        sessionId: "claude-cli-session-1",
-        authEpoch: "auth-epoch-1",
+      expect(persisted).toMatchObject({
+        modelProvider: "claude-cli",
+        model: "claude-sonnet-4-6",
       });
     });
   });
@@ -3095,6 +3089,113 @@ describe("recordCliCompactionInStore", () => {
   );
 });
 
+describe("CLI binding settlement", () => {
+  it.each(["deleted", "session", "lifecycle", "writer"])(
+    "cannot publish a native binding after its owner is %s",
+    async (change) => {
+      await withTempSessionStore(async ({ storePath }) => {
+        const sessionKey = "agent:main:cli-settlement-fence";
+        const entry = {
+          sessionId: "original",
+          lifecycleRevision: "original-lifecycle",
+          activeWriterRunId: "original-writer",
+          updatedAt: 1,
+        };
+        const sessionStore = { [sessionKey]: entry };
+        const current = {
+          ...entry,
+          ...(change === "session" ? { sessionId: "replacement" } : {}),
+          ...(change === "lifecycle" ? { lifecycleRevision: "replacement" } : {}),
+          ...(change === "writer" ? { activeWriterRunId: "replacement" } : {}),
+        };
+        if (change !== "deleted") {
+          await seedSessionStore(storePath, { [sessionKey]: current });
+        }
+        const before = loadPersistedSessionEntry(storePath, sessionKey);
+
+        await persistCliSessionBindingResult({
+          assertSettlementCurrent: () => {},
+          sessionKey,
+          storePath,
+          sessionStore,
+          expectedSession: entry,
+          provider: "claude-cli",
+          result: {
+            meta: {
+              durationMs: 1,
+              agentMeta: {
+                sessionId: "late-native-session",
+                cliSessionBinding: { sessionId: "late-native-session" },
+                provider: "claude-cli",
+                model: "claude-sonnet-4-6",
+              },
+            },
+          },
+        });
+        expect(loadPersistedSessionEntry(storePath, sessionKey)).toEqual(before);
+      });
+    },
+  );
+
+  it.each(["aborted-publish", "aborted-clear", "closed-publish", "closed-clear"])(
+    "revalidates settlement at the commit edge for %s",
+    async (operation) => {
+      await withTempSessionStore(async ({ storePath }) => {
+        const sessionKey = "agent:main:cli-settlement-commit";
+        const entry: SessionEntry = {
+          sessionId: "local-session",
+          updatedAt: 1,
+          cliSessionBindings: { "claude-cli": { sessionId: "existing-native-session" } },
+        };
+        await seedSessionStore(storePath, { [sessionKey]: entry });
+        const before = loadPersistedSessionEntry(storePath, sessionKey);
+        const controller = new AbortController();
+        let open = true;
+        const settlement = persistCliSessionBindingResult({
+          sessionKey,
+          storePath,
+          expectedSession: entry,
+          provider: "claude-cli",
+          abortSignal: controller.signal,
+          assertSettlementCurrent: () => {
+            if (!open) {
+              throw new Error("owner closed");
+            }
+          },
+          result: {
+            meta: {
+              durationMs: 1,
+              agentMeta: {
+                provider: "claude-cli",
+                model: "claude-sonnet-4-6",
+                sessionId: "replacement-native-session",
+                cliSessionBinding: { sessionId: "replacement-native-session" },
+                ...(operation.endsWith("clear") ? { clearCliSessionBinding: true } : {}),
+              },
+            },
+          },
+        });
+        // The row is unchanged; revocation happens after async patch planning starts.
+        if (operation.startsWith("closed")) {
+          open = false;
+        }
+        controller.abort(new Error("run aborted"));
+        if (operation === "aborted-clear") {
+          await settlement;
+          expect(
+            loadPersistedSessionEntry(storePath, sessionKey)?.cliSessionBindings,
+          ).toBeUndefined();
+        } else {
+          await expect(settlement).rejects.toThrow(
+            operation.startsWith("closed") ? "owner closed" : "run aborted",
+          );
+          expect(loadPersistedSessionEntry(storePath, sessionKey)).toEqual(before);
+        }
+      });
+    },
+  );
+});
+
 describe("consumeCliSessionForkInStore", () => {
   it("clears the one-shot marker while preserving the bound source id", async () => {
     await withTempSessionStore(async ({ storePath }) => {
@@ -3225,6 +3326,92 @@ describe("consumeCliSessionForkInStore", () => {
         authEpoch: "epoch-1",
         authEpochVersion: 3,
       });
+    });
+  });
+
+  it.each(
+    (["consume", "restore", "successor"] as const).flatMap((operation) =>
+      (
+        [
+          "rebound",
+          "deleted",
+          "session-replaced",
+          "lifecycle-replaced",
+          "writer-replaced",
+          "claim-released",
+        ] as const
+      ).map((durableState) => ({ durableState, operation })),
+    ),
+  )("rejects a stale $operation after the durable row is $durableState", async (testCase) => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const { durableState, operation } = testCase;
+      const sessionKey = `agent:main:cli-fork-cas:${operation}`;
+      const sourceBinding = {
+        sessionId: "claude-source-session",
+        forceReuse: true,
+        ...(operation === "consume" ? { forkNextResume: true as const } : {}),
+      };
+      const cached: SessionEntry = {
+        sessionId: "openclaw-session-1",
+        updatedAt: 1,
+        lifecycleRevision: "source-lifecycle",
+        activeWriterRunId: "source-writer",
+        cliSessionBindings: { "claude-cli": sourceBinding },
+      };
+      const rebound: SessionEntry = {
+        ...cached,
+        cliSessionBindings: {
+          "claude-cli": { sessionId: "claude-other-session", forceReuse: true },
+        },
+      };
+      const sessionStore = { [sessionKey]: cached };
+      const ownerReplacement =
+        durableState === "session-replaced"
+          ? { sessionId: "openclaw-session-2" }
+          : durableState === "lifecycle-replaced"
+            ? { lifecycleRevision: "replacement-lifecycle" }
+            : durableState === "writer-replaced"
+              ? { activeWriterRunId: "replacement-writer" }
+              : {};
+      const durableEntry =
+        durableState === "rebound" ? rebound : { ...cached, ...ownerReplacement };
+      if (durableState !== "deleted") {
+        await seedSessionStore(storePath, { [sessionKey]: durableEntry });
+      }
+
+      let open = true;
+      const common = {
+        provider: "claude-cli",
+        sessionKey,
+        sessionStore,
+        storePath,
+        expectedCliSessionId: "claude-source-session",
+        assertCommitAllowed: () => {
+          if (!open) {
+            throw new Error("claim released");
+          }
+        },
+      };
+      const result =
+        operation === "consume"
+          ? consumeCliSessionForkInStore(common)
+          : operation === "restore"
+            ? restoreCliSessionForkInStore(common)
+            : persistCliSessionForkSuccessorInStore({
+                ...common,
+                successorCliSessionId: "claude-successor-session",
+              });
+
+      if (durableState === "claim-released") {
+        open = false;
+        await expect(result).rejects.toThrow("claim released");
+      } else {
+        expect(await result).toBeUndefined();
+      }
+      expect(sessionStore[sessionKey]).toEqual(cached);
+      expect(loadPersistedSessionEntry(storePath, sessionKey)).toEqual(
+        durableState === "deleted" ? undefined : expect.objectContaining(durableEntry),
+      );
     });
   });
 });

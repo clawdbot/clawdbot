@@ -24,7 +24,6 @@ import type {
   CronPayload,
 } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
-import { resolveCronJobLastRunStatus } from "../cron-status.ts";
 import { formatUiError } from "../format-error.ts";
 import { toNumber } from "../format.ts";
 import {
@@ -791,54 +790,8 @@ export function updateCronJobsFilter(
   state.cronJobsSortDir = patch.cronJobsSortDir ?? state.cronJobsSortDir;
 }
 
-export function getVisibleCronJobs(
-  state: Pick<
-    CronState,
-    "cronJobs" | "cronJobsScheduleKindFilter" | "cronJobsLastStatusFilter" | "cronJobsTriggerFilter"
-  >,
-): CronJob[] {
-  return state.cronJobs.filter((job) => {
-    const scheduleKind = resolveCronJobScheduleKind(job);
-    if (!scheduleKind) {
-      return false;
-    }
-    if (
-      state.cronJobsScheduleKindFilter !== "all" &&
-      scheduleKind !== state.cronJobsScheduleKindFilter
-    ) {
-      return false;
-    }
-    if (
-      state.cronJobsLastStatusFilter !== "all" &&
-      resolveCronJobLastRunStatus(job) !== state.cronJobsLastStatusFilter
-    ) {
-      return false;
-    }
-    if (state.cronJobsTriggerFilter === "conditional" && !job.trigger) {
-      return false;
-    }
-    if (state.cronJobsTriggerFilter === "unconditional" && job.trigger) {
-      return false;
-    }
-    return true;
-  });
-}
-
-function resolveCronJobScheduleKind(job: CronJob): string | null {
-  const scheduleKind = (job.schedule as { kind?: unknown } | null | undefined)?.kind;
-  if (
-    scheduleKind === "at" ||
-    scheduleKind === "every" ||
-    scheduleKind === "cron" ||
-    scheduleKind === "on-exit" ||
-    scheduleKind === "stream"
-  ) {
-    return scheduleKind;
-  }
-  return null;
-}
-
 function clearCronEditState(state: CronState) {
+  state.cronError = null;
   state.cronEditingJob = null;
   state.cronCloningJob = null;
   state.cronEditingJobId = null;
@@ -1537,7 +1490,8 @@ export async function loadCronRuns(
   state.cronRunsLoadingMore = append;
   try {
     const res = await client.request<CronRunsResult>("cron.runs", {
-      ...(request.agentId ? { agentId: request.agentId } : {}),
+      // An exact job owns its history; the overview's agent filter may select another owner.
+      ...(request.scope === "all" && request.agentId ? { agentId: request.agentId } : {}),
       scope: request.scope,
       id: request.jobId ?? undefined,
       limit: request.limit,
@@ -1618,6 +1572,7 @@ export function updateCronRunsFilter(
 }
 
 function setCronEditState(state: CronState, job: CronJob, form: CronFormState) {
+  state.cronError = null;
   state.cronEditingJob = job;
   state.cronCloningJob = null;
   state.cronEditingJobId = job.id;

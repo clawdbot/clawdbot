@@ -93,9 +93,18 @@ model that is only installed on disk requires explicit setup through
 When a connection needs a runtime plugin, the app and dashboard show the
 staged package's source and capabilities, with integrity when available before installing or
 enabling it. Review the details, then explicitly confirm acceptance to continue.
-Declining, cancelling, or an interactive setup error stops that attempt without selecting another
-inference route. You can retry or choose a different connection. Installation
-progress and the final live model check stay in the same setup flow.
+Declining, confirmed cancellation, or an interactive setup error stops that attempt without selecting another
+inference route. You can retry or choose a different connection.
+
+The macOS setup sheet shows the selected provider and current activity with a
+spinner while the Gateway works. Plugin installation does not estimate a
+completion percentage. Review prompts and input controls appear when an answer
+is needed; installation and the final live AI test stay in the same flow.
+
+After you choose **Cancel**, wait for confirmation. The Gateway may need to
+finish an operation that has already reached its commit point. If cancellation
+cannot be confirmed, the sheet says setup may still be running and lets you
+retry **Cancel**.
 
 To use a Claude subscription when the Gateway host has no Claude CLI login, run
 `claude setup-token` on any machine with Claude Code installed, then paste the

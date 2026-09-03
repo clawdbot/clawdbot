@@ -11,14 +11,15 @@ import type { WorkboardCapability } from "../lib/workboard/capability.ts";
 import type { AgentSelectionCapability } from "./agent-selection.ts";
 import type { ApplicationChatSubmissions } from "./chat-submissions.ts";
 import type { ApplicationConfigCapability } from "./config.ts";
+import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ScopeUpgradeCapability } from "./device-scope-upgrade.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import type { NativeChatDrafts } from "./native-bridge.ts";
 import type { NativeNotificationsCapability } from "./native-notifications.ts";
 import type { ApplicationOverlays } from "./overlays-types.ts";
 import type { ApplicationPlacementStartup } from "./session-placement-startup.ts";
-import type { UiSettings } from "./settings.ts";
-import type { ApplicationSkillWorkshopRevisionAdmissions } from "./skill-workshop-revision-admissions.ts";
+import type { UiPreferences } from "./settings.ts";
+import type { SidebarAttentionStore } from "./sidebar-attention-store.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
 import type { WebPushCapability } from "./web-push.ts";
 
@@ -36,7 +37,7 @@ export type ApplicationThemeServerSelection = {
 };
 
 export type ApplicationTheme = {
-  readonly settings: UiSettings;
+  readonly settings: UiPreferences;
   readonly mode: ThemeMode;
   readonly resolvedMode: "dark" | "light";
   readonly serverSelection: ApplicationThemeServerSelection | null;
@@ -90,13 +91,17 @@ export type ApplicationChatAttachmentHandoff = {
 export type ApplicationContext<TRouteId extends string = string> = {
   readonly basePath: string;
   readonly resourceBasePath: string;
+  readonly lifecycleAbortSignal?: AbortSignal;
   readonly gateway: ApplicationGateway;
+  /** App-owned queue for automatic Gateway reconnect bootstrap work. */
+  readonly connectionBootstrap: ConnectionBootstrapCoordinator;
   readonly agents: AgentCapability;
   readonly agentIdentity: AgentIdentityCapability;
   readonly agentSelection: AgentSelectionCapability;
   readonly channels: ChannelCapability;
   readonly config: ApplicationConfigCapability;
   readonly scopeUpgrade: ScopeUpgradeCapability;
+  readonly sidebarAttention: SidebarAttentionStore;
   readonly runtimeConfig: RuntimeConfigCapability;
   readonly sessions: SessionCapability;
   readonly placementStartup: ApplicationPlacementStartup;
@@ -107,7 +112,6 @@ export type ApplicationContext<TRouteId extends string = string> = {
   readonly nativeChatDrafts: NativeChatDrafts;
   readonly nativeNotifications: NativeNotificationsCapability | null;
   readonly webPush: WebPushCapability;
-  readonly skillWorkshopRevisionAdmissions: ApplicationSkillWorkshopRevisionAdmissions;
   readonly chatSubmissions: ApplicationChatSubmissions;
   readonly chatAttachmentHandoff: ApplicationChatAttachmentHandoff;
   readonly navigate: (routeId: TRouteId, options?: ApplicationNavigationOptions) => void;

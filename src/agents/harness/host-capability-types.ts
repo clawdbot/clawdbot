@@ -37,6 +37,10 @@ export type AgentHarnessHostCapabilities = Readonly<{
   assertActive: () => void;
   /** Reports one completed model call's output tokens to this admitted run's live total. */
   reportOutputTokens?: (outputTokens: number) => void;
+  /** Adds native provenance only to this host's exact current admitted prompt. */
+  annotateCurrentUserTurn?: (
+    annotation: import("../../sessions/user-turn-transcript.types.js").UserTurnTranscriptAnnotation,
+  ) => Promise<void>;
   /** Closure-bound event sink backed by the host-owned trajectory recorder. */
   trajectory?: Readonly<{
     recordEvent: (type: string, data?: Record<string, unknown>) => void;
@@ -79,6 +83,9 @@ export type AgentHarnessHostCapabilities = Readonly<{
     severity: "info" | "warning";
     toolName: string;
     toolCallId?: string;
+    mcpTool?: { server: string; tool: string };
+    /** Persistence-only proof; loss of correlation does not cancel a one-shot approval. */
+    isMcpToolApprovalActive?: () => boolean;
     allowedDecisions?: AgentHarnessHostApprovalDecision[];
     timeoutMs: number;
     transportTimeoutMs?: number;

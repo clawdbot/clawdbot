@@ -1284,6 +1284,8 @@ export async function rpcReq<T extends Record<string, unknown>>(
   // Refresh mutable config fixtures, but leave in-flight session writers owned
   // by the running Gateway; their producers publish SQLite cache updates.
   resetConfigRuntimeState();
+  // Republish fixture overrides before in-flight readers can pin the disk config.
+  getRuntimeConfig();
   if (method === "agent" || method === "chat.send") {
     await prepareGatewayReplyRuntimeForTest();
   }

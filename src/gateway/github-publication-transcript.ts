@@ -7,14 +7,23 @@ import type { GitHubPublicationCoordinator } from "./github-publication.js";
 const GITHUB_PUBLICATION_RESPONSE_PREFIX = "github-publication:";
 
 function formatGitHubPublicationResult(result: SessionGitHubPublicationResult): string {
+  const publisher = result.publisher;
+  const source =
+    publisher?.source === "personal"
+      ? "My GitHub"
+      : publisher?.source === "agent-override"
+        ? "Agent override"
+        : "System";
+  const acting = publisher ? ` Using @${publisher.login} (${source}).` : "";
   switch (result.status) {
     case "published":
-      return `Published ${result.repository} branch ${result.branch}: ${result.url}`;
+      return `Published ${result.repository} branch ${result.branch}: ${result.url}${acting}`;
     case "failed":
-      return `GitHub publication failed: ${result.message} ${result.nextAction}`;
+      return `GitHub publication failed: ${result.message} ${result.nextAction}${acting}`;
     case "publishing":
     case "requested":
-      return result.message;
+    case "needs_confirmation":
+      return `${result.message}${acting}`;
   }
   return result satisfies never;
 }

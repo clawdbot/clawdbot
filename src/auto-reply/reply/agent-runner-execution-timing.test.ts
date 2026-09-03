@@ -10,7 +10,7 @@ import {
 
 vi.mock("../../gateway/session-utils.js", () => ({ loadSessionEntry: vi.fn() }));
 
-const state = setupAgentRunnerExecutionTestState();
+const state = await setupAgentRunnerExecutionTestState();
 
 it.each(["embedded preparation", "fallback preparation"])(
   "times %s failure between successful turns without borrowing the previous start",

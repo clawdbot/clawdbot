@@ -22,12 +22,15 @@ Related docs:
 openclaw channels list
 openclaw channels list --all
 openclaw channels status
+openclaw channels status --probe
 openclaw channels capabilities
 openclaw channels capabilities --channel discord --target channel:123
 openclaw channels resolve --channel slack "#general" "@jane"
 openclaw channels logs --channel all
 openclaw channels dead-letters list --channel telegram --account default
 ```
+
+`channels status` keeps configured channels visible when their plugin fails to load or register. Affected accounts report `running: false`, `lifecycle: "blocked"`, and the plugin error instead of stale probe success. Run `openclaw doctor`, repair or update the plugin, and restart the Gateway before checking again.
 
 `channels list` shows chat channels only: configured accounts by default, with `installed`, `configured`, and `enabled` status tags per account (`--json` for machine output). Pass `--all` to also surface bundled channels that have no configured account yet and installable catalog channels that are not yet on disk. Provider auth and model usage live elsewhere: `openclaw models auth list` for provider auth profiles, `openclaw status` or `openclaw models list` for usage/quota.
 
@@ -38,10 +41,17 @@ In an explicit multi-agent setup, workspace-scoped channel plugins come from
 returns the shared bundled, managed, and global inventory with a diagnostic;
 it does not guess one agent workspace.
 
+For `add`, `login`, `logout`, `remove`, and `resolve`, or `capabilities --channel`,
+use `--agent <id>` to select the workspace used for channel plugin discovery.
+The option works before or after the subcommand; a subcommand value takes precedence.
+Without it, discovery uses the configured System Agent or the existing sole/legacy owner.
+An explicit fleet with no such owner requires `--agent`. Selecting a workspace
+does not create account routing bindings; guided setup asks about routing separately.
+
 ## Status / capabilities / resolve / logs
 
 - `channels status`: `--channel <name>`, `--probe`, `--timeout <ms>` (default `10000`), `--json`
-- `channels capabilities`: `--channel <name>`, `--account <id>` (requires `--channel`), `--target <dest>` (requires `--channel`), `--timeout <ms>` (default `10000`, capped at `30000`), `--json`
+- `channels capabilities`: `--channel <name>`, `--agent <id>`, `--account <id>` (requires `--channel`), `--target <dest>` (requires `--channel`), `--timeout <ms>` (default `10000`, capped at `30000`), `--json`
 - `channels resolve <entries...>`: `--channel <name>`, `--account <id>`, `--agent <id>`, `--kind <auto|user|group|channel>` (default `auto`), `--json`
 - `channels logs`: `--channel <name|all>` (default `all`), `--lines <n>` (default `200`), `--json`
 
@@ -55,6 +65,8 @@ state plus probe results such as `works`, `probe failed`, `audit ok`, or `audit 
 If the gateway is unreachable, `channels status` falls back to config-only summaries
 instead of live probe output.
 
+`channels status` does not support `--deep`; use `openclaw channels status --probe` for channel checks. The separate top-level `openclaw status --deep` command provides a broader status probe.
+
 ## Inbound dead letters
 
 Inbound events that exhaust their retry policy remain in the shared state database for the queue's existing failed-entry retention period. Inspect one channel account with:
@@ -65,6 +77,8 @@ openclaw channels dead-letters list --channel telegram --account default --json
 ```
 
 The text view shows event ids, failure reasons, attempt counts, and failure ages. JSON output also includes the retained payload, metadata, lane, and attempt timestamps for diagnostics.
+
+Omitting `--account` inspects the `default` account. Both dead-letter commands reject a blank value instead of falling back to `default`, so an unset shell variable cannot silently select an account you did not name. You can place `--account` before or after `list` or `resubmit`; a value after the leaf command takes precedence.
 
 After correcting the underlying problem, re-enqueue one event with its original event id:
 
@@ -116,7 +130,7 @@ See [CLI automation](/start/wizard-cli-automation) for additional non-interactiv
 `channels remove` only operates on installed/configured channel plugins. Use `channels add` first for installable catalog channels. Without `--delete` it asks to disable the account and keeps its config; `--delete` removes the config entries without prompting.
 For runtime-backed channel plugins, `channels remove` also asks the running Gateway to stop the selected account before it updates config, so disabling or deleting an account does not leave the old listener active until restart.
 
-The shared control envelope contains only `--channel`, `--account`, and the optional account display `--name`. Each modern channel plugin owns its credential, transport, and provider-specific semantics. Once a channel is selected by positional id or `--channel <id>`, the CLI builds only that channel's options from bundled or installed plugin package metadata without loading channel runtime code.
+The shared control envelope contains `--agent`, `--channel`, `--account`, and the optional account display `--name`. Each modern channel plugin owns its credential, transport, and provider-specific semantics. Once a channel is selected by positional id or `--channel <id>`, the CLI builds only that channel's options from bundled or installed plugin package metadata without loading channel runtime code.
 
 Common-looking flags such as `--token`, `--url`, or `--use-env` are still channel-owned when a modern contract handles them. When a selected third-party plugin still uses the legacy shared setup adapter, core registers the released compatibility flag set for that channel only, alongside its legacy `cliAddOptions`. Unrelated legacy fields do not leak into other channels, and a modern selected channel rejects compatibility flags it did not declare.
 
@@ -167,12 +181,14 @@ If your config was already in a mixed state (named accounts present and top-leve
 
 ## Login and logout (interactive)
 
+Before `channels add` or `channels login` writes local credentials or configuration, OpenClaw compares the selected CLI state/config paths with the local Gateway or its installed service. A proven mismatch stops before the write. A remote Gateway or an authenticated path that cannot be verified produces a warning instead.
+
 ```bash
 openclaw channels login --channel whatsapp
 openclaw channels logout --channel whatsapp
 ```
 
-- `channels login` supports `--account <id>` and `--verbose`; `channels logout` supports `--account <id>`.
+- `channels login` supports `--agent <id>`, `--account <id>`, and `--verbose`; `channels logout` supports `--agent <id>` and `--account <id>`.
 - `channels login` and `logout` can infer the channel when only one configured channel supports that action; with several, pass `--channel`.
 - `channels logout` prefers the live Gateway path when reachable, so logout stops any active listener before clearing channel auth state. If a local Gateway is not reachable, it falls back to local auth cleanup; with `gateway.mode: "remote"` the gateway error fails the command instead.
 - Logout reports whether the plugin cleared saved auth. If the plugin reports that the account is not logged out, the CLI warns that other credentials may still be active; this is not a claim that provider-side tokens were revoked.
@@ -225,6 +241,7 @@ Notes:
 
 - `--channel` is optional; omit it to list every channel (including plugin-provided channels).
 - `--account` is only valid with `--channel`.
+- Each account probe and diagnostics step has its own timeout. A stalled step is reported in both text and JSON output, and the command continues with the remaining accounts.
 - `--target` accepts `channel:<id>` or a raw numeric channel id and only applies to Discord. For Discord voice channels, the permission check flags missing `ViewChannel`, `Connect`, `Speak`, `SendMessages`, and `ReadMessageHistory`.
 - Probes are provider-specific: Discord bot identity + intents plus optional channel permissions; Slack bot + user scopes; Telegram bot flags + webhook; Signal daemon version; Microsoft Teams app token + Graph roles/scopes (annotated where known). Channels without probes report `Probe: unavailable`.
 

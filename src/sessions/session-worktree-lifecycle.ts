@@ -182,7 +182,7 @@ export async function synchronizeSessionWorktreeArchive(params: {
           );
         }
         throw new SessionWorktreeLifecycleError(
-          "Session worktree could not be restored. Free disk space or an unused worktree slot, check the source repository, then retry. The conversation and snapshot are preserved.",
+          "Session worktree could not be restored. Free disk space if needed, check the source repository, then retry. The conversation and snapshot are preserved.",
           "restore-failed",
         );
       }

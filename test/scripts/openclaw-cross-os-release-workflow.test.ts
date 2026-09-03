@@ -24,6 +24,7 @@ type WorkflowStep = {
 
 type WorkflowJob = {
   if?: string;
+  needs?: string | string[];
   outputs?: Record<string, unknown>;
   steps?: WorkflowStep[];
   with?: Record<string, unknown>;
@@ -80,6 +81,32 @@ describe("cross-OS release checks workflow", () => {
     );
   });
 
+  it("reuses npm downloads across isolated lane homes without caching installed state", () => {
+    const consumer = job(readWorkflow(WORKFLOW_PATH), "cross_os_release_checks");
+    const run = step(consumer, "Run cross-OS release checks");
+    const restore = step(consumer, "Restore npm downloads");
+    const save = step(consumer, "Save npm downloads");
+    const cacheRoot = run.env?.NPM_CONFIG_CACHE;
+
+    expect(cacheRoot).toBe("${{ github.workspace }}/.cache/openclaw-cross-os-npm-cache");
+    expect(restore.with?.path).toBe(".cache/openclaw-cross-os-npm-cache/_cacache");
+    expect(save.with?.path).toBe(restore.with?.path);
+    expect(restore.with?.enableCrossOsArchive).toBe(true);
+    expect(save.with?.enableCrossOsArchive).toBe(true);
+    expect(restore.with?.["restore-keys"]).toContain("openclaw-cross-os-npm-v1-seed-\n");
+    expect(save.with?.key).toBe("${{ steps.npm_downloads.outputs.cache-primary-key }}");
+    expect(save.if).toBe(
+      "github.repository == 'openclaw/openclaw' && github.event_name == 'workflow_dispatch' && steps.npm_downloads.outputs.cache-hit != 'true'",
+    );
+    expect(step(consumer, "Setup Node.js").id).toBe("node");
+    expect(restore.with?.key).toBe(
+      "openclaw-cross-os-npm-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.node.outputs.node-version }}-${{ matrix.suite }}-${{ needs.prepare.outputs.candidate_sha256 }}-${{ needs.prepare.outputs.baseline_sha256 }}",
+    );
+    const steps = consumer.steps!;
+    expect(steps.indexOf(restore)).toBeLessThan(steps.indexOf(run));
+    expect(steps.indexOf(save)).toBeGreaterThan(steps.indexOf(run));
+  });
+
   it("retries only an interrupted Windows dashboard probe", () => {
     const workflow = readWorkflow(WORKFLOW_PATH);
     const consumer = job(workflow, "cross_os_release_checks");
@@ -116,7 +143,7 @@ describe("cross-OS release checks workflow", () => {
     });
     expect(baseline.run).toContain('"$INPUT_TARGET_CONTEXT_REF" == "extended-stable/"*');
     expect(baseline.run).toContain("npm view openclaw versions --json");
-    expect(baseline.run).toContain("scripts/lib/release-upgrade-baseline.mts");
+    expect(baseline.run).toContain("scripts/lib/release-upgrade-baseline.mjs");
     expect(baseline.run).toContain('--target-context-ref "$INPUT_TARGET_CONTEXT_REF"');
     expect(baseline.run).toContain('--previous-version "$INPUT_PREVIOUS_VERSION"');
     expect(baseline.run).toContain('BASELINE_VERSION="$(npm view openclaw@latest version)"');
@@ -128,6 +155,34 @@ describe("cross-OS release checks workflow", () => {
       'import { resolveNpmJsonEntries } from "./scripts/lib/npm-json-output.mts";',
     );
     expect(baselineMetadata.run).toContain("const entry = resolveNpmJsonEntries(payload).at(-1);");
+  });
+
+  it("passes a frozen-line predecessor to every upgrade-validation caller", () => {
+    const release = readWorkflow(RELEASE_CHECKS_PATH);
+    const target = job(release, "resolve_target");
+    const baseline = step(target, "Resolve frozen upgrade baseline");
+    const installSmoke = job(release, "install_smoke_release_checks");
+    const packageAcceptance = job(release, "package_acceptance_release_checks");
+
+    expect(target.outputs?.frozen_upgrade_baseline).toBe(
+      "${{ steps.frozen_upgrade_baseline.outputs.value }}",
+    );
+    expect(baseline.if).toContain("steps.inputs.outputs.install_smoke_scheduled == 'true'");
+    expect(baseline.if).toContain("steps.inputs.outputs.package_acceptance_scheduled == 'true'");
+    expect(baseline.if).toContain("startsWith(inputs.target_context_ref, 'extended-stable/')");
+    expect(baseline.env).toMatchObject({
+      GH_TOKEN: "${{ github.token }}",
+      TARGET_CONTEXT_REF: "${{ inputs.target_context_ref }}",
+      TARGET_SHA: "${{ steps.ref.outputs.sha }}",
+    });
+    expect(baseline.run).toContain("node workflow/scripts/lib/release-upgrade-baseline.mjs");
+    expect(baseline.run).toContain('echo "value=${baseline#openclaw@}"');
+    expect(installSmoke.with?.update_baseline_version).toBe(
+      "${{ needs.resolve_target.outputs.frozen_upgrade_baseline || 'latest' }}",
+    );
+    expect(packageAcceptance.with?.published_upgrade_survivor_baseline).toBe(
+      "${{ needs.resolve_target.outputs.frozen_upgrade_baseline && format('openclaw@{0}', needs.resolve_target.outputs.frozen_upgrade_baseline) || 'openclaw@latest' }}",
+    );
   });
 
   it("installs trusted workflow dependencies for artifact resolution and upgrade metadata", () => {

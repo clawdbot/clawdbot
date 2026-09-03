@@ -49,6 +49,10 @@ openclaw logs --follow
 
 The CLI captures `console.log/info/warn/error/debug/trace`, writes them to file logs, and still prints to stdout/stderr.
 
+`console.trace()` keeps its redacted stack in every console style, including
+forced stderr output. File capture records it once at `trace` level, subject to
+the configured file log level.
+
 Tune console verbosity independently:
 
 - `logging.consoleLevel` (default `info`)

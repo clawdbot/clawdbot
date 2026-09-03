@@ -12,39 +12,66 @@ import {
   QA_WHATSAPP_BATCHED_FINAL_MARKER_RE,
 } from "./mock-openai-contracts.js";
 export function extractLastUserText(input: ResponsesInputItem[]) {
-  for (const item of input.toReversed()) {
-    if (item.role !== "user" || !Array.isArray(item.content)) {
-      continue;
-    }
-    const text = extractInputText(item.content);
-    if (text && !isInternalRuntimeContextCarrierText(text)) {
-      return text;
-    }
-  }
-  return "";
+  return extractLastMatchingUserTurn(input)?.text ?? "";
 }
 
-export function extractLastMatchingUserTurn(input: ResponsesInputItem[], pattern: RegExp) {
-  const matcher = new RegExp(pattern.source, pattern.flags.replace(/[gy]/g, ""));
+export function extractLastMatchingUserTurn(input: ResponsesInputItem[], pattern?: RegExp) {
+  const matcher = pattern && new RegExp(pattern.source, pattern.flags.replace(/[gy]/g, ""));
   for (let index = input.length - 1; index >= 0; index -= 1) {
     const item = input[index];
-    if (item?.role !== "user" || !Array.isArray(item.content)) {
+    if (item?.role !== "user") {
       continue;
     }
     const text = extractInputText(item.content);
-    if (text && !isInternalRuntimeContextCarrierText(text) && matcher.test(text)) {
+    if (text && !isInternalRuntimeContextCarrierText(text) && (!matcher || matcher.test(text))) {
       return { index, text };
     }
   }
   return null;
 }
 
-function findLastUserIndex(input: ResponsesInputItem[]) {
-  return input.findLastIndex(
-    (item) =>
-      item.role === "user" &&
-      Array.isArray(item.content) &&
-      !isInternalRuntimeContextCarrierText(extractInputText(item.content)),
+export function splitMockConversationContext(text: string) {
+  // The Codex harness projects history and the new request into one user item.
+  // Quoted history must not dispatch a task or completion as the current request.
+  const projection =
+    /<conversation_context>\n([\s\S]*)\n<\/conversation_context>\n\nCurrent user request:\n([\s\S]*)$/.exec(
+      text,
+    );
+  return { current: projection?.[2] ?? text, history: projection?.[1] ?? "" };
+}
+
+export function extractMockSubagentContext(input: ResponsesInputItem[]) {
+  const turn = extractLastMatchingUserTurn(input, /[\s\S]/);
+  if (!turn) {
+    return undefined;
+  }
+  const { current, history } = splitMockConversationContext(turn.text);
+  const task =
+    /\[Subagent Context\] You are running as a subagent\b[\s\S]*?\[Subagent Task\]\s+([\s\S]*?)\s+Begin\. Execute the assigned task to completion\.$/.exec(
+      current,
+    )?.[1];
+  if (!task) {
+    return undefined;
+  }
+  const inheritedUserTexts = extractAllUserTexts(input.slice(0, turn.index)).filter(
+    (text) => !isInternalRuntimeContextCarrierText(text),
+  );
+  for (const match of history.matchAll(
+    /(?:^|\n\n)\[user\]\n([\s\S]*?)(?=\n\n\[[a-zA-Z]+\]\n|$)/g,
+  )) {
+    if (match[1]) {
+      inheritedUserTexts.push(match[1]);
+    }
+  }
+  return { task, inheritedUserTexts };
+}
+
+function isUserTurn(item: ResponsesInputItem) {
+  // Empty user messages still fence old tool output; runtime carriers do not.
+  return (
+    item.role === "user" &&
+    (typeof item.content === "string" || Array.isArray(item.content)) &&
+    !isInternalRuntimeContextCarrierText(extractInputText(item.content))
   );
 }
 
@@ -127,7 +154,7 @@ function extractFunctionCallOutputText(item: ResponsesInputItem) {
 }
 
 function findCurrentToolOutput(input: ResponsesInputItem[]): ResponsesInputItem | undefined {
-  const lastUserIndex = findLastUserIndex(input);
+  const lastUserIndex = input.findLastIndex(isUserTurn);
   for (const item of input.slice(lastUserIndex + 1).toReversed()) {
     if (isResponsesToolCallOutput(item)) {
       return item;
@@ -139,9 +166,8 @@ function findCurrentToolOutput(input: ResponsesInputItem[]): ResponsesInputItem 
     }
     const laterUserTexts = input
       .slice(candidateIndex + 1)
-      .filter((laterItem) => laterItem.role === "user" && Array.isArray(laterItem.content))
-      .map((laterItem) => extractInputText(laterItem.content as unknown[]))
-      .filter(Boolean);
+      .filter(isUserTurn)
+      .map((laterItem) => extractInputText(laterItem.content));
     if (laterUserTexts.length > 0 && laterUserTexts.every(isContinuationUserText)) {
       return candidateItem;
     }
@@ -163,7 +189,10 @@ export const extractToolOutputValue = (input: ResponsesInputItem[]) =>
 
 export function extractToolOutputStructuredError(input: ResponsesInputItem[]) {
   const item = findCurrentToolOutput(input);
-  return item?.is_error === true || item?.isError === true;
+  // Explicit success overrides error-shaped content; absent status permits text evidence.
+  return [item?.is_error, item?.isError].find(
+    (value): value is boolean => typeof value === "boolean",
+  );
 }
 
 export function extractToolOutputCallId(input: ResponsesInputItem[]) {
@@ -198,13 +227,19 @@ export function extractUserTextAfterLatestToolOutput(input: ResponsesInputItem[]
   }
   return input
     .slice(latestToolOutputIndex + 1)
-    .filter((item) => item.role === "user" && Array.isArray(item.content))
-    .map((item) => extractInputText(item.content as unknown[]))
+    .filter((item) => item.role === "user")
+    .map((item) => extractInputText(item.content))
     .filter(Boolean)
     .join("\n");
 }
 
-function extractInputText(content: unknown[]): string {
+function extractInputText(content: unknown): string {
+  if (typeof content === "string") {
+    return content.trim();
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
   return content
     .filter(
       (entry): entry is { type: "input_text"; text: string } =>
@@ -219,17 +254,10 @@ function extractInputText(content: unknown[]): string {
 }
 
 export function extractAllUserTexts(input: ResponsesInputItem[]) {
-  const texts: string[] = [];
-  for (const item of input) {
-    if (item.role !== "user" || !Array.isArray(item.content)) {
-      continue;
-    }
-    const text = extractInputText(item.content);
-    if (text) {
-      texts.push(text);
-    }
-  }
-  return texts;
+  return input
+    .filter((item) => item.role === "user")
+    .map((item) => extractInputText(item.content))
+    .filter(Boolean);
 }
 
 export function extractSlackMpimRetainedBotNonce(
@@ -268,20 +296,13 @@ export function extractSlackMpimRetainedBotNonce(
 }
 
 function extractAllInputTexts(input: ResponsesInputItem[]) {
-  const texts: string[] = [];
-  for (const item of input) {
-    if (typeof item.output === "string" && item.output.trim()) {
-      texts.push(item.output.trim());
-    }
-    if (!Array.isArray(item.content)) {
-      continue;
-    }
-    const text = extractInputText(item.content);
-    if (text) {
-      texts.push(text);
-    }
-  }
-  return texts.join("\n");
+  return input
+    .flatMap((item) => [
+      typeof item.output === "string" ? item.output.trim() : "",
+      extractInputText(item.content),
+    ])
+    .filter(Boolean)
+    .join("\n");
 }
 
 export function extractInstructionsText(body: Record<string, unknown>) {
@@ -289,16 +310,7 @@ export function extractInstructionsText(body: Record<string, unknown>) {
 }
 
 export function extractAllRequestTexts(input: ResponsesInputItem[], body: Record<string, unknown>) {
-  const texts: string[] = [];
-  const instructions = extractInstructionsText(body);
-  if (instructions) {
-    texts.push(instructions);
-  }
-  const inputText = extractAllInputTexts(input);
-  if (inputText) {
-    texts.push(inputText);
-  }
-  return texts.join("\n");
+  return [extractInstructionsText(body), extractAllInputTexts(input)].filter(Boolean).join("\n");
 }
 
 export function buildWhatsAppPendingHistoryReply(prompt: string, input: ResponsesInputItem[]) {
@@ -326,9 +338,9 @@ export function buildWhatsAppPendingHistoryReply(prompt: string, input: Response
 
 function extractWhatsAppPendingHistoryRuntimeContext(input: ResponsesInputItem[]) {
   return input
-    .filter((item) => item.role === "user" && Array.isArray(item.content))
+    .filter((item) => item.role === "user")
     .map((item) => {
-      const text = extractInputText(item.content as unknown[]);
+      const text = extractInputText(item.content);
       return isInternalRuntimeContextCarrierText(text) ? text : undefined;
     })
     .filter((block): block is string => Boolean(block))
@@ -408,7 +420,7 @@ export function countImageInputs(value: unknown): number {
 }
 
 function extractLatestImageUserTurn(input: ResponsesInputItem[]) {
-  const latestUserIndex = findLastUserIndex(input);
+  const latestUserIndex = input.findLastIndex(isUserTurn);
   if (latestUserIndex < 0) {
     return { text: "", imageInputCount: 0 };
   }
@@ -425,7 +437,7 @@ function extractLatestImageUserTurn(input: ResponsesInputItem[]) {
   }
   return {
     text: imageTurnItems
-      .map((item) => extractInputText(item.content as unknown[]))
+      .map((item) => extractInputText(item.content))
       .filter(Boolean)
       .join("\n"),
     imageInputCount,
@@ -443,8 +455,8 @@ export function extractCurrentImageRequest(
     return imageUserTurn;
   }
   const developerInstructions = input
-    .filter((item) => item.role === "developer" && Array.isArray(item.content))
-    .map((item) => extractInputText(item.content as unknown[]))
+    .filter((item) => item.role === "developer")
+    .map((item) => extractInputText(item.content))
     .filter(Boolean);
   return {
     text: [extractInstructionsText(body), ...developerInstructions, imageUserTurn.text]

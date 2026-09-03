@@ -746,11 +746,11 @@ export async function startGatewaySidecars(params: {
   let resolvePluginServicesOwner: ((handle: PluginServicesHandle | null) => void) | undefined;
   if (shouldStartPluginServices) {
     const ownedPluginServices = createDeferredCore<PluginServicesHandle | null>();
-    let stopPromise: Promise<void> | undefined;
     pluginServicesOwner = {
       stop: (options) => {
         pluginServicesStopRequested = true;
-        stopPromise ??= ownedPluginServices.promise.then(async (handle) => {
+        // Share the service owner, never a caller's expired replacement deadline.
+        const stopPromise = ownedPluginServices.promise.then(async (handle) => {
           await handle?.stop(options);
         });
         if (!options?.strict) {
@@ -768,7 +768,7 @@ export async function startGatewaySidecars(params: {
             },
             Math.max(0, options.deadlineAtMs - Date.now()),
           );
-          void stopPromise?.then(
+          void stopPromise.then(
             () => {
               clearTimeout(timer);
               resolve();
@@ -1283,7 +1283,8 @@ export async function startGatewayPostAttachRuntime(
         params.loadStartupPlugins!(),
       );
       await params.pluginRuntimeClaim?.waitForUnblocked();
-      if (params.pluginRuntimeClaim?.isCurrent() === false) {
+      if (params.isClosing?.() || params.pluginRuntimeClaim?.isCurrent() === false) {
+        // Shutdown only owns attached bindings; retire unadopted results here.
         loaded.retireGatewayRuntimeBindings?.();
         pluginRegistry = params.getCurrentPluginRegistry?.() ?? pluginRegistry;
         startupPluginsLoaded = true;
@@ -1298,9 +1299,7 @@ export async function startGatewayPostAttachRuntime(
         ],
         ["gatewayMethodCount", loaded.gatewayMethods.length],
       ]);
-      if (params.isClosing?.() !== true) {
-        await params.onStartupPluginsLoaded?.(loaded);
-      }
+      await params.onStartupPluginsLoaded?.(loaded);
       return loaded;
     })();
     return await startupPluginsLoadPromise;

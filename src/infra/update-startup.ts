@@ -1,5 +1,6 @@
 // Runs startup update checks and optional auto-update handoff.
 import { createHash, randomUUID } from "node:crypto";
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import {
   asDateTimestampMs,
   timestampMsToIsoString,
@@ -16,6 +17,7 @@ import {
   REMOTE_MODEL_CATALOG_TTL_MS,
 } from "../model-catalog/remote-refresh.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { classifyUpdateOutcome } from "../shared/update-outcome.js";
 import { readConfigMachineState, writeConfigMachineState } from "../state/config-machine-state.js";
 import { VERSION } from "../version.js";
 import { isTruthyEnvValue } from "./env.js";
@@ -477,9 +479,12 @@ async function runAutoUpdateCommand(
       logPath: started.logPath,
     };
   } catch (err) {
+    // Filesystem failures can contain private helper paths; keep the full cause local.
+    log.info("automatic update handoff failed", { error: String(err) });
+    const code = extractErrorCode(err);
     return failure(
       "managed-service-handoff-failed",
-      `Automatic update handoff failed: ${String(err)}. Run \`${command}\` from a shell to inspect and retry.`,
+      `Automatic update handoff failed${code ? ` (${code})` : ""}. Inspect the Gateway log, then run \`${command}\` from a shell to retry.`,
     );
   }
 }
@@ -700,6 +705,8 @@ async function runCampaignUpdate(params: {
   if (!isCurrent()) {
     return "failed";
   }
+  // Capture recovery code before the updater can replace the running installation.
+  const { runUpdateFailureTriage } = await import("./update-triage.js");
   const { sentinel, revision } = await readRestartSentinelSnapshot();
   if (!isCurrent()) {
     return "failed";
@@ -734,14 +741,37 @@ async function runCampaignUpdate(params: {
     });
     return "handoff";
   }
+  let triageHint: string | undefined;
+  if (classifyUpdateOutcome(outcome.result) === "failed") {
+    const triage = await runUpdateFailureTriage({
+      failure: { result: outcome.result, error: outcome.message },
+      target: { root: params.root, env: process.env },
+      mode: "json",
+      runtime: {
+        log: (message) => params.log.info(message),
+        error: (message) => params.log.info(message),
+      },
+      signal: params.signal,
+      isCurrent,
+    });
+    if (triage.status !== "cancelled") {
+      triageHint = triage.hint;
+    }
+  }
+  if (!isCurrent()) {
+    return "failed";
+  }
   // Publish before campaign-ended observers refresh status. A concurrent restart
   // or update keeps its notification; this attempt may replace only its snapshot.
   if (!sentinel || !isPendingControlPlaneUpdateRestartSentinel(sentinel.payload)) {
     await writeRestartSentinelIfUnchanged({
-      payload: buildUpdateRestartSentinelPayload({
-        result: outcome.result,
-        meta: { root: params.root, note: outcome.message },
-      }),
+      payload: {
+        ...buildUpdateRestartSentinelPayload({
+          result: outcome.result,
+          meta: { root: params.root, note: outcome.message },
+        }),
+        ...(triageHint ? { doctorHint: triageHint } : {}),
+      },
       expectedRevision: revision,
       isCurrent,
     });
@@ -753,6 +783,7 @@ async function runCampaignUpdate(params: {
     forced: params.forced,
     reason: outcome.result.reason,
     message: outcome.message,
+    ...(triageHint ? { triage: triageHint } : {}),
   });
   return "failed";
 }

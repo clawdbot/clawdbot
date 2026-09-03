@@ -392,11 +392,7 @@ function isTransientFollowError(error: unknown): boolean {
   return isPlainGatewayRequestCloseError(message) || isPlainGatewayRequestTimeoutError(message);
 }
 
-export function formatLogTimestamp(
-  value?: string,
-  mode: "pretty" | "plain" = "plain",
-  localTime = true,
-) {
+function formatLogTimestamp(value?: string, mode: "pretty" | "plain" = "plain", localTime = true) {
   if (!value) {
     return "";
   }

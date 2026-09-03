@@ -52,8 +52,11 @@ class ChatControllerSwarmProgressTest {
           requestGateway = { method, params ->
             requests += method to params
             when (method) {
-              "chat.metadata" -> """{"commands":[],"models":[],"swarmEnabled":true}"""
-              "sessions.list" ->
+              "chat.metadata" -> {
+                """{"commands":[],"models":[],"swarmEnabled":true}"""
+              }
+
+              "sessions.list" -> {
                 """
                 {"sessions":[
                   {
@@ -85,7 +88,11 @@ class ChatControllerSwarmProgressTest {
                   "hasMore":false
                 }
                 """.trimIndent()
-              else -> error("unexpected method $method")
+              }
+
+              else -> {
+                error("unexpected method $method")
+              }
             }
           },
           cacheScope = { ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1) },
@@ -123,8 +130,11 @@ class ChatControllerSwarmProgressTest {
           json = json,
           requestGateway = { method, _ ->
             when (method) {
-              "chat.metadata" -> """{"commands":[],"models":[],"swarmEnabled":true}"""
-              "sessions.list" ->
+              "chat.metadata" -> {
+                """{"commands":[],"models":[],"swarmEnabled":true}"""
+              }
+
+              "sessions.list" -> {
                 """
                 {"sessions":[
                   {
@@ -141,7 +151,11 @@ class ChatControllerSwarmProgressTest {
                   }
                 ],"totalCount":2,"hasMore":false}
                 """.trimIndent()
-              else -> error("unexpected method $method")
+              }
+
+              else -> {
+                error("unexpected method $method")
+              }
             }
           },
           cacheScope = { ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1) },
@@ -163,8 +177,11 @@ class ChatControllerSwarmProgressTest {
           json = json,
           requestGateway = { method, _ ->
             when (method) {
-              "chat.metadata" -> """{"commands":[],"models":[],"swarmEnabled":true}"""
-              "sessions.list" ->
+              "chat.metadata" -> {
+                """{"commands":[],"models":[],"swarmEnabled":true}"""
+              }
+
+              "sessions.list" -> {
                 """
                 {"sessions":[{
                   "key":"agent:codex:subagent:foreign",
@@ -174,7 +191,11 @@ class ChatControllerSwarmProgressTest {
                   "status":"running"
                 }],"totalCount":1,"hasMore":false}
                 """.trimIndent()
-              else -> error("unexpected method $method")
+              }
+
+              else -> {
+                error("unexpected method $method")
+              }
             }
           },
           cacheScope = { ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1) },
@@ -196,8 +217,11 @@ class ChatControllerSwarmProgressTest {
           json = json,
           requestGateway = { method, _ ->
             when (method) {
-              "chat.metadata" -> """{"commands":[],"models":[],"swarmEnabled":true}"""
-              "sessions.list" ->
+              "chat.metadata" -> {
+                """{"commands":[],"models":[],"swarmEnabled":true}"""
+              }
+
+              "sessions.list" -> {
                 """
                 {"sessions":[{
                   "key":"agent:main:ordinary-session",
@@ -205,7 +229,11 @@ class ChatControllerSwarmProgressTest {
                   "status":"running"
                 }],"totalCount":1,"hasMore":false}
                 """.trimIndent()
-              else -> error("unexpected method $method")
+              }
+
+              else -> {
+                error("unexpected method $method")
+              }
             }
           },
           cacheScope = { ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1) },
@@ -227,13 +255,19 @@ class ChatControllerSwarmProgressTest {
           json = json,
           requestGateway = { method, params ->
             when (method) {
-              "chat.metadata" -> """{"commands":[],"models":[],"swarmEnabled":true}"""
+              "chat.metadata" -> {
+                """{"commands":[],"models":[],"swarmEnabled":true}"""
+              }
+
               "sessions.list" -> {
                 assertTrue(params.orEmpty().contains("\"agentId\":\"main\""))
                 assertTrue(params.orEmpty().contains("\"spawnedBy\":\"$target\""))
                 """{"sessions":[],"totalCount":0,"hasMore":false}"""
               }
-              else -> error("unexpected method $method")
+
+              else -> {
+                error("unexpected method $method")
+              }
             }
           },
           cacheScope = { ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1) },
@@ -281,7 +315,10 @@ class ChatControllerSwarmProgressTest {
           json = json,
           requestGateway = { method, params ->
             when (method) {
-              "chat.metadata" -> """{"commands":[],"models":[],"swarmEnabled":true}"""
+              "chat.metadata" -> {
+                """{"commands":[],"models":[],"swarmEnabled":true}"""
+              }
+
               "sessions.list" -> {
                 sessionsListCalls += 1
                 assertTrue(params.orEmpty().contains("\"limit\":1001"))
@@ -295,7 +332,10 @@ class ChatControllerSwarmProgressTest {
                 }
                 """.trimIndent()
               }
-              else -> error("unexpected method $method")
+
+              else -> {
+                error("unexpected method $method")
+              }
             }
           },
           cacheScope = { ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1) },
@@ -317,12 +357,18 @@ class ChatControllerSwarmProgressTest {
           json = json,
           requestGateway = { method, _ ->
             when (method) {
-              "chat.metadata" -> """{"commands":[],"models":[],"swarmEnabled":false}"""
+              "chat.metadata" -> {
+                """{"commands":[],"models":[],"swarmEnabled":false}"""
+              }
+
               "sessions.list" -> {
                 sessionsListCalls += 1
                 error("disabled Swarm must not list children")
               }
-              else -> error("unexpected method $method")
+
+              else -> {
+                error("unexpected method $method")
+              }
             }
           },
           cacheScope = { ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1) },
@@ -344,12 +390,18 @@ class ChatControllerSwarmProgressTest {
           json = json,
           requestGateway = { method, _ ->
             when (method) {
-              "chat.metadata" -> """{"commands":[],"models":[],"swarmEnabled":true}"""
+              "chat.metadata" -> {
+                """{"commands":[],"models":[],"swarmEnabled":true}"""
+              }
+
               "sessions.list" -> {
                 currentScope = currentScope.copy(connectionGeneration = 2)
                 """{"sessions":[],"totalCount":0,"hasMore":false}"""
               }
-              else -> error("unexpected method $method")
+
+              else -> {
+                error("unexpected method $method")
+              }
             }
           },
           cacheScope = { currentScope },
@@ -439,12 +491,18 @@ class ChatControllerSwarmProgressTest {
           requestGateway = { _, _ -> "{}" },
           requestGatewayForGateway = { gatewayId, method, _ ->
             when (method) {
-              "chat.metadata" -> """{"commands":[],"models":[],"swarmEnabled":true}"""
+              "chat.metadata" -> {
+                """{"commands":[],"models":[],"swarmEnabled":true}"""
+              }
+
               "sessions.list" -> {
                 listGateways += gatewayId
                 """{"sessions":[],"totalCount":0,"hasMore":false}"""
               }
-              else -> "{}"
+
+              else -> {
+                "{}"
+              }
             }
           },
           cacheScope = { currentScope },
@@ -490,7 +548,10 @@ class ChatControllerSwarmProgressTest {
           requestGateway = { _, _ -> "{}" },
           requestGatewayForGateway = { gatewayId, method, _ ->
             when (method) {
-              "chat.metadata" -> """{"commands":[],"models":[],"swarmEnabled":true}"""
+              "chat.metadata" -> {
+                """{"commands":[],"models":[],"swarmEnabled":true}"""
+              }
+
               "sessions.list" -> {
                 check(gatewayId == "gateway-a")
                 listStarted.complete(Unit)
@@ -508,7 +569,10 @@ class ChatControllerSwarmProgressTest {
                 }
                 """.trimIndent()
               }
-              else -> "{}"
+
+              else -> {
+                "{}"
+              }
             }
           },
           cacheScope = { currentScope },

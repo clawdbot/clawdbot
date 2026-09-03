@@ -4,7 +4,10 @@ import type { CiTestTimings } from "./ci-test-timings-schema.mts";
 export type CiTimingRun = {
   id: number;
   createdAt: string;
-  logs: ({ kind: "uiE2e"; text: string } | { kind: "compact"; text: string; labels: string[] })[];
+  logs: (
+    | { kind: "uiE2e" | "repoE2e"; text: string }
+    | { kind: "compact"; text: string; labels: string[] }
+  )[];
 };
 
 type Samples = Map<string, number[]>;
@@ -28,15 +31,19 @@ function seconds(value: string, unit: string): number {
   return Number(value) / (unit === "ms" ? 1000 : 1);
 }
 
-function readUiLog(text: string, samples: Samples, overhead: number[]) {
+function readE2eLog(text: string, samples: Samples, overhead?: number[]) {
   const files = new Map<string, number>();
+  let hasParallelFiles = false;
   for (const line of text.split("\n")) {
     const file =
-      /^\s*(?:\d{4}-\d\d-\d\dT[\d:.]+Z\s+)?✓\s+(?:\|ui-e2e\||ui-e2e)\s+(\S+\.e2e\.test\.ts)\s+\((\d+) tests?(?: \| \d+ (?:skipped|todo))*\)\s+([\d.]+)(m?s)(?:\s|$)/u.exec(
+      /^\s*(?:\d{4}-\d\d-\d\dT[\d:.]+Z\s+)?✓\s+(?:(\|ui-e2e(?:-(?:bundled|standalone|serial(?:-standalone)?))?\||ui-e2e(?:-(?:bundled|standalone|serial(?:-standalone)?))?)\s+)?(\S+\.test\.ts)\s+\((\d+) tests?(?: \| \d+ (?:skipped|todo))*\)\s+([\d.]+)(m?s)(?:\s|$)/u.exec(
         line,
       );
     if (file) {
-      files.set(file[1]!, seconds(file[3]!, file[4]!));
+      files.set(file[2]!, seconds(file[4]!, file[5]!));
+      hasParallelFiles ||=
+        file[1]?.includes("ui-e2e-bundled") === true ||
+        file[1]?.includes("ui-e2e-standalone") === true;
     }
     const summary = /\bDuration\s+([\d.]+)(m?s)\s+\([^)]*\btests\s+([\d.]+)(m?s)/u.exec(line);
     if (summary && files.size > 0) {
@@ -46,10 +53,13 @@ function readUiLog(text: string, samples: Samples, overhead: number[]) {
       }
       const value =
         (seconds(summary[1]!, summary[2]!) - seconds(summary[3]!, summary[4]!)) / files.size;
-      if (Number.isFinite(value)) {
+      // Vitest sums test time across workers, so wall-minus-tests measures
+      // per-file overhead only for serial invocations.
+      if (overhead && !hasParallelFiles && Number.isFinite(value)) {
         overhead.push(value);
       }
       files.clear();
+      hasParallelFiles = false;
     }
   }
 }
@@ -77,8 +87,8 @@ function readCompactLog(
     }
     const started = starts.get(key);
     if (exitCode === "0" && started !== undefined) {
-      // Keep contention from PLAN_CONCURRENCY=2: the packer predicts the same
-      // two-up workload; isolated timings would invalidate its admission caps.
+      // Preserve the workload as executed. Packed plans may be serial or
+      // concurrent, and admission must use the wrapper span it actually ran.
       recordSample(samples[profile], key, (Date.parse(timestamp) - started) / 1000);
     }
     starts.delete(key);
@@ -112,11 +122,13 @@ function refitMap(samples: Samples, previous: Record<string, number> = {}, contr
 export function refitTestTimings(runs: CiTimingRun[], previous?: CiTestTimings) {
   const samples = {
     uiE2e: new Map<string, number[]>(),
+    repoE2e: new Map<string, number[]>(),
     blacksmith: new Map<string, number[]>(),
     github: new Map<string, number[]>(),
   };
   const contributingRuns = {
     uiE2e: new Set<number>(),
+    repoE2e: new Set<number>(),
     blacksmith: new Set<number>(),
     github: new Set<number>(),
   };
@@ -124,19 +136,20 @@ export function refitTestTimings(runs: CiTimingRun[], previous?: CiTestTimings) 
   for (const run of runs) {
     const current = {
       uiE2e: new Map<string, number[]>(),
+      repoE2e: new Map<string, number[]>(),
       blacksmith: new Map<string, number[]>(),
       github: new Map<string, number[]>(),
     };
     for (const log of run.logs) {
       const text = stripVTControlCharacters(log.text);
-      if (log.kind === "uiE2e") {
-        readUiLog(text, current.uiE2e, overhead);
-      } else {
+      if (log.kind === "compact") {
         readCompactLog(text, log.labels, current);
+      } else {
+        readE2eLog(text, current[log.kind], log.kind === "uiE2e" ? overhead : undefined);
       }
     }
     // Retries or duplicate reporter lines in one run must not satisfy the two-run minimum.
-    for (const profile of ["uiE2e", "blacksmith", "github"] as const) {
+    for (const profile of ["uiE2e", "repoE2e", "blacksmith", "github"] as const) {
       // Missing or unparseable profile logs are not evidence that its keys disappeared.
       if (current[profile].size > 0) {
         contributingRuns[profile].add(run.id);
@@ -167,7 +180,12 @@ export function refitTestTimings(runs: CiTimingRun[], previous?: CiTestTimings) 
         contributingRuns.github.size,
       ),
     },
-    source: `median of ${runIds.length} successful main CI runs: ${runIds.join(", ")}`,
+    repoE2eFileSeconds: refitMap(
+      samples.repoE2e,
+      previous?.repoE2eFileSeconds,
+      contributingRuns.repoE2e.size,
+    ),
+    source: `median of ${runIds.length} successful CI and release-check runs: ${runIds.join(", ")}`,
     uiE2e: {
       fileSeconds: refitMap(
         samples.uiE2e,
@@ -200,6 +218,7 @@ export function refitTestTimings(runs: CiTimingRun[], previous?: CiTestTimings) 
       previous?.compactGroupSeconds.github,
     ],
     ["uiE2e.fileSeconds", timings.uiE2e.fileSeconds, previous?.uiE2e.fileSeconds],
+    ["repoE2eFileSeconds", timings.repoE2eFileSeconds, previous?.repoE2eFileSeconds],
     [
       "uiE2e",
       { perFileOverheadSeconds: timings.uiE2e.perFileOverheadSeconds },

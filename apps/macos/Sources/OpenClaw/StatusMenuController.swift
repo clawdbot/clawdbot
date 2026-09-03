@@ -91,9 +91,12 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         // Cache projection must precede network work: AppKit begins tracking immediately.
         self.renderCachedMenu()
         self.isMenuOpen = true
+        let previousTask = self.refreshTask
         self.refreshTask?.cancel()
         self.refreshTask = Task { [weak self] in
-            guard let self else { return }
+            // Reopening must wait for canceled store refreshes to release their loading state.
+            await previousTask?.value
+            guard let self, !Task.isCancelled else { return }
             async let sessionRefresh: Void = self.sessions.refresh(force: true)
             async let approvalRefresh: Void = self.approvals.refresh()
             async let healthRefresh: Void = HealthStore.shared.refresh(onDemand: true)
@@ -109,6 +112,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         guard menu === self.menu else { return }
         StatusMenuHighlightDelegate.shared.menu(menu, willHighlight: nil)
         self.isMenuOpen = false
+        self.refreshTask?.cancel()
         self.sessions.cancelPreviewTasks()
         self.summaries.menuDidClose()
         // Leaving the menu attached makes subsequent left clicks open AppKit's menu.
@@ -130,6 +134,8 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     private func installButton(in item: NSStatusItem) {
         guard let button = item.button else { return }
         let host = NSHostingView(rootView: self.makeIconView())
+        // The constraints below own sizing; animation must not remeasure the status item.
+        host.sizingOptions = []
         host.translatesAutoresizingMaskIntoConstraints = false
         button.addSubview(host)
         NSLayoutConstraint.activate([

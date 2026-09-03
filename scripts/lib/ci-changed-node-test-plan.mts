@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { isUiBrowserTestFile } from "../../test/vitest/vitest.ui-paths.mjs";
 import { detectChangedLanes } from "../changed-lanes.mts";
 import {
   buildVitestRunPlans,
@@ -13,12 +14,14 @@ import { listAvailableExtensionIds } from "./changed-extensions.mts";
 import {
   createNodeTestShards,
   isPolicyTestOwnedPath,
+  packNodeTestGroups,
   resolvePolicyTestTargets,
+  type NodeTestShardGroup,
 } from "./ci-node-test-plan.mts";
 import {
+  estimateExtensionTestCost,
   listExtensionTestFilesForRoots,
   resolveExtensionTestConfig,
-  resolveExtensionTestJobFileLimit,
   shouldSplitExtensionTestProcesses,
   splitExtensionTestJobTargets,
 } from "./extension-test-plan.mts";
@@ -27,19 +30,23 @@ import {
   resolveVitestPretestBuildMode,
   type VitestPretestBuildMode,
 } from "./vitest-build-prerequisites.mts";
+import { VITEST_PRETEST_BUILD_SECONDS } from "./vitest-shard-metadata.mts";
 
 type ChangedNodeTestShard = {
   checkName: string;
   configs: string[];
+  groups?: NodeTestShardGroup[];
   env?: Record<string, string>;
   includePatterns?: string[];
   planConcurrency?: number;
+  predictedSeconds?: number;
   pretestBuildMode?: VitestPretestBuildMode;
   requiresDist: boolean;
   runner: string;
   shardName: string;
   targets?: string[];
 };
+type ChangedExtensionConfigShard = ChangedNodeTestShard & { predictedSeconds: number };
 type CwdOptions = { cwd?: string };
 
 const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
@@ -47,6 +54,8 @@ const MAX_CHANGED_NODE_TEST_TARGETS = 96;
 // Each target runs in its own child process (isolation contract), so bound the
 // serial tail per job; the shard runner overlaps two children at a time.
 const CHANGED_NODE_TEST_TARGETS_PER_JOB = 12;
+const CHANGED_EXTENSION_FALLBACK_JOB_SECONDS = 150;
+const MAX_CHANGED_EXTENSION_FALLBACK_JOBS = 50;
 // Memory Core targets perform real SQLite/indexing work. Two concurrent Vitest
 // processes starve each other on 4-vCPU runners and push otherwise healthy
 // integration tests past the global timeout.
@@ -107,11 +116,11 @@ function isTestOnlyPath(changedPath: string) {
 }
 
 // Inputs `build:ci-artifacts` consumes: runtime/plugin/package sources plus
-// the build pipeline itself (mirrors the build-all cache key in ci.yml).
+// the build pipeline itself, including shared declaration publication and cache owners.
 // Built-artifact test inputs below also require this lane even though they do
 // not change the bytes under test.
 const BUILD_INPUT_RE =
-  /^(?:src|extensions|packages)\/|^(?:openclaw\.mjs|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml)$|^tsconfig[^/]*\.json$|^scripts\/(?:build-[^/]+|runtime-postbuild\.mts|write-plugin-sdk-entry-dts\.ts)$|^scripts\/lib\/(?:copy-assets\.ts|plugin-sdk-entries\.mts)$/u;
+  /^(?:src|extensions|packages)\/|^(?:openclaw\.mjs|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml)$|^tsconfig[^/]*\.json$|^tsdown(?:\.[^/]+)?\.config\.ts$|^scripts\/(?:build-[^/]+|runtime-postbuild\.mts|tsdown-build\.mts|write-(?:plugin-sdk|unified)-entry-dts\.ts)$|^scripts\/lib\/(?:copy-assets\.ts|plugin-sdk-entries\.mts|(?:build-artifact-cache|compiler-input-snapshot|declaration-stage|tsdown-[^/]+)\.mts)$/u;
 const BUILT_ARTIFACT_TEST_INPUTS = new Set([
   "extensions/browser/chrome-extension/relay-key.test-support.ts",
   "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts",
@@ -359,30 +368,37 @@ function resolveChangedExtensionRoots(changedPaths: string[]) {
   ];
 }
 
-function createChangedExtensionConfigShards(extensionRoots: string[]) {
+function createChangedExtensionConfigShards(
+  extensionRoots: string[],
+): ChangedExtensionConfigShard[] {
   const rootsByConfig = new Map<string, string[]>();
   for (const root of extensionRoots) {
     const config = resolveExtensionTestConfig(root);
     rootsByConfig.set(config, [...(rootsByConfig.get(config) ?? []), root]);
   }
+  const filesByConfig = new Map<string, string[]>();
+  for (const file of rootsByConfig.size > 0 ? listExtensionTestFilesForRoots(["extensions"]) : []) {
+    const config = resolveExtensionTestConfig(file.split("/").slice(0, 2).join("/"));
+    filesByConfig.set(config, [...(filesByConfig.get(config) ?? []), file]);
+  }
   const plans: Array<{
     config: string;
     env?: Record<string, string>;
     includePatterns?: string[];
+    predictedSeconds: number;
   }> = [...rootsByConfig].flatMap(([config, roots]) => {
     const splitProcesses = shouldSplitExtensionTestProcesses(config);
-    const testFiles = resolveExtensionTestJobFileLimit(config)
-      ? listExtensionTestFilesForRoots(splitProcesses ? roots : ["extensions"]).filter(
-          (file) =>
-            splitProcesses ||
-            resolveExtensionTestConfig(file.split("/").slice(0, 2).join("/")) === config,
-        )
-      : [];
+    const testFiles = (filesByConfig.get(config) ?? []).filter(
+      (file) => !splitProcesses || roots.some((root) => file.startsWith(`${root}/`)),
+    );
     const chunks = testFiles.length > 0 ? splitExtensionTestJobTargets(config, testFiles) : [roots];
+    const predictedSeconds = Math.ceil(
+      estimateExtensionTestCost(config, testFiles.length) / chunks.length,
+    );
     return chunks.length > 1
       ? chunks.map((includePatterns, index) =>
           Object.assign(
-            { config },
+            { config, predictedSeconds },
             splitProcesses
               ? { includePatterns }
               : {
@@ -396,15 +412,16 @@ function createChangedExtensionConfigShards(extensionRoots: string[]) {
                 },
           ),
         )
-      : [{ config }];
+      : [{ config, predictedSeconds }];
   });
-  return plans.map(({ config, env, includePatterns }, index) => {
+  return plans.map(({ config, env, includePatterns, predictedSeconds }, index) => {
     const suffix = plans.length === 1 ? "" : `-${index + 1}`;
-    const shard: ChangedNodeTestShard = {
+    const shard: ChangedExtensionConfigShard = {
       checkName: `checks-node-changed-extensions-config${suffix}`,
       configs: [config],
       // No plans overlap in this row, so CI can scale the single process's worker budget.
       planConcurrency: 1,
+      predictedSeconds,
       requiresDist: false,
       runner: DEFAULT_NODE_TEST_RUNNER,
       shardName: `changed-extensions-config${suffix}`,
@@ -414,6 +431,7 @@ function createChangedExtensionConfigShards(extensionRoots: string[]) {
     ]);
     if (pretestBuildMode) {
       shard.pretestBuildMode = pretestBuildMode;
+      shard.predictedSeconds = predictedSeconds + VITEST_PRETEST_BUILD_SECONDS[pretestBuildMode];
     }
     if (includePatterns) {
       shard.includePatterns = includePatterns;
@@ -465,12 +483,55 @@ export function createChangedExtensionFallbackShards(
   options: CwdOptions = {},
 ): ChangedNodeTestShard[] {
   const cwd = options.cwd ?? process.cwd();
-  if (hasCoreExtensionImpact(changedPaths, { cwd })) {
-    return createChangedExtensionConfigShards(
-      listAvailableExtensionIds().map((extensionId) => `extensions/${extensionId}`),
+  const shards = hasCoreExtensionImpact(changedPaths, { cwd })
+    ? createChangedExtensionConfigShards(
+        listAvailableExtensionIds().map((extensionId) => `extensions/${extensionId}`),
+      )
+    : createChangedExtensionConfigShardsForPaths(changedPaths, cwd);
+  const bins = packNodeTestGroups(
+    shards.toSorted(
+      (a, b) => b.predictedSeconds - a.predictedSeconds || a.shardName.localeCompare(b.shardName),
+    ),
+    // Each envelope retains its own child process. Share only the checkout;
+    // runtime preparation stays separate from other configs' readers.
+    (bin, shard) =>
+      bin.length === 1 &&
+      !bin[0].pretestBuildMode &&
+      !shard.pretestBuildMode &&
+      bin[0].configs[0] !== shard.configs[0] &&
+      bin[0].runner === shard.runner &&
+      bin[0].requiresDist === shard.requiresDist &&
+      bin[0].predictedSeconds + shard.predictedSeconds <= CHANGED_EXTENSION_FALLBACK_JOB_SECONDS,
+  );
+  if (bins.length > MAX_CHANGED_EXTENSION_FALLBACK_JOBS) {
+    throw new Error(
+      `changed plugin fallback exceeds ${MAX_CHANGED_EXTENSION_FALLBACK_JOBS} jobs (${bins.length} planned)`,
     );
   }
-  return createChangedExtensionConfigShardsForPaths(changedPaths, cwd);
+  // Singleton objects keep their full metadata and original relative order.
+  return bins
+    .toSorted((a, b) => shards.indexOf(a[0]) - shards.indexOf(b[0]))
+    .map((bin, index) =>
+      bin.length === 1
+        ? bin[0]
+        : {
+            checkName: `checks-node-changed-extensions-bundle-${index + 1}`,
+            configs: [],
+            groups: bin.map((shard) => ({
+              configs: shard.configs,
+              ...(shard.env ? { env: shard.env } : {}),
+              ...(shard.includePatterns ? { includePatterns: shard.includePatterns } : {}),
+              requiresDist: shard.requiresDist,
+              runner: shard.runner,
+              shard_name: shard.shardName,
+            })),
+            planConcurrency: 1,
+            predictedSeconds: bin.reduce((seconds, shard) => seconds + shard.predictedSeconds, 0),
+            requiresDist: bin[0].requiresDist,
+            runner: bin[0].runner,
+            shardName: `changed-extensions-bundle-${index + 1}`,
+          },
+    );
 }
 
 /**
@@ -536,10 +597,14 @@ export function createChangedNodeTestShards(
   // suite scans the checked-out tree and never consumes the built dist.
   const shards = [
     ...createChangedExtensionConfigShardsForPaths(livePaths, cwd),
-    ...createChangedTargetShards(targets, {
-      checkName: "checks-node-changed",
-      shardName: "changed",
-    }),
+    // Native browser files run in checks-ui, including precise changed-file plans.
+    ...createChangedTargetShards(
+      targets.filter((target) => !isUiBrowserTestFile(target)),
+      {
+        checkName: "checks-node-changed",
+        shardName: "changed",
+      },
+    ),
     ...(hasBuildArtifactAffectingChange(changedPaths) ? [] : [createBoundaryShard()]),
   ];
   return shards.length > 0 ? shards : null;
