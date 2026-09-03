@@ -8,6 +8,7 @@ import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.types.js";
+import { isOpenClawRuntimeContextCustomMessage } from "../internal-runtime-context.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { stripFrontmatter } from "../utils/frontmatter.js";
 import { AgentSessionBase } from "./agent-session-base.js";
@@ -26,8 +27,38 @@ function rethrowPromptFinalizationFailure(failed: boolean, error: unknown): void
   }
 }
 
+/** @internal Host preparation runs after SDK prompt hooks and owns its run cancellation. */
+export const agentSessionSetPromptPreparation: unique symbol = Symbol.for(
+  "openclaw.agent-session.set-prompt-preparation",
+);
+
+/** @internal Queue prompt-owned context with cleanup for preflight exits. */
+export const agentSessionQueuePromptContext: unique symbol = Symbol.for(
+  "openclaw.agent-session.queue-prompt-context",
+);
+
 export abstract class AgentSessionPrompting extends AgentSessionBase {
   private logicalPromptActive = false;
+  private promptPreparation?: () => Promise<void>;
+
+  [agentSessionQueuePromptContext](message: CustomMessage): () => void {
+    // The carrier belongs immediately after its user, ahead of queued extension context.
+    this.pendingNextTurnMessages.unshift(message);
+    return () => {
+      this.pendingNextTurnMessages = this.pendingNextTurnMessages.filter(
+        (pending) => pending !== message,
+      );
+    };
+  }
+
+  [agentSessionSetPromptPreparation](prepare: (() => Promise<void>) | undefined): void {
+    this.promptPreparation = prepare;
+  }
+
+  override dispose(): void {
+    this.promptPreparation = undefined;
+    super.dispose();
+  }
 
   // =========================================================================
   // Prompting
@@ -44,14 +75,14 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     this.logicalPromptActive = true;
     let endedForTurnHandoff = false;
     try {
-      await this.agent.prompt(messages);
+      await this.runPreparedAgentLoop(() => this.agent.prompt(messages));
       while (true) {
         const action = await this.handlePostAgentRun();
         if (action !== "continue") {
           endedForTurnHandoff = action === "handoff";
           break;
         }
-        await this.agent.continue();
+        await this.runPreparedAgentLoop(() => this.agent.continue());
       }
     } finally {
       this.systemPromptOverride = undefined;
@@ -84,6 +115,18 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       rethrowPromptFinalizationFailure(flushFailed, flushError);
       rethrowPromptFinalizationFailure(terminalFailed, terminalError);
     }
+  }
+
+  private async runPreparedAgentLoop(run: () => Promise<void>): Promise<void> {
+    const prepare = this.promptPreparation;
+    if (prepare) {
+      await prepare();
+      if (prepare !== this.promptPreparation) {
+        throw new Error("Session prompt preparation is stale after replacement or disposal.");
+      }
+    }
+    // Start synchronously after the owner check; disposal must not reopen a core loop.
+    return run();
   }
 
   private async handlePostAgentRun(): Promise<PostAgentRunAction> {
@@ -239,8 +282,22 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       }
 
       const persistedUserIdempotencyKey = options?.persistedUserIdempotencyKey;
+      const persistedUserIndex = persistedUserIdempotencyKey
+        ? this.agent.state.messages.findLastIndex(
+            (message) =>
+              message.role === "user" &&
+              "idempotencyKey" in message &&
+              message.idempotencyKey === persistedUserIdempotencyKey,
+          )
+        : -1;
+      // Outer retries reuse the recorded user/carrier pair. Re-enqueuing either
+      // would duplicate the turn and detach runtime context from its original prefix.
+      const replayPersistedTurn =
+        persistedUserIndex >= 0 &&
+        isOpenClawRuntimeContextCustomMessage(this.agent.state.messages[persistedUserIndex + 1]);
       const activeTail = this.agent.state.messages.at(-1);
       if (
+        !replayPersistedTurn &&
         persistedUserIdempotencyKey &&
         activeTail?.role === "user" &&
         "idempotencyKey" in activeTail &&
@@ -251,15 +308,17 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
         this.agent.state.messages = this.agent.state.messages.slice(0, -1);
       }
 
-      // Build messages array (custom message if any, then user message)
       messages = [];
 
-      // Add user message
-      messages.push(this.createUserMessage(expandedText, currentImages));
+      if (!replayPersistedTurn) {
+        messages.push(this.createUserMessage(expandedText, currentImages));
+      }
 
       // Inject any pending "nextTurn" messages as context alongside the user message
       for (const msg of this.pendingNextTurnMessages) {
-        messages.push(msg);
+        if (!replayPersistedTurn || !isOpenClawRuntimeContextCustomMessage(msg)) {
+          messages.push(msg);
+        }
       }
       this.pendingNextTurnMessages = [];
 

@@ -119,7 +119,7 @@ describe("plugin state keyed store", () => {
       await expect(asyncStore.lookup("counter")).resolves.toEqual({ count: 1 });
 
       await expect(
-        asyncStore.update?.("counter", (current) => ({ count: (current?.count ?? 0) + 1 })),
+        asyncStore.update("counter", (current) => ({ count: (current?.count ?? 0) + 1 })),
       ).resolves.toBe(true);
       expect(syncStore.lookup("counter")).toEqual({ count: 2 });
 
@@ -158,9 +158,6 @@ describe("plugin state keyed store", () => {
         maxEntries: 10,
       });
       const update = store.update;
-      if (!update) {
-        throw new Error("expected sync keyed store update support");
-      }
 
       expect(update("counter", (current) => ({ count: (current?.count ?? 0) + 1 }))).toBe(true);
       expect(update("counter", (current) => ({ count: (current?.count ?? 0) + 1 }))).toBe(true);
@@ -309,9 +306,6 @@ describe("plugin state keyed store", () => {
         code: "PLUGIN_STATE_LIMIT_EXCEEDED",
       });
       await expect(store.registerIfAbsent("first", 99)).resolves.toBe(false);
-      if (!store.update) {
-        throw new Error("plugin state update unavailable");
-      }
       vi.setSystemTime(3000);
       await expect(store.update("first", () => 10)).resolves.toBe(true);
       await expect(store.update("third", () => 3)).rejects.toMatchObject({
@@ -331,9 +325,6 @@ describe("plugin state keyed store", () => {
         maxEntries: 10,
       });
       await store.register("chat", { version: 1 });
-      if (!store.deleteIf) {
-        throw new Error("plugin state conditional delete unavailable");
-      }
 
       await expect(store.deleteIf("chat", (current) => current.version === 2)).resolves.toBe(false);
       await expect(store.lookup("chat")).resolves.toEqual({ version: 1 });
@@ -856,8 +847,9 @@ describe("plugin state keyed store", () => {
         namespace: "stopped",
         maxEntries: 10,
       });
-      store.register("telegram:personal", { stopped: true });
+      expect(store.update("telegram:personal", () => ({ stopped: true }))).toBe(true);
       expect(store.lookup("telegram:personal")).toEqual({ stopped: true });
+      expect(store.deleteIf("telegram:personal", (current) => current.stopped)).toBe(true);
       expect(() =>
         createPluginStateKeyedStore("core:not-a-plugin", { namespace: "bad", maxEntries: 10 }),
       ).toThrow(PluginStateStoreError);

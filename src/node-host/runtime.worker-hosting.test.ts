@@ -119,6 +119,30 @@ describe("node-host worker manifest", () => {
     expect(prepared.workerHostingEnabled).toBe(true);
   });
 
+  it("keeps container hosting opted out without probing an engine or reporting a failure", async () => {
+    const prepared = await prepareNodeHostRuntime({
+      config: {
+        nodeHost: {
+          skills: { enabled: false },
+          workerRuns: { enabled: false, isolation: "container" },
+        },
+      },
+      env: { PATH: "/usr/bin" },
+      enableWorkerRuns: true,
+    });
+    const onWorkerHostingDisabled = vi.fn();
+    const runtime = prepared.start({ client, onWorkerHostingDisabled });
+    try {
+      expect(prepared.workerHostingEnabled).toBe(false);
+      expect(prepared.workerHostingDisabledReason).toBeUndefined();
+      expect(mocks.resolveContainerEngine).not.toHaveBeenCalled();
+      expect(createNodeWorkerSupervisor).not.toHaveBeenCalled();
+      expect(onWorkerHostingDisabled).not.toHaveBeenCalled();
+    } finally {
+      await runtime.close();
+    }
+  });
+
   it("keeps local consent separate from connection metadata", async () => {
     const prepared = await prepareWorkerRuntime();
 

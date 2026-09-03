@@ -155,6 +155,7 @@ export function createSlackDraftStream(params: {
   const { loop, update, discardPending, seal } =
     createFinalizableDraftStreamControlsForState<SlackDraftStreamUpdate>({
       throttleMs,
+      coalesceInFlight: true,
       state: streamState,
       sendOrEditStreamMessage,
       emptyValue: "",

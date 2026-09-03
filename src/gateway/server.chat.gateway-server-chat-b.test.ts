@@ -19,7 +19,7 @@ import { createSessionsHistoryTool } from "../agents/tools/sessions-history-tool
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
-import { clearConfigCache, getRuntimeConfig } from "../config/config.js";
+import { getRuntimeConfig, resetConfigRuntimeState } from "../config/config.js";
 import { resolveSessionRoutingContract } from "../config/sessions/main-session.js";
 import {
   appendTranscriptEvent,
@@ -39,6 +39,7 @@ import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { onDiagnosticEvent, type DiagnosticPayloadLargeEvent } from "../infra/diagnostic-events.js";
+import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
 import { ExecApprovalsMigrationRequiredError } from "../infra/exec-approvals-migration-gate.js";
 import { getMediaDir } from "../media/store.js";
 import { installTemporaryCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
@@ -221,6 +222,7 @@ function createGatewayPluginMetadataSnapshot(config: OpenClawConfig): PluginMeta
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      modelIdNormalizationPolicies: new Map(),
     },
     metrics: {
       registrySnapshotMs: 0,
@@ -283,8 +285,8 @@ async function withGatewayChatHarness(
     if (process.env.OPENCLAW_CONFIG_PATH) {
       await fs.rm(process.env.OPENCLAW_CONFIG_PATH, { force: true });
     }
-    clearConfigCache();
     testState.sessionStorePath = undefined;
+    resetConfigRuntimeState();
     ws.close();
   }
 }
@@ -323,7 +325,7 @@ async function writeGatewayConfig(config: Record<string, unknown>) {
   }
   await fs.mkdir(path.dirname(configPath), { recursive: true });
   await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
-  clearConfigCache();
+  resetConfigRuntimeState();
 }
 
 async function writeMainSessionTranscript(
@@ -386,7 +388,7 @@ function openDirectChatSession() {
 function resetDirectChatSession() {
   dispatchInboundMessageMock.mockReset();
   testState.sessionStorePath = undefined;
-  clearConfigCache();
+  resetConfigRuntimeState();
 }
 
 async function writeStoredMainSession(entry: StoredSessionEntry = {}) {
@@ -635,6 +637,7 @@ test("chat.send replays a cached result after the session is archived", async ()
 });
 
 async function readTimelineEvents(filePath: string): Promise<Array<Record<string, unknown>>> {
+  flushDiagnosticsTimeline();
   const raw = await fs.readFile(filePath, "utf-8");
   return raw
     .trim()
@@ -883,7 +886,6 @@ describe("gateway server chat", () => {
         ).toMatchObject({ state: "active", environmentId: "env-placement" });
       } finally {
         testState.sessionStorePath = undefined;
-        clearConfigCache();
       }
     },
   );
@@ -933,7 +935,6 @@ describe("gateway server chat", () => {
         });
       } finally {
         testState.sessionStorePath = undefined;
-        clearConfigCache();
       }
     },
   );
@@ -1118,7 +1119,6 @@ describe("gateway server chat", () => {
       } finally {
         clearActiveEmbeddedRun("sess-main", handle, "main");
         testState.sessionStorePath = undefined;
-        clearConfigCache();
       }
     },
   );
@@ -1178,7 +1178,6 @@ describe("gateway server chat", () => {
       } finally {
         testState.sessionConfig = undefined;
         testState.sessionStorePath = undefined;
-        clearConfigCache();
       }
     },
   );
@@ -1384,7 +1383,6 @@ describe("gateway server chat", () => {
       } finally {
         handler.dispose();
         testState.sessionStorePath = undefined;
-        clearConfigCache();
       }
     },
   );
@@ -1730,7 +1728,6 @@ describe("gateway server chat", () => {
       } finally {
         testState.agentConfig = undefined;
         testState.sessionStorePath = undefined;
-        clearConfigCache();
       }
     },
   );
@@ -2021,7 +2018,6 @@ describe("gateway server chat", () => {
       testState.agentConfig = undefined;
       testState.agentsConfig = undefined;
       testState.sessionStorePath = undefined;
-      clearConfigCache();
     }
   });
 
@@ -2066,7 +2062,6 @@ describe("gateway server chat", () => {
             talk: { agentId: "main" },
           };
           await state.writeConfig(config);
-          clearConfigCache();
           const pluginMetadataSnapshot = createGatewayPluginMetadataSnapshot(config);
           assertPluginMetadataSnapshotConsistency(pluginMetadataSnapshot);
           releasePluginMetadata = installTemporaryCurrentPluginMetadataSnapshot(
@@ -2494,7 +2489,6 @@ describe("gateway server chat", () => {
           testState.agentsConfig = previousAgentsConfig;
           testState.sessionStorePath = undefined;
           releasePluginMetadata();
-          clearConfigCache();
         }
       },
     );
@@ -3737,7 +3731,6 @@ describe("gateway server chat", () => {
         dispatchInboundMessageMock.mockReset();
         testState.agentConfig = undefined;
         testState.sessionStorePath = undefined;
-        clearConfigCache();
       }
     },
   );
@@ -6263,6 +6256,7 @@ describe("gateway server chat", () => {
         },
       );
     } finally {
+      flushDiagnosticsTimeline();
       if (previousDiagnostics === undefined) {
         delete process.env.OPENCLAW_DIAGNOSTICS;
       } else {

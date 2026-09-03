@@ -165,6 +165,9 @@ export type OpenClawConfig = {
         | "beacon"
         | "phosphor"
         | "crt"
+        | "manuscript"
+        | "rose"
+        | "miami"
         | "custom";
       /** Light/dark preference. */
       themeMode?: "light" | "dark" | "system";
@@ -200,6 +203,8 @@ export type OpenClawConfig = {
   nodeHost?: NodeHostConfig;
   /** Agent definitions, defaults, bindings, and runtime policy. */
   agents?: AgentsConfig;
+  /** Global root for new managed worktrees. Defaults to <state-dir>/worktrees; accepts ~. */
+  worktreeRoot?: string;
   /** Tool exposure, policy, web/media tools, exec, and code-mode settings. */
   tools?: ToolsConfig;
   /** Legacy/direct agent bindings used by runtime resolution. */

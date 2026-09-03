@@ -446,10 +446,10 @@ final class AppState {
         guard !fields.isEmpty else { return nil }
         let fieldNames = fields.map(\.displayName)
         let fieldList = ListFormatter.localizedString(byJoining: fieldNames)
-        let message = String(localized: """
-        These settings changed outside the app while you were editing: \(fieldList). \
+        let message = String(format: String(localized: """
+        These settings changed outside the app while you were editing: %@. \
         Choose which version to keep.
-        """)
+        """), fieldList)
         return GatewayConfigConflict(
             fields: fields,
             fieldNames: fieldNames,
@@ -740,12 +740,10 @@ extension AppState {
             }
 
             if draft.dirtyFields.contains(.remoteUrl) {
-                let trimmedUrl = draft.remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines)
-                if trimmedUrl.isEmpty {
-                    changed = Self.updateGatewayString(&remote, key: "url", value: nil) || changed
-                } else if let normalizedUrl = GatewayRemoteConfig.normalizeGatewayUrlString(trimmedUrl) {
-                    changed = Self.updateGatewayString(&remote, key: "url", value: normalizedUrl) || changed
-                }
+                // Reconciliation needs the incomplete draft too, or it mistakes the
+                // unchanged disk URL for a saved edit. gatewayDraftCanPersist gates writes.
+                let url = GatewayRemoteConfig.normalizeGatewayUrlString(draft.remoteUrl) ?? draft.remoteUrl
+                changed = Self.updateGatewayString(&remote, key: "url", value: url) || changed
             }
 
         case .ssh:

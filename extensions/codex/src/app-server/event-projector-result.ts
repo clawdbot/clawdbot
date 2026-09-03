@@ -5,6 +5,7 @@ import {
   type MessagingToolSend,
   type MessagingToolSourceReplyPayload,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveCodexTtsProvenanceTransfer } from "openclaw/plugin-sdk/codex-mcp-projection";
 import {
   attemptTerminal,
   type AttemptFailureSource,
@@ -29,6 +30,8 @@ export type CodexAppServerToolTelemetry = {
   messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
   heartbeatToolResponse?: HeartbeatToolResponse;
   toolMediaUrls?: string[];
+  toolAutoDeliveryMediaUrls?: string[];
+  coreTtsToolResults?: object[];
   toolAudioAsVoice?: boolean;
   successfulCronAdds?: number;
 } & Pick<EmbeddedRunAttemptResult, "acceptedSessionSpawns">;
@@ -59,7 +62,6 @@ type CodexAttemptResultInput = {
     | "collectAsyncMessages"
     | "collectCommentaryMessages"
     | "createAssistantMessage"
-    | "createAssistantMirrorMessage"
     | "createCurrentAttemptAssistantMessage"
     | "hasAssistantItemTextForSynthesis"
   >;
@@ -158,8 +160,6 @@ export function buildCodexAttemptResult(
     commentaryMessages,
     toolMessages: input.toolTranscriptProjection.transcriptMessages,
     lastAssistant,
-    createAssistantMirrorMessage: (title, text) =>
-      input.assistantProjection.createAssistantMirrorMessage(title, text),
   });
   const turnFailed = input.completedTurn?.status === "failed";
   const promptError =
@@ -181,7 +181,13 @@ export function buildCodexAttemptResult(
     ) ||
     input.generatedMediaProjection.hasGeneratedMedia() ||
     input.toolProgressProjection.hasPotentialSideEffects;
-  return {
+  const sentMediaUrls = new Set(
+    input.toolTelemetry.messagingToolSentMediaUrls.map((url) => url.trim()),
+  );
+  const toolAutoDeliveryMediaUrls = input.toolTelemetry.toolAutoDeliveryMediaUrls?.filter(
+    (url) => !sentMediaUrls.has(url.trim()),
+  );
+  const result = {
     terminal: attemptTerminal.normalize({
       aborted: input.aborted,
       promptError,
@@ -237,4 +243,9 @@ export function buildCodexAttemptResult(
     yieldDetected: input.yieldDetected || false,
     didSendDeterministicApprovalPrompt: input.guardianReviewCount > 0 ? false : undefined,
   };
+  const transferTtsProvenance = resolveCodexTtsProvenanceTransfer(input.runParams.hostCapabilities);
+  for (const toolResult of input.toolTelemetry.coreTtsToolResults ?? []) {
+    transferTtsProvenance?.(toolResult, result, toolAutoDeliveryMediaUrls ?? []);
+  }
+  return result;
 }

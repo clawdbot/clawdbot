@@ -559,6 +559,7 @@ function buildVoiceTestHarness() {
         sessionLifecycle: { status: "active" },
         playbackQueue: Promise.resolve(),
         processingQueue: Promise.resolve(),
+        audioInputBudget: { enabled: true, maxBytes: 20 * 1024 * 1024 },
         ttsStreamFallbackWarned: false,
         capture: createVoiceCaptureState(),
         receiveRecovery: createVoiceReceiveRecoveryState(),

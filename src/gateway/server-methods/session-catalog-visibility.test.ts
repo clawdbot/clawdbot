@@ -40,7 +40,8 @@ vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => (
   ...(await importOriginal<typeof import("../../config/sessions/session-accessor.js")>()),
   listSessionEntriesReadOnly: hoisted.listSessionEntriesReadOnly,
 }));
-vi.mock("../../state/user-profiles.js", () => ({
+vi.mock("../../state/user-profiles.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/user-profiles.js")>()),
   getUserProfileRole: hoisted.getUserProfileRole,
   hasMultipleSessionSharingIdentities: hoisted.hasMultipleSessionSharingIdentities,
 }));
@@ -349,6 +350,56 @@ describe("session catalog caller visibility", () => {
       }),
     );
     expect(read).not.toHaveBeenCalled();
+  });
+
+  it("shares only Gateway-hosted catalog rows with authenticated operators", async () => {
+    hoisted.hasMultipleSessionSharingIdentities.mockReturnValue(true);
+    const sharedRead = vi.fn(async () => ({
+      hostId: "gateway:local",
+      threadId: "shared-snapshot",
+      items: [{ type: "userMessage" as const, text: "sanitized snapshot" }],
+    }));
+    hoisted.activeRegistry.sessionCatalogs = [
+      {
+        provider: provider({
+          id: "beam",
+          label: "Beam",
+          audience: "gateway-operators",
+          list: vi.fn(async () => [host([session("shared-snapshot")])]),
+          read: sharedRead,
+        }),
+      },
+      {
+        provider: provider({
+          id: "codex",
+          list: vi.fn(async () => [host([session("private-native")])]),
+        }),
+      },
+    ];
+    const operator = unprofiledClient(["operator.read"]);
+
+    const listed = await call("sessions.catalog.list", {}, operator);
+    const transcript = await call(
+      "sessions.catalog.read",
+      { catalogId: "beam", hostId: "gateway:local", threadId: "shared-snapshot" },
+      operator,
+    );
+
+    expect(listed.mock.calls[0]?.[1]?.catalogs).toEqual([
+      expect.objectContaining({
+        id: "beam",
+        hosts: [expect.objectContaining({ sessions: [session("shared-snapshot")] })],
+      }),
+      expect.objectContaining({
+        id: "codex",
+        hosts: [expect.objectContaining({ sessions: [] })],
+      }),
+    ]);
+    expect(transcript).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ threadId: "shared-snapshot" }),
+    );
+    expect(sharedRead).toHaveBeenCalledOnce();
   });
 
   it.each([

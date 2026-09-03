@@ -251,6 +251,8 @@ export const TalkClientMutationResultSchema = closedObject({
 export const TalkClientToolCallResultSchema = closedObject({
   runId: NonEmptyString,
   idempotencyKey: NonEmptyString,
+  agentId: NonEmptyString,
+  agentSessionKey: NonEmptyString,
 });
 
 /** Text steering request for a Talk session bound to an agent turn. */

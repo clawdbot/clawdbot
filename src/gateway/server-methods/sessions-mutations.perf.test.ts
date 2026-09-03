@@ -1,4 +1,3 @@
-import { performance } from "node:perf_hooks";
 import { afterEach, expect, test, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
@@ -275,17 +274,12 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
         },
       } as unknown as GatewayRequestContext;
 
-      const startedAt = performance.now();
       await sessionMutationHandlers["sessions.patchMany"]!({
         params: { targets, patch: { archived: true } },
         respond,
         context,
         client: humanClient(),
       } as never);
-      const elapsedMs = performance.now() - startedAt;
-      console.info(`[perf] sessions.patchMany archive-30 ${elapsedMs.toFixed(2)}ms`);
-      expect(elapsedMs).toBeLessThan(1_000);
-
       expect(respond).toHaveBeenCalledWith(
         true,
         {
@@ -293,6 +287,7 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
         },
         undefined,
       );
+      // Guard batch cost with operation counts, independent of shared-runner contention.
       expect(statements.counts["whole-store-projection"]).toBe(0);
       expect(statements.counts["transcript-full-hydration"]).toBe(0);
       // Archive attribution stays in the session-store batch; transcripts are untouched.

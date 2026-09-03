@@ -12,12 +12,13 @@ import type {
   ChatComposerMemoryFallback,
   ChatGuardianNotice,
   ChatStreamSegment,
+  HumanMention,
 } from "../../lib/chat/chat-types.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
-import type { ChatState } from "./chat-history.ts";
 import type { ChatRealtimeState } from "./chat-realtime.ts";
 import type { ChatSendTimingEntry } from "./chat-send-ack.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
+import type { ChatState } from "./chat-state-contract.ts";
 import type { ChatProps } from "./chat-view.ts";
 import type { BackgroundTasksHost } from "./components/chat-background-tasks.ts";
 import type { SessionWorkspaceHost } from "./components/chat-session-workspace.ts";
@@ -34,7 +35,7 @@ import type {
   FallbackStatus,
   ToolStreamEntry,
   WaitingApprovalStatus,
-} from "./tool-stream.ts";
+} from "./tool-stream-contract.ts";
 
 export type { ChatComposerMemoryFallback } from "../../lib/chat/chat-types.ts";
 
@@ -43,7 +44,7 @@ export type ChatPageHost = ChatHost &
   ChatRealtimeState &
   SessionWorkspaceHost &
   BackgroundTasksHost & {
-    initialUserMessage: ApplicationContext["initialUserMessage"];
+    chatSubmissions: ApplicationContext["chatSubmissions"];
     password: string;
     onboarding: boolean;
     assistantName: string;
@@ -137,7 +138,7 @@ export type ChatPageHost = ChatHost &
     loadAssistantIdentity: () => Promise<void>;
     applySettings: (patch: Partial<UiSettings>) => void;
     handleChatScroll: (event: Event) => void;
-    handleChatDraftChange: (next: string) => void;
+    handleChatDraftChange: (next: string, mentions?: readonly HumanMention[]) => void;
     handleChatInputHistoryKey: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
     handleSendChat: (
       messageOverride?: string,
@@ -150,7 +151,7 @@ export type ChatPageHost = ChatHost &
     steerQueuedChatMessage: (id: string) => Promise<void>;
     moveQueuedChatMessage: (id: string, toIndex: number) => void;
     editQueuedChatMessage: (id: string) => void;
-    updateQueuedChatMessageEdit: (draftText: string) => void;
+    updateQueuedChatMessageEdit: (draftText: string, mentions?: readonly HumanMention[]) => void;
     submitQueuedChatMessageEdit: () => void;
     cancelQueuedChatMessageEdit: () => void;
     handleCloseSidebar: (slot: "detail" | "workspace") => void;

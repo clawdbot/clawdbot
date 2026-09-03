@@ -19,7 +19,11 @@ import {
 } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import {
+  ensureGatewayOwnerProfile,
+  ensureProfileForEmail,
+  setUserProfileRole,
+} from "../state/user-profiles.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
 import {
   resolveSessionMutationAuthorization,
@@ -210,7 +214,7 @@ test("sessions.recover settles its active placement before archiving a real sess
     expect(committedBeforeReclaim).toBe(false);
     expect(reclaim).toHaveBeenCalledWith(
       { agentId: "main", sessionId: sourceSessionId, sessionKey: sourceKey },
-      undefined,
+      expect.any(Function),
       expect.any(Function),
     );
     const unsettledSource = loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath });
@@ -652,13 +656,30 @@ test("sessions.recover rejects a healthy session", async () => {
   });
 });
 
-test.each([false, true])(
-  "sessions.recover uses the recovering creator's sandbox requirement (%s), not its source's",
-  async (required) => {
+test.each([
+  { identity: "operator", required: false },
+  { identity: "operator", required: true },
+  { identity: "system", required: false },
+  { identity: "system", required: true },
+  { identity: "owner", required: false },
+  { identity: "owner", required: true },
+  { identity: "identityless", required: false },
+  { identity: "identityless", required: true },
+] as const)(
+  "sessions.recover preserves $identity isolation (profile requirement: $required)",
+  async ({ identity, required }) => {
+    const systemActor = identity !== "operator";
     const { storePath } = await createSessionStoreDir();
     const owner = ensureProfileForEmail("recovery-source-owner@example.test");
-    const recovering = ensureProfileForEmail("recovery-requester@example.test");
-    setUserProfileRole(recovering.id, "requester");
+    const recovering =
+      identity === "identityless"
+        ? undefined
+        : systemActor
+          ? ensureGatewayOwnerProfile("Gateway Owner")
+          : ensureProfileForEmail("recovery-requester@example.test");
+    if (recovering && !systemActor) {
+      setUserProfileRole(recovering.id, "requester");
+    }
     const sourceKey = "agent:main:dashboard:creator-policy-recovery";
     const sourceStamp = {
       createdVia: "operator" as const,
@@ -691,6 +712,9 @@ test.each([false, true])(
     };
     const request = {
       client: {
+        ...(systemActor && identity !== "owner"
+          ? { internal: { operatorRoleActor: { kind: "system" as const } } }
+          : {}),
         connect: {
           minProtocol: 3,
           maxProtocol: 3,
@@ -698,14 +722,21 @@ test.each([false, true])(
           role: "operator",
           scopes: ["operator.write"],
         },
-        authenticatedUserProfile: {
-          profileId: recovering.id,
-          displayName: recovering.displayName,
-          hasAvatar: false,
-          updatedAt: recovering.updatedAt,
-        },
+        ...(recovering
+          ? {
+              authenticatedUserProfile: {
+                profileId: recovering.id,
+                displayName: recovering.displayName,
+                hasAvatar: false,
+                updatedAt: recovering.updatedAt,
+              },
+            }
+          : {}),
       },
-      context: { getRuntimeConfig: () => cfg },
+      context: {
+        getRuntimeConfig: () =>
+          identity === "owner" ? { ...cfg, gateway: { ...cfg.gateway, roles: undefined } } : cfg,
+      },
     };
     type RecoveryPayload = { key: string; continuation: { status: string } };
     const recovered = await directSessionReq<RecoveryPayload>(
@@ -721,10 +752,16 @@ test.each([false, true])(
     const successor = loadSessionEntry(scope);
     expect(successor).toMatchObject({
       createdVia: "operator",
-      createdActor: { type: "human", source: "profile", id: recovering.id },
       createdAt: expect.any(Number),
     });
-    expect(successor?.sandbox).toBe(required ? "required" : undefined);
+    expect(successor?.createdActor).toEqual(
+      recovering
+        ? { type: "human", source: "profile", id: recovering.id }
+        : sourceStamp.sandbox === "required"
+          ? sourceStamp.createdActor
+          : undefined,
+    );
+    expect(successor?.sandbox).toBe((systemActor ? !required : required) ? "required" : undefined);
     expect(successor?.createdAt).not.toBe(sourceStamp.createdAt);
     const repeated = await directSessionReq<RecoveryPayload>(
       "sessions.recover",
@@ -732,11 +769,10 @@ test.each([false, true])(
       request,
     );
     expect(repeated.payload?.key).toBe(scope.sessionKey);
-    expect(loadSessionEntry(scope)).toMatchObject({
-      createdActor: successor?.createdActor,
-      createdAt: successor?.createdAt,
-    });
-    expect(loadSessionEntry(scope)?.sandbox).toBe(successor?.sandbox);
+    const repeatedEntry = loadSessionEntry(scope);
+    expect(repeatedEntry?.createdActor).toEqual(successor?.createdActor);
+    expect(repeatedEntry?.createdAt).toBe(successor?.createdAt);
+    expect(repeatedEntry?.sandbox).toBe(successor?.sandbox);
     const source = loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath });
     expect(source).toMatchObject(sourceStamp);
     expect(source?.sandbox).toBe(required ? undefined : "required");
@@ -811,28 +847,14 @@ test("sessions.recover revalidates participation at the recovery writer commit",
   const { storePath } = await createSessionStoreDir();
   const sourceKey = "agent:main:dashboard:recovery-participation-race";
   const sourceSessionId = "recovery-participation-race-source";
-  await writeSessionStore({
-    entries: {
-      [sourceKey]: sessionStoreEntry(sourceSessionId, {
-        status: "failed",
-        abortedLastRun: true,
-        visibility: "read-only",
-        createdActor: { type: "human", source: "profile", id: "owner" },
-        mainRestartRecovery: {
-          cycleId: "cycle-recovery-participation-race",
-          revision: 1,
-          chargedAttempts: 3,
-          tombstone: { reason: "automatic recovery exhausted" },
-        },
-      }),
-    },
-  });
-  await seedSessionTranscript({
-    agentId: "main",
-    sessionId: sourceSessionId,
-    sessionKey: sourceKey,
+  await seedRecoverableSession({
+    sourceKey,
+    sourceSessionId,
     storePath,
-    messages: [{ role: "user", content: "recover this private session" }],
+    overrides: {
+      visibility: "read-only",
+      createdActor: { type: "human", source: "profile", id: "owner" },
+    },
   });
   addSessionMember(
     { agentId: "main", sessionKey: sourceKey, storePath },
@@ -962,29 +984,7 @@ test("sessions.recover rejects continuation launch after runtime authority close
   const { storePath } = await createSessionStoreDir();
   const sourceKey = "agent:main:dashboard:authority-race";
   const sourceSessionId = "authority-race-source";
-  await writeSessionStore({
-    entries: {
-      [sourceKey]: sessionStoreEntry(sourceSessionId, {
-        status: "failed",
-        abortedLastRun: true,
-        mainRestartRecovery: {
-          cycleId: "cycle-authority-race",
-          revision: 1,
-          chargedAttempts: 3,
-          tombstone: { reason: "automatic recovery exhausted" },
-        },
-      }),
-    },
-  });
-  await seedSessionTranscript({
-    agentId: "main",
-    sessionId: sourceSessionId,
-    sessionKey: sourceKey,
-    storePath,
-    messages: [{ role: "user", content: "continue after recovery" }],
-  });
-  let validations = 0;
-
+  await seedRecoverableSession({ sourceKey, sourceSessionId, storePath });
   const recovered = await directSessionReq<{
     key: string;
     continuation: { status: string; error?: { message?: string } };
@@ -993,7 +993,9 @@ test("sessions.recover rejects continuation launch after runtime authority close
     { agentId: "main", key: sourceKey },
     {
       context: {
-        validateAgentRuntimeApprovalAuthority: () => ++validations < 2,
+        validateAgentRuntimeApprovalAuthority: () =>
+          !loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath })
+            ?.mainRestartRecovery?.tombstone?.recoveredSessionKey,
       },
       client: {
         connect: { scopes: ["operator.write"] },
@@ -1017,7 +1019,6 @@ test("sessions.recover rejects continuation launch after runtime authority close
       },
     },
   });
-  expect(validations).toBe(2);
   expect(
     loadSessionEntry({
       agentId: "main",

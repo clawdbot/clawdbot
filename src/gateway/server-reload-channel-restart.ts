@@ -9,13 +9,13 @@ import type { StartChannelOptions } from "./server-channel-runtime.types.js";
 import type { GatewayReloadHandlerParams } from "./server-reload-contracts.js";
 import { collectChannelOperationFailures } from "./server-reload-utils.js";
 
-function startGatewayChannelFromActiveRegistry(
+async function startGatewayChannelFromActiveRegistry(
   params: Pick<GatewayReloadHandlerParams, "startChannel">,
   channel: ChannelKind,
   accountId?: string,
   options: Pick<StartChannelOptions, "skipUnavailableAccounts"> = {},
 ): Promise<void> {
-  return withPluginRuntimeRegistryScope(requireActivePluginChannelRegistry(), () =>
+  await withPluginRuntimeRegistryScope(requireActivePluginChannelRegistry(), () =>
     // Reload and rollback replace snapshots, not the operator's stopped intent.
     runOutsideGatewayRootWorkAdmission(() =>
       params.startChannel(channel, accountId, { preserveManualStop: true, ...options }),

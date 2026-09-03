@@ -53,14 +53,50 @@ afterEach(() => {
 });
 
 describe("check-package-patches", () => {
-  it.each([
-    ["baileys@7.0.0-rc12", "patches/baileys@7.0.0-rc12.patch"],
-    ["baileys@7.0.0-rc13", "patches/baileys@7.0.0-rc13.patch"],
-    ["@vitest/runner@4.1.11", "patches/@vitest__runner@4.1.11.patch"],
-    ["vitest@4.1.11", "patches/vitest@4.1.11.patch"],
-  ])("allows approved pnpm patch %s", (specifier, patchPath) => {
+  it("allows approved pnpm patches together", () => {
+    const approvedPatches = [
+      ["@awesome.me/webawesome@3.12.0", "patches/@awesome.me__webawesome@3.12.0.patch"],
+      ["baileys@7.0.0-rc12", "patches/baileys@7.0.0-rc12.patch"],
+      ["baileys@7.0.0-rc13", "patches/baileys@7.0.0-rc13.patch"],
+      ["@vitest/runner@4.1.11", "patches/@vitest__runner@4.1.11.patch"],
+      ["vitest@4.1.11", "patches/vitest@4.1.11.patch"],
+      ["matrix-js-sdk@42.2.0", "patches/matrix-js-sdk@42.2.0.patch"],
+    ] as const;
     const dir = makeRepo();
     mkdirSync(path.join(dir, "patches"), { recursive: true });
+    writeFileSync(
+      path.join(dir, "pnpm-workspace.yaml"),
+      `packages:
+  - .
+patchedDependencies:
+${approvedPatches.map(([specifier, patchPath]) => `  "${specifier}": "${patchPath}"`).join("\n")}
+`,
+      "utf8",
+    );
+    writeFileSync(
+      path.join(dir, "pnpm-lock.yaml"),
+      `lockfileVersion: '9.0'
+patchedDependencies:
+${approvedPatches.map(([specifier]) => `  "${specifier}": a9aea1790d2c65b1ae543c77faca4119bbfb91ee3b6ca6c38d1cad4f5702ada2`).join("\n")}
+`,
+      "utf8",
+    );
+    for (const [, patchPath] of approvedPatches) {
+      writeFileSync(path.join(dir, patchPath), "diff\n", "utf8");
+    }
+    git(dir, ["add", "pnpm-workspace.yaml", "pnpm-lock.yaml", "patches"]);
+
+    expect(collectPackagePatchViolations(dir)).toEqual([]);
+  });
+
+  it.each([
+    ["left-pad@1.3.0", "patches/left-pad@1.3.0.patch"],
+    ["matrix-js-sdk@42.2.1", "patches/matrix-js-sdk@42.2.1.patch"],
+    ["matrix-js-sdk@42.2.0", "patches/matrix-js-sdk@42.2.0-other.patch"],
+  ])("rejects unapproved workspace patch %s -> %s", (specifier, patchPath) => {
+    const dir = makeRepo();
+    mkdirSync(path.join(dir, "patches"), { recursive: true });
+    mkdirSync(path.join(dir, "fixtures"), { recursive: true });
     writeFileSync(
       path.join(dir, "pnpm-workspace.yaml"),
       `packages:
@@ -70,34 +106,7 @@ patchedDependencies:
 `,
       "utf8",
     );
-    writeFileSync(
-      path.join(dir, "pnpm-lock.yaml"),
-      `lockfileVersion: '9.0'
-patchedDependencies:
-  "${specifier}": a9aea1790d2c65b1ae543c77faca4119bbfb91ee3b6ca6c38d1cad4f5702ada2
-`,
-      "utf8",
-    );
     writeFileSync(path.join(dir, patchPath), "diff\n", "utf8");
-    git(dir, ["add", "pnpm-workspace.yaml", "pnpm-lock.yaml", "patches"]);
-
-    expect(collectPackagePatchViolations(dir)).toEqual([]);
-  });
-
-  it("rejects new workspace patchedDependencies and patch files", () => {
-    const dir = makeRepo();
-    mkdirSync(path.join(dir, "patches"), { recursive: true });
-    mkdirSync(path.join(dir, "fixtures"), { recursive: true });
-    writeFileSync(
-      path.join(dir, "pnpm-workspace.yaml"),
-      `packages:
-  - .
-patchedDependencies:
-  "left-pad@1.3.0": "patches/left-pad@1.3.0.patch"
-`,
-      "utf8",
-    );
-    writeFileSync(path.join(dir, "patches", "left-pad@1.3.0.patch"), "diff\n", "utf8");
     writeFileSync(path.join(dir, "fixtures", "fixture.patch"), "diff\n", "utf8");
     git(dir, ["add", "pnpm-workspace.yaml", "patches", "fixtures"]);
 
@@ -105,7 +114,7 @@ patchedDependencies:
       {
         file: "pnpm-workspace.yaml",
         kind: "patchedDependency",
-        detail: "left-pad@1.3.0 -> patches/left-pad@1.3.0.patch",
+        detail: `${specifier} -> ${patchPath}`,
       },
       {
         file: "fixtures/fixture.patch",
@@ -113,7 +122,7 @@ patchedDependencies:
         detail: "new package patch file",
       },
       {
-        file: "patches/left-pad@1.3.0.patch",
+        file: patchPath,
         kind: "patchFile",
         detail: "new package patch file",
       },

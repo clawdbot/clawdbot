@@ -7,6 +7,10 @@ export function toCodeModeJsonSafe(value: unknown): unknown {
   if (value === undefined) {
     return null;
   }
+  // Strings, booleans and null need no detachment or JSON normalization.
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    return value;
+  }
   try {
     const serialized = JSON.stringify(value);
     return serialized === undefined ? null : (JSON.parse(serialized) as unknown);
@@ -14,13 +18,8 @@ export function toCodeModeJsonSafe(value: unknown): unknown {
     if (value instanceof Error) {
       return { name: value.name, message: value.message };
     }
-    if (value === null) {
-      return null;
-    }
     switch (typeof value) {
-      case "string":
       case "number":
-      case "boolean":
         return value;
       case "bigint":
       case "symbol":
@@ -72,23 +71,30 @@ export function captureCodeModeOutput(output: unknown[], maxBytes: number): Code
 
 const TRUNCATION_GUIDANCE = "Output truncated; rerun with narrower args.";
 
+function fitJsonPrefix<T>(text: string, maxBytes: number, project: (prefix: string) => T): T {
+  let low = 0;
+  let high = Math.min(Buffer.byteLength(text, "utf8"), maxBytes);
+  // JSON escaping makes serialized bytes cost more than raw prefix bytes.
+  // Measure the complete projection so fitting cannot erase a useful prefix.
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (jsonUtf8Bytes(project(truncateUtf8Prefix(text, middle))) <= maxBytes) {
+      low = middle;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return project(truncateUtf8Prefix(text, low));
+}
+
 function truncationMarker(source: CodeModeJsonSource, maxBytes: number) {
   const originalBytes = sourceBytes(source);
-  let prefix = truncateUtf8Prefix(source.json, maxBytes);
-  while (true) {
-    const prefixBytes = Buffer.byteLength(prefix, "utf8");
-    const candidate = {
-      truncated: true,
-      omittedBytes: originalBytes - prefixBytes,
-      guidance: TRUNCATION_GUIDANCE,
-      prefix,
-    };
-    const overflow = jsonUtf8Bytes(candidate) - maxBytes;
-    if (overflow <= 0 || prefixBytes === 0) {
-      return candidate;
-    }
-    prefix = truncateUtf8Prefix(prefix, Math.max(0, prefixBytes - overflow));
-  }
+  return fitJsonPrefix(source.json, maxBytes, (prefix) => ({
+    truncated: true,
+    omittedBytes: originalBytes - Buffer.byteLength(prefix, "utf8"),
+    guidance: TRUNCATION_GUIDANCE,
+    prefix,
+  }));
 }
 
 function projectValue(source: CodeModeJsonSource, maxBytes: number): unknown {
@@ -103,23 +109,9 @@ export function boundCodeModeValue(value: unknown, maxBytes: number): unknown {
 }
 
 export function boundCodeModeError(error: string, maxBytes: number): string {
-  if (jsonUtf8Bytes(error) <= maxBytes) {
-    return error;
-  }
-  let low = 0;
-  let high = Math.min(Buffer.byteLength(error, "utf8"), maxBytes);
-  // Escaped characters cost more in JSON than in UTF-8; removing the serialized
-  // overflow from the raw prefix can erase the entire diagnostic.
-  while (low < high) {
-    const middle = Math.ceil((low + high) / 2);
-    const candidate = `${truncateUtf8Prefix(error, middle)} [error truncated]`;
-    if (jsonUtf8Bytes(candidate) <= maxBytes) {
-      low = middle;
-    } else {
-      high = middle - 1;
-    }
-  }
-  return `${truncateUtf8Prefix(error, low)} [error truncated]`;
+  return jsonUtf8Bytes(error) <= maxBytes
+    ? error
+    : fitJsonPrefix(error, maxBytes, (prefix) => `${prefix} [error truncated]`);
 }
 
 type DeliveryReceipt =

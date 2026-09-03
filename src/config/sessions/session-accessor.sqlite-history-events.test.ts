@@ -27,11 +27,14 @@ function historyEventId(entry: { event: unknown } | undefined): unknown {
   return event && typeof event === "object" && "id" in event ? event.id : undefined;
 }
 
-function enforceSqliteVariableLimit(database: OpenClawAgentDatabase): void {
+function enforceSqliteVariableLimit(
+  database: OpenClawAgentDatabase,
+  limit = REGRESSION_SQLITE_VARIABLE_LIMIT,
+): void {
   const prepare = database.db.prepare.bind(database.db);
   vi.spyOn(database.db, "prepare").mockImplementation((source) => {
     const variableCount = source.match(/\?/gu)?.length ?? 0;
-    if (variableCount > REGRESSION_SQLITE_VARIABLE_LIMIT) {
+    if (variableCount > limit) {
       throw new Error("too many SQL variables");
     }
     return prepare(source);
@@ -318,30 +321,84 @@ describe("SQLite transcript history events", () => {
     expect(events.map(historyEventId)).toEqual(["seed", "active-boundary-2", "active-boundary-4"]);
   });
 
-  it("bounds metadata bindings when the raw history window exceeds SQLite's limit", async () => {
+  it.each([REGRESSION_MAX_MESSAGES, REGRESSION_SQLITE_VARIABLE_LIMIT + 1])(
+    "reads %s recent messages with bounded metadata bindings",
+    async (maxMessages) => {
+      await persistSessionTranscriptTurn(scope, {
+        messages: [{ eventId: "seed", parentId: null, message: { role: "user", content: "seed" } }],
+        touchSessionEntry: false,
+      });
+      const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
+      const bindingCount = Math.max(REGRESSION_SQLITE_VARIABLE_LIMIT, maxMessages);
+      insertSyntheticHistory(database, scope.sessionId, bindingCount);
+      enforceSqliteVariableLimit(database);
+
+      const page = readRecentSessionTranscriptHistoryEvents(scope, {
+        maxBytes: 1_000_000,
+        maxLines: bindingCount + 1,
+        maxMessages,
+      });
+
+      expect(page.totalMessages).toBe(bindingCount + 1);
+      expect(page.events).toHaveLength(maxMessages);
+      expect(historyEventId(page.events[0])).toBe(
+        `synthetic-message-${String(bindingCount - maxMessages + 2)}`,
+      );
+      expect(historyEventId(page.events.at(-1))).toBe(
+        `synthetic-message-${String(bindingCount + 1)}`,
+      );
+    },
+  );
+
+  it("batches sparse reset history without reviving discarded tool results", async () => {
+    const keptIds = Array.from({ length: 1_001 }, (_, index) => `kept-${index}`);
     await persistSessionTranscriptTurn(scope, {
-      messages: [{ eventId: "seed", parentId: null, message: { role: "user", content: "seed" } }],
+      messages: keptIds.flatMap((eventId, index) => [
+        {
+          eventId,
+          parentId: index === 0 ? null : `tool-${index - 1}`,
+          message: { role: "user", content: eventId },
+        },
+        {
+          eventId: `tool-${index}`,
+          parentId: eventId,
+          message: { role: "toolResult", content: "discarded orphan result" },
+        },
+      ]),
+      touchSessionEntry: false,
+    });
+    await appendTranscriptEvent(scope, {
+      type: "reset",
+      id: "reset",
+      parentId: "tool-1000",
+      timestamp: "2026-08-30T00:00:00.000Z",
+      reason: "new",
+      firstKeptEntryId: keptIds[0],
+    });
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        { eventId: "fresh", parentId: "reset", message: { role: "user", content: "fresh" } },
+      ],
       touchSessionEntry: false,
     });
     const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
-    const bindingCount = REGRESSION_SQLITE_VARIABLE_LIMIT;
-    insertSyntheticHistory(database, scope.sessionId, bindingCount);
-    enforceSqliteVariableLimit(database);
+    enforceSqliteVariableLimit(database, 999);
 
     const page = readRecentSessionTranscriptHistoryEvents(scope, {
       maxBytes: 1_000_000,
-      maxLines: bindingCount + 1,
-      maxMessages: REGRESSION_MAX_MESSAGES,
+      maxLines: 2_010,
+      maxMessages: keptIds.length + 2,
     });
-
-    expect(page.totalMessages).toBe(bindingCount + 1);
-    expect(page.events).toHaveLength(REGRESSION_MAX_MESSAGES);
-    expect(historyEventId(page.events[0])).toBe(
-      `synthetic-message-${String(bindingCount - REGRESSION_MAX_MESSAGES + 2)}`,
+    expect(page.totalMessages).toBe(keptIds.length + 2);
+    expect(page.events.map(historyEventId)).toEqual([...keptIds, "reset", "fresh"]);
+    expect(page.events.map(({ seq }) => seq)).toEqual(
+      Array.from({ length: keptIds.length + 2 }, (_, index) => index + 1),
     );
-    expect(historyEventId(page.events.at(-1))).toBe(
-      `synthetic-message-${String(bindingCount + 1)}`,
-    );
+    expect(
+      readSessionTranscriptHistoryEventPage(scope, { offset: 500, maxMessages: 2 }).events.map(
+        historyEventId,
+      ),
+    ).toEqual(["kept-501", "kept-502"]);
   });
 
   it("reads more boundaries than SQLite permits as statement bindings", async () => {

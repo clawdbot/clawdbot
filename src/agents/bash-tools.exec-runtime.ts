@@ -49,11 +49,13 @@ import {
 import {
   appendExecTimeoutRetryGuidance,
   renderExecExitLabel,
+  renderExecOutputText,
   renderExecUpdateText,
 } from "./bash-tools.exec-output.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { chunkString, clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
+import { buildGitHubExecLaunchArgv } from "./github-exec-launch.js";
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { createSessionSlug } from "./session-slug.js";
@@ -568,7 +570,7 @@ function buildExecExitOutcome(params: {
       exitSignal: params.exit.exitSignal,
       exitReason: params.exit.reason,
       durationMs: params.durationMs,
-      aggregated: params.aggregated + exitMsg,
+      aggregated: (exitMsg ? renderExecOutputText(params.aggregated) : params.aggregated) + exitMsg,
       timedOut: false,
       noOutputTimedOut: params.exit.noOutputTimedOut,
     };
@@ -667,6 +669,8 @@ export async function runExecProcess({
   execCommand?: string;
   workdir: string;
   env: Record<string, string>;
+  /** Host-selected managed profile; never inferred from the requested environment. */
+  githubProfileDir?: string;
   pathPrepend?: string[];
   sandbox?: BashSandboxConfig;
   containerWorkdir?: string | null;
@@ -926,21 +930,15 @@ export async function runExecProcess({
       env: shellRuntimeEnv,
     });
 
-    const childArgv = [shell, ...shellArgs, commandWithShellSnapshot];
-    if (opts.usePty) {
-      return {
-        mode: "pty" as const,
-        ptyCommand: commandWithShellSnapshot,
-        childFallbackArgv: childArgv,
-        env: shellRuntimeEnv,
-        stdinMode: "pipe-open" as const,
-      };
-    }
+    const shellArgv = [shell, ...shellArgs, commandWithShellSnapshot];
+    const argv = opts.githubProfileDir
+      ? buildGitHubExecLaunchArgv(shellArgv, opts.githubProfileDir)
+      : shellArgv;
     return {
-      mode: "child" as const,
-      argv: childArgv,
+      mode: opts.usePty ? ("pty" as const) : ("child" as const),
+      argv,
       env: shellRuntimeEnv,
-      stdinMode: "pipe-closed" as const,
+      stdinMode: opts.usePty ? ("pipe-open" as const) : ("pipe-closed" as const),
     };
   };
 
@@ -998,7 +996,7 @@ export async function runExecProcess({
         managedRun = await spawn({
           ...spawnBase,
           mode: "pty",
-          ptyCommand: spawnSpec.ptyCommand,
+          argv: spawnSpec.argv,
         });
       } catch (err) {
         startupSignal?.throwIfAborted();
@@ -1009,15 +1007,9 @@ export async function runExecProcess({
         opts.warnings.push(warning);
         usingPty = false;
         await assertPreSpawnAuthorized();
-        managedRun = await spawn({
-          ...spawnBase,
-          mode: "child",
-          argv: spawnSpec.childFallbackArgv,
-          stdinMode: "pipe-open",
-          onStdout: handleStdout,
-        });
       }
-    } else {
+    }
+    if (!managedRun) {
       managedRun = await spawn({
         ...spawnBase,
         mode: "child",

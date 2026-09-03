@@ -1,3 +1,4 @@
+import path from "node:path";
 import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import { parseDurationMs } from "../cli/parse-duration.js";
@@ -229,6 +230,9 @@ export const OpenClawSchemaShape = {
               z.literal("beacon"),
               z.literal("phosphor"),
               z.literal("crt"),
+              z.literal("manuscript"),
+              z.literal("rose"),
+              z.literal("miami"),
               z.literal("custom"),
             ])
             .optional(),
@@ -299,6 +303,19 @@ export const OpenClawSchemaShape = {
   models: ModelsConfigSchema,
   nodeHost: NodeHostSchema,
   agents: AgentsSchema,
+  worktreeRoot: z
+    .string()
+    .trim()
+    .min(1)
+    .refine(
+      (value) =>
+        path.isAbsolute(value) ||
+        value === "~" ||
+        value.startsWith("~/") ||
+        value.startsWith(`~${path.sep}`),
+      "worktreeRoot must be an absolute path or a path starting with ~",
+    )
+    .optional(),
   tools: ToolsSchema,
   security: SecuritySchema,
   bindings: BindingsSchema,
@@ -321,6 +338,7 @@ export const OpenClawSchemaShape = {
   cron: z
     .strictObject({
       enabled: z.boolean().optional(),
+      skipMissedJobs: z.boolean().optional(),
       triggers: z
         .strictObject({
           enabled: z.boolean().optional(),
@@ -365,6 +383,7 @@ export const OpenClawSchemaShape = {
         .array(
           z.strictObject({
             providerId: z.string().min(1),
+            whenOccupied: z.boolean().optional(),
             sessionId: z.string().min(1).optional(),
             title: z.string().min(1).optional(),
             accountId: z.string().min(1).optional(),

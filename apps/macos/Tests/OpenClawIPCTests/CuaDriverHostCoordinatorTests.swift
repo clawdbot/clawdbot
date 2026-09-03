@@ -425,35 +425,6 @@ struct CuaDriverHostCoordinatorTests {
         #expect(launch.environment["PATH"] == "/usr/bin:/bin")
     }
 
-    @Test func `stderr relay replaces the raw danger banner with one managed mode notice`() async throws {
-        let probe = CuaDriverStderrProbe()
-        let relay = CuaDriverStderrRelay { probe.append($0) }
-        relay.startReading()
-        relay.reportManagedMode()
-        relay.reportManagedMode()
-
-        let driverOutput = """
-        DANGER: Cua Driver is running in unrestricted mode. Runtime approval prompts are disabled.
-        driver diagnostic
-
-        """
-        // The relay's readability handler calls stop() on any empty read, which
-        // closes the pipe's read end; without suppression a racing stop turns
-        // this write into a harness-killing SIGPIPE.
-        try TestProcessSupport.suppressSIGPIPE(relay.pipe.fileHandleForWriting)
-        try relay.pipe.fileHandleForWriting.write(contentsOf: Data(driverOutput.utf8))
-        try relay.pipe.fileHandleForWriting.close()
-        for _ in 0..<1000 where probe.events.count < 2 {
-            await Task.yield()
-        }
-        relay.stop()
-
-        #expect(probe.events == [
-            .notice(CuaDriverStderrRelay.managedModeNotice),
-            .error("driver diagnostic"),
-        ])
-    }
-
     @Test func `unexpected exits retry with a bounded budget while advertising unavailable`() async throws {
         let delays = CuaRestartDelayProbe()
         let root = try ExecApprovalsSocketTestSupport.makeRoot()
@@ -689,19 +660,6 @@ struct CuaDriverHostCoordinatorTests {
             descriptors.count,
             Int(populatedBytes) / MemoryLayout<proc_fdinfo>.stride)
         return descriptors.prefix(count).contains { $0.proc_fd == descriptor }
-    }
-}
-
-private final class CuaDriverStderrProbe: @unchecked Sendable {
-    private let lock = NSLock()
-    private var captured: [CuaDriverStderrEvent] = []
-
-    var events: [CuaDriverStderrEvent] {
-        self.lock.withLock { self.captured }
-    }
-
-    func append(_ event: CuaDriverStderrEvent) {
-        self.lock.withLock { self.captured.append(event) }
     }
 }
 

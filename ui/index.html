@@ -30,6 +30,9 @@
           beacon: 1,
           phosphor: 1,
           crt: 1,
+          manuscript: 1,
+          rose: 1,
+          miami: 1,
         };
         var MODES = { system: 1, light: 1, dark: 1 };
         var LEGACY = {
@@ -70,6 +73,9 @@
             beacon: ["beacon", "beacon-light"],
             phosphor: ["phosphor", "phosphor-light"],
             crt: ["crt", "crt-light"],
+            manuscript: ["manuscript", "manuscript-light"],
+            rose: ["rose", "rose-light"],
+            miami: ["miami", "miami-light"],
           };
           var pair = FAMILIES[theme];
           var resolved = pair
@@ -79,9 +85,13 @@
               : "dark";
           if (pair) {
             // Script-created links need explicit render blocking before first paint.
-            // The gateway stamps the mount prefix on <html> before this runs.
+            // The gateway stamps the mount prefix and asset version before this runs.
             var base =
               document.documentElement.getAttribute("data-openclaw-control-ui-base-path") || "";
+            var buildId = document.documentElement.getAttribute(
+              "data-openclaw-control-ui-build-id",
+            );
+            var version = buildId ? "?v=" + encodeURIComponent(buildId) : "";
             var palette = document.createElement("link");
             palette.rel = "stylesheet";
             palette.setAttribute("blocking", "render");
@@ -89,7 +99,7 @@
             palette.onerror = function () {
               palette.remove();
             };
-            palette.href = base + "/themes/" + theme + ".css";
+            palette.href = base + "/themes/" + theme + ".css" + version;
             document.head.appendChild(palette);
           }
           document.documentElement.setAttribute("data-theme", resolved);
@@ -172,6 +182,30 @@
 
       html[data-theme="crt-light"] {
         background: #f5f5f4;
+      }
+
+      html[data-theme="manuscript"] {
+        background: #211e18;
+      }
+
+      html[data-theme="manuscript-light"] {
+        background: #f6f1e4;
+      }
+
+      html[data-theme="rose"] {
+        background: #191724;
+      }
+
+      html[data-theme="rose-light"] {
+        background: #faf4ed;
+      }
+
+      html[data-theme="miami"] {
+        background: #140f1e;
+      }
+
+      html[data-theme="miami-light"] {
+        background: #f7f3f6;
       }
 
       body {

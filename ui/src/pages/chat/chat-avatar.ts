@@ -1,4 +1,5 @@
 // Control UI chat module implements chat avatar behavior.
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, type TemplateResult } from "lit";
 import { buildControlUiResourcePath } from "../../../../src/gateway/control-ui-resource-routes.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
@@ -9,6 +10,7 @@ import {
   resolveLocalUserAvatarUrl,
   resolveLocalUserName,
 } from "../../app/user-identity.ts";
+import { icons } from "../../components/icons.ts";
 import {
   identityAvatarClass,
   renderIdentityAvatarImage,
@@ -21,7 +23,11 @@ import {
   isRenderableControlUiAvatarUrl,
   resolveAssistantTextAvatar,
 } from "../../lib/avatar.ts";
-import { normalizeMessage, normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
+import {
+  normalizeRoleForGrouping,
+  readMessageSenderSession,
+  resolveMessageRole,
+} from "../../lib/chat/message-normalizer.ts";
 import type { SenderIdentity } from "../../lib/chat/sender-label.ts";
 import { formatSenderLabel } from "../../lib/chat/sender-label.ts";
 import { resolveAvatarImageUrl } from "../../lib/identity-avatar-loader.ts";
@@ -136,23 +142,35 @@ function renderAgentAvatar(
     : fallback;
 }
 
-export type SenderAgentAvatarOptions = {
+type ForwardedAvatarOptions = {
   agentId?: string;
   agents?: AgentsListResult["agents"];
   senderAgentAvatars?: ReadonlyMap<string, string | null>;
+  assistantName?: string;
+  assistantAvatar?: string | null;
+  resourceBasePath?: string;
   assistantAttachmentAuthToken?: string | null;
 };
 
-export function renderSenderAgentAvatar(
-  agentId: string | undefined,
-  opts: SenderAgentAvatarOptions,
-) {
-  const agent =
-    agentId && agentId !== opts.agentId
-      ? opts.agents?.find((candidate) => candidate.id === agentId)
-      : undefined;
+export function renderForwardedAvatar(agentId: string | undefined, opts: ForwardedAvatarOptions) {
+  // Forwarded rows carry the source agent's identity: another
+  // agent's avatar via the sender map, the current agent's own
+  // avatar for same-agent sessions, and the forward glyph only for
+  // unresolvable or legacy sources.
+  if (agentId && agentId === opts.agentId) {
+    return renderChatAvatar(
+      "assistant",
+      { name: opts.assistantName ?? "Assistant", avatar: opts.assistantAvatar ?? null },
+      undefined,
+      opts.resourceBasePath,
+      opts.assistantAttachmentAuthToken,
+    );
+  }
+  const agent = agentId ? opts.agents?.find((candidate) => candidate.id === agentId) : undefined;
   if (!agent) {
-    return undefined;
+    return html`<div class="chat-avatar chat-avatar--forwarded" aria-hidden="true">
+      ${icons.forward}
+    </div>`;
   }
   const name = agent.identity?.name?.trim() || agent.id;
   return renderAgentAvatar(
@@ -293,19 +311,11 @@ function buildAvatarMetaUrl(resourceBasePath: string, agentId: string): string {
   return `${buildControlUiResourcePath("agentAvatar", resourceBasePath, agentId)}?meta=1`;
 }
 
-function clearChatAvatarUrl(host: ChatAvatarHost) {
-  host.chatAvatarUrl = null;
-}
-
 function clearChatAvatarState(host: ChatAvatarHost) {
-  clearChatAvatarUrl(host);
+  host.chatAvatarUrl = null;
   host.chatAvatarSource = null;
   host.chatAvatarStatus = null;
   host.chatAvatarReason = null;
-}
-
-function setChatAvatarUrl(host: ChatAvatarHost, nextUrl: string | null) {
-  host.chatAvatarUrl = nextUrl;
 }
 
 function applyChatAvatarSnapshot(
@@ -316,7 +326,7 @@ function applyChatAvatarSnapshot(
   host.chatAvatarSource = snapshot.source;
   host.chatAvatarStatus = snapshot.status;
   host.chatAvatarReason = snapshot.reason;
-  setChatAvatarUrl(host, snapshot.url);
+  host.chatAvatarUrl = snapshot.url;
   chatAvatarDisplayedAgents.set(host as object, agentId);
 }
 
@@ -562,9 +572,11 @@ export async function refreshSenderAgentAvatars(
   senderAvatarInputs.set(host, inputs);
   // Use the same normalized sender metadata as grouping, after each transcript commit.
   const agentIds = host.chatMessages.flatMap((message) => {
-    const normalized = normalizeMessage(message);
-    const id = normalized.senderSession?.agentId;
-    return normalized.role === "assistant" && id ? [id] : [];
+    if (resolveMessageRole(message) !== "assistant") {
+      return [];
+    }
+    const id = readMessageSenderSession(asOptionalRecord(message)?.senderSession)?.agentId;
+    return id ? [id] : [];
   });
   await loadSenderAgentAvatars(host, agentIds);
 }

@@ -1,14 +1,20 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { attachRuntimePromptMediaFacts } from "../../../media/media-facts.js";
 import type { ProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
+import { resolveSandboxContext as resolveRealSandboxContext } from "../../sandbox/context.js";
 import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
+import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
+import { buildEmbeddedForegroundPromptContext } from "./agent-end-context.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const resolveProviderRuntimePluginHandle = vi.hoisted(() => vi.fn());
-const resolveSandboxContext = vi.hoisted(() => vi.fn(async () => null));
+const resolveSandboxContext = vi.hoisted(() =>
+  vi.fn<typeof resolveRealSandboxContext>(async () => null),
+);
 
 vi.mock("../../../plugins/provider-hook-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../plugins/provider-hook-runtime.js")>()),
@@ -26,6 +32,7 @@ import {
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("prepareEmbeddedAttemptSetup", () => {
   beforeEach(() => {
@@ -51,6 +58,62 @@ describe("prepareEmbeddedAttemptSetup", () => {
     } as unknown as EmbeddedRunAttemptParams);
 
     expect(setup.sessionAgentId).toBe("marketing");
+  });
+
+  it.each(
+    [undefined, "global", "agent:main:policy"].flatMap((sandboxSessionKey) =>
+      [false, true].map((detached) => ({ sandboxSessionKey, detached })),
+    ),
+  )(
+    "prepares a global workspace with policy $sandboxSessionKey (detached=$detached)",
+    async ({ sandboxSessionKey, detached }) => {
+      resolveSandboxContext.mockImplementationOnce(resolveRealSandboxContext);
+      const workspaceDir = tempDirs.make("openclaw-global-attempt-");
+      const foreground = {
+        agentId: "marketing",
+        sessionId: "global-attempt",
+        sessionKey: "global",
+        sandboxSessionKey,
+        workspaceDir,
+      };
+      const setup = await resolveAttemptWorkspaceSandbox({
+        ...foreground,
+        ...(detached
+          ? {
+              ...buildEmbeddedForegroundPromptContext(foreground, workspaceDir),
+              sessionId: "detached-review",
+              sessionKey: "agent:marketing:review",
+            }
+          : {}),
+        config: {
+          agents: {
+            ownership: "explicit",
+            defaults: { sandbox: { mode: "off" } },
+            list: [{ id: "main" }, { id: "marketing" }],
+          },
+        },
+      });
+      expect(setup.sessionAgentId).toBe("marketing");
+      expect(setup.sandbox).toBeNull();
+      expect(setup.effectiveWorkspace).toBe(workspaceDir);
+    },
+  );
+
+  it("does not apply an execution owner to an independent unscoped sandbox policy", async () => {
+    resolveSandboxContext.mockImplementationOnce(resolveRealSandboxContext);
+    const workspaceDir = tempDirs.make("openclaw-policy-attempt-");
+    await expect(
+      resolveAttemptWorkspaceSandbox({
+        agentId: "marketing",
+        config: {
+          agents: { ownership: "explicit", list: [{ id: "main" }, { id: "marketing" }] },
+        },
+        sessionId: "policy-attempt",
+        sessionKey: "agent:marketing:main",
+        sandboxSessionKey: "global",
+        workspaceDir,
+      }),
+    ).rejects.toThrow("Pass an agentId");
   });
 
   it("hydrates recent history media from the prepared session agent workspace", async () => {
@@ -80,6 +143,8 @@ describe("prepareEmbeddedAttemptSetup", () => {
       getPromptCache: () => undefined,
       getPromptCacheRetention: () => undefined,
       getCompactionReplayEnabled: () => false,
+      getServerToolClearingEnabled: () => false,
+      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
       getSystemPrompt: () => "",
       isOpenAIResponsesApi: false,
       repairToolUseResultPairing: false,

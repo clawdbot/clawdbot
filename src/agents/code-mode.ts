@@ -20,10 +20,8 @@ import {
 } from "./code-mode-control-tools.js";
 import { runCodeModeExec, runWait } from "./code-mode-execution.js";
 import { runCodeModeScriptHeadless } from "./code-mode-headless.js";
-import {
-  createCodeModeNamespaceRuntime,
-  describeCodeModeNamespacesForPrompt,
-} from "./code-mode-namespaces.js";
+import { describeCodeModeNamespacesForPrompt } from "./code-mode-namespaces.js";
+import { markCodeModePermissionChangeResult } from "./code-mode-repair-provenance.js";
 import {
   isCodeModeEngagedForModel,
   readCode,
@@ -167,15 +165,9 @@ function createCodeModeExecDescription(
     ? " Skills are available through the async `skills` global: use `await skills.list()` and `await skills.read(name)`."
     : "";
   const { maxOutputBytes } = config;
+  // The catalog already reserves built-in namespace globals without constructing their runtimes.
   const projection = catalog
-    ? createCodeModeCatalogProjection(
-        catalog.map((entry) => compactToolSearchCatalogEntry(entry)),
-        {
-          reservedNames: createCodeModeNamespaceRuntime(catalog).descriptors.map(
-            (descriptor) => descriptor.globalName,
-          ),
-        },
-      )
+    ? createCodeModeCatalogProjection(catalog.map((entry) => compactToolSearchCatalogEntry(entry)))
     : undefined;
   const catalogIndex = projection ? formatCodeModeCatalogIndex(projection.bindings) : "";
   return (
@@ -226,6 +218,9 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       signal?: AbortSignal,
       onUpdate?: AgentToolUpdateCallback,
     ) => {
+      // Context closure fences new calls; the supplied signal owns in-flight
+      // cancellation so sessions_yield can still finish its initiating handoff.
+      ctx.abortSignal?.throwIfAborted();
       const input = readCode(args);
       const executionContext = getAgentToolExecutionContext();
       let runtime: ToolSearchRuntime | undefined;
@@ -248,6 +243,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
           },
         }),
       );
+      markCodeModePermissionChangeResult(result, signal);
       return formatToolSearchControlResult(result, runtime, undefined, result.status);
     },
   } as AnyAgentTool);
@@ -269,6 +265,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       signal?: AbortSignal,
       onUpdate?: AgentToolUpdateCallback,
     ) => {
+      ctx.abortSignal?.throwIfAborted();
       let runtime: ToolSearchRuntime | undefined;
       const result = normalizeCodeModeTimeoutResult(
         await runWait({
@@ -282,6 +279,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
           },
         }),
       );
+      markCodeModePermissionChangeResult(result, signal);
       return formatToolSearchControlResult(result, runtime, undefined, result.status);
     },
   } as AnyAgentTool);

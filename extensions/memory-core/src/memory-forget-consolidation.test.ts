@@ -157,12 +157,7 @@ describe("memory forget", () => {
         ],
       });
       const subagent = {
-        run: vi.fn(async () => ({ runId: "shared-consolidation" })),
-        waitForRun: vi.fn(async () => ({ status: "ok" })),
-        getSessionMessages: vi.fn(async () => ({
-          messages: [{ role: "assistant", content: output }],
-        })),
-        deleteSession: vi.fn(async () => undefined),
+        complete: vi.fn(async () => ({ text: output })),
       };
 
       if (failOrigins) {

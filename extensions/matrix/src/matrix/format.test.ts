@@ -40,6 +40,65 @@ const MATRIX_FORMAT_GOLDENS = [
 ] as const;
 
 describe("Matrix formatting migration goldens", () => {
+  it.each([
+    {
+      name: "inline",
+      markdown: "Run `rg foo || true`.",
+      body: "Run `rg foo || true`.",
+      html: "<p>Run <code>rg foo || true</code>.</p>",
+    },
+    {
+      name: "fenced",
+      markdown: "```sh\nrg foo || true\n```",
+      body: "```sh\nrg foo || true\n```",
+      html: '<pre><code class="language-sh">rg foo || true\n</code></pre>',
+    },
+    {
+      name: "indented",
+      markdown: "    rg foo || true",
+      body: "    rg foo || true",
+      html: "<pre><code>rg foo || true\n</code></pre>",
+    },
+    {
+      name: "mixed",
+      markdown: "Run `rg foo || true` then ||secret||.",
+      body: "Run rg foo || true then [Spoiler].",
+      html: "<p>Run <code>rg foo || true</code> then <span data-mx-spoiler>secret</span>.</p>",
+    },
+    {
+      name: "underline-looking tag inside code",
+      markdown: '`<u title="||secret||">`',
+      body: '`<u title="||secret||">`',
+      html: "<p><code>&lt;u title=&quot;||secret||&quot;&gt;</code></p>",
+    },
+    {
+      name: "code inside escaped tag text",
+      markdown: '\\<u title="`||literal||`">label',
+      body: '\\<u title="`||literal||`">label',
+      html: "<p>&lt;u title=&quot;<code>||literal||</code>&quot;&gt;label</p>",
+    },
+    {
+      name: "code inside underline content",
+      markdown: "<u>`||literal||`</u>",
+      body: "<u>`||literal||`</u>",
+      html: "<p><u><code>||literal||</code></u></p>",
+    },
+  ])("preserves literal code pipes in $name text and HTML", async ({ markdown, body, html }) => {
+    expect(markdownToMatrixBody(markdown)).toBe(body);
+    expect(markdownToMatrixHtml(markdown)).toBe(html);
+    const rendered = await renderMarkdownToMatrixHtmlWithMentions({
+      markdown,
+      client: createMentionClient(),
+    });
+    expect(rendered.html).toBe(html);
+    expect(rendered.mentions).toEqual({});
+  });
+
+  it.each(["u", "ins"])("keeps code-looking pipes inside %s attributes fail closed", (tag) => {
+    const markdown = `<${tag} title="\`||secret||\`">label</${tag}>`;
+    expect(markdownToMatrixBody(markdown)).toBe("[Spoiler]");
+    expect(markdownToMatrixHtml(markdown)).toBe("<p>[Spoiler]</p>");
+  });
   for (const golden of MATRIX_FORMAT_GOLDENS) {
     it(`${golden.name}: emits the authorized before-to-after payload`, () => {
       expect(markdownToMatrixHtml(golden.markdown)).toBe(golden.html);

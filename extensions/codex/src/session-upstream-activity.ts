@@ -6,8 +6,8 @@ import type {
   SessionUpstreamProbe,
 } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { CodexAppServerRpcError } from "./app-server/client.js";
 import type { CodexTurn, CodexUserInput } from "./app-server/protocol.js";
+import { isCodexThreadReadMissingError } from "./app-server/rpc-error.js";
 import {
   sessionBindingIdentity,
   type CodexAppServerBindingStore,
@@ -18,20 +18,6 @@ import type {
 } from "./session-catalog-types.js";
 
 const CODEX_UPSTREAM_TURN_LIMIT = 100;
-// codex-rs app-server thread/read maps a gone rollout to JSON-RPC invalid_request
-// with exactly this message prefix (read_thread_view "thread not loaded"). The code
-// alone is generic (other store validation reuses it), so both must match; a harness
-// message rename degrades to the old silent gap instead of unlinking live threads.
-const CODEX_APP_SERVER_INVALID_REQUEST_CODE = -32600;
-const CODEX_THREAD_NOT_LOADED_MESSAGE_PREFIX = "thread not loaded:";
-
-function isCodexThreadGoneError(error: unknown): boolean {
-  return (
-    error instanceof CodexAppServerRpcError &&
-    error.code === CODEX_APP_SERVER_INVALID_REQUEST_CODE &&
-    error.message.startsWith(CODEX_THREAD_NOT_LOADED_MESSAGE_PREFIX)
-  );
-}
 
 type CodexUpstreamControl = Pick<
   CodexSessionCatalogControl,
@@ -147,8 +133,7 @@ function normalizeUserMessageTexts(item: CodexTurn["items"][number]): string[] {
 async function checkCodexUpstreamActivity(
   probes: SessionUpstreamProbe[],
   control: CodexUpstreamControl,
-  resolveThreadId: (probe: SessionUpstreamProbe) => Promise<string> = async (probe) =>
-    probe.threadId,
+  resolveThreadId: (probe: SessionUpstreamProbe) => string = (probe) => probe.threadId,
 ): Promise<SessionUpstreamActivity[]> {
   return await control.withPinnedConnection(async (pinned) => {
     const activities: SessionUpstreamActivity[] = [];
@@ -162,7 +147,7 @@ async function checkCodexUpstreamActivity(
         continue;
       }
       try {
-        const threadId = await resolveThreadId(probe);
+        const threadId = resolveThreadId(probe);
         const page = await pinned.listTurnPage({
           threadId,
           limit: CODEX_UPSTREAM_TURN_LIMIT,
@@ -178,7 +163,7 @@ async function checkCodexUpstreamActivity(
           try {
             await pinned.readThread(threadId, false);
           } catch (error) {
-            if (isCodexThreadGoneError(error)) {
+            if (isCodexThreadReadMissingError(error, threadId)) {
               activities.push({ kind: "missing", sessionKey: probe.sessionKey });
             }
           }
@@ -202,7 +187,7 @@ export function createChecker(params: {
   control: CodexSessionCatalogControlFactory;
   getRuntimeConfig: () => OpenClawConfig | undefined;
 }): NonNullable<SessionCatalogProvider["checkUpstreamActivity"]> {
-  const resolveThreadId = async (probe: SessionUpstreamProbe) => {
+  const resolveThreadId = (probe: SessionUpstreamProbe) => {
     const config = params.getRuntimeConfig();
     const entry = params.api.runtime.agent.session.getSessionEntry({
       agentId: probe.agentId,
@@ -213,7 +198,7 @@ export function createChecker(params: {
     if (!sessionId) {
       return probe.threadId;
     }
-    const binding = await params.bindingStore.read(
+    const binding = params.bindingStore.read(
       sessionBindingIdentity({ sessionId, sessionKey: probe.sessionKey, config }),
     );
     return binding?.connectionScope === "supervision" &&

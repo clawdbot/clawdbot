@@ -1,7 +1,11 @@
-/** Read-only Gateway config tool for regular agents. */
+/** Gateway config reads and owner-requested self-updates. */
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { GatewayClientRequestError } from "../../gateway/client.js";
+import {
+  DEFAULT_UPDATE_TIMEOUT_MS,
+  summarizeUpdateRunResponse,
+} from "../../gateway/update-run-summary.js";
 import { parseConfigPathArrayIndex } from "../../shared/path-array-index.js";
 import { stringEnum } from "../schema/typebox.js";
 import {
@@ -11,8 +15,10 @@ import {
   textResult,
   ToolInputError,
 } from "./common.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
+import { callInProcessGatewayTool, getInProcessGatewayToolContext } from "./in-process-gateway.js";
 
 // Keep complete JSON below the smallest default tool-result presentation budget.
 const MAX_GATEWAY_CONFIG_GET_TEXT_CHARS = 12_000;
@@ -97,11 +103,14 @@ function isConfigSchemaPathNotFoundError(error: unknown): boolean {
   );
 }
 
-const GATEWAY_ACTIONS = ["config.get", "config.schema.lookup"] as const;
+const GATEWAY_ACTIONS = ["config.get", "config.schema.lookup", "update.run"] as const;
 
 const GatewayToolSchema = Type.Object({
   action: stringEnum(GATEWAY_ACTIONS),
   ...gatewayCallOptionSchemaProperties(),
+  note: Type.Optional(
+    Type.String({ description: "Short human note for the post-update restart notice." }),
+  ),
   path: Type.Optional(
     Type.String({
       description: "Required for config.schema.lookup; optional for config.get.",
@@ -109,15 +118,60 @@ const GatewayToolSchema = Type.Object({
   ),
 });
 
-export function createGatewayTool(): AnyAgentTool {
+export function createGatewayTool(options?: {
+  senderIsOwner?: boolean;
+  requesterSenderId?: string | null;
+}): AnyAgentTool {
   return {
     label: "Gateway",
     name: "gateway",
-    description: "Read gateway config + schema. Writes/restart unavailable; ask human.",
+    description:
+      "Read gateway config/schema. update.run: owner-only update on explicit user request; restart + completion notice automatic. Never via shell.",
     parameters: GatewayToolSchema,
     execute: async (_toolCallId, args, signal) => {
       const params = args as Record<string, unknown>;
       const action = readToolStringParam(params, "action", { required: true });
+      if (action === "update.run") {
+        if (options?.senderIsOwner !== true) {
+          return jsonResult({
+            ok: false,
+            code: "owner_required",
+            message:
+              "Only the OpenClaw owner can start an update from chat. Tell the user to run `openclaw update` in a terminal or use the Control UI.",
+          });
+        }
+        // Routing comes from the admitted caller, never model-authored destinations or credentials.
+        const caller = getGatewayToolCallerIdentity();
+        const deliveryContext = caller
+          ? {
+              channel: caller.turnSourceChannel,
+              to: caller.turnSourceTo,
+              accountId: caller.turnSourceAccountId,
+              threadId: caller.turnSourceThreadId,
+            }
+          : undefined;
+        const result = await callInProcessGatewayTool(
+          "update.run",
+          {
+            requester: {
+              channel: caller?.turnSourceChannel,
+              accountId: caller?.turnSourceAccountId,
+              senderId: options?.requesterSenderId ?? undefined,
+            },
+            sessionKey: caller?.sessionKey,
+            deliveryContext,
+            note: readToolStringParam(params, "note"),
+            timeoutMs: DEFAULT_UPDATE_TIMEOUT_MS,
+          },
+          {
+            // An explicit binding prevents the standalone client's remote fallback.
+            resolveGatewayContext: getInProcessGatewayToolContext,
+            timeoutMs: DEFAULT_UPDATE_TIMEOUT_MS,
+            signal,
+          },
+        );
+        return jsonResult(summarizeUpdateRunResponse(result));
+      }
       const gatewayOpts = readGatewayCallOptions(params);
 
       if (action === "config.get") {

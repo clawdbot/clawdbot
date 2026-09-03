@@ -23,6 +23,7 @@ import {
   resolveProjectRegistry,
 } from "../../projects/project-registry.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
 import {
   buildDashboardSessionTitleSource,
   generateWorktreeSessionTitle,
@@ -32,13 +33,14 @@ import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-
 import { buildDashboardSessionKey, createGatewaySession } from "../session-create-service.js";
 import type { PreparedGatewaySessionLifecycle } from "../session-lifecycle-preparation.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
-import { readSessionMessageCountAsync } from "../session-transcript-readers.js";
 import {
   loadGatewaySessionEntryReadOnly,
   resolveGatewaySessionStoreTarget,
 } from "../session-utils.js";
 import { prepareSessionWorktree } from "../session-worktree-preparation.js";
+import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
+import { normalizeChatSendRequest } from "./chat-send-request.js";
 import { chatHandlers } from "./chat.js";
 import { resolveRegisteredCatalogCreateTarget } from "./session-catalog.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -46,7 +48,7 @@ import { registerCreatedSessionCategory } from "./session-create-category.js";
 import { idempotentSessionCreate } from "./session-create-idempotency.js";
 import {
   resolveSessionCreateInitialTurn,
-  shouldAttachPendingMessageSeq,
+  isFreshChatSendStarted,
 } from "./session-create-initial-turn.js";
 import {
   normalizeSessionProjectGitUrl,
@@ -113,7 +115,11 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     }
     const p = params;
     const parentSessionKey = normalizeOptionalString(p.parentSessionKey);
-    const sessionCreation = resolveOperatorSessionCreation(client, { allowTrustedHint: true });
+    const sessionCreation = prepareSkillLibrarySessionCreation(
+      client,
+      context.getRuntimeConfig,
+      resolveOperatorSessionCreation(client, { allowTrustedHint: true }),
+    );
     const spawnRequesterSessionKey =
       sessionCreation.via === "spawn"
         ? normalizeOptionalString(sessionCreation.requesterSessionKey)
@@ -129,14 +135,12 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const requestedModel = normalizeOptionalString(p.model);
     const cfg = context.getRuntimeConfig();
     const authority = createAgentRuntimeAuthorityGuard(client, context, respond);
-    let commitGuard =
-      authority.commitGuard || sessionMutationCommitGuard || sessionMutationAuthorization
-        ? () => {
-            sessionMutationCommitGuard?.();
-            authority.commitGuard?.();
-            sessionMutationAuthorization?.assertCurrent();
-          }
-        : undefined;
+    let commitGuard = () => {
+      sessionMutationCommitGuard?.();
+      authority.commitGuard?.();
+      sessionMutationAuthorization?.assertCurrent();
+      assertPreparedSkillLibrarySelection(sessionCreation.skillLibrarySelections);
+    };
     const catalogId = normalizeOptionalString(p.catalogId);
     const catalogConflict = p.model ? "model" : p.key ? "key" : undefined;
     if (catalogId && catalogConflict) {
@@ -205,6 +209,53 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       hasInitialTurn,
       message: initialMessage,
     } = initialTurn;
+    const initialRunId = randomUUID();
+    if (p.mentions?.length) {
+      if (catalogId || p.incognito) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "Human mentions are unavailable for this session mode. Remove the selected mentions to continue.",
+          ),
+        );
+        return;
+      }
+      const normalized = normalizeChatSendRequest({
+        params: {
+          sessionKey: agentSelectionKey,
+          message: initialMessage ?? "",
+          mentions: p.mentions,
+          idempotencyKey: initialRunId,
+        },
+        client,
+      });
+      if (!normalized.ok) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, normalized.error));
+        return;
+      }
+      const eligible = context.mentionInbox?.validateRecipients(
+        client,
+        {
+          agentId: explicitlyRequestedAgent.agentId,
+          ...(p.visibility ? { visibility: p.visibility } : {}),
+        },
+        p.mentions.map((mention) => mention.profileId),
+      );
+      if (!eligible?.ok) {
+        respond(
+          false,
+          undefined,
+          eligible?.error ??
+            errorShape(
+              ErrorCodes.UNAVAILABLE,
+              "Human mentions are unavailable; reconnect and retry.",
+            ),
+        );
+        return;
+      }
+    }
     let requestedCwd = normalizeOptionalString(p.cwd);
     const requestedExecNode = normalizeOptionalString(p.execNode);
     const requestedProjectId = normalizeOptionalString(p.projectId);
@@ -281,6 +332,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       return;
     }
     const explicitSessionLabel = normalizeOptionalString(p.label);
+    const preparedDisplayName = normalizeOptionalString(p.displayName);
     const titleAgentId = explicitlyRequestedAgent.agentId;
     const existingWorktreeTarget =
       p.worktree === true && explicitlyRequestedKey
@@ -428,6 +480,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           const title =
             !requestedWorktreeName &&
             !explicitSessionLabel &&
+            !preparedDisplayName &&
             lifecycleTarget.entry &&
             lifecycleTarget.titleModelSelection !== null
               ? await generateWorktreeSessionTitle({
@@ -459,6 +512,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
             baseRef: requestedWorktreeBaseRef,
             label:
               explicitSessionLabel ??
+              preparedDisplayName ??
               title ??
               resolveExplicitSessionName(lifecycleTarget.entry) ??
               source,
@@ -475,7 +529,6 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     let runPayload: Record<string, unknown> | undefined;
     let runError: unknown;
     let runMeta: Record<string, unknown> | undefined;
-    let messageSeq: number | undefined;
     const allowExistingModelSelection = authorizeOperatorScopesForRequiredScope(
       ADMIN_SCOPE,
       clientScopes,
@@ -489,6 +542,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       key: sessionKey,
       agentId: sessionAgentId,
       label: p.label,
+      displayName: preparedDisplayName,
       category: p.category,
       ...(catalogTarget ? { catalogTarget: catalogTarget.target } : { model: requestedModel }),
       contextWindow: p.contextWindow,
@@ -544,8 +598,8 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       armSessionDiffBaselineCapture: true,
       loadGatewayModelCatalog: () =>
         context.loadGatewayModelCatalog({ agentId: modelCatalogAgentId }),
-      ...(commitGuard ? { commitGuard } : {}),
-      afterCreate: async ({ key, agentId, entry, storePath }) => {
+      commitGuard,
+      afterCreate: async ({ key, agentId }) => {
         if (!authority.hasActive()) {
           return;
         }
@@ -553,14 +607,6 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           if (!authority.hasActive()) {
             return;
           }
-          messageSeq =
-            (await readSessionMessageCountAsync({
-              agentId,
-              sessionEntry: entry,
-              sessionId: entry.sessionId,
-              sessionKey: key,
-              storePath,
-            })) + 1;
           await expectDefined(
             chatHandlers["chat.send"],
             "chat.send handler",
@@ -570,7 +616,8 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
               sessionKey: key,
               agentId,
               message: initialMessage ?? "",
-              idempotencyKey: randomUUID(),
+              idempotencyKey: initialRunId,
+              ...(p.mentions ? { mentions: p.mentions } : {}),
               ...(initialAttachments ? { attachments: initialAttachments } : {}),
             },
             respond: (ok, payload, error, meta) => {
@@ -633,7 +680,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
 
     const runStarted =
       runPayload !== undefined &&
-      shouldAttachPendingMessageSeq({
+      isFreshChatSendStarted({
         payload: runPayload,
         cached: runMeta?.cached === true,
       });
@@ -647,7 +694,6 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         entry: responseEntry,
         runStarted,
         ...(runPayload ? runPayload : {}),
-        ...(runStarted && typeof messageSeq === "number" ? { messageSeq } : {}),
         ...(runError ? { runError } : {}),
         resolved: created.resolved,
         ...(createdWorktree ? { worktree: createdWorktree } : {}),

@@ -11,7 +11,8 @@ NPM_PROOF_CONTAINER="openclaw-package-npm-proof-$$"
 PNPM_PROOF_CONTAINER="openclaw-package-pnpm-proof-$$"
 BUN_PROOF_CONTAINER="openclaw-package-bun-proof-$$"
 DOCKER_RUN_TIMEOUT="${OPENCLAW_DOCKER_PACKAGE_INSTALL_RUN_TIMEOUT:-120s}"
-BUN_HARNESS_DIR="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-bun-harness.XXXXXX")"
+PACKAGE_HARNESS_DIR="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-package-harness.XXXXXX")"
+docker_e2e_package_mount_args "$PACKAGE_TGZ"
 
 cleanup() {
   docker_e2e_docker_cmd rm -f \
@@ -19,29 +20,28 @@ cleanup() {
     "$PNPM_PROOF_CONTAINER" \
     "$BUN_PROOF_CONTAINER" >/dev/null 2>&1 || true
   docker_e2e_cleanup_package_tgz "$PACKAGE_TGZ"
-  rm -rf "$BUN_HARNESS_DIR"
+  rm -rf "$PACKAGE_HARNESS_DIR"
 }
 trap cleanup EXIT
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" docker-package-install "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" bare
 
-# The bun smoke runs the shared openclaw-e2e-instance library (mock provider
-# servers included), so copy its whole script roots instead of a per-file list
-# that silently drifts when the library grows a dependency. The repo checkout
-# itself stays unmounted: the lane proves the packaged artifact, not sources.
+# The package proofs share the registry and lifecycle harness. Copy its complete
+# script roots so all three managers install the same candidate dependency bytes.
 for harness_path in \
   packages/normalization-core/src \
   scripts; do
-  mkdir -p "$BUN_HARNESS_DIR/$(dirname "$harness_path")"
-  cp -R "$ROOT_DIR/$harness_path" "$BUN_HARNESS_DIR/$harness_path"
+  mkdir -p "$PACKAGE_HARNESS_DIR/$(dirname "$harness_path")"
+  cp -R "$ROOT_DIR/$harness_path" "$PACKAGE_HARNESS_DIR/$harness_path"
 done
-chmod -R a+rX "$BUN_HARNESS_DIR"
+chmod -R a+rX "$PACKAGE_HARNESS_DIR"
 
 echo "Installing the real OpenClaw package artifact with npm as root..."
 DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
   --name "$NPM_PROOF_CONTAINER" \
   --user root \
-  -v "$PACKAGE_TGZ:/tmp/openclaw-current.tgz:ro" \
+  "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
+  -v "$PACKAGE_HARNESS_DIR:/repo:ro" \
   "$IMAGE_NAME" \
   bash -lc '
     set -euo pipefail
@@ -61,7 +61,8 @@ DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
 echo "Installing the real OpenClaw package artifact with pnpm..."
 DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
   --name "$PNPM_PROOF_CONTAINER" \
-  -v "$PACKAGE_TGZ:/tmp/openclaw-current.tgz:ro" \
+  "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
+  -v "$PACKAGE_HARNESS_DIR:/repo:ro" \
   "$IMAGE_NAME" \
   bash -lc '
     set -euo pipefail
@@ -116,8 +117,8 @@ SOURCE_LINK
 echo "Installing the real OpenClaw package artifact with Bun..."
 DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
   --name "$BUN_PROOF_CONTAINER" \
-  -v "$PACKAGE_TGZ:/tmp/openclaw-current.tgz:ro" \
-  -v "$BUN_HARNESS_DIR:/repo:ro" \
+  "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
+  -v "$PACKAGE_HARNESS_DIR:/repo:ro" \
   "$IMAGE_NAME" \
   bash -lc '
     set -euo pipefail

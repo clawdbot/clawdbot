@@ -120,13 +120,17 @@ export function copyProviderCatalogResultEntries(params: {
 }
 
 /** Copies model definitions from provider catalog provider config. */
-export function copyProviderCatalogModels(
+function copyProviderCatalogModels(
   providerConfig: ModelProviderConfig,
 ): ModelProviderConfig["models"] {
-  return copyArrayEntries(readRecordValue(providerConfig, "models")).flatMap((entry) => {
+  const models: ModelDefinitionConfig[] = [];
+  for (const entry of copyArrayEntries(readRecordValue(providerConfig, "models"))) {
     const copied = copyProviderCatalogModel(entry);
-    return copied ? [copied] : [];
-  });
+    if (copied) {
+      models.push(copied);
+    }
+  }
+  return models;
 }
 
 function copyProviderCatalogModel(model: unknown): ModelDefinitionConfig | undefined {

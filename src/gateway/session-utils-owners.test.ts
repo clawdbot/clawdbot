@@ -32,7 +32,10 @@ const getUserProfileDisplay = vi.hoisted(() =>
   }),
 );
 
-vi.mock("../state/user-profiles.js", () => ({ getUserProfileDisplay }));
+vi.mock("../state/user-profiles.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/user-profiles.js")>()),
+  getUserProfileDisplay,
+}));
 
 import { listSessionsFromStoreAsync } from "./session-utils.js";
 
@@ -499,6 +502,13 @@ it("deduplicates participants in order, excludes the owner, and filters sessions
       { identity: { type: "profile", id: "profile-dana" }, label: "Bob" },
       { identity: { type: "profile", id: "profile-erin" }, label: "Bob" },
     ],
+    expandedParticipants: [
+      { identity: { type: "agent", id: "research" }, label: "Research" },
+      { identity: { type: "profile", id: "profile-carol" }, label: "Bob" },
+      { identity: { type: "profile", id: "profile-dana" }, label: "Bob" },
+      { identity: { type: "profile", id: "profile-erin" }, label: "Bob" },
+      { identity: { type: "profile", id: "profile-ada" }, label: "Ada" },
+    ],
     participantCount: 5,
   });
 
@@ -930,7 +940,7 @@ it("keeps the serialized list response deterministic for the current filter path
   const expectedSerializedResponse = [
     '{"ts":1000000,"path":"/tmp/openclaw-session-byte-parity","count":1,"totalCount":1,"limitApplied":100,"nextOffset":null,"hasMore":false,"owners":[]',
     ',"defaults":{"modelProvider":"openai","model":"gpt-5.4","contextTokens":200000,"agentRuntime":{"id":"codex","cloudPlacementSupported":false,"devicePlacementSupported":false,"source":"implicit"},"thinkingLevels":[{"id":"off","label":"off"},{"id":"minimal","label":"minimal"},{"id":"low","label":"low"},{"id":"medium","label":"medium"},{"id":"high","label":"high"},{"id":"xhigh","label":"xhigh"}],"thinkingOptions":["off","minimal","low","medium","high","xhigh"],"thinkingDefault":"off"}',
-    ',"sessions":[{"key":"global","visibility":"shared","createdActor":{"type":"system","id":"creator-b","identity":{"type":"legacy","actorType":"system","source":null,"id":"creator-b"}},"kind":"global","classification":"global","agentId":"main","isMain":false,"isBackground":false,"subject":"needle global","updatedAt":999999,"archived":false,"pinned":false,"unread":false,"sessionId":"session-global","thinkingLevels":[{"id":"off","label":"off"},{"id":"minimal","label":"minimal"},{"id":"low","label":"low"},{"id":"medium","label":"medium"},{"id":"high","label":"high"}],"thinkingOptions":["off","minimal","low","medium","high"],"thinkingDefault":"off","effectiveFastMode":false,"effectiveFastModeSource":"default","fastAutoOnSeconds":60,"totalTokens":1,"totalTokensFresh":true,"estimatedCostUsd":0,"effectiveResponseUsage":"off","effectiveQueueMode":"steer","modelProvider":"openai","model":"gpt-5.4","modelOverrideSource":null,"agentRuntime":{"id":"codex","cloudPlacementSupported":false,"devicePlacementSupported":false,"source":"implicit"},"contextTokens":100}]}',
+    ',"sessions":[{"key":"global","visibility":"shared","permissionModePending":false,"createdActor":{"type":"system","id":"creator-b","identity":{"type":"legacy","actorType":"system","source":null,"id":"creator-b"}},"kind":"global","classification":"global","agentId":"main","isMain":false,"isBackground":false,"subject":"needle global","updatedAt":999999,"archived":false,"pinned":false,"unread":false,"sessionId":"session-global","thinkingLevels":[{"id":"off","label":"off"},{"id":"minimal","label":"minimal"},{"id":"low","label":"low"},{"id":"medium","label":"medium"},{"id":"high","label":"high"}],"thinkingOptions":["off","minimal","low","medium","high"],"thinkingDefault":"off","effectiveFastMode":false,"effectiveFastModeSource":"default","fastAutoOnSeconds":60,"totalTokens":1,"totalTokensFresh":true,"estimatedCostUsd":0,"effectiveResponseUsage":"off","effectiveQueueMode":"steer","modelProvider":"openai","model":"gpt-5.4","modelOverrideSource":null,"agentRuntime":{"id":"codex","cloudPlacementSupported":false,"devicePlacementSupported":false,"source":"implicit"},"contextTokens":100}]}',
   ].join("");
 
   expect(JSON.stringify(result)).toBe(expectedSerializedResponse);

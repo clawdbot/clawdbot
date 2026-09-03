@@ -1,6 +1,7 @@
 import type { AssistantMessage, Context, Model, ProviderReplayState } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { shortHash } from "../utils/hash.js";
+import { providerReplayContextMatches } from "./provider-replay-context.js";
 
 const ANTHROPIC_COMPACTION_REPLAY_TYPE = "anthropic-compaction";
 const ANTHROPIC_COMPACTION_SUPPRESSION_TYPE = "anthropic-compaction-suppression";
@@ -121,21 +122,6 @@ function readAnthropicCompactionState(
   return isRecord(value) && isAnthropicCompactionState(value) ? value : undefined;
 }
 
-function replayContextMatches(
-  state: AnthropicReplayContext,
-  context: AnthropicReplayContext,
-): boolean {
-  // The summary replaces a route-specific prefix and must never cross identities.
-  return (
-    state.provider === context.provider &&
-    state.api === context.api &&
-    state.model === context.model &&
-    state.baseUrlHash === context.baseUrlHash &&
-    state.sessionHash === context.sessionHash &&
-    state.authProfileHash === context.authProfileHash
-  );
-}
-
 function captureAnthropicCompaction(
   output: ReplayOut,
   summary: string,
@@ -188,7 +174,7 @@ export function resolveNewestAnthropicCompaction(
     }
     const replayState = readAnthropicCompactionState(message.providerReplay);
     if (replayState?.type === ANTHROPIC_COMPACTION_SUPPRESSION_TYPE) {
-      if (replayContextMatches(replayState, context)) {
+      if (providerReplayContextMatches(replayState, context)) {
         return undefined;
       }
       continue;
@@ -199,7 +185,7 @@ export function resolveNewestAnthropicCompaction(
     if (!replayState) {
       return undefined;
     }
-    if (!replayContextMatches(replayState, context)) {
+    if (!providerReplayContextMatches(replayState, context)) {
       return undefined;
     }
     return {

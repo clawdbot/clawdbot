@@ -8,15 +8,18 @@ import {
 } from "../../model-auth.js";
 import { OPENAI_PROVIDER_ID } from "../../openai-routing.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
+import { buildAgentRuntimeAuthPlan } from "../../runtime-plan/auth.js";
 import {
   createPreparedRuntimeModelMaterializer,
   providerUsesCredentialScopedModelMetadata,
 } from "../../runtime-plan/credential-scoped-model.js";
 import {
   prepareAgentRuntimeAuth,
+  type PreparedAgentRuntimeAuth,
   type PreparedAgentRuntimeAuthAttempt,
 } from "../../runtime-plan/prepare-auth.js";
 import { resolveModelAsync } from "../model.js";
+import type { PreparedNativeSessionRuntime } from "./model-setup.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 
 type ModelResolution = Awaited<ReturnType<typeof resolveModelAsync>>;
@@ -36,13 +39,6 @@ function loadEmbeddedRunAuthProfileStore(params: {
   });
 }
 
-// Test-only seam access mirrors external-auth.ts; the config-threading regression
-// must stay provable without composing a full embedded runner.
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.embeddedRunAuthPlanTestApi")] =
-    { loadEmbeddedRunAuthProfileStore };
-}
-
 export async function prepareEmbeddedRunAuthPlan(params: {
   runParams: RunEmbeddedAgentParams;
   provider: string;
@@ -52,6 +48,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
   workspaceDir: string;
   requestStreamTransportOverrides?: "present";
   nativeModelOwned: boolean;
+  nativeSessionRuntime?: PreparedNativeSessionRuntime;
   authStorage: ModelResolution["authStorage"];
   modelRegistry: ModelResolution["modelRegistry"];
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
@@ -136,8 +133,22 @@ export async function prepareEmbeddedRunAuthPlan(params: {
     externalCliAuthScope.ignoreAutoPreferredProfile && !lockedProfileId
       ? undefined
       : requestedProfileId;
-  const createAuthPreparation = () => {
+  const createAuthPreparation = (): PreparedAgentRuntimeAuth => {
     const harness = params.getAgentHarness();
+    if (params.nativeSessionRuntime?.auth === "native") {
+      // Only the binding-owned connection bypasses host credentials and routes;
+      // preserving a native model alone still uses the normal auth planner below.
+      const plan = buildAgentRuntimeAuthPlan({
+        provider: params.provider,
+        modelId: params.modelId,
+        harnessId: harness.id,
+        allowHarnessAuthProfileForwarding: false,
+        metadataSnapshot: params.preparedModelRuntime?.metadataSnapshot,
+        config: runParams.config,
+        workspaceDir: params.workspaceDir,
+      });
+      return { plan, attempts: [{ kind: "implicit", plan }] };
+    }
     return prepareAgentRuntimeAuth({
       provider: params.provider,
       modelId: params.modelId,

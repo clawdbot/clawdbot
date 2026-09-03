@@ -6,6 +6,7 @@ import {
   resolveThreadBindingMaxAgeMsForChannel,
 } from "../../channels/thread-bindings-policy.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isPluginOwnedBindingMetadata } from "../../plugins/conversation-binding-metadata.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
@@ -197,6 +198,8 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
             ? existing
             : undefined;
         const existingLocal = previous ? asAccountBindingRecord(previous) : undefined;
+        // Preserve plugin ownership on refresh without assigning its opaque target an agent.
+        const metadata = { ...previous?.metadata, ...input.metadata };
         const record: AccountScopedConversationBindingRecord<TKind> = {
           accountId,
           conversationId: normalizedConversationId,
@@ -205,19 +208,18 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
           agentId:
             normalizeOptionalString(input.metadata?.agentId) ??
             existingLocal?.agentId ??
-            resolveSessionAgentId({
-              config: params.cfg,
-              sessionKey: normalizedTargetSessionKey,
-            }),
+            (isPluginOwnedBindingMetadata(metadata)
+              ? undefined
+              : resolveSessionAgentId({
+                  config: params.cfg,
+                  sessionKey: normalizedTargetSessionKey,
+                })),
           label: normalizeOptionalString(input.metadata?.label) ?? existingLocal?.label,
           boundBy: normalizeOptionalString(input.metadata?.boundBy) ?? existingLocal?.boundBy,
           boundAt: now,
           lastActivityAt: now,
         };
-        return asSessionBindingRecord(record, {
-          ...previous?.metadata,
-          ...input.metadata,
-        });
+        return asSessionBindingRecord(record, metadata);
       },
     );
     return current;
@@ -263,7 +265,9 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
       ),
     stop: () => {
       // Registrations are process-local; SQLite-owned bindings must survive manager shutdown.
-      state.managersByAccountId.delete(accountId);
+      if (state.managersByAccountId.get(accountId) === manager) {
+        state.managersByAccountId.delete(accountId);
+      }
       unregisterSessionBindingAdapter({
         channel: params.channel,
         accountId,

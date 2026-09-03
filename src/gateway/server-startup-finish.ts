@@ -107,7 +107,7 @@ export async function finishGatewayStartup(params: {
     controlUiRootLifecycle,
     sidecarStartup,
     workerLiveEvents,
-    earlyRuntime,
+    startEarlyRuntime,
     cfgAtStart,
     preauthConnectionBudget,
     releaseStartupAccountStarts,
@@ -183,6 +183,10 @@ export async function finishGatewayStartup(params: {
   await startupTrace.measure("http.listen", () => startListening());
   kernel.setDispatchReady(true);
   startupTrace.mark("http.bound");
+  // Health can answer as soon as the listener binds. Discovery, remote-skill
+  // setup, and maintenance do not determine liveness, so keep them off that
+  // critical path while still completing before usable readiness.
+  const earlyRuntime = await startEarlyRuntime();
   const sessionDeliveryRecoveryMaxEnqueuedAt = Date.now();
   let postAttachRuntimeReturned = false;
   let scheduledServicesActivated = false;
@@ -219,7 +223,10 @@ export async function finishGatewayStartup(params: {
       kernel.setScheduledServiceHandles(activated);
     });
   };
-  const { createGatewayServerActiveWorkInspectors } = await import("./server-active-work.js");
+  const { createGatewayServerActiveWorkInspectors } = await startupTrace.measure(
+    "gateway.active-work-import",
+    () => import("./server-active-work.js"),
+  );
   const activeWorkInspectors = createGatewayServerActiveWorkInspectors(gatewayRequestContext);
   const postAttachHandles = await startupTrace.measure("runtime.post-attach", () =>
     loadGatewayStartupPostAttachModule().then(({ startGatewayPostAttachRuntime }) =>

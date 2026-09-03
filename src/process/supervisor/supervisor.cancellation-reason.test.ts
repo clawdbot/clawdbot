@@ -35,6 +35,7 @@ function createCancellationTestAdapter(): CancellationTestAdapter {
 
   return {
     pid: 4321,
+    supportsRawOutput: false,
     onStdout: () => undefined,
     onStderr: () => undefined,
     wait: async () => completion.promise,
@@ -118,16 +119,14 @@ describe("process supervisor first cancellation reason", () => {
               const supervisor = createProcessSupervisor();
               const runId = `first-cancellation-${mode}`;
               const scopeKey = `scope:first-cancellation-${mode}`;
-              const commonInput = {
+              const input: SpawnInput = {
                 runId,
                 scopeKey,
                 sessionId: "first-cancellation-reason",
                 backendId: "test",
+                mode,
+                argv: [process.execPath, "-e", ""],
               };
-              const input: SpawnInput =
-                mode === "child"
-                  ? { ...commonInput, mode: "child", argv: [process.execPath, "-e", ""] }
-                  : { ...commonInput, mode: "pty", ptyCommand: "printf running" };
               const run = await supervisor.spawn(input);
               const exitPromise = run.wait();
 

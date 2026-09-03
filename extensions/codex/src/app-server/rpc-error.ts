@@ -15,6 +15,17 @@ export class CodexAppServerRpcError extends Error {
   }
 }
 
+export function isCodexThreadReadMissingError(error: unknown, threadId: string): boolean {
+  // codex-rs read_thread_view uses this exact invalid_request for a gone thread.
+  // Other validation/storage errors cannot authorize unlinking or replacement.
+  return (
+    error instanceof CodexAppServerRpcError &&
+    error.method === "thread/read" &&
+    error.code === -32_600 &&
+    error.message === `thread not loaded: ${threadId}`
+  );
+}
+
 function formatCodexAppServerRpcErrorMessage(
   error: { message: string; data?: JsonValue },
   method: string,

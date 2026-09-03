@@ -1,5 +1,6 @@
 /** Durable malformed-cron recovery records stored in the shared SQLite database. */
 import { createHash } from "node:crypto";
+import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { createSqliteAuditRecordStore } from "../../infra/sqlite-audit-record-store.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
@@ -25,6 +26,27 @@ function cronQuarantineEntryKey(entry: QuarantinedCronConfigJob): string {
     scheduleIdentity: entry.scheduleIdentity ?? null,
   });
   return createHash("sha256").update(identity).digest("hex");
+}
+
+/** Deletes quarantine rows inside the caller-owned SQLite transaction. */
+export function deleteCronQuarantinedJobsFromDatabase(params: {
+  database: DatabaseSync;
+  storePath: string;
+  entries: readonly (QuarantinedCronConfigJob | CronQuarantinedJob)[];
+}): void {
+  if (params.entries.length === 0) {
+    return;
+  }
+  const scope = cronQuarantineScope(params.storePath);
+  for (const entry of params.entries) {
+    executeSqliteQuerySync(
+      params.database,
+      getNodeSqliteKysely<CronQuarantineDatabase>(params.database)
+        .deleteFrom("diagnostic_events")
+        .where("scope", "=", scope)
+        .where("event_key", "=", cronQuarantineEntryKey(entry)),
+    );
+  }
 }
 
 /** Reads quarantined cron rows without creating or migrating a state database. */

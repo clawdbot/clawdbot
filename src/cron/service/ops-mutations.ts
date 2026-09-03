@@ -407,6 +407,9 @@ export async function add(
     if (opts?.createdActor) {
       job.createdActor = structuredClone(opts.createdActor);
     }
+    if (opts?.skillLibrarySelections) {
+      job.skillLibrarySelections = structuredClone(opts.skillLibrarySelections);
+    }
     const runtimeAuthorityMutation = consumeRuntimeAuthorityMutationOptions(opts);
     reconcileRuntimeAuthority({
       job,

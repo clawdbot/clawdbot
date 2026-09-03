@@ -12,16 +12,16 @@ export type ControlUiSessionFixture = {
 };
 
 // Also serialized into the page realm; keep these builders free of module captures.
-export function createControlUiSessionRow<T extends Partial<ControlUiSessionFixture>>(
+export function createControlUiSessionRow(
   key: string,
   label: string,
   updatedAt: number,
-  options: T,
+  options?: Partial<ControlUiSessionFixture>,
 ) {
-  const archivedAt = options.archivedAt ?? (options.archived ? updatedAt : undefined);
+  const archivedAt = options?.archivedAt ?? (options?.archived ? updatedAt : undefined);
   const pinnedAt =
     archivedAt === undefined
-      ? (options.pinnedAt ?? (options.pinned ? updatedAt : undefined))
+      ? (options?.pinnedAt ?? (options?.pinned ? updatedAt : undefined))
       : undefined;
   return {
     displayName: label,
@@ -35,8 +35,8 @@ export function createControlUiSessionRow<T extends Partial<ControlUiSessionFixt
     totalTokens: 0,
     updatedAt,
     ...options,
-    contextTokens: options.contextTokens ?? null,
-    kind: options.kind ?? "direct",
+    contextTokens: options?.contextTokens ?? null,
+    kind: options?.kind ?? "direct",
     pinned: pinnedAt !== undefined,
     pinnedAt,
     archived: archivedAt !== undefined,
@@ -51,6 +51,7 @@ export function createControlUiSessionFixtures(input: {
   const records = new Map<string, { row: ControlUiSessionFixture; changed: Set<string> }>();
   const listed = new Set<string>();
   const materialized = new Set<string>();
+  let materializedSequence = 0;
   let timestamp = 1_800_000_000_000;
   const canonicalKey = (key: string) => (key === "main" ? input.mainKey : key);
   const record = (inputKey: string) => {
@@ -160,6 +161,7 @@ export function createControlUiSessionFixtures(input: {
     value.row = { ...value.row, ...fields, key: canonicalKey(key) };
     listed.add(canonicalKey(key));
     materialized.add(canonicalKey(key));
+    materializedSequence += 1;
   };
   const list = (wireRows?: unknown[]) => {
     const rows = wireRows ?? [...listed].map(read);
@@ -195,15 +197,21 @@ export function createControlUiSessionFixtures(input: {
     patch,
     materialize,
     list,
-    materializedCount: () => materialized.size,
-    replaceListSnapshot(rows: ControlUiSessionFixture[]) {
-      // Only explicitly replaced fields supersede earlier commits. Do not read
-      // future cases/sequences or clear unrelated rows' mutation history.
+    materializedCount: () => materializedSequence,
+    replaceCanonicalList(rows: unknown[]) {
+      const replacements: ControlUiSessionFixture[] = [];
       for (const row of rows) {
-        const value = record(row.key);
-        for (const field of Object.keys(row)) {
-          value.changed.delete(field);
+        if (!row || typeof row !== "object" || !("key" in row) || typeof row.key !== "string") {
+          throw new Error("Canonical sessions.list rows require a string key");
         }
+        replacements.push({ ...row, key: canonicalKey(row.key) });
+      }
+      records.clear();
+      listed.clear();
+      materialized.clear();
+      for (const fixture of replacements) {
+        records.set(fixture.key, { row: fixture, changed: new Set() });
+        listed.add(fixture.key);
       }
     },
   };

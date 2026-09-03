@@ -1,5 +1,4 @@
 /** Handles informational commands such as /help, /commands, /tools, and exports. */
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   resolveEffectiveToolInventory,
   resolveEffectiveToolInventoryRuntimeModelContextAsync,
@@ -43,12 +42,9 @@ async function resolveSkillCommands(
   if (params.loadSkillCommands) {
     return params.loadSkillCommands();
   }
-  const agentId = params.sessionKey
-    ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
-    : params.agentId;
   return listSkillCommandsForAgents({
     cfg: params.cfg,
-    agentIds: agentId ? [agentId] : undefined,
+    agentIds: [params.agentId],
     sessionEntry: params.sessionEntry,
     sessionKey: params.sessionKey,
   });
@@ -68,9 +64,6 @@ export const handleCommandsListCommand: CommandHandler = defineAuthorizedTextCom
     silentUnauthorized: true,
   },
   async (params) => {
-    const agentId = params.sessionKey
-      ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
-      : params.agentId;
     const skillCommands = await resolveSkillCommands(params);
     const surface = params.ctx.Surface;
     const commandPlugin = surface ? getChannelPlugin(surface) : null;
@@ -81,7 +74,7 @@ export const handleCommandsListCommand: CommandHandler = defineAuthorizedTextCom
     const channelData = commandPlugin?.commands?.buildCommandsListChannelData?.({
       currentPage: paginated.currentPage,
       totalPages: paginated.totalPages,
-      agentId,
+      agentId: params.agentId,
     });
     if (channelData) {
       return {
@@ -165,9 +158,6 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
     });
     const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
     const sessionBound = Boolean(params.sessionKey);
-    const agentId = sessionBound
-      ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
-      : params.agentId;
     const threadingContext = buildThreadingToolContext({
       sessionCtx: params.ctx,
       config: params.cfg,
@@ -175,7 +165,7 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
     });
     const runtimeModelContext = await resolveEffectiveToolInventoryRuntimeModelContextAsync({
       cfg: params.cfg,
-      agentId,
+      agentId: params.agentId,
       agentDir: sessionBound ? undefined : params.agentDir,
       workspaceDir: params.workspaceDir,
       modelProvider: params.provider,
@@ -183,7 +173,7 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
     });
     const result = resolveEffectiveToolInventory({
       cfg: params.cfg,
-      agentId,
+      agentId: params.agentId,
       sessionKey: params.sessionKey,
       workspaceDir: params.workspaceDir,
       agentDir: sessionBound ? undefined : params.agentDir,

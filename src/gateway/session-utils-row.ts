@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { SESSION_PARTICIPANT_LIMIT } from "../../packages/gateway-protocol/src/schema/session-participant.js";
 import { resolveAuthoredModelContextTokens } from "../agents/context-resolution.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
@@ -30,7 +31,10 @@ import {
 } from "../config/sessions.js";
 import { resolveSessionModelOverrideSource } from "../config/sessions/model-override-provenance.js";
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
-import { sessionCreatorProfileId } from "../config/sessions/session-entry-provenance.js";
+import {
+  MAX_SESSION_PARTICIPANTS,
+  sessionCreatorProfileId,
+} from "../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
@@ -47,6 +51,7 @@ import {
   projectSessionOwner,
   projectSessionParticipants,
 } from "./session-identity-projection.js";
+import { isSessionPermissionChangePending } from "./session-permission-change.js";
 import {
   resolveSessionStoreAgentId,
   resolveStoredSessionKeyForAgentStore,
@@ -232,6 +237,7 @@ export function buildGatewaySessionRow(params: {
     : undefined;
   const selectedModel = resolveSessionSelectedModelRef({
     cfg,
+    sessionKey: key,
     entry,
     agentId: sessionAgentId,
     rowContext,
@@ -422,6 +428,7 @@ export function buildGatewaySessionRow(params: {
     spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
     spawnedCwd: entry?.spawnedCwd,
     permissionMode: entry?.permissionMode,
+    permissionModePending: isSessionPermissionChangePending(entry?.sessionId),
     ...(entry?.permissionMode !== undefined && entry.sessionRoot !== undefined
       ? { sessionRoot: entry.sessionRoot }
       : {}),
@@ -440,7 +447,13 @@ export function buildGatewaySessionRow(params: {
       Boolean(sessionCreatorProfileId(entry?.createdActor)),
     ),
     owner,
-    participants: participants.size ? [...participants.values()].slice(0, 4) : undefined,
+    // Keep the released v4 summary stable; expanded identities are additive for newer clients.
+    participants: participants.size
+      ? [...participants.values()].slice(0, SESSION_PARTICIPANT_LIMIT)
+      : undefined,
+    expandedParticipants: participants.size
+      ? [...participants.values()].slice(0, MAX_SESSION_PARTICIPANTS)
+      : undefined,
     participantCount: participants.size || undefined,
     createdAt: entry?.createdAt,
     forkSource: entry?.forkSource,
@@ -466,6 +479,7 @@ export function buildGatewaySessionRow(params: {
     archived: entry?.archivedAt !== undefined,
     archivedAt: entry?.archivedAt,
     archivedBy: projectSessionActor(entry?.archivedBy, rowContext?.userProfileIdentityById, cfg),
+    archiveReason: entry?.archiveReason,
     pinned: entry?.pinnedAt !== undefined,
     pinnedAt: entry?.pinnedAt,
     unread: deriveSessionUnread(entry),

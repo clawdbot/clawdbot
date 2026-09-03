@@ -169,6 +169,7 @@ function createClient(
     baseURL: resolveOpenAIClientBaseUrl(model, baseUrl),
     dangerouslyAllowBrowser: true,
     defaultHeaders,
+    maxRetries: 0,
     // OpenAI supports custom fetch, so sentinels stay opaque until guarded egress.
     fetch: getAiTransportHost().buildModelFetch(model),
   });

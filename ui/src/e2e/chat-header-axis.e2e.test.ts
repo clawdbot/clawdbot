@@ -1,4 +1,4 @@
-import { mkdir, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import {
@@ -248,15 +248,10 @@ suite.define(() => {
       await icon.waitFor();
       await icon.locator("svg").waitFor();
       await icon.evaluate((element) => element.setAttribute("data-recovery-host", "mounted"));
-      const proofDir = path.join(
-        process.cwd(),
-        ".artifacts",
-        "control-ui-e2e",
-        "workspace-icon-recovery",
-      );
       if (captureUiProofEnabled) {
-        await mkdir(proofDir, { recursive: true });
-        await page.screenshot({ path: path.join(proofDir, "fallback.png") });
+        await page.screenshot({
+          path: path.join(suite.artifactDir, "workspace-icon-recovery", "fallback.png"),
+        });
       }
 
       await icon.locator(".workspace-icon").waitFor({ timeout: 10_000 });
@@ -264,7 +259,9 @@ suite.define(() => {
       expect(requests).toBe(2);
       expect(await icon.getAttribute("data-recovery-host")).toBe("mounted");
       if (captureUiProofEnabled) {
-        await page.screenshot({ path: path.join(proofDir, "recovered.png") });
+        await page.screenshot({
+          path: path.join(suite.artifactDir, "workspace-icon-recovery", "recovered.png"),
+        });
       }
     } finally {
       await suite.closeBrowserContext(context);

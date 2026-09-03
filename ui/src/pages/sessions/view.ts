@@ -60,6 +60,7 @@ import {
   resolveSessionPreferredFace,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
+import { formatSessionArchiveReason } from "../../lib/sessions/session-archive-reason.ts";
 import { parseSessionKeyParts } from "../../lib/sessions/session-key.ts";
 import { SESSIONS_PAGE_DEFAULT_LIMIT } from "../../lib/sessions/session-requests.ts";
 
@@ -730,6 +731,12 @@ function sessionDetailItems(params: {
   add(t("sessionsView.room"), row.room);
   add(t("sessionsView.space"), row.space);
   add(t("sessionsView.sessionId"), row.sessionId);
+  if (row.archiveReason) {
+    details.push({
+      label: t("sessionsView.archiveReason"),
+      value: formatSessionArchiveReason(row.archiveReason),
+    });
+  }
   for (const [label, value] of [
     [t("sessionsView.activeRun"), row.hasActiveRun],
     [t("sessionsView.archived"), row.archived],

@@ -31,6 +31,8 @@ type LoadManifestModelCatalogParams = Parameters<typeof loadManifestModelCatalog
 type RunAgentAttempt = typeof runAgentAttempt;
 type RunSessionCompaction =
   (typeof import("../auto-reply/reply/agent-runner-memory.js"))["runSessionCompactionIfNeeded"];
+type RunMemoryFlush =
+  (typeof import("../auto-reply/reply/agent-runner-memory.js"))["runMemoryFlushIfNeeded"];
 type CaptureSessionDiffBaseline =
   (typeof import("../sessions/session-diff.js"))["captureSessionDiffBaseline"];
 type CliCompaction = typeof import("./command/cli-compaction.js").runCliTurnCompactionLifecycle;
@@ -45,7 +47,7 @@ const compactionTestState = vi.hoisted(() => ({
     (_params: ProviderModelNormalizationParams) => undefined,
   ),
   runCliTurnCompactionLifecycleMock: vi.fn<CliCompaction>(async (params) => params.sessionEntry),
-  runMemoryFlushIfNeededMock: vi.fn(async (params: { sessionEntry?: SessionEntry }) => ({
+  runMemoryFlushIfNeededMock: vi.fn<RunMemoryFlush>(async (params) => ({
     sessionEntry: params.sessionEntry,
     outcome: "completed" as const,
   })),
@@ -70,18 +72,17 @@ vi.mock("../config/io.js", () => ({
 }));
 
 vi.mock("./agent-runtime-config.js", () => ({
-  resolveAgentRuntimeConfig: async () => ({
-    loadedRaw: compactionTestState.cfg,
-    sourceConfig: compactionTestState.cfg,
-    cfg: compactionTestState.cfg,
-  }),
+  resolveAgentRuntimeConfig: async () => compactionTestState.cfg,
 }));
 
-vi.mock("../plugins/plugin-metadata-snapshot.js", async () => {
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
+  const { rebasePluginMetadataSnapshotManifestRegistry } =
+    await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>();
   const { createPluginMetadataSnapshot } =
     await import("../config/plugin-auto-enable.test-helpers.js");
   return {
     isPluginMetadataSnapshotCompatible: () => false,
+    rebasePluginMetadataSnapshotManifestRegistry,
     resolvePluginMetadataSnapshot: () =>
       createPluginMetadataSnapshot({ manifestRegistry: { plugins: [], diagnostics: [] } }),
   };
@@ -212,7 +213,7 @@ vi.mock("./command/cli-compaction.js", () => ({
 }));
 
 vi.mock("../auto-reply/reply/agent-runner-memory.js", () => ({
-  runMemoryFlushIfNeeded: (params: { sessionEntry?: SessionEntry }) =>
+  runMemoryFlushIfNeeded: (params: Parameters<RunMemoryFlush>[0]) =>
     compactionTestState.runMemoryFlushIfNeededMock(params),
   runSessionCompactionIfNeeded: (params: Parameters<RunSessionCompaction>[0]) =>
     compactionTestState.runSessionCompactionIfNeededMock(params),

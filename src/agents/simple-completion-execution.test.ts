@@ -68,9 +68,12 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
       model,
       cfg,
     });
-    expect(mocks.complete).toHaveBeenCalledWith(preparedModel, context, {
-      apiKey: "ollama-local",
-    });
+    expect(mocks.complete).toHaveBeenCalledWith(
+      preparedModel,
+      context,
+      { apiKey: "ollama-local" },
+      undefined,
+    );
   });
 
   it.each([
@@ -97,10 +100,12 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
       context,
       options: { reasoning },
     });
-    expect(mocks.complete).toHaveBeenCalledWith(model, context, {
-      ...(expected ? { reasoning: expected } : {}),
-      apiKey: "sk-test",
-    });
+    expect(mocks.complete).toHaveBeenCalledWith(
+      model,
+      context,
+      { ...(expected ? { reasoning: expected } : {}), apiKey: "sk-test" },
+      undefined,
+    );
   });
 
   it("carries strict visibility internally without adding a wire option", async () => {
@@ -142,9 +147,11 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
       options: { reasoning: "off" },
     });
 
-    expect(mocks.complete).toHaveBeenCalledWith(preparedModel, context, {
-      reasoning: "off",
-      apiKey: "sk-test",
-    });
+    expect(mocks.complete).toHaveBeenCalledWith(
+      preparedModel,
+      context,
+      { reasoning: "off", apiKey: "sk-test" },
+      undefined,
+    );
   });
 });

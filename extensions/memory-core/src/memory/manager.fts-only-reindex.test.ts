@@ -613,6 +613,21 @@ describe("memory manager FTS-only reindex", () => {
     });
   });
 
+  it.skipIf(process.platform === "win32")(
+    "syncs regular memory when USER.md is a symlink",
+    async () => {
+      const linkedUserPath = path.join(workspaceDir, "shared-user.md");
+      await fs.writeFile(linkedUserPath, "Linked user content must not be indexed.");
+      await fs.symlink(linkedUserPath, path.join(workspaceDir, "USER.md"));
+      const memoryManager = await createManager({ provider: "none", vectorEnabled: false });
+
+      await expect(memoryManager.sync({ reason: "cli", force: true })).resolves.toBeUndefined();
+
+      expect(countChunksContaining("Alpha topic")).toBeGreaterThan(0);
+      expect(countChunksContaining("Linked user content")).toBe(0);
+    },
+  );
+
   it("reports explicit provider-none probes as FTS-only without resolving providers", async () => {
     const memoryManager = await createManager({ provider: "none", vectorEnabled: false });
 

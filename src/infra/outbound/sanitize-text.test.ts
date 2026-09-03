@@ -57,8 +57,13 @@ describe("sanitizeForPlainText", () => {
 
   // --- block elements -----------------------------------------------------
 
-  it("converts <p> and <div> to newlines", () => {
-    expect(sanitizeForPlainText("<p>paragraph</p>")).toBe("\nparagraph\n");
+  it.each([
+    ["<p>paragraph</p>", "\nparagraph\n"],
+    ['before<p class="x">inside</p>after', "before\ninside\nafter"],
+    ['before<div id="y">inside</div>after', "before\ninside\nafter"],
+    ["before<DIV id='y' title='a>b'>inside</DIV>after", "before\ninside\nafter"],
+  ])("preserves block boundaries in %s", (input, expected) => {
+    expect(sanitizeForPlainText(input)).toBe(expected);
   });
 
   it("converts headings to bold text with newlines", () => {
@@ -194,6 +199,27 @@ describe("sanitizeForPlainText", () => {
     );
   });
 
+  it.each([
+    ['Link: <a href="`hidden`">click</a> end', "Link: click end"],
+    ['Link: <a href="`hidden`">click</a> then `visible` end', "Link: click then `visible` end"],
+    ['`first` <a href="`hidden`">click</a> then `last`', "`first` click then `last`"],
+    ['<a href="`one`">a</a><span title="`two`">b</span> `visible`', "ab `visible`"],
+    ['<b title="`hidden`">`visible`</b>', "*`visible`*"],
+  ])("restores only surviving code regions in %s", (input, expected) => {
+    expect(sanitizeForPlainText(input)).toBe(expected);
+    expect(sanitizeForPlainText(input, { style: "markdown" })).toBe(
+      input.startsWith("<b") ? "**`visible`**" : expected,
+    );
+  });
+
+  it("preserves marker-shaped input around and inside surviving code", () => {
+    const sentinels = "\u0000e\u0000p0;\u0000p1;\u0000p12;";
+    const visible = `\`${sentinels}<Button>\``;
+    expect(sanitizeForPlainText(`${sentinels}<a href="\`hidden\`">click</a> ${visible}`)).toBe(
+      `${sentinels}click ${visible}`,
+    );
+  });
+
   it("preserves tag-shaped code inside indented code blocks", () => {
     expect(sanitizeForPlainText('Example:\n\n    <div id="root"></div>\n\ndone')).toBe(
       'Example:\n\n    <div id="root"></div>\n\ndone',
@@ -219,6 +245,33 @@ describe("sanitizeForPlainText", () => {
     expect(sanitizeForPlainText("See <https://example.com/path?q=1> now")).toBe(
       "See https://example.com/path?q=1 now",
     );
+    expect(sanitizeForPlainText("<https://example.com/a.pdf|Manual>")).toBe(
+      "https://example.com/a.pdf|Manual",
+    );
+  });
+
+  it.each([
+    ["<https://example.com/a.pdf|User Manual>", "User Manual"],
+    ["See <http://example.com/a.pdf|User Manual> now", "See User Manual now"],
+    ["<mailto:support@example.com|Contact Support>", "Contact Support"],
+    ["<mailto:a/b@example.com|Contact Support>", "Contact Support"],
+  ])("keeps the visible label from spaced angle links in %s", (input, expected) => {
+    expect(sanitizeForPlainText(input)).toBe(expected);
+  });
+
+  it.each([
+    "<https://example.com/a.pdf title=hidden>",
+    "<https://example.com/a.pdf\nsecret>",
+    "<https://example.com/a.pdf|   >",
+    "<ftp://example.com/a.pdf|File Manual>",
+    "</https://example.com/a.pdf>",
+  ])("does not broaden URL-shaped angle handling for %s", (input) => {
+    expect(sanitizeForPlainText(input)).toBe("");
+  });
+
+  it("keeps labeled angle text literal inside code", () => {
+    const link = "<https://example.com/a.pdf|User Manual>";
+    expect(sanitizeForPlainText(`\`${link}\` ${link}`)).toBe(`\`${link}\` User Manual`);
   });
 
   it("preserves angle-addr email addresses", () => {

@@ -2,7 +2,10 @@ import {
   CODE_MODE_EXEC_TOOL_NAME,
   CODE_MODE_WAIT_TOOL_NAME,
 } from "../../code-mode-control-tools.js";
-import { consumeRepairableCodeModeFailure } from "../../code-mode-repair-provenance.js";
+import {
+  consumeCodeModePermissionChangeResult,
+  consumeRepairableCodeModeFailure,
+} from "../../code-mode-repair-provenance.js";
 import type { AfterToolCallResult, Agent } from "../../runtime/index.js";
 import { readToolResultDetails } from "../../tool-result-error.js";
 
@@ -23,6 +26,7 @@ export function installCodeModeOutcomeHook(params: {
     const details = readToolResultDetails(context.result);
     // Exact host proof covers the full cell history, including work before wait; copies cannot grant it.
     const repairableFailure = consumeRepairableCodeModeFailure(details);
+    const permissionChanged = consumeCodeModePermissionChangeResult(details);
     let prior: AfterToolCallResult | undefined;
     try {
       prior = await previousAfterToolOutcome?.(context, signal);
@@ -58,7 +62,9 @@ export function installCodeModeOutcomeHook(params: {
     const dispatchUnknown =
       context.executionStarted && typeof details?.bridgeDispatchStarted !== "boolean";
     const unsafeToContinue =
-      (isCodeModeWait || bridgeStarted || dispatchUnknown) && !repairableFailure;
+      (!permissionChanged || signal?.aborted === true) &&
+      (isCodeModeWait || bridgeStarted || dispatchUnknown) &&
+      !repairableFailure;
     if (
       unsafeToContinue &&
       isCodeModeExec &&

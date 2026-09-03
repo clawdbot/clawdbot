@@ -1037,6 +1037,33 @@ describe("openclaw launcher", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "preserves a packaged pnpm project path through compile-cache respawn",
+    async () => {
+      const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+      await fs.writeFile(path.join(fixtureRoot, "package.json"), '{"version":"2026.8.1"}\n');
+      await fs.writeFile(
+        path.join(fixtureRoot, "dist", "entry.js"),
+        'process.stdout.write(process.argv[1] ?? "");\n',
+        "utf8",
+      );
+      const globalRoot = makeTempDir(fixtureRoots, "openclaw-pnpm-global-");
+      const packageRoot = path.join(globalRoot, "v11", "active", "node_modules", "openclaw");
+      await fs.mkdir(path.dirname(packageRoot), { recursive: true });
+      await fs.symlink(fixtureRoot, packageRoot, "dir");
+      const launcher = path.join(packageRoot, "openclaw.mjs");
+
+      const result = spawnSync(process.execPath, [launcher], {
+        cwd: globalRoot,
+        env: launcherEnv({ NODE_COMPILE_CACHE: path.join(globalRoot, ".node-compile-cache") }),
+        encoding: "utf8",
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe(launcher);
+    },
+  );
+
   it("keeps compile cache enabled for packaged launchers when NODE_COMPILE_CACHE is configured", async () => {
     const fixtureRoot = await makeLauncherFixture(fixtureRoots);
     await addCompileCacheProbe(fixtureRoot);

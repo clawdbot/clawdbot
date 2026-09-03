@@ -180,6 +180,53 @@ struct OnboardingViewSmokeTests {
         #expect(short < preferred)
     }
 
+    @Test(arguments: ["primary", "dual", "passive"])
+    func `error card trailing closure owns its primary action`(_ actions: String) throws {
+        var primaryInvocations = 0
+        var secondaryInvocations = 0
+        let card = switch actions {
+        case "primary":
+            OnboardingErrorCard(
+                title: "Setup failed",
+                message: "Fixture failure",
+                docsSlug: "start/onboarding",
+                retryTitle: "Try again")
+            {
+                primaryInvocations += 1
+            }
+        case "dual":
+            OnboardingErrorCard(
+                title: "Setup failed",
+                message: "Fixture failure",
+                docsSlug: "start/onboarding",
+                retryTitle: "Back to Gateway",
+                secondaryTitle: "Try again",
+                secondary: { secondaryInvocations += 1 },
+                retry: { primaryInvocations += 1 })
+        default:
+            OnboardingErrorCard(
+                title: "Setup failed",
+                message: "Fixture failure",
+                docsSlug: "start/onboarding",
+                retry: nil)
+        }
+
+        if actions == "dual" {
+            let secondary = try #require(card.secondary)
+            secondary()
+        } else {
+            #expect(card.secondary == nil)
+        }
+        if actions == "passive" {
+            #expect(card.retry == nil)
+        } else {
+            let retry = try #require(card.retry)
+            retry()
+        }
+        #expect(primaryInvocations == (actions == "passive" ? 0 : 1))
+        #expect(secondaryInvocations == (actions == "dual" ? 1 : 0))
+    }
+
     @Test func `configured flows end at AI setup and hand off to the dashboard`() {
         // Everything after working inference (memory import, permissions,
         // channels, hatch) belongs to the dashboard custodian onboarding.
@@ -201,23 +248,6 @@ struct OnboardingViewSmokeTests {
         #expect(OnboardingView.pageOrder(
             for: .unconfigured,
             requiresCLIInstall: false) == [0, 1, 9])
-    }
-
-    @Test func `fresh local setup installs CLI before inference setup`() {
-        let order = OnboardingView.pageOrder(
-            for: .local,
-            requiresCLIInstall: true)
-
-        #expect(order.firstIndex(of: 2) == 2)
-        #expect(order.firstIndex(of: 3) == 3)
-    }
-
-    @Test func `configured local setup skips CLI install page`() {
-        let order = OnboardingView.pageOrder(
-            for: .local,
-            requiresCLIInstall: false)
-
-        #expect(!order.contains(2))
     }
 
     @Test func `reopened onboarding preserves configure later selection`() {

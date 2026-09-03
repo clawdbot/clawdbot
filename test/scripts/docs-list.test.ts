@@ -37,47 +37,16 @@ describe("docs-list", () => {
     expect(result.stderr).toBe("docs:list: missing docs directory. Run from repo root.\n");
   });
 
-  it("prints single-line read_when strings as read hints", () => {
+  it("reads metadata across supported front matter forms", () => {
     const tempRepoRoot = makeTempRepoRoot("openclaw-docs-list-");
     mkdirSync(path.join(tempRepoRoot, "docs"), { recursive: true });
-    writeFileSync(
-      path.join(tempRepoRoot, "docs", "page.md"),
-      `---
-summary: "Single-line read_when page"
-read_when: "Read this page when the hint is inline."
----
-`,
-      "utf8",
-    );
-
-    const output = runDocsList(tempRepoRoot);
-
-    expect(output).toContain("page.md - Single-line read_when page");
-    expect(output).toContain("Read when: Read this page when the hint is inline.");
-  });
-
-  it("accepts YAML document end markers in front matter", () => {
-    const tempRepoRoot = makeTempRepoRoot("openclaw-docs-list-yaml-end-");
-    mkdirSync(path.join(tempRepoRoot, "docs"), { recursive: true });
-    writeFileSync(
-      path.join(tempRepoRoot, "docs", "page.md"),
-      `---
-summary: "YAML document end page"
-...
-`,
-      "utf8",
-    );
-
-    const output = runDocsList(tempRepoRoot);
-
-    expect(output).toContain("page.md - YAML document end page");
-    expect(output).not.toContain("unterminated front matter");
-  });
-
-  it("preserves suffixes and line endings on front matter terminators", () => {
-    const tempRepoRoot = makeTempRepoRoot("openclaw-docs-list-terminator-suffixes-");
-    mkdirSync(path.join(tempRepoRoot, "docs"), { recursive: true });
     const cases = [
+      [
+        "inline.md",
+        '---\nsummary: "Single-line read_when page"\nread_when: "Read this page when the hint is inline."\n---\n',
+        "Single-line read_when page",
+      ],
+      ["yaml-end.md", '---\nsummary: "YAML document end page"\n...\n', "YAML document end page"],
       [
         "annotated.md",
         '---\r\nsummary: "Annotated closing delimiter"\r\n--- # end\r\n',
@@ -104,6 +73,7 @@ summary: "YAML document end page"
     for (const [fileName, , summary] of cases) {
       expect(output).toContain(`${fileName} - ${summary}`);
     }
+    expect(output).toContain("Read when: Read this page when the hint is inline.");
     expect(output).not.toContain("unterminated front matter");
   });
 
@@ -114,7 +84,8 @@ summary: "YAML document end page"
       path.join(tempRepoRoot, "docs", "page.md"),
       `---
 summary: "Page"
----
+# This metadata comment must not become a heading
+... # end
 # Visible title
 
 ## \`API[*]\` <script>alert(1)</script>
@@ -146,31 +117,11 @@ summary: "Page"
     expect(output).toContain("  - H3: &lt;scr&lt;script&gt;ipt&gt;alert(1)&lt;/script&gt;");
     expect(output).toContain("  - H4: `![label](https://example.test/image)`");
     expect(output).toContain("## nested/index.mdx\n\n- Route: /nested");
+    expect(output).not.toContain("metadata comment must not become a heading");
     expect(output).not.toContain("Hidden fenced heading");
     expect(output).not.toContain("Hidden nested fenced heading");
     expect(output).not.toContain("AGENTS.md");
     expect(existsSync(path.join(tempRepoRoot, "docs", "docs_map.md"))).toBe(false);
-  });
-
-  it("strips annotated front matter terminators from the docs map", () => {
-    const tempRepoRoot = makeTempRepoRoot("openclaw-docs-headings-frontmatter-");
-    const docsDir = path.join(tempRepoRoot, "docs");
-    mkdirSync(docsDir, { recursive: true });
-    writeFileSync(
-      path.join(docsDir, "page.md"),
-      `---
-summary: "Annotated page"
-# This metadata comment must not become a heading
-... # end
-# Visible title
-`,
-      "utf8",
-    );
-
-    const output = runDocsList(tempRepoRoot, ["--headings"]);
-
-    expect(output).toContain("  - H1: Visible title");
-    expect(output).not.toContain("metadata comment must not become a heading");
   });
 
   it("normalizes injected Windows paths for nested page routes", () => {

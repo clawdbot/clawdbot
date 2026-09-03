@@ -6,6 +6,7 @@ export {
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 export { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
+export { assertOpenClawAgentDatabaseForMaintenance } from "../state/openclaw-agent-db-maintenance.js";
 export { ensureOpenClawAgentStandingIntentsSchema } from "../state/openclaw-agent-standing-intents-schema.js";
 export {
   executeSqliteQuerySync,

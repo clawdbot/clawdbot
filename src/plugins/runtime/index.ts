@@ -23,14 +23,12 @@ import {
 } from "../../video-generation/runtime.js";
 import { listWebSearchProviders, runWebSearch } from "../../web-search/runtime.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
+import { createRuntimeBase } from "./runtime-base.js";
 import { defineCachedValue } from "./runtime-cache.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
-import { createRuntimeConfig } from "./runtime-config.js";
 import { createRuntimeEvents } from "./runtime-events.js";
 import { createRuntimeLogging } from "./runtime-logging.js";
 import { createRuntimeMedia } from "./runtime-media.js";
-import { createRuntimeState } from "./runtime-state.js";
-import { createRuntimeSystem } from "./runtime-system.js";
 import { createRuntimeTaskFlow } from "./runtime-taskflow.js";
 import { createRuntimeTasks } from "./runtime-tasks.js";
 import type { PluginRuntimeFactory, PluginRuntime } from "./types.js";
@@ -77,6 +75,9 @@ function createRuntimeMediaUnderstandingFacade(): PluginRuntime["mediaUnderstand
     loadMediaUnderstandingRuntime,
   );
   return {
+    resolveAudioInputBudget: bindMediaUnderstandingRuntime(
+      (runtime) => runtime.resolveAudioInputBudget,
+    ),
     runFile: bindMediaUnderstandingRuntime((runtime) => runtime.runMediaUnderstandingFile),
     describeImageFile: bindMediaUnderstandingRuntime((runtime) => runtime.describeImageFile),
     describeImageFileWithModel: bindMediaUnderstandingRuntime(
@@ -175,6 +176,7 @@ function createUnavailableSubagentRuntime(): PluginRuntime["subagent"] {
     throw new RequestScopedSubagentRuntimeError();
   };
   return {
+    complete: unavailable,
     run: unavailable,
     waitForRun: unavailable,
     getSessionMessages: unavailable,
@@ -258,7 +260,7 @@ function createRuntimeSandbox(agent: PluginRuntime["agent"]): PluginRuntime["san
 // Loaded by path from the plugin loader, so static export analysis cannot see this contract.
 export const createPluginRuntime: PluginRuntimeFactory = (
   _options = {},
-  initialRuntime = { config: createRuntimeConfig(), state: createRuntimeState() },
+  base = createRuntimeBase(),
 ) => {
   const mediaUnderstanding = createRuntimeMediaUnderstandingFacade();
   const taskFlow = createRuntimeTaskFlow();
@@ -271,7 +273,7 @@ export const createPluginRuntime: PluginRuntimeFactory = (
     // always see the same version the CLI reports, avoiding API-version drift.
     version: VERSION,
     gateway: _options.gateway ?? createRuntimeGateway(),
-    config: initialRuntime.config,
+    config: base.config,
     agent,
     hooks: _options.hooks ?? {
       dispatchHookAgentTurn: async () => {
@@ -282,7 +284,7 @@ export const createPluginRuntime: PluginRuntimeFactory = (
     nodes: _options.nodes ?? createUnavailableNodesRuntime(),
     sandbox: createRuntimeSandbox(agent),
     worktrees: createRuntimeWorktrees(),
-    system: createRuntimeSystem(),
+    system: base.system,
     media: createRuntimeMedia(),
     webSearch: {
       listProviders: listWebSearchProviders,
@@ -295,7 +297,7 @@ export const createPluginRuntime: PluginRuntimeFactory = (
     ),
     events: createRuntimeEvents(),
     logging: createRuntimeLogging(),
-    state: initialRuntime.state,
+    state: base.state,
     tasks,
   } satisfies Omit<
     PluginRuntime,

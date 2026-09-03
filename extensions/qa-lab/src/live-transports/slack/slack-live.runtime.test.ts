@@ -3,8 +3,8 @@ import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readQaScenarioById } from "../../scenario-catalog.js";
 import { requireFlowScenario } from "../../scenario-catalog.test-utils.js";
+import { resolveLiveTransportQaScenarioIds } from "../shared/scenario-selection.js";
 import { testing as adapterTesting } from "./adapter.runtime.js";
-import { resolveSlackQaScenarioIds } from "./scenario-selection.js";
 import { resolveApprovalDecision } from "./slack-live.approvals.js";
 import {
   quiesceCodexApprovalAgentRun,
@@ -43,7 +43,12 @@ function toSlackScenarioExportName(id: string): string {
 }
 
 function findScenario(ids?: string[]) {
-  return resolveSlackQaScenarioIds({ scenarioIds: ids }).map((id) => {
+  return resolveLiveTransportQaScenarioIds({
+    channelId: "slack",
+    providerMode: "live-frontier",
+    scenarioIds: ids,
+    supportsModuleFlows: true,
+  }).map((id) => {
     const implementation = (
       slackScenarioImplementations as unknown as Record<string, SlackQaScenarioImplementation>
     )[toSlackScenarioExportName(id)];
@@ -651,7 +656,7 @@ describe("Slack live QA runtime helpers", () => {
         id: "slack-progress-commentary-omitted",
         commentaryTs: "1.500000",
         commentaryStyle: "headline",
-        toolProgress: "draft",
+        toolProgress: "absent",
       },
       {
         id: "slack-progress-commentary-verbose-dedupe",
@@ -679,8 +684,7 @@ describe("Slack live QA runtime helpers", () => {
       if (!commentaryMarker || !toolMarker || !outputMarker || !finalMarker || !verifyObserved) {
         throw new Error(`missing Slack progress verifier: ${testCase.id}`);
       }
-      // Progress cards compact command details from the middle, so the QA marker
-      // stays at the command suffix where the real Slack presentation preserves it.
+      // The command marker detects accidental tool detail disclosure in quiet drafts.
       expect(input).toContain(`sleep 5; printf '%s\\n' '${outputMarker}' # ${toolMarker}`);
       const messages = [
         {
@@ -708,10 +712,8 @@ describe("Slack live QA runtime helpers", () => {
                 text:
                   testCase.toolProgress === "standalone-redacted"
                     ? "🛠️ Exec"
-                    : testCase.toolProgress === "standalone"
-                      ? `🛠️ Exec\n\`\`\`\n${outputMarker}\n\`\`\``
-                      : `🛠️ Exec ${toolMarker}`,
-                ts: testCase.toolProgress === "draft" ? "1.500000" : "1.750000",
+                    : `🛠️ Exec\n\`\`\`\n${outputMarker}\n\`\`\``,
+                ts: "1.750000",
               },
             ]),
       ];
@@ -845,8 +847,12 @@ describe("Slack live QA runtime helpers", () => {
       ).toThrow("tool progress to stay out");
     }
     expect(
-      verify("slack-progress-commentary-omitted", ([commentary, , final]) => [commentary, final]),
-    ).toThrow("tool progress on the draft");
+      verify("slack-progress-commentary-omitted", ([commentary, tool, final]) => [
+        commentary,
+        tool,
+        final,
+      ]),
+    ).toThrow("tool progress to stay out");
     expect(
       verify(
         "slack-progress-commentary-true",

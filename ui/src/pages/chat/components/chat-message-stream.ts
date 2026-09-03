@@ -7,6 +7,7 @@ import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { formatDurationCompact } from "../../../lib/format.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
+import { resolveMessageActionDetails, type MessageReplyTarget } from "./chat-message-markdown.ts";
 import { renderChatTimestamp } from "./chat-message-timestamp.ts";
 import { renderChatQuestionSummary } from "./chat-question-card.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
@@ -42,6 +43,7 @@ type StreamMessageOptions = Pick<
 >;
 
 export type StreamGroupOptions = StreamMessageOptions & {
+  onReply?: (target: MessageReplyTarget) => void;
   onOpenSidebar?: (content: SidebarContent) => void;
   assistant?: AssistantIdentity;
   showAssistantAvatar?: boolean;
@@ -51,44 +53,47 @@ export type StreamGroupOptions = StreamMessageOptions & {
   questionPrompts?: ReadonlyMap<string, QuestionPrompt>;
 };
 
-function renderQuestionStreamPart(
-  part: Extract<StreamGroupPart, { kind: "question" }>,
-  opts: StreamGroupOptions,
-) {
-  const prompt = opts.questionPrompts?.get(part.questionId);
-  return prompt ? renderChatQuestionSummary(prompt) : nothing;
-}
-
 export function renderStreamGroupParts(
   parts: StreamGroupPart[],
   opts: StreamGroupOptions,
   presentation: "standalone" | "continuation",
 ) {
-  return parts.map((part) =>
-    part.kind === "reading-indicator"
-      ? renderChatWorkingIndicator(part, {
-          waitingApproval: opts.waitingApproval === true,
-          startupLabel: opts.startupLabel,
-          outputTokens: opts.runOutputTokens,
-          presentation,
-        })
-      : part.kind === "question"
-        ? renderQuestionStreamPart(part, opts)
-        : renderGroupedMessage(
-            {
-              role: "assistant",
-              content: [{ type: "text", text: part.text }],
-              timestamp: part.startedAt,
-            },
-            part.key,
-            {
-              ...opts,
-              isStreaming: part.isStreaming,
-              showReasoning: false,
-            },
-            opts.onOpenSidebar,
-          ),
-  );
+  return parts.map((part) => {
+    if (part.kind === "reading-indicator") {
+      return renderChatWorkingIndicator(part, {
+        waitingApproval: opts.waitingApproval === true,
+        startupLabel: opts.startupLabel,
+        outputTokens: opts.runOutputTokens,
+        presentation,
+      });
+    }
+    if (part.kind === "question") {
+      const prompt = opts.questionPrompts?.get(part.questionId);
+      return prompt ? renderChatQuestionSummary(prompt) : nothing;
+    }
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: part.text }],
+      timestamp: part.startedAt,
+    };
+    return renderGroupedMessage(
+      message,
+      part.key,
+      {
+        ...opts,
+        isStreaming: part.isStreaming,
+        showReasoning: false,
+        // Settled segments can be replied to without transcript IDs or footer actions.
+        messageActions: resolveMessageActionDetails({
+          message,
+          messageId: part.key,
+          onReply: opts.onReply,
+          senderLabel: opts.assistant?.name ?? "Assistant",
+        }),
+      },
+      opts.onOpenSidebar,
+    );
+  });
 }
 
 // One assistant group per contiguous run of streaming items: a reply that

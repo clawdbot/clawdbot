@@ -30,15 +30,25 @@ data class ChatQuestionPrompt(
       ChatQuestionStatus.Unavailable
     } else {
       when (record.status) {
-        "answered" -> if (answeredLocally) ChatQuestionStatus.Answered else ChatQuestionStatus.AnsweredElsewhere
-        "cancelled" -> ChatQuestionStatus.Cancelled
-        "expired" -> ChatQuestionStatus.Expired
-        else ->
+        "answered" -> {
+          if (answeredLocally) ChatQuestionStatus.Answered else ChatQuestionStatus.AnsweredElsewhere
+        }
+
+        "cancelled" -> {
+          ChatQuestionStatus.Cancelled
+        }
+
+        "expired" -> {
+          ChatQuestionStatus.Expired
+        }
+
+        else -> {
           when {
             nowMs >= record.expiresAtMs -> ChatQuestionStatus.Expired
             submitting -> ChatQuestionStatus.Submitting
             else -> ChatQuestionStatus.Pending
           }
+        }
       }
     }
 }

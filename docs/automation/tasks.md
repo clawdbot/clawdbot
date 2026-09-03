@@ -177,6 +177,10 @@ When a task reaches a terminal state, OpenClaw notifies you. There are two deliv
 
 **Session-queued delivery** - if direct delivery fails or no origin is set, the update is queued as a system event in the requester's session and surfaces on the next heartbeat.
 
+Notifications retain the recorded requester agent, even when another agent executes
+the task. With `session.scope: "global"`, queued updates and heartbeat wakes stay
+with that requester; another agent sharing the `global` session key cannot consume them.
+
 When `gateway.publicOrigin` is configured and the Control UI is enabled,
 direct channel notifications include an `Inspect` link to the task's own
 session. Session-queued notifications do not include this link.
@@ -284,6 +288,7 @@ openclaw tasks notify <lookup> state_changes
     | `cancel_stuck`         | warn       | Cancel requested over 5 minutes ago, no active child tasks, still nonterminal |
     | `missing_linked_tasks` | warn/error | Stale managed flow with no linked tasks or wait state                       |
     | `blocked_task_missing` | warn       | Blocked flow points at a task id that no longer exists                      |
+    | `inconsistent_timestamps` | warn    | Flow timestamps are not in chronological order                              |
 
   </Accordion>
   <Accordion title="tasks maintenance">
@@ -337,6 +342,8 @@ For the full operator ledger, use the CLI: `openclaw tasks list`.
 The web Control UI has a **Tasks** page in the sidebar with live active and recent background tasks. Use it to inspect progress, open linked sessions, refresh the ledger, cancel queued and running tasks, or retry/dismiss a blocked completion delivery. Task detail keeps execution status and delivery status separate and exposes the retained result for copying.
 
 Chat panes also have a collapsible **Background tasks** rail scoped to the pane's agent, with running work, stop controls, and a finished section. Open it from the activity toggle in the pane header (or the floating activity button in single-pane chat).
+
+Running work stays in creation order so progress updates do not move rows while you monitor them. Finished work is selected and displayed by completion time, newest first. Transient list conflicts retry silently; if retries are exhausted, use **Refresh** in the Tasks panel header.
 
 Select a task to replace the list with a compact detail view inside the rail; use the back button to return to the list. The detail view shows the bounded input prompt, latest output or error summary, timing, and current tool activity. Subagent details stay in the rail rather than opening their child conversation in the main chat pane; linked-session actions remain available for task runtimes intended for direct inspection. On iOS, open **Chat actions → Background Tasks**; on Android, open the Chat overflow menu and select **Background tasks**. Both mobile views use the same Running and Finished grouping and open task details on selection.
 

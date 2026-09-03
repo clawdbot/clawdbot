@@ -2,6 +2,7 @@ import { copyFile, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
+import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../../test-helpers/control-ui-e2e.ts";
 
 const suite = createControlUiE2eSuite({
@@ -11,7 +12,6 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not installed at ${executablePath}. Run \`pnpm --dir ui exec playwright install chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
 });
 
-const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/tasks");
 const baseTime = Date.parse("2026-07-05T18:00:00.000Z");
 
 const runningTask = {
@@ -144,7 +144,7 @@ const activePageOneTasks = [
 
 suite.define(() => {
   it("keeps completed tasks visible when active work fills the unfiltered page", async () => {
-    await mkdir(artifactDir, { recursive: true });
+    const artifactDir = createControlUiE2eArtifactDir("tasks-recent");
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -187,7 +187,7 @@ suite.define(() => {
       expect(await gateway.getRequests("tasks.list")).toContainEqual({
         id: expect.any(String),
         method: "tasks.list",
-        params: { agentId: "main", limit: 200, status: terminalStatuses },
+        params: { agentId: "main", limit: 200, sortBy: "endedAt", status: terminalStatuses },
       });
     } finally {
       await context.close();
@@ -195,12 +195,8 @@ suite.define(() => {
   });
 
   it("keeps retry and dismiss outcomes authoritative across a stale refresh and reconnect", async () => {
-    const actionArtifactDir = path.resolve(
-      process.cwd(),
-      ".artifacts/control-ui-e2e/task-action-outcomes",
-    );
+    const actionArtifactDir = createControlUiE2eArtifactDir("task-action-outcomes");
     const rawVideoDir = path.join(actionArtifactDir, "raw-video");
-    await rm(actionArtifactDir, { force: true, recursive: true });
     await mkdir(rawVideoDir, { recursive: true });
     const context = await suite.browser.newContext({
       locale: "en-US",
@@ -255,6 +251,8 @@ suite.define(() => {
       await page.screenshot({ path: path.join(actionArtifactDir, "01-blocked.png") });
 
       await page.setViewportSize({ width: 320, height: 844 });
+      // Resize schedules a shell render; visible buttons can still belong to its desktop grid.
+      await page.locator(".shell.shell--mobile-nav").waitFor();
       const recoveryActions = ["Copy result", "Retry delivery", "Dismiss delivery"];
       for (const name of recoveryActions) {
         const action = retryRow.getByRole("button", { name });
@@ -266,6 +264,7 @@ suite.define(() => {
       }
       await page.screenshot({ path: path.join(actionArtifactDir, "01-blocked-mobile.png") });
       await page.setViewportSize({ width: 1440, height: 900 });
+      await page.locator(".shell:not(.shell--mobile-nav)").waitFor();
 
       await gateway.deferNext("tasks.retry", { taskIds: [retryBlockedTask.taskId] });
       const retryButton = retryRow.getByRole("button", { name: "Retry delivery" });
@@ -364,8 +363,7 @@ suite.define(() => {
   });
 
   it("renders every active page, applies pushed completion, and cancels a page-two task", async () => {
-    await rm(artifactDir, { force: true, recursive: true });
-    await mkdir(artifactDir, { recursive: true });
+    const artifactDir = createControlUiE2eArtifactDir("tasks-flow");
     const rawVideoDir = path.join(artifactDir, "raw-video");
     await mkdir(rawVideoDir, { recursive: true });
     const context = await suite.browser.newContext({
@@ -406,6 +404,7 @@ suite.define(() => {
                   agentId: "main",
                   limit: 200,
                   status: ["completed", "failed", "timed_out", "cancelled"],
+                  sortBy: "endedAt",
                 },
                 response: { tasks: [completedTask, failedTask] },
               },
@@ -461,6 +460,7 @@ suite.define(() => {
           agentId: "main",
           limit: 200,
           status: ["completed", "failed", "timed_out", "cancelled"],
+          sortBy: "endedAt",
         },
       });
       await page.screenshot({
@@ -511,7 +511,7 @@ suite.define(() => {
   });
 
   it("copies retained results through fallback and announces total failure", async () => {
-    await mkdir(artifactDir, { recursive: true });
+    const artifactDir = createControlUiE2eArtifactDir("tasks-copy");
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",

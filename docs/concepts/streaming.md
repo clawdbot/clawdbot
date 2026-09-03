@@ -263,6 +263,9 @@ Slack-only:
 - `block` mode uses draft chunking (`draftChunk`).
 - Preview streaming is skipped when Discord block streaming is explicitly
   enabled.
+- `progress` shows one quiet work summary and authored milestones, not a rolling
+  tool log. Generated progress emoji are omitted; approvals and failures stay
+  visible. Routine edits coalesce while attention updates flush immediately.
 - `progress` mode deletes the status draft once the final answer is delivered,
   so busy channels keep no orphaned tool log above the reply. Error finals keep
   the draft as the record of the failed turn.
@@ -275,7 +278,9 @@ Slack-only:
   when available.
 - `block` uses append-style draft previews.
 - `progress` streams Slack's native agent card by default: one message carries
-  narration, the live plan/task card, and the final answer. The card appears
+  narration, authored milestones (or one work-summary row), and the final answer.
+  Ordinary tool calls do not create task rows. Routine progress updates coalesce
+  at one-second intervals; attention and completion flush immediately. The card appears
   only for turns that do real work, so plain questions are answered without one.
   `streaming.progress.nativeTaskCards: false` falls back to the Block Kit
   session card, which finalizes to success or error and posts the assistant's

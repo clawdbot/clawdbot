@@ -1,9 +1,13 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
-import { readStoredOutboxStore, storageTargetForGateway } from "../../lib/chat/outbox-store.ts";
-import { createSessionCapability } from "../../lib/sessions/index.ts";
+import {
+  captureChatOutboxAdmission,
+  readStoredOutboxStore,
+  storageTargetForGateway,
+} from "../../lib/chat/outbox-store.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   getChatAttachmentDataUrl,
@@ -12,12 +16,19 @@ import {
 } from "./attachment-payload-store.ts";
 import { composeBrowserAnnotationContext } from "./browser-annotation-context.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
-import { loadChatHistory, type ChatHistoryResult } from "./chat-history.ts";
-import { makeChatHost } from "./chat-host.test-support.ts";
+import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
+import { loadChatHistory } from "./chat-history.ts";
+import {
+  createBrowserAnnotationAttachment,
+  createImmediateCommandHost,
+  findChatSendPayload,
+  makeChatHost,
+} from "./chat-host.test-support.ts";
 import { syncVisibleChatQueueProjection } from "./chat-queue.ts";
 import { retryQueuedChatMessage, retryReconnectableQueuedChatSends } from "./chat-send-actions.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
+import { formatChatWorkContext } from "./chat-work-context.ts";
 import { getChatSessionProjection } from "./history-merge.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
@@ -40,39 +51,6 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-function createBrowserAnnotationAttachment(id: string, modelContext: string): ChatAttachment {
-  return {
-    id,
-    dataUrl: "data:image/png;base64,aQ==",
-    mimeType: "image/png",
-    browserAnnotation: {
-      modelContext,
-      title: `Page ${id}`,
-      displayUrl: `https://example.com/${id}`,
-      markedRegionCount: 1,
-      inspectedElement: false,
-    },
-  };
-}
-
-function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((settle) => {
-    resolve = settle;
-  });
-  return { promise, resolve };
-}
-
-function findChatSendPayload(host: {
-  request: { mock: { calls: ReadonlyArray<readonly [string, unknown?]> } };
-}): Record<string, unknown> {
-  const call = host.request.mock.calls.find(([method]) => method === "chat.send");
-  if (!call?.[1] || typeof call[1] !== "object") {
-    throw new Error("Expected chat.send payload");
-  }
-  return call[1] as Record<string, unknown>;
-}
-
 function createStagedAttachment(id: string): ChatAttachment {
   const file = new File(["%PDF-1.4\n"], "brief.pdf", { type: "application/pdf" });
   const attachment = registerChatAttachmentPayload({
@@ -89,41 +67,6 @@ function createStagedAttachment(id: string): ChatAttachment {
   return attachment;
 }
 
-function createImmediateCommandHost(
-  command: string,
-  attachment: ChatAttachment,
-  overrides: Partial<ChatHost> = {},
-): ChatHost {
-  const host = {
-    sessions: createSessionCapability({
-      snapshot: { client: null, phase: "reconnecting", hello: null },
-      subscribe: () => () => undefined,
-      subscribeEvents: () => () => undefined,
-    }),
-    client: null,
-    connected: true,
-    sessionKey: "agent:main",
-    chatLoading: false,
-    chatMessage: command,
-    chatMessages: [],
-    chatLocalInputHistoryBySession: {},
-    chatInputHistorySessionKey: null,
-    chatInputHistoryItems: null,
-    chatInputHistoryIndex: -1,
-    chatDraftBeforeHistory: null,
-    chatAttachments: [attachment],
-    chatQueue: [],
-    chatRunId: null,
-    chatSending: false,
-    chatStream: null,
-    chatModelCatalog: [],
-    hello: null,
-    refreshSessionsAfterChat: new Map(),
-    ...overrides,
-  } satisfies Partial<ChatHost>;
-  return host as ChatHost;
-}
-
 describe("structured Goal admission", () => {
   const intent = { kind: "session-goal-start", version: 1, issuedAtMs: 1_788_000_000_000 } as const;
 
@@ -132,6 +75,7 @@ describe("structured Goal admission", () => {
     async (objective) => {
       const host = makeChatHost({
         chatMessage: objective,
+        getWorkContext: () => "Ambient context must not become a Goal objective",
         currentSessionId: "incarnation-a",
         chatDisplayedLeafEntryId: "leaf-a",
         requestHandlers: { "chat.send": { status: "started" } },
@@ -233,7 +177,9 @@ describe("structured Goal admission", () => {
     };
     // The same browser persistence owner used on reconnect restores this immutable row.
     const { admitQueuedMessageForSession } = await import("./chat-queue.ts");
-    expect(admitQueuedMessageForSession(host, host.sessionKey, queued)).toBe(true);
+    expect(
+      admitQueuedMessageForSession(host, captureChatOutboxAdmission(host, host.sessionKey), queued),
+    ).toBe(true);
     host.currentSessionId = "incarnation-b";
     host.chatDisplayedLeafEntryId = "leaf-b";
     await retryQueuedChatMessage(host, queued.id);
@@ -417,62 +363,38 @@ describe("handleSendChat browser annotation context", () => {
     expect(host.chatMessage).toBe("");
   });
 
-  it("restores the command draft and mixed attachments when a remote command fails", async () => {
-    const annotation = createBrowserAnnotationAttachment("failed-status", "Review the page");
-    const document = createStagedAttachment("failed-status-document");
-    const host = makeChatHost({
-      requestHandlers: { "chat.send": { runId: "failed-status-run", status: "error" } },
-      chatAttachments: [annotation, document],
-      chatMessage: "/status",
-    });
+  it.each(["/status", "/approve approval-123 allow-once"])(
+    "restores the command draft and mixed attachments when %s fails",
+    async (command) => {
+      const annotation = createBrowserAnnotationAttachment("failed-command", "Review the page");
+      const document = createStagedAttachment("failed-command-document");
+      const approval = command.startsWith("/approve");
+      const host = makeChatHost({
+        requestHandlers: { "chat.send": { runId: "failed-command-run", status: "error" } },
+        chatAttachments: [annotation, document],
+        chatMessage: command,
+        chatRunId: approval ? "active-run" : null,
+        chatStream: approval ? "Waiting for approval..." : null,
+      });
 
-    await handleSendChat(host);
+      await handleSendChat(host);
 
-    expect(findChatSendPayload(host).attachments).toEqual([
-      expect.objectContaining({ fileName: "brief.pdf", mimeType: "application/pdf" }),
-    ]);
-    expect(host.chatMessage).toBe("/status");
-    expect(host.chatAttachments).toMatchObject([
-      {
-        id: annotation.id,
-        browserAnnotation: annotation.browserAnnotation,
-        dataUrl: annotation.dataUrl,
-      },
-      { id: document.id, fileName: "brief.pdf", dataUrl: attachmentDataUrl },
-    ]);
-    expect(getChatAttachmentDataUrl(host.chatAttachments[0]!)).toBe(annotation.dataUrl);
-    expect(getChatAttachmentDataUrl(host.chatAttachments[1]!)).toBe(attachmentDataUrl);
-  });
-
-  it("restores the command draft and mixed attachments when an approval fails", async () => {
-    const annotation = createBrowserAnnotationAttachment("failed-approval", "Review the page");
-    const document = createStagedAttachment("failed-approval-document");
-    const command = "/approve approval-123 allow-once";
-    const host = makeChatHost({
-      requestHandlers: { "chat.send": { runId: "failed-approval-run", status: "error" } },
-      chatAttachments: [annotation, document],
-      chatMessage: command,
-      chatRunId: "active-run",
-      chatStream: "Waiting for approval...",
-    });
-
-    await handleSendChat(host);
-
-    expect(findChatSendPayload(host).attachments).toEqual([
-      expect.objectContaining({ fileName: "brief.pdf", mimeType: "application/pdf" }),
-    ]);
-    expect(host.chatMessage).toBe(command);
-    expect(host.chatAttachments).toMatchObject([
-      {
-        id: annotation.id,
-        browserAnnotation: annotation.browserAnnotation,
-        dataUrl: annotation.dataUrl,
-      },
-      { id: document.id, fileName: "brief.pdf", dataUrl: attachmentDataUrl },
-    ]);
-    expect(getChatAttachmentDataUrl(host.chatAttachments[0]!)).toBe(annotation.dataUrl);
-    expect(getChatAttachmentDataUrl(host.chatAttachments[1]!)).toBe(attachmentDataUrl);
-  });
+      expect(findChatSendPayload(host).attachments).toEqual([
+        expect.objectContaining({ fileName: "brief.pdf", mimeType: "application/pdf" }),
+      ]);
+      expect(host.chatMessage).toBe(command);
+      expect(host.chatAttachments).toMatchObject([
+        {
+          id: annotation.id,
+          browserAnnotation: annotation.browserAnnotation,
+          dataUrl: annotation.dataUrl,
+        },
+        { id: document.id, fileName: "brief.pdf", dataUrl: attachmentDataUrl },
+      ]);
+      expect(getChatAttachmentDataUrl(host.chatAttachments[0]!)).toBe(annotation.dataUrl);
+      expect(getChatAttachmentDataUrl(host.chatAttachments[1]!)).toBe(attachmentDataUrl);
+    },
+  );
 
   it("never restores over a replacement annotation that reuses the submitted attachment ID", async () => {
     const acknowledgment = createDeferred<{ runId: string; status: "error" }>();
@@ -541,37 +463,210 @@ describe("handleSendChat browser annotation context", () => {
     expect(findChatSendPayload(host).message).toBe("Review the annotated page\n\n/review-this");
   });
 
-  it("keeps one materialized snapshot through delayed failed delivery", async () => {
-    const settingsPatch = createDeferred<boolean>();
-    const attachment = createBrowserAnnotationAttachment("delayed", "Stable browser context");
-    const replacement = createBrowserAnnotationAttachment("replacement", "New browser context");
+  it.each(["annotation", "home"])(
+    "keeps one %s context snapshot through delayed delivery and retry",
+    async (source) => {
+      const settingsPatch = createDeferred<boolean>();
+      const sendRequest = vi
+        .fn()
+        .mockResolvedValueOnce({ status: "timeout" })
+        .mockResolvedValue({ status: "started" });
+      let workContext = "Stable browser context";
+      const attachment = createBrowserAnnotationAttachment("delayed", "Stable browser context");
+      const replacement = createBrowserAnnotationAttachment("replacement", "New browser context");
+      const mentions = [{ profileId: "profile-alex", start: 5, end: 10 }];
+      const host = makeChatHost({
+        requestHandlers: { "chat.send": sendRequest },
+        chatAttachments: source === "annotation" ? [attachment] : [],
+        getWorkContext: source === "home" ? () => workContext : undefined,
+        chatMessage: "  🔎 @Alex Use the marked area  ",
+        chatMentions: mentions,
+        pendingSettingsPatches: { "agent:main": settingsPatch.promise },
+      });
+
+      // Annotation context is prepended by the attachment path; Home work context
+      // trails the message so session titles derive from what the person asked.
+      const expected =
+        source === "home"
+          ? "🔎 @Alex Use the marked area\n\nStable browser context"
+          : "Stable browser context\n\n🔎 @Alex Use the marked area";
+      const expectedMentions = [
+        {
+          profileId: "profile-alex",
+          start: expected.indexOf("@Alex"),
+          end: expected.indexOf("@Alex") + 5,
+        },
+      ];
+
+      const send = handleSendChat(host);
+      await vi.waitFor(() => expect(host.chatQueue).toHaveLength(1));
+      expect(host.chatQueue[0]?.text).toBe(expected);
+      expect(host.chatQueue[0]?.mentions).toEqual(expectedMentions);
+      expect(host.chatMentions).toEqual([]);
+
+      mentions[0]!.profileId = "not-the-submitted-recipient";
+      host.chatMessage = "@Carol New draft";
+      host.chatMentions = [{ profileId: "profile-carol", start: 0, end: 6 }];
+      host.chatAttachments = [replacement];
+      workContext = "A different task is now visible";
+      settingsPatch.resolve(true);
+      await send;
+
+      expect(findChatSendPayload(host).message).toBe(expected);
+      expect(findChatSendPayload(host).mentions).toEqual(expectedMentions);
+      expect(host.chatQueue[0]).toMatchObject({ sendState: "failed", text: expected });
+      expect(host.chatMessage).toBe("@Carol New draft");
+      expect(host.chatMentions).toEqual([{ profileId: "profile-carol", start: 0, end: 6 }]);
+      expect(host.chatAttachments).toEqual([replacement]);
+      expect(host.chatLocalInputHistoryBySession[host.sessionKey]?.[0]?.text).toBe(
+        "🔎 @Alex Use the marked area",
+      );
+      await retryQueuedChatMessage(host, host.chatQueue[0]!.id);
+      expect(sendRequest.mock.calls.map(([params]) => params.message)).toEqual([
+        expected,
+        expected,
+      ]);
+      expect(sendRequest.mock.calls.map(([params]) => params.mentions)).toEqual([
+        expectedMentions,
+        expectedMentions,
+      ]);
+    },
+  );
+});
+
+describe("human mention submission", () => {
+  it("keeps only selected recipients after annotation and reply prefixes", async () => {
     const host = makeChatHost({
-      requestHandlers: { "chat.send": { status: "timeout" } },
-      chatAttachments: [attachment],
-      chatMessage: "Use the marked area",
-      pendingSettingsPatches: { "agent:main": settingsPatch.promise },
+      chatMessage: "  🔎 @Alex please review  ",
+      chatMentions: [{ profileId: "profile-alex", start: 5, end: 10 }],
+      chatAttachments: [createBrowserAnnotationAttachment("mention", "Unselected @Other context")],
+      chatReplyTarget: {
+        messageId: "synthetic-reply",
+        text: "Unselected @Other quote",
+        senderLabel: "Reader",
+      },
+      getWorkContext: () => "Unselected @Other work context",
+      requestHandlers: { "chat.send": { status: "started" } },
     });
 
-    const send = handleSendChat(host);
-    await vi.waitFor(() => expect(host.chatQueue).toHaveLength(1));
-    expect(host.chatQueue[0]?.text).toBe("Stable browser context\n\nUse the marked area");
+    await handleSendChat(host);
 
-    host.chatMessage = "New draft";
-    host.chatAttachments = [replacement];
-    settingsPatch.resolve(true);
-    await send;
-
-    expect(findChatSendPayload(host).message).toBe("Stable browser context\n\nUse the marked area");
-    expect(host.chatQueue[0]).toMatchObject({
-      sendState: "failed",
-      text: "Stable browser context\n\nUse the marked area",
+    const expected =
+      "> **Reader:** Unselected @Other quote\n\nUnselected @Other context\n\n🔎 @Alex please review\n\nUnselected @Other work context";
+    expect(findChatSendPayload(host)).toMatchObject({
+      message: expected,
+      mentions: [
+        {
+          profileId: "profile-alex",
+          start: expected.indexOf("@Alex"),
+          end: expected.indexOf("@Alex") + 5,
+        },
+      ],
     });
-    expect(host.chatMessage).toBe("New draft");
-    expect(host.chatAttachments).toEqual([replacement]);
-    expect(host.chatLocalInputHistoryBySession[host.sessionKey]?.[0]?.text).toBe(
-      "Use the marked area",
-    );
   });
+
+  it("does not clear a same-label replacement recipient while history is loading", async () => {
+    const history = createDeferred<ChatHistoryResult>();
+    const host = makeChatHost({
+      chatMessage: "@Alex please review",
+      chatMentions: [{ profileId: "profile-first", start: 0, end: 5 }],
+      chatLoading: true,
+      requestHandlers: {
+        "chat.history": () => history.promise,
+        "chat.send": { status: "started" },
+      },
+    });
+    const sending = handleSendChat(host);
+    await vi.waitFor(() =>
+      expect(host.request).toHaveBeenCalledWith("chat.history", expect.anything()),
+    );
+    host.chatMentions = [{ profileId: "profile-second", start: 0, end: 5 }];
+    history.resolve({
+      messages: [],
+      sessionInfo: {
+        key: host.sessionKey,
+        kind: "direct",
+        updatedAt: 1,
+        status: "done",
+        hasActiveRun: false,
+      },
+    });
+    await sending;
+
+    expect(findChatSendPayload(host).mentions).toEqual([
+      { profileId: "profile-first", start: 0, end: 5 },
+    ]);
+    expect(host.chatMessage).toBe("@Alex please review");
+    expect(host.chatMentions).toEqual([{ profileId: "profile-second", start: 0, end: 5 }]);
+  });
+
+  it.each(["/new @Alex", "/status @Alex", "/btw @Alex review"])(
+    "preserves mention intent instead of dropping it in %s",
+    async (message) => {
+      const mentions = [
+        {
+          profileId: "profile-alex",
+          start: message.indexOf("@Alex"),
+          end: message.indexOf("@Alex") + 5,
+        },
+      ];
+      const host = makeChatHost({
+        chatMessage: message,
+        chatMentions: mentions,
+        requestHandlers: {},
+      });
+
+      await handleSendChat(host);
+
+      expect(host.request).not.toHaveBeenCalled();
+      expect(host.chatMessage).toBe(message);
+      expect(host.chatMentions).toEqual(mentions);
+      expect(host.chatError).toBeTruthy();
+    },
+  );
+});
+
+describe("Home work context admission", () => {
+  it.each([true, false])(
+    "sends an inspectable context only when included (%s)",
+    async (included) => {
+      const text = formatChatWorkContext({
+        page: "chat",
+        title: "Review parser",
+        sessionKey: "agent:main:parser",
+      });
+      const host = makeChatHost({
+        chatMessage: "Explain this task",
+        getWorkContext: () => (included ? text : undefined),
+        requestHandlers: { "chat.send": { status: "started" } },
+      });
+      await handleSendChat(host);
+      expect(findChatSendPayload(host).message).toBe(
+        included ? `Explain this task\n\n${text}` : "Explain this task",
+      );
+      expect(host.chatLocalInputHistoryBySession[host.sessionKey]?.[0]?.text).toBe(
+        "Explain this task",
+      );
+    },
+  );
+
+  it.each(["/new", "/stop", "/review-this", ""])(
+    "does not attach ambient context to %j",
+    async (message) => {
+      const getWorkContext = vi.fn(() => "Unrelated work context");
+      const host = makeChatHost({
+        chatMessage: message,
+        getWorkContext,
+        createChatSession: vi.fn(async () => true),
+        requestHandlers: { "chat.send": { status: "started" } },
+      });
+      await handleSendChat(host);
+      expect(getWorkContext).not.toHaveBeenCalled();
+      if (message === "/review-this") {
+        expect(findChatSendPayload(host).message).toBe(message);
+      }
+    },
+  );
 });
 
 describe("handleSendChat immediate local commands", () => {
@@ -675,7 +770,7 @@ describe("handleSendChat session ownership", () => {
       });
       await loadChatHistory(host);
       expect(host.chatRunError?.summary).toContain(failed.sessionInfo!.lastRunError);
-      const diagnostic = getChatSessionProjection(host, host.chatMessages).runs["run-first"];
+      const diagnostic = getChatSessionProjection(host).runs["run-first"];
       const loading = pendingHistory ? loadChatHistory(host) : undefined;
       try {
         const sending = handleSendChat(
@@ -707,9 +802,7 @@ describe("handleSendChat session ownership", () => {
         expect(host.chatRunStatus).toMatchObject({ phase: "done", runId });
         expect(host.chatRunId).toBeNull();
         expect(host.lastError).toBeNull();
-        expect(getChatSessionProjection(host, host.chatMessages).runs["run-first"]).toEqual(
-          diagnostic,
-        );
+        expect(getChatSessionProjection(host).runs["run-first"]).toEqual(diagnostic);
         expect(host.chatRunError).toBeNull();
       } finally {
         reconcileChatRunLifecycle(host, { clearRunStatus: true });
@@ -796,7 +889,7 @@ describe("handleSendChat session ownership", () => {
         await loadChatHistory(host);
         expect(host.chatRunId).toBeNull();
         expect(host.chatRunError).toBeNull();
-        expect(getChatSessionProjection(host, host.chatMessages).runs["old-run"]).toBeUndefined();
+        expect(getChatSessionProjection(host).runs["old-run"]).toBeUndefined();
       } finally {
         ack.resolve({ status: "started" });
         await sending;

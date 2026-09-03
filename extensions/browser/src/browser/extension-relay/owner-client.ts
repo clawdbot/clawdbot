@@ -14,6 +14,9 @@ import {
   type RelayOwnerStatus,
 } from "./owner-protocol.js";
 
+const nullableIdResult = z.string().nullable();
+const streamIdResult = z.number().int().positive();
+
 type OwnerStream = {
   send: (raw: string) => void;
   close: () => Promise<void>;
@@ -43,23 +46,12 @@ export class RelayOwnerClient {
   private retirementAcknowledged = false;
   private closing: Promise<void> | undefined;
 
-  private constructor(
-    private readonly ws: WebSocket,
-    readonly owner: string,
-  ) {
+  private constructor(private readonly ws: WebSocket) {
     ws.on("message", (raw) => {
       const parsed = parseStrictJsonObject(rawDataToString(raw));
       if (relayOwnerRetired.safeParse(parsed).success) {
         this.retirementAcknowledged = true;
-        this.closed = true;
-        for (const pending of this.pending.values()) {
-          pending.reject(new Error("Relay owner retired"));
-        }
-        this.pending.clear();
-        for (const stream of this.streams.values()) {
-          stream.onClose?.();
-        }
-        this.streams.clear();
+        this.invalidate("Relay owner retired");
         return;
       }
       const reply = relayOwnerReply.safeParse(parsed);
@@ -86,17 +78,19 @@ export class RelayOwnerClient {
       }
       ws.close(4003, "invalid relay owner response");
     });
-    ws.once("close", () => {
-      this.closed = true;
-      for (const pending of this.pending.values()) {
-        pending.reject(new Error("Relay owner connection lost"));
-      }
-      this.pending.clear();
-      for (const stream of this.streams.values()) {
-        stream.onClose?.();
-      }
-      this.streams.clear();
-    });
+    ws.once("close", () => this.invalidate("Relay owner connection lost"));
+  }
+
+  private invalidate(message: string): void {
+    this.closed = true;
+    for (const pending of this.pending.values()) {
+      pending.reject(new Error(message));
+    }
+    this.pending.clear();
+    for (const stream of this.streams.values()) {
+      stream.onClose?.();
+    }
+    this.streams.clear();
   }
 
   static async connect(params: {
@@ -105,8 +99,8 @@ export class RelayOwnerClient {
     token: string;
     signal: AbortSignal;
   }) {
-    const { ws, owner } = await authenticateRelayOwner(params);
-    return new RelayOwnerClient(ws, owner);
+    const { ws } = await authenticateRelayOwner(params);
+    return new RelayOwnerClient(ws);
   }
 
   adoptProfileLease(assertCurrent: () => void): void {
@@ -162,10 +156,7 @@ export class RelayOwnerClient {
   ): Promise<RelayOperationReference> {
     this.assertCurrent();
     assertOperationCurrent();
-    const ref = z
-      .string()
-      .nullable()
-      .parse(await this.request("capture", { targetId }));
+    const ref = nullableIdResult.parse(await this.request("capture", { targetId }));
     try {
       this.assertCurrent();
       assertOperationCurrent();
@@ -186,10 +177,7 @@ export class RelayOwnerClient {
     return {
       resolve: async () => {
         assertReference();
-        const target = z
-          .string()
-          .nullable()
-          .parse(await this.request("resolve", { ref }));
+        const target = nullableIdResult.parse(await this.request("resolve", { ref }));
         assertReference();
         return target ?? undefined;
       },
@@ -223,11 +211,7 @@ export class RelayOwnerClient {
 
   private async openStream(op: "cdp.open" | "ingress.open", ref?: string): Promise<OwnerStream> {
     this.assertCurrent();
-    const id = z
-      .number()
-      .int()
-      .positive()
-      .parse(await this.request(op, ref ? { ref } : {}));
+    const id = streamIdResult.parse(await this.request(op, ref ? { ref } : {}));
     this.assertCurrent();
     let closed = false;
     let closing: Promise<void> | undefined;

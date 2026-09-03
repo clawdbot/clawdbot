@@ -1,5 +1,4 @@
 // Applies parsed directives to session state, config overrides, and run options.
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { modelKey } from "../../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
@@ -194,6 +193,7 @@ export async function applyInlineDirectiveOverrides(params: {
   };
   const createDirectiveHandlingBase = () => ({
     cfg,
+    agentId,
     directives,
     sessionEntry,
     sessionStore,
@@ -562,7 +562,7 @@ export async function applyInlineDirectiveOverrides(params: {
         provider,
         modelId: model,
         config: cfg,
-        agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
+        agentId,
         sessionKey,
       }).runtime,
       config: cfg,

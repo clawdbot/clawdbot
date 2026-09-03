@@ -1293,6 +1293,11 @@ describe("plugin sdk alias helpers", () => {
       ["@openclaw/net-policy/ip", "net-policy", "ip"],
       ["@openclaw/net-policy/url-protocol", "net-policy", "url-protocol"],
       ["@openclaw/model-catalog-core/provider-id", "model-catalog-core", "provider-id"],
+      [
+        "@openclaw/model-catalog-core/model-catalog-pricing",
+        "model-catalog-core",
+        "model-catalog-pricing",
+      ],
     ]);
     for (const entry of workspaceAliases) {
       fs.rmSync(entry.distFile);
@@ -1345,6 +1350,11 @@ describe("plugin sdk alias helpers", () => {
         "@openclaw/model-catalog-core/provider-model-id-normalize",
         "model-catalog-core",
         "provider-model-id-normalize",
+      ],
+      [
+        "@openclaw/model-catalog-core/model-catalog-pricing",
+        "model-catalog-core",
+        "model-catalog-pricing",
       ],
     ]);
     const sourcePluginEntry = writePluginEntry(

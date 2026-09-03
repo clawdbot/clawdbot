@@ -1,6 +1,6 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiBundledGatewayUrl,
   controlUiSessionUrl,
@@ -15,7 +15,10 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 
-const outputDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/session-activity-feed");
+let outputDir: string;
+beforeEach(() => {
+  outputDir = createControlUiE2eArtifactDir("session-activity-feed");
+});
 const proofPhase = process.env.OPENCLAW_MENU_THEME_PROOF_PHASE;
 
 suite.define(() => {
@@ -295,7 +298,6 @@ suite.define(() => {
         const onlineToggle = page.getByRole("button", { name: "Online", exact: true });
         await expect.poll(() => onlineToggle.getAttribute("aria-expanded")).toBe("true");
         await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(4);
-        await mkdir(outputDir, { recursive: true });
         await page.locator(".sidebar").screenshot({
           animations: "disabled",
           path: path.join(outputDir, "01-sidebar-online-default-open-light.png"),
@@ -451,9 +453,7 @@ suite.define(() => {
         const personCard = page.getByRole("dialog", { name: "Activity for Alice Chen" });
         await personCard.waitFor({ state: "visible" });
         await personCard.getByRole("link", { name: "View activity", exact: true }).click();
-        await expect
-          .poll(() => new URL(page.url()).searchParams.get("person"))
-          .toBe("profile-alice");
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/activity/profile-alice");
         await expect
           .poll(() => activityPage.locator('[data-activity-identity="profile-alice"]').isVisible())
           .toBe(true);
@@ -471,12 +471,10 @@ suite.define(() => {
         });
 
         await activityPage.locator(".activity-feed__people-clear").click();
-        await expect.poll(() => new URL(page.url()).searchParams.get("person")).toBeNull();
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/activity");
         await activityPage.locator(".activity-feed__people-trigger").click();
         await activityPage.locator('[data-activity-person="profile-carol"]').click();
-        await expect
-          .poll(() => new URL(page.url()).searchParams.get("person"))
-          .toBe("profile-carol");
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/activity/profile-carol");
         await expect.poll(() => activitySession(nightlyMaintenanceKey).count()).toBe(1);
         await expect
           .poll(() =>
@@ -491,7 +489,7 @@ suite.define(() => {
         });
 
         await activityPage.locator(".activity-feed__people-clear").click();
-        await expect.poll(() => new URL(page.url()).searchParams.get("person")).toBeNull();
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/activity");
         await page.setViewportSize({ height: 844, width: 390 });
 
         const peopleControl = activityPage.locator(".activity-feed__people-control");
@@ -532,9 +530,7 @@ suite.define(() => {
         ).toEqual({ backgroundColor: "rgba(0, 0, 0, 0)", borderTopWidth: "0px" });
         await activityPage.locator(".activity-feed__people-trigger").click();
         await activityPage.locator('[data-activity-person="profile-carol"]').click();
-        await expect
-          .poll(() => new URL(page.url()).searchParams.get("person"))
-          .toBe("profile-carol");
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/activity/profile-carol");
         await expect.poll(() => activitySession(nightlyMaintenanceKey).count()).toBe(1);
         await expect
           .poll(() => activityFeed.locator('[data-activity-created-via="cron"]').count())

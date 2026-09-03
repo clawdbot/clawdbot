@@ -24,6 +24,7 @@ suite.define(() => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
+    const activePane = page.locator(".chat-pane-cache__pane--active");
     const agentsList = {
       agents: [
         { id: "main", name: "Main" },
@@ -33,11 +34,11 @@ suite.define(() => {
       mainKey: "main",
       scope: "global",
     };
-    const historyResponse = (active: boolean) => ({
+    const historyResponse = (agentId: "main" | "work", active: boolean) => ({
       messages: [],
-      sessionId: active ? "main-global-session" : "work-global-session",
+      sessionId: `${agentId}-global-session`,
       sessionInfo: {
-        activeRunIds: active ? ["main-active-run"] : [],
+        activeRunIds: active ? [`${agentId}-active-run`] : [],
         hasActiveRun: active,
         key: "global",
         status: active ? "running" : "done",
@@ -63,19 +64,25 @@ suite.define(() => {
         "agents.list": agentsList,
         "chat.history": {
           cases: [
-            { match: { agentId: "work", sessionKey: "global" }, response: historyResponse(true) },
-            { match: { agentId: "main", sessionKey: "global" }, response: historyResponse(true) },
+            {
+              match: { agentId: "work", sessionKey: "global" },
+              response: historyResponse("work", true),
+            },
+            {
+              match: { agentId: "main", sessionKey: "global" },
+              response: historyResponse("main", true),
+            },
           ],
         },
         "chat.startup": {
           cases: [
             {
               match: { agentId: "work" },
-              response: { ...historyResponse(false), agentsList },
+              response: { ...historyResponse("work", false), agentsList },
             },
             {
               match: { agentId: "main" },
-              response: { ...historyResponse(true), agentsList },
+              response: { ...historyResponse("main", true), agentsList },
             },
           ],
         },
@@ -144,8 +151,14 @@ suite.define(() => {
       await gateway.deferNext("chat.send");
       await gateway.setMethodResponse("chat.history", {
         cases: [
-          { match: { agentId: "work", sessionKey: "global" }, response: historyResponse(false) },
-          { match: { agentId: "main", sessionKey: "global" }, response: historyResponse(true) },
+          {
+            match: { agentId: "work", sessionKey: "global" },
+            response: historyResponse("work", false),
+          },
+          {
+            match: { agentId: "main", sessionKey: "global" },
+            response: historyResponse("main", true),
+          },
         ],
       });
       await gateway.emitGatewayEvent("sessions.changed", {
@@ -162,6 +175,17 @@ suite.define(() => {
       expect(params).toMatchObject({ agentId: "work", message: prompt, sessionKey: "global" });
       const runId = requireString(params.idempotencyKey, "inactive-agent outbox run id");
       await expectRequestCountStable(gateway, "chat.send", 1);
+      const recoveryRequests = (await gateway.getRequests("chat.history"))
+        .map((entry) => requireRecord(entry.params))
+        .filter((historyParams) => Array.isArray(historyParams.inputRunIds));
+      expect(recoveryRequests.length).toBeGreaterThan(0);
+      for (const historyParams of recoveryRequests) {
+        expect(historyParams).toMatchObject({
+          agentId: "work",
+          sessionKey: "global",
+          inputRunIds: [runId],
+        });
+      }
       const workPath = controlUiSessionPath("agent:work:main");
       await page.evaluate((pathname) => {
         const app = document.querySelector("openclaw-app") as HTMLElement & {
@@ -202,7 +226,7 @@ suite.define(() => {
         sessionKey: "global",
         status: "running",
       });
-      await page.locator(".chat-group.user").getByText(prompt).waitFor({ timeout: 10_000 });
+      await activePane.locator(".chat-group.user").getByText(prompt).waitFor({ timeout: 10_000 });
       await gateway.resolveDeferred("chat.send", { runId, status: "started" });
       if (artifactDir) {
         await page.screenshot({
@@ -223,11 +247,24 @@ suite.define(() => {
         state: "final",
       });
       await queue.waitFor({ state: "detached", timeout: 10_000 });
-      await page
+      // Retained panes also receive this conversation's events; assert its rendered owner.
+      const reply = activePane
         .locator(".chat-group.assistant")
-        .getByText("Work outbox delivered.", { exact: true })
-        .waitFor({ timeout: 10_000 });
+        .getByText("Work outbox delivered.", { exact: true });
+      await reply.waitFor({ timeout: 10_000 });
       await expectRequestCountStable(gateway, "chat.send", 1);
+      expect(await activePane.count()).toBe(1);
+      expect(await reply.count()).toBe(1);
+      const messages = await activePane.evaluate(
+        (pane) => (pane as HTMLElement & { state: { chatMessages: unknown[] } }).state.chatMessages,
+      );
+      expect(messages.map(requireRecord).filter((message) => message.role === "assistant")).toEqual(
+        [
+          expect.objectContaining({
+            content: [{ text: "Work outbox delivered.", type: "text" }],
+          }),
+        ],
+      );
       if (artifactDir) {
         await page.screenshot({
           path: `${artifactDir}/inactive-agent-delivered.png`,

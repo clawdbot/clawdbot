@@ -142,7 +142,7 @@ describe("cloud Stop owns the held initial turn", () => {
           startup,
         );
         expect(request).toHaveBeenCalledWith("sessions.reclaim", expect.anything(), {
-          timeoutMs: 10 * 60_000,
+          timeoutMs: null,
         });
         moduleLoad.resolve({ default: createRuntime });
         dispatch.resolve({ placement: createStartupPlacement("active", 1) });

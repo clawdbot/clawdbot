@@ -1,9 +1,8 @@
-// Moonshot tests cover kimi web search provider plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
 import { withEnv, withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { testing } from "../test-api.js";
 import { createKimiWebSearchProvider } from "./kimi-web-search-provider.js";
+import { testing } from "./kimi-web-search-provider.runtime.js";
 
 const kimiApiKeyEnv = ["KIMI_API", "KEY"].join("_");
 

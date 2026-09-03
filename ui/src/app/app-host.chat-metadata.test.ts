@@ -123,8 +123,14 @@ it("invalidates chat metadata on config changes and same-client disconnects", ()
     phase: "connected",
     sessionKey: "agent:main:main",
   } as ApplicationGatewaySnapshot;
+  const connectionBootstrap = {
+    reset: vi.fn(),
+    run: (_key: string, task: () => Promise<unknown>) => task(),
+    synchronize: vi.fn(),
+  };
   const context = {
     gateway: { snapshot: connected },
+    connectionBootstrap,
     runtimeConfig: {
       state: { configFormDirty: false, configSnapshot: null },
       ensureLoaded: vi.fn(async () => null),

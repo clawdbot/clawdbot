@@ -9,6 +9,7 @@ import {
 } from "./active-runtime-registry.js";
 import { loadBundledCapabilityRuntimeRegistry } from "./bundled-capability-runtime.js";
 import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
+import { isBundledProviderCompatContract } from "./bundled-provider-compat.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { resolveRuntimePluginRegistry, type PluginLoadOptions } from "./loader.js";
 import {
@@ -97,6 +98,7 @@ function resolveCapabilityPluginIds(params: {
         // Legacy TTS remains available when the operator disables plugins globally.
         allowRestrictiveAllowlistBypass:
           params.key === "speechProviders" && params.cfg?.plugins?.enabled === false,
+        allowBundledProviderCompat: isBundledProviderCompatContract(params.key),
       }),
   );
   return {
@@ -118,6 +120,7 @@ function createCapabilityProviderLoadOptions(params: {
   const config = withBundledPluginEnablementCompat({
     config: params.cfg,
     pluginIds,
+    ...(params.loadContext?.env ? { env: params.loadContext.env } : {}),
   });
   const overrides: PluginLoadOptions = {
     ...(config === undefined ? {} : { config }),
@@ -419,6 +422,7 @@ function filterPolicyAllowedCapabilityProviders<K extends CapabilityProviderRegi
       config: params.cfg,
       allowRestrictiveAllowlistBypass:
         params.key === "speechProviders" && params.cfg?.plugins?.enabled === false,
+      allowBundledProviderCompat: isBundledProviderCompatContract(params.key),
     });
   }) as PluginRegistry[K];
 }

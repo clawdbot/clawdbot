@@ -10,6 +10,7 @@ import {
 } from "../infra/control-ui-assets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createControlUiAssetRetention } from "./control-ui-asset-retention.js";
+import { CONTROL_UI_BUILD_ID_ATTRIBUTE } from "./control-ui-root-assets.js";
 import type { ControlUiRootState } from "./control-ui.js";
 
 type GatewayControlUiRootParams = {
@@ -46,6 +47,10 @@ function createResolvedRootState(root: string, configured = false): ControlUiRoo
         kind: "bundled",
         path: root,
         realPath: fs.realpathSync(root),
+        // Snapshot build metadata at the root lifecycle boundary, never per request.
+        publicAssetBuildId: new RegExp(
+          `${CONTROL_UI_BUILD_ID_ATTRIBUTE}="([a-zA-Z0-9._-]{1,161})"`,
+        ).exec(fs.readFileSync(path.join(root, "index.html"), "utf8"))?.[1],
         retainedAssets: createControlUiAssetRetention(root),
       }
     : {

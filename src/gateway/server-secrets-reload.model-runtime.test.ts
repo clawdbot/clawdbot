@@ -135,7 +135,7 @@ async function coldRuntime(clients: SharedGatewayAuthClient[] = []) {
     resolveSharedGatewaySessionGenerationForConfig: () => "reloaded",
     clients,
     channelManager: {
-      startChannel: async () => {},
+      startChannel: async () => new Map(),
       stopChannel: async () => {},
       isManuallyStopped: () => false,
       resolveRuntimeAccountId: (_channel, accountId) => accountId,

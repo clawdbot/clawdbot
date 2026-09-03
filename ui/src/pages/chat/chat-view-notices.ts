@@ -6,8 +6,8 @@ import { formatWebUiIconErrorText } from "../../components/error-presentation.ts
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
+import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
 import { clampText } from "../../lib/format.ts";
-import { chatMessagesContainQueuedSend } from "./chat-send-support.ts";
 import { renderWorkspaceConflictNotice } from "./components/chat-workspace-conflict.ts";
 import type { WorkspaceResultConflict } from "./workspace-conflict.ts";
 
@@ -92,12 +92,12 @@ function renderErrorNotice(
         ? html`<details class="chat-error__content">
             <summary class="chat-error__summary">
               <strong>${summary}</strong>
-              <span>${t("chat.errorDetails")}</span>
+              <span>${t("chat.details")}</span>
               <span class="chat-error__chevron" aria-hidden="true">${icons.chevronDown}</span>
+              ${renderCopyButton(error, t("chat.copyError"))}
             </summary>
             <pre class="chat-error__diagnostic" tabindex="0" aria-label=${t("chat.errorDetails")}>
 ${displayError}</pre>
-            ${renderCopyButton(error, t("chat.copyError"))}
           </details>`
         : html`<span class="chat-error__content"
             ><strong>${summary}</strong>${renderCopyButton(error, t("chat.copyError"))}</span
@@ -181,7 +181,7 @@ function renderPlacementStartupError(
   // History can own the bubble before startup observes its receipt. Keep the
   // banner action reachable when transcript deduplication hides the row.
   const hasInlineTurn =
-    status.initialTurn && !chatMessagesContainQueuedSend(messages, status.initialTurn, true);
+    status.initialTurn && !findChatSubmissionMessage(messages, status.initialTurn.sendRunId, true);
   const retry =
     status.retryable && onRetry && !hasInlineTurn
       ? html`<button class="btn btn--sm" type="button" @click=${onRetry}>

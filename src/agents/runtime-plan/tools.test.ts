@@ -259,29 +259,36 @@ describe("AgentRuntimePlan tool policy helpers", () => {
     expect(getPluginToolMeta(expectDefined(result[0], "result[0] test invariant"))).toBe(metadata);
   });
 
-  it("preserves declared output schemas when runtime normalization clones tools", () => {
-    const outputSchema = Type.Object(
-      { id: Type.String(), ready: Type.Boolean() },
-      { additionalProperties: false },
-    );
-    const tool = {
-      ...createParameterFreeTool("fixture_status"),
-      outputSchema,
-    } as unknown as AgentTool;
-    const normalized = {
-      ...createParameterFreeTool("fixture_status"),
-      parameters: normalizedParameterFreeSchema(),
-    } as unknown as AgentTool;
-    mocks.normalizeProviderToolSchemas.mockReturnValueOnce([normalized]);
+  it.each([true, false, undefined])(
+    "preserves output schemas and channel-progress visibility (%s) across runtime clones",
+    (hideFromChannelProgress) => {
+      const outputSchema = Type.Object(
+        { id: Type.String(), ready: Type.Boolean() },
+        { additionalProperties: false },
+      );
+      const tool = {
+        ...createParameterFreeTool("fixture_status"),
+        outputSchema,
+      } as unknown as AgentTool;
+      Object.defineProperty(tool, "hideFromChannelProgress", { value: hideFromChannelProgress });
+      const normalized = {
+        ...createParameterFreeTool("fixture_status"),
+        parameters: normalizedParameterFreeSchema(),
+      } as unknown as AgentTool;
+      mocks.normalizeProviderToolSchemas.mockReturnValueOnce([normalized]);
 
-    const result = normalizeAgentRuntimeTools({
-      tools: [tool],
-      provider: "openai",
-    });
+      const result = normalizeAgentRuntimeTools({
+        tools: [tool],
+        provider: "openai",
+      });
 
-    expect(result[0]).toBe(normalized);
-    expect(result[0]?.outputSchema).toBe(outputSchema);
-  });
+      expect(result[0]).toBe(normalized);
+      expect(result[0]?.outputSchema).toBe(outputSchema);
+      expect(result[0]?.hideFromChannelProgress).toBe(
+        hideFromChannelProgress === true ? true : undefined,
+      );
+    },
+  );
 
   it("preserves private execution metadata when provider normalization clones tools", () => {
     const formatter = vi.fn(() => ({ text: "Terminal summary" }));

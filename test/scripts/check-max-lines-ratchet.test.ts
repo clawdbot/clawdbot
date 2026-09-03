@@ -42,17 +42,15 @@ function git(cwd: string, args: string[]): void {
   for (const key of nestedGitEnvKeys) {
     delete env[key];
   }
-  execFileSync("git", args, { cwd, env, stdio: "ignore" });
+  execFileSync("git", ["-c", "user.email=test@example.com", "-c", "user.name=Test", ...args], {
+    cwd,
+    env,
+    stdio: "ignore",
+  });
 }
 
 function commitFixture(root: string, message = "base"): void {
-  for (const args of [
-    ["init"],
-    ["config", "user.email", "test@example.com"],
-    ["config", "user.name", "Test"],
-    ["add", "."],
-    ["commit", "-m", message],
-  ]) {
+  for (const args of [["init"], ["add", "."], ["commit", "-m", message]]) {
     git(root, args);
   }
 }

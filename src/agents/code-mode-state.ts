@@ -3,6 +3,7 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationSeconds,
 } from "@openclaw/normalization-core/number-coercion";
+import type { Snapshot } from "quickjs-wasi";
 import { raceWithAbortSignal } from "./agent-tools.abort.js";
 import { runBridgeRequest } from "./code-mode-bridge.js";
 import type { CodeModeCatalogProjection } from "./code-mode-catalog.js";
@@ -44,7 +45,7 @@ type CodeModeRunState = {
   parentToolCallId: string;
   ctx: ToolSearchToolContext;
   config: CodeModeConfig;
-  snapshotBytes: Uint8Array;
+  snapshot: Snapshot;
   pending: PendingBridgeState[];
   settlementMode: CodeModeSettlementMode;
   // True only when every future bridge call is enforced read-only before execution.
@@ -455,7 +456,7 @@ export function storeSnapshotState(params: {
   pending: PendingBridgeState[];
   replaySafe: boolean;
   settlementMode: CodeModeSettlementMode;
-  snapshotBytes: Uint8Array;
+  snapshot: Snapshot;
   parentToolCallId: string;
   ctx: ToolSearchToolContext;
   config: CodeModeConfig;
@@ -490,7 +491,7 @@ export function storeSnapshotState(params: {
     parentToolCallId: params.parentToolCallId,
     ctx: params.ctx,
     config: params.config,
-    snapshotBytes: params.snapshotBytes,
+    snapshot: params.snapshot,
     pending: params.pending,
     settlementMode: params.settlementMode,
     replaySafe: params.replaySafe,

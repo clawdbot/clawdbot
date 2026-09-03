@@ -126,6 +126,62 @@ describe("classifyRealtimeVoiceAgentControlText", () => {
 });
 
 describe("controlRealtimeVoiceAgentRun", () => {
+  it.each([null, "stale-run"])(
+    "never falls back from exact selector %s to a shared global key",
+    async (runId) => {
+      const deps = createDeps({
+        activeSessionId: "another-agent-session",
+        activity: { hasActiveEmbeddedRun: true },
+      });
+      const runTarget = runId
+        ? { runId, signal: new AbortController().signal, isCurrent: () => true }
+        : null;
+      for (const mode of ["status", "cancel", "steer"] as const) {
+        const result = await controlRealtimeVoiceAgentRun(
+          { sessionKey: "global", runTarget, text: mode, mode },
+          deps,
+        );
+        expect(result.active).toBe(false);
+      }
+      expect(deps.resolveActiveEmbeddedRunSessionId).not.toHaveBeenCalled();
+      expect(deps.getDiagnosticSessionActivitySnapshot).not.toHaveBeenCalled();
+      expect(deps.abortEmbeddedAgentRun).not.toHaveBeenCalled();
+      expect(deps.queueEmbeddedAgentMessageWithOutcomeAsync).not.toHaveBeenCalled();
+    },
+  );
+
+  it("controls the exact live owner and queries only its session diagnostics", async () => {
+    const deps = createDeps({ activeSessionId: "another-agent-session" });
+    const abort = vi.fn(() => true);
+    const resolveActiveEmbeddedRunOwnerByRunId = vi.fn(() => ({
+      runId: "owned-run",
+      sessionId: "owned-session",
+      sessionKey: "global",
+      abort,
+    }));
+    const result = await controlRealtimeVoiceAgentRun(
+      {
+        sessionKey: "global",
+        runTarget: {
+          runId: "owned-run",
+          signal: new AbortController().signal,
+          isCurrent: () => true,
+        },
+        text: "cancel",
+        mode: "cancel",
+      },
+      { ...deps, resolveActiveEmbeddedRunOwnerByRunId },
+    );
+    expect(result).toMatchObject({ ok: true, sessionId: "owned-session", aborted: true });
+    expect(resolveActiveEmbeddedRunOwnerByRunId).toHaveBeenCalledExactlyOnceWith("owned-run");
+    expect(abort).toHaveBeenCalledOnce();
+    expect(deps.getDiagnosticSessionActivitySnapshot).toHaveBeenCalledExactlyOnceWith({
+      sessionId: "owned-session",
+    });
+    expect(deps.resolveActiveEmbeddedRunSessionId).not.toHaveBeenCalled();
+    expect(deps.abortEmbeddedAgentRun).not.toHaveBeenCalled();
+  });
+
   it("queues steering into the active embedded run", async () => {
     const deps = createDeps({ activeSessionId: "session-active" });
 

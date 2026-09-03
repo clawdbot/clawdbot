@@ -2,46 +2,50 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  MODEL_PRICING_SOURCES,
+  normalizeModelPricingCatalog,
+  normalizeModelPricingProvider,
+  normalizeOpenRouterModelPricing,
+  normalizeUpstreamModelPricing,
+  type ModelPricingProvider,
+  type ModelPricingSource,
+} from "@openclaw/model-catalog-core/model-catalog-pricing";
+import { normalizeModelCatalogProviderId } from "@openclaw/model-catalog-core/model-catalog-refs";
+import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { parseCerebrasPricingCatalog } from "../extensions/cerebras/pricing-api.js";
+import { parseChutesPricingCatalog } from "../extensions/chutes/pricing-api.js";
+import { parseDeepInfraPricingCatalog } from "../extensions/deepinfra/pricing-api.js";
+import { parseVenicePricingCatalog } from "../extensions/venice/pricing-api.js";
 import type {
   RemoteModelCatalogBundle,
   RemoteModelCatalogPricing,
 } from "../packages/model-catalog-core/src/remote-catalog-bundle.js";
-import type {
-  PluginManifestModelPricingProvider,
-  PluginManifestModelPricingSource,
-} from "../src/plugins/manifest-types.js";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 
 type ModelCatalogManifestInput = {
   pluginId: string;
   manifestPath: string;
   manifest: {
-    modelCatalog?: {
-      providers?: Record<string, unknown>;
-    };
-    modelPricing?: {
-      providers?: Record<string, unknown>;
-    };
+    providers?: string[];
+    modelCatalog?: { providers?: Record<string, unknown> };
+    modelPricing?: { providers?: Record<string, unknown> };
   };
 };
 
 type PublishedModelPricing = RemoteModelCatalogPricing;
 type PublishedModelCatalogBundle = RemoteModelCatalogBundle;
-
-type PricingSource = Exclude<keyof PluginManifestModelPricingProvider, "external">;
-type PricingPolicies = Map<string, PluginManifestModelPricingProvider>;
+type PricingPolicies = Map<string, ModelPricingProvider>;
 type PricingCatalog = Map<string, PublishedModelPricing>;
-type RuntimePricingEntries = Map<
-  string,
-  Partial<Record<PricingSource, PublishedModelPricing | undefined>>
->;
+type PricingSource = (typeof MODEL_PRICING_SOURCES)[number];
+type LoadedPricingSource = PricingSource & {
+  catalog: PricingCatalog;
+  aliases: string[][];
+};
 type BundleValidator = (bundle: unknown) => PublishedModelCatalogBundle;
 const MODEL_CATALOG_MIN_VERSION = "2026.7.0";
 export const MODEL_CATALOG_MIN_MODELS = 200;
-export const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
-export const LITELLM_PRICING_URL =
-  "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
 
 const SCRIPT_LABEL = "publish-model-catalog";
 const PRICING_FETCH_TIMEOUT_MS = 60_000;
@@ -49,6 +53,15 @@ const MAX_PRICING_CATALOG_BYTES = 5 * 1024 * 1024;
 const BUNDLE_SIZE_WARNING_BYTES = 2 * 1024 * 1024;
 const CLIENT_BUNDLE_LIMIT_BYTES = 4 * 1024 * 1024;
 const defaultRootDir = resolveRepoRoot(import.meta.url);
+const NATIVE_CATALOG_PARSERS = {
+  cerebras: parseCerebrasPricingCatalog,
+  chutes: parseChutesPricingCatalog,
+  deepinfra: parseDeepInfraPricingCatalog,
+  venice: parseVenicePricingCatalog,
+} satisfies Record<
+  Exclude<Extract<PricingSource, { authoritative: true }>["id"], "openCode">,
+  (payload: unknown) => PricingCatalog | undefined
+>;
 
 function requireOptionValue(args: string[], index: number, flag: string): string {
   const value = args[index + 1]?.trim();
@@ -129,11 +142,7 @@ export async function assembleModelCatalogBundle(options: {
   const providers: Record<string, unknown> = {};
   for (const entry of options.manifests) {
     const declaredProviders = entry.manifest?.modelCatalog?.providers;
-    if (
-      !declaredProviders ||
-      typeof declaredProviders !== "object" ||
-      Array.isArray(declaredProviders)
-    ) {
+    if (!isRecord(declaredProviders)) {
       continue;
     }
     for (const [providerId, provider] of Object.entries(declaredProviders)) {
@@ -147,7 +156,6 @@ export async function assembleModelCatalogBundle(options: {
   if (!Object.hasOwn(providers, "anthropic") || !Object.hasOwn(providers, "openai")) {
     throw new Error("catalog must include anthropic and openai providers");
   }
-
   const bundle = {
     schemaVersion: 1,
     generatedAt: options.generatedAt,
@@ -179,36 +187,8 @@ export function summarizeModelCatalogBundle(bundle: PublishedModelCatalogBundle)
   };
 }
 
-function parseNumberString(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value !== "string" || !value.trim()) {
-    return null;
-  }
-  const parsed = Number(value.trim());
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function toPricePerMillion(value: number | null): number {
-  return value === null || value < 0 || !Number.isFinite(value) ? 0 : value * 1_000_000;
-}
-
-function parseOpenRouterPricing(value: unknown): PublishedModelPricing | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  const prompt = parseNumberString(value.prompt);
-  const completion = parseNumberString(value.completion);
-  if (prompt === null || completion === null || prompt < 0 || completion < 0) {
-    return null;
-  }
-  return {
-    input: toPricePerMillion(prompt),
-    output: toPricePerMillion(completion),
-    cacheRead: toPricePerMillion(parseNumberString(value.input_cache_read)),
-    cacheWrite: toPricePerMillion(parseNumberString(value.input_cache_write)),
-  };
+function toPricePerMillion(value: number | undefined): number {
+  return value === undefined || value < 0 ? 0 : value * 1_000_000;
 }
 
 function parseLiteLLMTieredPricing(
@@ -219,26 +199,29 @@ function parseLiteLLMTieredPricing(
   }
   const tiers: NonNullable<PublishedModelPricing["tieredPricing"]> = [];
   for (const raw of value) {
-    if (!isRecord(raw)) {
+    if (!isRecord(raw) || !Array.isArray(raw.range)) {
       continue;
     }
-    if (!Array.isArray(raw.range)) {
+    const input = parseStrictFiniteNumber(raw.input_cost_per_token);
+    const output = parseStrictFiniteNumber(raw.output_cost_per_token);
+    const start = parseStrictFiniteNumber(raw.range[0]);
+    if (
+      input === undefined ||
+      output === undefined ||
+      start === undefined ||
+      input < 0 ||
+      output < 0
+    ) {
       continue;
     }
-    const input = parseNumberString(raw.input_cost_per_token);
-    const output = parseNumberString(raw.output_cost_per_token);
-    const start = parseNumberString(raw.range[0]);
-    if (input === null || output === null || start === null || input < 0 || output < 0) {
-      continue;
-    }
-    const rawEnd = raw.range.length >= 2 ? parseNumberString(raw.range[1]) : null;
+    const rawEnd = raw.range.length >= 2 ? parseStrictFiniteNumber(raw.range[1]) : undefined;
     const range: [number] | [number, number] =
-      rawEnd === null || rawEnd <= start ? [start] : [start, rawEnd];
+      rawEnd === undefined || rawEnd <= start ? [start] : [start, rawEnd];
     tiers.push({
       input: toPricePerMillion(input),
       output: toPricePerMillion(output),
-      cacheRead: toPricePerMillion(parseNumberString(raw.cache_read_input_token_cost)),
-      cacheWrite: toPricePerMillion(parseNumberString(raw.cache_creation_input_token_cost)),
+      cacheRead: toPricePerMillion(parseStrictFiniteNumber(raw.cache_read_input_token_cost)),
+      cacheWrite: toPricePerMillion(parseStrictFiniteNumber(raw.cache_creation_input_token_cost)),
       range,
     });
   }
@@ -247,21 +230,21 @@ function parseLiteLLMTieredPricing(
     : undefined;
 }
 
-function parseLiteLLMPricing(value: unknown): PublishedModelPricing | null {
+function parseLiteLLMPricing(value: unknown): PublishedModelPricing | undefined {
   if (!isRecord(value)) {
-    return null;
+    return undefined;
   }
-  const input = parseNumberString(value.input_cost_per_token);
-  const output = parseNumberString(value.output_cost_per_token);
-  if (input === null || output === null || input < 0 || output < 0) {
-    return null;
+  const input = parseStrictFiniteNumber(value.input_cost_per_token);
+  const output = parseStrictFiniteNumber(value.output_cost_per_token);
+  if (input === undefined || output === undefined || input < 0 || output < 0) {
+    return undefined;
   }
   const tieredPricing = parseLiteLLMTieredPricing(value.tiered_pricing);
   return {
     input: toPricePerMillion(input),
     output: toPricePerMillion(output),
-    cacheRead: toPricePerMillion(parseNumberString(value.cache_read_input_token_cost)),
-    cacheWrite: toPricePerMillion(parseNumberString(value.cache_creation_input_token_cost)),
+    cacheRead: toPricePerMillion(parseStrictFiniteNumber(value.cache_read_input_token_cost)),
+    cacheWrite: toPricePerMillion(parseStrictFiniteNumber(value.cache_creation_input_token_cost)),
     ...(tieredPricing ? { tieredPricing } : {}),
   };
 }
@@ -276,268 +259,86 @@ function compactPricing(pricing: PublishedModelPricing): PublishedModelPricing {
   };
 }
 
-function mergePricing(
-  primary: PublishedModelPricing | undefined,
-  secondary: PublishedModelPricing | undefined,
-): PublishedModelPricing | undefined {
-  if (!primary || !hasKnownPricing(primary)) {
-    return secondary;
-  }
-  if (!secondary || !hasKnownPricing(secondary)) {
-    return primary;
-  }
-  if (!secondary?.tieredPricing) {
-    return primary;
-  }
-  return { ...primary, tieredPricing: secondary.tieredPricing };
-}
-
 function hasKnownPricing(pricing: Partial<PublishedModelPricing>): boolean {
   return (
     (pricing.input ?? 0) > 0 ||
     (pricing.output ?? 0) > 0 ||
     (pricing.cacheRead ?? 0) > 0 ||
     (pricing.cacheWrite ?? 0) > 0 ||
-    Boolean(
-      pricing.tieredPricing?.some(
-        (tier) => tier.input > 0 || tier.output > 0 || tier.cacheRead > 0 || tier.cacheWrite > 0,
-      ),
-    )
+    Boolean(pricing.tieredPricing?.some(hasKnownPricing))
   );
 }
 
-function applyModelIdTransforms(modelId: string, transforms?: string[]): string[] {
-  const variants = new Set([modelId]);
-  for (const transform of transforms ?? []) {
-    if (transform !== "version-dots") {
-      continue;
-    }
-    for (const variant of Array.from(variants)) {
-      variants.add(
-        variant
-          .replace(/^claude-(\d+)-(\d+)-/u, "claude-$1.$2-")
-          .replace(/^claude-([a-z]+)-(\d+)-(\d+)$/u, "claude-$1-$2.$3"),
-      );
-    }
+function modelIdVariants(modelId: string, transforms?: string[], reverse = false): string[] {
+  if (!transforms?.includes("version-dots")) {
+    return [modelId];
   }
-  return [...variants];
+  const variant = reverse
+    ? modelId
+        .replace(/^claude-(\d+)\.(\d+)-/u, "claude-$1-$2-")
+        .replace(/^claude-([a-z]+)-(\d+)\.(\d+)$/u, "claude-$1-$2-$3")
+    : modelId
+        .replace(/^claude-(\d+)-(\d+)-/u, "claude-$1.$2-")
+        .replace(/^claude-([a-z]+)-(\d+)-(\d+)$/u, "claude-$1-$2.$3");
+  return [...new Set([modelId, variant])];
 }
 
-function buildPricingCandidates({
-  providerId,
-  modelId,
-  source,
-  policies,
-  seen = new Set<string>(),
-}: {
-  providerId: string;
-  modelId: string;
-  source: PricingSource;
-  policies: PricingPolicies;
-  seen?: Set<string>;
-}): string[] {
-  const ref = `${providerId}/${modelId}`;
-  if (seen.has(ref)) {
-    return [];
-  }
-  const nextSeen = new Set(seen).add(ref);
-  const policy = policies.get(providerId);
-  if (policy?.external === false) {
-    return [];
-  }
-  const configuredSource = policy?.[source];
-  const sourcePolicy = configuredSource === false ? undefined : configuredSource;
-  if (policy && !sourcePolicy) {
-    return [];
-  }
-  const externalProvider = sourcePolicy?.provider ?? providerId;
-  const candidates = new Set(
-    applyModelIdTransforms(modelId, sourcePolicy?.modelIdTransforms).map(
-      (candidate) => `${externalProvider}/${candidate}`,
-    ),
-  );
-  if (sourcePolicy?.passthroughProviderModel && modelId.includes("/")) {
-    const slash = modelId.indexOf("/");
-    for (const candidate of buildPricingCandidates({
-      providerId: modelId.slice(0, slash),
-      modelId: modelId.slice(slash + 1),
-      source,
-      policies,
-      seen: nextSeen,
-    })) {
-      candidates.add(candidate);
-    }
-  }
-  return [...candidates];
-}
-
-function reverseModelIdTransforms(modelId: string, transforms?: string[]): string[] {
-  const variants = new Set([modelId]);
-  for (const transform of transforms ?? []) {
-    if (transform !== "version-dots") {
-      continue;
-    }
-    for (const variant of Array.from(variants)) {
-      variants.add(
-        variant
-          .replace(/^claude-(\d+)\.(\d+)-/u, "claude-$1-$2-")
-          .replace(/^claude-([a-z]+)-(\d+)\.(\d+)$/u, "claude-$1-$2-$3"),
-      );
-    }
-  }
-  return [...variants];
-}
-
-function setRuntimePricingSource(
-  entries: RuntimePricingEntries,
-  key: string,
+function sourcePolicy(
+  policies: PricingPolicies,
+  providerId: string,
   source: PricingSource,
-  pricing: PublishedModelPricing | undefined,
-): void {
-  const entry = entries.get(key) ?? {};
-  entry[source] = pricing;
-  entries.set(key, entry);
-}
-
-function collectPolicyRuntimePricingAliases({
-  providerId,
-  policy,
-  source,
-  catalog,
-  entries,
-}: {
-  providerId: string;
-  policy: PluginManifestModelPricingProvider | undefined;
-  source: PricingSource;
-  catalog: PricingCatalog;
-  entries: RuntimePricingEntries;
-}): void {
-  const configuredSource = policy?.[source];
-  const sourcePolicy = configuredSource === false ? undefined : configuredSource;
-  const sourceProvider = sourcePolicy?.provider ?? providerId;
-  for (const [sourceKey, pricing] of catalog) {
-    const slash = sourceKey.indexOf("/");
-    if (slash <= 0 || slash === sourceKey.length - 1) {
-      continue;
-    }
-    const keyProvider = sourceKey.slice(0, slash);
-    const sourceModel = sourceKey.slice(slash + 1);
-    if (keyProvider === sourceProvider) {
-      for (const runtimeModel of reverseModelIdTransforms(
-        sourceModel,
-        sourcePolicy?.modelIdTransforms,
-      )) {
-        setRuntimePricingSource(
-          entries,
-          `${providerId}/${runtimeModel}`,
-          source,
-          sourcePolicy ? pricing : undefined,
-        );
-      }
-    }
-    if (sourcePolicy?.passthroughProviderModel) {
-      setRuntimePricingSource(entries, `${providerId}/${sourceKey}`, source, pricing);
-    }
-  }
-}
-
-function materializePolicyRuntimePricing({
-  hostedPricing,
-  policies,
-  openRouterCatalog,
-  liteLlmCatalog,
-  pricedProviderModelKeys,
-}: {
-  hostedPricing: PricingCatalog;
-  policies: PricingPolicies;
-  openRouterCatalog: PricingCatalog;
-  liteLlmCatalog: PricingCatalog;
-  pricedProviderModelKeys: Set<string>;
-}): void {
-  for (const [providerId, policy] of policies) {
-    for (const key of hostedPricing.keys()) {
-      if (key.startsWith(`${providerId}/`)) {
-        hostedPricing.delete(key);
-      }
-    }
-    if (policy?.external === false) {
-      continue;
-    }
-    const entries: RuntimePricingEntries = new Map();
-    collectPolicyRuntimePricingAliases({
-      providerId,
-      policy,
-      source: "openRouter",
-      catalog: openRouterCatalog,
-      entries,
-    });
-    collectPolicyRuntimePricingAliases({
-      providerId,
-      policy,
-      source: "liteLLM",
-      catalog: liteLlmCatalog,
-      entries,
-    });
-    for (const [key, entry] of entries) {
-      if (pricedProviderModelKeys.has(key)) {
-        hostedPricing.delete(key);
-        continue;
-      }
-      const pricing = mergePricing(entry.openRouter, entry.liteLLM);
-      if (pricing) {
-        hostedPricing.set(key, pricing);
-      } else {
-        hostedPricing.delete(key);
-      }
-    }
-  }
-}
-
-function normalizePricingSource(
-  value: unknown,
-): PluginManifestModelPricingSource | false | undefined {
-  if (value === false) {
-    return false;
-  }
-  if (!isRecord(value)) {
+): ModelPricingSource | undefined {
+  const policy = policies.get(providerId);
+  const selected = policy?.[source.id];
+  if (
+    policy?.external === false ||
+    selected === false ||
+    (!selected && (policy || source.authoritative))
+  ) {
     return undefined;
   }
-  const modelIdTransforms = Array.isArray(value.modelIdTransforms)
-    ? value.modelIdTransforms.filter(
-        (transform): transform is "version-dots" => transform === "version-dots",
-      )
-    : undefined;
-  return {
-    ...(typeof value.provider === "string" ? { provider: value.provider } : {}),
-    ...(typeof value.passthroughProviderModel === "boolean"
-      ? { passthroughProviderModel: value.passthroughProviderModel }
-      : {}),
-    ...(modelIdTransforms && modelIdTransforms.length > 0 ? { modelIdTransforms } : {}),
-  };
+  return selected ?? {};
 }
 
-function normalizePricingPolicy(value: unknown): PluginManifestModelPricingProvider | undefined {
-  if (!isRecord(value)) {
-    return undefined;
+function buildPricingCandidates(
+  providerId: string,
+  modelId: string,
+  source: PricingSource,
+  policies: PricingPolicies,
+  seen = new Set<string>(),
+): string[] {
+  const ref = `${providerId}/${modelId}`;
+  const policy = sourcePolicy(policies, providerId, source);
+  if (seen.has(ref) || !policy) {
+    return [];
   }
-  const openRouter = normalizePricingSource(value.openRouter);
-  const liteLLM = normalizePricingSource(value.liteLLM);
-  return {
-    ...(typeof value.external === "boolean" ? { external: value.external } : {}),
-    ...(openRouter !== undefined ? { openRouter } : {}),
-    ...(liteLLM !== undefined ? { liteLLM } : {}),
-  };
+  const candidates = modelIdVariants(modelId, policy.modelIdTransforms).map(
+    (id) => `${policy.provider ?? providerId}/${id}`,
+  );
+  const slash = modelId.indexOf("/");
+  if (policy.passthroughProviderModel && slash > 0) {
+    candidates.push(
+      ...buildPricingCandidates(
+        modelId.slice(0, slash),
+        modelId.slice(slash + 1),
+        source,
+        policies,
+        new Set(seen).add(ref),
+      ),
+    );
+  }
+  return [...new Set(candidates)];
 }
 
 function readPricingPolicies(manifests: ModelCatalogManifestInput[]): PricingPolicies {
   const policies: PricingPolicies = new Map();
-  for (const entry of manifests) {
-    for (const [providerId, rawPolicy] of Object.entries(
-      entry.manifest?.modelPricing?.providers ?? {},
-    )) {
-      const policy = normalizePricingPolicy(rawPolicy);
+  for (const { manifest } of manifests) {
+    const owners = new Set((manifest.providers ?? []).map(normalizeModelCatalogProviderId));
+    for (const [rawId, value] of Object.entries(manifest.modelPricing?.providers ?? {})) {
+      const id = normalizeModelCatalogProviderId(rawId);
+      const policy = owners.has(id) ? normalizeModelPricingProvider(value) : undefined;
       if (policy) {
-        policies.set(providerId, policy);
+        policies.set(id, policy);
       }
     }
   }
@@ -582,39 +383,176 @@ async function readJsonResponse(response: Response, source: string) {
   } catch {
     throw new Error(`${source} response is malformed JSON`);
   }
-  if (!isRecord(payload)) {
-    throw new Error(`${source} response is not a JSON object`);
-  }
   return payload;
 }
 
-async function fetchPricingSources(fetchImpl: typeof fetch) {
-  const signal = AbortSignal.timeout(PRICING_FETCH_TIMEOUT_MS);
-  const results = await Promise.allSettled([
-    fetchImpl(OPENROUTER_MODELS_URL, {
-      headers: { Accept: "application/json" },
-      signal,
-    }).then((response) => readJsonResponse(response, "OpenRouter")),
-    fetchImpl(LITELLM_PRICING_URL, {
-      headers: { Accept: "application/json" },
-      signal,
-    }).then((response) => readJsonResponse(response, "LiteLLM")),
-  ]);
-  const [openRouterResult, liteLlmResult] = results;
-  for (const { label, result } of [
-    { label: "OpenRouter", result: openRouterResult },
-    { label: "LiteLLM", result: liteLlmResult },
-  ]) {
-    if (result.status === "rejected") {
-      process.stderr.write(
-        `[${SCRIPT_LABEL}] warning: ${label} pricing unavailable: ${String(result.reason)}\n`,
+function parsePricingCatalog(
+  source: PricingSource,
+  body: unknown,
+  policies: PricingPolicies,
+): LoadedPricingSource {
+  const catalog: PricingCatalog = new Map();
+  const aliases: string[][] = [];
+  if (source.authoritative && source.id !== "openCode") {
+    const prices = NATIVE_CATALOG_PARSERS[source.id](body);
+    if (!prices) {
+      throw new Error(`${source.label} pricing response is malformed`);
+    }
+    for (const [id, pricing] of prices) {
+      catalog.set(`${source.id}/${id}`, pricing);
+    }
+    return { ...source, catalog, aliases };
+  }
+  if (!isRecord(body)) {
+    throw new Error(`${source.label} response is not a JSON object`);
+  }
+  if (source.id === "openCode") {
+    for (const [providerId] of policies) {
+      const policy = sourcePolicy(policies, providerId, source);
+      if (!policy) {
+        continue;
+      }
+      const upstreamId = policy.provider ?? providerId;
+      const provider = body[upstreamId];
+      if (!isRecord(provider) || provider.id !== upstreamId || !isRecord(provider.models)) {
+        throw new Error(`${source.label} pricing missing provider ${upstreamId}`);
+      }
+      const rows = Object.entries(provider.models).map(([id, model]) =>
+        isRecord(model) && model.id === id ? model : undefined,
       );
+      const prices = normalizeModelPricingCatalog(rows, normalizeUpstreamModelPricing, {
+        readPricing: (model) => model.cost,
+      });
+      if (!prices) {
+        throw new Error(`${source.label} pricing malformed for provider ${upstreamId}`);
+      }
+      for (const [id, pricing] of prices) {
+        catalog.set(`${upstreamId}/${id}`, pricing);
+      }
+    }
+  } else if (source.id === "openRouter") {
+    for (const row of Array.isArray(body.data) ? body.data : []) {
+      if (!isRecord(row)) {
+        continue;
+      }
+      const pricing = normalizeOpenRouterModelPricing(row.pricing);
+      if (typeof row.id === "string" && pricing) {
+        catalog.set(row.id, pricing);
+      }
+    }
+  } else {
+    for (const [id, row] of Object.entries(body)) {
+      const pricing = parseLiteLLMPricing(row);
+      if (!pricing || !isRecord(row)) {
+        continue;
+      }
+      const keys = [id];
+      if (typeof row.litellm_provider === "string" && !id.includes("/")) {
+        keys.push(`${row.litellm_provider}/${id}`);
+      }
+      for (const key of keys) {
+        catalog.set(key, pricing);
+      }
+      aliases.push(keys);
     }
   }
-  return {
-    openRouter: openRouterResult.status === "fulfilled" ? openRouterResult.value : {},
-    liteLlm: liteLlmResult.status === "fulfilled" ? liteLlmResult.value : {},
-  };
+  return { ...source, catalog, aliases };
+}
+
+async function fetchPricingSources(fetchImpl: typeof fetch, policies: PricingPolicies) {
+  const sources = MODEL_PRICING_SOURCES.filter(
+    (source) =>
+      !source.authoritative ||
+      [...policies.keys()].some((id) => sourcePolicy(policies, id, source)),
+  );
+  const signal = AbortSignal.timeout(PRICING_FETCH_TIMEOUT_MS);
+  const loaded = await Promise.all(
+    sources.map(async (source) => {
+      try {
+        const response = await fetchImpl(source.url, {
+          headers: { Accept: "application/json" },
+          signal,
+        });
+        const body = await readJsonResponse(response, source.label);
+        return parsePricingCatalog(source, body, policies);
+      } catch (cause) {
+        return {
+          source,
+          error: new Error(`${source.label} pricing unavailable: ${String(cause)}`, { cause }),
+        };
+      }
+    }),
+  );
+  // Join all fetches before the final failure marker, and never re-stamp stale owner prices.
+  const failure = loaded.find((entry) => "error" in entry && entry.source.authoritative);
+  if (failure && "error" in failure) {
+    throw failure.error;
+  }
+  const result: LoadedPricingSource[] = [];
+  for (const entry of loaded) {
+    if ("error" in entry) {
+      process.stderr.write(`[${SCRIPT_LABEL}] warning: ${entry.error.message}\n`);
+      result.push({ ...entry.source, catalog: new Map(), aliases: [] });
+    } else {
+      result.push(entry);
+    }
+  }
+  return result;
+}
+
+function selectProviderPricingSources(
+  providerId: string,
+  sources: LoadedPricingSource[],
+  policies: PricingPolicies,
+): LoadedPricingSource[] {
+  const eligible = sources.filter((source) => sourcePolicy(policies, providerId, source));
+  // A native feed owns unavailable prices too; other vendors cannot fill its gaps.
+  const native = eligible.find((source) => source.authoritative);
+  return native ? [native] : eligible;
+}
+
+function materializePolicyRuntimePricing(
+  hosted: PricingCatalog,
+  policies: PricingPolicies,
+  sources: LoadedPricingSource[],
+  metadataOwnedKeys: Set<string>,
+): void {
+  for (const [providerId] of policies) {
+    for (const key of hosted.keys()) {
+      if (key.startsWith(`${providerId}/`)) {
+        hosted.delete(key);
+      }
+    }
+    for (const source of selectProviderPricingSources(providerId, sources, policies)) {
+      const policy = sourcePolicy(policies, providerId, source);
+      if (!policy) {
+        continue;
+      }
+      for (const [key, pricing] of source.catalog) {
+        if (!source.authoritative && !hasKnownPricing(pricing)) {
+          continue;
+        }
+        const slash = key.indexOf("/");
+        if (slash <= 0 || slash === key.length - 1) {
+          continue;
+        }
+        const runtimeKeys =
+          key.slice(0, slash) === (policy.provider ?? providerId)
+            ? modelIdVariants(key.slice(slash + 1), policy.modelIdTransforms, true).map(
+                (id) => `${providerId}/${id}`,
+              )
+            : [];
+        if (policy.passthroughProviderModel) {
+          runtimeKeys.push(`${providerId}/${key}`);
+        }
+        for (const runtimeKey of runtimeKeys) {
+          if (!metadataOwnedKeys.has(runtimeKey) && !hosted.has(runtimeKey)) {
+            hosted.set(runtimeKey, pricing);
+          }
+        }
+      }
+    }
+  }
 }
 
 export async function enrichModelCatalogPricing(options: {
@@ -624,104 +562,73 @@ export async function enrichModelCatalogPricing(options: {
   validateBundle?: BundleValidator;
 }): Promise<{ modelsEnriched: number; pricingEntries: number }> {
   const policies = readPricingPolicies(options.manifests);
-  const sources = await fetchPricingSources(options.fetchImpl ?? fetch);
-  const openRouterCatalog: PricingCatalog = new Map();
-  for (const row of Array.isArray(sources.openRouter.data) ? sources.openRouter.data : []) {
-    if (!isRecord(row)) {
-      continue;
-    }
-    const pricing = parseOpenRouterPricing(row.pricing);
-    if (typeof row.id === "string" && pricing) {
-      openRouterCatalog.set(row.id, pricing);
-    }
-  }
-  const liteLlmCatalog: PricingCatalog = new Map();
-  const liteLlmAliasGroups: string[][] = [];
-  for (const [id, row] of Object.entries(sources.liteLlm)) {
-    if (!isRecord(row)) {
-      continue;
-    }
-    const pricing = parseLiteLLMPricing(row);
-    if (pricing) {
-      const aliases = [id];
-      if (typeof row?.litellm_provider === "string" && !id.includes("/")) {
-        aliases.push(`${row.litellm_provider}/${id}`);
-      }
-      for (const alias of aliases) {
-        liteLlmCatalog.set(alias, pricing);
-      }
-      liteLlmAliasGroups.push(aliases);
-    }
-  }
-
+  const sources = await fetchPricingSources(options.fetchImpl ?? fetch, policies);
   let enriched = 0;
-  const coveredPricingKeys = new Set<string>();
-  const pricedProviderModelKeys = new Set<string>();
+  const coveredKeys = new Set<string>();
+  const metadataOwnedKeys = new Set<string>();
   for (const [providerId, provider] of Object.entries(options.bundle.providers)) {
+    const providerSources = selectProviderPricingSources(providerId, sources, policies);
     for (const model of provider.models) {
-      const openRouterCandidates = buildPricingCandidates({
-        providerId,
-        modelId: model.id,
-        source: "openRouter",
-        policies,
+      const matches = providerSources.map((source) => {
+        const candidates = buildPricingCandidates(providerId, model.id, source, policies);
+        return {
+          source,
+          candidates,
+          pricing: candidates.map((key) => source.catalog.get(key)).find(Boolean),
+        };
       });
-      const openRouterPricing = openRouterCandidates
-        .map((candidate) => openRouterCatalog.get(candidate))
-        .find(Boolean);
-      const liteLlmCandidates = buildPricingCandidates({
-        providerId,
-        modelId: model.id,
-        source: "liteLLM",
-        policies,
-      });
-      const liteLlmPricing = liteLlmCandidates
-        .map((candidate) => liteLlmCatalog.get(candidate))
-        .find(Boolean);
-      const cost = mergePricing(openRouterPricing, liteLlmPricing);
-      if (cost && hasKnownPricing(cost)) {
-        model.cost = cost;
+      const chosen = matches.find(
+        ({ source, pricing }) => source.authoritative || (pricing && hasKnownPricing(pricing)),
+      );
+      if (chosen?.pricing) {
+        model.cost = chosen.pricing;
         enriched += 1;
+      } else if (chosen) {
+        // Keep the metadata row: removing it would revive the bundled seed's stale price.
+        delete model.cost;
+        process.stderr.write(
+          `[${SCRIPT_LABEL}] warning: ${chosen.source.label} pricing unavailable for ${providerId}/${model.id}; preserving metadata without cost\n`,
+        );
       }
-      if (model.cost && hasKnownPricing(model.cost)) {
-        const providerModelKey = `${providerId}/${model.id}`;
-        coveredPricingKeys.add(providerModelKey);
-        pricedProviderModelKeys.add(providerModelKey);
-        for (const candidate of [...openRouterCandidates, ...liteLlmCandidates]) {
-          coveredPricingKeys.add(candidate);
+      // Native zero prices keep standalone entries as evidence of free, not unknown, usage.
+      if ((model.cost && hasKnownPricing(model.cost)) || (chosen && !chosen.pricing)) {
+        const key = `${providerId}/${model.id}`;
+        coveredKeys.add(key);
+        metadataOwnedKeys.add(key);
+        for (const { candidates } of matches) {
+          for (const candidate of candidates) {
+            coveredKeys.add(candidate);
+          }
         }
       }
     }
   }
 
-  const hostedPricing: PricingCatalog = new Map();
-  for (const [key, pricing] of openRouterCatalog) {
-    hostedPricing.set(key, pricing);
-  }
-  for (const [key, pricing] of liteLlmCatalog) {
-    const merged = mergePricing(hostedPricing.get(key), pricing);
-    if (merged) {
-      hostedPricing.set(key, merged);
+  const hosted: PricingCatalog = new Map();
+  for (const source of sources) {
+    // Opted-in feeds only enter the owner's mapped namespace, never the global fallback map.
+    if (!source.authoritative) {
+      for (const [key, pricing] of source.catalog) {
+        const existing = hosted.get(key);
+        if (!existing || !hasKnownPricing(existing)) {
+          hosted.set(key, pricing);
+        }
+      }
     }
-  }
-  for (const aliases of liteLlmAliasGroups) {
-    if (aliases.some((alias) => coveredPricingKeys.has(alias))) {
-      for (const alias of aliases) {
-        coveredPricingKeys.add(alias);
+    for (const aliases of source.aliases) {
+      if (aliases.some((key) => coveredKeys.has(key))) {
+        for (const key of aliases) {
+          coveredKeys.add(key);
+        }
       }
     }
   }
-  for (const key of coveredPricingKeys) {
-    hostedPricing.delete(key);
+  for (const key of coveredKeys) {
+    hosted.delete(key);
   }
-  materializePolicyRuntimePricing({
-    hostedPricing,
-    policies,
-    openRouterCatalog,
-    liteLlmCatalog,
-    pricedProviderModelKeys,
-  });
+  materializePolicyRuntimePricing(hosted, policies, sources, metadataOwnedKeys);
   options.bundle.pricing = Object.fromEntries(
-    [...hostedPricing.entries()]
+    [...hosted.entries()]
       .toSorted(([left], [right]) => left.localeCompare(right))
       .map(([key, pricing]) => [key, compactPricing(pricing)]),
   );
@@ -729,7 +636,7 @@ export async function enrichModelCatalogPricing(options: {
   const validated = validateBundle(options.bundle);
   options.bundle.providers = validated.providers;
   options.bundle.pricing = validated.pricing;
-  return { modelsEnriched: enriched, pricingEntries: hostedPricing.size };
+  return { modelsEnriched: enriched, pricingEntries: hosted.size };
 }
 
 function sortCatalogValue(value: unknown): unknown {
@@ -783,11 +690,7 @@ async function runPublishModelCatalog(
   const generatedAt = (options.now ?? Date.now)();
   const sourceCommit = options.sourceCommit ?? resolveSourceCommit(rootDir);
   const manifests = readModelCatalogManifests({ rootDir });
-  const bundle = await assembleModelCatalogBundle({
-    manifests,
-    generatedAt,
-    sourceCommit,
-  });
+  const bundle = await assembleModelCatalogBundle({ manifests, generatedAt, sourceCommit });
   const pricingResult = args.pricing
     ? await enrichModelCatalogPricing({ bundle, manifests, fetchImpl: options.fetchImpl })
     : { modelsEnriched: 0, pricingEntries: 0 };
@@ -809,7 +712,6 @@ async function runPublishModelCatalog(
     process.stdout.write(`[${SCRIPT_LABEL}] dry-run ${stats}\n`);
     return { bundle, summary, pricingEnriched: pricingResult.modelsEnriched, wrote: false };
   }
-
   if (!args.out) {
     throw new Error("output path is required outside dry-run mode");
   }

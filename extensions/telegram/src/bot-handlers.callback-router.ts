@@ -46,7 +46,10 @@ import {
   withResolvedTelegramForumFlag,
 } from "./bot/helpers.js";
 import type { TelegramContext, TelegramGetChat } from "./bot/types.js";
-import { getTelegramCallbackQueryAnswerPromise } from "./callback-query-answer-state.js";
+import {
+  getTelegramCallbackQueryAnswerPromise,
+  startTelegramCallbackQueryAnswer,
+} from "./callback-query-answer-state.js";
 import { buildCommandsPaginationKeyboard, buildTelegramModelsMenuButtons } from "./command-ui.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
 import {
@@ -101,14 +104,11 @@ export function createTelegramCallbackRouter({
       return;
     }
     let callbackAnswered = false;
-    const answerCallbackQuery = async (text?: string) => {
+    const answerCallbackQuery = async () => {
       await withTelegramApiErrorLogging({
         operation: "answerCallbackQuery",
         runtime,
-        fn: () =>
-          text
-            ? bot.api.answerCallbackQuery(callback.id, { text })
-            : bot.api.answerCallbackQuery(callback.id),
+        fn: () => startTelegramCallbackQueryAnswer(bot, callback.id, false),
       }).catch(() => {});
       callbackAnswered = true;
     };

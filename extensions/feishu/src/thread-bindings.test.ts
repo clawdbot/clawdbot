@@ -44,7 +44,7 @@ describe("Feishu thread bindings", () => {
   it("binds and resolves a Feishu topic conversation", async () => {
     vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
     createFeishuThreadBindingManager({
-      cfg: { ...baseCfg, agents: { list: [{ id: "main" }, { id: "codex" }] } },
+      cfg: { ...baseCfg, agents: { entries: { main: {}, codex: {} } } },
       accountId: "default",
     });
 
@@ -253,11 +253,31 @@ describe("Feishu thread bindings", () => {
         conversationId: "oc_group_chat:topic:om_topic_root",
       }),
     ).toBeNull();
+
+    const restarted = createFeishuThreadBindingManager({ cfg: baseCfg, accountId: "default" });
+    const conversation = {
+      channel: "feishu",
+      accountId: "default",
+      conversationId: "oc_group_chat:topic:om_restarted",
+    };
+    const replacement = await getSessionBindingService().bind({
+      conversation,
+      targetSessionKey: "agent:codex:acp:replacement",
+      targetKind: "session",
+    });
+
+    manager.stop();
+
+    expect(createFeishuThreadBindingManager({ cfg: baseCfg, accountId: "default" })).toBe(
+      restarted,
+    );
+    expect(getSessionBindingService().resolveByConversation(conversation)).toEqual(replacement);
   });
 
-  it.each([false, true])(
-    "preserves conversation delivery fields without inheriting another target's owner (replace=%s)",
-    async (replace) => {
+  it.each(["refresh", "session", "kind"] as const)(
+    "preserves conversation delivery fields without inheriting another target's owner (%s)",
+    async (change) => {
+      const replace = change !== "refresh";
       vi.spyOn(Date, "now").mockReturnValue(1_700_000_100_000);
       const manager = createFeishuThreadBindingManager({ cfg: baseCfg, accountId: "default" });
 
@@ -272,12 +292,17 @@ describe("Feishu thread bindings", () => {
           boundBy: "system",
           deliveryTo: "user:ou_sender_1",
           deliveryThreadId: "om_topic_root",
+          pluginBindingOwner: "plugin",
+          pluginId: "fixture-plugin",
+          pluginRoot: "/fixture/plugin",
+          data: { threadId: "plugin-thread" },
         },
       });
 
       await getSessionBindingService().bind({
-        targetSessionKey: replace ? "agent:main:subagent:replacement" : "agent:main:subagent:child",
-        targetKind: "subagent",
+        targetSessionKey:
+          change === "session" ? "agent:main:subagent:replacement" : "agent:main:subagent:child",
+        targetKind: change === "kind" ? "session" : "subagent",
         conversation: {
           channel: "feishu",
           accountId: "default",
@@ -298,8 +323,9 @@ describe("Feishu thread bindings", () => {
         }),
       ).toEqual({
         bindingId: "default:oc_group_chat:topic:om_topic_root:sender:ou_sender_1",
-        targetSessionKey: replace ? "agent:main:subagent:replacement" : "agent:main:subagent:child",
-        targetKind: "subagent",
+        targetSessionKey:
+          change === "session" ? "agent:main:subagent:replacement" : "agent:main:subagent:child",
+        targetKind: change === "kind" ? "session" : "subagent",
         conversation: {
           channel: "feishu",
           accountId: "default",
@@ -310,6 +336,14 @@ describe("Feishu thread bindings", () => {
         boundAt: 1_700_000_100_000,
         expiresAt: 1_700_086_500_000,
         metadata: {
+          ...(!replace
+            ? {
+                pluginBindingOwner: "plugin",
+                pluginId: "fixture-plugin",
+                pluginRoot: "/fixture/plugin",
+                data: { threadId: "plugin-thread" },
+              }
+            : {}),
           agentId: replace ? "main" : "previous-agent",
           label: "child",
           boundBy: replace ? undefined : "system",

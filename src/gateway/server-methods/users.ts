@@ -33,6 +33,7 @@ import {
   isGatewayClientProfilePending,
 } from "./gateway-client-identity.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
+import { usersGitHubHandlers } from "./users-github.js";
 import { assertValidParams } from "./validation.js";
 
 function refreshConnectedProfile(
@@ -120,6 +121,7 @@ function requireProfileMutationAccess(
 }
 
 export const usersHandlers: GatewayRequestHandlers = {
+  ...usersGitHubHandlers,
   "users.list": ({ params, respond }) => {
     if (!assertValidParams(params, validateUsersListParams, "users.list", respond)) {
       return;
@@ -130,7 +132,7 @@ export const usersHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateUsersSelfParams, "users.self", respond)) {
       return;
     }
-    if (!client?.authenticatedUserId) {
+    if (!client?.authenticatedUserId && !client?.authenticatedUserProfile) {
       respond(
         false,
         undefined,

@@ -928,7 +928,7 @@ describe("sessions page lifecycle", () => {
     expect(request).toHaveBeenCalledWith(
       "sessions.reclaim",
       { key: "agent:main:cloud", agentId: "main" },
-      { timeoutMs: 10 * 60_000 },
+      { timeoutMs: null },
     );
     expect(managed.refreshList).toHaveBeenCalledWith({ ...query, force: true });
     expect(page.result?.sessions[0]?.label).toBe("Updated while stopping");
@@ -966,7 +966,7 @@ describe("sessions page lifecycle", () => {
     expect(request).toHaveBeenCalledWith(
       "sessions.reclaim",
       { key: "agent:main:cloud", agentId: "main" },
-      { timeoutMs: 10 * 60_000 },
+      { timeoutMs: null },
     );
     expect(managed.refreshList).toHaveBeenCalledOnce();
     expect(page.sessionMutationPending).toBe(false);

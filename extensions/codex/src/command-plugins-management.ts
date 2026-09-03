@@ -55,11 +55,9 @@ type ConfiguredPluginKeyResolution =
   | { status: "mismatched" };
 
 // Plugin lifecycle changes (enable/disable) write to openclaw.json
-// synchronously. The Codex app-server picks up the new policy when the next
-// thread starts; in-flight conversations keep the old policy until /new or
-// /reset. A full gateway restart is NOT needed.
-const POLICY_REFRESH_HINT =
-  "New Codex conversations pick this up automatically. Use /new or /reset to refresh the current one.";
+// synchronously. The next message rotates the native thread onto the new
+// policy; a conversation reset or full gateway restart is not needed.
+const POLICY_REFRESH_HINT = "Takes effect on your next message.";
 
 export async function handleCodexPluginsSubcommand(
   ctx: PluginCommandContext,
@@ -701,6 +699,6 @@ function formatPluginList(
     ...(globalEnabled
       ? []
       : ["Global codexPlugins.enabled is off; configured sub-plugins are inactive.", ""]),
-    "New Codex conversations pick up policy changes automatically; /new or /reset to refresh the current one.",
+    POLICY_REFRESH_HINT,
   ].join("\n");
 }

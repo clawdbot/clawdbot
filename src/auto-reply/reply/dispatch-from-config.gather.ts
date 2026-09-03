@@ -192,6 +192,7 @@ export async function gatherDispatchRequest(
       return;
     }
     agentDispatchStartedAt = Date.now();
+    replyHotPathTiming.logPreparationIfSlow({ channel, messageId, sessionKey });
     logMessageDispatchStarted({
       channel,
       sessionKey: acpDispatchSessionKey,
@@ -480,6 +481,7 @@ export async function gatherDispatchRequest(
       stageRemoteInboundMediaIfNeeded({
         ctx: hookCtx,
         cfg,
+        agentId: sessionAgentId,
         sessionKey: acpDispatchSessionKey,
         workspaceDir,
         remoteMediaMode: "cache",

@@ -746,6 +746,36 @@ fi
 
 CURRENT_PHASE=target-wizard
 echo "Exercising current target Gateway wizard RPC lifecycle"
+# The current setup owner exposes an admission code; the pinned source package only exposes prose.
+assert_target_setup_admission_busy() {
+  local output="$1"
+  local error_output="$2"
+  local label="$3"
+  if node -e '
+    const fs = require("node:fs");
+    try {
+      const payload = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+      process.exit(
+        payload?.ok === false &&
+          payload?.error?.type === "gateway_request_error" &&
+          payload.error.code === "UNAVAILABLE" &&
+          payload.error.details?.code === "SETUP_ADMISSION_BUSY" &&
+          payload.error.retryable === true
+          ? 0
+          : 1,
+      );
+    } catch {
+      process.exit(1);
+    }
+  ' "$output"; then
+    return 0
+  fi
+  echo "$label failed without a retryable SETUP_ADMISSION_BUSY result" >&2
+  openclaw_e2e_print_log "$output" >&2
+  openclaw_e2e_print_log "$error_output" >&2
+  exit 1
+}
+
 wait_for_target_wizard_start() {
   local output="$1"
   local error_output="$2"
@@ -777,8 +807,7 @@ wait_for_target_wizard_start() {
       printf '%s\t%s\n' "$session_id" "$polls"
       return 0
     fi
-    assert_gateway_call_error_message \
-      "$output" "$error_output" "wizard already running" "$label"
+    assert_target_setup_admission_busy "$output" "$error_output" "$label"
     sleep 0.2
   done
   echo "timed out waiting for $label" >&2
@@ -865,10 +894,9 @@ if gateway_call wizard.start '{"mode":"local"}' \
   echo "target wizard.start unexpectedly allowed an overlapping setup session" >&2
   exit 1
 fi
-assert_gateway_call_error_message \
+assert_target_setup_admission_busy \
   "$TARGET_WIZARD_DUPLICATE_JSON" \
   "$TARGET_WIZARD_DUPLICATE_ERR" \
-  "wizard already running" \
   "target overlapping wizard.start"
 
 gateway_call wizard.cancel "$target_active_session_params" \

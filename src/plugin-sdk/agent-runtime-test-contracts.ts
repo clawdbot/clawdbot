@@ -13,6 +13,7 @@ export {
 export {
   buildContractReplyPayloads,
   createContractToolTerminalObserver,
+  createHostTtsRuntimeContract,
   createOwnerBackedContractTool,
   createTerminalPresentationContractTool,
   installCodexToolResultMiddleware,

@@ -1,3 +1,5 @@
+import type { ReactiveController, ReactiveControllerHost } from "lit";
+
 type AvatarRouteEntry = {
   blobUrl: string | null;
   consumers: Map<symbol, () => void>;
@@ -125,8 +127,8 @@ async function fetchAvatarRoute(
     if (notFound && cacheNotFound) {
       return;
     }
-    if (retryDelayMs !== undefined) {
-      if (entry.consumers.size > 0 && entry.retryAttempts < AUTHENTICATED_AVATAR_MAX_RETRIES) {
+    if (retryDelayMs !== undefined && entry.consumers.size > 0) {
+      if (entry.retryAttempts < AUTHENTICATED_AVATAR_MAX_RETRIES) {
         entry.retryAttempts += 1;
         // The budget belongs to this persistent shared entry. Keeping an
         // exhausted miss prevents Lit rerenders from minting a new poll loop.
@@ -138,7 +140,7 @@ async function fetchAvatarRoute(
           entry.controller = new AbortController();
           void fetchAvatarRoute(key, url, authTokens, cacheNotFound, retryUnavailable, entry);
         }, retryDelayMs);
-      } else if (entry.consumers.size > 0) {
+      } else {
         // Keep the exhausted entry through a cooldown so render churn cannot
         // remint the budget. A later render may start a fresh bounded window.
         entry.retryEligibleAt = Date.now() + AUTHENTICATED_AVATAR_RETRY_COOLDOWN_MS;
@@ -159,14 +161,32 @@ async function fetchAvatarRoute(
  * Resolves protected same-origin avatar routes to one browser-local blob shared by all views.
  * The owning view releases its reference on credential change or disconnect.
  */
-export class AuthenticatedAvatarRouteLoader {
+export class AuthenticatedAvatarRouteLoader implements ReactiveController {
   private readonly owner = Symbol("authenticated-avatar-route-owner");
   private keys = new Set<string>();
+  private connected = false;
+  private readonly onUpdate = () => {
+    if (this.connected) {
+      this.host.requestUpdate();
+    }
+  };
 
   constructor(
-    private readonly onUpdate: () => void,
+    private readonly host: ReactiveControllerHost,
     private readonly options: { cacheNotFound?: boolean; retryUnavailable?: boolean } = {},
-  ) {}
+  ) {
+    host.addController(this);
+  }
+
+  hostConnected() {
+    this.connected = true;
+    this.host.requestUpdate();
+  }
+
+  hostDisconnected() {
+    this.connected = false;
+    this.reset();
+  }
 
   reset() {
     for (const key of this.keys) {
@@ -193,6 +213,11 @@ export class AuthenticatedAvatarRouteLoader {
   resolve(url: string, authTokens: readonly string[]): string | null {
     if (!url.startsWith("/")) {
       return url;
+    }
+    // Lit can finish a queued render after disconnect. That render must not
+    // reacquire a released route and keep an orphaned request or retry alive.
+    if (!this.connected) {
+      return null;
     }
     const cacheNotFound = this.options.cacheNotFound === true;
     const retryUnavailable = this.options.retryUnavailable === true;

@@ -22,6 +22,8 @@ import { parseApprovalResolvedEvent } from "../../app/exec-approval.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import {
   renderLearnMoreLink,
+  renderSettingsGroup,
+  renderSettingsLoadingSkeleton,
   renderSettingsPage,
   renderSettingsPageHeader,
 } from "../../components/settings-ui.ts";
@@ -428,6 +430,11 @@ class ApprovalsPage extends OpenClawLightDomElement {
   }
 
   private renderTable() {
+    if (this.loading && this.items.length === 0) {
+      return renderSettingsGroup(
+        renderSettingsLoadingSkeleton({ label: t("approvalHistory.loading") }),
+      );
+    }
     return html`
       <div class="data-table-container">
         <table class="data-table approval-history-table">
@@ -448,11 +455,9 @@ class ApprovalsPage extends OpenClawLightDomElement {
                   <tr>
                     <td colspan="7" class="data-table-empty-cell">
                       <div class="data-table-empty-state" role="status" aria-live="polite">
-                        ${this.loading
-                          ? t("approvalHistory.loading")
-                          : this.error || !this.hasLoaded
-                            ? t("approvalHistory.unknown")
-                            : t("approvalHistory.empty")}
+                        ${this.error || !this.hasLoaded
+                          ? t("approvalHistory.unknown")
+                          : t("approvalHistory.empty")}
                       </div>
                     </td>
                   </tr>

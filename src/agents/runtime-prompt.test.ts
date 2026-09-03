@@ -85,6 +85,7 @@ describe("resolveAgentRuntimePrompt", () => {
     expect(resolveChannelMessageToolHintsMock).toHaveBeenCalledWith(channelContext);
     expect(listChannelSupportedActionsMock).toHaveBeenCalledWith({
       ...channelContext,
+      chatType: "group",
       currentChannelId: "telegram:-1001:topic:928",
       currentThreadTs: "928",
       currentMessageId: "message-1",

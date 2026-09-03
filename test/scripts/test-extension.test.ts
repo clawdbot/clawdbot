@@ -559,7 +559,21 @@ describe("scripts/test-extension.mts", () => {
     expect(assigned).toHaveLength(balancedExpectedExtensionIds.length);
 
     const totals = shards.map((shard) => shard.estimatedCost);
-    expect(Math.max(...totals) - Math.min(...totals)).toBeLessThanOrEqual(1);
+    const largestPlugin = Math.max(
+      ...balancedExpectedExtensionIds.map(
+        (targetArg) => resolveExtensionTestPlan({ targetArg }).estimatedCost,
+      ),
+    );
+    const lowerBound = Math.max(
+      largestPlugin,
+      Math.ceil(totals.reduce((sum, cost) => sum + cost, 0) / shards.length),
+    );
+    expect(Math.max(...totals)).toBe(lowerBound);
+    // Whole plugins cannot be divided; balance the remaining packed rows.
+    const packedTotals = shards
+      .filter((shard) => shard.extensionIds.length > 1)
+      .map((shard) => shard.estimatedCost);
+    expect(Math.max(...packedTotals) - Math.min(...packedTotals)).toBeLessThanOrEqual(1);
 
     for (const shard of shards) {
       expect(shard.extensionIds.length).toBeGreaterThan(0);
@@ -687,9 +701,13 @@ describe("scripts/test-extension.mts", () => {
     });
   });
 
-  it.each([false, true])(
-    "runs installed Vitest without pnpm (Maglev opt-in: %s)",
-    (enableMaglev) => {
+  it.each([
+    { enableMaglev: false, realHomeReplay: false },
+    { enableMaglev: true, realHomeReplay: false },
+    { enableMaglev: false, realHomeReplay: true },
+  ])(
+    "runs installed Vitest without pnpm (Maglev: $enableMaglev, owner-authorized real home: $realHomeReplay)",
+    ({ enableMaglev, realHomeReplay }) => {
       const root = realpathSync(
         mkdtempSync(path.join(tmpdir(), "openclaw-test-extension-native-")),
       );
@@ -709,9 +727,10 @@ describe("scripts/test-extension.mts", () => {
 assert.equal(process.execArgv.includes('--no-maglev'), ${!enableMaglev}, 'batch Node defaults');
 export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join(root, "cache"))},test:{include:['*.test.mjs'],pool:'forks',maxWorkers:1,fileParallelism:false,cache:false,experimental:{fsModuleCache:false}}};`,
       );
+      const expectedHome = realHomeReplay ? JSON.stringify(home) : "path.join(tmpdir(), 'home')";
       writeFileSync(
         path.join(root, "selected.test.mjs"),
-        `import {test,expect} from 'vitest';test('selected native case',()=>expect(process.env.HOME).toBe(${JSON.stringify(home)}));`,
+        `import {homedir,tmpdir} from 'node:os';import path from 'node:path';import {test,expect} from 'vitest';test('selected native case',()=>{expect(process.env.HOME).toBe(${expectedHome});expect(homedir()).toBe(${expectedHome});});`,
       );
       for (const name of ["excluded", "unrelated"]) {
         writeFileSync(
@@ -721,6 +740,7 @@ export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join
       }
       const params = {
         config,
+        homeMode: realHomeReplay ? "live-aware" : undefined,
         args: [
           "--configLoader=native",
           "--reporter=verbose",
@@ -730,7 +750,7 @@ export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join
           "**/excluded.test.mjs",
         ],
         targets: [path.join(root, "selected.test.mjs"), path.join(root, "excluded.test.mjs")],
-      };
+      } satisfies VitestBatchRunParams;
       writeFileSync(
         entry,
         `import {runVitestBatch} from ${JSON.stringify(path.join(process.cwd(), "scripts/lib/vitest-batch-runner.mts"))};process.exitCode=await runVitestBatch({...${JSON.stringify(params)},env:{...process.env,OPENCLAW_VITEST_ENABLE_MAGLEV:${JSON.stringify(enableMaglev ? "1" : "")}}});`,
@@ -746,6 +766,8 @@ export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join
               PATH: "",
               HOME: home,
               USERPROFILE: home,
+              OPENCLAW_LIVE_TEST: realHomeReplay ? "1" : "0",
+              OPENCLAW_LIVE_USE_REAL_HOME: realHomeReplay ? "1" : "0",
               TMPDIR: root,
               TMP: root,
               TEMP: root,

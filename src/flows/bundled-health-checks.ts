@@ -57,9 +57,43 @@ type BundledHealthCheckSelection = {
   readonly skipIds?: readonly string[];
   readonly onlyIds?: readonly string[];
   readonly includeAllChecks?: boolean;
+  readonly updateReadiness?: "post-plugin";
 };
 
 type BundledHealthCheckPluginStateMode = "direct" | "deferred" | "isolated";
+
+type BundledHealthCheckParams = {
+  cfg: OpenClawConfig;
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  runWithPluginStateSnapshot?: <T>(
+    run: (pluginMetadataEnv: NodeJS.ProcessEnv) => Promise<T>,
+  ) => Promise<T>;
+};
+
+function defineHealthCheckRegistration(
+  register: (params: BundledHealthCheckParams, registerCheck: typeof registerHealthCheck) => void,
+  updateReadiness?: "post-plugin",
+) {
+  // Owners retain callback and check identities when refreshing their registration state.
+  // Declare phase ownership before loading their implementation, then carry it onto each check.
+  const registerCheck = updateReadiness
+    ? (check: Parameters<typeof registerHealthCheck>[0]) =>
+        registerHealthCheck(Object.assign(check, { updateReadiness }))
+    : registerHealthCheck;
+  return {
+    updateReadiness,
+    register: (params: BundledHealthCheckParams) => register(params, registerCheck),
+  };
+}
+
+const HEALTH_CHECK_REGISTRATIONS = [
+  defineHealthCheckRegistration(registerMemoryCoreHealthChecks, "post-plugin"),
+  defineHealthCheckRegistration(registerCodexHealthChecks),
+  defineHealthCheckRegistration(registerPolicyHealthChecks),
+  defineHealthCheckRegistration(registerCuaHealthChecks),
+  defineHealthCheckRegistration(registerBundledWorkerProviderHealthChecks),
+];
 
 function loadMemoryCoreHealthApi(): BundledHealthApi {
   return loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({
@@ -71,6 +105,11 @@ function loadMemoryCoreHealthApi(): BundledHealthApi {
 export function resolveBundledHealthCheckPluginStateMode(
   selection: BundledHealthCheckSelection,
 ): BundledHealthCheckPluginStateMode {
+  if (selection.updateReadiness !== undefined) {
+    // Update gates may inspect plugin-owned persistent state. Keep every phase on a private
+    // snapshot so a future tagged check cannot accidentally mutate the live pre-restart owner.
+    return "isolated";
+  }
   if (
     selection.includeAllChecks !== true &&
     (selection.onlyIds === undefined || selection.onlyIds.length === 0)
@@ -94,18 +133,28 @@ export function resolveBundledHealthCheckPluginStateMode(
 }
 
 /** Registers bundled health checks that are explicitly enabled by config and owner policy. */
-export function registerBundledHealthChecks(params: {
-  cfg: OpenClawConfig;
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
-  runWithPluginStateSnapshot?: <T>(
-    run: (pluginMetadataEnv: NodeJS.ProcessEnv) => Promise<T>,
-  ) => Promise<T>;
-}): void {
+export function registerBundledHealthChecks(
+  params: BundledHealthCheckParams & { updateReadiness?: "post-plugin" },
+): void {
+  for (const registration of HEALTH_CHECK_REGISTRATIONS) {
+    if (
+      params.updateReadiness !== undefined &&
+      registration.updateReadiness !== params.updateReadiness
+    ) {
+      continue;
+    }
+    registration.register(params);
+  }
+}
+
+function registerMemoryCoreHealthChecks(
+  params: BundledHealthCheckParams,
+  registerCheck: typeof registerHealthCheck,
+): void {
   const env = params.env ?? process.env;
   loadMemoryCoreHealthApi().registerMemoryCoreDoctorChecks?.({
     getHealthCheck,
-    registerHealthCheck,
+    registerHealthCheck: registerCheck,
     async inspectEmbeddingProviderSetup(providerParams) {
       const inspect = async (pluginMetadataEnv: NodeJS.ProcessEnv) => {
         const manifestRegistry: PluginManifestRegistry =
@@ -127,6 +176,13 @@ export function registerBundledHealthChecks(params: {
     },
     memoryCoreActive: isMemoryCoreActive(params.cfg),
   });
+}
+
+function registerCodexHealthChecks(
+  params: BundledHealthCheckParams,
+  registerCheck: typeof registerHealthCheck,
+): void {
+  const env = params.env ?? process.env;
   if (shouldRegisterCodexManagedHealth(params.cfg)) {
     const registry = loadPluginManifestRegistryForPluginRegistry({
       config: params.cfg,
@@ -151,28 +207,43 @@ export function registerBundledHealthChecks(params: {
         pluginRoot: owner.rootDir,
         artifactBasename: "api.js",
         origin: owner.origin === "bundled" ? "bundled" : "global",
-      }).registerCodexManagedAppServerDoctorChecks({ getHealthCheck, registerHealthCheck });
+      }).registerCodexManagedAppServerDoctorChecks({
+        getHealthCheck,
+        registerHealthCheck: registerCheck,
+      });
     }
   }
+}
+
+function registerPolicyHealthChecks(
+  params: BundledHealthCheckParams,
+  registerCheck: typeof registerHealthCheck,
+): void {
   if (shouldRegisterPolicyHealth(params)) {
     loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({
       dirName: "policy",
       artifactBasename: "api.js",
-    }).registerPolicyDoctorChecks?.({ registerHealthCheck });
+    }).registerPolicyDoctorChecks?.({ registerHealthCheck: registerCheck });
   }
+}
+
+function registerCuaHealthChecks(
+  params: BundledHealthCheckParams,
+  registerCheck: typeof registerHealthCheck,
+): void {
   if (shouldRegisterPluginHealth(params.cfg, "cua-computer")) {
     loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({
       dirName: "cua-computer",
       artifactBasename: "api.js",
-    }).registerCuaDriverDoctorChecks?.({ registerHealthCheck });
+    }).registerCuaDriverDoctorChecks?.({ registerHealthCheck: registerCheck });
   }
-  registerBundledWorkerProviderHealthChecks(params, env);
 }
 
 function registerBundledWorkerProviderHealthChecks(
-  params: { cfg: OpenClawConfig; cwd?: string },
-  env: NodeJS.ProcessEnv,
+  params: BundledHealthCheckParams,
+  registerCheck: typeof registerHealthCheck,
 ): void {
+  const env = params.env ?? process.env;
   const providerIds = collectConfiguredWorkerProviderIds(params.cfg);
   if (providerIds.length === 0) {
     return;
@@ -185,7 +256,10 @@ function registerBundledWorkerProviderHealthChecks(
     loadBundledPluginPublicArtifactModuleFromCandidatesSync<WorkerProviderHealthApi>({
       dirName: pluginId,
       artifactCandidates: ["doctor-health-api.js"],
-    })?.registerWorkerProviderDoctorChecks?.({ getHealthCheck, registerHealthCheck });
+    })?.registerWorkerProviderDoctorChecks?.({
+      getHealthCheck,
+      registerHealthCheck: registerCheck,
+    });
   }
 }
 

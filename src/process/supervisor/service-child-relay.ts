@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
@@ -59,11 +60,7 @@ export function runServiceChildRelay(): void {
       process.exitCode = 1;
       return;
     }
-    const anchorUrl = resolveRuntimeWorkerUrl({
-      currentModuleUrl: import.meta.url,
-      sourceWorkerName: "service-child-group-anchor",
-      distWorkerPath: "process/supervisor/service-child-group-anchor.js",
-    });
+    const anchorUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.serviceChildGroupAnchor);
     const stdio: StdioEntry[] = ["inherit", "inherit", "inherit"];
     while (stdio.length <= start.controlFd) {
       stdio.push("ignore");

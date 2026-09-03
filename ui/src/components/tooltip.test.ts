@@ -210,7 +210,7 @@ describe("openclaw-tooltip", () => {
     expectOpenCount(1);
   });
 
-  it("suppresses a tooltip that repeats fully visible trigger text", async () => {
+  it("suppresses repeated trigger text before opening and after content updates", async () => {
     const provider = createProvider();
     const { tooltip, trigger } = createTooltip("Claude Opus 4.7", "Claude Opus 4.7 Anthropic");
     provider.append(tooltip);
@@ -221,6 +221,15 @@ describe("openclaw-tooltip", () => {
     expectOpenCount(0);
     hoverTrigger(trigger);
     vi.runAllTimers();
+    expectOpenCount(0);
+
+    tooltip.content = "Additional model details";
+    await tooltip.updateComplete;
+    focusTrigger(trigger);
+    expectOpenCount(1);
+
+    tooltip.content = "Claude Opus 4.7";
+    await tooltip.updateComplete;
     expectOpenCount(0);
   });
 
@@ -368,6 +377,47 @@ describe("openclaw-tooltip", () => {
     vi.advanceTimersByTime(150);
     expect(webAwesomeTooltip(portaled.tooltip)?.open).toBe(false);
     expect(webAwesomeTooltip(scoped.tooltip)?.open).toBe(true);
+  });
+
+  it("consumes only an unclaimed Escape while a tooltip is active", async () => {
+    const { tooltip, trigger } = createTooltip("Keyboard hint");
+    document.body.append(tooltip);
+    await tooltip.updateComplete;
+    focusTrigger(trigger);
+    const downstream = vi.fn();
+    trigger.addEventListener("keydown", downstream);
+    const descriptionId = trigger.getAttribute("aria-describedby");
+
+    for (const key of ["Tab", "Escape"]) {
+      const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+      if (key === "Escape") {
+        event.preventDefault();
+      }
+      trigger.dispatchEvent(event);
+      expectOpenCount(1);
+    }
+    expect(downstream).toHaveBeenCalledTimes(2);
+
+    const escape = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    trigger.dispatchEvent(escape);
+    expectOpenCount(0);
+    expect(escape.defaultPrevented).toBe(true);
+    expect(downstream).toHaveBeenCalledTimes(2);
+    expect(trigger.getAttribute("aria-describedby")).toBe(descriptionId);
+    expect(document.getElementById(descriptionId ?? "")?.textContent).toBe("Keyboard hint");
+
+    const nextEscape = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    trigger.dispatchEvent(nextEscape);
+    expect(nextEscape.defaultPrevented).toBe(false);
+    expect(downstream).toHaveBeenCalledTimes(3);
   });
 
   it("honors per-tooltip hover intent while keyboard focus stays immediate", async () => {
@@ -554,6 +604,16 @@ describe("openclaw-tooltip", () => {
     expectOpenCount(1);
     first.tooltip.remove();
     expectOpenCount(0);
+    const escape = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    const downstream = vi.fn();
+    provider.addEventListener("keydown", downstream);
+    provider.dispatchEvent(escape);
+    expect(escape.defaultPrevented).toBe(false);
+    expect(downstream).toHaveBeenCalledOnce();
     vi.advanceTimersByTime(20);
 
     const second = createTooltip("Second tooltip");

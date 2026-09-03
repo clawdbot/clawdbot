@@ -33,6 +33,7 @@ describe("coercion helper declaration AST guard", () => {
       "};",
       "function normalizeAgentId() {}",
       "const isValidAgentId = () => true;",
+      "function containsAsciiControlCharacter() {}",
     ].join("\n");
 
     expect(findBannedCoercionHelperDeclarations(source, "src/example.ts")).toEqual([
@@ -46,6 +47,7 @@ describe("coercion helper declaration AST guard", () => {
       { file: "src/example.ts", kind: "property", line: 11, name: "readBoolean" },
       { file: "src/example.ts", kind: "function", line: 13, name: "normalizeAgentId" },
       { file: "src/example.ts", kind: "variable", line: 14, name: "isValidAgentId" },
+      { file: "src/example.ts", kind: "function", line: 15, name: "containsAsciiControlCharacter" },
     ]);
   });
 

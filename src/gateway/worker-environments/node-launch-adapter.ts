@@ -79,7 +79,6 @@ type NodeWorkerLaunchAdapterOptions = {
 };
 
 type OperationDeadline = {
-  expiresAtMs: number;
   signal: AbortSignal;
   remainingMs: () => number;
   dispose: () => void;
@@ -216,25 +215,36 @@ function createDeadline(params: {
   now: () => number;
   timeoutMs: number;
   signal?: AbortSignal;
+  parent?: OperationDeadline;
   label: string;
 }): OperationDeadline {
   if (!Number.isFinite(params.timeoutMs) || params.timeoutMs <= 0) {
     throw new Error(`${params.label} timeout must be a positive finite number`);
   }
   const controller = new AbortController();
-  const timer = setTimeout(
-    () => controller.abort(new Error(`${params.label} timed out`)),
-    params.timeoutMs,
-  );
-  timer.unref?.();
-  const signal = params.signal
-    ? AbortSignal.any([params.signal, controller.signal])
-    : controller.signal;
   const expiresAtMs = params.now() + params.timeoutMs;
+  const expire = () => {
+    params.parent?.remainingMs();
+    controller.abort(new Error(`${params.label} timed out`));
+  };
+  const timer = setTimeout(expire, params.timeoutMs);
+  timer.unref?.();
+  const parentSignal = params.parent?.signal ?? params.signal;
+  const signal = parentSignal
+    ? AbortSignal.any([parentSignal, controller.signal])
+    : controller.signal;
   return {
-    expiresAtMs,
     signal,
-    remainingMs: () => Math.max(0, expiresAtMs - params.now()),
+    remainingMs: () => {
+      // Clock reads can observe expiry before timers run. Publish the same abort,
+      // synchronizing the parent first so a launch timeout retains precedence.
+      params.parent?.remainingMs();
+      const remainingMs = Math.max(0, expiresAtMs - params.now());
+      if (remainingMs === 0) {
+        expire();
+      }
+      return remainingMs;
+    },
     dispose: () => clearTimeout(timer),
   };
 }
@@ -291,9 +301,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
       );
     }
     const remainingMs = params.deadline.remainingMs();
-    if (remainingMs <= 0 || params.deadline.signal.aborted) {
-      throw params.deadline.signal.reason ?? new Error("node worker operation timed out");
-    }
+    params.deadline.signal.throwIfAborted();
     const transport = options.getTransport();
     if (!transport) {
       throw new NodeWorkerLaunchTransportError(
@@ -384,9 +392,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
     deadline: OperationDeadline;
   }): Promise<number> => {
     const remainingMs = params.deadline.remainingMs();
-    if (remainingMs <= 0 || params.deadline.signal.aborted) {
-      throw params.deadline.signal.reason ?? new Error("node worker operation timed out");
-    }
+    params.deadline.signal.throwIfAborted();
     await raceNodeWorkerOperation(
       sleep(Math.min(params.delayMs, remainingMs), params.deadline.signal),
       params.deadline.signal,
@@ -460,7 +466,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
     const availabilityDeadline = createDeadline({
       now,
       timeoutMs: DEFAULT_AVAILABILITY_TIMEOUT_MS,
-      signal: deadline.signal,
+      parent: deadline,
       label: "node worker availability",
     });
     let mayHaveLaunched = false;

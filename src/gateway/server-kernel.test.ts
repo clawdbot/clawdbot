@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
+import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
@@ -10,15 +12,118 @@ import {
 } from "../plugins/runtime.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
 import { createGatewayKernel } from "./server-kernel.js";
+import type { GatewayClient } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 
 describe("createGatewayKernel", () => {
+  it("does not start recovered channels after close prelude begins", async () => {
+    const port = await getFreePort();
+    const state = await createOpenClawTestState({
+      label: "gateway-kernel-breaker-recovery-close",
+      layout: "home",
+      env: {
+        OPENCLAW_GATEWAY_PASSWORD: undefined,
+        OPENCLAW_GATEWAY_TOKEN: undefined,
+        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+        OPENCLAW_SKIP_CANVAS_HOST: "1",
+        OPENCLAW_SKIP_CHANNELS: undefined,
+        OPENCLAW_SKIP_CRON: "1",
+        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+        OPENCLAW_SKIP_PROVIDERS: undefined,
+        OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
+        VITEST: "1",
+      },
+    });
+    const originalPluginRegistry = captureActivePluginRegistrySnapshot();
+    const startAccount = vi.fn(async () => {});
+    const channelPlugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({
+        id: "telegram",
+        config: {
+          listAccountIds: (config) => Object.keys(config.channels?.telegram?.accounts ?? {}),
+          resolveAccount: (config, accountId) =>
+            config.channels?.telegram?.accounts?.[accountId ?? "default"] ?? {},
+          isConfigured: (account) =>
+            typeof (account as { botToken?: unknown }).botToken === "string",
+        },
+      }),
+      gateway: { startAccount },
+    };
+    const registry = createTestRegistry([
+      {
+        pluginId: channelPlugin.id,
+        plugin: channelPlugin,
+        source: "gateway-kernel-test",
+      },
+    ]);
+    registry.plugins.push(
+      createPluginRecord({
+        id: channelPlugin.id,
+        source: "gateway-kernel-test",
+        origin: "bundled",
+        enabled: true,
+        configSchema: false,
+      }),
+    );
+    let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
+    try {
+      stageActivePluginRegistry(registry, null, "default");
+      const token = "gateway-kernel-breaker-recovery-token";
+      await state.writeConfig({
+        gateway: {
+          auth: { mode: "token", token },
+          controlUi: { enabled: false },
+          port,
+        },
+        channels: {
+          telegram: {
+            accounts: {
+              default: { botToken: "telegram-breaker-recovery-token" },
+            },
+          },
+        },
+      });
+      state.applyEnv();
+      kernel = await createGatewayKernel(port, {
+        auth: { mode: "token", token },
+        bind: "loopback",
+        channelAutostartSuppression: {
+          reason: "crash-loop-breaker",
+          message: "safe mode",
+        },
+        controlUiEnabled: false,
+        sidecarStartup: "defer",
+        tryRecoverChannelAutostartSuppression: () => true,
+      });
+
+      await expect(kernel.channelManager.recoverAutostartSuppression()).resolves.toBe(true);
+      expect(startAccount).not.toHaveBeenCalled();
+
+      await kernel.beginClosePrelude();
+      kernel.releaseStartupAccountStarts();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+
+      expect(startAccount).not.toHaveBeenCalled();
+      expect(kernel.channelManager.isAutoRestartScheduled("telegram", "default")).toBe(false);
+    } finally {
+      try {
+        await kernel?.closeOnStartupFailure();
+      } finally {
+        restoreActivePluginRegistrySnapshot(originalPluginRegistry);
+        await state.cleanup();
+      }
+    }
+  });
+
   it("reports startup and readiness as draining during a direct close", async () => {
     const port = 19_789;
     const state = await createOpenClawTestState({
@@ -38,6 +143,7 @@ describe("createGatewayKernel", () => {
       },
     });
     const token = "gateway-kernel-direct-close-readiness-token";
+    const bootId = "gateway-kernel-direct-close";
     const configReloaderStop = createDeferred();
     let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
     try {
@@ -46,6 +152,7 @@ describe("createGatewayKernel", () => {
       });
       state.applyEnv();
       kernel = await createGatewayKernel(port, {
+        bootId,
         auth: { mode: "token", token },
         bind: "loopback",
         controlUiEnabled: false,
@@ -56,6 +163,25 @@ describe("createGatewayKernel", () => {
       const { getStartup, getReadiness } = kernel.createHttpTransportOptions();
       expect(getStartup()).toMatchObject({ ok: true, status: "started" });
       expect(getReadiness()).toMatchObject({ ready: true, failing: [] });
+      const reader = {
+        connect: {
+          minProtocol: 1,
+          maxProtocol: 1,
+          client: { id: "openclaw-control-ui", version: "test", platform: "web", mode: "webchat" },
+          role: "operator",
+          scopes: ["operator.read"],
+        },
+        authenticatedUserProfile: {
+          profileId: ensureProfileForEmail("mention-reader@example.test").id,
+          displayName: "Reader",
+          hasAvatar: false,
+          updatedAt: 1,
+        },
+      } satisfies GatewayClient;
+      expect(kernel.gatewayRequestContext.mentionInbox?.list(reader)).toMatchObject({
+        ok: true,
+        value: { gatewayInstanceId: bootId, items: [] },
+      });
 
       const closeFirstStop = vi.fn(async () => {});
       kernel.kernel.swapBonjourStop(closeFirstStop);
@@ -66,6 +192,10 @@ describe("createGatewayKernel", () => {
 
       expect(getStartup()).toMatchObject({ ok: false, status: "draining" });
       expect(getReadiness()).toMatchObject({ ready: false, failing: ["gateway-draining"] });
+      expect(kernel.gatewayRequestContext.mentionInbox?.list(reader)).toMatchObject({
+        ok: false,
+        error: { code: "UNAVAILABLE" },
+      });
       configReloaderStop.resolve();
       await closing;
       expect(closeFirstStop).toHaveBeenCalledOnce();
@@ -376,6 +506,7 @@ describe("createGatewayKernel", () => {
       ).resolves.toEqual({ runId: "kernel-run", status: "ok", summary: "cached" });
       expect(getActiveGatewayRootWorkCount()).toBe(0);
 
+      flushDiagnosticsTimeline();
       const timeline = (await fs.readFile(timelinePath, "utf8"))
         .trim()
         .split("\n")
@@ -387,6 +518,12 @@ describe("createGatewayKernel", () => {
           return attributes?.traceName ?? event.name;
         });
       expect(measureNames).toEqual([
+        "state.ownership",
+        "state.runtime-imports",
+        "state.schema-preflight",
+        "runtime.network-imports",
+        "runtime.network-bootstrap",
+        "config.runtime-imports",
         "config.snapshot",
         "config.snapshot.read",
         "config.snapshot.read.file",
@@ -409,19 +546,28 @@ describe("createGatewayKernel", () => {
         "config.auth.ensure",
         "config.auth.runtime-startup-overrides",
         "config.auth.secrets-activate",
+        "agents.github-profile-cleanup",
+        "plugins.bootstrap-imports",
         "startup.maintenance",
         "plugins.bootstrap",
+        "gateway.kernel-state",
         "runtime.config",
         "control-ui.root",
+        "terminal.launch-import",
+        "gateway.wizard-imports",
         "tls.runtime",
+        "gateway.channel-manager-import",
         "runtime.state",
         "gateway.shutdown-runtime-import",
-        "runtime.early",
-        "runtime.early.discovery",
+        "gateway.lifecycle",
+        "gateway.core-runtime",
         "runtime.post-early-imports",
         "runtime.subscriptions",
         "runtime.services",
         "gateway.handlers",
+        "runtime.early",
+        "runtime.early.discovery",
+        "gateway.request-runtime",
         "gateway.config-revision-key",
         "gateway.request-context",
       ]);
@@ -430,6 +576,7 @@ describe("createGatewayKernel", () => {
         await kernel?.closeOnStartupFailure();
       } finally {
         try {
+          flushDiagnosticsTimeline();
           await state.cleanup();
         } finally {
           if (capturedLoadedPluginRegistry) {

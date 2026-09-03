@@ -5,8 +5,10 @@ import type { TtsAutoMode } from "../../config/types.tts.js";
 import type { WorkerSessionPlacementRecord } from "../../gateway/worker-environments/placement-record.js";
 import type { SessionWorkerPlacementContext } from "../../gateway/worker-environments/session-placement-lifecycle.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
+import { isPluginOwnedBindingMetadata } from "../../plugins/conversation-binding-metadata.js";
 import type {
   PluginHookBeforeDispatchResult,
+  PluginHookReplyDispatchEvent,
   PluginHookReplyDispatchResult,
 } from "../../plugins/hook-types.js";
 import type { createHookRunner } from "../../plugins/hooks.js";
@@ -104,7 +106,10 @@ const hookMocks = vi.hoisted(() => ({
       (eventValue: unknown, _ctx: unknown) => Promise<PluginHookBeforeDispatchResult | undefined>
     >(async () => undefined),
     runReplyDispatch: vi.fn<
-      (eventValue: unknown, _ctx: unknown) => Promise<PluginHookReplyDispatchResult | undefined>
+      (
+        eventValue: PluginHookReplyDispatchEvent,
+        _ctx: unknown,
+      ) => Promise<PluginHookReplyDispatchResult | undefined>
     >(async () => undefined),
     runReplyPayloadSending: vi.fn(async () => undefined),
   },
@@ -115,12 +120,12 @@ const internalHookMocks = vi.hoisted(() => ({
 }));
 const acpMocks = vi.hoisted(() => ({
   listAcpSessionEntries: vi.fn(async () => []),
-  readAcpSessionEntry: vi.fn<(params: { sessionKey: string; cfg?: OpenClawConfig }) => unknown>(
-    () => null,
-  ),
-  readAcpSessionMeta: vi.fn<(params: { sessionKey: string; cfg?: OpenClawConfig }) => unknown>(
-    () => null,
-  ),
+  readAcpSessionEntry: vi.fn<
+    (params: { sessionKey: string; agentId?: string; cfg?: OpenClawConfig }) => unknown
+  >(() => null),
+  readAcpSessionMeta: vi.fn<
+    (params: { sessionKey: string; agentId?: string; cfg?: OpenClawConfig }) => unknown
+  >(() => null),
   getAcpRuntimeBackend: vi.fn<() => unknown>(() => null),
   upsertAcpSessionMeta: vi.fn<
     (params: {
@@ -614,12 +619,6 @@ vi.mock("../../plugins/conversation-binding.js", () => ({
     pluginConversationBindingMocks.shownFallbackNoticeBindingIds.has(
       JSON.stringify([scope?.channel, scope?.accountId, bindingId]),
     ),
-  isPluginOwnedSessionBindingRecord: (
-    record: SessionBindingRecord | null | undefined,
-  ): record is SessionBindingRecord =>
-    record?.metadata != null &&
-    typeof record.metadata === "object" &&
-    (record.metadata as { pluginBindingOwner?: string }).pluginBindingOwner === "plugin",
   markPluginBindingFallbackNoticeShown: (
     bindingId: string,
     scope?: { channel: string; accountId: string },
@@ -628,18 +627,16 @@ vi.mock("../../plugins/conversation-binding.js", () => ({
       JSON.stringify([scope?.channel, scope?.accountId, bindingId]),
     );
   },
-  toPluginConversationBinding: (record: SessionBindingRecord) => {
-    const metadata = (record.metadata ?? {}) as {
-      pluginId?: string;
-      pluginName?: string;
-      pluginRoot?: string;
-      data?: Record<string, unknown>;
-    };
+  toPluginConversationBinding: (record: SessionBindingRecord | null | undefined) => {
+    if (!record || !isPluginOwnedBindingMetadata(record.metadata)) {
+      return null;
+    }
+    const metadata = record.metadata;
     return {
       bindingId: record.bindingId,
-      pluginId: metadata.pluginId ?? "unknown-plugin",
+      pluginId: metadata.pluginId,
       pluginName: metadata.pluginName,
-      pluginRoot: metadata.pluginRoot ?? "",
+      pluginRoot: metadata.pluginRoot,
       channel: record.conversation.channel,
       accountId: record.conversation.accountId,
       conversationId: record.conversation.conversationId,
@@ -650,7 +647,7 @@ vi.mock("../../plugins/conversation-binding.js", () => ({
 }));
 vi.mock("./dispatch-acp-manager.runtime.js", () => ({
   getAcpSessionManager: () => acpManagerRuntimeMocks.getAcpSessionManager(),
-  readAcpSessionEntry: (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
+  readAcpSessionEntry: (params: { sessionKey: string; agentId?: string; cfg?: OpenClawConfig }) =>
     acpMocks.readAcpSessionEntry(params),
   getSessionBindingService: () => ({
     listBySession: (targetSessionKey: string) =>

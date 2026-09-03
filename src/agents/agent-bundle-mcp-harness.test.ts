@@ -92,7 +92,7 @@ vi.mock("./mcp-oauth.js", async (importOriginal) => {
 
 import {
   materializeRequesterScopedMcpToolsForHarnessRunCore,
-  materializeStaticMcpToolsForScheduledHarnessRunCore,
+  materializeStaticMcpToolsForHarnessRunCore,
 } from "./agent-bundle-mcp-harness.js";
 import { createRequesterMcpConnect } from "./agent-bundle-mcp-requester-connect.js";
 
@@ -202,14 +202,14 @@ beforeEach(() => {
   startAuthorization.mockReset();
 });
 
-describe("materializeStaticMcpToolsForScheduledHarnessRunCore", () => {
+describe("materializeStaticMcpToolsForHarnessRunCore", () => {
   it("materializes static tools without carrying requester identity and applies the stored cap", async () => {
     const runtime = makeRuntime({ sessionId: "scheduled", requesterSenderId: "unused" });
     delete runtime.requesterScope;
     runtime.peekCatalog()!.servers["user-mail"]!.codexApprovalMode = "approve";
     mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
 
-    const result = await materializeStaticMcpToolsForScheduledHarnessRunCore({
+    const result = await materializeStaticMcpToolsForHarnessRunCore({
       sessionId: "scheduled",
       workspaceDir: "/workspace",
       toolsAllow: ["user-mail__inbox"],
@@ -231,7 +231,7 @@ describe("materializeStaticMcpToolsForScheduledHarnessRunCore", () => {
     delete runtime.requesterScope;
     mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
 
-    const result = await materializeStaticMcpToolsForScheduledHarnessRunCore({
+    const result = await materializeStaticMcpToolsForHarnessRunCore({
       sessionId: "scheduled-denied",
       workspaceDir: "/workspace",
       toolsAllow: ["read"],
@@ -239,6 +239,72 @@ describe("materializeStaticMcpToolsForScheduledHarnessRunCore", () => {
 
     expect(result?.tools).toEqual([]);
     await result?.dispose();
+  });
+
+  it("gates interactive configured MCP before the original executor", async () => {
+    const runtime = makeRuntime({ sessionId: "interactive", requesterSenderId: "unused" });
+    delete runtime.requesterScope;
+    const callTool = vi.spyOn(runtime, "callTool");
+    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
+    let active: (() => boolean) | undefined;
+    const requestInteractiveCodexApproval = vi.fn(async (request) => {
+      active = request.isActive;
+      if (request.toolCallId === "denied") {
+        throw new Error("operator denied");
+      }
+    });
+
+    const result = await materializeStaticMcpToolsForHarnessRunCore({
+      sessionId: "interactive",
+      workspaceDir: "/workspace",
+      toolsAllow: ["user-mail__inbox"],
+      requestInteractiveCodexApproval,
+    });
+    const tool = result.tools[0]!;
+
+    await expect(tool.execute("denied", { folder: "private" })).rejects.toThrow("operator denied");
+    expect(callTool).not.toHaveBeenCalled();
+
+    await expect(tool.execute("allowed", { folder: "team" })).resolves.toBeDefined();
+    expect(callTool).toHaveBeenCalledOnce();
+    expect(callTool).toHaveBeenCalledWith("user-mail", "inbox", { folder: "team" });
+    expect(requestInteractiveCodexApproval).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        safeToolName: "user-mail__inbox",
+        toolCallId: "allowed",
+        serverName: "user-mail",
+        toolName: "inbox",
+        mode: "auto",
+      }),
+    );
+    expect(active?.()).toBe(false);
+    await result.dispose();
+  });
+
+  it.each([
+    { name: "full permission", mode: undefined, grant: false, approvalCalls: 0 },
+    { name: "explicit prompt", mode: "prompt" as const, grant: false, approvalCalls: 1 },
+    { name: "durable grant", mode: "auto" as const, grant: true, approvalCalls: 0 },
+  ])("preserves $name on the interactive surface", async ({ mode, grant, approvalCalls }) => {
+    const runtime = makeRuntime({ sessionId: "interactive-policy", requesterSenderId: "unused" });
+    delete runtime.requesterScope;
+    runtime.peekCatalog()!.servers["user-mail"]!.codexApprovalMode = mode;
+    mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
+    const requestInteractiveCodexApproval = vi.fn(async () => undefined);
+
+    const result = await materializeStaticMcpToolsForHarnessRunCore({
+      sessionId: "interactive-policy",
+      workspaceDir: "/workspace",
+      toolsAllow: ["user-mail__inbox"],
+      autoApproveCodexAppServerApprovals: true,
+      projectedMcpServers: grant
+        ? { "user-mail": { tools: { inbox: { approval_mode: "approve" } } } }
+        : undefined,
+      requestInteractiveCodexApproval,
+    });
+    await expect(result.tools[0]!.execute("call", {})).resolves.toBeDefined();
+    expect(requestInteractiveCodexApproval).toHaveBeenCalledTimes(approvalCalls);
+    await result.dispose();
   });
 
   it("binds persistent app views to the same finite scheduled cap", async () => {
@@ -279,7 +345,7 @@ describe("materializeStaticMcpToolsForScheduledHarnessRunCore", () => {
     const callTool = vi.spyOn(runtime, "callTool");
     mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
 
-    const result = await materializeStaticMcpToolsForScheduledHarnessRunCore({
+    const result = await materializeStaticMcpToolsForHarnessRunCore({
       sessionId: "scheduled-app",
       sessionKey: "agent:main:main",
       agentId: "main",
@@ -352,13 +418,15 @@ describe("materializeStaticMcpToolsForScheduledHarnessRunCore", () => {
     });
     const callTool = vi.spyOn(runtime, "callTool");
     mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
+    const requestInteractiveCodexApproval = vi.fn(async () => undefined);
 
-    const result = await materializeStaticMcpToolsForScheduledHarnessRunCore({
+    const result = await materializeStaticMcpToolsForHarnessRunCore({
       sessionId: "scheduled-app-approval",
       sessionKey: "agent:main:main",
       agentId: "main",
       workspaceDir: "/workspace",
       toolsAllow: ["*"],
+      requestInteractiveCodexApproval,
     });
     const callResult = await result.tools[0]!.execute("call-app", {});
     const viewId = (callResult.details as { mcpAppPreview?: { mcpApp?: { viewId?: string } } })
@@ -380,16 +448,16 @@ describe("materializeStaticMcpToolsForScheduledHarnessRunCore", () => {
       ),
     ).resolves.toBeDefined();
     expect(callTool).toHaveBeenCalledTimes(2);
+    expect(requestInteractiveCodexApproval).not.toHaveBeenCalled();
     await result.dispose();
   });
 
-  it("allows prompt-mode app tools only under host-confirmed yolo", async () => {
+  it("allows unannotated app tools under host-confirmed full permission", async () => {
     const runtime = makeRuntime({ sessionId: "scheduled-app-yolo", requesterSenderId: "unused" });
     runtime.sessionKey = "agent:main:main";
     delete runtime.requesterScope;
     const catalog = runtime.peekCatalog()!;
     catalog.servers["user-mail"]!.toolCount = 2;
-    catalog.servers["user-mail"]!.codexApprovalMode = "prompt";
     catalog.tools = [
       {
         serverName: "user-mail",
@@ -420,7 +488,7 @@ describe("materializeStaticMcpToolsForScheduledHarnessRunCore", () => {
     });
     mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
 
-    const result = await materializeStaticMcpToolsForScheduledHarnessRunCore({
+    const result = await materializeStaticMcpToolsForHarnessRunCore({
       sessionId: "scheduled-app-yolo",
       sessionKey: "agent:main:main",
       agentId: "main",
@@ -445,7 +513,7 @@ describe("materializeStaticMcpToolsForScheduledHarnessRunCore", () => {
     runtime.getCatalog = async () => emptyCatalog;
     mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
 
-    const result = await materializeStaticMcpToolsForScheduledHarnessRunCore({
+    const result = await materializeStaticMcpToolsForHarnessRunCore({
       sessionId: "scheduled-empty",
       workspaceDir: "/workspace",
       toolsAllow: ["*"],
@@ -476,7 +544,7 @@ describe("materializeStaticMcpToolsForScheduledHarnessRunCore", () => {
     runtime.getCatalog = async () => failedCatalog;
     mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
 
-    const result = await materializeStaticMcpToolsForScheduledHarnessRunCore({
+    const result = await materializeStaticMcpToolsForHarnessRunCore({
       sessionId: "scheduled-diagnostic",
       workspaceDir: "/workspace",
       toolsAllow: ["*"],
@@ -495,7 +563,7 @@ describe("materializeStaticMcpToolsForScheduledHarnessRunCore", () => {
     mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
     const callTool = vi.spyOn(runtime, "callTool");
 
-    const result = await materializeStaticMcpToolsForScheduledHarnessRunCore({
+    const result = await materializeStaticMcpToolsForHarnessRunCore({
       sessionId: "scheduled-prompt",
       workspaceDir: "/workspace",
       toolsAllow: ["user-mail__inbox"],
@@ -503,27 +571,40 @@ describe("materializeStaticMcpToolsForScheduledHarnessRunCore", () => {
 
     expect(result.tools).toEqual([]);
     expect(result.diagnosticNotice).toContain("user-mail/inbox");
-    expect(result.diagnosticNotice).toContain('defaultToolsApprovalMode="approve"');
+    expect(result.diagnosticNotice).toContain(
+      "openclaw mcp configure user-mail --approval approve",
+    );
     expect(callTool).not.toHaveBeenCalled();
     await result?.dispose();
   });
 
-  it("bypasses scheduled MCP prompting only for the host-confirmed yolo profile", async () => {
+  it.each([
+    { mode: undefined, allowed: true },
+    { mode: "auto" as const, allowed: false },
+    { mode: "prompt" as const, allowed: false },
+    { mode: "approve" as const, allowed: true },
+  ])("honors explicit $mode in scheduled full-permission sessions", async ({ mode, allowed }) => {
     const runtime = makeRuntime({ sessionId: "scheduled-yolo", requesterSenderId: "unused" });
     delete runtime.requesterScope;
-    runtime.peekCatalog()!.servers["user-mail"]!.codexApprovalMode = "prompt";
+    runtime.peekCatalog()!.servers["user-mail"]!.codexApprovalMode = mode;
     mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
     const callTool = vi.spyOn(runtime, "callTool");
 
-    const result = await materializeStaticMcpToolsForScheduledHarnessRunCore({
+    const result = await materializeStaticMcpToolsForHarnessRunCore({
       sessionId: "scheduled-yolo",
       workspaceDir: "/workspace",
       toolsAllow: ["user-mail__inbox"],
       autoApproveCodexAppServerApprovals: true,
     });
 
-    await expect(result.tools[0]!.execute("call-1", {})).resolves.toBeDefined();
-    expect(callTool).toHaveBeenCalledOnce();
+    if (allowed) {
+      await expect(result.tools[0]!.execute("call-1", {})).resolves.toBeDefined();
+      expect(callTool).toHaveBeenCalledOnce();
+    } else {
+      expect(result.tools).toEqual([]);
+      expect(result.diagnosticNotice).toContain("user-mail/inbox");
+      expect(callTool).not.toHaveBeenCalled();
+    }
     await result.dispose();
   });
 
@@ -541,7 +622,7 @@ describe("materializeStaticMcpToolsForScheduledHarnessRunCore", () => {
     mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
     const callTool = vi.spyOn(runtime, "callTool");
 
-    const result = await materializeStaticMcpToolsForScheduledHarnessRunCore({
+    const result = await materializeStaticMcpToolsForHarnessRunCore({
       sessionId: `scheduled-${mode}`,
       workspaceDir: "/workspace",
       toolsAllow: ["user-mail__inbox"],
@@ -558,7 +639,7 @@ describe("materializeStaticMcpToolsForScheduledHarnessRunCore", () => {
     mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
     const callTool = vi.spyOn(runtime, "callTool");
 
-    const result = await materializeStaticMcpToolsForScheduledHarnessRunCore({
+    const result = await materializeStaticMcpToolsForHarnessRunCore({
       sessionId: "scheduled-unknown",
       workspaceDir: "/workspace",
       toolsAllow: ["user-mail__inbox"],
@@ -566,7 +647,9 @@ describe("materializeStaticMcpToolsForScheduledHarnessRunCore", () => {
 
     expect(result.tools).toEqual([]);
     expect(result.diagnosticNotice).toContain("user-mail/inbox");
-    expect(result.diagnosticNotice).toContain('defaultToolsApprovalMode="approve"');
+    expect(result.diagnosticNotice).toContain(
+      "openclaw mcp configure user-mail --approval approve",
+    );
     expect(callTool).not.toHaveBeenCalled();
     await result?.dispose();
   });

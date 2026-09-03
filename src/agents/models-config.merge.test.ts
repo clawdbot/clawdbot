@@ -135,7 +135,9 @@ describe("models-config merge helpers", () => {
     expect(
       mergeProviderModels(implicit, explicit, {
         providerId: "ollama",
-        sourceModelInputOmissions: new Set(["ollama/qwen3-vl:latest"]),
+        sourceModelFields: new Map([
+          ["ollama/qwen3-vl:latest", { inputOmitted: true, cost: undefined }],
+        ]),
       }).models?.[0]?.input,
     ).toEqual(["text", "image"]);
   });

@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveQueuedReplyExecutionConfig } from "../auto-reply/reply/agent-runner-utils.js";
+import { resolveCommandConfigWithSecrets } from "../cli/command-config-resolution.js";
+import { getTtsCommandSecretTargetIds } from "../cli/command-secret-targets.js";
 import * as configIo from "../config/io.js";
 import {
   cloneConfigWithResolutionFacts,
@@ -14,7 +16,7 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ModelsConfigSchema } from "../config/zod-schema.core.js";
-import { setPathCreateStrict } from "../secrets/path-utils.js";
+import { getPath, setPathCreateStrict } from "../secrets/path-utils.js";
 import * as secretResolver from "../secrets/resolve.js";
 import { resolveCommandSecretsFromActiveRuntimeSnapshot } from "../secrets/runtime-command-secrets.js";
 import {
@@ -111,7 +113,7 @@ afterEach(async () => {
 });
 
 describe("agent execution respects prepared secret owners", () => {
-  it("reads active config without copying reload-only plugin metadata", async () => {
+  it("reuses active config without copying source or reload-only plugin metadata", async () => {
     const config: OpenClawConfig = {
       plugins: { enabled: false },
       agents: { defaults: { workspace: "/fixture/workspace" } },
@@ -147,13 +149,9 @@ describe("agent execution respects prepared secret owners", () => {
 
     const result = await resolveAgentRuntimeConfig(runtime);
 
-    expect(result.cfg).toBe(active?.config);
-    expect(result.loadedRaw).toBe(result.cfg);
-    expect(result.sourceConfig).toEqual(config);
-    expect(result.sourceConfig).not.toBe(active?.sourceConfig);
-    expect(getConfigResolutionFacts(result.sourceConfig)).toBe(facts);
-    result.sourceConfig.agents!.defaults!.workspace = "/fixture/changed-by-caller";
-    expect(active?.sourceConfig.agents?.defaults?.workspace).toBe("/fixture/workspace");
+    expect(clone).not.toHaveBeenCalledWith(active?.sourceConfig);
+    expect(result).toBe(active?.config);
+    expect(getConfigResolutionFacts(result)).toBe(facts);
     expect(getRuntimeConfigSnapshotMetadata()?.revision).toBe(revision);
     expect(clone).not.toHaveBeenCalledWith(manifestRegistry);
   });
@@ -167,7 +165,7 @@ describe("agent execution respects prepared secret owners", () => {
       const config =
         entry === "reply"
           ? await resolveQueuedReplyExecutionConfig(snapshot.sourceConfig)
-          : (await resolveAgentRuntimeConfig(runtime)).cfg;
+          : await resolveAgentRuntimeConfig(runtime);
       expect(config).toBe(getRuntimeConfigSnapshot());
       expect(config.models?.providers?.healthy?.apiKey).toBe("prepared-fixture-key");
       expect(config.models?.providers?.ollama?.apiKey).toEqual(
@@ -252,7 +250,7 @@ describe("agent execution respects prepared secret owners", () => {
       vi.stubEnv("OLLAMA_API_KEY", "ambient-fixture-key");
       for (const config of [
         await resolveQueuedReplyExecutionConfig(snapshot.sourceConfig),
-        (await resolveAgentRuntimeConfig(runtime)).cfg,
+        await resolveAgentRuntimeConfig(runtime),
       ]) {
         await expect(
           resolveApiKeyForProviderCore({
@@ -323,7 +321,7 @@ describe("agent execution respects prepared secret owners", () => {
       expect(getActiveSecretsRuntimeConfigSnapshot()?.configRefsPrepared).toBe(true);
       for (const config of [
         await resolveQueuedReplyExecutionConfig(snapshot.sourceConfig),
-        (await resolveAgentRuntimeConfig(runtime)).cfg,
+        await resolveAgentRuntimeConfig(runtime),
       ]) {
         expect(config.skills).toEqual(source.skills);
         await expect(
@@ -467,7 +465,7 @@ describe("agent execution respects prepared secret owners", () => {
       resolveAgentRuntimeConfig(runtime, {
         runtimeChannelSecretScope: { channel: "telegram", accountId: "healthy" },
       }),
-    ).resolves.toMatchObject({ cfg: snapshot.config });
+    ).resolves.toEqual(snapshot.config);
     expect(callGatewayMock).not.toHaveBeenCalled();
     await expect(
       resolveQueuedReplyExecutionConfig(snapshot.sourceConfig, {
@@ -484,6 +482,49 @@ describe("agent execution respects prepared secret owners", () => {
       resolveAgentRuntimeConfig(runtime, { runtimeTargetsChannelSecrets: true }),
     ).rejects.toThrow("channels.telegram.accounts.cold.botToken is unresolved");
   });
+
+  it.each([
+    ["global", "agent"],
+    ["agent", "agent"],
+    ["global", "tts"],
+    ["agent", "tts"],
+  ] as const)(
+    "resolves a persona-only %s SecretRef for local %s commands",
+    async (scope, command) => {
+      const config: OpenClawConfig = { plugins: { enabled: false } };
+      const keyPath = [
+        ...(scope === "agent" ? ["agents", "entries", "reader", "tts"] : ["tts"]),
+        "personas",
+        "reader.uk",
+        "providers",
+        "mock",
+        "apiKey",
+      ];
+      const ref = { source: "env", provider: "default", id: "TEST_TTS_PERSONA_ONLY_KEY" } as const;
+      setPathCreateStrict(config, keyPath, ref);
+      setRuntimeConfigSnapshot(config, config);
+      vi.spyOn(configIo, "readConfigFileSnapshotForWrite").mockRejectedValue(
+        new Error("fixture has no source file"),
+      );
+      callGatewayMock.mockRejectedValue(new Error("fixture gateway offline"));
+      vi.stubEnv("TEST_TTS_PERSONA_ONLY_KEY", "persona-only-fixture-key");
+
+      const resolved =
+        command === "agent"
+          ? await resolveAgentRuntimeConfig(runtime)
+          : (
+              await resolveCommandConfigWithSecrets({
+                config,
+                commandName: "infer tts convert",
+                targetIds: getTtsCommandSecretTargetIds(),
+                runtime,
+              })
+            ).resolvedConfig;
+
+      expect(getPath(resolved, keyPath)).toBe("persona-only-fixture-key");
+      expect(getPath(config, keyPath)).toEqual(ref);
+    },
+  );
 
   it("does not resolve unrelated channel, plugin, or Gateway refs for standalone nondelivery", async () => {
     const config = providerConfig();
@@ -510,10 +551,10 @@ describe("agent execution respects prepared secret owners", () => {
     vi.stubEnv("TEST_HEALTHY_PROVIDER_KEY", "local-fixture-key");
     const resolveRef = vi.spyOn(secretResolver, "resolveSecretRefValue");
     const result = await resolveAgentRuntimeConfig(runtime);
-    expect(result.cfg.models?.providers?.healthy?.apiKey).toBe("local-fixture-key");
-    expect(result.cfg.channels).toEqual(config.channels);
-    expect(result.cfg.gateway).toEqual(config.gateway);
-    expect(result.cfg.plugins).toEqual(config.plugins);
+    expect(result.models?.providers?.healthy?.apiKey).toBe("local-fixture-key");
+    expect(result.channels).toEqual(config.channels);
+    expect(result.gateway).toEqual(config.gateway);
+    expect(result.plugins).toEqual(config.plugins);
     expect(resolveRef.mock.calls.map(([ref]) => ref.id)).toEqual(["TEST_HEALTHY_PROVIDER_KEY"]);
   });
 });

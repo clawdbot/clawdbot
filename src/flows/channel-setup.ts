@@ -146,7 +146,9 @@ export async function setupChannels(
     ...options?.accountIds,
   };
   const scopedPluginsById = new Map<ChannelChoice, ChannelSetupPlugin>();
-  const resolveWorkspaceDir = () => resolveChannelSetupWorkspaceDir(next);
+  let preparedWorkspaceDir = options?.workspaceDir;
+  const resolveWorkspaceDir = () =>
+    (preparedWorkspaceDir ??= resolveChannelSetupWorkspaceDir(next));
   const rememberScopedPlugin = (plugin: ChannelSetupPlugin) => {
     const channel = plugin.id;
     scopedPluginsById.set(channel, plugin);
@@ -265,6 +267,7 @@ export async function setupChannels(
     ? { statusByChannel: new Map<ChannelChoice, ChannelSetupStatus>(), statusLines: [] }
     : await collectChannelStatus({
         cfg: next,
+        workspaceDir: resolveWorkspaceDir(),
         options,
         accountOverrides,
         installedPlugins: listVisibleInstalledPlugins(),
@@ -1027,6 +1030,7 @@ export async function setupChannels(
 
   const selectedLines = resolveChannelSelectionNoteLines({
     cfg: next,
+    workspaceDir: resolveWorkspaceDir(),
     installedPlugins: listVisibleInstalledPlugins(),
     selection,
   });

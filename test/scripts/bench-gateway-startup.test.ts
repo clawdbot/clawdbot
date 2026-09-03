@@ -5,10 +5,13 @@ import { createServer, type RequestListener } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-gateway-startup.ts";
 import { isStartupTraceDuration } from "../../scripts/lib/gateway-startup-trace-ranking.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { registerStopChildBehaviorTests } from "./bench-gateway-child-test-support.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function listenOnLoopback(handler: RequestListener) {
   const server = createServer(handler);
@@ -146,6 +149,33 @@ describe("gateway startup benchmark script", () => {
 
     expect(env.OPENCLAW_LOCAL_CHECK).toBeUndefined();
     expect(env.OPENCLAW_GATEWAY_STARTUP_TRACE).toBe("1");
+  });
+
+  it("forces incident packaged-plugin cases to load built plugin entries", () => {
+    const benchCase = testing.parseOptions(["--case", "incidentCombined"]).cases[0];
+    if (!benchCase) {
+      throw new Error("expected combined incident benchmark case");
+    }
+
+    const env = testing.sanitizedEnv(
+      "/tmp/openclaw-bench",
+      "/tmp/openclaw-bench/config.json",
+      benchCase,
+    );
+
+    expect(env.OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK).toBe("1");
+    expect(env.OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS).toBeUndefined();
+  });
+
+  it("requires the full packaged plugin inventory even when a build filter is set", () => {
+    const filteredEnv = { ...process.env, OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "telegram" };
+
+    expect(testing.listIncidentPackagedPluginArtifacts(filteredEnv)).toEqual(
+      testing.listIncidentPackagedPluginArtifacts({
+        ...process.env,
+        OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: undefined,
+      }),
+    );
   });
 
   it("classifies HTTP listen and gateway ready logs separately", () => {
@@ -347,6 +377,53 @@ describe("gateway startup benchmark script", () => {
     expect(testing.collectResultFailures([result], { processMetricsRequired: true })).toEqual([]);
   });
 
+  it("enforces the combined incident readiness budgets", () => {
+    const result = testing.summarizeCase({ config: {}, id: "incidentCombined", name: "incident" }, [
+      {
+        completionMs: 60_000,
+        cpuCoreRatio: 0.5,
+        cpuMs: 100,
+        exitCode: 0,
+        firstOutputMs: 1,
+        gatewayReadyLogLine: "[gateway] ready",
+        gatewayReadyLogMs: 60_000,
+        healthz: {
+          firstErrorKind: null,
+          firstRecoveryMs: 30_000,
+          ms: 30_000,
+          status: 200,
+          transitions: [],
+        },
+        httpListenLogLine: "[gateway] http server listening (0 plugins)",
+        httpListenLogMs: 5,
+        maxRssMb: 120,
+        outputTail: "",
+        readyz: {
+          firstErrorKind: null,
+          firstRecoveryMs: 60_000,
+          ms: 60_000,
+          status: 200,
+          transitions: [],
+        },
+        signal: null,
+        startupTrace: {},
+      },
+    ]);
+
+    expect(testing.collectResultFailures([result], { processMetricsRequired: true })).toEqual([
+      {
+        id: "incidentCombined",
+        reason: "/healthz p95 30000.0ms must be under 30000.0ms",
+        sampleIndex: 0,
+      },
+      {
+        id: "incidentCombined",
+        reason: "/readyz p95 60000.0ms must be under 60000.0ms",
+        sampleIndex: 0,
+      },
+    ]);
+  });
+
   it("flags samples that become ready and then die from a signal", () => {
     const result = testing.summarizeCase({ config: {}, id: "demo", name: "demo" }, [
       {
@@ -499,6 +576,81 @@ describe("gateway startup benchmark script", () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("builds a bounded incident fixture before the startup timer begins", async () => {
+    const root = tempDirs.make("openclaw-incident-bench-test-");
+    await testing.writeIncidentFixture(root, {
+      kind: "combined",
+      auditRowCount: 2_000,
+      workspaceFileBytes: 32,
+      workspaceFileCount: 6,
+    });
+    const { DatabaseSync } = await import("node:sqlite");
+    const statePath = path.join(root, "state", "state", "openclaw.sqlite");
+    const state = new DatabaseSync(statePath, { readOnly: true });
+    try {
+      expect(state.prepare("SELECT count(*) AS count FROM audit_events").get()).toEqual({
+        count: 1_000,
+      });
+      const freelist = state.prepare("PRAGMA freelist_count").get() as { freelist_count: number };
+      expect(freelist.freelist_count).toBeGreaterThan(0);
+      expect(
+        state.prepare("SELECT app_version FROM schema_meta WHERE meta_key = 'primary'").get(),
+      ).toEqual({
+        app_version: null,
+      });
+    } finally {
+      state.close();
+    }
+    for (let index = 1; index <= 8; index += 1) {
+      const agent = new DatabaseSync(
+        path.join(
+          root,
+          "state",
+          "agents",
+          `incident-agent-${String(index).padStart(2, "0")}`,
+          "agent",
+          "openclaw-agent.sqlite",
+        ),
+        { readOnly: true },
+      );
+      try {
+        expect(
+          agent.prepare("SELECT app_version FROM schema_meta WHERE meta_key = 'primary'").get(),
+        ).toEqual({
+          app_version: null,
+        });
+      } finally {
+        agent.close();
+      }
+    }
+    expect(
+      fs.statSync(
+        path.join(
+          root,
+          "workspaces",
+          "agent-01",
+          "incident-artifacts",
+          "batch-000",
+          "artifact-000000.bin",
+        ),
+      ).size,
+    ).toBe(32);
+  });
+
+  it("removes the benchmark fixture when a sample fails", async () => {
+    let fixtureRoot = "";
+
+    await expect(
+      testing.withGatewayBenchRoot(async (root) => {
+        fixtureRoot = root;
+        fs.writeFileSync(path.join(root, "fixture"), "test");
+        throw new Error("fixture failure");
+      }),
+    ).rejects.toThrow("fixture failure");
+
+    expect(fs.existsSync(fixtureRoot)).toBe(false);
   });
 
   it("builds a deterministic prepared-runtime catalog stall case", () => {
