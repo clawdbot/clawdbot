@@ -2567,10 +2567,6 @@ wa-dropdown.session-menu::part(menu) {
   background: var(--wa-color-surface-raised);
 }
 
-.session-menu--compact .session-menu__chevron {
-  display: inline-flex;
-}
-
 html[dir="rtl"] .session-menu__chevron,
 html[dir="rtl"] .session-menu__back > .session-menu__icon {
   transform: scaleX(-1);
@@ -2659,11 +2655,6 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
    that margin as the icon column instead of stacking into a ~17px gutter. */
 wa-dropdown-item.session-menu__item {
   gap: 0;
-}
-
-.session-menu__item::part(submenu) {
-  max-height: calc(100dvh - 16px);
-  overflow: auto;
 }
 
 /* The icon slot wrapper is a block-level flex item, so its inline child sits on

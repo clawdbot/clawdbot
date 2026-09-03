@@ -13,6 +13,7 @@ import {
 import { renderSessionEditorOptions, renderSessionGroupOptions } from "./session-menu-options.ts";
 import type { SessionCreatedActor, SessionOwnerOption } from "./session-owner-chip.ts";
 import { SessionOwnerMenu } from "./session-owner-menu.ts";
+import "../styles/sidebar-menus.css";
 
 export type SessionMenuData = {
   label: string;

@@ -35,5 +35,5 @@ export function createSessionOwnerMenuHarness(
     scope: "per-sender",
     agents: [{ id: "research:one", name: agentName }],
   });
-  return { context, request, publish: gateway.publish };
+  return { context, request, publish: gateway.publish.bind(gateway) };
 }
