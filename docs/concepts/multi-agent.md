@@ -18,9 +18,9 @@ Each agent has its own:
 
 - **Workspace**: files, `AGENTS.md`/`SOUL.md`/`USER.md`, local notes, persona rules.
 - **State directory** (`agentDir`): auth profiles, model registry, per-agent config.
-- **Session store**: chat history and routing state in `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`.
+- **Session store**: chat history and routing state in `<agentDir>/openclaw-agent.sqlite`.
 
-Auth profiles are per-agent, read from:
+Auth profiles are per-agent, read from `<agentDir>/openclaw-agent.sqlite`. With the default layout, that resolves to:
 
 ```text
 ~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite
@@ -54,7 +54,7 @@ when personas must not share compiled wiki knowledge.
 | Default agent's workspace        | `<stateDir>/workspace` (`~/.openclaw-<profile>/workspace` for a named profile)         | `agents.entries.*.workspace`, then `agents.defaults.workspace`, or `OPENCLAW_WORKSPACE_DIR` |
 | Other agents' workspace          | `<stateDir>/workspace-<agentId>` (or `<agents.defaults.workspace>/<agentId>` when set) | `agents.entries.*.workspace`                                                                |
 | Agent dir                        | `~/.openclaw/agents/<agentId>/agent`                                                   | `agents.entries.*.agentDir`                                                                 |
-| Sessions and transcripts         | `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`                             | —                                                                                           |
+| Sessions and transcripts         | `<agentDir>/openclaw-agent.sqlite`                                                     | `agents.entries.*.agentDir`                                                                 |
 | Legacy/archive session artifacts | `~/.openclaw/agents/<agentId>/sessions`                                                | —                                                                                           |
 
 ### Single-agent mode (default)
@@ -62,7 +62,7 @@ when personas must not share compiled wiki knowledge.
 If you configure nothing, OpenClaw runs one agent:
 
 - `agentId` defaults to `main`.
-- Sessions key as `agent:main:<mainKey>` (default `mainKey` is `main`).
+- The main session key is `agent:main:main`.
 - Workspace defaults to `<stateDir>/workspace` (`~/.openclaw/workspace` for the default install and `~/.openclaw-<profile>/workspace` for a named profile).
 - State defaults to `~/.openclaw/agents/main/agent`.
 
@@ -108,7 +108,7 @@ the configured roster, its children appear at the root of the tree.
     openclaw agents add social
     ```
 
-    Each agent gets its own workspace with `SOUL.md`, `AGENTS.md`, and optional `USER.md`, plus a dedicated `agentDir` and session store under `~/.openclaw/agents/<agentId>`.
+    Each agent gets its own workspace with `SOUL.md`, `AGENTS.md`, and optional `USER.md`, plus a dedicated `agentDir` and session store. By default, those agent files live under `~/.openclaw/agents/<agentId>`.
 
   </Step>
   <Step title="Create channel accounts">
@@ -143,7 +143,7 @@ Each configured `agentId` is a distinct persona boundary for core agent state:
 
 - Different accounts per channel (per `accountId`).
 - Different personalities (per-agent `AGENTS.md`/`SOUL.md`).
-- Separate auth and sessions, with cross-agent access enabled only through explicit features or plugin configuration.
+- Separate auth and sessions, with cross-agent session access on by default and governed by `tools.agentToAgent`. Narrow session visibility with `tools.sessions.visibility`, restrict agent pairs with `tools.agentToAgent.allow`, or set `tools.agentToAgent.enabled: false` to block ordinary cross-agent access. Requester-owned native subagent and ACP child sessions stay reachable under `tree` or `all` visibility; use separate gateways for strict separation.
 
 This lets multiple people share one Gateway while keeping core agent state separate.
 
@@ -234,6 +234,22 @@ Bindings are deterministic and most-specific wins. See [Channel routing](/channe
 
 For existing multi-agent configs, `openclaw doctor --fix` materializes legacy ambient default routing into channel-wide bindings plus explicit heartbeat, Custodian, and Talk targets. Single-agent configs are unchanged.
 
+For a multi-agent roster defined directly in the main config file without a
+legacy `default: true` marker, Doctor adds `agents.ownership: "explicit"` for
+both keyed `agents.entries` and older `agents.list` rosters, including with
+`--fix --non-interactive`. Existing bindings and per-surface owners remain
+unchanged. If an account has no fallback route but its matchable narrower bindings
+all explicitly name one configured agent, Doctor adds an account-scoped binding for that
+agent. It does not borrow ownership from another account or channel, choose
+between conflicting owners, or assign other unowned surfaces.
+
+When migrating a legacy `agents.list` roster without a default marker, Doctor
+also pins the first agent's inherited workspace to `agents.entries.<id>.workspace`. Its customized instructions
+and historical `memory/` notes remain in their original directory. Explicit
+workspaces stay authoritative. If an earlier upgrade already left two edited
+workspaces, select the intended per-agent workspace and reconcile their contents
+from your backups; Doctor does not merge directories.
+
 ## Multiple accounts / phone numbers
 
 Channels that support multiple accounts (e.g. WhatsApp) use `accountId` to identify each login. Each `accountId` routes to its own agent, so one server can host multiple phone numbers without mixing sessions.
@@ -247,7 +263,7 @@ Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imess
 - `agentId`: one "brain" (workspace, per-agent auth, per-agent session store).
 - `accountId`: one channel account instance (e.g. WhatsApp account `personal` vs `biz`).
 - `binding`: routes inbound messages to an `agentId` by `(channel, accountId, peer)`, and optionally guild/team ids.
-- Direct chats collapse to `agent:<agentId>:<mainKey>` (per-agent "main"; see `session.mainKey`).
+- Direct chats collapse to `agent:<agentId>:main` by default (the per-agent [main session](/concepts/main-session)).
 
 ## Platform examples
 
@@ -385,10 +401,10 @@ Channels supporting multiple accounts: `discord`, `feishu`, `googlechat`, `imess
         },
       ],
 
-      // Off by default: agent-to-agent messaging must be explicitly enabled + allowlisted.
+      // On by default. Omitted/empty `allow` permits every agent pair;
+      // list requester and target ids to restrict access, or set enabled: false to turn it off.
       tools: {
         agentToAgent: {
-          enabled: false,
           allow: ["home", "work"],
         },
       },

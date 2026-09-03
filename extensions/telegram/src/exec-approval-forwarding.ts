@@ -40,6 +40,7 @@ export function buildTelegramExecApprovalPendingPayload(params: {
     cwd: params.request.request.cwd ?? undefined,
     host: params.request.request.host === "node" ? "node" : "gateway",
     nodeId: params.request.request.nodeId ?? undefined,
+    scope: params.request.request.scope ?? undefined,
     allowedDecisions: resolveExecApprovalRequestAllowedDecisions(params.request.request),
     expiresAtMs: params.request.expiresAtMs,
     nowMs: params.nowMs,

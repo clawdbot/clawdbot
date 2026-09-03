@@ -447,7 +447,7 @@ describe("AppSidebar interleaved zone", () => {
       expect(sessions.patch).toHaveBeenCalledWith(
         "agent:main:alpha",
         { pinned: true },
-        { agentId: "main" },
+        { agentId: "main", expectedSessionId: "session:agent:main:alpha" },
       ),
     );
     // The slot write waits for the pin patch to land.
@@ -560,9 +560,7 @@ describe("AppSidebar interleaved zone", () => {
       throw new Error("expected session links");
     }
 
-    alpha.dispatchEvent(
-      new MouseEvent("click", { bubbles: true, cancelable: true, metaKey: true }),
-    );
+    alpha.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, altKey: true }));
     beta.dispatchEvent(
       new MouseEvent("click", { bubbles: true, cancelable: true, shiftKey: true }),
     );

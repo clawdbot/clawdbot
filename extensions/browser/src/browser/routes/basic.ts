@@ -41,28 +41,6 @@ function remainingChromeMcpStatusTimeoutMs(startedAtMs: number): number {
   return Math.max(1, STATUS_CHROME_MCP_TOTAL_TIMEOUT_MS - (Date.now() - startedAtMs));
 }
 
-async function probeChromeMcpPageReady(
-  profileCtx: ProfileContext,
-  timeoutMs: number,
-  signal: AbortSignal,
-) {
-  const abort = new AbortController();
-  const timer = setTimeout(() => {
-    abort.abort(new Error(`Chrome MCP page-readiness probe timed out after ${timeoutMs}ms.`));
-  }, timeoutMs);
-  try {
-    return await profileCtx.isReachable(timeoutMs, {
-      ephemeral: true,
-      signal: AbortSignal.any([signal, abort.signal]),
-    });
-  } catch {
-    signal.throwIfAborted();
-    return false;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 function handleBrowserRouteError(res: BrowserResponse, err: unknown) {
   if (isProfileRestartRequiredError(err)) {
     throw err;
@@ -153,20 +131,14 @@ async function buildBrowserStatus(
   const [cdpHttp, cdpReady, pageReady] = capabilities.usesChromeMcp
     ? await (async () => {
         const statusStartedAtMs = Date.now();
+        let pageReachable = false;
         const transportReady = await profileCtx.isTransportAvailable(
           STATUS_CHROME_MCP_TRANSPORT_TIMEOUT_MS,
           signal,
-        );
-        if (!transportReady) {
-          return [false, false, false] as const;
-        }
-        // Status-safe page probe: ephemeral so a passive status call does not seed
-        // a persistent cached Chrome MCP session. Keep the whole status route inside
-        // the public client timeout; page probe failures degrade to pageReady=false.
-        const pageReachable = await probeChromeMcpPageReady(
-          profileCtx,
-          remainingChromeMcpStatusTimeoutMs(statusStartedAtMs),
-          signal,
+          {
+            timeoutMs: () => remainingChromeMcpStatusTimeoutMs(statusStartedAtMs),
+            onResult: (tabCount) => (pageReachable = tabCount !== null),
+          },
         );
         return [transportReady, transportReady, pageReachable] as const;
       })()
@@ -202,16 +174,16 @@ async function buildBrowserStatus(
           }),
       )
     : null;
-  let detectedBrowser: string | null = null;
-  let detectedExecutablePath: string | null = null;
+  let detected: ReturnType<typeof resolveBrowserExecutableForPlatform> = null;
   let detectError: string | null = null;
 
   try {
-    const detected = resolveBrowserExecutableForPlatform(current.resolved, process.platform);
-    if (detected) {
-      detectedBrowser = detected.kind;
-      detectedExecutablePath = detected.path;
-    }
+    detected = resolveBrowserExecutableForPlatform(
+      capabilities.mode === "local-managed" && capabilities.browserFilesystemLocal
+        ? { ...current.resolved, executablePath: profileCtx.profile.executablePath }
+        : current.resolved,
+      process.platform,
+    );
   } catch (err) {
     detectError = String(err);
   }
@@ -248,8 +220,8 @@ async function buildBrowserStatus(
     cdpPort: capabilities.usesChromeMcp ? null : profileCtx.profile.cdpPort,
     cdpUrl: profileCtx.profile.cdpUrl ? (redactCdpUrl(profileCtx.profile.cdpUrl) ?? null) : null,
     chosenBrowser: profileState?.running?.exe.kind ?? null,
-    detectedBrowser,
-    detectedExecutablePath,
+    detectedBrowser: detected?.kind ?? null,
+    detectedExecutablePath: detected?.path ?? null,
     detectError,
     userDataDir: profileState?.running?.userDataDir ?? profileCtx.profile.userDataDir ?? null,
     color: profileCtx.profile.color,
@@ -425,7 +397,16 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
         signal: req.signal,
         run: async (signal) => {
           const status = await buildBrowserStatus(ctx, profileCtx, signal);
-          const doctorReport = buildBrowserDoctorReport({ status });
+          const relay = ctx.state().extensionRelays?.get(profileCtx.profile.name);
+          const identity =
+            relay?.ownership === "borrowed"
+              ? (await relay.client.status()).identity
+              : relay?.bridge.identity;
+          const doctorReport = buildBrowserDoctorReport({
+            status,
+            extensionVersion:
+              status.transport === "extension" ? identity?.extensionVersion : undefined,
+          });
           if (toBoolean(req.query.deep) === true || toBoolean(req.query.live) === true) {
             doctorReport.checks.push(await runBrowserLiveProbe(profileCtx, signal));
             doctorReport.ok = doctorReport.checks.every((check) => check.status !== "fail");

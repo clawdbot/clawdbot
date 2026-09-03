@@ -53,7 +53,12 @@ import {
 } from "./shared.js";
 
 const LOCAL_MODEL_RUN_SYSTEM_PROMPT = "You are a personal assistant running inside OpenClaw.";
-const HEIC_MODEL_RUN_MIMES = new Set(["image/heic", "image/heif"]);
+const HEIC_MODEL_RUN_MIMES = new Set([
+  "image/heic",
+  "image/heic-sequence",
+  "image/heif",
+  "image/heif-sequence",
+]);
 
 async function loadModelCatalogForInspection(cfg: OpenClawConfig, agentId?: string) {
   const prepared = await loadPreparedModelCatalog({ config: cfg, agentId, readOnly: true });

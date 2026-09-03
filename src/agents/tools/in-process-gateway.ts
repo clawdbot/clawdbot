@@ -6,6 +6,7 @@ import { resolveLeastPrivilegeOperatorScopesForMethod } from "../../gateway/meth
 import type { TrustedSessionCreation } from "../../gateway/server-methods/session-creation-provenance.js";
 import type {
   GatewayAgentRunTaskOwner,
+  GatewayContextResolver,
   GatewayRequestContext,
   TrustedAgentToolCaller,
 } from "../../gateway/server-methods/types.js";
@@ -13,13 +14,30 @@ import {
   dispatchGatewayMethodInProcess,
   getInProcessGatewayRequestContext,
   hasInProcessGatewayContext,
+  runWithOperatorToolGatewayCleanupContext,
 } from "../../gateway/server-plugins.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayContextResolver,
+} from "../../plugins/runtime/gateway-request-scope.js";
+import {
+  getGatewayToolCallerIdentity,
+  withoutGatewayToolCallerIdentity,
+} from "./gateway-caller-context.js";
 import { runWithGatewaySessionSpawnContext } from "./gateway-session-spawn-context.js";
 import { callGatewayTool } from "./gateway.js";
+
+type InProcessGatewayCallOptions = {
+  resolveGatewayContext?: GatewayContextResolver;
+  sessionMutationCommitGuard?: () => void;
+  signal?: AbortSignal;
+  timeoutMs?: number | null;
+};
 
 export type InProcessGatewayCaller = <T = Record<string, unknown>>(
   method: string,
   params: Record<string, unknown>,
+  options?: InProcessGatewayCallOptions,
 ) => Promise<T>;
 
 type AgentToolGatewayRequest = Pick<
@@ -59,12 +77,105 @@ export type AgentToolGatewayRequestCaller = <T = Record<string, unknown>>(
 
 const DEFAULT_IN_PROCESS_GATEWAY_REQUEST_TIMEOUT_MS = 10_000;
 
-export function hasInProcessGatewayToolContext(): boolean {
-  return hasInProcessGatewayContext();
+function callerGatewayContextResolver(
+  explicit?: GatewayContextResolver,
+): GatewayContextResolver | undefined {
+  return explicit ?? getGatewayToolCallerIdentity()?.gatewayContextResolver;
 }
 
-export function getInProcessGatewayToolContext(): GatewayRequestContext | undefined {
-  return getInProcessGatewayRequestContext();
+function captureGatewayToolCallerAssertion(): (() => void) | undefined {
+  const caller = getGatewayToolCallerIdentity();
+  if (!caller?.operationalRunInstance) {
+    return undefined;
+  }
+  // This host-owned closure checks the exact admitted run and worker claim even
+  // when audit collection is disabled. Never infer fresh authority from run ids.
+  const isCurrent = caller.receiptAuthority;
+  const signals = caller.approvalSignals ?? [];
+  return () => {
+    if (!isCurrent || signals.some((signal) => signal.aborted) || isCurrent() === false) {
+      throw new Error("agent tool caller authority is no longer active");
+    }
+  };
+}
+
+/** Transfer already-owned cleanup to its Gateway, without retaining the finished turn. */
+export function runWithGatewayToolCleanupContext<T>(
+  run: () => T,
+  explicitResolver?: GatewayContextResolver,
+): T {
+  const resolveGatewayContext = callerGatewayContextResolver(explicitResolver);
+  return withoutGatewayToolCallerIdentity(() =>
+    runWithOperatorToolGatewayCleanupContext(() =>
+      resolveGatewayContext
+        ? withPluginRuntimeGatewayContextResolver(resolveGatewayContext, run)
+        : run(),
+    ),
+  );
+}
+
+function bindInProcessGatewayContext(
+  method: string,
+  resolveGatewayContext: GatewayContextResolver,
+): { assertCurrent: () => void; resolve: GatewayContextResolver } {
+  const admittedContext = resolveGatewayContext();
+  if (!admittedContext) {
+    throw new Error(`Gateway instance unavailable for ${method}`);
+  }
+  const assertCurrent = () => {
+    if (resolveGatewayContext() !== admittedContext) {
+      throw new Error(`Gateway instance unavailable for ${method}`);
+    }
+  };
+  return {
+    assertCurrent,
+    resolve: () => {
+      assertCurrent();
+      return admittedContext;
+    },
+  };
+}
+
+async function runBoundInProcessGatewayCall<T>(
+  boundGateway: ReturnType<typeof bindInProcessGatewayContext> | undefined,
+  run: (resolveGatewayContext?: GatewayContextResolver) => Promise<T>,
+  assertCallerCurrent?: () => void,
+): Promise<T> {
+  const assertCurrent = () => {
+    boundGateway?.assertCurrent();
+    assertCallerCurrent?.();
+  };
+  try {
+    assertCurrent();
+    const result = await run(boundGateway?.resolve);
+    assertCurrent();
+    return result;
+  } catch (error) {
+    assertCurrent();
+    throw error;
+  }
+}
+
+export function hasInProcessGatewayToolContext(): boolean {
+  const resolveGatewayContext = callerGatewayContextResolver();
+  return resolveGatewayContext ? Boolean(resolveGatewayContext()) : hasInProcessGatewayContext();
+}
+
+/** Whether Gateway routing belongs to this caller or the hosting process. */
+export function hasGatewayToolRoutingContext(): boolean {
+  const resolver =
+    callerGatewayContextResolver() ?? getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
+  const context = getInProcessGatewayRequestContext(resolver);
+  // A retired binding still owns routing: dispatch must reject it instead of
+  // letting optional Gateway-backed tools switch to standalone host execution.
+  return context?.localEmbedded !== true && Boolean(resolver || context);
+}
+
+export function getInProcessGatewayToolContext(
+  explicitResolver?: GatewayContextResolver,
+): GatewayRequestContext | undefined {
+  const resolveGatewayContext = callerGatewayContextResolver(explicitResolver);
+  return resolveGatewayContext ? resolveGatewayContext() : getInProcessGatewayRequestContext();
 }
 
 /**
@@ -72,13 +183,22 @@ export function getInProcessGatewayToolContext(): GatewayRequestContext | undefi
  * router without opening a loopback transport. Outside a Gateway process, the
  * same request falls back to the ordinary Gateway client.
  */
-export const callAgentToolGatewayRequest: AgentToolGatewayRequestCaller = async <T>(
+async function callAgentToolGatewayRequestBound<T>(
   request: AgentToolGatewayRequest,
-): Promise<T> => {
-  const runtimeIdentity = agentToolGatewayRuntimeIdentities.get(request);
-  if (!hasInProcessGatewayContext()) {
+  resolveGatewayContext: GatewayContextResolver | undefined,
+  runtimeIdentity: AgentRuntimeIdentity | undefined,
+  assertCallerCurrent: (() => void) | undefined,
+): Promise<T> {
+  assertCallerCurrent?.();
+  const boundGateway = resolveGatewayContext
+    ? bindInProcessGatewayContext(request.method, resolveGatewayContext)
+    : undefined;
+  if (!hasInProcessGatewayContext(boundGateway?.resolve)) {
     if (runtimeIdentity) {
       throw new Error("trusted agent runtime identity requires in-process Gateway dispatch");
+    }
+    if (boundGateway) {
+      throw new Error(`Gateway instance unavailable for ${request.method}`);
     }
     const { callGateway } = await import("../../gateway/call.js");
     const {
@@ -86,7 +206,11 @@ export const callAgentToolGatewayRequest: AgentToolGatewayRequestCaller = async 
       agentToolCaller: _agentToolCaller,
       ...wireRequest
     } = request;
-    return await callGateway<T>(wireRequest);
+    return await runBoundInProcessGatewayCall(
+      undefined,
+      () => callGateway<T>(wireRequest),
+      assertCallerCurrent,
+    );
   }
   const scopes =
     request.scopes ?? resolveLeastPrivilegeOperatorScopesForMethod(request.method, request.params);
@@ -96,6 +220,7 @@ export const callAgentToolGatewayRequest: AgentToolGatewayRequestCaller = async 
       : (request.timeoutMs ?? DEFAULT_IN_PROCESS_GATEWAY_REQUEST_TIMEOUT_MS);
   const dispatchOptions = {
     forceSyntheticClient: true,
+    operatorRoleActor: { kind: "system" as const },
     ...(request.agentRunTracking ? { agentRunTracking: request.agentRunTracking } : {}),
     ...(request.agentToolCaller ? { agentToolCaller: request.agentToolCaller } : {}),
     syntheticScopes: scopes,
@@ -104,75 +229,152 @@ export const callAgentToolGatewayRequest: AgentToolGatewayRequestCaller = async 
     ...(request.onSignalAbort
       ? {
           onSignalAbort: () =>
-            request.onSignalAbort?.((method, params, options) =>
-              callAgentToolGatewayRequest({ method, params, ...options }),
+            runWithGatewayToolCleanupContext(
+              () =>
+                request.onSignalAbort?.((method, params, options) =>
+                  callAgentToolGatewayRequestBound(
+                    { method, params, ...options },
+                    boundGateway?.resolve ?? resolveGatewayContext,
+                    undefined,
+                    undefined,
+                  ),
+                ),
+              boundGateway?.resolve ?? resolveGatewayContext,
             ),
         }
       : {}),
     ...(request.signal ? { signal: request.signal } : {}),
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    ...(boundGateway ? { resolveGatewayContext: boundGateway.resolve } : {}),
+    ...(assertCallerCurrent ? { sessionMutationCommitGuard: assertCallerCurrent } : {}),
   };
-  return await dispatchGatewayMethodInProcess<T>(
-    request.method,
-    (request.params ?? {}) as Record<string, unknown>,
-    withInProcessAgentRuntimeIdentity(dispatchOptions, runtimeIdentity),
+  return await runBoundInProcessGatewayCall(
+    boundGateway,
+    async () =>
+      await dispatchGatewayMethodInProcess<T>(
+        request.method,
+        (request.params ?? {}) as Record<string, unknown>,
+        withInProcessAgentRuntimeIdentity(dispatchOptions, runtimeIdentity),
+      ),
+    assertCallerCurrent,
+  );
+}
+
+export const callAgentToolGatewayRequest: AgentToolGatewayRequestCaller = async <T>(
+  request: AgentToolGatewayRequest,
+): Promise<T> => {
+  return await callAgentToolGatewayRequestBound(
+    request,
+    callerGatewayContextResolver(),
+    agentToolGatewayRuntimeIdentities.get(request),
+    captureGatewayToolCallerAssertion(),
   );
 };
+
+async function callInProcessGatewayToolBound<T>(
+  method: string,
+  params: Record<string, unknown>,
+  options: InProcessGatewayCallOptions & {
+    sessionCreation?: TrustedSessionCreation;
+  },
+  fallback: (scopes: ReturnType<typeof resolveLeastPrivilegeOperatorScopesForMethod>) => Promise<T>,
+): Promise<T> {
+  const assertCallerCurrent = captureGatewayToolCallerAssertion();
+  assertCallerCurrent?.();
+  const sessionMutationCommitGuard = assertCallerCurrent
+    ? () => {
+        assertCallerCurrent();
+        options.sessionMutationCommitGuard?.();
+      }
+    : options.sessionMutationCommitGuard;
+  const scopes = resolveLeastPrivilegeOperatorScopesForMethod(method, params);
+  const resolveGatewayContext = callerGatewayContextResolver(options.resolveGatewayContext);
+  const boundGateway = resolveGatewayContext
+    ? bindInProcessGatewayContext(method, resolveGatewayContext)
+    : undefined;
+  if (hasInProcessGatewayContext(boundGateway?.resolve)) {
+    return await runBoundInProcessGatewayCall(
+      boundGateway,
+      async (boundResolver) =>
+        await dispatchGatewayMethodInProcess<T>(method, params, {
+          forceSyntheticClient: true,
+          operatorRoleActor: { kind: "system" as const },
+          syntheticScopes: scopes,
+          ...(options.sessionCreation ? { sessionCreation: options.sessionCreation } : {}),
+          ...(sessionMutationCommitGuard ? { sessionMutationCommitGuard } : {}),
+          ...(options.signal ? { signal: options.signal } : {}),
+          ...(options.timeoutMs !== undefined && options.timeoutMs !== null
+            ? { timeoutMs: options.timeoutMs }
+            : {}),
+          ...(boundResolver ? { resolveGatewayContext: boundResolver } : {}),
+        }),
+      assertCallerCurrent,
+    );
+  }
+  if (boundGateway) {
+    throw new Error(`Gateway instance unavailable for ${method}`);
+  }
+  return await runBoundInProcessGatewayCall(undefined, () => fallback(scopes), assertCallerCurrent);
+}
 
 export const callInProcessGatewayTool: InProcessGatewayCaller = async <T>(
   method: string,
   params: Record<string, unknown>,
+  options: InProcessGatewayCallOptions = {},
 ): Promise<T> => {
-  const scopes = resolveLeastPrivilegeOperatorScopesForMethod(method, params);
-  if (hasInProcessGatewayContext()) {
-    return await dispatchGatewayMethodInProcess<T>(method, params, {
-      forceSyntheticClient: true,
-      syntheticScopes: scopes,
-    });
-  }
-  return await callGatewayTool<T>(method, {}, params, { scopes });
+  return await callInProcessGatewayToolBound(method, params, options, async (scopes) =>
+    callGatewayTool<T>(
+      method,
+      options.timeoutMs == null ? {} : { timeoutMs: options.timeoutMs },
+      params,
+      {
+        scopes,
+        ...(options.signal ? { signal: options.signal } : {}),
+      },
+    ),
+  );
 };
 
 export async function callInProcessGatewayToolWithCreation<T = Record<string, unknown>>(
   method: string,
   params: Record<string, unknown>,
   creation: TrustedSessionCreation,
-  options: { signal?: AbortSignal; timeoutMs?: number | null } = {},
+  options: {
+    resolveGatewayContext?: GatewayContextResolver;
+    sessionMutationCommitGuard?: () => void;
+    signal?: AbortSignal;
+    timeoutMs?: number | null;
+  } = {},
 ): Promise<T> {
-  const scopes = resolveLeastPrivilegeOperatorScopesForMethod(method, params);
-  if (hasInProcessGatewayContext()) {
-    return await dispatchGatewayMethodInProcess<T>(method, params, {
-      forceSyntheticClient: true,
-      sessionCreation: creation,
-      syntheticScopes: scopes,
-      ...(options.signal ? { signal: options.signal } : {}),
-      ...(options.timeoutMs !== undefined && options.timeoutMs !== null
-        ? { timeoutMs: options.timeoutMs }
-        : {}),
-    });
-  }
-  // The fallback is a real local Gateway request. Carry spawn policy only in
-  // the signed agent-runtime identity token, never in model-authored params.
-  if (creation.via !== "spawn" || !creation.inheritedToolPolicy) {
-    return await callGatewayTool<T>(method, {}, params, {
-      scopes,
-      ...(options.signal ? { signal: options.signal } : {}),
-      ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
-    });
-  }
-  return await runWithGatewaySessionSpawnContext(
-    {
-      ...(creation.completionOwnerSessionKey
-        ? { completionOwnerSessionKey: creation.completionOwnerSessionKey }
-        : {}),
-      inheritedToolPolicy: creation.inheritedToolPolicy,
+  return await callInProcessGatewayToolBound(
+    method,
+    params,
+    { ...options, sessionCreation: creation },
+    async (scopes) => {
+      // The fallback is a real local Gateway request. Carry spawn policy only in
+      // the signed agent-runtime identity token, never in model-authored params.
+      if (creation.via !== "spawn" || !creation.inheritedToolPolicy) {
+        return await callGatewayTool<T>(method, {}, params, {
+          scopes,
+          ...(options.signal ? { signal: options.signal } : {}),
+          ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+        });
+      }
+      return await runWithGatewaySessionSpawnContext(
+        {
+          ...(creation.completionOwnerSessionKey
+            ? { completionOwnerSessionKey: creation.completionOwnerSessionKey }
+            : {}),
+          inheritedToolPolicy: creation.inheritedToolPolicy,
+        },
+        () =>
+          callGatewayTool<T>(method, {}, params, {
+            scopes,
+            requireAgentRuntimeIdentity: true,
+            ...(options.signal ? { signal: options.signal } : {}),
+            ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+          }),
+      );
     },
-    () =>
-      callGatewayTool<T>(method, {}, params, {
-        scopes,
-        requireAgentRuntimeIdentity: true,
-        ...(options.signal ? { signal: options.signal } : {}),
-        ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
-      }),
   );
 }

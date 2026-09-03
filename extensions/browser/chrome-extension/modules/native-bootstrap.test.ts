@@ -3,6 +3,7 @@ import {
   createNativeBootstrapController,
   discardRetiredCopilotState,
   prepareRetiredCopilotState,
+  requestRelayEnsure,
 } from "./native-bootstrap.js";
 
 const COPILOT_LOCAL_KEYS = [
@@ -382,5 +383,68 @@ describe("native bootstrap timeout", () => {
       failureCode: "native_host_timeout",
     });
     expect(disconnect).toHaveBeenCalledOnce();
+  });
+});
+
+type EnsurePortScript = (request: { nonce: string }) => unknown;
+
+function ensureChromeApi(script: EnsurePortScript | "disconnect") {
+  const connectNative = vi.fn(() => {
+    let messageListener: ((response: unknown) => void) | undefined;
+    let disconnectListener: (() => void) | undefined;
+    return {
+      disconnect: vi.fn(),
+      onMessage: {
+        addListener: (listener: (response: unknown) => void) => {
+          messageListener = listener;
+        },
+      },
+      onDisconnect: {
+        addListener: (listener: () => void) => {
+          disconnectListener = listener;
+        },
+      },
+      postMessage: (request: { nonce: string }) => {
+        queueMicrotask(() => {
+          if (script === "disconnect") {
+            disconnectListener?.();
+            return;
+          }
+          messageListener?.(script(request));
+        });
+      },
+    };
+  });
+  return { runtime: { connectNative, lastError: undefined } };
+}
+
+describe("requestRelayEnsure", () => {
+  it("returns the relay status when the native host answers with the echoed nonce", async () => {
+    const chromeApi = ensureChromeApi((request) => {
+      expect(request).toEqual({
+        v: 1,
+        op: "ensure_relay",
+        nonce: expect.any(String),
+        relayPort: 20123,
+      });
+      return { v: 1, ok: true, nonce: request.nonce, relay: "spawned" };
+    });
+    await expect(requestRelayEnsure(20123, chromeApi)).resolves.toEqual({ status: "spawned" });
+  });
+
+  it("treats a nonce mismatch as unavailable", async () => {
+    const chromeApi = ensureChromeApi(() => ({
+      v: 1,
+      ok: true,
+      nonce: "AAAAAAAAAAAAAAAAAAAAAA",
+      relay: "spawned",
+    }));
+    await expect(requestRelayEnsure(20123, chromeApi)).resolves.toEqual({ status: "unavailable" });
+  });
+
+  it("treats a missing native host as unavailable", async () => {
+    await expect(requestRelayEnsure(20123, ensureChromeApi("disconnect"))).resolves.toEqual({
+      status: "unavailable",
+    });
   });
 });

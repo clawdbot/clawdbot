@@ -2138,14 +2138,20 @@ describe("sendMessageTelegram", () => {
     expect(botApi.sendMessage).toHaveBeenCalledTimes(3);
   });
 
-  it("does not continue after accepted-send bookkeeping fails", async () => {
+  it.each([
+    new Error("delivery observer failed"),
+    createHtmlParseError(),
+    new Error("Bad Request: message text is empty"),
+    createChunkRejection("delivery observer failed"),
+  ])("does not continue after accepted-send bookkeeping fails: %s", async (observerError) => {
     botApi.sendMessage
       .mockResolvedValueOnce({ message_id: 54, chat: { id: "123" } })
-      .mockResolvedValueOnce({ message_id: 55, chat: { id: "123" } });
+      .mockResolvedValueOnce({ message_id: 55, chat: { id: "123" } })
+      .mockResolvedValue({ message_id: 56, chat: { id: "123" } });
     const onDeliveryResult = vi
       .fn()
       .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(new Error("delivery observer failed"));
+      .mockRejectedValueOnce(observerError);
 
     let observed: unknown;
     try {
@@ -3487,6 +3493,34 @@ describe("sendMessageTelegram", () => {
     expect(observed).toBeInstanceOf(PlatformMessageNotDispatchedError);
     expect(observed).toHaveProperty("cause", terminal);
     expect(sendMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("maps a supergroup migration rejection without rewriting the durable target", async () => {
+    const chatId = "-123456789";
+    const migratedChatId = -1_001_234_567_890;
+    const terminal = Object.assign(
+      new Error("400: Bad Request: group chat was upgraded to a supergroup chat"),
+      {
+        name: "GrammyError",
+        error_code: 400,
+        description: "Bad Request: group chat was upgraded to a supergroup chat",
+        parameters: { migrate_to_chat_id: migratedChatId },
+      },
+    );
+    const sendMessage = vi.fn().mockRejectedValue(terminal);
+    const api = makeTelegramApiTestMock({ sendMessage });
+
+    const observed = await sendMessageTelegram(chatId, "hi", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+    }).catch((error: unknown) => error);
+
+    expect(observed).toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(observed).toMatchObject({ cause: terminal, retryable: false });
+    expect(observed).toMatchObject({ message: expect.stringContaining(String(migratedChatId)) });
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(firstMockCall(sendMessage, "sendMessage call")[0]).toBe(chatId);
   });
 
   it("keeps broad 421-shaped durable send errors ambiguous", async () => {
@@ -5779,33 +5813,50 @@ describe("sendPollTelegram", () => {
     });
   });
 
-  it("maps durationSeconds to open_period", async () => {
-    const api = makeTelegramApiTestMock({
-      sendPoll: vi.fn<Bot["api"]["sendPoll"]>(async () =>
-        makeTelegramPollMessage({ poll: { id: "p1" } }),
+  it.each([5, 600, 601, 3_600, 86_400, 604_800])(
+    "maps supported poll duration %i seconds to open_period",
+    async (durationSeconds) => {
+      const api = makeTelegramApiTestMock({
+        sendPoll: vi.fn<Bot["api"]["sendPoll"]>(async () =>
+          makeTelegramPollMessage({ poll: { id: "p1" } }),
+        ),
+      });
+
+      const res = await sendPollTelegram(
+        "123",
+        { question: " Q ", options: [" A ", "B "], durationSeconds },
+        { cfg: TELEGRAM_TEST_CFG, token: "t", api },
+      );
+
+      expect(res).toMatchObject({
+        messageId: "123",
+        chatId: "555",
+        pollId: "p1",
+        pollAnswerRouting: "unavailable",
+      });
+      expect(api.sendPoll).toHaveBeenCalledTimes(1);
+      const sendPollMock = api.sendPoll as ReturnType<typeof vi.fn>;
+      const sendPollCall = firstMockCall(sendPollMock, "send poll call");
+      expect(sendPollCall[0]).toBe("123");
+      expect(sendPollCall[1]).toBe("Q");
+      expect(sendPollCall[2]).toEqual(["A", "B"]);
+      expect(requireRecord(sendPollCall[3], "send poll params").open_period).toBe(durationSeconds);
+      expect(wasSentByBot("123", 123)).toBe(true);
+    },
+  );
+
+  it.each([4, 604_801])("rejects unsupported poll duration %i seconds", async (durationSeconds) => {
+    const api = makeTelegramApiTestMock({ sendPoll: vi.fn<Bot["api"]["sendPoll"]>() });
+
+    await expect(
+      sendPollTelegram(
+        "123",
+        { question: "Q", options: ["A", "B"], durationSeconds },
+        { cfg: TELEGRAM_TEST_CFG, token: "t", api },
       ),
-    });
+    ).rejects.toThrow("Telegram poll durationSeconds must be between 5 and 604800");
 
-    const res = await sendPollTelegram(
-      "123",
-      { question: " Q ", options: [" A ", "B "], durationSeconds: 60 },
-      { cfg: TELEGRAM_TEST_CFG, token: "t", api },
-    );
-
-    expect(res).toMatchObject({
-      messageId: "123",
-      chatId: "555",
-      pollId: "p1",
-      pollAnswerRouting: "unavailable",
-    });
-    expect(api.sendPoll).toHaveBeenCalledTimes(1);
-    const sendPollMock = api.sendPoll as ReturnType<typeof vi.fn>;
-    const sendPollCall = firstMockCall(sendPollMock, "send poll call");
-    expect(sendPollCall[0]).toBe("123");
-    expect(sendPollCall[1]).toBe("Q");
-    expect(sendPollCall[2]).toEqual(["A", "B"]);
-    expect(requireRecord(sendPollCall[3], "send poll params").open_period).toBe(60);
-    expect(wasSentByBot("123", 123)).toBe(true);
+    expect(api.sendPoll).not.toHaveBeenCalled();
   });
 
   it("records a public poll origin with its resolved topic", async () => {

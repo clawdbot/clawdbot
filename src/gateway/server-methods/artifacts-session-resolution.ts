@@ -10,10 +10,12 @@ import {
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
 import { getTaskSessionLookupByIdForStatus } from "../../tasks/task-status-access.js";
+import { hasOperatorBoundary } from "../operator-role-policy.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
   authorizeIncognitoSessionTarget,
+  createSessionListEntryFilter,
   resolveSessionSharingTarget,
 } from "../session-sharing.js";
 import {
@@ -169,20 +171,27 @@ export function resolveAuthorizedArtifactSession(
   if (!resolved) {
     return undefined;
   }
+  const target = resolveSessionSharingTarget({
+    cfg: cfg ?? {},
+    sessionKey: resolved.sessionKey,
+    agentId: resolved.agentId,
+  });
   const error = authorizeIncognitoSessionTarget({
     client,
     sessionKey: query.sessionKey ?? resolved.sessionKey,
-    target: resolveSessionSharingTarget({
-      cfg: cfg ?? {},
-      sessionKey: resolved.sessionKey,
-      agentId: resolved.agentId,
-    }),
+    target,
   });
-  if (!error) {
+  const roleVisibilityDenied = Boolean(
+    cfg &&
+    hasOperatorBoundary(client, cfg) &&
+    target &&
+    createSessionListEntryFilter({ client, cfg })?.(target.storeKey, target.entry) === false,
+  );
+  if (!error && !roleVisibilityDenied) {
     return resolved;
   }
   throw new ArtifactSessionResolutionError(
-    query.sessionKey
+    query.sessionKey && error
       ? error
       : errorShape(ErrorCodes.INVALID_REQUEST, "no session found for artifact query", {
           details: { type: "artifact_scope_not_found" },

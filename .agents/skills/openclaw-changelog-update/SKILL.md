@@ -43,8 +43,9 @@ every human `Thanks @...` attribution.
    - record the successful Full Release Validation run id and attempt
    - stop if any product/version/backport change is still pending
 2. Audit history, including direct commits:
-   - `git log --first-parent --date=iso-strict --pretty=format:'%h%x09%ad%x09%s' <base-tag>..<target-ref>`
-   - `git log --first-parent --grep='(#' --date=short --pretty=format:'%h%x09%ad%x09%s' <base-tag>..<target-ref>`
+   - `git log --topo-order --date=iso-strict --pretty=format:'%h%x09%ad%x09%s' <base-tag>..<target-ref>`
+   - `git log --topo-order --grep='(#' --date=short --pretty=format:'%h%x09%ad%x09%s' <base-tag>..<target-ref>`
+   - Include every commit reachable from the target but not the base, including merged side branches. Resolve PR associations before deduplicating and subtracting shipped records; retain the existing revert exclusions.
    - also inspect `--since='24 hours ago'` when main moved during the release.
 3. Generate the complete contribution record and editorial manifest before
    writing grouped prose:
@@ -167,13 +168,17 @@ every human `Thanks @...` attribution.
      prose but are never rendered as a public `#### Direct commits` dump. Add
      direct-commit credit to a grouped bullet only when it shares an explicit
      closing issue reference or at least two distinctive subject terms
-   - the verifier rejects `docs`, `test`, `refactor`, `ci`, `build`, `chore`,
-     and `style` PRs in Highlights, Changes, or Fixes. Keep those internal
-     contributions in the complete PR record, but do not give them editorial
-     release-note space
-   - classify internal-only work from conventional prefixes and clear title
-     signals such as `QA`, `test`, `docs`, `refactor`, `lint`, or `CI`; an
-     untyped title is not automatically editorial
+   - the verifier rejects ordinary `docs`, `test`, `refactor`, `ci`, `build`,
+     `chore`, and `style` PRs in Highlights, Changes, or Fixes. An explicit
+     Conventional Commits `!` marker makes any type editorial-eligible; include
+     its verified user-facing breaking change and migration guidance with the
+     original PR ref and credit. Keep other internal contributions only in the
+     complete PR record
+   - classify conventional titles from their declared type and scope, not
+     incidental words such as `doc` or `build` in their descriptions. For
+     untyped titles, retain internal-work signals such as `QA`, `test`, `docs`,
+     `refactor`, `lint`, or `CI`; eligibility never replaces the source audit
+     that establishes a user-visible outcome
    - do not add GHSA references, advisory IDs, or security advisory slugs to
      changelog entries or GitHub release-note text unless explicitly requested
    - never thank bots, `@claude`, `@codex`, `@openclaw`, `@clawsweeper`, or `@steipete`

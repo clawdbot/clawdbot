@@ -4,12 +4,15 @@
  * It can delegate cleanup to a live gateway or run local store maintenance,
  * with dry-run tables that explain every planned pruning action.
  */
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
-import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
+import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { getRuntimeConfig } from "../config/config.js";
 import {
   resolveSessionCleanupAction,
+  isSessionsCleanupPartialResult,
   runSessionsCleanup,
   serializeSessionCleanupResult,
   type SessionCleanupSummary,
@@ -21,20 +24,15 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway, isGatewayTransportError } from "../gateway/call.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
+import { resolveCommandSessionStoreTargets } from "./session-store-targets.js";
 import { resolveSessionDisplayModel } from "./sessions-display-model.js";
 import {
   formatSessionAgeCell,
   formatSessionFlagsCell,
   formatSessionKeyCell,
   formatSessionModelCell,
-  SESSION_AGE_PAD,
-  SESSION_KEY_PAD,
-  SESSION_MODEL_PAD,
   toSessionDisplayRows,
 } from "./sessions-table.js";
-
-const ACTION_PAD = "archive-dashboard".length;
 
 type SessionCleanupActionRow = ReturnType<typeof toSessionDisplayRows>[number] & {
   action: ReturnType<typeof resolveSessionCleanupAction>;
@@ -51,32 +49,34 @@ function formatCleanupActionCell(
   action: ReturnType<typeof resolveSessionCleanupAction>,
   rich: boolean,
 ): string {
-  const label = action.padEnd(ACTION_PAD);
   if (!rich) {
-    return label;
+    return action;
   }
   if (action === "keep") {
-    return theme.muted(label);
+    return theme.muted(action);
   }
   if (action === "archive-dashboard") {
-    return theme.warn(label);
+    return theme.warn(action);
+  }
+  if (action === "archive-cap") {
+    return theme.warn(action);
   }
   if (action === "prune-missing") {
-    return theme.error(label);
+    return theme.error(action);
   }
   if (action === "prune-model-run") {
-    return theme.warn(label);
+    return theme.warn(action);
   }
   if (action === "prune-stale") {
-    return theme.warn(label);
+    return theme.warn(action);
   }
   if (action === "retire-dm-scope") {
-    return theme.warn(label);
+    return theme.warn(action);
   }
   if (action === "cap-overflow") {
-    return theme.accentBright(label);
+    return theme.accentBright(action);
   }
-  return theme.error(label);
+  return theme.error(action);
 }
 
 function buildActionRows(params: {
@@ -84,6 +84,7 @@ function buildActionRows(params: {
   missingKeys: Set<string>;
   modelRunPrunedKeys: Set<string>;
   archivedKeys?: Set<string>;
+  capArchivedKeys?: Set<string>;
   staleKeys: Set<string>;
   cappedKeys: Set<string>;
   dmScopeRetiredKeys: Set<string>;
@@ -98,6 +99,7 @@ function buildActionRows(params: {
         missingKeys: params.missingKeys,
         modelRunPrunedKeys: params.modelRunPrunedKeys,
         archivedKeys: params.archivedKeys,
+        capArchivedKeys: params.capArchivedKeys,
         staleKeys: params.staleKeys,
         cappedKeys: params.cappedKeys,
         dmScopeRetiredKeys: params.dmScopeRetiredKeys,
@@ -116,7 +118,11 @@ function buildLabelSummaries(actionRows: SessionCleanupActionRow[]): SessionClea
       summary = { label, kept: 0, pruned: 0 };
       summaryByLabel.set(label, summary);
     }
-    if (actionRow.action === "keep" || actionRow.action === "archive-dashboard") {
+    if (
+      actionRow.action === "keep" ||
+      actionRow.action === "archive-dashboard" ||
+      actionRow.action === "archive-cap"
+    ) {
       summary.kept += 1;
     } else {
       summary.pruned += 1;
@@ -133,7 +139,10 @@ function renderLabelSummaries(params: {
   if (summaries.length === 0) {
     return;
   }
-  const labelPad = Math.max(...summaries.map((summary) => visibleWidth(summary.label)));
+  const labelPad = summaries.reduce(
+    (max, summary) => Math.max(max, visibleWidth(summary.label)),
+    0,
+  );
   const totalKept = summaries.reduce((total, summary) => total + summary.kept, 0);
   const totalPruned = summaries.reduce((total, summary) => total + summary.pruned, 0);
   params.runtime.log("");
@@ -176,6 +185,7 @@ function renderStoreDryRunPlan(params: {
   params.runtime.log(`Would retire stale direct DM sessions: ${params.summary.dmScopeRetired}`);
   params.runtime.log(`Would prune stale model-run probes: ${params.summary.modelRunPruned}`);
   params.runtime.log(`Would archive inactive dashboard sessions: ${params.summary.archived ?? 0}`);
+  params.runtime.log(`Would archive cap overflow: ${params.summary.capArchived ?? 0}`);
   params.runtime.log(`Would prune stale: ${params.summary.pruned}`);
   params.runtime.log(`Would cap overflow: ${params.summary.capped}`);
   if (params.summary.unreferencedArtifacts?.scannedFiles) {
@@ -193,25 +203,27 @@ function renderStoreDryRunPlan(params: {
   }
   params.runtime.log("");
   params.runtime.log("Planned session actions:");
-  const header = [
-    "Action".padEnd(ACTION_PAD),
-    "Key".padEnd(SESSION_KEY_PAD),
-    "Age".padEnd(SESSION_AGE_PAD),
-    "Model".padEnd(SESSION_MODEL_PAD),
-    "Flags",
-  ].join(" ");
-  params.runtime.log(rich ? theme.heading(header) : header);
-  for (const actionRow of params.actionRows) {
-    const model = resolveSessionDisplayModel(params.cfg, actionRow);
-    const line = [
-      formatCleanupActionCell(actionRow.action, rich),
-      formatSessionKeyCell(actionRow.key, rich),
-      formatSessionAgeCell(actionRow.updatedAt, rich),
-      formatSessionModelCell(model, rich),
-      formatSessionFlagsCell(actionRow, rich),
-    ].join(" ");
-    params.runtime.log(line.trimEnd());
-  }
+  params.runtime.log(
+    renderTable({
+      width: getTerminalTableWidth(),
+      columns: [
+        { key: "action", header: "Action" },
+        { key: "key", header: "Key" },
+        { key: "age", header: "Age" },
+        { key: "model", header: "Model" },
+        { key: "flags", header: "Flags", flex: true },
+      ].map((column) =>
+        Object.assign(column, { header: colorize(rich, theme.heading, column.header) }),
+      ),
+      rows: params.actionRows.map((row) => ({
+        action: formatCleanupActionCell(row.action, rich),
+        key: formatSessionKeyCell(row.key, rich),
+        age: formatSessionAgeCell(row.updatedAt, rich),
+        model: formatSessionModelCell(resolveSessionDisplayModel(params.cfg, row), rich),
+        flags: formatSessionFlagsCell(row, rich),
+      })),
+    }).trimEnd(),
+  );
   renderLabelSummaries({ actionRows: params.actionRows, runtime: params.runtime });
 }
 
@@ -247,9 +259,9 @@ function renderAppliedSummaries(params: {
 async function maybeRunGatewayCleanup(
   opts: SessionsCleanupOptions,
 ): Promise<{ delegated: true; result: SessionsCleanupResult } | { delegated: false }> {
-  if (opts.store || opts.dryRun) {
-    // Explicit store paths and dry-runs must stay local; the gateway only owns
-    // live in-process cleanup for default stores.
+  if (opts.store !== undefined || opts.dryRun) {
+    // Explicit store paths and dry-runs stay local; sessions.cleanup takes no store param.
+    // A blank --store is explicit too: delegating it would clean the default store.
     return { delegated: false };
   }
   try {
@@ -274,6 +286,9 @@ async function maybeRunGatewayCleanup(
       // mutation; timeouts and established closes must not replay it locally.
       return { delegated: false };
     }
+    if (isRecord(error) && isSessionsCleanupPartialResult(error.details)) {
+      return { delegated: true, result: error.details };
+    }
     throw error;
   }
 }
@@ -284,8 +299,13 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
   if (gatewayCleanup.delegated) {
     // The Gateway owns this path. Preserve its syntax because resolving a remote
     // Windows path on a POSIX client (or vice versa) would fabricate a local path.
+    const partialError =
+      "partialError" in gatewayCleanup.result ? gatewayCleanup.result.partialError : undefined;
     if (opts.json) {
       writeRuntimeJson(runtime, gatewayCleanup.result);
+      if (partialError) {
+        process.exitCode = 1;
+      }
       return;
     }
     renderAppliedSummaries({
@@ -294,28 +314,24 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
       runtime,
       locallyOwned: false,
     });
+    if (partialError) {
+      runtime.error(`[error] ${partialError.message}`);
+      process.exitCode = 1;
+    }
     return;
   }
 
   const cfg = getRuntimeConfig();
-  const targets = resolveSessionStoreTargetsOrExit({
-    cfg,
-    opts: {
-      store: opts.store,
-      agent: opts.agent,
-      allAgents: opts.allAgents,
-    },
-    runtime,
-    json: opts.json,
-  });
-  if (!targets) {
-    return;
+  const targets = resolveCommandSessionStoreTargets({ cfg, opts });
+  const cleanupParams = { cfg, opts, targets };
+  let cleanupResult;
+  if (opts.dryRun) {
+    cleanupResult = await runSessionsCleanup(cleanupParams);
+  } else {
+    const { runLocalSessionsCleanup } = await import("./sessions-cleanup.runtime.js");
+    cleanupResult = await runLocalSessionsCleanup(cleanupParams, runtime);
   }
-  const { mode, previewResults, appliedSummaries } = await runSessionsCleanup({
-    cfg,
-    opts,
-    targets,
-  });
+  const { mode, previewResults, appliedSummaries, failure } = cleanupResult;
 
   if (opts.dryRun) {
     if (opts.json) {
@@ -352,10 +368,18 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
         mode,
         dryRun: false,
         summaries: appliedSummaries.map(toDisplayedCleanupSummary),
+        failure,
       }),
     );
+    if (failure) {
+      process.exitCode = 1;
+    }
     return;
   }
 
   renderAppliedSummaries({ summaries: appliedSummaries, runtime, locallyOwned: true });
+  if (failure) {
+    runtime.error(`[error] ${failure.message}`);
+    process.exitCode = 1;
+  }
 }

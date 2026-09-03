@@ -82,6 +82,20 @@ export function buildTelegramCanonicalApprovalTerminalText(params: {
   fallbackApprovalId: string;
 }): string {
   const approval = params.result.approval;
+  if (approval.presentation?.kind === "system-agent" && params.result.applied) {
+    if (approval.status === "allowed") {
+      return `✅ OpenClaw change approved. Applying: ${truncateDetail(approval.presentation.description)}`;
+    }
+    if (approval.status === "cancelled") {
+      return "⚠️ OpenClaw change was cancelled because its run ended. No change was made. Retry.";
+    }
+    if (approval.status === "denied") {
+      return "❌ OpenClaw change denied. No change was made.";
+    }
+    if (approval.status === "expired") {
+      return "⏱️ OpenClaw change expired. No change was made.";
+    }
+  }
   const approvalId = approval.id || params.fallbackApprovalId;
   const lines = [
     params.result.applied ? "✅ Approval resolved here" : "ℹ️ Approval already resolved",
@@ -138,6 +152,17 @@ function appendViewSubject(
 
 /** Render a canonical native resolved event while retaining safe request context. */
 export function buildTelegramNativeResolvedApprovalText(view: ResolvedApprovalView): string {
+  if (view.approvalKind === "system-agent") {
+    return view.terminalStatus === "cancelled"
+      ? "⚠️ OpenClaw change was cancelled because its run ended. No change was made. Retry."
+      : view.decision === "deny"
+        ? "❌ OpenClaw change denied. No change was made."
+        : view.applicationStatus === "applied"
+          ? `✅ OpenClaw change approved and applied: ${truncateDetail(view.operationSummary)}`
+          : view.applicationStatus === "not-applied"
+            ? "⚠️ OpenClaw change approved, but it was not applied. Check the Gateway and retry."
+            : `✅ OpenClaw change approved. Applying: ${truncateDetail(view.operationSummary)}`;
+  }
   const label = view.approvalKind === "exec" ? "Exec" : "Plugin";
   const lines = [
     `✅ ${label} approval resolved`,
@@ -153,6 +178,9 @@ export function buildTelegramNativeResolvedApprovalText(view: ResolvedApprovalVi
 
 /** Render a canonical native expiration event while retaining safe request context. */
 export function buildTelegramNativeExpiredApprovalText(view: ExpiredApprovalView): string {
+  if (view.approvalKind === "system-agent") {
+    return "⏱️ OpenClaw change expired. No change was made.";
+  }
   const label = view.approvalKind === "exec" ? "Exec" : "Plugin";
   const lines = [
     `⏱️ ${label} approval expired`,

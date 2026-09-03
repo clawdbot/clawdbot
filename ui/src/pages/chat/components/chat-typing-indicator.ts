@@ -8,16 +8,16 @@ export function renderChatTypingIndicator(
   if (!actors?.length) {
     return null;
   }
-  const statusText =
+  const previews = actors.filter((actor) => actor.preview?.trim());
+  const indicators = actors.filter((actor) => !actor.preview?.trim());
+  const status =
     actors.length === 1
       ? t("chat.sessionSuggestions.typing", { name: actors[0]?.label ?? "" })
       : t("chat.sessionSuggestions.typingMany", {
           names: actors.map((actor) => actor.label).join(", "),
         });
-  const previewActors = actors.filter((actor) => actor.preview?.trim());
-  const indicatorActors = actors.filter((actor) => !actor.preview?.trim());
-  return html`<div class="agent-chat__typing-indicator">
-    ${previewActors.map(
+  return html`<div class="agent-chat__typing-indicator agent-chat__typing-indicator--outside">
+    ${previews.map(
       (actor) => html`<div class="agent-chat__typing-preview-row">
         ${renderChatAvatar("user", undefined, undefined, undefined, undefined, {
           id: actor.id,
@@ -31,10 +31,10 @@ export function renderChatTypingIndicator(
         </div>
       </div>`,
     )}
-    ${indicatorActors.length
+    ${indicators.length
       ? html`<div class="agent-chat__typing-dots-row">
           <span class="agent-chat__typing-avatars" aria-hidden="true">
-            ${indicatorActors.slice(0, 3).map((actor) =>
+            ${indicators.slice(0, 3).map((actor) =>
               renderChatAvatar("user", undefined, undefined, undefined, undefined, {
                 id: actor.id,
                 name: actor.label,
@@ -49,6 +49,6 @@ export function renderChatTypingIndicator(
           </span>
         </div>`
       : null}
-    <span class="sr-only" role="status">${statusText}</span>
+    <span class="sr-only" role="status">${status}</span>
   </div>`;
 }

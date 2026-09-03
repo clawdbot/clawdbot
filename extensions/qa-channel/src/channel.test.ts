@@ -1,4 +1,5 @@
 // Qa Channel tests cover channel plugin behavior.
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import {
@@ -12,7 +13,7 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { extractToolPayload } from "openclaw/plugin-sdk/tool-payload";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState, startQaBusServer } from "../../qa-lab/bus-api.js";
 import { qaChannelPlugin, setQaChannelRuntime } from "../api.js";
 import { listQaChannelAccountIds, resolveDefaultQaChannelAccountId } from "./accounts.js";
@@ -106,7 +107,11 @@ function createMockQaRuntime(params?: {
   } as unknown as PluginRuntime);
 }
 
-function createQaChannelConfig(params: { baseUrl: string; allowFrom?: string[] }) {
+function createQaChannelConfig(params: {
+  baseUrl: string;
+  allowFrom?: string[];
+  mediaMaxMb?: number;
+}) {
   return {
     channels: {
       "qa-channel": {
@@ -114,6 +119,7 @@ function createQaChannelConfig(params: { baseUrl: string; allowFrom?: string[] }
         botUserId: "openclaw",
         botDisplayName: "OpenClaw QA",
         allowFrom: params.allowFrom,
+        mediaMaxMb: params.mediaMaxMb,
       },
     },
   };
@@ -146,12 +152,17 @@ function requireQaActionHandler() {
 async function startQaChannelTestHarness(params?: {
   runtime?: PluginRuntime;
   allowFrom?: string[];
+  mediaMaxMb?: number;
 }) {
   installQaChannelTestRegistry();
   const state = createQaBusState();
   const bus = await startQaBusServer({ state });
   setQaChannelRuntime(params?.runtime ?? createMockQaRuntime());
-  const cfg = createQaChannelConfig({ baseUrl: bus.baseUrl, allowFrom: params?.allowFrom });
+  const cfg = createQaChannelConfig({
+    baseUrl: bus.baseUrl,
+    allowFrom: params?.allowFrom,
+    mediaMaxMb: params?.mediaMaxMb,
+  });
   const account = qaChannelPlugin.config.resolveAccount(cfg, "default");
   const abort = new AbortController();
   const startAccount = requireQaStartAccount();
@@ -610,6 +621,71 @@ describe("qa-channel plugin", () => {
     }
   });
 
+  it.each(["inline", "remote"] as const)(
+    "rejects oversized %s inbound bytes without stopping subsequent messages",
+    async (source) => {
+      const dispatched: Record<string, unknown>[] = [];
+      const originalFetch = globalThis.fetch;
+      if (source === "remote") {
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+            const url = new URL(input instanceof Request ? input.url : String(input));
+            if (url.hostname === "93.184.216.34") {
+              return new Response(Buffer.alloc(Number(url.pathname.slice(1)), 0x61), {
+                headers: { "content-type": "text/plain" },
+              });
+            }
+            return originalFetch(input, init);
+          }),
+        );
+      }
+      const harness = await startQaChannelTestHarness({
+        allowFrom: ["*"],
+        mediaMaxMb: 1 / 1024,
+        runtime: createMockQaRuntime({ onDispatch: (ctx) => dispatched.push(ctx) }),
+      });
+      try {
+        for (const [text, bytes] of [
+          ["oversized", 1536],
+          ["small", 512],
+        ] as const) {
+          harness.state.addInboundMessage({
+            conversation: { id: "alice", kind: "direct" },
+            senderId: "alice",
+            text,
+            attachments: [
+              {
+                id: text,
+                kind: "file",
+                mimeType: "text/plain",
+                fileName: `${text}.txt`,
+                ...(source === "inline"
+                  ? { contentBase64: Buffer.alloc(bytes, 0x61).toString("base64") }
+                  : { url: `https://93.184.216.34/${bytes}` }),
+              },
+            ],
+          });
+          await harness.state.waitFor({
+            kind: "message-text",
+            textIncludes: `qa-echo: ${text}`,
+            direction: "outbound",
+            timeoutMs: 15_000,
+          });
+        }
+        expect(dispatched).toHaveLength(2);
+        expect(dispatched[0]?.media).toEqual([]);
+        expect(dispatched[0]?.BodyForAgent).toContain("attachment unavailable");
+        expect(dispatched[1]?.media).toHaveLength(1);
+        const media = dispatched[1]?.media as Array<{ path: string }>;
+        expect(await readFile(media[0]!.path)).toEqual(Buffer.alloc(512, 0x61));
+      } finally {
+        await harness.stop();
+        vi.unstubAllGlobals();
+      }
+    },
+  );
+
   it("keeps deleted messages out of channel actions and makes reactions idempotent", async () => {
     installQaChannelTestRegistry();
     const state = createQaBusState();
@@ -716,10 +792,22 @@ describe("qa-channel plugin", () => {
         action: "thread-reply",
         cfg,
         accountId: "default",
-        params: { channelId: "qa-room", threadId: thread.id, text: "owned reply" },
+        params: { to: "channel:qa-room", threadId: thread.id, message: "owned reply" },
       });
-      const payload = extractToolPayload(result) as { message: { threadId: string } };
+      const payload = extractToolPayload(result) as {
+        message: { id: string; threadId: string };
+        receipt: {
+          primaryPlatformMessageId?: string;
+          threadId?: string;
+          parts: Array<{ threadId?: string }>;
+        };
+      };
       expect(payload.message.threadId).toBe(thread.id);
+      expect(payload.receipt).toMatchObject({
+        primaryPlatformMessageId: payload.message.id,
+        threadId: thread.id,
+        parts: [{ threadId: thread.id }],
+      });
     } finally {
       await bus.stop();
     }

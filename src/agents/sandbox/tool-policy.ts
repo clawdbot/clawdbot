@@ -104,7 +104,11 @@ function pickConfiguredAlsoAllow(params: { agent?: string[]; global?: string[] }
   return { values: undefined, source: undefined };
 }
 
-function mergeAllowlist(base: string[] | undefined, extra: string[] | undefined): string[] {
+function mergeAllowlist(
+  base: string[] | undefined,
+  extra: string[] | undefined,
+  defaultAllow: readonly string[],
+): string[] {
   if (Array.isArray(base)) {
     // Preserve the existing sandbox meaning of `allow: []` => allow all.
     if (base.length === 0) {
@@ -116,9 +120,9 @@ function mergeAllowlist(base: string[] | undefined, extra: string[] | undefined)
     return uniqueStrings([...base, ...extra]);
   }
   if (Array.isArray(extra) && extra.length > 0) {
-    return uniqueStrings([...DEFAULT_TOOL_ALLOW, ...extra]);
+    return uniqueStrings([...defaultAllow, ...extra]);
   }
-  return [...DEFAULT_TOOL_ALLOW];
+  return [...defaultAllow];
 }
 
 function pickAllowSource(params: {
@@ -235,6 +239,7 @@ export function isToolAllowed(policy: SandboxToolPolicy, name: string) {
 export function resolveSandboxToolPolicyForAgent(
   cfg?: OpenClawConfig,
   agentId?: string,
+  options?: { containedToolNames?: readonly string[] },
 ): SandboxToolPolicyResolved {
   const agentConfig = cfg && agentId ? resolveAgentConfig(cfg, agentId) : undefined;
   const agentPolicy = agentConfig?.tools?.sandbox?.tools as SandboxToolPolicyConfig | undefined;
@@ -258,11 +263,15 @@ export function resolveSandboxToolPolicyForAgent(
     alsoAllow: alsoAllowConfig.values,
   });
 
-  const resolvedAllow = mergeAllowlist(allowConfig.values, alsoAllowConfig.values);
+  // Host-bound tools that operate inside this placement are sandbox capabilities.
+  // Change defaults only; configured allow/deny lists retain their normal authority.
+  const containedTools = new Set(options?.containedToolNames);
+  const defaultAllow = uniqueStrings([...DEFAULT_TOOL_ALLOW, ...containedTools]);
+  const resolvedAllow = mergeAllowlist(allowConfig.values, alsoAllowConfig.values, defaultAllow);
   const resolvedDeny = Array.isArray(denyConfig.values)
     ? [...denyConfig.values]
     : filterDefaultDenyForExplicitAllows({
-        deny: [...DEFAULT_TOOL_DENY],
+        deny: DEFAULT_TOOL_DENY.filter((name) => !containedTools.has(name)),
         explicitAllowPatterns,
       });
 

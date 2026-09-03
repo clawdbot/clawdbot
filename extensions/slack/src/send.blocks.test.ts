@@ -429,6 +429,19 @@ describe("sendMessageSlack blocks", () => {
     expect(
       delivered.some((result) => result.receipt.parts[0]?.kind === "card" && !result.meta),
     ).toBe(true);
+    expect(
+      aggregateResult.receipt.parts.map(({ platformMessageId, kind, index }) => ({
+        platformMessageId,
+        kind,
+        index,
+      })),
+    ).toEqual(
+      delivered.map((result, index) => ({
+        platformMessageId: result.messageId,
+        kind: result.receipt.parts[0]?.kind,
+        index,
+      })),
+    );
     const questionDelivery = delivered.find((delivery) => delivery.meta);
     expect(questionDelivery?.messageId).not.toBe(aggregateResult.messageId);
     expect(JSON.stringify(aggregateResult.meta)).toBe(

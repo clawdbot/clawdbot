@@ -44,6 +44,13 @@ function makeOllamaResponse(params: {
 }
 
 const MODEL_INFO = { api: "ollama", provider: "ollama", id: "qwen3.5" };
+const STREAM_MODEL = {
+  api: "ollama",
+  provider: "ollama",
+  id: "qwen3.5",
+  input: ["text"],
+  contextWindow: 65536,
+} as const;
 
 describe("isOllamaCompatProvider", () => {
   it.each([
@@ -167,11 +174,7 @@ describe("createOllamaStreamFn thinking events", () => {
     });
 
     const streamFn = createOllamaStreamFn("http://localhost:11434");
-    const stream = streamFn(
-      { api: "ollama", provider: "ollama", id: "qwen3.5", contextWindow: 65536 } as never,
-      context,
-      options,
-    );
+    const stream = streamFn(STREAM_MODEL as never, context, options);
 
     const events: Array<{ type: string; [key: string]: unknown }> = [];
     for await (const event of stream as AsyncIterable<{
@@ -480,7 +483,7 @@ describe("createOllamaStreamFn thinking events", () => {
 
     const streamFn = createOllamaStreamFn("http://localhost:11434");
     const stream = streamFn(
-      { api: "ollama", provider: "ollama", id: "qwen3.5", contextWindow: 65536 } as never,
+      STREAM_MODEL as never,
       { messages: [{ role: "user", content: "test" }] } as never,
       {},
     );
@@ -528,7 +531,7 @@ describe("createOllamaStreamFn thinking events", () => {
 
     const streamFn = createOllamaStreamFn("http://localhost:11434");
     const stream = streamFn(
-      { api: "ollama", provider: "ollama", id: "qwen3.5", contextWindow: 65536 } as never,
+      STREAM_MODEL as never,
       { messages: [{ role: "user", content: "test" }] } as never,
       {},
     );
@@ -540,6 +543,132 @@ describe("createOllamaStreamFn thinking events", () => {
 
     expect(events.some((event) => event.type === "done")).toBe(true);
     expect(refreshTimeout).toHaveBeenCalledTimes(chunks.length);
+  });
+
+  it("redacts reflected credentials from a real non-2xx Ollama response", async () => {
+    const configuredSecret = "stream-transport-configured-secret";
+    const bearerCredential = "stream-transport-bearer-secret";
+    let returnSuccess = false;
+    let receivedConfiguredHeader: string | undefined;
+    let receivedAuthorization: string | undefined;
+    const server = createServer((request, response) => {
+      const configuredHeader = request.headers["x-proxy-auth"];
+      receivedConfiguredHeader =
+        typeof configuredHeader === "string" ? configuredHeader : undefined;
+      receivedAuthorization = request.headers.authorization;
+      if (returnSuccess) {
+        response.writeHead(200, { "content-type": "application/x-ndjson" });
+        response.end(`${JSON.stringify(makeOllamaResponse({ content: "success control" }))}\n`);
+        return;
+      }
+      response.writeHead(429, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          error: "rate limit exceeded",
+          configuredEcho: configuredSecret,
+          bearerEcho: bearerCredential,
+        }),
+      );
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+
+    try {
+      const { fetchWithSsrFGuard } = await vi.importActual<
+        typeof import("openclaw/plugin-sdk/ssrf-runtime")
+      >("openclaw/plugin-sdk/ssrf-runtime");
+      fetchWithSsrFGuardMock.mockImplementation(fetchWithSsrFGuard);
+
+      const address = server.address() as AddressInfo;
+      const streamFn = createOllamaStreamFn(`http://127.0.0.1:${address.port}`, {
+        "X-Proxy-Auth": configuredSecret,
+      });
+      const stream = streamFn(
+        STREAM_MODEL as never,
+        { messages: [{ role: "user", content: "test" }] } as never,
+        { apiKey: bearerCredential },
+      );
+
+      const events: Array<{ type: string; error?: { errorMessage?: string } }> = [];
+      for await (const event of stream as AsyncIterable<{
+        type: string;
+        error?: { errorMessage?: string };
+      }>) {
+        events.push(event);
+      }
+
+      const errorEvent = events.find((event) => event.type === "error");
+      expect(receivedConfiguredHeader).toBe(configuredSecret);
+      expect(receivedAuthorization).toBe(`Bearer ${bearerCredential}`);
+      expect(errorEvent?.error?.errorMessage).toMatch(/^429\b/);
+      expect(errorEvent?.error?.errorMessage).toContain("rate limit exceeded");
+      expect(errorEvent?.error?.errorMessage).not.toContain(configuredSecret);
+      expect(errorEvent?.error?.errorMessage).not.toContain(bearerCredential);
+
+      returnSuccess = true;
+      const successEvents: Array<{ type: string }> = [];
+      for await (const event of streamFn(
+        STREAM_MODEL as never,
+        { messages: [{ role: "user", content: "test" }] } as never,
+        { apiKey: bearerCredential },
+      ) as AsyncIterable<{ type: string }>) {
+        successEvents.push(event);
+      }
+      expect(successEvents.some((event) => event.type === "done")).toBe(true);
+      console.info(
+        "[ollama credential redaction proof] surface=stream status=429 safe-marker-present=true authorization-secret-absent=true custom-secret-absent=true success-control=true",
+      );
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it("rejects incomplete UTF-8 after a real terminal Ollama response", async () => {
+    let corrupted = true;
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/x-ndjson" });
+      const valid = Buffer.from(`${JSON.stringify(makeOllamaResponse({ content: "ok" }))}\n`);
+      response.end(corrupted ? Buffer.concat([valid, Buffer.from([0xc3])]) : valid);
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+
+    try {
+      const { fetchWithSsrFGuard } = await vi.importActual<
+        typeof import("openclaw/plugin-sdk/ssrf-runtime")
+      >("openclaw/plugin-sdk/ssrf-runtime");
+      fetchWithSsrFGuardMock.mockImplementation(fetchWithSsrFGuard);
+
+      const address = server.address() as AddressInfo;
+      const streamFn = createOllamaStreamFn(`http://127.0.0.1:${address.port}`);
+      const readEventTypes = async () => {
+        const events: string[] = [];
+        for await (const event of streamFn(
+          STREAM_MODEL as never,
+          { messages: [{ role: "user", content: "test" }] } as never,
+          {},
+        ) as AsyncIterable<{ type: string }>) {
+          events.push(event.type);
+        }
+        return events;
+      };
+
+      expect(await readEventTypes()).toContain("error");
+      corrupted = false;
+      expect(await readEventTypes()).toContain("done");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 
   it("keeps a real slow native Ollama response alive while NDJSON chunks advance", async () => {
@@ -590,7 +719,7 @@ describe("createOllamaStreamFn thinking events", () => {
       const address = server.address() as AddressInfo;
       const streamFn = createOllamaStreamFn(`http://127.0.0.1:${address.port}`);
       const stream = streamFn(
-        { api: "ollama", provider: "ollama", id: "qwen3.5", contextWindow: 65536 } as never,
+        STREAM_MODEL as never,
         { messages: [{ role: "user", content: "test" }] } as never,
         { requestTimeoutMs } as never,
       );
@@ -636,7 +765,7 @@ describe("createOllamaStreamFn thinking events", () => {
       const address = server.address() as AddressInfo;
       const streamFn = createOllamaStreamFn(`http://127.0.0.1:${address.port}`);
       const stream = streamFn(
-        { api: "ollama", provider: "ollama", id: "qwen3.5", contextWindow: 65536 } as never,
+        STREAM_MODEL as never,
         { messages: [{ role: "user", content: "test" }] } as never,
         { requestTimeoutMs: 120 } as never,
       );
@@ -674,7 +803,7 @@ describe("createOllamaStreamFn thinking events", () => {
     const controller = new AbortController();
     const streamFn = createOllamaStreamFn("http://localhost:11434");
     const stream = streamFn(
-      { api: "ollama", provider: "ollama", id: "qwen3.5", contextWindow: 65536 } as never,
+      STREAM_MODEL as never,
       { messages: [{ role: "user", content: "test" }] } as never,
       { signal: controller.signal },
     );

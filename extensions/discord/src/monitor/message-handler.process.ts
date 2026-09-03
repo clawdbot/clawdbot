@@ -53,10 +53,6 @@ const TARGETED_ONLY_ALLOWED_MENTIONS = {
   parse: ["users", "roles"],
 } as APIAllowedMentions;
 
-function isProcessAborted(abortSignal?: AbortSignal): boolean {
-  return Boolean(abortSignal?.aborted);
-}
-
 function isFallbackOnlyToolWarningFinal(payload: ReplyPayload): boolean {
   if (payload.isError !== true || !isReplyPayloadNonTerminalToolErrorWarning(payload)) {
     return false;
@@ -70,6 +66,13 @@ type DiscordMessageProcessObserver = {
   onFinalReplyStart?: () => void;
   onFinalReplyDelivered?: () => void;
   onReplyPlanResolved?: (params: { createdThreadId?: string; sessionKey?: string }) => void;
+};
+
+type DiscordProviderDeliveryInfo = {
+  kind: ReplyDispatchKind;
+  bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
+  onPlatformSendDispatch: () => Promise<void>;
+  assertPlatformSendAuthorized: () => void;
 };
 
 export async function processDiscordMessage(
@@ -103,7 +106,7 @@ async function processDiscordMessageInner(
     turnAdoptionLifecycle,
     preparedMedia: mediaList,
   } = ctx;
-  if (isProcessAborted(abortSignal)) {
+  if (abortSignal?.aborted) {
     return;
   }
   const text = messageText;
@@ -217,7 +220,7 @@ async function processDiscordMessageInner(
   let userFacingFinalDelivered = false;
   let userFacingFinalDeliveryFailed = false;
   let pendingToolWarningFinal:
-    | { payload: ReplyPayload; info: { kind: ReplyDispatchKind } }
+    | { payload: ReplyPayload; info: DiscordProviderDeliveryInfo }
     | undefined;
   const markFinalReplyDelivered = (isError = false) => {
     draftPreview.markFinalReplyDelivered(isError);
@@ -248,7 +251,7 @@ async function processDiscordMessageInner(
   });
   let replyLifecycleStarted = false;
   const onDiscordReplyStart = async () => {
-    if (isProcessAborted(abortSignal)) {
+    if (abortSignal?.aborted) {
       return;
     }
     replyLifecycleStarted = true;
@@ -265,16 +268,13 @@ async function processDiscordMessageInner(
 
   const deliverDiscordPayload = async (
     payload: ReplyPayload,
-    info: {
-      kind: ReplyDispatchKind;
-      bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
-    },
+    info: DiscordProviderDeliveryInfo,
     options?: {
       allowFallbackOnlyToolWarning?: boolean;
       allowProgressBlock?: boolean;
     },
   ) => {
-    if (isProcessAborted(abortSignal)) {
+    if (abortSignal?.aborted) {
       // Surface so operators don't chase missing replies when an abort
       // drops a model-produced text payload.
       logVerbose(
@@ -326,6 +326,8 @@ async function processDiscordMessageInner(
         mediaLocalRoots,
         kind: "block",
         bindPendingFinalDelivery: info.bindPendingFinalDelivery,
+        onPlatformSendDispatch: info.onPlatformSendDispatch,
+        assertPlatformSendAuthorized: info.assertPlatformSendAuthorized,
       });
       if (result.visibleReplySent) {
         replyReference.markSent();
@@ -423,7 +425,7 @@ async function processDiscordMessageInner(
             return undefined;
           },
           editFinal: async (previewMessageId, edit) => {
-            if (isProcessAborted(abortSignal)) {
+            if (abortSignal?.aborted) {
               throw new Error("process aborted");
             }
             notifyFinalReplyStart();
@@ -445,7 +447,7 @@ async function processDiscordMessageInner(
           },
         }),
         deliverNormally: async () => {
-          if (isProcessAborted(abortSignal)) {
+          if (abortSignal?.aborted) {
             return false;
           }
           const fallbackPayload =
@@ -481,6 +483,8 @@ async function processDiscordMessageInner(
             allowedMentions,
             kind: info.kind,
             bindPendingFinalDelivery: info.bindPendingFinalDelivery,
+            onPlatformSendDispatch: info.onPlatformSendDispatch,
+            assertPlatformSendAuthorized: info.assertPlatformSendAuthorized,
           });
           return deliveryResult.visibleReplySent;
         },
@@ -493,7 +497,7 @@ async function processDiscordMessageInner(
         return { visibleReplySent: true };
       }
     }
-    if (isProcessAborted(abortSignal)) {
+    if (abortSignal?.aborted) {
       // Mirror the entry-point abort log so a mid-deliver abort (after
       // the preview path bowed out) does not silently drop the reply.
       logVerbose(
@@ -530,6 +534,8 @@ async function processDiscordMessageInner(
       mediaLocalRoots,
       kind: info.kind,
       bindPendingFinalDelivery: info.bindPendingFinalDelivery,
+      onPlatformSendDispatch: info.onPlatformSendDispatch,
+      assertPlatformSendAuthorized: info.assertPlatformSendAuthorized,
     });
     if (!result.visibleReplySent) {
       return result;
@@ -573,7 +579,7 @@ async function processDiscordMessageInner(
   let dispatchError = false;
   let dispatchAborted = false;
   const deliverPendingToolWarningFinalIfNeeded = async () => {
-    if (!pendingToolWarningFinal || userFacingFinalDelivered || isProcessAborted(abortSignal)) {
+    if (!pendingToolWarningFinal || userFacingFinalDelivered || abortSignal?.aborted) {
       return undefined;
     }
     const pending = pendingToolWarningFinal;
@@ -589,7 +595,7 @@ async function processDiscordMessageInner(
     }
   };
   try {
-    if (isProcessAborted(abortSignal)) {
+    if (abortSignal?.aborted) {
       dispatchAborted = true;
       return;
     }
@@ -660,7 +666,7 @@ async function processDiscordMessageInner(
       return;
     }
     dispatchResult = preparedResult.dispatchResult;
-    if (isProcessAborted(abortSignal)) {
+    if (abortSignal?.aborted) {
       dispatchAborted = true;
       return;
     }
@@ -678,13 +684,28 @@ async function processDiscordMessageInner(
       markFinalReplyDelivered();
     }
   } catch (err) {
-    if (isProcessAborted(abortSignal)) {
+    if (abortSignal?.aborted) {
       dispatchAborted = true;
       return;
     }
     dispatchError = true;
-    if (await completeDiscordSessionConflict(err, deliverDiscordPayload, onDiscordDeliveryError)) {
-      // The visible terminal notice owns this event, so replay can commit.
+    const conflictOutcome = await completeDiscordSessionConflict(
+      err,
+      sourceReplyDeliveryMode,
+      (payload, info) =>
+        deliverDiscordPayload(payload, {
+          ...info,
+          onPlatformSendDispatch: () => Promise.resolve(),
+          assertPlatformSendAuthorized: () => undefined,
+        }),
+      onDiscordDeliveryError,
+    );
+    if (conflictOutcome) {
+      runtime.error(
+        `discord: reply session init conflict exhausted; terminal notice ${conflictOutcome} ` +
+          `(sourceReplyDeliveryMode=${sourceReplyDeliveryMode}, message=${message.id}, session=${persistedSessionKey})`,
+      );
+      // Both a delivered notice and recorded policy suppression consume the event.
       return;
     }
     throw err;

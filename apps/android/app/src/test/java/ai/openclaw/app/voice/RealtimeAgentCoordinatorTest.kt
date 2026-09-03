@@ -6,6 +6,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -18,6 +19,156 @@ import org.robolectric.RobolectricTestRunner
 @RunWith(RobolectricTestRunner::class)
 class RealtimeAgentCoordinatorTest {
   private lateinit var calls: MutableList<GatewayCall>
+
+  @Test
+  fun `keyless duplicate stays quarantined when an owned completion is claimed or stopped`() =
+    runTest {
+      for (stopped in listOf(false, true)) {
+        for (keylessFirst in listOf(false, true)) {
+          val response = CompletableDeferred<String>()
+          val unhandled = mutableListOf<RealtimeAgentUnhandledCompletion>()
+          val coordinator =
+            coordinator(
+              responses = { method -> if (method == "talk.client.toolCall") response.await() else "{}" },
+              onUnhandledCompletion = unhandled::add,
+            )
+          coordinator.beginSession(RealtimeAgentSession("relay-1", "main"))
+          coordinator.consult("call-1")
+          runCurrent()
+          val keys = listOf(null, "agent:voice:main").let { if (keylessFirst) it else it.reversed() }
+          keys.forEach { assertTrue(coordinator.complete(it, "run-1", "owned")) }
+          if (stopped) coordinator.endSession()
+          response.complete("""{"runId":"run-1","agentSessionKey":"agent:voice:main"}""")
+          runCurrent()
+
+          assertTrue("Compatible duplicate escaped into ordinary TTS", unhandled.isEmpty())
+          assertEquals(if (stopped) 0 else 1, calls.count { it.method == "talk.session.submitToolResult" })
+          coordinator.endSession()
+        }
+      }
+    }
+
+  @Test
+  fun `wrong session early final cannot displace the owned final`() =
+    runTest {
+      val response = CompletableDeferred<String>()
+      val unhandled = mutableListOf<RealtimeAgentUnhandledCompletion>()
+      val coordinator =
+        coordinator(
+          responses = { method -> if (method == "talk.client.toolCall") response.await() else "{}" },
+          onUnhandledCompletion = unhandled::add,
+        )
+      coordinator.beginSession(RealtimeAgentSession("relay-1", "main"))
+      coordinator.consult("call-1")
+      runCurrent()
+      assertTrue(coordinator.complete("other-session", "run-1", "private"))
+      assertTrue(coordinator.complete("agent:voice:main", "run-1", "owned"))
+      response.complete("""{"runId":"run-1","agentSessionKey":"agent:voice:main"}""")
+      runCurrent()
+
+      val result = calls.single { it.method == "talk.session.submitToolResult" }
+      assertTrue(result.params.contains("\"text\":\"owned\""))
+      assertEquals(listOf("other-session"), unhandled.map { it.sessionKey })
+    }
+
+  @Test
+  fun `later duplicate ack cannot steal an earlier pending completion`() =
+    runTest {
+      val responses = List(2) { CompletableDeferred<String>() }
+      var requestIndex = 0
+      val coordinator =
+        coordinator(
+          responses = { method -> if (method == "talk.client.toolCall") responses[requestIndex++].await() else "{}" },
+        )
+      coordinator.beginSession(RealtimeAgentSession("relay-1", "main"))
+      coordinator.consult("call-1")
+      runCurrent()
+      assertTrue(coordinator.complete("agent:voice:main", "run-1", "owned"))
+      coordinator.consult("call-2")
+      runCurrent()
+      val ack = """{"runId":"run-1","agentSessionKey":"agent:voice:main"}"""
+      responses[1].complete(ack)
+      runCurrent()
+      responses[0].complete(ack)
+      runCurrent()
+
+      val results = calls.filter { it.method == "talk.session.submitToolResult" }.map { Json.parseToJsonElement(it.params).jsonObject }
+      assertEquals(2, results.size)
+      assertEquals(
+        "tool call returned a duplicate run id",
+        results
+          .single { it.getValue("callId").jsonPrimitive.content == "call-2" }
+          .getValue("result")
+          .jsonObject
+          .getValue("error")
+          .jsonPrimitive.content,
+      )
+      assertEquals(
+        "owned",
+        results
+          .single { it.getValue("callId").jsonPrimitive.content == "call-1" }
+          .getValue("result")
+          .jsonObject
+          .getValue("text")
+          .jsonPrimitive.content,
+      )
+    }
+
+  @Test
+  fun `consult follows acknowledged ownership before and after the ack`() =
+    runTest {
+      for ((voiceKey, agentKey) in listOf("main" to "agent:voice:main", "global" to "global")) {
+        for (early in listOf(false, true)) {
+          val response = CompletableDeferred<String>()
+          val unhandled = mutableListOf<RealtimeAgentUnhandledCompletion>()
+          val coordinator =
+            coordinator(
+              responses = { method -> if (method == "talk.client.toolCall") response.await() else "{}" },
+              onUnhandledCompletion = unhandled::add,
+            )
+          coordinator.beginSession(RealtimeAgentSession("relay-1", voiceKey))
+          coordinator.consult("call-1")
+          runCurrent()
+
+          if (early) {
+            assertTrue(coordinator.complete("other-session", "unrelated-run", "private"))
+            assertTrue(coordinator.complete(agentKey, "run-1", "done"))
+            runCurrent()
+            assertTrue(calls.none { it.method == "talk.session.submitToolResult" })
+          }
+          response.complete("""{"runId":"run-1","agentId":"voice","agentSessionKey":"$agentKey"}""")
+          runCurrent()
+          if (!early) {
+            assertFalse(coordinator.complete("other-session", "run-1", "private"))
+            assertTrue(coordinator.complete(agentKey, "run-1", "done"))
+            runCurrent()
+          }
+
+          val consult = calls.single { it.method == "talk.client.toolCall" }
+          assertEquals(
+            voiceKey,
+            Json
+              .parseToJsonElement(consult.params)
+              .jsonObject
+              .getValue("sessionKey")
+              .jsonPrimitive.content,
+          )
+          val result = calls.single { it.method == "talk.session.submitToolResult" }
+          val params = Json.parseToJsonElement(result.params).jsonObject
+          assertEquals("relay-1", params.getValue("sessionId").jsonPrimitive.content)
+          assertEquals(
+            "done",
+            params
+              .getValue("result")
+              .jsonObject
+              .getValue("text")
+              .jsonPrimitive.content,
+          )
+          assertEquals(if (early) listOf("unrelated-run") else emptyList(), unhandled.map { it.runId })
+          coordinator.endSession()
+        }
+      }
+    }
 
   @Test
   fun `consult correlates the active run and submits its final text`() =
@@ -224,12 +375,14 @@ class RealtimeAgentCoordinatorTest {
     }
 
   @Test
-  fun `old session request does not buffer a new session completion`() =
+  fun `old session request releases an unrelated completion after its ack`() =
     runTest {
       val oldResponse = CompletableDeferred<String>()
+      val unhandled = mutableListOf<RealtimeAgentUnhandledCompletion>()
       val coordinator =
         coordinator(
           responses = { method -> if (method == "talk.client.toolCall") oldResponse.await() else "{}" },
+          onUnhandledCompletion = unhandled::add,
         )
       coordinator.beginSession(RealtimeAgentSession("relay-old", "session-old"))
       coordinator.consult("call-old")
@@ -237,10 +390,39 @@ class RealtimeAgentCoordinatorTest {
 
       coordinator.beginSession(RealtimeAgentSession("relay-new", "session-new"))
 
-      assertFalse(coordinator.complete("session-new", "ordinary-run", "ordinary"))
+      assertTrue(coordinator.complete("session-new", "ordinary-run", "ordinary"))
       oldResponse.complete("""{"runId":"run-old"}""")
       runCurrent()
       assertTrue(calls.none { it.method == "talk.session.submitToolResult" })
+      assertEquals(listOf("ordinary-run"), unhandled.map { it.runId })
+    }
+
+  @Test
+  fun `new pending calls cannot prolong an unrelated early completion`() =
+    runTest {
+      val responses = List(2) { CompletableDeferred<String>() }
+      var requestIndex = 0
+      val unhandled = mutableListOf<RealtimeAgentUnhandledCompletion>()
+      val coordinator =
+        coordinator(
+          responses = { method -> if (method == "talk.client.toolCall") responses[requestIndex++].await() else "{}" },
+          onUnhandledCompletion = unhandled::add,
+        )
+      coordinator.beginSession(RealtimeAgentSession("relay-1", "session-1"))
+      coordinator.consult("call-1")
+      runCurrent()
+      assertTrue(coordinator.complete("session-1", "ordinary-run", "ordinary"))
+      coordinator.consult("call-2")
+      runCurrent()
+
+      responses[0].complete("""{"runId":"run-1"}""")
+      runCurrent()
+
+      assertEquals(listOf("ordinary-run"), unhandled.map { it.runId })
+      assertTrue(calls.none { it.method == "talk.session.submitToolResult" })
+      responses[1].complete("""{"runId":"run-2"}""")
+      runCurrent()
+      coordinator.endSession()
     }
 
   @Test
@@ -419,7 +601,7 @@ class RealtimeAgentCoordinatorTest {
   ): Boolean = handleToolCall(callId, "openclaw_agent_consult", null, forced)
 
   private fun RealtimeAgentCoordinator.complete(
-    sessionKey: String,
+    sessionKey: String?,
     runId: String,
     text: String,
   ): Boolean = handleChatEvent(sessionKey, runId, "final", Json.parseToJsonElement("""{"role":"assistant","content":"$text"}"""))

@@ -186,12 +186,29 @@ export const UpdateHoldResultSchema = closedObject({
 
 /** Request payload for running an update/restart flow with optional channel delivery context. */
 export const UpdateRunParamsSchema = closedObject({
+  requester: Type.Optional(
+    closedObject({
+      channel: Type.Optional(Type.String()),
+      accountId: Type.Optional(Type.String()),
+      senderId: Type.Optional(Type.String()),
+    }),
+  ),
   sessionKey: Type.Optional(Type.String()),
   deliveryContext: Type.Optional(ConfigDeliveryContextSchema),
   note: Type.Optional(Type.String()),
   continuationMessage: Type.Optional(Type.String()),
   restartDelayMs: Type.Optional(Type.Integer({ minimum: 0 })),
   timeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
+  target: Type.Optional(
+    closedObject({
+      kind: Type.Literal("git"),
+      upstreamRef: Type.String({
+        minLength: 1,
+        pattern: "^[^\\s\\u0000-\\u001f\\u007f-\\u009f]+$",
+      }),
+      upstreamSha: Type.String({ pattern: "^[a-fA-F0-9]{40}$" }),
+    }),
+  ),
 });
 
 /** UI metadata attached to config schema paths. */

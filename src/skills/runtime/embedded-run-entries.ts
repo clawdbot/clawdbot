@@ -1,5 +1,6 @@
 // Embedded run entry helpers serialize runtime skill metadata for agent run records.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { loadSkillLibrarySelection } from "../library/selection.js";
 import { resolveSkillRuntimeConfig } from "../loading/runtime-config.js";
 import {
   loadMergedWorkspaceSkills,
@@ -51,6 +52,11 @@ export function resolveEmbeddedRunSkillEntries(params: {
     cachedSkillEntries = skillRoots.executionSkillsDir
       ? loadMergedWorkspaceSkills({ ...skillRoots, ...options })
       : loadWorkspaceSkills(params.workspaceDir, options);
+    if (params.skillsSnapshot?.librarySelections?.length && params.workspaceOnly !== true) {
+      cachedSkillEntries.push(
+        ...loadSkillLibrarySelection(params.skillsSnapshot.librarySelections),
+      );
+    }
     return cachedSkillEntries;
   };
   return {

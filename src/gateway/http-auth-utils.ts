@@ -6,16 +6,20 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/io.js";
+import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { verifyDeviceToken } from "../infra/device-pairing-tokens.js";
 import { listDevicePairing } from "../infra/device-pairing.js";
 import { verifyPairingToken } from "../infra/pairing-token.js";
+import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { getUserProfileListItem } from "../state/user-profiles.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
 } from "./auth-rate-limit.js";
 import {
+  authorizeControlUiReadHttpGatewayConnect,
   authorizeHttpGatewayConnect,
   authorizeUserProfileAvatarHttpGatewayConnect,
   type GatewayAuthResult,
@@ -30,6 +34,11 @@ import {
   listControlUiPluginTabAuthGrants,
   type ControlUiPluginTabAuthGrant,
 } from "./control-ui-plugin-tabs.js";
+import {
+  resolveAuthenticatedHttpUserProfile,
+  resolveHttpProfile,
+  usesSharedSecretGatewayMethod,
+} from "./http-auth-user-profile.js";
 import { sendGatewayAuthFailure, sendJson, sendMissingScopeForbidden } from "./http-common.js";
 import {
   prepareGatewayIngressAttribution,
@@ -42,6 +51,7 @@ import {
 } from "./method-scopes.js";
 import { resolveBrowserOriginPolicy } from "./origin-check.js";
 import { withSerializedCredentialFallbackAttempt } from "./rate-limit-attempt-serialization.js";
+import type { GatewayClient } from "./server-methods/shared-types.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
 const CONTROL_UI_OPERATOR_READ_SCOPE = "operator.read";
@@ -73,9 +83,16 @@ export type AuthorizedGatewayHttpRequest = {
   authMethod?: GatewayAuthResult["method"];
   user?: string;
   trustDeclaredOperatorScopes: boolean;
+  authenticatedUserProfile?: GatewayClient["authenticatedUserProfile"];
+  operatorRolePolicy?: GatewayOperatorRoleDefinition;
+  operatorRoleActor?: { kind: "system" };
   controlUiPluginGrants?: ControlUiPluginTabAuthGrant[];
   controlUiPluginGrant?: ControlUiPluginTabAuthGrant;
 };
+type AuthenticatedHttpUserProfile = Pick<
+  AuthorizedGatewayHttpRequest,
+  "authenticatedUserProfile" | "operatorRolePolicy"
+>;
 
 export type GatewayHttpRequestAuthCheckResult =
   | {
@@ -127,8 +144,16 @@ function usesSharedSecretHttpAuth(auth: SharedSecretGatewayAuth | undefined): bo
   return auth?.mode === "token" || auth?.mode === "password";
 }
 
-function usesSharedSecretGatewayMethod(method: GatewayAuthResult["method"] | undefined): boolean {
-  return method === "token" || method === "password";
+export function applyHttpOperatorRoleScopeCeiling<Scope extends string>(
+  scopes: Scope[],
+  auth: Pick<AuthorizedGatewayHttpRequest, "operatorRolePolicy"> | undefined,
+): Scope[] {
+  const allowedScopes = auth?.operatorRolePolicy?.scopes;
+  return allowedScopes
+    ? scopes.filter((scope) =>
+        roleScopesAllow({ role: "operator", requestedScopes: [scope], allowedScopes }),
+      )
+    : scopes;
 }
 
 function shouldTrustDeclaredHttpOperatorScopes(
@@ -189,12 +214,16 @@ function resolveControlUiReadOperatorScopes(
   req: IncomingMessage,
   authMethod: NonNullable<GatewayAuthResult["method"]>,
   deviceScopes: string[] | undefined,
+  authenticatedRequest?: Pick<AuthorizedGatewayHttpRequest, "operatorRolePolicy">,
 ): string[] {
   if (authMethod === "device-token") {
-    return deviceScopes ?? [];
+    return applyHttpOperatorRoleScopeCeiling(deviceScopes ?? [], authenticatedRequest);
   }
   if (authMethod === "trusted-proxy" || authMethod === "tailscale") {
-    return resolveTrustedHttpOperatorScopes(req, { trustDeclaredOperatorScopes: true });
+    return resolveTrustedHttpOperatorScopes(req, {
+      trustDeclaredOperatorScopes: true,
+      ...authenticatedRequest,
+    });
   }
   return authMethod === "bootstrap-token" ? [] : [...CLI_DEFAULT_OPERATOR_SCOPES];
 }
@@ -223,7 +252,7 @@ export async function authorizeControlUiReadRequestOrReply(
   const canUseDeviceTokenFallback =
     Boolean(token) && auth.mode !== "trusted-proxy" && auth.mode !== "none";
   const run = async (): Promise<AuthorizedControlUiReadRequest | null> => {
-    const authResult = await authorizeHttpGatewayConnect({
+    const authResult = await authorizeControlUiReadHttpGatewayConnect({
       auth,
       connectAuth: token ? { token, password: token } : null,
       req: params.req,
@@ -284,9 +313,27 @@ export async function authorizeControlUiReadRequestOrReply(
       return null;
     }
 
+    const cfg = getRuntimeConfig();
+    let authenticatedProfile;
+    try {
+      authenticatedProfile = await resolveAuthenticatedHttpUserProfile({
+        authResult: resolvedAuthResult,
+        cfg,
+        req: params.req,
+      });
+    } catch {
+      sendGatewayAuthFailure(params.res, { ok: false, reason: "user_profile_unavailable" });
+      return null;
+    }
     const authMethod = resolvedAuthResult.method ?? "none";
     const trustDeclaredOperatorScopes =
       authMethod === "trusted-proxy" || authMethod === "tailscale";
+    const operatorScopes = resolveControlUiReadOperatorScopes(
+      params.req,
+      authMethod,
+      deviceScopes,
+      authenticatedProfile,
+    );
     params.onPluginFrameGrants?.(
       setControlUiPluginAuthCookieForRequest(
         params.req,
@@ -294,10 +341,10 @@ export async function authorizeControlUiReadRequestOrReply(
         authMethod,
         trustDeclaredOperatorScopes,
         authGeneration,
-        deviceScopes,
+        operatorScopes,
+        authenticatedProfile.authenticatedUserProfile?.profileId,
       ),
     );
-    const operatorScopes = resolveControlUiReadOperatorScopes(params.req, authMethod, deviceScopes);
     const scopeAuth = authorizeOperatorScopesForMethod(
       params.requiredOperatorMethod ?? "assistant.media.get",
       operatorScopes,
@@ -372,19 +419,23 @@ export function setControlUiPluginAuthCookieForRequest(
   trustDeclaredOperatorScopes: boolean,
   authGeneration: string | undefined,
   authenticatedScopes?: readonly string[],
+  authenticatedProfileId?: string,
 ): ControlUiPluginTabAuthGrant[] {
-  const scopes = usesSharedSecretGatewayMethod(authMethod)
-    ? [...CLI_DEFAULT_OPERATOR_SCOPES]
-    : authMethod === "trusted-proxy" || authMethod === "tailscale"
-      ? resolveTrustedHttpOperatorScopes(req, {
-          trustDeclaredOperatorScopes,
-        })
-      : authMethod === "device-token"
-        ? (authenticatedScopes ?? [])
-        : [];
+  const scopes =
+    authenticatedScopes ??
+    (usesSharedSecretGatewayMethod(authMethod)
+      ? [...CLI_DEFAULT_OPERATOR_SCOPES]
+      : authMethod === "trusted-proxy" || authMethod === "tailscale"
+        ? resolveTrustedHttpOperatorScopes(req, {
+            trustDeclaredOperatorScopes,
+          })
+        : []);
   const grants = listControlUiPluginTabAuthGrants(scopes);
   if (grants.length > 0) {
-    return setControlUiPluginAuthCookie(res, grants, { generation: authGeneration });
+    return setControlUiPluginAuthCookie(res, grants, {
+      generation: authGeneration,
+      ...(authenticatedProfileId ? { profileId: authenticatedProfileId } : {}),
+    });
   }
   return [];
 }
@@ -411,10 +462,28 @@ export function authorizeControlUiPluginCookieRequest(
   if (grants.length === 0) {
     return null;
   }
+  const cfg = getRuntimeConfig();
+  let authenticatedProfile: AuthenticatedHttpUserProfile = {};
+  if (cfg.gateway?.roles) {
+    const profileId = grants[0]?.profileId;
+    if (!profileId || grants.some((grant) => grant.profileId !== profileId)) {
+      return null;
+    }
+    try {
+      const profile = getUserProfileListItem(profileId);
+      authenticatedProfile = resolveHttpProfile(profile.id, profile.updatedAt, cfg);
+    } catch {
+      return null;
+    }
+  }
+  for (const grant of grants) {
+    grant.scopes = applyHttpOperatorRoleScopeCeiling(grant.scopes, authenticatedProfile);
+  }
   return {
     requestAuth: {
       trustDeclaredOperatorScopes: false,
       controlUiPluginGrants: grants,
+      ...authenticatedProfile,
     },
     // Route dispatch selects the candidate that owns the first matched gateway
     // route. Do not union scopes before that owner boundary is known.
@@ -479,10 +548,17 @@ async function checkGatewayHttpRequestAuthWith(
     browserOriginPolicy,
   });
   if (!authResult.ok) {
-    return {
-      ok: false,
+    return { ok: false, authResult };
+  }
+  let authenticatedProfile;
+  try {
+    authenticatedProfile = await resolveAuthenticatedHttpUserProfile({
       authResult,
-    };
+      cfg: params.cfg ?? getRuntimeConfig(),
+      req: params.req,
+    });
+  } catch {
+    return { ok: false, authResult: { ok: false, reason: "user_profile_unavailable" } };
   }
   return {
     ok: true,
@@ -494,6 +570,11 @@ async function checkGatewayHttpRequestAuthWith(
       // must opt in explicitly if they want to treat that shared-secret path as a
       // full trusted-operator surface.
       trustDeclaredOperatorScopes: !usesSharedSecretGatewayMethod(authResult.method),
+      // Shared-secret authority belongs to authentication, independently of profile attribution.
+      ...(usesSharedSecretGatewayMethod(authResult.method)
+        ? { operatorRoleActor: { kind: "system" as const } }
+        : {}),
+      ...authenticatedProfile,
     },
   };
 }
@@ -569,7 +650,7 @@ export function resolveTrustedHttpOperatorScopes(
   req: IncomingMessage,
   authOrRequest?:
     | SharedSecretGatewayAuth
-    | Pick<AuthorizedGatewayHttpRequest, "trustDeclaredOperatorScopes">,
+    | Pick<AuthorizedGatewayHttpRequest, "trustDeclaredOperatorScopes" | "operatorRolePolicy">,
 ): string[] {
   if (!shouldTrustDeclaredHttpOperatorScopes(req, authOrRequest)) {
     // Gateway bearer auth only proves possession of the shared secret. Do not
@@ -578,19 +659,18 @@ export function resolveTrustedHttpOperatorScopes(
   }
 
   const headerValue = getHeader(req, "x-openclaw-scopes");
-  if (headerValue === undefined) {
-    // No scope header present - trusted clients without an explicit header
-    // get the default operator scopes (matching pre-#57783 behavior).
-    return [...CLI_DEFAULT_OPERATOR_SCOPES];
-  }
-  const raw = headerValue.trim();
-  if (!raw) {
-    return [];
-  }
-  return raw
-    .split(",")
-    .map((scope) => scope.trim())
-    .filter((scope) => scope.length > 0);
+  // Missing headers preserve trusted-client defaults; present empty headers grant nothing.
+  const scopes =
+    headerValue === undefined
+      ? [...CLI_DEFAULT_OPERATOR_SCOPES]
+      : headerValue
+          .split(",")
+          .map((scope) => scope.trim())
+          .filter((scope) => scope.length > 0);
+  return applyHttpOperatorRoleScopeCeiling(
+    scopes,
+    authOrRequest && "trustDeclaredOperatorScopes" in authOrRequest ? authOrRequest : undefined,
+  );
 }
 
 export function resolveOpenAiCompatibleHttpOperatorScopes(

@@ -84,6 +84,7 @@ fun parseHomeDestinationIntent(intent: Intent?): HomeDestination? {
   return when {
     // Debug-only shortcut keeps E2E navigation out of release builds.
     BuildConfig.DEBUG && action == actionOpenVoiceE2e -> HomeDestination.Voice
+
     else -> null
   }
 }
@@ -94,12 +95,13 @@ fun parseHomeDestinationIntent(intent: Intent?): HomeDestination? {
 fun parseAssistantLaunchIntent(intent: Intent?): AssistantLaunchRequest? {
   val action = intent?.action ?: return null
   return when (action) {
-    Intent.ACTION_ASSIST ->
+    Intent.ACTION_ASSIST -> {
       AssistantLaunchRequest(
         source = "assist",
         prompt = null,
         autoSend = false,
       )
+    }
 
     actionAskOpenClaw -> {
       val prompt = intent.getStringExtra(extraAssistantPrompt)?.trim()?.ifEmpty { null }
@@ -110,7 +112,9 @@ fun parseAssistantLaunchIntent(intent: Intent?): AssistantLaunchRequest? {
       )
     }
 
-    else -> null
+    else -> {
+      null
+    }
   }
 }
 
@@ -122,9 +126,13 @@ fun parseShareLaunchIntent(
   val action = intent?.action ?: return null
   if (action != Intent.ACTION_SEND && action != Intent.ACTION_SEND_MULTIPLE) return null
 
+  val indexedText =
+    if (action == Intent.ACTION_SEND_MULTIPLE) intent.getCharSequenceArrayListExtra(Intent.EXTRA_TEXT) else null
   val text =
-    listOf(intent.getStringExtra(Intent.EXTRA_SUBJECT), intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString())
-      .mapNotNull { value -> value?.trim()?.takeIf { it.isNotEmpty() } }
+    listOf(intent.getStringExtra(Intent.EXTRA_SUBJECT))
+      .plus(indexedText ?: listOfNotNull(intent.getCharSequenceExtra(Intent.EXTRA_TEXT)))
+      .plus(intent.clipData?.run { (0 until itemCount).map { getItemAt(it).text } }.orEmpty())
+      .mapNotNull { value -> value?.toString()?.trim()?.takeIf { it.isNotEmpty() } }
       .distinct()
       .joinToString(separator = "\n\n")
       .ifEmpty { null }
@@ -145,13 +153,17 @@ private fun sharedAttachments(
 ): SharedAttachmentSelection {
   val streamUris =
     when (action) {
-      Intent.ACTION_SEND ->
+      Intent.ACTION_SEND -> {
         listOfNotNull(IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java))
+      }
 
-      Intent.ACTION_SEND_MULTIPLE ->
+      Intent.ACTION_SEND_MULTIPLE -> {
         IntentCompat.getParcelableArrayListExtra(intent, Intent.EXTRA_STREAM, Uri::class.java).orEmpty()
+      }
 
-      else -> emptyList()
+      else -> {
+        emptyList()
+      }
     }
   val clipUris =
     intent.clipData

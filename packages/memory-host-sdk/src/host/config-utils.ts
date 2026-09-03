@@ -155,7 +155,7 @@ function resolveRequiredHomeDir(
 ): string {
   const explicitHome = normalizeHomeValue(env.OPENCLAW_HOME);
   const rawHome = explicitHome
-    ? explicitHome.replace(/^~(?=$|[\\/])/, resolveRawOsHomeDir(env, homedir) ?? "")
+    ? explicitHome.replace(/^~(?=$|[\\/])/, () => resolveRawOsHomeDir(env, homedir) ?? "")
     : resolveRawOsHomeDir(env, homedir);
   return rawHome ? path.resolve(rawHome) : path.resolve(process.cwd());
 }
@@ -171,7 +171,9 @@ function resolveMemoryHostUserPath(
     return trimmed;
   }
   if (trimmed.startsWith("~")) {
-    return path.resolve(trimmed.replace(/^~(?=$|[\\/])/, resolveRequiredHomeDir(env, homedir)));
+    return path.resolve(
+      trimmed.replace(/^~(?=$|[\\/])/, () => resolveRequiredHomeDir(env, homedir)),
+    );
   }
   return path.resolve(trimmed);
 }

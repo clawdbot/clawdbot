@@ -8,7 +8,6 @@ import {
 } from "../lifecycle/workspace-skill-write.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
 import { stripProposalFrontmatterForSkill } from "./frontmatter.js";
-import { isWorkshopOwnedSkillDir } from "./ownership.js";
 import { createSkillProposalEvent, dispatchSkillProposalChanged } from "./plugin-hooks.js";
 import { prepareSkillProposalDraft, resolveUpdateProposalDescription } from "./proposal-draft.js";
 import { createSkillProposalGenerationDraftFile } from "./proposal-generation.js";
@@ -192,18 +191,27 @@ export function composeSkillBodyPatch(
     }
     return `${body.trimEnd()}\n\n${patch.newString.trim()}\n`;
   }
-  const first = body.indexOf(patch.oldString);
+  const { start, end } = findUniqueSkillPatchSpan(body, patch.oldString);
+  return `${body.slice(0, start)}${patch.newString}${body.slice(end)}`;
+}
+
+/** Resolves the one exact live-body span that a targeted patch may replace. */
+export function findUniqueSkillPatchSpan(
+  body: string,
+  oldString: string,
+): { start: number; end: number } {
+  const first = body.indexOf(oldString);
   if (first === -1) {
     throw new Error(
       "Patch oldString not found in the live skill body. Read the skill and quote the exact current text.",
     );
   }
-  if (body.includes(patch.oldString, first + 1)) {
+  if (body.includes(oldString, first + 1)) {
     throw new Error(
       "Patch oldString matches more than once in the live skill body. Quote a longer unique span.",
     );
   }
-  return `${body.slice(0, first)}${patch.newString}${body.slice(first + patch.oldString.length)}`;
+  return { start: first, end: first + oldString.length };
 }
 
 export async function proposeUpdateSkill(
@@ -220,15 +228,6 @@ export async function proposeUpdateSkill(
     throw new Error(`Skill not found: ${skillName}`);
   }
   assertWritableSkillTarget(input.workspaceDir, targetSkill);
-  if (
-    !isWorkshopOwnedSkillDir(
-      input.workspaceDir,
-      targetSkill.baseDir,
-      proposalStoreOptions(input.env),
-    )
-  ) {
-    throw new Error(`Skill Workshop does not own this skill path: ${targetSkill.skillKey}`);
-  }
   const currentContent = await readWorkspaceSkillFile(targetSkill.filePath);
   if (currentContent === null) {
     throw new Error(`Skill file is missing: ${targetSkill.filePath}`);
@@ -254,7 +253,7 @@ export async function proposeUpdateSkill(
 
   const now = new Date().toISOString();
   const prepared = prepareSkillProposalDraft({
-    name: targetSkill.skillKey,
+    name: targetSkill.name,
     description,
     content: draftContent,
     fallbackFrontmatterContent: currentContent,

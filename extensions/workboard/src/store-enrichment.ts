@@ -8,7 +8,6 @@ import type {
 import type { PersistedWorkboardAttachment } from "./persistence-types.js";
 import {
   assertCanMutateClaimedCard,
-  capText,
   cardRunId,
   cardSessionKey,
   closeRunningAttempts,
@@ -30,6 +29,7 @@ import type {
   WorkboardWorkerLogInput,
 } from "./store-inputs.js";
 import {
+  capText,
   clearDiagnostics,
   normalizeArtifact,
   normalizeAttachmentInput,

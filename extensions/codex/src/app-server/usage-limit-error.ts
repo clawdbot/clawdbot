@@ -41,6 +41,15 @@ export function createCodexUsageLimitPromptError(message: string): Error & { sta
   return Object.assign(new Error(message), { status: 429 as const });
 }
 
+export function resolveCodexPromptError(
+  source: Pick<CodexUsageLimitErrorSource, "message" | "codexErrorInfo" | "rateLimits">,
+): string | Error | undefined {
+  const usageLimitMessage = formatCodexUsageLimitErrorMessage(source);
+  return usageLimitMessage
+    ? createCodexUsageLimitPromptError(usageLimitMessage)
+    : (source.message ?? undefined);
+}
+
 export function isCodexUsageLimitPromptError(error: unknown): error is Error & { status: 429 } {
   return error instanceof Error && "status" in error && error.status === 429;
 }

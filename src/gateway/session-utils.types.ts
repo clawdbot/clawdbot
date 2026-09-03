@@ -2,21 +2,13 @@
 // Keeps server methods and Control UI payloads aligned.
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
-  SessionCreatedActor,
-  SessionClassification,
-  SessionPeerKind,
-  SessionOwner,
   SessionPlacement,
   SessionPlacementMove,
   SessionRow,
-  SessionRunStatus,
-  SessionSharingRole,
-  SessionVisibility,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { QueueMode } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
-import type { ChatType } from "../channels/chat-type.js";
+import type { StickyModelSelectionTarget } from "../agents/sticky-model-selection.js";
 import type {
   SessionCompactionCheckpoint,
   SessionEntry,
@@ -28,12 +20,13 @@ import type { FastModeSource } from "../shared/fast-mode.js";
 import type {
   GatewayAgentRuntime,
   GatewayAgentRow as SharedGatewayAgentRow,
+  GatewayContextWindowOption,
   GatewayThinkingLevelOption,
-  SessionBoardFace,
   SessionsListResultBase,
   SessionsPatchResultBase,
 } from "../shared/session-types.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import type { PreparedGatewayModelCatalog } from "./server-model-catalog.types.js";
 
 // Shared Gateway session response contracts. Server methods, UI adapters, and
 // tests import these types so list/patch/preview payloads evolve together.
@@ -41,10 +34,14 @@ export type GatewaySessionsDefaults = {
   modelProvider: string | null;
   model: string | null;
   contextTokens: number | null;
+  contextWindow?: string;
+  contextWindows?: GatewayContextWindowOption[];
+  contextWindowDefault?: string;
   agentRuntime?: GatewayAgentRuntime;
   thinkingLevels?: GatewayThinkingLevelOption[];
   thinkingOptions?: string[];
   thinkingDefault?: string;
+  modelSelectionTarget?: StickyModelSelectionTarget;
 };
 
 type SubagentRunState = "active" | "interrupted" | "historical";
@@ -54,92 +51,32 @@ type SessionCompactionCheckpointPreview = Pick<
   "checkpointId" | "createdAt" | "reason"
 >;
 
-export type GatewaySessionRow = {
-  key: string;
-  /** Optional display metadata; never authoritative for session access or lifecycle. */
-  classification?: SessionClassification;
-  agentId?: string;
-  accountId?: string;
-  peerKind?: SessionPeerKind;
-  isMain?: boolean;
-  isBackground?: boolean;
-  /** Additive collaboration state; absent on older gateways. */
-  visibility?: SessionVisibility;
-  /** Caller-relative role used by Control UI participation controls. */
-  sharingRole?: SessionSharingRole;
-  incognito?: true;
-  spawnedBy?: string;
-  /** Current runtime controller, falling back to the durable spawning session. */
-  controlOwnerSessionKey?: string;
-  /** Collector swarm group that owns this child session, when applicable. */
-  swarmGroupId?: string;
-  spawnedWorkspaceDir?: string;
-  spawnedCwd?: string;
-  permissionMode?: SessionEntry["permissionMode"];
-  sessionRoot?: string;
-  /** Managed worktree bound to this session (repo checkout + branch). */
+export type GatewaySessionRow = Omit<SessionRow, "archivedBy" | "updatedAt" | "worktree"> & {
   worktree?: SessionEntry["worktree"];
-  /** Session-scoped exec node binding (exec host=node routing). */
-  execNode?: string;
-  /** Working directory interpreted only by the bound exec node. */
-  execCwd?: string;
-  forkedFromParent?: boolean;
-  spawnDepth?: number;
-  subagentRole?: SessionEntry["subagentRole"];
-  subagentControlScope?: SessionEntry["subagentControlScope"];
-  createdVia?: SessionEntry["createdVia"];
-  createdActor?: SessionCreatedActor;
-  owner?: SessionOwner;
-  participants?: SessionCreatedActor[];
-  participantCount?: number;
-  createdAt?: SessionEntry["createdAt"];
-  forkSource?: SessionEntry["forkSource"];
-  previousSessionId?: SessionEntry["previousSessionId"];
-  kind: "direct" | "group" | "global" | "unknown";
-  label?: string;
-  icon?: string;
-  channelAvatarUrl?: string;
-  /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */
   category?: string;
-  /** Preferred Control UI face for generic session navigation. */
-  boardFace?: SessionBoardFace;
-  displayName?: string;
-  derivedTitle?: string;
-  lastMessagePreview?: string;
-  channel?: string;
   subject?: string;
   groupChannel?: string;
   space?: string;
-  chatType?: ChatType;
   origin?: Omit<SessionOrigin, "avatar">;
   updatedAt: number | null;
-  archived?: boolean;
-  archivedAt?: number;
   archivedBy?: SessionEntry["archivedBy"];
-  pinned?: boolean;
-  pinnedAt?: number;
-  unread?: boolean;
-  lastReadAt?: number;
   agentStatus?: SessionEntry["agentStatus"];
   observerDigest?: Pick<
     SessionObserverDigest,
     "agentId" | "runId" | "headline" | "health" | "updatedAt" | "revision"
   >;
-  /** Last real user/channel interaction; background work does not advance it. */
-  lastInteractionAt?: number;
-  lastActivityAt?: number;
-  sessionId?: string;
   placement?: SessionPlacement;
   placementMove?: SessionPlacementMove;
   systemSent?: boolean;
   abortedLastRun?: boolean;
-  restartRecoveryStatus?: "tombstoned";
   thinkingLevel?: string;
+  contextWindow?: string;
+  contextWindows?: GatewayContextWindowOption[];
+  contextWindowDefault?: string;
   thinkingLevels?: GatewayThinkingLevelOption[];
   thinkingOptions?: string[];
   thinkingDefault?: string;
   fastMode?: FastMode;
-  toolOverrides?: SessionEntry["toolOverrides"];
   effectiveFastMode?: FastMode;
   effectiveFastModeSource?: FastModeSource;
   fastAutoOnSeconds?: number;
@@ -148,41 +85,21 @@ export type GatewaySessionRow = {
   reasoningLevel?: string;
   elevatedLevel?: string;
   sendPolicy?: "allow" | "deny";
-  inputTokens?: number;
-  outputTokens?: number;
-  totalTokens?: number;
-  totalTokensFresh?: boolean;
   goal?: SessionGoal;
-  estimatedCostUsd?: number;
-  status?: SessionRunStatus;
-  /** Compact user-facing reason for the latest failed or timed-out run. */
-  lastRunError?: string;
   hasActiveRun?: boolean;
-  /** Complete exact active set when present; omitted for active owners without exact identities. */
   activeRunIds?: string[];
-  /** Active transcript-branch leaf for history rendered from this row. */
-  activeLeafEntryId?: string | null;
-  /** An enabled cron job is bound to this session (runs in it or delivers to it). */
   hasAutomation?: boolean;
   subagentRunState?: SubagentRunState;
   hasActiveSubagentRun?: boolean;
   startedAt?: number;
   endedAt?: number;
   runtimeMs?: number;
-  parentSessionKey?: string;
-  childSessions?: string[];
   responseUsage?: "on" | "off" | "tokens" | "full";
-  /** Resolved effective usage mode (session override → channel config → default → off). Populated by surfaces that have config access; absent from the raw session store row. */
   effectiveResponseUsage?: "on" | "off" | "tokens" | "full";
-  /** Explicit per-session queue override, before channel/global defaults. */
   queueMode?: QueueMode;
-  /** Queue mode for Control UI sends (session override → webchat config → global default). */
   effectiveQueueMode?: QueueMode;
-  modelProvider?: string;
-  model?: string;
   modelSelectionLocked?: boolean;
   agentRuntime?: GatewayAgentRuntime;
-  contextTokens?: number;
   contextBudgetStatus?: SessionEntry["contextBudgetStatus"];
   deliveryContext?: DeliveryContext;
   lastChannel?: string;
@@ -229,7 +146,7 @@ export type SessionsListResult = SessionsListResultBase<GatewaySessionsDefaults,
  * carry exactly one agent's catalog; unscoped listings carry one per configured
  * agent so row projections stay owner-scoped.
  */
-export type SessionListModelCatalog = ReadonlyMap<string, ModelCatalogEntry[] | undefined>;
+export type SessionListModelCatalog = ReadonlyMap<string, PreparedGatewayModelCatalog | undefined>;
 
 export type SessionsPatchResult = SessionsPatchResultBase<SessionEntry> & {
   entry: SessionEntry;
@@ -237,6 +154,8 @@ export type SessionsPatchResult = SessionsPatchResultBase<SessionEntry> & {
     modelProvider?: string;
     model?: string;
     agentRuntime?: GatewayAgentRuntime;
+    contextWindow?: string;
+    contextWindows?: GatewayContextWindowOption[];
     thinkingLevel?: string;
     thinkingLevels?: GatewayThinkingLevelOption[];
   };

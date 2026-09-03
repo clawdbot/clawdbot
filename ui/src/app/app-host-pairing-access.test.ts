@@ -1,11 +1,13 @@
 /* @vitest-environment jsdom */
 
 import { render, type TemplateResult } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import "../components/app-sidebar.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "./context.ts";
+import { loadSettings } from "./settings.ts";
 import "./app-host.ts";
 
 type PairingShell = HTMLElement & {
@@ -54,7 +56,6 @@ function createPairingShell(params: {
   const overlaySnapshot = {
     approvalQueue: [],
     approvalErrors: new Map(),
-    approvalNowMs: 0,
     approvalBusy: false,
     devicePairSetupOpen: Boolean(params.setupCode),
     devicePairSetupLifecycle: params.setupCode
@@ -99,7 +100,7 @@ function createPairingShell(params: {
     agents: { state: { agentsList: null } },
     agentSelection: { state: { selectedId: "main", scopeId: "main" } },
     sessions: { state: { result: null } },
-    theme: { mode: "system" },
+    theme: { mode: "system", settings: loadSettings() },
   } as unknown as ApplicationContext;
   const shell = document.createElement("openclaw-app-shell") as PairingShell;
   shell.runtime = { context, router: {} } as ApplicationRuntime;
@@ -108,6 +109,9 @@ function createPairingShell(params: {
     location: { pathname: "/chat", search: "", hash: "" },
   };
   const container = document.createElement("div");
+  onTestFinished(() => {
+    render(null, container);
+  });
 
   const renderSidebar = () => {
     render(shell.render(), container);
@@ -122,6 +126,7 @@ function createPairingShell(params: {
   // replaces the eager loading shell with the full dialog.
   const renderPairingDialog = async () => {
     renderSidebar();
+    await vi.dynamicImportSettled();
     return await waitForFast(() => {
       render(shell.render(), container);
       const dialog = container.querySelector<HTMLElement>(
@@ -146,9 +151,9 @@ function createPairingShell(params: {
 }
 
 afterEach(async () => {
+  await vi.dynamicImportSettled();
   vi.useRealTimers();
   document.body.replaceChildren();
-  await Promise.resolve();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   Reflect.deleteProperty(document, "execCommand");
@@ -260,7 +265,11 @@ describe("application shell pairing access", () => {
 
     const sidebar = container.querySelector<HTMLElement>(".settings-sidebar");
     expect(sidebar?.getAttribute("aria-busy")).toBe("true");
-    expect(sidebar?.textContent).toContain("Loading…");
+    const loadingSkeleton = sidebar?.querySelector<HTMLElement>(
+      '.settings-sidebar__loading[role="status"][aria-busy="true"]',
+    );
+    expect(loadingSkeleton?.getAttribute("aria-label")).toBe("Loading…");
+    expect(loadingSkeleton?.querySelectorAll(".settings-sidebar__loading-row")).toHaveLength(7);
     expect(loadRenderer).toHaveBeenCalledOnce();
   });
 
@@ -304,7 +313,7 @@ describe("application shell pairing access", () => {
     button?.click();
 
     await waitForFast(() => expect(button?.textContent?.trim()).toBe("Copy failed"));
-    expect(button?.getAttribute("aria-label")).toBe("Copy failed");
+    expect(button?.getAttribute("aria-label")).toBeNull();
     expect(button?.querySelector("svg")).not.toBeNull();
     expect(writeText).toHaveBeenCalledWith("pair-mobile-secret");
     expect(execCommand).toHaveBeenCalledWith("copy");
@@ -316,7 +325,7 @@ describe("application shell pairing access", () => {
     reset();
 
     expect(button?.textContent?.trim()).toBe("Copy setup code");
-    expect(button?.getAttribute("aria-label")).toBe("Copy setup code");
+    expect(button?.getAttribute("aria-label")).toBeNull();
   });
 
   it("expires a node setup link from the pairing clock", async () => {
@@ -329,6 +338,7 @@ describe("application shell pairing access", () => {
     });
 
     renderSidebar();
+    await vi.dynamicImportSettled();
     await waitForFast(() => {
       render(shell.render(), container);
       expect(container.querySelector('[role="timer"]')?.textContent).toContain("0:01");

@@ -22,6 +22,7 @@ export async function runAbortableHeartbeatWake(
   wake: HeartbeatWakeRequest,
   signal: AbortSignal,
 ): Promise<HeartbeatRunResult> {
+  signal.throwIfAborted();
   let abortListener: (() => void) | undefined;
   const aborted = new Promise<never>((_resolve, reject) => {
     abortListener = () => {
@@ -30,10 +31,6 @@ export async function runAbortableHeartbeatWake(
         abortReason instanceof Error ? abortReason : new Error("Heartbeat handler was replaced"),
       );
     };
-    if (signal.aborted) {
-      abortListener();
-      return;
-    }
     signal.addEventListener("abort", abortListener, { once: true });
   });
   try {

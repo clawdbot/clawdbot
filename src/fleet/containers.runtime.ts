@@ -1,13 +1,12 @@
 import { spawn } from "node:child_process";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { isRecord, isStringRecord } from "@openclaw/normalization-core/record-coerce";
+import { withContainerEnvFile } from "../infra/container-env-file.js";
 import { attachChildProcessBridge } from "../process/child-process-bridge.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
   buildCellCreateArgs,
   buildCellRunArgs,
+  validateCellContainerProfile,
   validateFleetImage,
   type CellContainerProfile,
   type FleetContainerRuntimeName,
@@ -709,24 +708,15 @@ export function createFleetContainerRuntime(
     },
 
     async run(profile: CellContainerProfile, start: boolean): Promise<void> {
-      const tempRoot = await fs.realpath(os.tmpdir());
-      const tempDir = await fs.mkdtemp(path.join(tempRoot, "openclaw-fleet-env-"));
-      const environmentFile = path.join(tempDir, "cell.env");
-      try {
+      validateCellContainerProfile(profile);
+      await withContainerEnvFile(profile.environment, async (environmentFile) => {
         const args = start
           ? buildCellRunArgs(profile, { environmentFile })
           : buildCellCreateArgs(profile, { environmentFile });
-        const content = Object.entries(profile.environment)
-          .toSorted(([left], [right]) => left.localeCompare(right))
-          .map(([key, value]) => `${key}=${value}\n`)
-          .join("");
-        await fs.writeFile(environmentFile, content, { encoding: "utf8", mode: 0o600 });
         await execute(profile.runtime, args, {
           redactValues: Object.values(profile.environment),
         });
-      } finally {
-        await fs.rm(tempDir, { recursive: true, force: true });
-      }
+      });
     },
 
     async pull(runtime: FleetContainerRuntimeName, image: string): Promise<void> {

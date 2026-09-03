@@ -1,7 +1,6 @@
 // Config-flow step tests cover doctor repair step ordering and mutation planning.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../config/config.js";
-import type { DoctorConfigPreflightResult } from "../../doctor-config-preflight.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.openclaw.js";
 
 const { migrateLegacyConfigMock, stripUnknownConfigKeysMock } = vi.hoisted(() => ({
   migrateLegacyConfigMock: vi.fn(),
@@ -19,11 +18,23 @@ vi.mock("../../doctor-config-analysis.js", () => ({
 import { applyLegacyCompatibilityStep, applyUnknownConfigKeyStep } from "./config-flow-steps.js";
 
 function createLegacyStepResult(
-  snapshot: DoctorConfigPreflightResult["snapshot"],
+  snapshot: Pick<ConfigFileSnapshot, "parsed" | "legacyIssues"> & Partial<ConfigFileSnapshot>,
   doctorFixCommand = "openclaw doctor --fix",
 ) {
   return applyLegacyCompatibilityStep({
-    snapshot,
+    snapshot: {
+      exists: true,
+      path: "/tmp/config.json",
+      valid: true,
+      raw: "{}",
+      resolved: {},
+      sourceConfig: {},
+      config: {},
+      runtimeConfig: {},
+      issues: [],
+      warnings: [],
+      ...snapshot,
+    },
     state: {
       cfg: {},
       candidate: {},
@@ -52,19 +63,9 @@ describe("doctor config flow steps", () => {
     });
 
     const result = createLegacyStepResult({
-      exists: true,
       parsed: { heartbeat: { enabled: true } },
       legacyIssues: [{ path: "heartbeat", message: "use agents.defaults.heartbeat" }],
-      path: "/tmp/config.json",
-      valid: true,
-      issues: [],
-      raw: "{}",
-      resolved: {},
-      sourceConfig: {},
-      config: {},
-      runtimeConfig: {},
-      warnings: [],
-    } satisfies DoctorConfigPreflightResult["snapshot"]);
+    });
 
     expect(result.issueLines).toEqual(["- heartbeat: use agents.defaults.heartbeat"]);
     expect(result.changeLines).not.toStrictEqual([]);
@@ -88,19 +89,14 @@ describe("doctor config flow steps", () => {
     });
 
     const result = createLegacyStepResult({
-      exists: true,
       parsed: { mcp: { $include: "./mcp.json5" } },
       legacyIssues: [{ path: "mcp.servers", message: "disabled is legacy" }],
-      path: "/tmp/config.json",
       valid: false,
-      issues: [],
-      raw: "{}",
       resolved: sourceConfig,
       sourceConfig,
       config: sourceConfig,
       runtimeConfig: sourceConfig,
-      warnings: [],
-    } satisfies DoctorConfigPreflightResult["snapshot"]);
+    });
 
     expect(migrateLegacyConfigMock).toHaveBeenCalledWith(sourceConfig, {
       authoredRaw: { mcp: { $include: "./mcp.json5" } },
@@ -116,7 +112,6 @@ describe("doctor config flow steps", () => {
       diagnostics: { otel: { enabled: true, protocol: "grpc" } },
     } as unknown as OpenClawConfig;
     const result = createLegacyStepResult({
-      exists: true,
       parsed: { diagnostics: { $include: ["./a.json5", "./b.json5"] } },
       includeProvenance: [
         {
@@ -132,16 +127,12 @@ describe("doctor config flow steps", () => {
           message: "grpc is unsupported",
         },
       ],
-      path: "/tmp/config.json",
       valid: false,
-      issues: [],
-      raw: "{}",
       resolved: sourceConfig,
       sourceConfig,
       config: sourceConfig,
       runtimeConfig: sourceConfig,
-      warnings: [],
-    } satisfies DoctorConfigPreflightResult["snapshot"]);
+    });
 
     expect(migrateLegacyConfigMock).not.toHaveBeenCalled();
     expect(result.blocksWrite).toBe(true);
@@ -154,7 +145,6 @@ describe("doctor config flow steps", () => {
 
   it("keeps pending repair state for legacy issues even when the snapshot is already normalized", () => {
     const result = createLegacyStepResult({
-      exists: true,
       parsed: { talk: { voiceId: "voice-1", modelId: "eleven_v3" } },
       legacyIssues: [
         {
@@ -162,16 +152,7 @@ describe("doctor config flow steps", () => {
           message: "talk.voiceId/talk.voiceAliases/talk.modelId/talk.outputFormat/talk.apiKey",
         },
       ],
-      path: "/tmp/config.json",
-      valid: true,
-      issues: [],
-      raw: "{}",
-      resolved: {},
-      sourceConfig: {},
-      config: {},
-      runtimeConfig: {},
-      warnings: [],
-    } satisfies DoctorConfigPreflightResult["snapshot"]);
+    });
 
     expect(result.changeLines).toStrictEqual([]);
     expect(result.state.pendingChanges).toBe(true);
@@ -179,6 +160,38 @@ describe("doctor config flow steps", () => {
       'Run "openclaw doctor --fix" to migrate legacy config keys.',
     ]);
   });
+
+  it.each([false, true])(
+    "does not queue a write for deferred-only legacy advice (candidate %s)",
+    (hasCandidate) => {
+      const config = { agents: { entries: { main: {} }, defaults: { models: { bare: {} } } } };
+      migrateLegacyConfigMock.mockReturnValueOnce({
+        config: hasCandidate ? config : null,
+        changes: [],
+      });
+      const result = createLegacyStepResult({
+        parsed: config,
+        raw: JSON.stringify(config),
+        sourceConfigBeforeMigrations: config,
+        sourceConfig: config,
+        resolved: config,
+        config,
+        runtimeConfig: config,
+        legacyIssues: [
+          {
+            path: "agents.defaults.models",
+            message: "Legacy model restriction retained; set an explicit policy.",
+          },
+        ],
+      });
+      expect(result.issueLines).toEqual([
+        "- agents.defaults.models: Legacy model restriction retained; set an explicit policy.",
+      ]);
+      expect(result.changeLines).toEqual([]);
+      expect(result.state.pendingChanges).toBe(false);
+      expect(result.state.fixHints).toEqual([]);
+    },
+  );
 
   it("commits migration even when post-migration validation has unrelated issues (#76798)", () => {
     const migratedConfig = { agents: { defaults: { model: { primary: "openai/gpt-5.4" } } } };
@@ -191,7 +204,6 @@ describe("doctor config flow steps", () => {
     });
 
     const result = createLegacyStepResult({
-      exists: true,
       parsed: {
         agents: {
           defaults: { llm: { idleTimeoutSeconds: 120 }, model: { primary: "openai/gpt-5.4" } },
@@ -199,7 +211,6 @@ describe("doctor config flow steps", () => {
         tools: { web: { search: { provider: "brave" } } },
       },
       legacyIssues: [{ path: "agents.defaults.llm", message: "deprecated key" }],
-      path: "/tmp/config.json",
       valid: false,
       issues: [
         {
@@ -207,13 +218,7 @@ describe("doctor config flow steps", () => {
           message: "web_search provider is not available: brave",
         },
       ],
-      raw: "{}",
-      resolved: {},
-      sourceConfig: {},
-      config: {},
-      runtimeConfig: {},
-      warnings: [],
-    } satisfies DoctorConfigPreflightResult["snapshot"]);
+    });
 
     expect(result.state.candidate).toEqual(migratedConfig);
     expect(result.state.cfg).toEqual(migratedConfig);

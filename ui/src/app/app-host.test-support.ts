@@ -44,3 +44,15 @@ export function createLazyElementSpec(
     },
   };
 }
+
+/**
+ * Replay is gated on the rendered element; harnesses that model "rendered as
+ * soon as the module defines the tag" install this stub on the fake shell.
+ */
+export function stubRenderedWhenDefined(shell: object): void {
+  Object.defineProperty(shell, "queryRenderedElement", {
+    configurable: true,
+    value: (tagName: string) =>
+      customElements.get(tagName) ? document.createElement(tagName) : null,
+  });
+}

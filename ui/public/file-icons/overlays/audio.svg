@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" role="img" aria-label="Audio file overlay">
+  <path d="M9.25 17.25V7.5l9-2.25V15" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M9.25 10.25 18.25 8" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
+  <ellipse cx="6.75" cy="17.25" rx="2.5" ry="2" fill="currentColor"/>
+  <ellipse cx="15.75" cy="15" rx="2.5" ry="2" fill="currentColor"/>
+</svg>

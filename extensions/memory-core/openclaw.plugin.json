@@ -57,6 +57,30 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "memoryPolicy": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "excludeSessions": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "hookExternalContentSources": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "channels": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "chatTypes": {
+                "type": "array",
+                "items": { "type": "string", "enum": ["direct", "group", "channel"] }
+              }
+            }
+          }
+        }
+      },
       "dreaming": {
         "type": "object",
         "additionalProperties": false,

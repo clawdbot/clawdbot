@@ -36,6 +36,21 @@ export function resolveControlUiSessionLinkBase(cfg: ControlUiLinkConfig): strin
   return sessionLinkBase.length <= 200 ? sessionLinkBase : undefined;
 }
 
+export function resolveControlUiAutomationRunUrl(
+  cfg: ControlUiLinkConfig,
+  params: { jobId: string; runId?: string },
+): string | undefined {
+  const location = resolveControlUiLinkLocation(cfg);
+  if (!location) {
+    return undefined;
+  }
+  const query = new URLSearchParams({ job: params.jobId });
+  if (params.runId) {
+    query.set("run", params.runId);
+  }
+  return `${location.origin}${location.basePath}/automations?${query}`;
+}
+
 export function resolveControlUiSessionUrl(
   cfg: ControlUiLinkConfig,
   params: {

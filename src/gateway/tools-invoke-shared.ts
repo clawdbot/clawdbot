@@ -22,13 +22,22 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
 import { isTestDefaultMemorySlotDisabled } from "../plugins/config-state.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
-import { getPluginToolMeta } from "../plugins/tools.js";
+import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import {
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
   isAgentHarnessSessionKey,
   isAgentHarnessSessionStoreEntryProtected,
 } from "../sessions/agent-harness-session-key.js";
+import { ADMIN_SCOPE } from "./method-scopes.js";
+import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
+import type { GatewayClient } from "./server-methods/shared-types.js";
+import { withOperatorToolGatewayAuthority } from "./server-plugin-in-process-dispatch.js";
+import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
+import {
+  authorizeResolvedSessionMutation,
+  resolveSessionSharingTarget,
+} from "./session-sharing.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
@@ -160,21 +169,28 @@ function resolveToolSource(tool: AnyAgentTool): "core" | "plugin" | "channel" {
   return "core";
 }
 
-/** Resolves, authorizes, and invokes one gateway-visible core/plugin/channel tool. */
-export async function invokeGatewayTool(params: {
+type InvokeGatewayToolParams = {
   cfg: OpenClawConfig;
   input: ToolsInvokeInput;
   messageChannel?: string;
   accountId?: string;
   agentTo?: string;
   agentThreadId?: string;
+  authenticatedUserProfile?: GatewayClient["authenticatedUserProfile"];
+  /** Host-minted authority from the calling connection; never derived from wire params. */
+  operatorRoleActor?: NonNullable<GatewayClient["internal"]>["operatorRoleActor"];
+  operatorScopes?: readonly string[];
   senderIsOwner?: boolean;
   clientCaps?: string[];
   conversationReadOrigin?: ConversationReadInvocationOrigin;
   toolCallIdPrefix: string;
   approvalMode?: "request" | "report";
   signal?: AbortSignal;
-}): Promise<ToolsInvokeOutcome> {
+};
+
+async function invokeGatewayToolWithSignal(
+  params: InvokeGatewayToolParams & { signal: AbortSignal },
+): Promise<ToolsInvokeOutcome> {
   const conversationReadOrigin = normalizeConversationReadInvocationOrigin(
     params.conversationReadOrigin,
   );
@@ -231,6 +247,80 @@ export async function invokeGatewayTool(params: {
     };
   }
   const { agentId: selectedAgentId, sessionKey } = sessionTarget;
+  const authenticatedUserProfile = params.cfg.gateway?.roles
+    ? params.authenticatedUserProfile
+    : undefined;
+  // HTTP and RPC auth boundaries supply authority independently of profile attribution.
+  const client = createSyntheticPluginRuntimeClient({
+    ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
+    operatorRoleActor: params.operatorRoleActor,
+    scopes: params.senderIsOwner ? [ADMIN_SCOPE] : [...(params.operatorScopes ?? [])],
+  });
+  const primarySessionAuthorizationError = authorizeResolvedSessionMutation({
+    cfg: params.cfg,
+    client,
+    sessionKey,
+    agentId: selectedAgentId,
+  });
+  if (primarySessionAuthorizationError) {
+    return {
+      ok: false,
+      status: 403,
+      toolName,
+      error: {
+        type: "tool_call_blocked",
+        message: primarySessionAuthorizationError.message,
+      },
+    };
+  }
+  if (authenticatedUserProfile && (toolName === "sessions_spawn" || toolName === "sessions_send")) {
+    const nestedSessionKey = normalizeOptionalString(args.sessionKey);
+    const nestedAgentId = normalizeOptionalString(args.agentId);
+    const targetAgent = nestedSessionKey
+      ? resolveRequestedSessionAgentId(params.cfg, nestedSessionKey, nestedAgentId)
+      : undefined;
+    if (targetAgent && !targetAgent.ok) {
+      return {
+        ok: false,
+        status: 400,
+        toolName,
+        error: { type: "invalid_request", message: targetAgent.error.message },
+      };
+    }
+    const targetAgentId = targetAgent?.agentId ?? nestedAgentId ?? selectedAgentId;
+    const existingTarget =
+      toolName === "sessions_send" && nestedSessionKey
+        ? resolveSessionSharingTarget({
+            cfg: params.cfg,
+            sessionKey: nestedSessionKey,
+            agentId: targetAgentId,
+          })
+        : null;
+    const authorizationError =
+      (toolName === "sessions_send" && nestedSessionKey
+        ? authorizeResolvedSessionMutation({
+            cfg: params.cfg,
+            client,
+            sessionKey: nestedSessionKey,
+            agentId: targetAgentId,
+          })
+        : null) ??
+      (!existingTarget
+        ? authorizeGatewaySessionCreation({
+            cfg: params.cfg,
+            client,
+            agentId: targetAgentId,
+          })
+        : null);
+    if (authorizationError) {
+      return {
+        ok: false,
+        status: 403,
+        toolName,
+        error: { type: "tool_call_blocked", message: authorizationError.message },
+      };
+    }
+  }
   const sessionEntry = loadGatewaySessionEntryReadOnly(sessionKey, {
     agentId: selectedAgentId,
   }).entry;
@@ -332,12 +422,24 @@ export async function invokeGatewayTool(params: {
       };
     }
     params.signal?.throwIfAborted();
+    const executeTool = async () =>
+      await gatewayTool.execute?.(toolCallId, hookResult.params, params.signal);
+    const result = authenticatedUserProfile
+      ? await withOperatorToolGatewayAuthority(
+          {
+            authenticatedUserProfile,
+            operatorRoleActor: params.operatorRoleActor,
+            scopes: params.operatorScopes ?? [],
+          },
+          executeTool,
+        )
+      : await executeTool();
     return {
       ok: true,
       status: 200,
       toolName,
       source: resolveToolSource(gatewayTool),
-      result: await gatewayTool.execute?.(toolCallId, hookResult.params, params.signal),
+      result,
     };
   } catch (err) {
     const inputStatus = resolveToolInputErrorStatus(err);
@@ -361,5 +463,20 @@ export async function invokeGatewayTool(params: {
       toolName,
       error: { type: "tool_error", message: "tool execution failed" },
     };
+  }
+}
+
+/** Resolves, authorizes, and invokes one gateway-visible core/plugin/channel tool. */
+export async function invokeGatewayTool(
+  params: InvokeGatewayToolParams,
+): Promise<ToolsInvokeOutcome> {
+  const requestAbort = new AbortController();
+  const signal = params.signal
+    ? AbortSignal.any([params.signal, requestAbort.signal])
+    : requestAbort.signal;
+  try {
+    return await invokeGatewayToolWithSignal({ ...params, signal });
+  } finally {
+    requestAbort.abort();
   }
 }

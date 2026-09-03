@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { parse } from "yaml";
 import {
   cleanupDockerSetupSandboxRoot,
   collectMatchingLines,
@@ -952,20 +953,31 @@ describe("scripts/docker/setup.sh", () => {
     expect(compose.match(/TZ: \$\{OPENCLAW_TZ:-UTC\}/g)).toHaveLength(2);
   });
 
-  it("pins container-side state, workspace, and config dirs on both services so host .env paths cannot leak (#77436)", async () => {
-    const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
-    // Both gateway and CLI services must override env_file values with the
-    // canonical container paths so host-style paths written to `.env` cannot
-    // reach runtime code inside Linux Docker.
-    expect(compose.match(/OPENCLAW_HOME: \/home\/node$/gm)).toHaveLength(2);
-    expect(compose.match(/OPENCLAW_STATE_DIR: \/home\/node\/\.openclaw$/gm)).toHaveLength(2);
-    expect(
-      compose.match(/OPENCLAW_CONFIG_PATH: \/home\/node\/\.openclaw\/openclaw\.json$/gm),
-    ).toHaveLength(2);
-    expect(compose.match(/OPENCLAW_CONFIG_DIR: \/home\/node\/\.openclaw$/gm)).toHaveLength(2);
-    expect(
-      compose.match(/OPENCLAW_WORKSPACE_DIR: \/home\/node\/\.openclaw\/workspace$/gm),
-    ).toHaveLength(2);
+  it("isolates container paths and listener port from host .env values on both services", async () => {
+    const { services } = parse(await readFile(join(repoRoot, "docker-compose.yml"), "utf8")) as {
+      services: Record<
+        "openclaw-gateway" | "openclaw-cli",
+        {
+          environment: Record<string, string>;
+          command: string[];
+          ports: string[];
+        }
+      >;
+    };
+    const gateway = services["openclaw-gateway"];
+    const listenerPort = gateway.command[gateway.command.indexOf("--port") + 1];
+    expect(listenerPort).toBe("18789");
+    expect(gateway.ports).toContain(`\${OPENCLAW_GATEWAY_PORT:-18789}:${listenerPort}`);
+    for (const name of ["openclaw-gateway", "openclaw-cli"] as const) {
+      expect(services[name].environment, name).toMatchObject({
+        OPENCLAW_HOME: "/home/node",
+        OPENCLAW_STATE_DIR: "/home/node/.openclaw",
+        OPENCLAW_CONFIG_PATH: "/home/node/.openclaw/openclaw.json",
+        OPENCLAW_CONFIG_DIR: "/home/node/.openclaw",
+        OPENCLAW_WORKSPACE_DIR: "/home/node/.openclaw/workspace",
+        OPENCLAW_GATEWAY_PORT: listenerPort,
+      });
+    }
   });
 
   it("Dockerfile ARG OPENCLAW_IMAGE_APT_PACKAGES must not have a default value", async () => {

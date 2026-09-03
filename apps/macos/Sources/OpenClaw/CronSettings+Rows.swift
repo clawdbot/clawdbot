@@ -120,7 +120,8 @@ extension CronSettings {
             }
             LabeledContent("Last run") {
                 if let date = job.lastRunDate {
-                    Text("\(date.formatted(date: .abbreviated, time: .standard)) · \(relativeAge(from: date))")
+                    Text(
+                        verbatim: "\(date.formatted(date: .abbreviated, time: .standard)) · \(relativeAge(from: date))")
                 } else {
                     Text("—").foregroundStyle(.secondary)
                 }
@@ -188,7 +189,7 @@ extension CronSettings {
                     .foregroundStyle(.secondary)
                 Spacer()
                 if let ms = entry.durationMs {
-                    Text("\(ms)ms")
+                    Text(String(format: String(localized: "%lldms"), ms))
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }

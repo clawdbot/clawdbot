@@ -213,7 +213,7 @@ Pairing codes expire after 1 hour. Full reference: [Telegram](/channels/telegram
 WhatsApp ships as a separate plugin, so install and enable it first:
 
 ```bash
-openclaw plugins install clawhub:@openclaw/whatsapp --acknowledge-clawhub-risk
+openclaw plugins install clawhub:@openclaw/whatsapp
 openclaw plugins enable whatsapp
 ```
 

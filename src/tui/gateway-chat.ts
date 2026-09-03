@@ -177,6 +177,7 @@ type HandoffSessionResolveResult =
 
 export class GatewayChatClient implements TuiBackend {
   private client: GatewayClient;
+  private readonly historyLifetime = new AbortController();
   private readyPromise: Promise<void>;
   private resolveReady?: () => void;
   private pendingConnectError?: Error;
@@ -312,6 +313,7 @@ export class GatewayChatClient implements TuiBackend {
   }
 
   stop() {
+    this.historyLifetime.abort();
     // Keep TUI teardown ordered after the transport closes. Otherwise the
     // late close callback can re-arm UI timers after shutdown cleared them.
     return this.client.stopAndWait();
@@ -373,8 +375,9 @@ export class GatewayChatClient implements TuiBackend {
   }
 
   async loadHistory(opts: { sessionKey: string; agentId?: string; limit?: number }) {
-    const startedAt = Date.now();
+    const deadline = Date.now() + STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS;
     for (;;) {
+      this.historyLifetime.signal.throwIfAborted();
       try {
         return await this.client.request("chat.history", {
           sessionKey: opts.sessionKey,
@@ -382,13 +385,10 @@ export class GatewayChatClient implements TuiBackend {
           limit: opts.limit,
         });
       } catch (err) {
-        const withinStartupRetryWindow =
-          Date.now() - startedAt < STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS;
-        if (withinStartupRetryWindow && isRetryableStartupUnavailable(err, "chat.history")) {
-          await sleep(resolveStartupRetryDelayMs(err));
-          continue;
+        if (Date.now() >= deadline || !isRetryableStartupUnavailable(err, "chat.history")) {
+          throw err;
         }
-        throw err;
+        await sleep(resolveStartupRetryDelayMs(err), this.historyLifetime.signal);
       }
     }
   }

@@ -1,14 +1,13 @@
 /**
  * Shared resolver for bundled plugin facade module paths and registry fallbacks.
  */
-import fs from "node:fs";
 import path from "node:path";
 import { areBundledPluginsDisabled } from "../plugins/bundled-dir.js";
 import {
-  PUBLIC_SURFACE_SOURCE_EXTENSIONS,
   normalizeBundledPluginArtifactSubpath,
   resolveBundledPluginPublicSurfacePath,
   resolveBundledPluginSourcePublicSurfacePath,
+  resolvePluginRootPublicSurfacePath,
 } from "../plugins/public-surface-runtime.js";
 
 /** Resolved facade module path plus the package/plugin root that bounds imports. */
@@ -112,23 +111,15 @@ export function resolveRegistryPluginModuleLocationFromRecords(params: {
     (plugin) => plugin.channels.includes(params.dirName),
   ];
   const artifactBasename = normalizeBundledPluginArtifactSubpath(params.artifactBasename);
-  const sourceBaseName = artifactBasename.replace(/\.js$/u, "");
   for (const matchFn of tiers) {
     for (const record of params.registry.filter(matchFn)) {
       const rootDir = path.resolve(record.rootDir);
-      for (const builtCandidate of [
-        path.join(rootDir, artifactBasename),
-        path.join(rootDir, "dist", artifactBasename),
-      ]) {
-        if (fs.existsSync(builtCandidate)) {
-          return { modulePath: builtCandidate, boundaryRoot: rootDir };
-        }
-      }
-      for (const ext of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
-        const sourceCandidate = path.join(rootDir, `${sourceBaseName}${ext}`);
-        if (fs.existsSync(sourceCandidate)) {
-          return { modulePath: sourceCandidate, boundaryRoot: rootDir };
-        }
+      const modulePath = resolvePluginRootPublicSurfacePath({
+        pluginRoot: rootDir,
+        artifactBasename,
+      });
+      if (modulePath) {
+        return { modulePath, boundaryRoot: rootDir };
       }
     }
   }

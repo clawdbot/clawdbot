@@ -2,7 +2,7 @@
 import { html } from "lit";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayHelloOk } from "../../api/gateway.ts";
-import { resolveGatewayTokenForUrlEdit, type UiSettings } from "../../app/settings.ts";
+import type { UiSettings } from "../../app/settings.ts";
 import {
   renderSettingsPage,
   renderSettingsRow,
@@ -74,12 +74,8 @@ export function renderConnection(props: ConnectionProps) {
           aria-label=${t("connection.access.wsUrl")}
           .value=${props.settings.gatewayUrl}
           @input=${(e: Event) => {
-            const settings = props.settings;
             const v = (e.target as HTMLInputElement).value;
-            props.onConnectionChange({
-              gatewayUrl: v,
-              token: resolveGatewayTokenForUrlEdit(settings.gatewayUrl, v, settings.token),
-            });
+            props.onConnectionChange({ gatewayUrl: v });
           }}
           placeholder="ws://100.x.y.z:18789"
         />

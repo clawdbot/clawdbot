@@ -830,9 +830,15 @@ async function importChatGptConversationsUnlocked(params: {
   let indexUpdatedFiles: string[] = [];
   if (!params.dryRun && importRunRecord) {
     if (importRunRecord.createdPaths.length > 0 || importRunRecord.updatedPaths.length > 0) {
-      const compile = await compileMemoryWikiVault(params.config);
-      indexUpdatedFiles = compile.updatedFiles;
       await writeImportRunRecord(params.config.vault.path, importRunRecord);
+      const compile = await compileMemoryWikiVault(params.config).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `Memory Wiki ChatGPT import run ${importRunRecord.runId} changed source pages, but vault compilation failed: ${message}. After fixing the compile error, run \`openclaw wiki chatgpt rollback ${importRunRecord.runId}\` to restore the imported pages.`,
+          { cause: error },
+        );
+      });
+      indexUpdatedFiles = compile.updatedFiles;
       await appendMemoryWikiLog(params.config.vault.path, {
         type: "ingest",
         timestamp: nowIso,

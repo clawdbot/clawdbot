@@ -1,6 +1,6 @@
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 // Matrix tests cover draft stream plugin behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PluginRuntime } from "../runtime-api.js";
 
 const sendModuleMocks = vi.hoisted(() => {
   const loadConfigMock = vi.fn(() => ({}));

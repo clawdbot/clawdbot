@@ -16,993 +16,358 @@ on:
         required: false
         default: ""
         type: string
+      focused_release_evidence_run_id:
+        description: Optional immutable authorized beta focused evidence producer run
+        required: false
+        default: ""
+        type: string
+      focused_release_evidence_run_attempt:
+        description: Exact previously verified focused evidence producer attempt
+        required: false
+        default: ""
+        type: string
+      focused_release_evidence_workflow_full_ref:
+        description: Exact previously verified focused evidence producer tag
+        required: false
+        default: ""
+        type: string
+      focused_release_evidence_workflow_sha:
+        description: Exact previously verified focused evidence producer SHA
+        required: false
+        default: ""
+        type: string
+      prepared_run_id:
+        description: Exact prepared Docker producer run; omitted to prepare in this publication
+        required: false
+        default: ""
+        type: string
+      prepared_run_attempt:
+        description: Exact prepared Docker producer attempt
+        required: false
+        default: ""
+        type: string
+      prepared_artifact_name:
+        description: Immutable prepared Docker manifest artifact name
+        required: false
+        default: ""
+        type: string
+      prepared_manifest_sha256:
+        description: SHA256 of the prepared Docker manifest bytes
+        required: false
+        default: ""
+        type: string
     outputs:
       version:
         description: Resolved Docker release version without the v prefix
-        value: ${{ jobs.resolve_release_policy.outputs.version }}
+        value: ${{ jobs.validate_release_identity.outputs.version }}
       include_browser:
-        description: Whether the tagged Docker release includes browser images
-        value: ${{ jobs.create-manifest.outputs.browser_supported }}
-      vcr_source_refs:
-        description: Newline-delimited attestation-verified immutable GHCR source refs
-        value: ${{ jobs.verify-attestations.outputs.vcr_source_refs }}
+        description: Whether the tagged release includes browser images
+        value: ${{ jobs.validate_release_identity.outputs.include_browser }}
+      vcr_source_digests:
+        description: Newline-delimited verified immutable GHCR source digests
+        value: ${{ jobs.publish.outputs.vcr_source_digests }}
     secrets:
       DOCKERHUB_USERNAME:
         required: true
       DOCKERHUB_TOKEN:
         required: true
 
-concurrency:
-  # Alias promotion checks are read-then-write; serialize every Docker publish
-  # so an older stable run cannot overwrite a newer latest/main promotion.
-  group: docker-release-publish
-  cancel-in-progress: false
-  queue: max
+permissions:
+  contents: read
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
-  DOCKERHUB_REGISTRY: docker.io
-  DOCKERHUB_IMAGE_NAME: openclaw/openclaw
 
 jobs:
   validate_release_identity:
     runs-on: ubuntu-24.04
-    permissions:
-      contents: read
+    outputs:
+      version: ${{ steps.identity.outputs.version }}
+      include_browser: ${{ steps.identity.outputs.include_browser }}
     steps:
       - name: Validate immutable tag and SHA inputs
         env:
-          IMAGE_TAG_SUFFIX: ${{ inputs.image_tag_suffix }}
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_SHA: ${{ inputs.release_sha }}
+          IMAGE_TAG_SUFFIX: ${{ inputs.image_tag_suffix }}
+          PREPARED_RUN_ID: ${{ inputs.prepared_run_id }}
+          PREPARED_RUN_ATTEMPT: ${{ inputs.prepared_run_attempt }}
+          PREPARED_ARTIFACT_NAME: ${{ inputs.prepared_artifact_name }}
+          PREPARED_MANIFEST_SHA256: ${{ inputs.prepared_manifest_sha256 }}
         run: |
           set -euo pipefail
           if [[ -n "${IMAGE_TAG_SUFFIX}" && ! "${IMAGE_TAG_SUFFIX}" =~ ^-r[0-9]{8}$ ]]; then
             echo "Invalid Docker image tag suffix: ${IMAGE_TAG_SUFFIX}" >&2
             exit 1
           fi
-          if [[ "${RELEASE_TAG}" == *"-alpha."* ]]; then
-            echo "Docker alpha image publishing is disabled."
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-(beta\.)?[1-9][0-9]*)?$ || ! "${RELEASE_SHA}" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "Docker publication requires an immutable stable, extended-stable, or beta tag and full SHA." >&2
             exit 1
           fi
-          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-(beta\.)?[1-9][0-9]*)?$ ]]; then
-            echo "Invalid release tag: ${RELEASE_TAG}"
-            exit 1
+          if [[ -n "${PREPARED_RUN_ID}${PREPARED_RUN_ATTEMPT}${PREPARED_ARTIFACT_NAME}${PREPARED_MANIFEST_SHA256}" ]]; then
+            if [[ ! "${PREPARED_RUN_ID}" =~ ^[1-9][0-9]*$ || ! "${PREPARED_RUN_ATTEMPT}" =~ ^[1-9][0-9]*$ || ! "${PREPARED_MANIFEST_SHA256}" =~ ^[a-f0-9]{64}$ || "${PREPARED_ARTIFACT_NAME}" != "docker-release-${RELEASE_SHA}-${PREPARED_RUN_ATTEMPT}" ]]; then
+              echo "Prepared Docker evidence requires the complete exact producer and manifest tuple." >&2
+              exit 1
+            fi
           fi
-          if [[ ! "${RELEASE_SHA}" =~ ^[a-f0-9]{40}$ ]]; then
-            echo "Release SHA must be a full lowercase commit SHA."
-            exit 1
-          fi
-
       - name: Checkout immutable release tag
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: refs/tags/${{ inputs.tag }}
-          fetch-depth: 0
+          path: release-source
+          fetch-depth: 1
+          sparse-checkout: |
+            package.json
+            Dockerfile
+          sparse-checkout-cone-mode: false
           persist-credentials: false
-
+      - name: Checkout trusted Docker tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: workflow-source
+          fetch-depth: 1
+          sparse-checkout: scripts
+          persist-credentials: false
       - name: Verify tag, SHA, and package identity agree
+        id: identity
         env:
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_SHA: ${{ inputs.release_sha }}
+          IMAGE_TAG_SUFFIX: ${{ inputs.image_tag_suffix }}
         run: |
           set -euo pipefail
-          tag_sha="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
-          checkout_sha="$(git rev-parse HEAD)"
-          package_version="$(node -p "require('./package.json').version")"
-          if [[ "${tag_sha}" != "${RELEASE_SHA}" || "${checkout_sha}" != "${RELEASE_SHA}" ]]; then
-            echo "Release tag ${RELEASE_TAG} must resolve to supplied SHA ${RELEASE_SHA}; got ${tag_sha}." >&2
-            exit 1
-          fi
-          if [[ "v${package_version}" != "${RELEASE_TAG}" && ! "${RELEASE_TAG}" =~ ^v${package_version}-[1-9][0-9]*$ ]]; then
-            echo "Release tag ${RELEASE_TAG} does not match package.json version ${package_version} or its correction-tag form." >&2
-            exit 1
-          fi
+          test "$(git -C release-source rev-parse "refs/tags/${RELEASE_TAG}^{commit}")" = "${RELEASE_SHA}"
+          test "$(git -C release-source rev-parse HEAD)" = "${RELEASE_SHA}"
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync } from 'node:fs';
+          import { validateDockerReleaseIdentity } from './workflow-source/scripts/docker-release-artifacts.mjs';
+          const env = process.env;
+          const policy = validateDockerReleaseIdentity({ tag: env.RELEASE_TAG, sourceSha: env.RELEASE_SHA, imageTagSuffix: env.IMAGE_TAG_SUFFIX, packageVersion: JSON.parse(readFileSync('release-source/package.json', 'utf8')).version });
+          const includeBrowser = /^ARG OPENCLAW_INSTALL_BROWSER/m.test(readFileSync('release-source/Dockerfile', 'utf8'));
+          appendFileSync(env.GITHUB_OUTPUT, `version=${policy.version}\ninclude_browser=${includeBrowser}\n`);
+          NODE
 
-  resolve_release_policy:
+  prepare:
+    name: Prepare immutable Docker images
     needs: validate_release_identity
-    runs-on: ubuntu-24.04
+    if: ${{ inputs.prepared_run_id == '' }}
+    uses: ./.github/workflows/docker-release-prepare.yml
+    with:
+      tag: ${{ inputs.tag }}
+      release_sha: ${{ inputs.release_sha }}
+      image_tag_suffix: ${{ inputs.image_tag_suffix }}
     permissions:
+      actions: read
       contents: read
-    outputs:
-      version: ${{ steps.policy.outputs.version }}
-      channel: ${{ steps.policy.outputs.channel }}
-    steps:
-      - name: Checkout trusted workflow helpers
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          ref: ${{ github.sha }}
-          path: workflow-source
-          persist-credentials: false
 
-      - name: Resolve release channel policy
-        id: policy
-        shell: bash
-        env:
-          SOURCE_REF: ${{ format('refs/tags/{0}', inputs.tag) }}
+  publish:
+    name: Publish prepared Docker images
+    needs: [validate_release_identity, prepare]
+    if: ${{ always() && needs.validate_release_identity.result == 'success' && (needs.prepare.result == 'success' || needs.prepare.result == 'skipped') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: docker-release
+    # The global lock covers every registry mutation and the alias read/write
+    # checks. Preparation never queues behind a previous release's promotion.
+    concurrency:
+      group: docker-release-publish
+      cancel-in-progress: false
+      queue: max
+    permissions:
+      actions: read
+      attestations: read
+      contents: read
+      packages: write
+    outputs:
+      vcr_source_digests: ${{ steps.promote.outputs.vcr_source_digests }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      RELEASE_SHA: ${{ inputs.release_sha }}
+      IMAGE_TAG_SUFFIX: ${{ inputs.image_tag_suffix }}
+      INCLUDE_BROWSER: ${{ needs.validate_release_identity.outputs.include_browser }}
+      PREPARED_RUN_ID: ${{ inputs.prepared_run_id || needs.prepare.outputs.prepared_run_id }}
+      PREPARED_RUN_ATTEMPT: ${{ inputs.prepared_run_attempt || needs.prepare.outputs.prepared_run_attempt }}
+      PREPARED_ARTIFACT_NAME: ${{ inputs.prepared_artifact_name || needs.prepare.outputs.prepared_artifact_name }}
+      PREPARED_MANIFEST_SHA256: ${{ inputs.prepared_manifest_sha256 || needs.prepare.outputs.prepared_manifest_sha256 }}
+    steps:
+      - name: Checkout immutable release source after approval
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          path: release-source
+          fetch-depth: 1
+          filter: blob:none
+          sparse-checkout: |
+            package.json
+            Dockerfile
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Fetch focused release history
+        if: ${{ inputs.focused_release_evidence_run_id != '' }}
         run: |
           set -euo pipefail
-          if [[ "${SOURCE_REF}" != refs/tags/v* ]]; then
-            echo "::error::Docker releases require a v-prefixed release tag; got ${SOURCE_REF}."
+          # Historical focused evidence reconstructs candidate trees and ancestry.
+          git -C release-source fetch --no-tags --filter=blob:none --unshallow origin \
+            "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+      - name: Checkout trusted Docker tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: workflow-source
+          fetch-depth: 1
+          sparse-checkout: scripts
+          persist-credentials: false
+      - name: Revalidate immutable source after approval
+        run: |
+          set -euo pipefail
+          test "$(git -C release-source rev-parse "refs/tags/${RELEASE_TAG}^{commit}")" = "${RELEASE_SHA}"
+          test "$(git -C release-source rev-parse HEAD)" = "${RELEASE_SHA}"
+      - name: Revalidate focused evidence producer after Docker approval
+        if: ${{ inputs.focused_release_evidence_run_id != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FOCUSED_RELEASE_EVIDENCE_RUN_ID: ${{ inputs.focused_release_evidence_run_id }}
+          FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT: ${{ inputs.focused_release_evidence_run_attempt }}
+          PRODUCER_WORKFLOW_FULL_REF: ${{ inputs.focused_release_evidence_workflow_full_ref }}
+          PRODUCER_WORKFLOW_SHA: ${{ inputs.focused_release_evidence_workflow_sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${FOCUSED_RELEASE_EVIDENCE_RUN_ID}" =~ ^[1-9][0-9]*$ ||
+                ! "${FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT}" =~ ^[1-9][0-9]*$ ||
+                ! "${PRODUCER_WORKFLOW_SHA}" =~ ^[a-f0-9]{40}$ ||
+                ! "${PRODUCER_WORKFLOW_FULL_REF}" =~ ^refs/tags/release-publish/([a-f0-9]{12})-[1-9][0-9]*$ ||
+                "${PRODUCER_WORKFLOW_SHA:0:12}" != "${BASH_REMATCH[1]}" ]]; then
+            echo "Focused evidence producer identity is missing or invalid after Docker approval." >&2
             exit 1
           fi
-          version="${SOURCE_REF#refs/tags/v}"
-          policy="$(node workflow-source/scripts/lib/docker-release-policy.mjs "${version}")"
-          channel="$(jq -r '.channel' <<< "${policy}")"
-          {
-            echo "version=${version}"
-            echo "channel=${channel}"
-          } >> "$GITHUB_OUTPUT"
-          {
-            echo "## Docker release policy"
-            echo "- Version: ${version}"
-            echo "- Channel: ${channel}"
-          } >> "$GITHUB_STEP_SUMMARY"
+          producer_ref="${PRODUCER_WORKFLOW_FULL_REF#refs/tags/}"
+          run_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${FOCUSED_RELEASE_EVIDENCE_RUN_ID}")"
+          if ! jq -e \
+            --arg run_id "${FOCUSED_RELEASE_EVIDENCE_RUN_ID}" \
+            --arg attempt "${FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT}" \
+            --arg producer_ref "${producer_ref}" \
+            --arg producer_sha "${PRODUCER_WORKFLOW_SHA}" \
+            '.id == ($run_id | tonumber) and .run_attempt == ($attempt | tonumber) and
+             .name == "Authorized Beta Focused Validation" and
+             .path == ".github/workflows/authorized-beta-focused-validation.yml" and
+             .event == "workflow_dispatch" and .status == "completed" and .conclusion == "success" and
+             .head_branch == $producer_ref and .head_sha == $producer_sha' \
+            <<<"${run_json}" >/dev/null; then
+            echo "Focused evidence producer changed after Docker approval." >&2
+            exit 1
+          fi
+          remote_producer_sha="$(
+            gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${producer_ref}" \
+              --jq '.object | select(.type == "commit") | .sha'
+          )"
+          if [[ "${remote_producer_sha}" != "${PRODUCER_WORKFLOW_SHA}" ]]; then
+            echo "Focused evidence producer tag is missing, moved, or annotated after Docker approval." >&2
+            exit 1
+          fi
 
-  approve_docker_publish:
-    name: Approve Docker publication ${{ inputs.tag }}
-    needs: [validate_release_identity, resolve_release_policy]
-    # Docker publication remains protected even though only release orchestration can call it.
-    runs-on: ubuntu-24.04
-    environment: docker-release
-    permissions: {}
-    steps:
-      - name: Approve Docker publication
+      - name: Download focused release evidence after Docker approval
+        if: ${{ inputs.focused_release_evidence_run_id != '' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: authorized-beta-focused-v1-${{ inputs.focused_release_evidence_run_id }}-${{ inputs.focused_release_evidence_run_attempt }}
+          path: ${{ runner.temp }}/authorized-beta-focused-evidence
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.focused_release_evidence_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Verify focused release evidence after Docker approval
+        if: ${{ inputs.focused_release_evidence_run_id != '' }}
         env:
-          RELEASE_TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+          FOCUSED_RELEASE_EVIDENCE_RUN_ID: ${{ inputs.focused_release_evidence_run_id }}
+          FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT: ${{ inputs.focused_release_evidence_run_attempt }}
+          PRODUCER_WORKFLOW_FULL_REF: ${{ inputs.focused_release_evidence_workflow_full_ref }}
+          PRODUCER_WORKFLOW_SHA: ${{ inputs.focused_release_evidence_workflow_sha }}
         run: |
-          echo "Approved immutable Docker image publication for ${RELEASE_TAG}"
+          set -euo pipefail
+          evidence="${RUNNER_TEMP}/authorized-beta-focused-evidence/evidence.json"
+          gh attestation verify "${evidence}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/authorized-beta-focused-validation.yml" \
+            --signer-digest "${PRODUCER_WORKFLOW_SHA}" \
+            --source-digest "${PRODUCER_WORKFLOW_SHA}" \
+            --source-ref "${PRODUCER_WORKFLOW_FULL_REF}" \
+            --deny-self-hosted-runners
+          node workflow-source/scripts/verify-authorized-beta-focused-candidate.mjs \
+            --repository-root release-source \
+            --validator workflow-source/scripts/validate-authorized-beta-focused-evidence.mts \
+            --policy workflow-source/scripts/authorized-beta-focused-policy.json \
+            --artifact "${evidence}" \
+            --producer-run-id "${FOCUSED_RELEASE_EVIDENCE_RUN_ID}" \
+            --producer-run-attempt "${FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT}" \
+            --producer-workflow-full-ref "${PRODUCER_WORKFLOW_FULL_REF}" \
+            --producer-workflow-sha "${PRODUCER_WORKFLOW_SHA}"
 
-  validate_publish_config:
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-    steps:
+      - name: Download prepared Docker manifest
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: ${{ env.PREPARED_ARTIFACT_NAME }}
+          path: ${{ runner.temp }}/docker-release
+          repository: ${{ github.repository }}
+          run-id: ${{ env.PREPARED_RUN_ID }}
+          github-token: ${{ github.token }}
+      - name: Verify exact prepared producer and payload identities
+        id: prepared
+        run: |
+          set -euo pipefail
+          node workflow-source/scripts/docker-release-artifacts.mjs verify \
+            --manifest "${RUNNER_TEMP}/docker-release/manifest.json" \
+            --manifest-sha256 "${PREPARED_MANIFEST_SHA256}" \
+            --artifact-name "${PREPARED_ARTIFACT_NAME}" \
+            --run-id "${PREPARED_RUN_ID}" --run-attempt "${PREPARED_RUN_ATTEMPT}"
+      - name: Download immutable OCI payloads
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ steps.prepared.outputs.artifact_ids }}
+          path: ${{ runner.temp }}/docker-release/payloads
+          repository: ${{ github.repository }}
+          run-id: ${{ env.PREPARED_RUN_ID }}
+          github-token: ${{ github.token }}
+      - name: Install reviewed OCI transport
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y skopeo
+          skopeo --version | grep -Fx 'skopeo version 1.13.3'
+          dpkg-query --show --showformat='${Package} ${Version}\n' skopeo
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
       - name: Validate Docker Hub publish credentials
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-          DOCKERHUB_IMAGE: ${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_IMAGE_NAME }}
         run: |
           set -euo pipefail
           if [[ -z "${DOCKERHUB_USERNAME}" || -z "${DOCKERHUB_TOKEN}" ]]; then
-            echo "::error::Docker Hub publishing requires DOCKERHUB_USERNAME and DOCKERHUB_TOKEN secrets."
+            echo "Docker Hub publishing requires DOCKERHUB_USERNAME and DOCKERHUB_TOKEN secrets." >&2
             exit 1
           fi
-          echo "Docker Hub publishing configured for ${DOCKERHUB_IMAGE}."
-
-  resolve_build_provenance:
-    needs: [approve_docker_publish, resolve_release_policy, validate_publish_config]
-    if: ${{ always() && needs.approve_docker_publish.result == 'success' && needs.resolve_release_policy.result == 'success' && needs.validate_publish_config.result == 'success' }}
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-    outputs:
-      built_at: ${{ steps.build_provenance.outputs.built_at }}
-      source_sha: ${{ steps.build_provenance.outputs.source_sha }}
-    steps:
-      - name: Checkout selected source
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
-          ref: ${{ inputs.release_sha }}
-          fetch-depth: 0
-
-      - name: Resolve shared build provenance
-        id: build_provenance
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "source_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
-
-  # KEEP THIS WORKFLOW ON GITHUB-HOSTED RUNNERS.
-  # DO NOT MOVE IT BACK TO BLACKSMITH WITHOUT RE-VALIDATING TAG BUILDS AND BACKFILLS.
-  # Build amd64 image. Default and slim tags point to the same slim runtime.
-  build-amd64:
-    needs: [approve_docker_publish, validate_publish_config, resolve_build_provenance]
-    if: ${{ always() && needs.approve_docker_publish.result == 'success' && needs.validate_publish_config.result == 'success' && needs.resolve_build_provenance.result == 'success' }}
-    # WARNING: DO NOT REVERT THIS TO A BLACKSMITH RUNNER WITHOUT RE-VALIDATING TAG BACKFILLS.
-    runs-on: ubuntu-24.04
-    permissions:
-      packages: write
-      contents: read
-    outputs:
-      digest: ${{ steps.build.outputs.digest }}
-      browser_digest: ${{ steps.build-browser.outputs.digest }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          ref: ${{ needs.resolve_build_provenance.outputs.source_sha }}
-          fetch-depth: 0
-
-      - &buildkit_prepull_step
-        name: Pre-pull BuildKit image
-        shell: bash
-        env:
-          BUILDKIT_IMAGE: moby/buildkit:buildx-stable-1
-        run: |
-          set -euo pipefail
-          for attempt in 1 2 3 4; do
-            if docker pull "${BUILDKIT_IMAGE}"; then
-              exit 0
-            fi
-            if [[ "${attempt}" == "4" ]]; then
-              echo "::error::Failed to pull ${BUILDKIT_IMAGE} after ${attempt} attempts"
-              exit 1
-            fi
-            sleep_seconds=$((attempt * 10))
-            echo "BuildKit image pull failed; retrying in ${sleep_seconds}s (${attempt}/4)."
-            sleep "${sleep_seconds}"
-          done
-
-      - name: Set up Docker Builder
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
-
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
-        with:
-          registry: ${{ env.REGISTRY }}
+          registry: ghcr.io
           username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Login to Docker Hub
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+          password: ${{ github.token }}
+      - name: Log in to Docker Hub
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
-          registry: ${{ env.DOCKERHUB_REGISTRY }}
+          registry: docker.io
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Resolve image tags (amd64)
-        id: tags
-        shell: bash
-        env:
-          GHCR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          DOCKERHUB_IMAGE: ${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_IMAGE_NAME }}
-          IMAGE_TAG_SUFFIX: ${{ inputs.image_tag_suffix }}
-          SOURCE_REF: ${{ format('refs/tags/{0}', inputs.tag) }}
+      - name: Copy exact OCI digests, verify attestations, and promote aliases
+        id: promote
         run: |
           set -euo pipefail
-          tags=()
-          slim_tags=()
-          browser_tags=()
-          images=("${GHCR_IMAGE}" "${DOCKERHUB_IMAGE}")
-          browser_supported=0
-          if grep -q '^ARG OPENCLAW_INSTALL_BROWSER' Dockerfile; then
-            browser_supported=1
-          fi
-          if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
-            version="${SOURCE_REF#refs/tags/v}"
-            image_version="${version}${IMAGE_TAG_SUFFIX}"
-            for image in "${images[@]}"; do
-              tags+=("${image}:${image_version}-amd64")
-              slim_tags+=("${image}:${image_version}-slim-amd64")
-              if [[ "${browser_supported}" == "1" ]]; then
-                browser_tags+=("${image}:${image_version}-browser-amd64")
-              fi
-            done
-          fi
-          if [[ ${#tags[@]} -eq 0 ]]; then
-            echo "::error::No amd64 tags resolved for ref ${SOURCE_REF}"
-            exit 1
-          fi
-          {
-            echo "value<<EOF"
-            printf "%s\n" "${tags[@]}" "${slim_tags[@]}"
-            echo "EOF"
-            echo "browser<<EOF"
-            printf "%s\n" "${browser_tags[@]}"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Resolve OCI labels (amd64)
-        id: labels
-        shell: bash
-        env:
-          BUILD_TIMESTAMP: ${{ needs.resolve_build_provenance.outputs.built_at }}
-          SOURCE_SHA: ${{ needs.resolve_build_provenance.outputs.source_sha }}
-          SOURCE_REF: ${{ format('refs/tags/{0}', inputs.tag) }}
-        run: |
-          set -euo pipefail
-          source_sha="${SOURCE_SHA}"
-          version="${source_sha}"
-          if [[ "${SOURCE_REF}" == "refs/heads/main" ]]; then
-            version="main"
-          fi
-          if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
-            version="${SOURCE_REF#refs/tags/v}"
-          fi
-          created="${BUILD_TIMESTAMP}"
-          {
-            echo "value<<EOF"
-            echo "org.opencontainers.image.revision=${source_sha}"
-            echo "org.opencontainers.image.version=${version}"
-            echo "org.opencontainers.image.created=${created}"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Build and push amd64 image
-        id: build
-        # WARNING: KEEP THE OFFICIAL DOCKER ACTION HERE; DO NOT SWITCH THIS BACK TO BLACKSMITH BLINDLY.
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
-        with:
-          context: .
-          platforms: linux/amd64
-          cache-from: type=gha,scope=docker-release-amd64
-          cache-to: type=gha,mode=max,scope=docker-release-amd64
-          build-args: |
-            GIT_COMMIT=${{ needs.resolve_build_provenance.outputs.source_sha }}
-            OPENCLAW_BUILD_TIMESTAMP=${{ needs.resolve_build_provenance.outputs.built_at }}
-            OPENCLAW_EXTENSIONS=diagnostics-otel,codex
-          tags: ${{ steps.tags.outputs.value }}
-          labels: ${{ steps.labels.outputs.value }}
-          sbom: true
-          provenance: mode=max
-          push: true
-
-      - name: Build and push amd64 browser image
-        id: build-browser
-        if: steps.tags.outputs.browser != ''
-        # WARNING: KEEP THE OFFICIAL DOCKER ACTION HERE; DO NOT SWITCH THIS BACK TO BLACKSMITH BLINDLY.
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
-        with:
-          context: .
-          platforms: linux/amd64
-          cache-from: |
-            type=gha,scope=docker-release-amd64
-            type=gha,scope=docker-release-browser-amd64
-          cache-to: type=gha,mode=max,scope=docker-release-browser-amd64
-          build-args: |
-            GIT_COMMIT=${{ needs.resolve_build_provenance.outputs.source_sha }}
-            OPENCLAW_BUILD_TIMESTAMP=${{ needs.resolve_build_provenance.outputs.built_at }}
-            OPENCLAW_EXTENSIONS=diagnostics-otel,codex
-            OPENCLAW_INSTALL_BROWSER=1
-          tags: ${{ steps.tags.outputs.browser }}
-          labels: ${{ steps.labels.outputs.value }}
-          sbom: true
-          provenance: mode=max
-          push: true
-
-      - name: Smoke test amd64 runtime workspace templates
-        shell: bash
-        env:
-          IMAGE_REFS: ${{ steps.tags.outputs.value }}
-        run: |
-          set -euo pipefail
-          mapfile -t image_refs <<< "${IMAGE_REFS}"
-          image_ref="${image_refs[0]}"
-          if [[ -z "${image_ref}" ]]; then
-            echo "::error::No amd64 image ref resolved for runtime template smoke"
-            exit 1
-          fi
-          docker run --rm --entrypoint /bin/sh "${image_ref}" -lc '
-            set -eu
-            test -f /app/src/agents/templates/HEARTBEAT.md
-            temp_root="$(mktemp -d)"
-            trap "rm -rf \"${temp_root}\"" EXIT
-            mkdir -p "${temp_root}/home" "${temp_root}/cwd"
-            cd "${temp_root}/cwd"
-            set +e
-            HOME="${temp_root}/home" \
-            USERPROFILE="${temp_root}/home" \
-            OPENCLAW_HOME="${temp_root}/home" \
-            OPENCLAW_NO_ONBOARD=1 \
-            OPENCLAW_SUPPRESS_NOTES=1 \
-            OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 \
-            OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK=1 \
-            AWS_EC2_METADATA_DISABLED=true \
-            AWS_SHARED_CREDENTIALS_FILE="${temp_root}/home/.aws/credentials" \
-            AWS_CONFIG_FILE="${temp_root}/home/.aws/config" \
-              node /app/openclaw.mjs agent --message "workspace bootstrap smoke" --session-id "workspace-bootstrap-smoke" --local --timeout 1 --json \
-              >"${temp_root}/out.log" 2>&1
-            status="$?"
-            set -e
-            if grep -F "Missing workspace template:" "${temp_root}/out.log"; then
-              cat "${temp_root}/out.log"
-              exit 1
-            fi
-            if [ "${status}" -ne 0 ]; then
-              cat "${temp_root}/out.log"
-            fi
-          '
-
-      - name: Smoke test amd64 browser image
-        if: steps.tags.outputs.browser != ''
-        shell: bash
-        env:
-          IMAGE_REFS: ${{ steps.tags.outputs.browser }}
-        run: |
-          set -euo pipefail
-          mapfile -t image_refs <<< "${IMAGE_REFS}"
-          image_ref="${image_refs[0]}"
-          if [[ -z "${image_ref}" ]]; then
-            echo "::error::No amd64 browser image ref resolved"
-            exit 1
-          fi
-          docker run --rm --entrypoint /bin/sh "${image_ref}" -lc '
-            set -eu
-            browser="$(find /home/node/.cache/ms-playwright -maxdepth 5 -type f \( -name chrome -o -name chromium -o -name chrome-headless-shell \) -print | head -1)"
-            test -n "${browser}"
-            "${browser}" --version
-          '
-
-  # Build arm64 image. Default and slim tags point to the same slim runtime.
-  build-arm64:
-    needs: [approve_docker_publish, validate_publish_config, resolve_build_provenance]
-    if: ${{ always() && needs.approve_docker_publish.result == 'success' && needs.validate_publish_config.result == 'success' && needs.resolve_build_provenance.result == 'success' }}
-    # WARNING: DO NOT REVERT THIS TO A BLACKSMITH RUNNER WITHOUT RE-VALIDATING TAG BACKFILLS.
-    runs-on: ubuntu-24.04-arm
-    permissions:
-      packages: write
-      contents: read
-    outputs:
-      digest: ${{ steps.build.outputs.digest }}
-      browser_digest: ${{ steps.build-browser.outputs.digest }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          ref: ${{ needs.resolve_build_provenance.outputs.source_sha }}
-          fetch-depth: 0
-
-      - *buildkit_prepull_step
-      - name: Set up Docker Builder
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
-
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Login to Docker Hub
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
-        with:
-          registry: ${{ env.DOCKERHUB_REGISTRY }}
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Resolve image tags (arm64)
-        id: tags
-        shell: bash
-        env:
-          GHCR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          DOCKERHUB_IMAGE: ${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_IMAGE_NAME }}
-          IMAGE_TAG_SUFFIX: ${{ inputs.image_tag_suffix }}
-          SOURCE_REF: ${{ format('refs/tags/{0}', inputs.tag) }}
-        run: |
-          set -euo pipefail
-          tags=()
-          slim_tags=()
-          browser_tags=()
-          images=("${GHCR_IMAGE}" "${DOCKERHUB_IMAGE}")
-          browser_supported=0
-          if grep -q '^ARG OPENCLAW_INSTALL_BROWSER' Dockerfile; then
-            browser_supported=1
-          fi
-          if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
-            version="${SOURCE_REF#refs/tags/v}"
-            image_version="${version}${IMAGE_TAG_SUFFIX}"
-            for image in "${images[@]}"; do
-              tags+=("${image}:${image_version}-arm64")
-              slim_tags+=("${image}:${image_version}-slim-arm64")
-              if [[ "${browser_supported}" == "1" ]]; then
-                browser_tags+=("${image}:${image_version}-browser-arm64")
-              fi
-            done
-          fi
-          if [[ ${#tags[@]} -eq 0 ]]; then
-            echo "::error::No arm64 tags resolved for ref ${SOURCE_REF}"
-            exit 1
-          fi
-          {
-            echo "value<<EOF"
-            printf "%s\n" "${tags[@]}" "${slim_tags[@]}"
-            echo "EOF"
-            echo "browser<<EOF"
-            printf "%s\n" "${browser_tags[@]}"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Resolve OCI labels (arm64)
-        id: labels
-        shell: bash
-        env:
-          BUILD_TIMESTAMP: ${{ needs.resolve_build_provenance.outputs.built_at }}
-          SOURCE_SHA: ${{ needs.resolve_build_provenance.outputs.source_sha }}
-          SOURCE_REF: ${{ format('refs/tags/{0}', inputs.tag) }}
-        run: |
-          set -euo pipefail
-          source_sha="${SOURCE_SHA}"
-          version="${source_sha}"
-          if [[ "${SOURCE_REF}" == "refs/heads/main" ]]; then
-            version="main"
-          fi
-          if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
-            version="${SOURCE_REF#refs/tags/v}"
-          fi
-          created="${BUILD_TIMESTAMP}"
-          {
-            echo "value<<EOF"
-            echo "org.opencontainers.image.revision=${source_sha}"
-            echo "org.opencontainers.image.version=${version}"
-            echo "org.opencontainers.image.created=${created}"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Build and push arm64 image
-        id: build
-        # WARNING: KEEP THE OFFICIAL DOCKER ACTION HERE; DO NOT SWITCH THIS BACK TO BLACKSMITH BLINDLY.
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
-        with:
-          context: .
-          platforms: linux/arm64
-          cache-from: type=gha,scope=docker-release-arm64
-          cache-to: type=gha,mode=max,scope=docker-release-arm64
-          build-args: |
-            GIT_COMMIT=${{ needs.resolve_build_provenance.outputs.source_sha }}
-            OPENCLAW_BUILD_TIMESTAMP=${{ needs.resolve_build_provenance.outputs.built_at }}
-            OPENCLAW_EXTENSIONS=diagnostics-otel,codex
-          tags: ${{ steps.tags.outputs.value }}
-          labels: ${{ steps.labels.outputs.value }}
-          sbom: true
-          provenance: mode=max
-          push: true
-
-      - name: Build and push arm64 browser image
-        id: build-browser
-        if: steps.tags.outputs.browser != ''
-        # WARNING: KEEP THE OFFICIAL DOCKER ACTION HERE; DO NOT SWITCH THIS BACK TO BLACKSMITH BLINDLY.
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
-        with:
-          context: .
-          platforms: linux/arm64
-          cache-from: |
-            type=gha,scope=docker-release-arm64
-            type=gha,scope=docker-release-browser-arm64
-          cache-to: type=gha,mode=max,scope=docker-release-browser-arm64
-          build-args: |
-            GIT_COMMIT=${{ needs.resolve_build_provenance.outputs.source_sha }}
-            OPENCLAW_BUILD_TIMESTAMP=${{ needs.resolve_build_provenance.outputs.built_at }}
-            OPENCLAW_EXTENSIONS=diagnostics-otel,codex
-            OPENCLAW_INSTALL_BROWSER=1
-          tags: ${{ steps.tags.outputs.browser }}
-          labels: ${{ steps.labels.outputs.value }}
-          sbom: true
-          provenance: mode=max
-          push: true
-
-      - name: Smoke test arm64 runtime workspace templates
-        shell: bash
-        env:
-          IMAGE_REFS: ${{ steps.tags.outputs.value }}
-        run: |
-          set -euo pipefail
-          mapfile -t image_refs <<< "${IMAGE_REFS}"
-          image_ref="${image_refs[0]}"
-          if [[ -z "${image_ref}" ]]; then
-            echo "::error::No arm64 image ref resolved for runtime template smoke"
-            exit 1
-          fi
-          docker run --rm --entrypoint /bin/sh "${image_ref}" -lc '
-            set -eu
-            test -f /app/src/agents/templates/HEARTBEAT.md
-            temp_root="$(mktemp -d)"
-            trap "rm -rf \"${temp_root}\"" EXIT
-            mkdir -p "${temp_root}/home" "${temp_root}/cwd"
-            cd "${temp_root}/cwd"
-            set +e
-            HOME="${temp_root}/home" \
-            USERPROFILE="${temp_root}/home" \
-            OPENCLAW_HOME="${temp_root}/home" \
-            OPENCLAW_NO_ONBOARD=1 \
-            OPENCLAW_SUPPRESS_NOTES=1 \
-            OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 \
-            OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK=1 \
-            AWS_EC2_METADATA_DISABLED=true \
-            AWS_SHARED_CREDENTIALS_FILE="${temp_root}/home/.aws/credentials" \
-            AWS_CONFIG_FILE="${temp_root}/home/.aws/config" \
-              node /app/openclaw.mjs agent --message "workspace bootstrap smoke" --session-id "workspace-bootstrap-smoke" --local --timeout 1 --json \
-              >"${temp_root}/out.log" 2>&1
-            status="$?"
-            set -e
-            if grep -F "Missing workspace template:" "${temp_root}/out.log"; then
-              cat "${temp_root}/out.log"
-              exit 1
-            fi
-            if [ "${status}" -ne 0 ]; then
-              cat "${temp_root}/out.log"
-            fi
-          '
-
-      - name: Smoke test arm64 browser image
-        if: steps.tags.outputs.browser != ''
-        shell: bash
-        env:
-          IMAGE_REFS: ${{ steps.tags.outputs.browser }}
-        run: |
-          set -euo pipefail
-          mapfile -t image_refs <<< "${IMAGE_REFS}"
-          image_ref="${image_refs[0]}"
-          if [[ -z "${image_ref}" ]]; then
-            echo "::error::No arm64 browser image ref resolved"
-            exit 1
-          fi
-          docker run --rm --entrypoint /bin/sh "${image_ref}" -lc '
-            set -eu
-            browser="$(find /home/node/.cache/ms-playwright -maxdepth 5 -type f \( -name chrome -o -name chromium -o -name chrome-headless-shell \) -print | head -1)"
-            test -n "${browser}"
-            "${browser}" --version
-          '
-
-  # Create multi-platform manifests
-  create-manifest:
-    needs:
-      [
-        approve_docker_publish,
-        resolve_release_policy,
-        validate_publish_config,
-        resolve_build_provenance,
-        build-amd64,
-        build-arm64,
-      ]
-    if: ${{ always() && needs.approve_docker_publish.result == 'success' && needs.validate_publish_config.result == 'success' && needs.build-amd64.result == 'success' && needs.build-arm64.result == 'success' }}
-    # WARNING: DO NOT REVERT THIS TO A BLACKSMITH RUNNER WITHOUT RE-VALIDATING TAG BACKFILLS.
-    runs-on: ubuntu-24.04
-    permissions:
-      packages: write
-      contents: read
-    outputs:
-      browser_supported: ${{ steps.tags.outputs.browser_supported }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          ref: ${{ needs.resolve_build_provenance.outputs.source_sha }}
-          fetch-depth: 0
-
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Login to Docker Hub
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
-        with:
-          registry: ${{ env.DOCKERHUB_REGISTRY }}
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Resolve manifest tags
-        id: tags
-        shell: bash
-        env:
-          GHCR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          DOCKERHUB_IMAGE: ${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_IMAGE_NAME }}
-          IMAGE_TAG_SUFFIX: ${{ inputs.image_tag_suffix }}
-          SOURCE_REF: ${{ format('refs/tags/{0}', inputs.tag) }}
-        run: |
-          set -euo pipefail
-          tags=()
-          slim_tags=()
-          browser_tags=()
-          dockerhub_tags=()
-          dockerhub_slim_tags=()
-          dockerhub_browser_tags=()
-          browser_supported=0
-          if grep -q '^ARG OPENCLAW_INSTALL_BROWSER' Dockerfile; then
-            browser_supported=1
-          fi
-          if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
-            version="${SOURCE_REF#refs/tags/v}"
-            image_version="${version}${IMAGE_TAG_SUFFIX}"
-            tags+=("${GHCR_IMAGE}:${image_version}")
-            slim_tags+=("${GHCR_IMAGE}:${image_version}-slim")
-            dockerhub_tags+=("${DOCKERHUB_IMAGE}:${image_version}")
-            dockerhub_slim_tags+=("${DOCKERHUB_IMAGE}:${image_version}-slim")
-            if [[ "${browser_supported}" == "1" ]]; then
-              browser_tags+=("${GHCR_IMAGE}:${image_version}-browser")
-              dockerhub_browser_tags+=("${DOCKERHUB_IMAGE}:${image_version}-browser")
-            fi
-          fi
-          if [[ ${#tags[@]} -eq 0 ]]; then
-            echo "::error::No manifest tags resolved for ref ${SOURCE_REF}"
-            exit 1
-          fi
-          {
-            if [[ "${browser_supported}" == "1" ]]; then
-              echo "browser_supported=true"
-            else
-              echo "browser_supported=false"
-            fi
-            echo "value<<EOF"
-            printf "%s\n" "${tags[@]}" "${slim_tags[@]}"
-            echo "EOF"
-            echo "browser<<EOF"
-            printf "%s\n" "${browser_tags[@]}"
-            echo "EOF"
-            echo "dockerhub<<EOF"
-            printf "%s\n" "${dockerhub_tags[@]}" "${dockerhub_slim_tags[@]}"
-            echo "EOF"
-            echo "dockerhub_browser<<EOF"
-            printf "%s\n" "${dockerhub_browser_tags[@]}"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Create and push manifest
-        shell: bash
-        env:
-          DOCKERHUB_IMAGE: ${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_IMAGE_NAME }}
-          SOURCE_REF: ${{ format('refs/tags/{0}', inputs.tag) }}
-          TAGS: ${{ steps.tags.outputs.value }}
-          BROWSER_TAGS: ${{ steps.tags.outputs.browser }}
-          DOCKERHUB_TAGS: ${{ steps.tags.outputs.dockerhub }}
-          DOCKERHUB_BROWSER_TAGS: ${{ steps.tags.outputs.dockerhub_browser }}
-          IMAGE_TAG_SUFFIX: ${{ inputs.image_tag_suffix }}
-          AMD64_DIGEST: ${{ needs.build-amd64.outputs.digest }}
-          ARM64_DIGEST: ${{ needs.build-arm64.outputs.digest }}
-          AMD64_BROWSER_DIGEST: ${{ needs.build-amd64.outputs.browser_digest }}
-          ARM64_BROWSER_DIGEST: ${{ needs.build-arm64.outputs.browser_digest }}
-        run: |
-          set -euo pipefail
-          mapfile -t tags <<< "${TAGS}"
-          mapfile -t browser_tags <<< "${BROWSER_TAGS}"
-          mapfile -t dockerhub_tags <<< "${DOCKERHUB_TAGS}"
-          mapfile -t dockerhub_browser_tags <<< "${DOCKERHUB_BROWSER_TAGS}"
-          create_manifest() {
-            local amd64_digest="$1"
-            local arm64_digest="$2"
-            shift 2
-            local args=()
-            for tag in "$@"; do
-              [ -z "$tag" ] && continue
-              args+=("-t" "$tag")
-            done
-            docker buildx imagetools create "${args[@]}" "$amd64_digest" "$arm64_digest"
-          }
-          create_manifest "${AMD64_DIGEST}" "${ARM64_DIGEST}" "${tags[@]}"
-          if [[ "${SOURCE_REF}" != refs/tags/v* ]]; then
-            echo "::error::No Docker Hub source refs resolved for ref ${SOURCE_REF}"
-            exit 1
-          fi
-          version="${SOURCE_REF#refs/tags/v}"
-          image_version="${version}${IMAGE_TAG_SUFFIX}"
-          create_manifest "${DOCKERHUB_IMAGE}:${image_version}-amd64" "${DOCKERHUB_IMAGE}:${image_version}-arm64" "${dockerhub_tags[@]}"
-          if [[ -n "${BROWSER_TAGS}" ]]; then
-            create_manifest "${AMD64_BROWSER_DIGEST}" "${ARM64_BROWSER_DIGEST}" "${browser_tags[@]}"
-          fi
-          if [[ -n "${DOCKERHUB_BROWSER_TAGS}" ]]; then
-            create_manifest \
-              "${DOCKERHUB_IMAGE}:${image_version}-browser-amd64" \
-              "${DOCKERHUB_IMAGE}:${image_version}-browser-arm64" \
-              "${dockerhub_browser_tags[@]}"
-          fi
-
-  verify-attestations:
-    name: Verify attestations and promote channel
-    needs: [resolve_release_policy, resolve_build_provenance, create-manifest]
-    if: ${{ always() && needs.create-manifest.result == 'success' }}
-    runs-on: ubuntu-24.04
-    outputs:
-      vcr_source_refs: ${{ steps.vcr_source_refs.outputs.value }}
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          ref: ${{ needs.resolve_build_provenance.outputs.source_sha }}
-          fetch-depth: 1
-
-      - *buildkit_prepull_step
-      - name: Set up Docker Builder
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
-
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Login to Docker Hub
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
-        with:
-          registry: ${{ env.DOCKERHUB_REGISTRY }}
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Resolve image refs
-        id: refs
-        shell: bash
-        env:
-          GHCR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          DOCKERHUB_IMAGE: ${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_IMAGE_NAME }}
-          IMAGE_TAG_SUFFIX: ${{ inputs.image_tag_suffix }}
-          SOURCE_REF: ${{ format('refs/tags/{0}', inputs.tag) }}
-        run: |
-          set -euo pipefail
-          multi_refs=()
-          slim_multi_refs=()
-          amd64_refs=()
-          arm64_refs=()
-          dockerhub_multi_refs=()
-          dockerhub_slim_multi_refs=()
-          dockerhub_amd64_refs=()
-          dockerhub_arm64_refs=()
-          browser_supported=0
-          if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
-            if grep -q '^ARG OPENCLAW_INSTALL_BROWSER' Dockerfile; then
-              browser_supported=1
-            fi
-          elif grep -q '^ARG OPENCLAW_INSTALL_BROWSER' Dockerfile; then
-            browser_supported=1
-          fi
-          if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
-            version="${SOURCE_REF#refs/tags/v}"
-            image_version="${version}${IMAGE_TAG_SUFFIX}"
-            multi_refs+=("${GHCR_IMAGE}:${image_version}")
-            slim_multi_refs+=("${GHCR_IMAGE}:${image_version}-slim")
-            dockerhub_multi_refs+=("${DOCKERHUB_IMAGE}:${image_version}")
-            dockerhub_slim_multi_refs+=("${DOCKERHUB_IMAGE}:${image_version}-slim")
-            amd64_refs+=(
-              "${GHCR_IMAGE}:${image_version}-amd64"
-              "${GHCR_IMAGE}:${image_version}-slim-amd64"
-            )
-            dockerhub_amd64_refs+=(
-              "${DOCKERHUB_IMAGE}:${image_version}-amd64"
-              "${DOCKERHUB_IMAGE}:${image_version}-slim-amd64"
-            )
-            arm64_refs+=(
-              "${GHCR_IMAGE}:${image_version}-arm64"
-              "${GHCR_IMAGE}:${image_version}-slim-arm64"
-            )
-            dockerhub_arm64_refs+=(
-              "${DOCKERHUB_IMAGE}:${image_version}-arm64"
-              "${DOCKERHUB_IMAGE}:${image_version}-slim-arm64"
-            )
-            if [[ "${browser_supported}" == "1" ]]; then
-              multi_refs+=("${GHCR_IMAGE}:${image_version}-browser")
-              dockerhub_multi_refs+=("${DOCKERHUB_IMAGE}:${image_version}-browser")
-              amd64_refs+=("${GHCR_IMAGE}:${image_version}-browser-amd64")
-              dockerhub_amd64_refs+=("${DOCKERHUB_IMAGE}:${image_version}-browser-amd64")
-              arm64_refs+=("${GHCR_IMAGE}:${image_version}-browser-arm64")
-              dockerhub_arm64_refs+=("${DOCKERHUB_IMAGE}:${image_version}-browser-arm64")
-            fi
-          fi
-          if [[ ${#multi_refs[@]} -eq 0 || ${#amd64_refs[@]} -eq 0 || ${#arm64_refs[@]} -eq 0 || ${#dockerhub_multi_refs[@]} -eq 0 || ${#dockerhub_amd64_refs[@]} -eq 0 || ${#dockerhub_arm64_refs[@]} -eq 0 ]]; then
-            echo "::error::No Docker image refs resolved for ref ${SOURCE_REF}"
-            exit 1
-          fi
-          {
-            echo "multi<<EOF"
-            printf "%s\n" "${multi_refs[@]}" "${slim_multi_refs[@]}"
-            echo "EOF"
-            echo "amd64<<EOF"
-            printf "%s\n" "${amd64_refs[@]}"
-            echo "EOF"
-            echo "arm64<<EOF"
-            printf "%s\n" "${arm64_refs[@]}"
-            echo "EOF"
-            echo "dockerhub_multi<<EOF"
-            printf "%s\n" "${dockerhub_multi_refs[@]}" "${dockerhub_slim_multi_refs[@]}"
-            echo "EOF"
-            echo "dockerhub_amd64<<EOF"
-            printf "%s\n" "${dockerhub_amd64_refs[@]}"
-            echo "EOF"
-            echo "dockerhub_arm64<<EOF"
-            printf "%s\n" "${dockerhub_arm64_refs[@]}"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Verify Docker attestations
-        shell: bash
-        env:
-          MULTI_REFS: ${{ steps.refs.outputs.multi }}
-          AMD64_REFS: ${{ steps.refs.outputs.amd64 }}
-          ARM64_REFS: ${{ steps.refs.outputs.arm64 }}
-          DOCKERHUB_MULTI_REFS: ${{ steps.refs.outputs.dockerhub_multi }}
-          DOCKERHUB_AMD64_REFS: ${{ steps.refs.outputs.dockerhub_amd64 }}
-          DOCKERHUB_ARM64_REFS: ${{ steps.refs.outputs.dockerhub_arm64 }}
-        run: |
-          set -euo pipefail
-          mapfile -t multi_refs <<< "${MULTI_REFS}"
-          mapfile -t amd64_refs <<< "${AMD64_REFS}"
-          mapfile -t arm64_refs <<< "${ARM64_REFS}"
-          mapfile -t dockerhub_multi_refs <<< "${DOCKERHUB_MULTI_REFS}"
-          mapfile -t dockerhub_amd64_refs <<< "${DOCKERHUB_AMD64_REFS}"
-          mapfile -t dockerhub_arm64_refs <<< "${DOCKERHUB_ARM64_REFS}"
-
-          node scripts/verify-docker-attestations.mjs \
-            --platform linux/amd64 \
-            --platform linux/arm64 \
-            "${multi_refs[@]}"
-          node scripts/verify-docker-attestations.mjs \
-            --platform linux/amd64 \
-            "${amd64_refs[@]}"
-          node scripts/verify-docker-attestations.mjs \
-            --platform linux/arm64 \
-            "${arm64_refs[@]}"
-          node scripts/verify-docker-attestations.mjs \
-            --platform linux/amd64 \
-            --platform linux/arm64 \
-            "${dockerhub_multi_refs[@]}"
-          node scripts/verify-docker-attestations.mjs \
-            --platform linux/amd64 \
-            "${dockerhub_amd64_refs[@]}"
-          node scripts/verify-docker-attestations.mjs \
-            --platform linux/arm64 \
-            "${dockerhub_arm64_refs[@]}"
-
-      # Resolve the moving release tags once, then verify the exact immutable
-      # indexes that the VCR publisher will consume. Passing those digest refs
-      # across the job boundary prevents a later tag rewrite from changing the
-      # bytes copied after attestation verification.
-      - name: Resolve and verify immutable VCR source refs
-        id: vcr_source_refs
-        shell: bash
-        env:
-          GHCR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          IMAGE_TAG_SUFFIX: ${{ inputs.image_tag_suffix }}
-          INCLUDE_BROWSER: ${{ needs.create-manifest.outputs.browser_supported }}
-          VERSION: ${{ needs.resolve_release_policy.outputs.version }}
-        run: |
-          set -euo pipefail
-          aliases=(default slim)
-          image_version="${VERSION}${IMAGE_TAG_SUFFIX}"
-          tags=("${image_version}" "${image_version}-slim")
-          if [[ "${INCLUDE_BROWSER}" == "true" ]]; then
-            aliases+=(browser)
-            tags+=("${image_version}-browser")
-          fi
-
-          source_refs=()
-          immutable_refs=()
-          for index in "${!aliases[@]}"; do
-            tagged_ref="${GHCR_IMAGE}:${tags[$index]}"
-            descriptor="$(
-              docker buildx imagetools inspect \
-                "${tagged_ref}" \
-                --format '{{json .Manifest}}'
-            )"
-            digest="$(
-              jq -er \
-                '.digest | select(type == "string" and test("^sha256:[a-f0-9]{64}$"))' \
-                <<< "${descriptor}"
-            )"
-            immutable_ref="${GHCR_IMAGE}@${digest}"
-            source_refs+=("${aliases[$index]}=${immutable_ref}")
-            immutable_refs+=("${immutable_ref}")
-          done
-
-          node scripts/verify-docker-attestations.mjs \
-            --platform linux/amd64 \
-            --platform linux/arm64 \
-            "${immutable_refs[@]}"
-
-          {
-            echo "value<<EOF"
-            printf '%s\n' "${source_refs[@]}"
-            echo "EOF"
-          } >> "${GITHUB_OUTPUT}"
-
-      - name: Promote and verify channel aliases
-        if: ${{ needs.resolve_release_policy.outputs.channel != 'beta' }}
-        env:
-          VERSION: ${{ needs.resolve_release_policy.outputs.version }}
-          IMAGE_TAG_SUFFIX: ${{ inputs.image_tag_suffix }}
-          GHCR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          DOCKERHUB_IMAGE: ${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_IMAGE_NAME }}
-        run: |
-          set -euo pipefail
-          node scripts/docker-channel-promote.mjs \
-            --version "${VERSION}" \
-            --image-tag-suffix "${IMAGE_TAG_SUFFIX}" \
-            --image "${GHCR_IMAGE}" \
-            --image "${DOCKERHUB_IMAGE}"
+          node workflow-source/scripts/docker-release-artifacts.mjs publish \
+            --manifest "${RUNNER_TEMP}/docker-release/manifest.json" \
+            --manifest-sha256 "${PREPARED_MANIFEST_SHA256}" \
+            --artifact-name "${PREPARED_ARTIFACT_NAME}" \
+            --run-id "${PREPARED_RUN_ID}" --run-attempt "${PREPARED_RUN_ATTEMPT}" \
+            --directory "${RUNNER_TEMP}/docker-release/payloads"

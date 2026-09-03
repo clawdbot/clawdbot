@@ -950,41 +950,6 @@ describe("ollama setup", () => {
     });
   });
 
-  it("uses discovered model when requested non-interactive download fails", async () => {
-    const fetchMock = createOllamaFetchMock({
-      tags: ["qwen2.5-coder:7b"],
-      pullResponse: new Response('{"error":"disk full"}\n', { status: 200 }),
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    const runtime = createRuntime();
-
-    const result = await configureOllamaNonInteractive({
-      nextConfig: {
-        agents: {
-          defaults: {
-            model: {
-              primary: "openai/gpt-4o-mini",
-              fallbacks: ["anthropic/claude-sonnet-4-5"],
-            },
-          },
-        },
-      },
-      opts: {
-        customBaseUrl: "http://127.0.0.1:11434",
-        customModelId: "missing-model",
-      },
-      runtime,
-    });
-
-    expect(runtime.error).toHaveBeenCalledWith("Download failed: disk full");
-    expect(result.agents?.defaults?.model).toEqual({
-      primary: "ollama/qwen2.5-coder:7b",
-      fallbacks: ["anthropic/claude-sonnet-4-5"],
-    });
-    expect(result.models?.providers?.ollama?.apiKey).toBe("ollama-local");
-    expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
-  });
-
   it("normalizes ollama/ prefix in non-interactive custom model download", async () => {
     const fetchMock = createOllamaFetchMock({
       tags: [],

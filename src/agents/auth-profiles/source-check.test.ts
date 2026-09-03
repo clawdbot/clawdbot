@@ -88,6 +88,20 @@ describe("hasAuthProfileStoreSourceForProvider", () => {
     expect(readPersistedAuthProfileStoreRaw(agentDir)).toEqual(unreadableStore);
   });
 
+  it("returns null for classified SQLite lock contention", async () => {
+    const { agentDir } = await withAgentStore({});
+    const lockError = Object.assign(new Error("database is locked"), { errcode: 5 });
+
+    await expect(
+      updateAuthProfileStoreWithLock({
+        agentDir,
+        updater: () => {
+          throw lockError;
+        },
+      }),
+    ).resolves.toBeNull();
+  });
+
   it("detects a legacy credential source that appears after an earlier clean load", async () => {
     const { agentDir } = await withAgentStore({});
     expect(loadAuthProfileStoreForRuntime(agentDir).profiles).toEqual({});

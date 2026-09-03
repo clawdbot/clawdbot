@@ -9,7 +9,7 @@ const pluginRegistryMocks = vi.hoisted(() => {
   return {
     loadPluginManifestRegistryForInstalledIndex: loadManifestRegistry,
     loadPluginManifestRegistryForPluginRegistry: loadManifestRegistry,
-    loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
+    loadPluginRegistrySnapshotWithMetadata: vi.fn(() => ({ snapshot: { plugins: [] } })),
     resolveInstalledManifestRegistryIndexFingerprint: vi.fn(() => "test-index"),
     loadPluginMetadataSnapshot: vi.fn((params: unknown) => {
       const registry = loadManifestRegistry(params) ?? { plugins: [], diagnostics: [] };
@@ -38,7 +38,8 @@ vi.mock("../plugins/manifest-registry-installed.js", () => ({
 vi.mock("../plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry:
     pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry,
-  loadPluginRegistrySnapshot: pluginRegistryMocks.loadPluginRegistrySnapshot,
+  loadPluginRegistrySnapshotWithMetadata:
+    pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata,
 }));
 
 vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
@@ -49,15 +50,15 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   resolveProviderSyntheticAuthWithPlugin: vi.fn(() => undefined),
 }));
 
-import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { InstalledPluginIndexRecord } from "../plugins/installed-plugin-index.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import { createPluginCache, getPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { createProviderAuthResolver } from "./models-config.providers.secrets.js";
-import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
-import { resetProviderAuthAliasMapCacheForTest } from "./provider-auth-aliases.test-support.js";
+import { resolveProviderAuthAliasMap, resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 
 function createPluginManifestRecord(
   plugin: Partial<PluginManifestRecord> & Pick<PluginManifestRecord, "id" | "origin">,
@@ -100,19 +101,21 @@ function createPluginMetadataSnapshot(params: {
   plugins: readonly PluginManifestRecord[];
 }): PluginMetadataSnapshot {
   const policyHash = resolveInstalledPluginIndexPolicyHash(params.config);
+  const index: PluginMetadataSnapshot["index"] = {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash,
+    generatedAtMs: 1,
+    installRecords: {},
+    plugins: params.plugins.map((plugin) => createInstalledPluginIndexRecord(plugin)),
+    diagnostics: [],
+  };
   return {
     policyHash,
-    index: {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash,
-      generatedAtMs: 1,
-      installRecords: {},
-      plugins: params.plugins.map((plugin) => createInstalledPluginIndexRecord(plugin)),
-      diagnostics: [],
-    },
+    index,
+    registryIndex: index,
     registryDiagnostics: [],
     manifestRegistry: { plugins: [...params.plugins], diagnostics: [] },
     plugins: params.plugins,
@@ -128,6 +131,7 @@ function createPluginMetadataSnapshot(params: {
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      modelIdNormalizationPolicies: new Map(),
     },
     metrics: {
       registrySnapshotMs: 0,
@@ -140,19 +144,291 @@ function createPluginMetadataSnapshot(params: {
   };
 }
 
+async function prepareAliasSnapshot(plugins: PluginManifestRecord[]) {
+  const metadata = await vi.importActual<typeof import("../plugins/plugin-metadata-snapshot.js")>(
+    "../plugins/plugin-metadata-snapshot.js",
+  );
+  const source = createPluginMetadataSnapshot({ plugins });
+  const snapshot = metadata.restorePluginMetadataSnapshot(
+    metadata.rebasePluginMetadataSnapshotManifestRegistry(source, source.manifestRegistry),
+  );
+  return { metadata, snapshot };
+}
+
 describe("provider auth aliases", () => {
   beforeEach(() => {
     clearPluginMetadataLifecycleCaches();
-    resetProviderAuthAliasMapCacheForTest();
     pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReset();
     pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReset();
     pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
       plugins: [],
       diagnostics: [],
     });
-    pluginRegistryMocks.loadPluginRegistrySnapshot.mockReset();
-    pluginRegistryMocks.loadPluginRegistrySnapshot.mockReturnValue({ plugins: [] });
+    pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata.mockReset();
+    pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      snapshot: { plugins: [] },
+    });
     pluginRegistryMocks.loadPluginMetadataSnapshot.mockClear();
+  });
+
+  it("does not enumerate alias metadata again after snapshot preparation", async () => {
+    const enumerateAliases = vi.fn(Reflect.ownKeys);
+    const { snapshot } = await prepareAliasSnapshot([
+      createPluginManifestRecord({
+        id: "selected",
+        origin: "bundled",
+        providerAuthAliases: { selected: "selected-provider" },
+      }),
+      createPluginManifestRecord({
+        id: "unrelated",
+        origin: "bundled",
+        providerAuthAliases: new Proxy<Record<string, string>>(
+          { unrelated: "unrelated-provider" },
+          {
+            ownKeys: enumerateAliases,
+          },
+        ),
+      }),
+    ]);
+    enumerateAliases.mockClear();
+
+    for (let repeat = 0; repeat < 8; repeat += 1) {
+      expect(resolveProviderIdForAuth("selected", { metadataSnapshot: snapshot })).toBe(
+        "selected-provider",
+      );
+      expect(resolveProviderIdForAuth("unrelated", { metadataSnapshot: snapshot })).toBe(
+        "unrelated-provider",
+      );
+      expect(resolveProviderIdForAuth("missing", { metadataSnapshot: snapshot })).toBe("missing");
+    }
+    expect(enumerateAliases).not.toHaveBeenCalled();
+  });
+
+  it("preserves alias precedence, normalized collisions and eligible declaration order", async () => {
+    const { snapshot } = await prepareAliasSnapshot([
+      createPluginManifestRecord({
+        id: "early-workspace",
+        origin: "workspace",
+        providerAuthAliases: { "early-only": "workspace", shared: "workspace" },
+      }),
+      createPluginManifestRecord({
+        id: "first-global",
+        origin: "global",
+        providerAuthAliases: {
+          "duplicate ": "later-raw-alias",
+          duplicate: "first-raw-alias",
+          middle: "first-global",
+          shared: "global",
+        },
+        providerAuthChoices: [
+          {
+            provider: "choice-provider",
+            method: "oauth",
+            choiceId: "choice",
+            deprecatedChoiceIds: ["legacy", "duplicate"],
+          },
+        ],
+      }),
+      createPluginManifestRecord({
+        id: "later-bundled",
+        origin: "bundled",
+        providerAuthAliases: { shared: "bundled", tail: "bundled" },
+      }),
+      createPluginManifestRecord({
+        id: "same-priority",
+        origin: "global",
+        providerAuthAliases: { middle: "later-global" },
+      }),
+      createPluginManifestRecord({
+        id: "configured",
+        origin: "config",
+        providerAuthAliases: { shared: "configured" },
+      }),
+    ]);
+    const withoutWorkspace = resolveProviderAuthAliasMap({ metadataSnapshot: snapshot });
+    expect(Object.keys(withoutWorkspace)).toEqual([
+      "duplicate",
+      "middle",
+      "shared",
+      "legacy",
+      "tail",
+    ]);
+    expect(withoutWorkspace).toEqual({
+      duplicate: "first-raw-alias",
+      middle: "first-global",
+      shared: "configured",
+      legacy: "choice-provider",
+      tail: "bundled",
+    });
+    const withWorkspace = resolveProviderAuthAliasMap({
+      config: { plugins: { allow: ["early-workspace"] } },
+      metadataSnapshot: snapshot,
+    });
+    expect(Object.keys(withWorkspace)).toEqual([
+      "early-only",
+      "shared",
+      "duplicate",
+      "middle",
+      "legacy",
+      "tail",
+    ]);
+    for (const [alias, target] of Object.entries(withWorkspace)) {
+      expect(
+        resolveProviderIdForAuth(alias, {
+          config: { plugins: { allow: ["early-workspace"] } },
+          metadataSnapshot: snapshot,
+        }),
+      ).toBe(target);
+    }
+    const proto = resolveProviderAuthAliasMap({
+      metadataSnapshot: {
+        plugins: [
+          createPluginManifestRecord({
+            id: "prototype-alias",
+            origin: "bundled",
+            providerAuthAliases: { ["__proto__"]: "prototype-provider" },
+          }),
+        ],
+      },
+    });
+    expect(Object.getPrototypeOf(withWorkspace)).toBeNull();
+    expect(Object.getPrototypeOf(proto)).toBeNull();
+    expect(Object.getOwnPropertyDescriptor(proto, "__proto__")?.value).toBe("prototype-provider");
+    withoutWorkspace.shared = "caller-mutation";
+    expect(resolveProviderIdForAuth("shared", { metadataSnapshot: snapshot })).toBe("configured");
+  });
+
+  it("rechecks workspace trust against current config within one prepared snapshot", async () => {
+    const { snapshot } = await prepareAliasSnapshot([
+      createPluginManifestRecord({
+        id: "first-workspace",
+        origin: "workspace",
+        providerAuthAliases: { shared: "first-provider" },
+      }),
+      createPluginManifestRecord({
+        id: "second-workspace",
+        origin: "workspace",
+        providerAuthAliases: { shared: "second-provider" },
+      }),
+    ]);
+    const config: NonNullable<Parameters<typeof resolveProviderIdForAuth>[1]>["config"] = {};
+    const resolve = () =>
+      resolveProviderIdForAuth("shared", { config, metadataSnapshot: snapshot });
+    expect(resolve()).toBe("shared");
+    config.plugins = { allow: ["first-workspace", "second-workspace"] };
+    expect(resolve()).toBe("first-provider");
+    config.plugins.deny = ["first-workspace"];
+    expect(resolve()).toBe("second-provider");
+    config.plugins.entries = { "second-workspace": { enabled: false } };
+    expect(resolve()).toBe("shared");
+    config.plugins = { slots: { contextEngine: "first-workspace" } };
+    expect(resolve()).toBe("first-provider");
+    config.plugins.enabled = false;
+    expect(resolve()).toBe("shared");
+    expect(
+      resolveProviderIdForAuth("shared", {
+        config,
+        metadataSnapshot: snapshot,
+        includeUntrustedWorkspacePlugins: true,
+      }),
+    ).toBe("first-provider");
+  });
+
+  it("keeps public partial metadata views fresh when the caller mutates them", () => {
+    const aliases = { fixture: "first-provider" };
+    const plugins = [
+      createPluginManifestRecord({
+        id: "mutable-view",
+        origin: "global",
+        providerAuthAliases: aliases,
+      }),
+    ];
+    const metadataSnapshot = { plugins };
+    expect(resolveProviderIdForAuth("fixture", { metadataSnapshot })).toBe("first-provider");
+    aliases.fixture = "second-provider";
+    expect(resolveProviderIdForAuth("fixture", { metadataSnapshot })).toBe("second-provider");
+    plugins.push(
+      createPluginManifestRecord({
+        id: "added-view",
+        origin: "bundled",
+        providerAuthAliases: { added: "added-provider" },
+      }),
+    );
+    expect(resolveProviderIdForAuth("added", { metadataSnapshot })).toBe("added-provider");
+  });
+
+  it("retains alias ownership through worker cloning, projection and metadata replacement", async () => {
+    const { metadata, snapshot } = await prepareAliasSnapshot([
+      createPluginManifestRecord({
+        id: "first",
+        origin: "bundled",
+        providerAuthAliases: { fixture: "first-provider" },
+      }),
+      createPluginManifestRecord({
+        id: "second",
+        origin: "bundled",
+        providerAuthAliases: { second: "second-provider" },
+      }),
+    ]);
+    const { normalizePluginId: _normalizePluginId, ...serialized } = snapshot;
+    const restored = metadata.restorePluginMetadataSnapshot(structuredClone(serialized));
+    expect(resolveProviderAuthAliasMap({ metadataSnapshot: restored })).toEqual({
+      fixture: "first-provider",
+      second: "second-provider",
+    });
+    const projected = metadata.projectPluginMetadataSnapshot(restored, ["second"]);
+    expect(resolveProviderIdForAuth("fixture", { metadataSnapshot: projected })).toBe("fixture");
+    expect(resolveProviderIdForAuth("second", { metadataSnapshot: projected })).toBe(
+      "second-provider",
+    );
+    const replacement = metadata.rebasePluginMetadataSnapshotManifestRegistry(restored, {
+      plugins: [
+        createPluginManifestRecord({
+          id: "first",
+          origin: "bundled",
+          providerAuthAliases: { fixture: "replacement-provider" },
+        }),
+      ],
+      diagnostics: [],
+    });
+    expect(resolveProviderIdForAuth("fixture", { metadataSnapshot: replacement })).toBe(
+      "replacement-provider",
+    );
+    expect(resolveProviderIdForAuth("fixture", { metadataSnapshot: restored })).toBe(
+      "first-provider",
+    );
+  });
+
+  it("does not reuse implicit auth aliases across fresh operation owners", () => {
+    const config = {};
+    const env = { HOME: "/home/owner-test" };
+    const firstOwner = createPluginCache();
+    const secondOwner = createPluginCache();
+    const snapshot = (target: string) =>
+      createPluginMetadataSnapshot({
+        config,
+        plugins: [
+          createPluginManifestRecord({
+            id: "owner-fixture",
+            origin: "bundled",
+            providerAuthAliases: { fixture: target },
+          }),
+        ],
+      });
+    const firstSnapshot = snapshot("first-provider");
+    const secondSnapshot = snapshot("second-provider");
+    pluginRegistryMocks.loadPluginMetadataSnapshot.withImplementation(
+      () => (getPluginCache() === firstOwner ? firstSnapshot : secondSnapshot),
+      () => {
+        expect(
+          withPluginCache(firstOwner, () => resolveProviderIdForAuth("fixture", { config, env })),
+        ).toBe("first-provider");
+        expect(
+          withPluginCache(secondOwner, () => resolveProviderIdForAuth("fixture", { config, env })),
+        ).toBe("second-provider");
+        expect(pluginRegistryMocks.loadPluginMetadataSnapshot).toHaveBeenCalledTimes(2);
+      },
+    );
   });
 
   it("treats deprecated auth choice ids as provider auth aliases", () => {

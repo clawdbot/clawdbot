@@ -218,8 +218,14 @@ export async function applySkillProposalTransition(
 
       assertInsideWorkspace(input.workspaceDir, record.target.skillFile, "skill file");
       assertInsideWorkspace(input.workspaceDir, record.target.skillDir, "skill directory");
+      // Agents rewrite only Workshop-authored skills; operators (gateway, CLI) approve the rest.
+      // Rechecked under the commit lock so a claim released after the autonomous pre-check
+      // cannot let an agent write a user-authored skill.
+      const operatorActor =
+        input.eventActor?.type === "gateway" || input.eventActor?.type === "system";
       if (
         record.kind === "update" &&
+        !operatorActor &&
         !isWorkshopOwnedSkillDir(
           input.workspaceDir,
           record.target.skillDir,

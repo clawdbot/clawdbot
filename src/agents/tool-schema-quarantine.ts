@@ -6,7 +6,7 @@
  */
 import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { getPluginToolMeta } from "../plugins/tools.js";
+import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import type { RuntimeToolSchemaDiagnostic } from "./tool-schema-projection.js";
 import {
   clearRecoveredPersistedRuntimeToolSchemaQuarantines,

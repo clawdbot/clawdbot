@@ -1,5 +1,6 @@
 // Shared directive parsing helpers used by model and auth directive handlers.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { AgentModelPrimaryWriteTarget } from "../../agents/agent-scope.js";
 import type { StickyModelSelectionDispatchOutcome } from "../../agents/sticky-model-selection.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import {
@@ -66,15 +67,22 @@ export function formatModelSelectionScopeAck(params: {
   isDefault: boolean;
   label: string;
   configuredDefaultUpdate?: StickyModelSelectionDispatchOutcome;
+  stickyModelSelectionTarget?: AgentModelPrimaryWriteTarget;
 }): string {
-  if (params.isDefault) {
+  if (params.isDefault && !params.stickyModelSelectionTarget) {
     return `Session model reset to configured default (${params.label}).`;
   }
+  const targetLabel =
+    params.stickyModelSelectionTarget === "agent"
+      ? "Agent default"
+      : params.stickyModelSelectionTarget === "defaults"
+        ? "Global default"
+        : "Configured default";
   if (params.configuredDefaultUpdate === "requested") {
-    return `Model set to ${params.label} for this session. Configured default update requested.`;
+    return `Model set to ${params.label} for this session. ${targetLabel} update requested.`;
   }
   if (params.configuredDefaultUpdate === "skipped-immutable") {
-    return `Model set to ${params.label} for this session. Configured default unchanged because configuration is immutable.`;
+    return `Model set to ${params.label} for this session. ${targetLabel} unchanged because configuration is immutable.`;
   }
   return `Model set to ${params.label} for this session only; configured default unchanged.`;
 }
@@ -110,12 +118,9 @@ const SESSION_LEVEL_DIRECTIVE_FIELDS = [
   ["hasElevatedDirective", "elevatedLevel"],
 ] as const satisfies ReadonlyArray<readonly [keyof InlineDirectives, keyof SessionEntry]>;
 
-const SESSION_EXEC_DIRECTIVE_FIELDS = [
-  "execHost",
-  "execSecurity",
-  "execAsk",
-  "execNode",
-] as const satisfies ReadonlyArray<keyof InlineDirectives & keyof SessionEntry>;
+const SESSION_EXEC_DIRECTIVE_FIELDS = ["execHost", "execNode"] as const satisfies ReadonlyArray<
+  keyof InlineDirectives & keyof SessionEntry
+>;
 
 const SESSION_QUEUE_DIRECTIVE_FIELDS = [
   ["queueMode", "queueMode"],

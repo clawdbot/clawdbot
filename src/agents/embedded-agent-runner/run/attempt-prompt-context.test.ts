@@ -50,6 +50,7 @@ const projectionState: ToolResultPromptProjectionState = {
   replacements: new Map(),
   frozen: new Set(),
   ambiguousBaseKeys: new Set(),
+  restoredCacheTtl: new Map(),
   sourceTextByKey: new Map(),
 };
 
@@ -128,6 +129,40 @@ beforeEach(() => {
 });
 
 describe("prepareEmbeddedAttemptPromptContext", () => {
+  it("carries next-turn runtime context as the delimited body only", () => {
+    const fixture = createInput();
+    const result = prepareEmbeddedAttemptPromptContext(fixture.input);
+    expect(result.runtimeContextMessageForCurrentTurn?.content).toBe(
+      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nConversation info: channel=telegram\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+    );
+  });
+  it.each(["Please recall my preference.", "Current time: noon. Please recall my preference."])(
+    "preserves active-memory hook context at the model boundary: %s",
+    (prompt) => {
+      const memory = "Context:\n<active_memory_plugin>\nsaved preference\n</active_memory_plugin>";
+      const modelPrompt = `${memory}\n\n${prompt}`;
+      const fixture = createInput({
+        prompt: createPrompt({
+          effectivePrompt: modelPrompt,
+          promptBeforePromptBuildHooks: prompt,
+          promptBuildPrependContext: memory,
+          hasPromptBuildContext: true,
+          effectiveTranscriptPrompt: prompt,
+          transcriptPromptForRuntimeSplit: prompt,
+          promptForRuntimeContextSplit: prompt,
+          promptForModelBeforeRuntimeContextSplit: modelPrompt,
+          promptForRuntimeContextBeforeAnnotation: prompt,
+        }),
+      });
+
+      const result = prepareEmbeddedAttemptPromptContext(fixture.input);
+
+      expect(result.promptForSession).toBe(prompt);
+      expect(result.llmBoundaryPromptForPrecheck).toBe(modelPrompt);
+      expect(result.runtimeContextMessageForCurrentTurn?.content).not.toContain("saved preference");
+    },
+  );
+
   it("keeps the transcript prompt bare while carrying inbound context to hooks", () => {
     const fixture = createInput();
 
@@ -240,7 +275,7 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     expect(hoisted.warn).not.toHaveBeenCalled();
   });
 
-  it("moves runtime-only context into the active system prompt", () => {
+  it("moves runtime-only context into the active system prompt with its preface", () => {
     const fixture = createInput({
       attempt: createAttempt({
         currentInboundContext: { text: "Room event metadata" },
@@ -257,6 +292,9 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
 
     const result = prepareEmbeddedAttemptPromptContext(fixture.input);
 
+    expect(result.promptSubmission.runtimeSystemContext).toBe(
+      "OpenClaw runtime event.\nThis context is runtime-generated, not user-authored. Keep internal details private.\n\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nRuntime room event\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+    );
     expect(result.promptSubmission.runtimeOnly).toBe(true);
     expect(result.promptForSession).toContain("Room event metadata");
     expect(result.runtimeContextMessageForCurrentTurn).toBeUndefined();

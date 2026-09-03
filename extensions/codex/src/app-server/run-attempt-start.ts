@@ -1,4 +1,8 @@
-import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  embeddedAgentLog,
+  hasBeforeToolCallPolicy,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { startCodexAttemptThread } from "./attempt-startup.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
@@ -9,6 +13,7 @@ import {
 } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import { joinPresentSections } from "./run-attempt-state.js";
+import { CodexThreadPolicyHandoffError } from "./thread-policy.js";
 import { recordCodexTrajectoryContext } from "./trajectory.js";
 
 export async function startCodexAttemptRuntime(resources: CodexAttemptResources) {
@@ -48,7 +53,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
   const { toolBridge, toolState } = attemptTools;
   const developerInstructions = joinPresentSections(
     turnState.promptBuild.developerInstructions,
-    attemptTools.scheduledConfiguredMcp?.diagnosticNotice,
+    attemptTools.configuredMcp?.diagnosticNotice,
   );
   const {
     params,
@@ -74,6 +79,12 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     abortFromUpstream,
   } = connection;
   let pluginAppServer = withCodexAppServerFastModeServiceTier(appServer, runtimeParams);
+  const loopDetectionEnabled =
+    (sessionAgentId && params.config
+      ? resolveAgentConfig(params.config, sessionAgentId)?.tools?.loopDetection?.enabled
+      : undefined) ??
+    params.config?.tools?.loopDetection?.enabled ??
+    false;
   try {
     void emitCodexAppServerEvent(params, {
       stream: "codex_app_server.lifecycle",
@@ -110,7 +121,16 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       developerInstructions,
       agentWorkspaceDeveloperInstructions: context.agentWorkspaceDeveloperInstructions,
       buildFinalConfigPatch: buildNativeHookRelayFinalConfigPatch,
+      nativeHookRelayRequired:
+        connection.options.nativeHookRelay?.enabled !== false &&
+        params.pluginHarnessToolPolicyRestricted !== true &&
+        connection.nativeHookRelayEvents.includes("pre_tool_use") &&
+        (hasBeforeToolCallPolicy() ||
+          (appServer.loopDetectionPreToolUseRelay &&
+            Boolean(connection.sandboxSessionKey) &&
+            loopDetectionEnabled)),
       bundleMcpThreadConfig,
+      configuredMcpDynamicSurface: attemptTools.configuredMcp !== undefined,
       configuredMcpOwnershipVersion: attemptTools.configuredMcpOwnershipVersion,
       nativeToolSurfaceEnabled,
       nativeProviderWebSearchSupport,
@@ -213,7 +233,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       cwd: effectiveCwd,
       developerInstructions: joinPresentSections(
         buildRenderedCodexDeveloperInstructions(),
-        attemptTools.scheduledConfiguredMcp?.diagnosticNotice,
+        attemptTools.configuredMcp?.diagnosticNotice,
       ),
       prompt: turnState.codexTurnPromptText,
       tools: toolBridge.availableSpecs,
@@ -238,6 +258,8 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     await runCleanupStep("codex-start-failure-abort-listener", () =>
       params.abortSignal?.removeEventListener("abort", abortFromUpstream),
     );
-    throw state.executionDisconnectError ?? error;
+    throw error instanceof CodexThreadPolicyHandoffError
+      ? error
+      : (state.executionDisconnectError ?? error);
   }
 }

@@ -5,7 +5,7 @@ import {
   HeartbeatSchema,
   AgentSandboxSchema,
   AgentContextLimitsSchema,
-  AgentModelRuntimeEntrySchema,
+  AgentModelMapSchema,
   AgentModelPolicySchema,
   AgentModelSchema,
   AgentToolModelSchema,
@@ -64,6 +64,7 @@ export const AgentDefaultsSchema = z
     /** Global default provider params applied to all models before per-model and per-agent overrides. */
     params: z.record(z.string(), z.unknown()).optional(),
     model: AgentModelSchema.optional(),
+    modelSelectionScope: z.enum(["session", "agent", "global"]).optional(),
     utilityModel: z.string().optional(),
     imageModel: AgentToolModelSchema.optional(),
     mediaModels: z
@@ -78,9 +79,10 @@ export const AgentDefaultsSchema = z
     pdfModel: AgentToolModelSchema.optional(),
     pdfMaxMb: z.number().positive().optional(),
     pdfMaxPages: z.number().int().positive().optional(),
-    models: z.record(z.string(), AgentModelRuntimeEntrySchema).optional(),
+    models: AgentModelMapSchema.optional(),
     modelPolicy: AgentModelPolicySchema.optional(),
     workspace: z.string().optional(),
+    cwd: z.string().optional(),
     skills: z.array(z.string()).optional(),
     silentReply: SilentReplyPolicyConfigSchema.optional(),
     repoRoot: z.string().optional(),

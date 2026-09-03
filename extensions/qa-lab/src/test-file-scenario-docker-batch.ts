@@ -4,7 +4,11 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { z } from "zod";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import { shellQuote } from "./shell-quote.js";
-import { runQaScenarioCommandLifecycle } from "./test-file-scenario-command-lifecycle.js";
+import {
+  formatQaScenarioCommandOutput,
+  runQaScenarioCommandLifecycle,
+  type QaScenarioCommandExecution,
+} from "./test-file-scenario-command-lifecycle.js";
 
 const QA_DOCKER_E2E_LANE_SCRIPT = "test/e2e/qa-lab/runtime/docker-e2e-lane.ts";
 const DOCKER_CANDIDATE_ENV_KEY =
@@ -64,6 +68,13 @@ export function isDockerE2eScenario(
   return dockerE2eLaneName(scenario) !== undefined;
 }
 
+export function dockerLaneName(scenario: QaSeedScenarioWithSource) {
+  if (scenario.execution.kind !== "script") {
+    return undefined;
+  }
+  return scenario.execution.dockerLane ?? dockerE2eLaneName(scenario);
+}
+
 export async function prepareDockerE2eEnvironment(params: {
   env: NodeJS.ProcessEnv;
   outputDir: string;
@@ -72,7 +83,7 @@ export async function prepareDockerE2eEnvironment(params: {
   scenarios: readonly QaSeedScenarioWithSource[];
 }): Promise<Readonly<NodeJS.ProcessEnv> | undefined> {
   const laneNames = [
-    ...new Set(params.scenarios.flatMap((scenario) => dockerE2eLaneName(scenario) ?? [])),
+    ...new Set(params.scenarios.flatMap((scenario) => dockerLaneName(scenario) ?? [])),
   ];
   if (laneNames.length === 0) {
     return undefined;
@@ -151,6 +162,7 @@ function laneMatches(
 export async function runDockerE2eBatch(params: {
   commandTimeoutMs: number;
   env: NodeJS.ProcessEnv;
+  onCommandOutput?: QaScenarioCommandExecution["onOutput"];
   outputDir: string;
   repoRoot: string;
   runCommand: typeof runQaScenarioCommandLifecycle;
@@ -183,6 +195,7 @@ export async function runDockerE2eBatch(params: {
         OPENCLAW_DOCKER_ALL_PROFILE: "all",
         OPENCLAW_DOCKER_ALL_TIMINGS_FILE: path.join(dockerOutputDir, "lane-timings.json"),
       },
+      ...(params.onCommandOutput ? { onOutput: params.onCommandOutput } : {}),
       // The scheduler owns each resolved lane deadline. Parent signals and the
       // enclosing QA workflow bound the aggregate run without alias-count guesses.
     });
@@ -196,7 +209,7 @@ export async function runDockerE2eBatch(params: {
   }
   await fs.writeFile(
     logPath,
-    `$ ${shellQuote(process.execPath)} scripts/test-docker-all.mjs\n${commandResult.stdout}${commandResult.stderr}`,
+    `$ ${shellQuote(process.execPath)} scripts/test-docker-all.mjs\n${formatQaScenarioCommandOutput(commandResult)}`,
     "utf8",
   );
 

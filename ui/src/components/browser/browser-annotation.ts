@@ -4,6 +4,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { t } from "../../i18n/index.ts";
 import type { BrowserInspectedNode } from "./browser-client.ts";
+import type { BrowserTabTarget } from "./browser-target.ts";
 
 /** Point in normalized [0..1] coordinates of the captured screenshot. */
 type AnnotationPoint = { x: number; y: number };
@@ -152,6 +153,7 @@ export function buildBrowserAnnotationContent(params: {
   title: string;
   strokes: AnnotationStroke[];
   element?: BrowserInspectedNode | null;
+  browserTab?: BrowserTabTarget;
 }): Pick<BrowserAnnotationDraft, "modelContext" | "card"> {
   const url = sanitizePageUrl(params.url);
   const title = sanitizePageText(params.title, ANNOTATION_TITLE_MAX_LENGTH);
@@ -171,6 +173,11 @@ export function buildBrowserAnnotationContent(params: {
       ? t("browser.annotatePrompt.introTitled", { url, title })
       : t("browser.annotatePrompt.introUntitled", { url }),
   ];
+  if (params.browserTab) {
+    lines.push(
+      t("browser.annotatePrompt.browserTarget", { target: JSON.stringify(params.browserTab) }),
+    );
+  }
   regions.slice(0, MAX_PROMPT_REGIONS).forEach((region, index) => {
     lines.push(
       t("browser.annotatePrompt.region", {

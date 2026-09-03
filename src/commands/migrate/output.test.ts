@@ -207,6 +207,21 @@ describe("formatMigrationResult", () => {
     expect(output).toContain("✅");
   });
 
+  it("renders provider warnings absent from migration next steps", () => {
+    const warning = "Some imported settings require manual review before activation.";
+    const output = formatMigrationResult({
+      ...plan([{ ...skillItem(1), status: "migrated" }]),
+      warnings: [warning],
+      nextSteps: ["Run openclaw doctor after applying the migration."],
+    })
+      .map(stripAnsi)
+      .join("\n");
+
+    expect(output).toContain("Warnings:");
+    expect(output).toContain(`⚠️  ${warning}`);
+    expect(output).toContain("• Run openclaw doctor after applying the migration.");
+  });
+
   it("renders warning-backed next steps with a warning glyph", () => {
     const warning =
       "Some Codex plugins could not be migrated. Run `openclaw migrate codex` after onboarding.";
@@ -219,6 +234,7 @@ describe("formatMigrationResult", () => {
       .join("\n");
 
     expect(output).toContain(`⚠️  ${warning}`);
+    expect(output.split(warning)).toHaveLength(2);
     expect(output).toContain("• Run openclaw doctor after applying the migration.");
   });
 
@@ -232,7 +248,7 @@ describe("formatMigrationResult", () => {
     expect(output).toContain("(Skipped)");
   });
 
-  it("redacts secrets from item text and next steps", () => {
+  it("redacts secrets from item text, provider warnings, and next steps", () => {
     const secret = fakeSecret("result");
     const output = formatMigrationResult({
       ...plan([
@@ -242,12 +258,14 @@ describe("formatMigrationResult", () => {
           message: `Provider returned Bearer ${secret}`,
         },
       ]),
+      warnings: [`Retry with Bearer ${secret}`],
       nextSteps: [`Save ${secret} for retry`],
     })
       .map(stripAnsi)
       .join("\n");
 
     expect(output).not.toContain(secret);
+    expect(output).toContain("Retry with [redacted]");
     expect(output).toContain("[redacted]");
   });
 });

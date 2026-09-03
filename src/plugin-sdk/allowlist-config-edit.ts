@@ -1,4 +1,5 @@
 // Allowlist config edit helpers build safe config mutations for channel allowlists.
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { ConfigWriteTarget } from "../channels/plugins/config-writes.js";
 import type { ChannelAllowlistAdapter } from "../channels/plugins/types.adapters.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
@@ -278,7 +279,7 @@ function applyAccountScopedAllowlistConfigEdit(params: {
     params.channelId,
     params.accountId,
   );
-  const existing: string[] = [];
+  const storedEntries: unknown[] = [];
   let hasStoredList = false;
   for (const path of params.paths.readPaths) {
     const existingRaw = getNestedValue(resolvedTarget.target, path);
@@ -287,24 +288,14 @@ function applyAccountScopedAllowlistConfigEdit(params: {
     }
     hasStoredList = true;
     for (const entry of existingRaw) {
-      const value = String(entry).trim();
-      if (!value || existing.includes(value)) {
-        continue;
-      }
-      existing.push(value);
+      storedEntries.push(entry);
     }
   }
   // A new account override starts from its effective inherited list; otherwise the
   // first scoped edit would silently discard every channel-level entry.
-  if (!hasStoredList) {
-    for (const entry of params.resolveEffectiveEntries?.() ?? []) {
-      const value = String(entry).trim();
-      if (!value || existing.includes(value)) {
-        continue;
-      }
-      existing.push(value);
-    }
-  }
+  const existing = normalizeUniqueStringEntries(
+    hasStoredList ? storedEntries : (params.resolveEffectiveEntries?.() ?? []),
+  );
 
   const normalizedEntry = params.normalize([params.entry]);
   if (normalizedEntry.length === 0) {

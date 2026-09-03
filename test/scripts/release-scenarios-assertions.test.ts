@@ -1,6 +1,6 @@
 // Release Scenarios Assertions tests cover release scenarios assertions script behavior.
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -32,23 +32,25 @@ function runAssertion(args: string[], env?: NodeJS.ProcessEnv) {
   });
 }
 
-function writeAuthProfileStoreSqlite(agentDir: string, store: unknown) {
-  mkdirSync(agentDir, { recursive: true });
-  const db = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"));
+function writeAuthProfileStoreSqlite(stateDir: string, store: unknown) {
+  const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+  mkdirSync(path.dirname(databasePath), { recursive: true });
+  const db = new DatabaseSync(databasePath);
   try {
     db.exec(`
-      CREATE TABLE IF NOT EXISTS auth_profile_store (
-        store_key TEXT NOT NULL PRIMARY KEY,
-        store_json TEXT NOT NULL,
-        updated_at INTEGER NOT NULL
+      PRAGMA user_version = 13;
+      CREATE TABLE IF NOT EXISTS config_machine_state (
+        state_key TEXT NOT NULL PRIMARY KEY,
+        value_json TEXT NOT NULL,
+        updated_at_ms INTEGER NOT NULL
       );
     `);
     db.prepare(
       `
-        INSERT INTO auth_profile_store (store_key, store_json, updated_at)
+        INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
         VALUES (?, ?, ?)
       `,
-    ).run("primary", JSON.stringify(store), Date.now());
+    ).run("authProfiles.store", JSON.stringify(store), Date.now());
   } finally {
     db.close();
   }
@@ -105,6 +107,48 @@ describe("release scenario assertions", () => {
       expect(result.stderr).toContain("Output tail:");
       expect(result.stderr).toContain("recent output tail");
       expect(result.stderr).not.toContain("DO_NOT_DUMP_OLD_OUTPUT");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("reports bounded onboarding hook diagnostics without leaking unrelated config", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-scenarios-"));
+    const configPath = path.join(root, "openclaw.json");
+    const secretSentinel = "release-diagnostic-secret-sentinel";
+
+    try {
+      writeJson(configPath, {
+        wizard: {
+          lastRunCommand: "onboard",
+          lastRunMode: "local",
+          lastRunVersion: secretSentinel,
+        },
+        hooks: {
+          internal: {
+            enabled: true,
+            entries: {
+              "unrelated-hook": { token: secretSentinel },
+            },
+          },
+        },
+        env: {
+          vars: {
+            OPENCLAW_TEST_SECRET: secretSentinel,
+          },
+        },
+      });
+
+      const result = runAssertion(["assert-session-memory-hook-enabled"], {
+        OPENCLAW_CONFIG_PATH: configPath,
+      });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(
+        'Onboarding config projection: {"wizard":{"present":true,"lastRunCommand":"onboard","lastRunMode":"local"},"hooks":{"present":true,"internalPresent":true,"internalEnabled":true,"sessionMemoryPresent":false,"sessionMemoryEnabled":"missing"}}',
+      );
+      expect(result.stderr).not.toContain(secretSentinel);
+      expect(result.stderr.length).toBeLessThan(4 * 1024);
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
@@ -196,7 +240,6 @@ describe("release scenario assertions", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-scenarios-"));
     const home = path.join(root, "home");
     const stateDir = path.join(home, ".openclaw");
-    const agentDir = path.join(stateDir, "agents", "main", "agent");
     const configPath = path.join(stateDir, "openclaw.json");
 
     try {
@@ -207,7 +250,7 @@ describe("release scenario assertions", () => {
           },
         },
       });
-      writeAuthProfileStoreSqlite(agentDir, {
+      writeAuthProfileStoreSqlite(stateDir, {
         version: 1,
         profiles: {
           "openai:api-key": {
@@ -221,10 +264,14 @@ describe("release scenario assertions", () => {
       const result = runAssertion(["assert-openai-env-ref", "sk-test-raw-key"], {
         HOME: home,
         OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_STATE_DIR: stateDir,
       });
 
       expect(result.status).toBe(0);
       expect(result.stderr).toBe("");
+      expect(
+        existsSync(path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite")),
+      ).toBe(false);
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
@@ -234,7 +281,6 @@ describe("release scenario assertions", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-scenarios-"));
     const home = path.join(root, "home");
     const stateDir = path.join(home, ".openclaw");
-    const agentDir = path.join(stateDir, "agents", "main", "agent");
     const configPath = path.join(stateDir, "openclaw.json");
 
     try {
@@ -245,7 +291,7 @@ describe("release scenario assertions", () => {
           },
         },
       });
-      writeAuthProfileStoreSqlite(agentDir, {
+      writeAuthProfileStoreSqlite(stateDir, {
         version: 1,
         profiles: {
           "openai:api-key": { note: "OPENAI_API_KEY" },
@@ -255,6 +301,7 @@ describe("release scenario assertions", () => {
       const result = runAssertion(["assert-openai-env-ref", "sk-test-raw-key"], {
         HOME: home,
         OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_STATE_DIR: stateDir,
       });
 
       expect(result.status).not.toBe(0);
@@ -268,7 +315,6 @@ describe("release scenario assertions", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-scenarios-"));
     const home = path.join(root, "home");
     const stateDir = path.join(home, ".openclaw");
-    const agentDir = path.join(stateDir, "agents", "main", "agent");
     const configPath = path.join(stateDir, "openclaw.json");
 
     try {
@@ -279,7 +325,7 @@ describe("release scenario assertions", () => {
           },
         },
       });
-      writeAuthProfileStoreSqlite(agentDir, {
+      writeAuthProfileStoreSqlite(stateDir, {
         version: 1,
         profiles: {
           "openai:api-key": {
@@ -293,6 +339,7 @@ describe("release scenario assertions", () => {
       const result = runAssertion(["assert-openai-env-ref", "sk-test-raw-key"], {
         HOME: home,
         OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_STATE_DIR: stateDir,
       });
 
       expect(result.status).not.toBe(0);
@@ -306,7 +353,6 @@ describe("release scenario assertions", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-scenarios-"));
     const home = path.join(root, "home");
     const stateDir = path.join(home, ".openclaw");
-    const agentDir = path.join(stateDir, "agents", "main", "agent");
     const configPath = path.join(stateDir, "openclaw.json");
 
     try {
@@ -322,7 +368,7 @@ describe("release scenario assertions", () => {
           },
         },
       });
-      writeAuthProfileStoreSqlite(agentDir, {
+      writeAuthProfileStoreSqlite(stateDir, {
         version: 1,
         profiles: {
           "openai:api-key": {
@@ -336,6 +382,7 @@ describe("release scenario assertions", () => {
       const result = runAssertion(["assert-openai-env-ref", "sk-test-raw-key"], {
         HOME: home,
         OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_STATE_DIR: stateDir,
       });
 
       expect(result.status).not.toBe(0);

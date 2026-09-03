@@ -155,15 +155,15 @@ Out-of-scope reports and false-positive patterns (public internet exposure, prom
 
 #### T-ACCESS-002: AllowFrom spoofing
 
-| Attribute               | Value                                                                          |
-| ----------------------- | ------------------------------------------------------------------------------ |
-| **ATLAS ID**            | AML.T0040 - AI Model Inference API Access                                      |
-| **Description**         | Attacker spoofs an allowed sender identity on a channel                        |
-| **Attack vector**       | Channel-dependent - phone number spoofing, username impersonation              |
-| **Affected components** | Per-channel AllowFrom validation                                               |
-| **Current mitigations** | Channel-specific identity verification                                         |
-| **Residual risk**       | Medium - some channels remain vulnerable to spoofing                           |
-| **Recommendations**     | Document channel-specific risks, add cryptographic verification where possible |
+| Attribute               | Value                                                                                                                                                                                                                                                                                                                                       |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **ATLAS ID**            | AML.T0040 - AI Model Inference API Access                                                                                                                                                                                                                                                                                                   |
+| **Description**         | Attacker spoofs an allowed sender identity on a channel                                                                                                                                                                                                                                                                                     |
+| **Attack vector**       | Channel-dependent - phone number spoofing, username impersonation                                                                                                                                                                                                                                                                           |
+| **Affected components** | Per-channel AllowFrom validation                                                                                                                                                                                                                                                                                                            |
+| **Current mitigations** | Channel-specific identity verification; graded identifier-authentication gate uses `min(entry, subject)` over `verified > asserted > unverified > mutable` with exact match provenance and default minimum `asserted` (#123782/#123793). Channels declare per-identifier strength; security audit warns on inert mutable entries (#131129). |
+| **Residual risk**       | Medium - some channels remain vulnerable to spoofing                                                                                                                                                                                                                                                                                        |
+| **Recommendations**     | Continue per-channel `verified` adoption and downstream strength mappers; document channel-specific risks                                                                                                                                                                                                                                   |
 
 #### T-ACCESS-003: Token theft
 
@@ -502,11 +502,11 @@ T-EXEC-002 → T-EXFIL-001 → External exfiltration
 
 ### 6.3 Medium-term (P2)
 
-| ID    | Recommendation                                        | Addresses     |
-| ----- | ----------------------------------------------------- | ------------- |
-| R-008 | Add cryptographic channel verification where possible | T-ACCESS-002  |
-| R-009 | Implement config integrity verification               | T-PERSIST-003 |
-| R-010 | Add update signing and version pinning                | T-PERSIST-002 |
+| ID    | Recommendation                                                                                                                                                        | Addresses     |
+| ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| R-008 | Implemented in core: graded identifier-authentication primitive and audit findings; remaining work is per-channel `verified` adoption and downstream strength mappers | T-ACCESS-002  |
+| R-009 | Implement config integrity verification                                                                                                                               | T-PERSIST-003 |
+| R-010 | Add update signing and version pinning                                                                                                                                | T-PERSIST-002 |
 
 ---
 

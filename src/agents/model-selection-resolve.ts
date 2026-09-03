@@ -1,8 +1,7 @@
 /**
  * Model selection resolution facade.
  *
- * This module exposes model-selection helpers that need default fallback model
- * handling before checking aliases, allowlists, catalogs, and plugin manifests.
+ * This module resolves configured fallbacks and explicit model selections.
  */
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -11,13 +10,13 @@ import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import type { ModelManifestNormalizationContext, ModelRef } from "./model-ref-shared.js";
 import {
   buildModelAliasIndex,
-  getModelRefStatusWithFallbackModels,
+  getModelRefStatus,
   resolveAllowedModelRefFromAliasIndex,
-  type ModelRefStatus,
 } from "./model-selection-shared.js";
 
 export {
   buildModelAliasIndex,
+  getModelRefStatus,
   normalizeModelSelection,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
@@ -37,30 +36,6 @@ export function resolveConfiguredModelFallbacks(params: {
     }
   }
   return resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
-}
-
-/** Returns whether a normalized model ref is available, allowed, or fallback-backed. */
-export function getModelRefStatus(
-  params: {
-    cfg: OpenClawConfig;
-    catalog: ModelCatalogEntry[];
-    ref: ModelRef;
-    defaultProvider: string;
-    defaultModel?: string;
-    agentId?: string;
-  } & ModelManifestNormalizationContext,
-): ModelRefStatus {
-  const { cfg, catalog, ref, defaultProvider, defaultModel, agentId, manifestPlugins } = params;
-  return getModelRefStatusWithFallbackModels({
-    cfg,
-    catalog,
-    ref,
-    defaultProvider,
-    defaultModel,
-    agentId,
-    fallbackModels: resolveConfiguredModelFallbacks({ cfg, agentId }),
-    manifestPlugins,
-  });
 }
 
 /** Resolves a raw model string into an allowed model ref or an explanatory error. */

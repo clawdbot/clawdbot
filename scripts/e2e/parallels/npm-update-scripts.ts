@@ -16,6 +16,7 @@ import {
   modelProviderConfigBatchJson,
   resolveParallelsModelTimeoutSeconds,
 } from "./provider-auth.ts";
+import { posixStopGatewayScript } from "./smoke-common.ts";
 import type { Platform, ProviderAuth } from "./types.ts";
 
 interface NpmUpdateScriptInput {
@@ -51,7 +52,8 @@ function posixNpmRegistryEnv(registry: string | undefined): string {
     return "";
   }
   const quoted = shellQuote(registry);
-  return `NPM_CONFIG_REGISTRY=${quoted} npm_config_registry=${quoted} `;
+  // The candidate registry must also serve plugins provisioned after the core swap.
+  return `export NPM_CONFIG_REGISTRY=${quoted} npm_config_registry=${quoted}\n`;
 }
 
 function posixModelProviderConfigCommands(
@@ -145,11 +147,11 @@ fi`;
 }
 
 function windowsUpdateWithScopedEnv(input: NpmUpdateScriptInput): string {
-  const registryEntry = input.npmRegistry
-    ? `; NPM_CONFIG_REGISTRY = ${psSingleQuote(input.npmRegistry)}`
+  const registryScript = input.npmRegistry
+    ? `$env:NPM_CONFIG_REGISTRY = ${psSingleQuote(input.npmRegistry)}\n`
     : "";
-  return `$script:OpenClawUpdateExit = 0
-$updateOutput = Invoke-WithScopedEnv @{ OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS = '1'${registryEntry} } {
+  return `${registryScript}$script:OpenClawUpdateExit = 0
+$updateOutput = Invoke-WithScopedEnv @{ OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS = '1' } {
   Invoke-OpenClaw update --tag ${psSingleQuote(input.updateTarget)} --yes --json --no-restart 2>&1
   $script:OpenClawUpdateExit = $LASTEXITCODE
 }
@@ -348,6 +350,7 @@ ${posixNpmRegistryEnv(input.npmRegistry)}OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE
 ${posixVersionCheck(macosOpenClawCommand, input.expectedNeedle)}
 start_openclaw_gateway
 wait_for_gateway
+${posixStopGatewayScript()}
 "$OPENCLAW_BIN" models set ${shellQuote(input.auth.modelId)}
 ${posixModelProviderConfigCommands(macosOpenClawCommand, input.auth.modelId, "macos")}
 "$OPENCLAW_BIN" config set agents.defaults.skipBootstrap true --strict-json
@@ -428,6 +431,7 @@ if ($updateExit -ne 0) {
 }
 ${windowsVersionCheck(input.expectedNeedle)}
 ${windowsGatewayReadyScript(input)}
+Stop-OpenClawGatewayProcesses
 ${windowsAssertAgentOkScript(input)}`;
 }
 
@@ -509,6 +513,7 @@ ${posixNpmRegistryEnv(input.npmRegistry)}OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE
 ${posixVersionCheck("openclaw", input.expectedNeedle)}
 start_openclaw_gateway
 wait_for_gateway
+${posixStopGatewayScript()}
 openclaw models set ${shellQuote(input.auth.modelId)}
 ${posixModelProviderConfigCommands("openclaw", input.auth.modelId, "linux")}
 openclaw config set agents.defaults.skipBootstrap true --strict-json

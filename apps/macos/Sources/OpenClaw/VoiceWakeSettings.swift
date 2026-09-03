@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import Observation
+import OpenClawKit
 import Speech
 import SwabbleKit
 import SwiftUI
@@ -181,6 +182,21 @@ struct VoiceWakeSettings: View {
                             title: "Hold Right Option to talk",
                             subtitle: "Start listening while you hold the key and show the preview overlay.",
                             binding: self.$state.voicePushToTalkEnabled)
+
+                        self.realtimeRelayToggle
+
+                        SettingsCardRow(
+                            title: "Talk configuration",
+                            subtitle: "Choose the realtime provider, model, voice, and transport in the Control UI.")
+                        {
+                            Button("Open in Dashboard") {
+                                Task {
+                                    await DashboardManager.shared.show(
+                                        atPath: DashboardRouteMap.talkSettingsPath)
+                                }
+                            }
+                            .buttonStyle(.link)
+                        }
 
                         if self.state.voicePushToTalkEnabled, self.state.talkEnabled {
                             SettingsCardRow(
@@ -586,7 +602,8 @@ struct VoiceWakeSettings: View {
             {
                 Picker("Language", selection: self.$state.voiceWakeLocaleID) {
                     let current = Locale(identifier: Locale.current.identifier)
-                    Text("\(self.friendlyName(for: current)) (System)").tag(Locale.current.identifier)
+                    Text(String(format: String(localized: "%@ (System)"), self.friendlyName(for: current)))
+                        .tag(Locale.current.identifier)
                     ForEach(self.availableLocales.map(\.identifier), id: \.self) { id in
                         if id != Locale.current.identifier {
                             Text(self.friendlyName(for: Locale(identifier: id))).tag(id)
@@ -876,15 +893,14 @@ private struct AdditionalLanguageRow: View {
     let onRemove: () -> Void
 
     var body: some View {
-        SettingsCardRow(
-            title: .verbatim(String(
-                format: String(localized: "Language %lld"),
-                self.index + 2)),
+        let title = String(format: String(localized: "Language %lld"), self.index + 2)
+        return SettingsCardRow(
+            title: .verbatim(title),
             subtitle: "Fallback recognition language.",
             showsDivider: self.showsDivider)
         {
             HStack(spacing: 10) {
-                Picker("Language \(self.index + 2)", selection: self.$selection) {
+                Picker(title, selection: self.$selection) {
                     ForEach(self.localeIDs, id: \.self) { id in
                         Text(self.localeName(id)).tag(id)
                     }
@@ -927,6 +943,18 @@ private struct TriggerPhraseHelpRow: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 11)
+    }
+}
+
+extension VoiceWakeSettings {
+    private var realtimeRelayToggle: some View {
+        SettingsCardToggleRow(
+            title: "Use realtime Gateway relay",
+            subtitle: """
+            Use the Gateway's configured realtime voice session on this Mac. \
+            Requires realtime, gateway-relay, and agent-consult in Talk settings.
+            """,
+            binding: self.$state.talkRealtimeRelayEnabled)
     }
 }
 

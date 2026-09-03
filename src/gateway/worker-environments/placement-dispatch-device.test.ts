@@ -21,13 +21,20 @@ import { REQUEST, type PlacementStore } from "./placement-dispatch-test-fixtures
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 
+const runtimeNodeCommandPolicy = vi.hoisted(() => ({
+  commands: { allow: ["codex.exec-server.stdio.v1"] } as {
+    allow?: string[];
+    deny?: string[];
+  },
+}));
+
 vi.mock("../../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../config/config.js")>();
   return {
     ...actual,
     getRuntimeConfig: () => ({
       ...actual.getRuntimeConfig(),
-      gateway: { nodes: { commands: { allow: ["codex.exec-server.stdio.v1"] } } },
+      gateway: { nodes: { commands: runtimeNodeCommandPolicy.commands } },
     }),
   };
 });
@@ -57,12 +64,52 @@ function deviceProof(
   };
 }
 
+function prepareCloudNodeDispatch(
+  harness: ReturnType<typeof createHarness>,
+  executionMode: "worker-turn" | "remote-exec" = "remote-exec",
+) {
+  const cloudNodeIdentity = {
+    providerId: "generic-cloud-node",
+    profileId: "multi-mode-cloud",
+    nodeDeviceId: "device-1",
+    sshEndpoint: null,
+    sharedHost: false,
+  };
+  const ready = { ...harness.ready, ...cloudNodeIdentity };
+  const attached = { ...harness.attached, ...cloudNodeIdentity };
+  let isAttached = false;
+  Object.assign(harness.environments, {
+    requiresNodeEnrollment: (profileId: string) => profileId === ready.profileId,
+  });
+  vi.mocked(harness.environments.create).mockResolvedValue(ready);
+  vi.mocked(harness.environments.get).mockImplementation((environmentId) =>
+    environmentId === ready.environmentId ? (isAttached ? attached : ready) : undefined,
+  );
+  const attachSession = vi.mocked(harness.environments.attachSession).getMockImplementation();
+  vi.mocked(harness.environments.attachSession).mockImplementation(async (params) => {
+    if (!attachSession) {
+      throw new Error("cloud node dispatch fixture has no session attachment owner");
+    }
+    const credential = await attachSession(params);
+    isAttached = true;
+    return credential;
+  });
+  return {
+    ...REQUEST,
+    profileId: ready.profileId,
+    executionMode,
+    devicePlacement:
+      executionMode === "remote-exec" ? CODEX_DEVICE_REQUIREMENT : OPENCLAW_DEVICE_REQUIREMENT,
+  };
+}
+
 describe("device worker placement dispatch", () => {
   let root: string;
   let database: OpenClawStateDatabase;
   let placementStore: PlacementStore;
 
   beforeEach(() => {
+    runtimeNodeCommandPolicy.commands = { allow: [CODEX_COMMAND] };
     root = tempDirs.make("openclaw-device-dispatch-");
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     placementStore = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
@@ -83,7 +130,7 @@ describe("device worker placement dispatch", () => {
       providerId: "device",
       profileId: "device:device-1",
       profileSnapshot: { install: "bundle", settings: { device: "device-1" } },
-      leaseId: "device-lease-1",
+      leaseId: "lease-1",
       sshEndpoint: null,
       bootstrapReceipt: {
         bundleHash: "a".repeat(64),
@@ -116,6 +163,8 @@ describe("device worker placement dispatch", () => {
       expect.stringMatching(/^session-dispatch:/u),
       undefined,
       REQUEST.executionMode,
+      "/gateway/workspace",
+      undefined,
     );
     expect(harness.environments.startTunnel).toHaveBeenCalledWith({
       environmentId: harness.ready.environmentId,
@@ -136,15 +185,31 @@ describe("device worker placement dispatch", () => {
       available: true,
       node: deviceProof(0),
     }));
-    vi.mocked(harness.environments.createFromProfileSnapshot).mockResolvedValue({
+    const nodeEnvironment = {
       ...harness.ready,
       providerId: "device",
       profileId: "device:device-1",
       profileSnapshot: { install: "bundle", settings: { device: "device-1" } },
       nodeDeviceId: "device-1",
-      leaseId: "device-lease-1",
+      leaseId: "lease-1",
       sshEndpoint: null,
       sharedHost: true,
+    } as const;
+    vi.mocked(harness.environments.createFromProfileSnapshot).mockResolvedValue(nodeEnvironment);
+    vi.mocked(harness.environments.get).mockImplementation((environmentId) => {
+      if (environmentId !== nodeEnvironment.environmentId) {
+        return undefined;
+      }
+      return vi.mocked(harness.environments.attachSession).mock.calls.length > 0
+        ? {
+            ...harness.attached,
+            providerId: "device",
+            profileId: "device:device-1",
+            nodeDeviceId: "device-1",
+            sshEndpoint: null,
+            sharedHost: true,
+          }
+        : nodeEnvironment;
     });
     const request = {
       ...REQUEST,
@@ -169,6 +234,8 @@ describe("device worker placement dispatch", () => {
       expect.stringMatching(/^session-dispatch:/u),
       undefined,
       "remote-exec",
+      "/gateway/workspace",
+      undefined,
     );
     const workspaceTunnel = await vi.mocked(harness.environments.startTunnel).mock.results[0]
       ?.value;
@@ -180,6 +247,243 @@ describe("device worker placement dispatch", () => {
       }),
     );
     expect(workspaceTunnel?.launchTurn).not.toHaveBeenCalled();
+  });
+
+  it("activates non-device node remote-exec without a worker slot or worker child", async () => {
+    const harness = createHarness(placementStore);
+    const resolveAvailability = vi.fn(async () => ({
+      available: true,
+      node: deviceProof(0),
+    }));
+    bindDeviceWorkerAvailability(harness.environments, resolveAvailability);
+    const request = prepareCloudNodeDispatch(harness);
+
+    await expect(harness.service.dispatch(request)).resolves.toMatchObject({
+      state: "active",
+      executionMode: "remote-exec",
+      remoteWorkspaceDir: "/worker/workspace",
+    });
+
+    expect(resolveAvailability).toHaveBeenCalledWith("device-1");
+    expect(harness.environments.create).toHaveBeenCalledWith(
+      "multi-mode-cloud",
+      expect.stringMatching(/^session-dispatch:/u),
+      undefined,
+      "remote-exec",
+      "/gateway/workspace",
+      undefined,
+    );
+    const workspaceTunnel = await vi.mocked(harness.environments.startTunnel).mock.results[0]
+      ?.value;
+    expect(workspaceTunnel?.syncWorkspace).toHaveBeenCalledOnce();
+    expect(workspaceTunnel?.launchTurn).not.toHaveBeenCalled();
+  });
+
+  it("does not require node command approval for an SSH-only remote-exec profile", async () => {
+    const harness = createHarness(placementStore);
+    runtimeNodeCommandPolicy.commands = { deny: [CODEX_COMMAND] };
+
+    await expect(
+      harness.service.dispatch({
+        ...REQUEST,
+        executionMode: "remote-exec",
+        devicePlacement: CODEX_DEVICE_REQUIREMENT,
+      }),
+    ).resolves.toMatchObject({ state: "active", executionMode: "remote-exec" });
+
+    expect(harness.environments.create).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a remote-exec-only enrolled node before provider allocation when its command is denied", async () => {
+    const harness = createHarness(placementStore);
+    const request = prepareCloudNodeDispatch(harness);
+    runtimeNodeCommandPolicy.commands = { deny: [CODEX_COMMAND] };
+    Object.assign(harness.environments, {
+      supportsExecutionMode: (_profileId: string, mode: string) => mode === "remote-exec",
+      requiresNodeEnrollment: () => true,
+    });
+
+    await expect(harness.service.dispatch(request)).rejects.toThrow(CODEX_COMMAND);
+
+    expect(harness.environments.create).not.toHaveBeenCalled();
+    expect(harness.environments.attachSession).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "undeclared required node command",
+      node: deviceProof(0, ["system.run"]),
+      deniedByGateway: false,
+      expectedProvisionCalls: 1,
+    },
+    {
+      name: "required node command denied by Gateway policy",
+      node: deviceProof(0),
+      deniedByGateway: true,
+      expectedProvisionCalls: 0,
+    },
+  ])("rejects a non-device cloud node with an $name before workspace sync", async (scenario) => {
+    const harness = createHarness(placementStore);
+    bindDeviceWorkerAvailability(harness.environments, async () => ({
+      available: true,
+      node: scenario.node,
+    }));
+    if (scenario.deniedByGateway) {
+      runtimeNodeCommandPolicy.commands = { deny: [CODEX_COMMAND] };
+    }
+    const request = prepareCloudNodeDispatch(harness);
+
+    await expect(harness.service.dispatch(request)).rejects.toThrow("codex.exec-server.stdio.v1");
+
+    expect(harness.environments.create).toHaveBeenCalledTimes(scenario.expectedProvisionCalls);
+    expect(harness.environments.attachSession).not.toHaveBeenCalled();
+    expect(harness.environments.startTunnel).not.toHaveBeenCalled();
+    expect(harness.placements.current()).toMatchObject({ state: "failed" });
+  });
+
+  it("rejects a non-device cloud node whose current proof names a different node", async () => {
+    const harness = createHarness(placementStore);
+    bindDeviceWorkerAvailability(harness.environments, async () => ({
+      available: true,
+      node: { ...deviceProof(), nodeId: "replacement-node" },
+    }));
+    const request = prepareCloudNodeDispatch(harness);
+
+    await expect(harness.service.dispatch(request)).rejects.toThrow();
+
+    expect(harness.environments.create).toHaveBeenCalledOnce();
+    expect(harness.environments.attachSession).not.toHaveBeenCalled();
+    expect(harness.environments.startTunnel).not.toHaveBeenCalled();
+    expect(harness.placements.current()).toMatchObject({ state: "failed" });
+  });
+
+  it("fences a non-device cloud node replaced inside the activation barrier", async () => {
+    const harness = createHarness(placementStore);
+    bindDeviceWorkerAvailability(harness.environments, async () => ({
+      available: true,
+      node: deviceProof(),
+    }));
+    const request = prepareCloudNodeDispatch(harness);
+
+    await expect(
+      harness.service.dispatch(request, undefined, () => {
+        if (harness.placements.current()?.state === "starting") {
+          vi.mocked(harness.environments.get).mockReturnValue({
+            ...harness.attached,
+            providerId: "generic-cloud-node",
+            profileId: "multi-mode-cloud",
+            nodeDeviceId: "replacement-node",
+            sshEndpoint: null,
+            sharedHost: false,
+          });
+        }
+      }),
+    ).rejects.toThrow("exact environment owner");
+
+    expect(harness.environments.startTunnel).toHaveBeenCalledOnce();
+    expect(harness.placements.current()).toMatchObject({ state: "failed" });
+  });
+
+  it("rejects a cloud node re-paired while its managed workspace is synchronizing", async () => {
+    let currentNode = deviceProof(0);
+    const harness = createHarness(placementStore, {
+      isCurrentNodePlacement: (node) =>
+        node.nodeId === currentNode.nodeId &&
+        node.connId === currentNode.connId &&
+        node.pairingGeneration === currentNode.pairingGeneration,
+    });
+    bindDeviceWorkerAvailability(harness.environments, async () => ({
+      available: true,
+      node: currentNode,
+    }));
+    const request = prepareCloudNodeDispatch(harness);
+
+    await expect(
+      harness.service.dispatch(request, (placement) => {
+        if (placement.state === "starting") {
+          currentNode = {
+            ...currentNode,
+            connId: "replacement-connection",
+            pairingGeneration: "replacement-generation",
+          };
+        }
+      }),
+    ).rejects.toThrow();
+
+    expect(harness.environments.startTunnel).toHaveBeenCalledOnce();
+    expect(harness.placements.current()).toMatchObject({ state: "failed" });
+  });
+
+  it("fences a cloud node re-paired inside the synchronous activation callback", async () => {
+    let currentNode = deviceProof(0);
+    const harness = createHarness(placementStore, {
+      isCurrentNodePlacement: (node) =>
+        node.nodeId === currentNode.nodeId &&
+        node.connId === currentNode.connId &&
+        node.pairingGeneration === currentNode.pairingGeneration,
+    });
+    bindDeviceWorkerAvailability(harness.environments, async () => ({
+      available: true,
+      node: currentNode,
+    }));
+    const request = prepareCloudNodeDispatch(harness);
+
+    await expect(
+      harness.service.dispatch(request, undefined, () => {
+        if (harness.placements.current()?.state === "starting") {
+          currentNode = {
+            ...currentNode,
+            connId: "replacement-connection",
+            pairingGeneration: "replacement-generation",
+          };
+        }
+      }),
+    ).rejects.toThrow("pairing generation");
+
+    expect(harness.environments.startTunnel).toHaveBeenCalledOnce();
+    expect(harness.placements.current()).toMatchObject({ state: "failed" });
+  });
+
+  it.each([
+    { name: "withdraws its required node command", revocation: "command" as const },
+    { name: "denies its required command in Gateway policy", revocation: "policy" as const },
+  ])("fences a cloud node that $name inside the activation callback", async (scenario) => {
+    let currentNode = deviceProof(0);
+    const harness = createHarness(placementStore, {
+      isCurrentNodePlacement: (node, requirement) =>
+        node.nodeId === currentNode.nodeId &&
+        node.connId === currentNode.connId &&
+        node.pairingGeneration === currentNode.pairingGeneration &&
+        requirement.requiredNodeCommands.every(
+          (command) =>
+            currentNode.commands.includes(command) &&
+            runtimeNodeCommandPolicy.commands.allow?.includes(command) === true &&
+            runtimeNodeCommandPolicy.commands.deny?.includes(command) !== true,
+        ),
+    });
+    bindDeviceWorkerAvailability(harness.environments, async () => ({
+      available: true,
+      node: currentNode,
+    }));
+    const request = prepareCloudNodeDispatch(harness);
+
+    await expect(
+      harness.service.dispatch(request, undefined, () => {
+        if (harness.placements.current()?.state === "starting") {
+          if (scenario.revocation === "command") {
+            currentNode = {
+              ...currentNode,
+              commands: currentNode.commands.filter((command) => command !== CODEX_COMMAND),
+            };
+          } else {
+            runtimeNodeCommandPolicy.commands = { deny: [CODEX_COMMAND] };
+          }
+        }
+      }),
+    ).rejects.toThrow();
+
+    expect(harness.environments.startTunnel).toHaveBeenCalledOnce();
+    expect(harness.placements.current()).toMatchObject({ state: "failed" });
   });
 
   it("records an unavailable device dispatch as a durable failed placement", async () => {
@@ -321,13 +625,29 @@ describe("device worker placement dispatch", () => {
       name: "saturated worker-turn node",
       executionMode: "worker-turn" as const,
       node: deviceProof(0),
+      providerId: "device",
       expectedMessage: "at capacity",
     },
     {
       name: "remote-exec node missing its required command",
       executionMode: "remote-exec" as const,
       node: deviceProof(0, ["system.run"]),
+      providerId: "device",
       expectedMessage: "not enabled or approved",
+    },
+    {
+      name: "non-device remote-exec cloud node missing its required command",
+      executionMode: "remote-exec" as const,
+      node: deviceProof(0, ["system.run"]),
+      providerId: "generic-cloud-node",
+      expectedMessage: "not enabled or approved",
+    },
+    {
+      name: "saturated non-device worker-turn cloud node",
+      executionMode: "worker-turn" as const,
+      node: deviceProof(0),
+      providerId: "generic-cloud-node",
+      expectedMessage: "at capacity",
     },
   ])("fences recovery of a $name before workspace sync", async (scenario) => {
     const harness = createHarness(placementStore);
@@ -335,7 +655,12 @@ describe("device worker placement dispatch", () => {
     if (provisioning.state !== "provisioning") {
       throw new Error("paired-device recovery fixture did not enter provisioning");
     }
-    const environment = { ...harness.ready, providerId: "device", nodeDeviceId: "device-1" };
+    const environment = {
+      ...harness.ready,
+      providerId: scenario.providerId,
+      nodeDeviceId: "device-1",
+      sshEndpoint: null,
+    };
     vi.mocked(harness.environments.get).mockImplementation((environmentId) =>
       environmentId === environment.environmentId ? environment : undefined,
     );

@@ -265,7 +265,15 @@ async function readDurableRows() {
     path: database.path,
     subagentRows: executeSqliteQuerySync(
       database.db,
-      db.selectFrom("subagent_runs").select(["run_id", "ended_at"]).orderBy("run_id"),
+      db
+        .selectFrom("subagent_runs")
+        .select((eb) => [
+          "run_id",
+          eb
+            .fn<number | null>("json_extract", ["payload_json", eb.val("$.execution.endedAt")])
+            .as("ended_at"),
+        ])
+        .orderBy("run_id"),
     ).rows,
     taskRows: executeSqliteQuerySync(
       database.db,

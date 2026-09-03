@@ -88,13 +88,12 @@ describe("Buzz live directory", () => {
     gatewayMocks.activeBus = undefined;
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => ({
-        ok: true,
-        json: async () => ({
+      vi.fn(async () =>
+        Response.json({
           self: RELAY_PUBLIC_KEY,
           software: "https://github.com/block/buzz",
         }),
-      })),
+      ),
     );
     relayMocks.subscribe.mockImplementation(
       (
@@ -197,6 +196,68 @@ describe("Buzz live directory", () => {
     expect(relayMocks.auth).toHaveBeenCalledOnce();
     expect(relayMocks.close).toHaveBeenCalledOnce();
   });
+
+  it.each([
+    { rootEnabled: false, accountEnabled: true, active: false, unavailable: false },
+    { rootEnabled: false, accountEnabled: true, active: false, unavailable: true },
+    { rootEnabled: true, accountEnabled: false, active: false, unavailable: false },
+    { rootEnabled: true, accountEnabled: false, active: false, unavailable: true },
+    { rootEnabled: false, accountEnabled: true, active: true, unavailable: false },
+    { rootEnabled: false, accountEnabled: true, active: true, unavailable: true },
+    { rootEnabled: true, accountEnabled: false, active: true, unavailable: false },
+    { rootEnabled: true, accountEnabled: false, active: true, unavailable: true },
+  ])(
+    "returns static rooms without network for disabled identities: %j",
+    async ({ rootEnabled, accountEnabled, active, unavailable }) => {
+      const refreshDirectory = vi.fn(async () => {});
+      if (active) {
+        gatewayMocks.activeBus = {
+          directory: {
+            self: () => null,
+            listPeers: () => [],
+            listGroupMembers: () => [],
+            listGroups: () => [],
+          },
+          refreshDirectory,
+        };
+      }
+      const cfg = {
+        channels: {
+          buzz: {
+            enabled: rootEnabled,
+            accounts: {
+              ada: {
+                enabled: accountEnabled,
+                relayUrl: "wss://buzz.example.com",
+                privateKey: unavailable
+                  ? { source: "env", provider: "default", id: "UNAVAILABLE_KEY" }
+                  : PRIVATE_KEY,
+                groups: { [ROOM_ID]: {} },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const {
+        listBuzzDirectoryGroupsLive,
+        listBuzzDirectoryPeersLive,
+        listBuzzDirectoryGroupMembers,
+        getBuzzDirectorySelf,
+      } = await import("./directory.js");
+      await expect(
+        listBuzzDirectoryGroupsLive({ cfg, accountId: "ada", query: ROOM_ID, limit: 1 }),
+      ).resolves.toEqual([expect.objectContaining({ id: `buzz:${ROOM_ID}` })]);
+      await expect(listBuzzDirectoryPeersLive({ cfg, accountId: "ada" })).resolves.toEqual([]);
+      await expect(
+        listBuzzDirectoryGroupMembers({ cfg, accountId: "ada", groupId: ROOM_ID }),
+      ).resolves.toEqual([]);
+      const self = await getBuzzDirectorySelf({ cfg, accountId: "ada" });
+      expect(self?.id ?? null).toBe(unavailable ? null : BOT_PUBLIC_KEY);
+      expect(fetch).not.toHaveBeenCalled();
+      expect(relayMocks.connect).not.toHaveBeenCalled();
+      expect(refreshDirectory).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not open a relay for live directory reads when an auth-tag SecretRef is unavailable", async () => {
     vi.stubEnv("BUZZ_AUTH_TAG", '["auth","owner","kind=9","signature"]');

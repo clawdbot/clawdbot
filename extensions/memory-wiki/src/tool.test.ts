@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { lintMemoryWikiVault } from "./lint.js";
+import { parseWikiMarkdown } from "./markdown.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 import { createWikiApplyTool, createWikiLintTool } from "./tool.js";
 
@@ -70,12 +71,66 @@ describe("memory-wiki tools", () => {
     const tool = createWikiApplyTool(config);
 
     await expect(tool.execute("malformed-null", null)).rejects.toThrow(
-      "wiki mutation requires lookup for update_metadata.",
+      'wiki mutation op must be one of "create_synthesis", "update_metadata"',
     );
     await expect(tool.execute("malformed-undefined", undefined)).rejects.toThrow(
-      "wiki mutation requires lookup for update_metadata.",
+      'wiki mutation op must be one of "create_synthesis", "update_metadata"',
     );
   });
+
+  async function createApplyFixture() {
+    const { rootDir, config } = await harness.createVault({ initialize: true });
+    const pagePath = path.join(rootDir, "entities", "alpha.md");
+    const original = [
+      "---",
+      "pageType: entity",
+      "id: entity.alpha",
+      "title: Alpha",
+      "status: active",
+      "updatedAt: 2026-01-01T00:00:00.000Z",
+      "---",
+      "",
+      "# Alpha",
+      "",
+      "Keep this human note.",
+      "",
+    ].join("\n");
+    await fs.writeFile(pagePath, original, "utf8");
+    return { tool: createWikiApplyTool(config), pagePath, original };
+  }
+
+  it.each(["synthesise", "update"])(
+    "keeps wiki pages unchanged for unknown operation %s",
+    async (op) => {
+      const { tool, pagePath, original } = await createApplyFixture();
+      const outcome = await tool
+        .execute("unknown-operation", { op, lookup: "entity.alpha", status: "review" })
+        .then(
+          () => "accepted",
+          () => "rejected",
+        );
+
+      expect(await fs.readFile(pagePath, "utf8")).toBe(original);
+      expect(outcome).toBe("rejected");
+    },
+  );
+
+  it.each(["update_metadata", "metadata"])(
+    "applies supported metadata operation %s",
+    async (op) => {
+      const { tool, pagePath } = await createApplyFixture();
+      const result = await tool.execute("valid-operation", {
+        op,
+        lookup: "entity.alpha",
+        status: "review",
+      });
+      const page = parseWikiMarkdown(await fs.readFile(pagePath, "utf8"));
+
+      expect(result.details).toMatchObject({ changed: true, operation: "update_metadata" });
+      expect(page.frontmatter.status).toBe("review");
+      expect(page.body).toContain("Keep this human note.");
+    },
+  );
 
   it("returns tool-safe relative report paths from wiki_lint", async () => {
     const { rootDir, config } = await harness.createVault({ initialize: true });

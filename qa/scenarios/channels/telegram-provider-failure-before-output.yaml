@@ -1,0 +1,72 @@
+title: Telegram provider failure before output
+
+scenario:
+  id: telegram-provider-failure-before-output
+  surface: channels
+  category: channels.conversation-routing-and-delivery
+  coverage:
+    primary:
+      - channels.streaming-final-reply
+  objective: Verify Telegram sends one fallback when the provider fails before producing visible output.
+  successCriteria:
+    - With silent error replies enabled, a provider failure before visible output produces exactly one non-empty Telegram fallback.
+  codeRefs:
+    - src/auto-reply/reply/dispatch-from-config.execute.ts
+    - extensions/telegram/src/bot-message-dispatch.ts
+    - extensions/qa-lab/src/providers/mock-openai/server.ts
+    - extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts
+  gatewayConfigPatch:
+    channels:
+      telegram:
+        silentErrorReplies: true
+    agents:
+      defaults:
+        model:
+          fallbacks: []
+      entries:
+        qa:
+          model:
+            fallbacks: []
+  execution:
+    kind: flow
+    channel: telegram
+    summary: Inject a provider failure before visible output and verify one Telegram fallback remains.
+    config:
+      requiredProviderMode: mock-openai
+      partialMarker: TELEGRAM-VISIBLE-PARTIAL-BEFORE-FAILURE
+
+flow:
+  steps:
+    - name: sends one fallback when no output became visible
+      actions:
+        - assert:
+            expr: env.providerMode === config.requiredProviderMode
+            message: this Telegram recovery scenario requires mock-openai
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForTransportReady
+          args: [{ ref: env }, 60000]
+        - resetTransport: true
+        - set: outboundStart
+          value:
+            expr: "getTransportSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation: { id: telegram-provider-failure-room, kind: group }
+            senderId: qa-telegram-recovery-operator
+            senderName: Telegram Recovery Operator
+            text: "@openclaw Telegram unsent failure QA check"
+        - waitForOutbound:
+            conversation: { id: telegram-provider-failure-room, kind: group }
+            sinceIndex: { ref: outboundStart }
+            timeoutMs: 75000
+          saveAs: fallbackReply
+        - call: sleep
+          args: [4000]
+        - set: messages
+          value:
+            expr: "getTransportSnapshot().messages.filter((message) => message.direction === 'outbound').slice(outboundStart)"
+        - assert:
+            expr: "messages.length === 1 && fallbackReply.text.trim().length > 0 && messages[0].text.trim().length > 0 && !messages[0].text.includes(config.partialMarker)"
+            message:
+              expr: "`expected one non-empty Telegram fallback without partial text; saw ${messages.length}: ${messages.map((message) => message.text).join(' | ')}`"
+      detailsExpr: "JSON.stringify({ count: messages.length, text: messages.map((message) => message.text).join(' | ') })"

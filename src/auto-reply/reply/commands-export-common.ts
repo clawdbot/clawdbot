@@ -7,7 +7,6 @@ import {
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { escapeRegExp } from "../../shared/regexp.js";
 import type { ReplyPayload } from "../types.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -48,10 +47,7 @@ export function parseExportCommandOutputPath(
 export function resolveExportCommandSessionTarget(
   params: HandleCommandsParams,
 ): ExportCommandSessionTarget | ReplyPayload {
-  const targetAgentId = resolveAgentIdFromSessionKey(params.sessionKey) || params.agentId;
-  if (!targetAgentId) {
-    return { text: `❌ Failed to resolve agent for session: ${params.sessionKey}` };
-  }
+  const targetAgentId = params.agentId;
   const storePath = params.storePath ?? resolveDefaultSessionStorePath(targetAgentId);
   const entry = loadSessionEntryReadOnly({
     storePath,

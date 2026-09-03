@@ -37,6 +37,8 @@ public final class TalkSystemSpeechSynthesizer: NSObject {
     {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        // A cancelled caller must not retire the utterance already playing.
+        guard !Task.isCancelled else { throw SpeakError.canceled }
 
         self.stop()
         let token = UUID()
@@ -74,6 +76,9 @@ public final class TalkSystemSpeechSynthesizer: NSObject {
             }
         }, onCancel: {
             Task { @MainActor in
+                // A replacement may start before this actor hop runs. Cancellation
+                // must stop only the utterance owned by the canceled call.
+                guard self.currentToken == token else { return }
                 self.stop()
             }
         })

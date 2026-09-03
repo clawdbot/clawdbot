@@ -67,8 +67,23 @@ export function isRunnableJob(params: {
   if (hasActiveCronRun(job)) {
     return false;
   }
+  const next = job.state.nextRunAtMs;
+  // A recorded startup deferral also owns the missed-slot path across restarts.
+  // Keep their dominant no-due path ahead of run-history normalization.
+  if (
+    hasScheduledNextRunAtMs(next) &&
+    nowMs < next &&
+    (!params.allowCronMissedRunByLastRun || job.state.startupCatchupAtMs === next)
+  ) {
+    return false;
+  }
   const lastRunStatus = resolveJobLastRunStatus(job);
   if (params.skipAtIfAlreadyRan && job.schedule.kind === "at" && lastRunStatus) {
+    // The recovery owner recorded pending work after checking the exact task
+    // identity. Its scheduled slot remains due even when the old run started later.
+    if (hasScheduledNextRunAtMs(next) && job.state.startupCatchupAtMs === next) {
+      return nowMs >= next;
+    }
     const lastRun = job.state.lastRunAtMs;
     const nextRun = job.state.nextRunAtMs;
     // Terminal history belongs to the old occurrence. A matching newer
@@ -88,8 +103,7 @@ export function isRunnableJob(params: {
     }
     return false;
   }
-  const next = job.state.nextRunAtMs;
-  if (isErrorBackoffPending(params.state, job, nowMs)) {
+  if (isErrorBackoffPending(job, nowMs, lastRunStatus)) {
     // Error retry windows are anchored at run end; persisted start-based
     // retry timestamps from older state must not bypass active backoff.
     return false;
@@ -122,8 +136,12 @@ export function isRunnableJob(params: {
   return hasMissedCronSlotSinceLastRun(job, nowMs);
 }
 
-function isErrorBackoffPending(_state: CronServiceState, job: CronJob, nowMs: number): boolean {
-  if (job.schedule.kind === "at" || resolveJobLastRunStatus(job) !== "error") {
+function isErrorBackoffPending(
+  job: CronJob,
+  nowMs: number,
+  lastRunStatus: ReturnType<typeof resolveJobLastRunStatus>,
+): boolean {
+  if (job.schedule.kind === "at" || lastRunStatus !== "error") {
     return false;
   }
   const backoffUntilMs = resolveJobErrorBackoffUntilMs(job, DEFAULT_ERROR_BACKOFF_SCHEDULE_MS);

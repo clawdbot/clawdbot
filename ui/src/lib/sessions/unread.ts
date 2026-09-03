@@ -5,19 +5,45 @@
  */
 export class SessionUnreadPatchGuard {
   private activeSessionKey = "";
+  private activationObserved = false;
+  private activationMarkedUnreadAt: number | undefined;
   private requested = false;
 
-  shouldPatch(activeSessionKey: string, unread: boolean | undefined): boolean {
+  beginActivation(activeSessionKey: string) {
+    this.activeSessionKey = activeSessionKey.trim();
+    this.activationObserved = false;
+    this.activationMarkedUnreadAt = undefined;
+    this.requested = false;
+  }
+
+  shouldPatch(
+    activeSessionKey: string,
+    unread: boolean | undefined,
+    markedUnreadAt?: number | null,
+  ): boolean {
     const key = activeSessionKey.trim();
+    const marker = markedUnreadAt ?? undefined;
     if (key !== this.activeSessionKey) {
-      this.activeSessionKey = key;
-      this.requested = false;
+      this.beginActivation(key);
     }
     if (!key) {
       return false;
     }
+    if (!this.activationObserved) {
+      this.activationObserved = true;
+      this.activationMarkedUnreadAt = marker;
+    }
     if (unread === false) {
+      // An optimistic read keeps the observed marker until the Gateway confirms it.
+      // Clearing the latch here would let rollback synchronously dispatch a duplicate.
+      if (marker !== undefined) {
+        return false;
+      }
+      this.activationMarkedUnreadAt = undefined;
       this.requested = false;
+      return false;
+    }
+    if (marker !== undefined && marker !== this.activationMarkedUnreadAt) {
       return false;
     }
     if (unread !== true || this.requested) {

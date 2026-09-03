@@ -21,6 +21,17 @@ function classify(params: {
 }
 
 describe("classifyAcpToolApproval", () => {
+  it.each([
+    ["list_windows", "other"],
+    ["left_click", "mutating"],
+  ])("keeps computer %s behind approval", (action, approvalClass) => {
+    expect(classify({ title: "computer", rawInput: { name: "computer", action } })).toEqual({
+      toolName: "computer",
+      approvalClass,
+      autoApprove: false,
+    });
+  });
+
   it("auto-approves scoped readonly reads", () => {
     expect(
       classify({

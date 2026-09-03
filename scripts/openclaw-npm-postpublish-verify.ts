@@ -28,6 +28,10 @@ import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entri
 import { formatErrorMessage } from "./lib/error-format.mts";
 import { runNpmVerifyCommand } from "./lib/npm-verify-exec.ts";
 import {
+  comparePackageDistInventory,
+  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+} from "./lib/package-dist-inventory-contract.mts";
+import {
   collectRuntimeDependencySpecs,
   packageNameFromSpecifier,
 } from "./lib/plugin-package-dependencies.mts";
@@ -864,17 +868,6 @@ export function resolveInstalledBinaryCommandInvocation(
   };
 }
 
-function collectExpectedBundledExtensionPackageIds(): ReadonlySet<string> {
-  const ids = new Set<string>();
-  for (const relativePath of PACKAGED_BUNDLED_PLUGIN_ARTIFACTS) {
-    const match = /^dist\/extensions\/([^/]+)\/package\.json$/u.exec(relativePath);
-    if (match) {
-      ids.add(expectDefined(match[1], "bundled package extension id"));
-    }
-  }
-  return ids;
-}
-
 function readBundledExtensionPackageJsons(packageRoot: string): {
   manifests: InstalledBundledExtensionManifestRecord[];
   errors: string[];
@@ -882,15 +875,41 @@ function readBundledExtensionPackageJsons(packageRoot: string): {
   const extensionsDir = join(packageRoot, "dist", "extensions");
   const manifests: InstalledBundledExtensionManifestRecord[] = [];
   const errors: string[] = [];
-  const expectedPackageIds = collectExpectedBundledExtensionPackageIds();
+  const inventoryPath = join(packageRoot, PACKAGE_DIST_INVENTORY_RELATIVE_PATH);
 
-  // Scan the package contract first: absent bundled directories are invisible
-  // when verification only walks the installed extension root.
-  for (const expectedPackageId of expectedPackageIds) {
-    const packageJsonPath = join(extensionsDir, expectedPackageId, "package.json");
-    if (!existsSync(packageJsonPath)) {
-      errors.push(`installed bundled extension manifest missing: ${packageJsonPath}.`);
+  try {
+    const inventory: unknown = JSON.parse(readFileSync(inventoryPath, "utf8"));
+    if (!Array.isArray(inventory) || inventory.some((entry) => typeof entry !== "string")) {
+      throw new Error("inventory must be an array of file paths");
     }
+    const inventoryParity = comparePackageDistInventory({
+      files: PACKAGED_BUNDLED_PLUGIN_ARTIFACTS,
+      inventory: inventory as string[],
+    });
+    errors.push(
+      ...inventoryParity.packagedFilesMissingFromInventory.map(
+        (relativePath) =>
+          `installed bundled plugin artifact omitted from dist inventory: ${relativePath}.`,
+      ),
+    );
+  } catch (error) {
+    errors.push(
+      `installed package dist inventory is missing or invalid: ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}: ${formatErrorMessage(error)}.`,
+    );
+  }
+
+  const installedArtifactParity = comparePackageDistInventory({
+    files: [...PACKAGED_BUNDLED_PLUGIN_ARTIFACTS].filter((relativePath) =>
+      existsSync(join(packageRoot, relativePath)),
+    ),
+    inventory: PACKAGED_BUNDLED_PLUGIN_ARTIFACTS,
+  });
+  for (const relativePath of installedArtifactParity.inventoryEntriesMissingFromPackage) {
+    errors.push(
+      relativePath.endsWith("/package.json")
+        ? `installed bundled extension manifest missing: ${join(packageRoot, relativePath)}.`
+        : `installed bundled plugin artifact missing: ${relativePath}.`,
+    );
   }
 
   if (!existsSync(extensionsDir)) {

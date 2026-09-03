@@ -122,6 +122,17 @@ describe("zai provider plugin", () => {
         },
       },
       {
+        modelId: "glm-5.3-flash",
+        providerBaseUrl: "https://api.z.ai/api/coding/paas/v4",
+        expected: {
+          baseUrl: "https://api.z.ai/api/coding/paas/v4",
+          input: ["text", "image"],
+          reasoning: true,
+          contextWindow: 1_048_576,
+          maxTokens: 131_072,
+        },
+      },
+      {
         modelId: "glm-5.2",
         providerBaseUrl: "https://api.z.ai/api/coding/paas/v4",
         expected: {
@@ -416,14 +427,19 @@ describe("zai provider plugin", () => {
       return { payload } as never;
     };
 
-    for (const [thinkingLevel, expectedEffort] of [
-      ["low", "low"],
-      ["high", "high"],
-      ["max", "max"],
+    for (const [modelId, thinkingLevel, expectedEffort] of [
+      ["glm-5.3", "off", "low"],
+      ["glm-5.3", "low", "low"],
+      ["glm-5.3", "high", "high"],
+      ["glm-5.3", "max", "max"],
+      ["glm-5.3-flash", "off", "low"],
+      ["glm-5.3-flash", "low", "low"],
+      ["glm-5.3-flash", "high", "high"],
+      ["glm-5.3-flash", "max", "max"],
     ] as const) {
       const wrapped = provider.wrapStreamFn?.({
         provider: "zai",
-        modelId: "glm-5.3",
+        modelId,
         extraParams: {},
         thinkingLevel,
         streamFn: baseStreamFn,
@@ -433,7 +449,7 @@ describe("zai provider plugin", () => {
         {
           api: "openai-completions",
           provider: "zai",
-          id: "glm-5.3",
+          id: modelId,
         } as Model<"openai-completions">,
         { messages: [] } as Context,
         {},

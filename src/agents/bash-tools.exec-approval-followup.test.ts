@@ -26,7 +26,12 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import { sendMessage } from "../infra/outbound/message.js";
+import {
+  claimExecApprovalFollowupRuntimeHandoff,
+  finalizeExecApprovalFollowupRuntimeHandoff,
+} from "./bash-tools.exec-approval-followup-state.js";
 import { sendExecApprovalFollowup } from "./bash-tools.exec-approval-followup.js";
+import { sendExecApprovalFollowupResult } from "./bash-tools.exec-host-shared.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 const tempStoreDirs: string[] = [];
@@ -973,21 +978,45 @@ describe("exec approval followup", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("carries the runtime handoff separately from idempotency without exposing elevated defaults", async () => {
-    await sendExecApprovalFollowup({
+  it("registers the runtime handoff before default followup dispatch without exposing elevated defaults", async () => {
+    const target = {
       approvalId: "req-elevated-75832",
       sessionKey: "agent:main:telegram:direct:123",
       turnSourceChannel: "telegram",
-      resultText: "Exec finished (gateway id=req-elevated-75832, code 0)\nok",
-      internalRuntimeHandoffId: "handoff-75832",
-      idempotencyKey: "exec-approval-followup:req-elevated-75832:nonce:nonce-75832",
+      bashElevated: { enabled: true, allowed: true, defaultLevel: "on" as const },
+    };
+    const resultText = "Exec finished (gateway id=req-elevated-75832, code 0)\nok";
+    let handoff: ReturnType<typeof claimExecApprovalFollowupRuntimeHandoff>;
+    vi.mocked(callGatewayTool).mockImplementationOnce(async (_method, _options, rawParams) => {
+      const params = requireRecord(rawParams, "followup dispatch params");
+      const handoffId = String(params.internalRuntimeHandoffId);
+      handoff = claimExecApprovalFollowupRuntimeHandoff({
+        handoffId,
+        approvalId: target.approvalId,
+        sessionKey: target.sessionKey,
+        idempotencyKey: String(params.idempotencyKey),
+        claimId: "followup-default-dispatch",
+      });
+      finalizeExecApprovalFollowupRuntimeHandoff({
+        handoffId,
+        claimId: "followup-default-dispatch",
+      });
+      return { status: "ok" };
     });
+    await sendExecApprovalFollowupResult(target, resultText);
 
     const agentArgs = expectGatewayAgentFollowup({
       sessionKey: "agent:main:telegram:direct:123",
       channel: "telegram",
-      idempotencyKey: "exec-approval-followup:req-elevated-75832:nonce:nonce-75832",
-      internalRuntimeHandoffId: "handoff-75832",
+    });
+    expectAuthenticatedHandoff(agentArgs, target);
+    expect(handoff).toEqual({
+      kind: "exec-approval-followup",
+      approvalId: target.approvalId,
+      sessionKey: target.sessionKey,
+      idempotencyKey: agentArgs.idempotencyKey,
+      bashElevated: target.bashElevated,
+      resultText,
     });
     expect(agentArgs.message).toContain("ok");
     expect(agentArgs.inputProvenance).toEqual({

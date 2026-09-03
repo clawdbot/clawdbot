@@ -77,6 +77,9 @@ describe("cleanupEmbeddedAttemptResources", () => {
     await cleanupPromise;
 
     expect(order).toEqual(["flush", "dispose"]);
+    expect(log.warn).toHaveBeenCalledWith(
+      `embedded abort settle timed out: runId=run-1 sessionId=session-1 timeoutMs=${abortSettleTimeoutMs}`,
+    );
   });
 
   it("disposes the session before runtime teardown can hang", async () => {

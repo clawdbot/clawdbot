@@ -9,7 +9,7 @@ import {
 import { hashCodexAppServerBindingFingerprint } from "./session-binding.js";
 import { resolveCodexGpt56MultiAgentVersion } from "./thread-binding-policy.js";
 
-export function codexDynamicToolsFingerprint(dynamicTools: CodexDynamicToolSpec[]): string {
+export function codexDynamicToolsFingerprint(dynamicTools: readonly JsonValue[]): string {
   return fingerprintDynamicTools(dynamicTools);
 }
 
@@ -25,11 +25,11 @@ export function areCodexDynamicToolFingerprintsCompatible(params: {
   return areDynamicToolFingerprintsCompatible(params.previous, params.next, params.nextLegacy);
 }
 
-function fingerprintDynamicTools(dynamicTools: CodexDynamicToolSpec[]): string {
+function fingerprintDynamicTools(dynamicTools: readonly JsonValue[]): string {
   return hashCodexAppServerBindingFingerprint(legacyFingerprintDynamicTools(dynamicTools));
 }
 
-function legacyFingerprintDynamicTools(dynamicTools: CodexDynamicToolSpec[]): string {
+function legacyFingerprintDynamicTools(dynamicTools: readonly JsonValue[]): string {
   return JSON.stringify(
     dynamicTools.map(fingerprintDynamicToolSpec).toSorted(compareJsonFingerprint),
   );

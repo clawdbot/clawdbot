@@ -13,12 +13,14 @@ import {
 } from "../../test/helpers/openclaw-test-instance.js";
 import { isProcessAlive, waitForPidFile } from "../../test/helpers/process-wait.js";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
+import { reloadSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
+import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { connectGatewayClient } from "../gateway/test-helpers.e2e.js";
 import { runExec } from "../process/exec.js";
+import { withEnv } from "../test-utils/env.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
 import { sleep } from "../utils/sleep.js";
 import { GatewayChatClient } from "./gateway-chat.js";
@@ -59,6 +61,7 @@ type MockModelBehavior = {
 type MockModelRequest = {
   method: string;
   path: string;
+  authorization?: string;
   body: Record<string, unknown>;
 };
 
@@ -122,7 +125,9 @@ const GATEWAY_SCENARIOS = {
     agentId: SHARED_GATEWAY_AGENT_ID,
     modelId: "tui-pty-empty-reply",
     toolsProfile: "minimal",
-    replyText: "[[reply_to_current]]",
+    // Nonempty runtime output reaches late reply filtering without triggering
+    // the embedded empty-response retry, unlike a directive-only response.
+    replyText: "HEARTBEAT_OK",
     holdFirstResponse: false,
     followupReplyText: "FOLLOWUP_RUN_COMPLETE",
   },
@@ -211,6 +216,8 @@ async function writeResponsesSse(
   const events = [
     {
       type: "response.output_item.added",
+      output_index: 0,
+      sequence_number: 0,
       item: { type: "message", id, role: "assistant", content: [], status: "in_progress" },
     },
     {
@@ -218,6 +225,8 @@ async function writeResponsesSse(
       item_id: id,
       output_index: 0,
       content_index: 0,
+      sequence_number: 1,
+      logprobs: [],
       delta: text,
     },
     {
@@ -225,10 +234,14 @@ async function writeResponsesSse(
       item_id: id,
       output_index: 0,
       content_index: 0,
+      sequence_number: 2,
+      logprobs: [],
       text,
     },
     {
       type: "response.output_item.done",
+      output_index: 0,
+      sequence_number: 3,
       item: {
         type: "message",
         id,
@@ -239,6 +252,7 @@ async function writeResponsesSse(
     },
     {
       type: "response.completed",
+      sequence_number: 4,
       response: {
         id: "resp_tui_pty_local",
         status: "completed",
@@ -287,11 +301,13 @@ function writeInvalidEditCallSse(res: ServerResponse, requestIndex: number) {
     {
       type: "response.output_item.added",
       output_index: 0,
+      sequence_number: 0,
       item: { ...item, status: "in_progress" },
     },
-    { type: "response.output_item.done", output_index: 0, item },
+    { type: "response.output_item.done", output_index: 0, sequence_number: 1, item },
     {
       type: "response.completed",
+      sequence_number: 2,
       response: {
         id: `resp_tui_validation_${requestIndex}`,
         status: "completed",
@@ -346,7 +362,12 @@ async function startRoutedMockModelServer(
         const body = await readJsonRequest(req);
         if (url.pathname === "/v1/responses" || url.pathname === "/responses") {
           const modelId = typeof body.model === "string" ? body.model : "";
-          const request = { method: req.method, path: url.pathname, body };
+          const request = {
+            method: req.method,
+            path: url.pathname,
+            authorization: req.headers.authorization,
+            body,
+          };
           const behavior = behaviors[modelId];
           if (!behavior) {
             rejectedRequests.push(request);
@@ -916,6 +937,7 @@ async function startGatewayModeTui(
   const outputOffset = run.visibleOutput().length;
   return {
     kind: "gateway" as const,
+    controlClient,
     run,
     gateway: shared.gateway,
     mockModel: {
@@ -1469,7 +1491,7 @@ describe("TUI PTY real backends", () => {
     "authenticates a manifest-discovered provider and resumes the unchanged local model",
     async ({ onTestFinished }) => {
       const pluginId = "t05-local-auth-fixture";
-      const providerId = "t05-local-auth-provider";
+      const providerId = "tui-pty-mock";
       const profileId = `${providerId}:default`;
       const sentinel = `t05-${randomUUID()}`;
       const expectedDigest = createHash("sha256").update(sentinel).digest("hex");
@@ -1587,7 +1609,13 @@ export default {
         const agentDir = path.join(fixture.stateDir, "agents", "main", "agent");
         const sqlitePath = path.join(agentDir, "openclaw-agent.sqlite");
         expect(await stat(sqlitePath).then((entry) => entry.isFile())).toBe(true);
-        const store = loadPersistedAuthProfileStore(agentDir);
+        const store = withEnv({ OPENCLAW_STATE_DIR: fixture.stateDir }, () => {
+          reloadSharedAuthStoreOwnership();
+          return loadAuthProfileStoreForRuntime(agentDir, {
+            readOnly: true,
+            syncExternalCli: false,
+          });
+        });
         const profile = store?.profiles[profileId];
         expect(profile?.type === "api_key").toBe(true);
         expect(profile?.provider === providerId).toBe(true);
@@ -1608,6 +1636,7 @@ export default {
           onTimeout: () => new Error("post-auth prompt did not reach the mock provider"),
         });
         expect(fixture.mockModel.requests()[0]?.body.model).toBe("gpt-5.5");
+        expect(fixture.mockModel.requests()[0]?.authorization).toBe(`Bearer ${sentinel}`);
         await fixture.run.waitForOutput("LOCAL_AUTH_RESPONSE", LOCAL_OUTPUT_TIMEOUT_MS);
 
         await fixture.run.write("/exit\r", { delay: false });
@@ -2087,7 +2116,7 @@ export default {
     "executes Gateway status model new and reset RPCs through a real TUI PTY",
     async ({ onTestFinished }) => {
       const fixture = await startGatewayModeTui("command", onTestFinished);
-      const { controlClient } = await requireSharedGatewayFixture();
+      const { controlClient, mockModel } = await requireSharedGatewayFixture();
       try {
         await fixture.run.write("/gateway-status\r", { delay: false });
         await fixture.waitForOutput("Default model: tui-pty-validation (128k ctx)");
@@ -2159,14 +2188,16 @@ export default {
             Boolean(sessionInfo?.activeLeafEntryId) &&
             sessionInfo?.activeLeafEntryId !== selectedInfo.activeLeafEntryId &&
             [sessionInfo?.modelProvider, sessionInfo?.model].join("/") === alternateModel &&
-            findOrderedTurn(messages, resetMarker, seedReply) >= 0,
+            messages.every(
+              (message) =>
+                ![resetMarker, seedReply].includes(extractTextFromMessage(message).trim()),
+            ),
         );
         const postMarker = "T02_POST_RESET";
         const postOffset = fixture.run.visibleOutput().length;
         await fixture.run.write(`${postMarker}\r`, { delay: false });
         await waitForOutputAfter(fixture.run, GATEWAY_SCENARIOS.reconnect.replyText, postOffset);
         await waitForHistoryMessages(controlClient, createdKey!, ({ messages, sessionInfo }) => {
-          const serialized = JSON.stringify(messages);
           return (
             Boolean(sessionInfo?.activeLeafEntryId) &&
             sessionInfo?.sessionId === selectedInfo.sessionId &&
@@ -2174,11 +2205,19 @@ export default {
             (sessionInfo?.updatedAt as number) >= (reset.sessionInfo?.updatedAt as number) &&
             sessionInfo?.activeLeafEntryId !== reset.sessionInfo?.activeLeafEntryId &&
             [sessionInfo?.modelProvider, sessionInfo?.model].join("/") === alternateModel &&
-            findOrderedTurn(messages, resetMarker, seedReply) >= 0 &&
-            serialized.indexOf(postMarker) > serialized.indexOf(seedReply) &&
+            messages.every(
+              (message) =>
+                ![resetMarker, seedReply].includes(extractTextFromMessage(message).trim()),
+            ) &&
             findOrderedTurn(messages, postMarker, GATEWAY_SCENARIOS.reconnect.replyText) >= 0
           );
         });
+        const postRequest = JSON.stringify(
+          mockModel.requests(GATEWAY_SCENARIOS.reconnect.modelId).at(-1)?.body,
+        );
+        expect(postRequest).toContain(postMarker);
+        expect(postRequest).not.toContain(resetMarker);
+        expect(postRequest).not.toContain(seedReply);
       } finally {
         await fixture.cleanup();
       }
@@ -2356,6 +2395,14 @@ export default {
     "renders a non-deliverable direct reply failure through the real Gateway and TUI",
     async ({ onTestFinished }) => {
       const fixture = await startGatewayModeTui("emptyReply", onTestFinished);
+      const failureText =
+        "I finished the turn, but it did not produce a visible reply. Please try again, or start a new session if this keeps happening.";
+      const chatEvents: unknown[] = [];
+      fixture.controlClient.onEvent = ({ event, payload }) => {
+        if (event === "chat") {
+          chatEvents.push(payload);
+        }
+      };
       try {
         await fixture.run.write("non-deliverable first turn\r");
         await waitFor({
@@ -2371,7 +2418,7 @@ export default {
             fixture.visibleOutput().includes("did not produce a visible reply") ? true : null,
           onTimeout: () =>
             new Error(
-              `empty-reply fallback was not rendered\nrequests=${JSON.stringify(
+              `empty-reply fallback was not rendered\nchatEvents=${JSON.stringify(chatEvents)}\nrequests=${JSON.stringify(
                 fixture.mockModel.requests(),
                 null,
                 2,
@@ -2379,7 +2426,14 @@ export default {
             ),
         });
         expect(fixture.mockModel.requests()).toHaveLength(1);
-        expect(fixture.visibleOutput()).not.toContain("[[reply_to_current]]");
+        // Final filtering does not erase text already streamed into the PTY history.
+        expect(chatEvents).toContainEqual(
+          expect.objectContaining({
+            sessionKey: fixture.sessionKey,
+            state: "error",
+            errorMessage: failureText,
+          }),
+        );
 
         await fixture.run.write("turn after empty reply\r");
         await waitFor({
@@ -2391,6 +2445,10 @@ export default {
             ),
         });
         await fixture.waitForOutput("FOLLOWUP_RUN_COMPLETE");
+        expect(fixture.mockModel.requests()).toHaveLength(2);
+        expect(JSON.stringify(fixture.mockModel.requests()[1]?.body)).toContain(
+          "turn after empty reply",
+        );
       } finally {
         await fixture.cleanup();
       }

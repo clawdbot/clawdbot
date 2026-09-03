@@ -18,16 +18,14 @@ import {
   isModelSelectionLocked,
   MODEL_SELECTION_LOCKED_MESSAGE,
 } from "../../sessions/model-overrides.js";
+import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import {
   formatThinkingLevels,
   isThinkingLevelSupported,
   resolveSupportedThinkingLevel,
 } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
-import {
-  applyModelRuntimeDirective,
-  resolveModelRuntimeDirective,
-} from "./directive-handling.model-runtime.js";
+import { applyModelRuntimeDirective } from "./directive-handling.model-runtime.js";
 import { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
 import { maybeHandleModelDirectiveInfo } from "./directive-handling.model.js";
 import { maybeHandleUnexpectedNativeDirectiveArguments } from "./directive-handling.native.js";
@@ -54,6 +52,10 @@ import {
 } from "./directive-handling.shared.js";
 import { resolveDirectiveRuntimeContext } from "./directive-runtime-context.js";
 import type { ReasoningLevel, ThinkLevel } from "./directives.js";
+import {
+  findSelectedCatalogEntry,
+  prepareModelSelectionRuntime,
+} from "./model-runtime-normalization.js";
 import { refreshQueuedFollowupSession } from "./queue.js";
 
 /** Handles inline directives that can be acknowledged without a model turn. */
@@ -111,7 +113,7 @@ export async function handleDirectiveOnly(
   const { activeAgentId, agentDir, runtimePolicySessionKey, runtimeIsSandboxed } =
     resolveDirectiveRuntimeContext(params);
   const shouldHintDirectRuntime = directives.hasElevatedDirective && !runtimeIsSandboxed;
-  const thinkingCatalog =
+  let thinkingCatalog =
     params.thinkingCatalog && params.thinkingCatalog.length > 0
       ? params.thinkingCatalog
       : allowedModelCatalog.length > 0
@@ -153,6 +155,7 @@ export async function handleDirectiveOnly(
     allowedModelCatalog,
     provider,
     agentId: activeAgentId,
+    modelPolicy: params.modelPolicy,
   });
   if (modelResolution.errorText) {
     return rejectModelTransaction(modelResolution.errorText);
@@ -165,27 +168,50 @@ export async function handleDirectiveOnly(
 
   const resolvedProvider = modelSelection?.provider ?? provider;
   const resolvedModel = modelSelection?.model ?? model;
-  const modelRuntimeResolution = modelSelection
-    ? resolveModelRuntimeDirective({
-        rawRuntime: directives.rawModelRuntime,
-        provider: resolvedProvider,
-        cfg: params.cfg,
-        sessionEntry,
-      })
-    : ({ kind: "unchanged" } as const);
-  if (modelRuntimeResolution.kind === "invalid") {
-    return rejectModelTransaction(modelRuntimeResolution.errorText);
+  let modelRuntimeResolution: Parameters<typeof applyModelRuntimeDirective>[1] = {
+    kind: "unchanged",
+  };
+  if (modelSelection) {
+    const prepared = await prepareModelSelectionRuntime({
+      cfg: params.cfg,
+      agentId: activeAgentId,
+      provider: resolvedProvider,
+      model: resolvedModel,
+      catalog: thinkingCatalog ?? [],
+      rawRuntime: directives.rawModelRuntime,
+      sessionEntry,
+    });
+    if (prepared.status === "rejected") {
+      return rejectModelTransaction(prepared.message);
+    }
+    thinkingCatalog = prepared.catalog;
+    modelRuntimeResolution = prepared.runtime;
   }
   const prospectiveSessionEntry = { ...sessionEntry };
   applyModelRuntimeDirective(prospectiveSessionEntry, modelRuntimeResolution);
-  const thinkingRuntime = resolveEffectiveAgentRuntime({
-    cfg: params.cfg,
+  const selectedCatalogEntry = findSelectedCatalogEntry({
+    catalog: thinkingCatalog,
     provider: resolvedProvider,
-    modelId: resolvedModel,
-    agentId: activeAgentId,
-    sessionKey: runtimePolicySessionKey,
-    sessionEntry: prospectiveSessionEntry,
+    model: resolvedModel,
   });
+  const resolveThinkingRuntime = (entry: typeof sessionEntry) =>
+    resolveEffectiveAgentRuntime({
+      cfg: params.cfg,
+      provider: resolvedProvider,
+      modelId: resolvedModel,
+      modelApi: selectedCatalogEntry?.api,
+      modelBaseUrl: selectedCatalogEntry?.baseUrl,
+      agentId: activeAgentId,
+      sessionKey: runtimePolicySessionKey,
+      sessionEntry: entry,
+    });
+  const thinkingRuntime = resolveThinkingRuntime(prospectiveSessionEntry);
+  const thinkingPolicy = {
+    provider: resolvedProvider,
+    model: resolvedModel,
+    catalog: thinkingCatalog,
+    agentRuntime: thinkingRuntime,
+  };
   const fastModeState = resolveFastModeState({
     cfg: params.cfg,
     provider: resolvedProvider,
@@ -204,11 +230,8 @@ export async function handleDirectiveOnly(
     // If no argument was provided, show the current level
     if (!directives.rawThinkLevel) {
       const level = resolveSupportedThinkingLevel({
-        provider: resolvedProvider,
-        model: resolvedModel,
+        ...thinkingPolicy,
         level: currentThinkLevel ?? "off",
-        catalog: thinkingCatalog,
-        agentRuntime: thinkingRuntime,
       });
       return acknowledgeIgnoredDirective(
         {
@@ -398,11 +421,8 @@ export async function handleDirectiveOnly(
     directives.hasThinkDirective &&
     directives.thinkLevel &&
     !isThinkingLevelSupported({
-      provider: resolvedProvider,
-      model: resolvedModel,
+      ...thinkingPolicy,
       level: directives.thinkLevel,
-      catalog: thinkingCatalog,
-      agentRuntime: thinkingRuntime,
     })
   ) {
     return rejectModelTransaction(
@@ -414,21 +434,10 @@ export async function handleDirectiveOnly(
     ? directives.thinkLevel
     : ((sessionEntry?.thinkingLevel as ThinkLevel | undefined) ?? currentThinkLevel);
   const remappedUnsupportedThinkLevel =
-    !directives.hasThinkDirective &&
-    nextThinkLevel &&
-    !isThinkingLevelSupported({
-      provider: resolvedProvider,
-      model: resolvedModel,
-      level: nextThinkLevel,
-      catalog: thinkingCatalog,
-      agentRuntime: thinkingRuntime,
-    })
+    !directives.hasThinkDirective && nextThinkLevel
       ? resolveSupportedThinkingLevel({
-          provider: resolvedProvider,
-          model: resolvedModel,
+          ...thinkingPolicy,
           level: nextThinkLevel,
-          catalog: thinkingCatalog,
-          agentRuntime: thinkingRuntime,
         })
       : undefined;
   const shouldRemapUnsupportedThinkLevel =
@@ -515,15 +524,17 @@ export async function handleDirectiveOnly(
     }
     if (
       modelSelection &&
-      !modelSelection.isDefault &&
+      (!modelSelection.isDefault || params.stickyModelSelectionTarget) &&
       params.canPersistStickyModelSelection === true
     ) {
       configuredDefaultUpdate = persistStickyModelSelectionBestEffort({
         agentId: activeAgentId,
         model: `${modelSelection.provider}/${modelSelection.model}`,
+        ...(params.stickyModelSelectionTarget ? { target: params.stickyModelSelectionTarget } : {}),
       });
     }
     if (modelSelection && modelSelectionUpdated && sessionKey) {
+      emitSessionLifecycleEvent({ sessionKey, agentId: activeAgentId, reason: "patch" });
       triggerSessionPatchHook({
         cfg: params.cfg,
         sessionEntry: appliedSessionEntry,
@@ -548,14 +559,7 @@ export async function handleDirectiveOnly(
         nextThinking: {
           level: appliedSessionEntry.thinkingLevel,
           catalog: thinkingCatalog,
-          agentRuntime: resolveEffectiveAgentRuntime({
-            cfg: params.cfg,
-            provider: modelSelection.provider,
-            modelId: modelSelection.model,
-            agentId: activeAgentId,
-            sessionKey: runtimePolicySessionKey,
-            sessionEntry: appliedSessionEntry,
-          }),
+          agentRuntime: resolveThinkingRuntime(appliedSessionEntry),
         },
       });
     }
@@ -581,6 +585,7 @@ export async function handleDirectiveOnly(
       kind: "applied",
       provider: resolvedProvider,
       model: resolvedModel,
+      modelCatalog: thinkingCatalog,
     };
   }
 
@@ -626,21 +631,27 @@ export async function handleDirectiveOnly(
       parts.push(formatElevatedRuntimeHint());
     }
   }
-  if (directives.hasExecDirective && directives.hasExecOptions && allowPrivilegedPersistence) {
-    const execParts = Object.entries({
-      host: directives.execHost,
-      security: directives.execSecurity,
-      ask: directives.execAsk,
-      node: directives.execNode,
-    })
-      .filter(([, value]) => Boolean(value))
-      .map(([key, value]) => `${key}=${value}`);
-    if (execParts.length > 0) {
-      parts.push(formatDirectiveAck(`Exec defaults set (${execParts.join(", ")}).`));
+  if (directives.hasExecDirective && directives.hasExecOptions) {
+    for (const [label, options] of [
+      [
+        allowPrivilegedPersistence && "Exec defaults set",
+        { host: directives.execHost, node: directives.execNode },
+      ],
+      [
+        "Exec policy for this run only",
+        { security: directives.execSecurity, ask: directives.execAsk },
+      ],
+    ] as const) {
+      const execParts = Object.entries(options)
+        .filter(([, value]) => Boolean(value))
+        .map(([key, value]) => `${key}=${value}`);
+      if (execParts.length > 0) {
+        const message = label
+          ? `${label} (${execParts.join(", ")}).`
+          : formatInternalExecPersistenceDeniedText();
+        parts.push(formatDirectiveAck(message));
+      }
     }
-  }
-  if (directives.hasExecDirective && directives.hasExecOptions && !allowPrivilegedPersistence) {
-    parts.push(formatDirectiveAck(formatInternalExecPersistenceDeniedText()));
   }
   if (modelSelection) {
     const label = `${modelSelection.provider}/${modelSelection.model}`;
@@ -650,6 +661,9 @@ export async function handleDirectiveOnly(
         isDefault: modelSelection.isDefault,
         label: labelWithAlias,
         configuredDefaultUpdate,
+        ...(params.stickyModelSelectionTarget
+          ? { stickyModelSelectionTarget: params.stickyModelSelectionTarget }
+          : {}),
       }),
     );
     if (profileOverride) {

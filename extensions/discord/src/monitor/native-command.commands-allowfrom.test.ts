@@ -55,12 +55,15 @@ function createConfig(): OpenClawConfig {
   } as OpenClawConfig;
 }
 
-function createCommand(cfg: OpenClawConfig, discordConfig?: DiscordAccountConfig) {
-  const commandSpec: NativeCommandSpec = {
+function createCommand(
+  cfg: OpenClawConfig,
+  discordConfig?: DiscordAccountConfig,
+  commandSpec: NativeCommandSpec = {
     name: "ping",
     description: "Ping",
     acceptsArgs: false,
-  };
+  },
+) {
   return createDiscordNativeCommand({
     command: commandSpec,
     cfg,
@@ -123,12 +126,17 @@ async function runGuildSlashCommand(params?: {
   userId?: string;
   mutateConfig?: (cfg: OpenClawConfig) => void;
   runtimeDiscordConfig?: DiscordAccountConfig;
+  commandSpec?: NativeCommandSpec;
+  optionValues?: Record<string, string>;
   mutateInteraction?: (interaction: MockCommandInteraction) => void;
 }) {
   const cfg = createConfig();
   params?.mutateConfig?.(cfg);
-  const command = createCommand(cfg, params?.runtimeDiscordConfig);
+  const command = createCommand(cfg, params?.runtimeDiscordConfig, params?.commandSpec);
   const interaction = createInteraction({ userId: params?.userId });
+  interaction.options.getString.mockImplementation(
+    (name: string) => params?.optionValues?.[name] ?? null,
+  );
   params?.mutateInteraction?.(interaction);
   vi.mocked(matchPluginCommand).mockReturnValue(null);
   const dispatchSpy = createDispatchSpy();
@@ -535,6 +543,72 @@ describe("Discord native slash commands with commands.allowFrom", () => {
     expect(interaction.followUp).toHaveBeenCalledWith({ content: longReply, ephemeral: true });
     expect(interaction.reply).not.toHaveBeenCalled();
   });
+
+  const structuredDiscordArgCases: Array<{
+    command: string;
+    optionValues: Record<string, string>;
+    expectedPrompt: string;
+  }> = [
+    {
+      command: "config",
+      optionValues: { action: " GET ", path: " agents.defaults.model " },
+      expectedPrompt: "/config get agents.defaults.model",
+    },
+    {
+      command: "config",
+      optionValues: { action: "set", path: "agents.defaults.model" },
+      expectedPrompt: "/config set agents.defaults.model",
+    },
+    {
+      command: "mcp",
+      optionValues: { action: "get", path: "servers.github" },
+      expectedPrompt: "/mcp get servers.github",
+    },
+    { command: "mcp", optionValues: { action: "get" }, expectedPrompt: "/mcp get" },
+    {
+      command: "plugins",
+      optionValues: { action: "get", path: "discord" },
+      expectedPrompt: "/plugins get discord",
+    },
+    {
+      command: "plugins",
+      optionValues: { action: "list", path: "ignored" },
+      expectedPrompt: "/plugins list",
+    },
+    {
+      command: "debug",
+      optionValues: { action: "show", path: "ignored" },
+      expectedPrompt: "/debug show",
+    },
+    { command: "debug", optionValues: { action: "unset" }, expectedPrompt: "/debug unset" },
+  ];
+
+  it.each(structuredDiscordArgCases)(
+    "serializes structured /$command args and delivers the visible reply",
+    async ({ command, optionValues, expectedPrompt }) => {
+      const visibleReply = `Handled ${expectedPrompt}`;
+      const { interaction } = await runGuildSlashCommand({
+        commandSpec: {
+          name: command,
+          description: `Test ${command}`,
+          acceptsArgs: true,
+        },
+        optionValues,
+      });
+      const dispatchCall = firstDispatchReplyCall();
+
+      expect(dispatchCall.ctx.Body).toBe(expectedPrompt);
+      expect(dispatchCall.ctx.CommandArgs?.raw).toBe(expectedPrompt.slice(command.length + 2));
+
+      await dispatchCall.dispatcherOptions.deliver({ text: visibleReply }, { kind: "final" });
+
+      expect(interaction.followUp).toHaveBeenCalledWith({
+        content: visibleReply,
+        ephemeral: true,
+      });
+      expect(interaction.reply).not.toHaveBeenCalled();
+    },
+  );
 
   it("swallows expired slash interactions before dispatch when defer returns Unknown interaction", async () => {
     const cfg = createConfig();

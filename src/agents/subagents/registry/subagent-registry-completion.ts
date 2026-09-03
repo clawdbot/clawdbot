@@ -56,9 +56,11 @@ export function resolveFinalizedSubagentTaskState(
   }
   if (outcome.status === "ok") {
     const terminal =
-      entry.expectsCompletionMessage === true
-        ? resolveRequiredCompletionTerminalResult(progressSummary)
-        : {};
+      entry.expectsCompletionMessage !== true
+        ? {}
+        : entry.delivery?.disposition === "intentional_non_delivery"
+          ? { terminalOutcome: "succeeded" as const, terminalSummary: null }
+          : resolveRequiredCompletionTerminalResult(progressSummary);
     return {
       status: "succeeded",
       endedAt,

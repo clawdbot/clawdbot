@@ -290,6 +290,26 @@ describe("linux-node commands", () => {
     expect(payload.timestamp).toBe("2026-07-13T12:00:05.000Z");
   });
 
+  it("keeps GeoClue running past a future-dated fix until a current update arrives", async () => {
+    const fix = (lat: number, epochSeconds: number) =>
+      `\nNew location:\nLatitude: ${lat}\nLongitude: 16\nAccuracy: 25 meters\nTimestamp: now (${epochSeconds} seconds since the Epoch)\n`;
+    const future = fix(47, Date.parse("2026-07-13T12:00:15.000Z") / 1000);
+    const current = fix(48, Date.parse("2026-07-13T12:00:09.000Z") / 1000);
+    const runCommand = vi.fn(async (_argv: string[], options: CommandOptions) => {
+      expect(options.onOutputChunk?.(Buffer.from(future), "stdout")).toBe(true);
+      expect(options.onOutputChunk?.(Buffer.from(current), "stdout")).toBe(false);
+      return success(`${future}${current}`);
+    });
+    const { command } = createHarness({ runCommand });
+
+    const payload = JSON.parse(
+      await command("location.get").handle(JSON.stringify({ maxAgeMs: 2000 })),
+    ) as Record<string, unknown>;
+
+    expect(payload.lat).toBe(48);
+    expect(payload.timestamp).toBe("2026-07-13T12:00:09.000Z");
+  });
+
   it("accounts for GeoClue second precision when maxAgeMs is zero", async () => {
     const output = `\nNew location:\nLatitude: 48\nLongitude: 16\nAccuracy: 25 meters\nTimestamp: now (1783944010 seconds since the Epoch)\n`;
     const harness = createHarness({

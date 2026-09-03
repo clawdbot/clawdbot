@@ -58,6 +58,7 @@ export function createWorkerSshRunner(): WorkerSshRunner {
       let closed = false;
       let exitedSettled = false;
       let readySettled = false;
+      let exitEventResult: WorkerSshProcessExit | undefined;
       let resolveReady!: () => void;
       let rejectReady!: (error: Error) => void;
       let resolveExited!: (exit: WorkerSshProcessExit) => void;
@@ -91,7 +92,7 @@ export function createWorkerSshRunner(): WorkerSshRunner {
       child.stdout.setEncoding("utf8");
       child.stdout.on("error", () => {});
       child.stdout.on("data", (chunk: string) => {
-        if (readySettled) {
+        if (readySettled || exitEventResult !== undefined) {
           return;
         }
         stdout = sliceUtf16Safe(`${stdout}${chunk}`, -STDERR_LIMIT);
@@ -118,7 +119,6 @@ export function createWorkerSshRunner(): WorkerSshRunner {
       // "exit" fires before "close", and "close" can be delayed indefinitely while a
       // descendant holds a piped stdio descriptor; settle on the real exit so connected
       // tunnels awaiting `exited` observe termination without depending on stream closure.
-      let exitEventResult: WorkerSshProcessExit | undefined;
       child.once("exit", (code, signal) => {
         exitEventResult = { code, signal };
         child.stdin.destroy();

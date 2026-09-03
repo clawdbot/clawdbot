@@ -16,12 +16,23 @@ import type { QaScorecardChannelDriver, QaScorecardEvidenceMode } from "./scorec
 import type { QaSuiteRoundTripProbe } from "./suite-round-trip.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
+export type QaSuiteStepOutcome = {
+  details?: string;
+  timing?: QaEvidenceTiming;
+};
+
+export type QaSuiteStep = {
+  name: string;
+  run: () => Promise<QaSuiteStepOutcome | void>;
+};
+
 export type QaSuiteScenarioResult = {
   name: string;
   status: "pass" | "fail" | "skip";
   steps: QaReportCheck[];
   details?: string;
   timing?: QaEvidenceTiming;
+  modelSwitchEvidence?: Record<string, unknown>;
   runtimeParity?: RuntimeParityResult;
 };
 

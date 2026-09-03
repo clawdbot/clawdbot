@@ -40,6 +40,26 @@ export async function readPidFile(pidPath: string): Promise<number> {
   return Number((await fs.readFile(pidPath, "utf8")).trim());
 }
 
+export async function waitForPidFile(pidPath: string, timeoutMs = 5_000): Promise<number> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const pid = await readPidFile(pidPath);
+      if (Number.isInteger(pid) && pid > 0) {
+        return pid;
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 25);
+    });
+  }
+  throw new Error(`Timed out waiting for pid file: ${pidPath}`);
+}
+
 export function killPidIfAlive(pid: number | undefined): void {
   if (pid === undefined || !isPidAlive(pid)) {
     return;

@@ -3,15 +3,14 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
-import { createTestChatPane } from "./chat-pane.test-support.ts";
+import { createSessionCapabilityFixture, createTestChatPane } from "./chat-pane.test-support.ts";
 
 describe("chat pane read markers", () => {
   it("marks an unread failure read even when its regular unread flag is false", () => {
     const patch = vi.fn().mockResolvedValue(null);
     const { pane } = createTestChatPane({
       client: {} as GatewayBrowserClient,
-      sessions: { patch } as unknown as SessionCapability,
+      sessions: createSessionCapabilityFixture({ patch }),
     });
 
     pane.markSessionRead({
@@ -27,7 +26,7 @@ describe("chat pane read markers", () => {
     expect(patch).toHaveBeenCalledWith(
       "agent:main:current",
       { unread: false },
-      { agentId: "main" },
+      { agentId: "main", expectedMarkedUnreadAt: null },
     );
   });
 
@@ -35,7 +34,7 @@ describe("chat pane read markers", () => {
     const patch = vi.fn().mockResolvedValue(null);
     const { pane } = createTestChatPane({
       client: {} as GatewayBrowserClient,
-      sessions: { patch } as unknown as SessionCapability,
+      sessions: createSessionCapabilityFixture({ patch }),
     });
 
     pane.markSessionRead({
@@ -50,7 +49,7 @@ describe("chat pane read markers", () => {
     expect(patch).toHaveBeenCalledWith(
       "agent:main:current",
       { unread: false },
-      { agentId: "main" },
+      { agentId: "main", expectedMarkedUnreadAt: null },
     );
   });
 
@@ -69,7 +68,7 @@ describe("chat pane read markers", () => {
     const patch = vi.fn().mockResolvedValue(null);
     const { pane, state } = createTestChatPane({
       client: {} as GatewayBrowserClient,
-      sessions: { patch } as unknown as SessionCapability,
+      sessions: createSessionCapabilityFixture({ patch }),
     });
     pane.context.gateway.snapshot.hello = {
       auth: { role: "operator", scopes },
@@ -97,7 +96,7 @@ describe("chat pane read markers", () => {
     const patch = vi.fn().mockResolvedValue(null);
     const { pane } = createTestChatPane({
       client: {} as GatewayBrowserClient,
-      sessions: { patch } as unknown as SessionCapability,
+      sessions: createSessionCapabilityFixture({ patch }),
     });
     const row = {
       key: "agent:main:current",
@@ -118,7 +117,7 @@ describe("chat pane read markers", () => {
     const patch = vi.fn().mockResolvedValue(null);
     const { pane } = createTestChatPane({
       client: {} as GatewayBrowserClient,
-      sessions: { patch } as unknown as SessionCapability,
+      sessions: createSessionCapabilityFixture({ patch }),
     });
     const sessionsState = (presented: boolean) => {
       pane.presented = presented;
@@ -150,7 +149,66 @@ describe("chat pane read markers", () => {
     expect(patch).toHaveBeenCalledWith(
       "agent:main:current",
       { unread: false },
-      { agentId: "main" },
+      { agentId: "main", expectedMarkedUnreadAt: null },
+    );
+  });
+
+  it("preserves a manual unread marker received after activation", () => {
+    const patch = vi.fn().mockResolvedValue(null);
+    const { pane } = createTestChatPane({
+      client: {} as GatewayBrowserClient,
+      sessions: createSessionCapabilityFixture({ patch }),
+    });
+
+    pane.markSessionRead({
+      key: "agent:main:current",
+      kind: "direct",
+      updatedAt: 10,
+      unread: false,
+    });
+    pane.markSessionRead({
+      key: "agent:main:current",
+      kind: "direct",
+      markedUnreadAt: 20,
+      updatedAt: 20,
+      unread: true,
+    });
+
+    expect(patch).not.toHaveBeenCalled();
+  });
+
+  it("acknowledges a manual unread marker when a retained pane is presented again", () => {
+    const patch = vi.fn().mockResolvedValue({});
+    const { pane } = createTestChatPane({
+      client: {} as GatewayBrowserClient,
+      sessions: createSessionCapabilityFixture({ patch }),
+    });
+    const row = {
+      key: "agent:main:current",
+      kind: "direct" as const,
+      markedUnreadAt: 20,
+      updatedAt: 20,
+      unread: true,
+    };
+
+    pane.markSessionRead({ ...row, markedUnreadAt: undefined, unread: false });
+    pane.markSessionRead(row);
+    expect(patch).not.toHaveBeenCalled();
+
+    pane.presented = false;
+    pane.applySessionsState({
+      result: { sessions: [row] },
+      agentId: "main",
+      loading: false,
+      error: null,
+      deletedSessions: [],
+    } as unknown as Parameters<typeof pane.applySessionsState>[0]);
+    pane.presented = true;
+
+    expect(patch).toHaveBeenCalledWith(
+      "agent:main:current",
+      { unread: false },
+      { agentId: "main", expectedMarkedUnreadAt: 20 },
     );
   });
 });

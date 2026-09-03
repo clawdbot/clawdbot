@@ -10,50 +10,37 @@ import {
   getSkillsSnapshotVersion,
   shouldRefreshSnapshotForVersion,
 } from "./refresh-state.js";
+import { createSkillsWatcherMock } from "./refresh.watcher.test-support.js";
 
 type SkillsChangeEvent = NonNullable<Parameters<typeof bumpSkillsSnapshotVersion>[0]>;
 
-type WatchEvent = "add" | "addDir" | "all" | "change" | "unlink" | "unlinkDir" | "raw" | "error";
-type WatchCallback = (...args: unknown[]) => void;
+const { createdWatchers, watchMock, watchForSkillRoot } = createSkillsWatcherMock();
 
-function createMockWatcher() {
-  const handlers = new Map<WatchEvent, WatchCallback[]>();
-  const watcher = {
-    on: vi.fn((event: WatchEvent, callback: WatchCallback) => {
-      handlers.set(event, [...(handlers.get(event) ?? []), callback]);
-      return watcher;
-    }),
-    close: vi.fn(async () => undefined),
-    emit: (event: WatchEvent, ...args: unknown[]) => {
-      for (const callback of handlers.get(event) ?? []) {
-        callback(...args);
-      }
-    },
-  };
-  return watcher;
-}
-
-const createdWatchers: Array<ReturnType<typeof createMockWatcher>> = [];
-const watchMock = vi.fn(() => {
-  const watcher = createMockWatcher();
-  createdWatchers.push(watcher);
-  return watcher;
-});
 const pluginSkillsMocks = vi.hoisted(() => ({
-  resolvePluginSkillDirs: vi.fn((): string[] => []),
-  resolvePluginSkillDirsFromMetadata: vi.fn((): string[] => []),
+  resolvePluginSkillRoots: vi.fn((): Array<{ dir: string; rejectHardlinks: boolean }> => []),
+  resolvePluginSkillRootsFromMetadata: vi.fn(
+    (): Array<{ dir: string; rejectHardlinks: boolean }> => [],
+  ),
 }));
 
 let refreshModule: typeof import("./refresh.js");
 let refreshTestSupport: typeof import("./refresh.test-support.js");
+let fixtureRoot: string;
+let fixtureWorkspaceDir: string;
+
+async function createFixtureDirectory(relativePath: string): Promise<string> {
+  const directory = path.join(fixtureRoot, relativePath);
+  await fs.mkdir(directory, { recursive: true });
+  return directory;
+}
 
 vi.mock("chokidar", () => ({
   default: { watch: watchMock },
 }));
 
 vi.mock("../loading/plugin-skills.js", () => ({
-  resolvePluginSkillDirs: pluginSkillsMocks.resolvePluginSkillDirs,
-  resolvePluginSkillDirsFromMetadata: pluginSkillsMocks.resolvePluginSkillDirsFromMetadata,
+  resolvePluginSkillRoots: pluginSkillsMocks.resolvePluginSkillRoots,
+  resolvePluginSkillRootsFromMetadata: pluginSkillsMocks.resolvePluginSkillRootsFromMetadata,
 }));
 
 describe("ensureSkillsWatcher", () => {
@@ -62,83 +49,63 @@ describe("ensureSkillsWatcher", () => {
     refreshTestSupport = await import("./refresh.test-support.js");
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     watchMock.mockClear();
     createdWatchers.length = 0;
-    pluginSkillsMocks.resolvePluginSkillDirs.mockClear();
-    pluginSkillsMocks.resolvePluginSkillDirsFromMetadata.mockClear();
+    pluginSkillsMocks.resolvePluginSkillRoots.mockClear();
+    pluginSkillsMocks.resolvePluginSkillRootsFromMetadata.mockClear();
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-watch-fixture-"));
+    fixtureWorkspaceDir = await createFixtureDirectory("workspace");
+    await createFixtureDirectory("workspace/skills");
   });
 
   afterEach(async () => {
     vi.useRealTimers();
     await refreshTestSupport.resetSkillsRefreshForTest();
+    await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
   it("watches skill roots and filters non-skill churn", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-watch-root-"));
-    try {
-      refreshModule.ensureSkillsWatcher({ workspaceDir });
+    const workspaceDir = fixtureWorkspaceDir;
+    refreshModule.ensureSkillsWatcher({ workspaceDir });
+    const workspaceSkillsRoot = path.join(workspaceDir, "skills");
+    const projectSkillsRoot = path.join(workspaceDir, ".agents", "skills");
+    const { options, watchRoot } = watchForSkillRoot(workspaceSkillsRoot);
+    expect(watchRoot).toBe(workspaceSkillsRoot.replaceAll("\\", "/"));
+    expect(options.followSymlinks).toBe(false);
+    expect(options.depth).toBe(6);
+    const projectWatch = watchForSkillRoot(projectSkillsRoot);
+    expect(projectWatch.watchRoot).toBe(workspaceDir.replaceAll("\\", "/"));
+    expect(projectWatch.options.depth).toBe(8);
+    expect(
+      watchForSkillRoot(path.join(os.homedir(), ".agents", "skills")).options.followSymlinks,
+    ).toBe(false);
+    expect(watchMock.mock.calls.every(([target]) => !target.includes("*"))).toBe(true);
 
-      // Each unique directory gets its own watcher (one path argument per call).
-      const calls = watchMock.mock.calls as unknown as Array<
-        [
-          string,
-          {
-            depth?: number;
-            followSymlinks?: boolean;
-            ignored?: (
-              watchPath: string,
-              stats?: { isDirectory?: () => boolean; isSymbolicLink?: () => boolean },
-            ) => boolean;
-          },
-        ]
-      >;
-      expect(calls.length).toBeGreaterThan(0);
-      const targets = calls.map((call) => call[0]);
-      const opts = calls[0]?.[1] ?? {};
-      const workspaceSkillsRoot = path.join(workspaceDir, "skills").replaceAll("\\", "/");
-
-      expect(typeof opts.ignored).toBe("function");
-      expect(opts.followSymlinks).toBe(false);
-      const posix = (p: string) => p.replaceAll("\\", "/");
-      expect(targets).toContain(workspaceSkillsRoot);
-      expect(targets).toContain(posix(path.join(workspaceDir, ".agents", "skills")));
-      expect(calls.find(([p]) => p.replaceAll("\\", "/") === workspaceSkillsRoot)?.[1].depth).toBe(
-        7,
-      );
-      expect(targets).toContain(posix(path.join(os.homedir(), ".agents", "skills")));
-      const wildcardTargets = targets.filter((target) => target.includes("*"));
-      expect(wildcardTargets).toStrictEqual([]);
-      const ignored = opts.ignored;
-      expect(ignored).toBeDefined();
-
-      // Node/JS paths
-      expect(ignored?.("/tmp/workspace/skills/node_modules/pkg/index.js")).toBe(true);
-      expect(ignored?.("/tmp/workspace/skills/dist/index.js")).toBe(true);
-      expect(ignored?.("/tmp/workspace/skills/.git/config")).toBe(true);
-
-      // Python virtual environments and caches
-      expect(ignored?.("/tmp/workspace/skills/scripts/.venv/bin/python")).toBe(true);
-      expect(ignored?.("/tmp/workspace/skills/venv/lib/python3.10/site.py")).toBe(true);
-      expect(ignored?.("/tmp/workspace/skills/__pycache__/module.pyc")).toBe(true);
-      expect(ignored?.("/tmp/workspace/skills/.mypy_cache/3.10/foo.json")).toBe(true);
-      expect(ignored?.("/tmp/workspace/skills/.pytest_cache/v/cache")).toBe(true);
-
-      // Build artifacts and caches
-      expect(ignored?.("/tmp/workspace/skills/build/output.js")).toBe(true);
-      expect(ignored?.("/tmp/workspace/skills/.cache/data.json")).toBe(true);
-
-      // Paths without stats stay visible so chokidar can stat and classify them.
-      expect(ignored?.("/tmp/.hidden/skills/index.md")).toBe(false);
-      expect(ignored?.("/tmp/workspace/skills/my-skill", { isDirectory: () => true })).toBe(false);
-      expect(ignored?.("/tmp/workspace/skills/my-skill", { isSymbolicLink: () => true })).toBe(
-        false,
-      );
-      expect(ignored?.("/tmp/workspace/skills/my-skill/README.md", {})).toBe(true);
-      expect(ignored?.("/tmp/workspace/skills/my-skill/SKILL.md", {})).toBe(true);
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
+    for (const ignoredPath of [
+      "node_modules/pkg/index.js",
+      "dist/index.js",
+      ".git/config",
+      "scripts/.venv/bin/python",
+      "venv/lib/python3.10/site.py",
+      "__pycache__/module.pyc",
+      ".mypy_cache/3.10/foo.json",
+      ".pytest_cache/v/cache",
+      "build/output.js",
+      ".cache/data.json",
+    ]) {
+      expect(options.ignored(path.join(workspaceSkillsRoot, ignoredPath))).toBe(true);
     }
+    // Unknown paths within the root remain visible until Chokidar can classify them.
+    expect(options.ignored(path.join(workspaceSkillsRoot, ".hidden", "index.md"))).toBe(false);
+    const skillDir = path.join(workspaceSkillsRoot, "my-skill");
+    expect(options.ignored(skillDir, { isDirectory: () => true })).toBe(false);
+    expect(options.ignored(skillDir, { isSymbolicLink: () => true })).toBe(false);
+    expect(options.ignored(path.join(skillDir, "README.md"), {})).toBe(true);
+    expect(options.ignored(path.join(skillDir, "SKILL.md"), {})).toBe(true);
+    expect(options.ignored(path.join(workspaceDir, "unrelated"), { isDirectory: () => true })).toBe(
+      true,
+    );
   });
 
   it("does not watch home-scoped personal skills for a non-default state directory", async () => {
@@ -152,6 +119,7 @@ describe("ensureSkillsWatcher", () => {
           OPENCLAW_STATE_DIR: path.join(root, "scratch-state"),
         },
         async () => {
+          await fs.mkdir(path.join(root, ".agents", "skills"), { recursive: true });
           refreshModule.ensureSkillsWatcher({ workspaceDir: path.join(root, "workspace") });
           const calls = watchMock.mock.calls as unknown as Array<[string]>;
           const targets = calls.map(([target]) => target);
@@ -170,21 +138,11 @@ describe("ensureSkillsWatcher", () => {
       process.env.CHOKIDAR_USEPOLLING = "true";
       refreshModule.ensureSkillsWatcher({ workspaceDir });
 
-      const calls = watchMock.mock.calls as unknown as Array<
-        [
-          string,
-          {
-            ignored?: (
-              watchPath: string,
-              stats?: { isDirectory?: () => boolean; isSymbolicLink?: () => boolean },
-            ) => boolean;
-            usePolling?: boolean;
-          },
-        ]
-      >;
-      const opts = calls[0]?.[1] ?? {};
+      const opts = watchForSkillRoot(path.join(workspaceDir, "skills")).options;
       expect(opts.usePolling).toBe(true);
-      expect(opts.ignored?.("/tmp/workspace/skills/my-skill/SKILL.md", {})).toBe(false);
+      expect(opts.ignored?.(path.join(workspaceDir, "skills", "my-skill", "SKILL.md"), {})).toBe(
+        false,
+      );
     } finally {
       if (previousPolling === undefined) {
         delete process.env.CHOKIDAR_USEPOLLING;
@@ -210,7 +168,7 @@ describe("ensureSkillsWatcher", () => {
         config: { skills: { load: {} } },
       });
 
-      createdWatchers[0]?.emit(
+      watchForSkillRoot(path.join(workspaceDir, "skills")).watcher.emit(
         "raw",
         "change",
         path.join(workspaceDir, "skills", "demo", "SKILL.md"),
@@ -233,43 +191,36 @@ describe("ensureSkillsWatcher", () => {
 
   it("keeps grouped skill folders within the watcher traversal depth", async () => {
     vi.useFakeTimers();
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-watch-depth-"));
+    const workspaceDir = await createFixtureDirectory("watch-depth");
     const seen: SkillsChangeEvent[] = [];
-    try {
-      refreshModule.registerSkillsChangeListener((change) => {
-        seen.push(change);
-      });
-      refreshModule.ensureSkillsWatcher({
+    refreshModule.registerSkillsChangeListener((change) => {
+      seen.push(change);
+    });
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir,
+      config: { skills: { load: {} } },
+    });
+
+    const watched = watchForSkillRoot(path.join(workspaceDir, "skills"));
+    expect(watched.watchRoot).toBe(workspaceDir.replaceAll("\\", "/"));
+    expect(watched.options.depth).toBe(7);
+
+    const changedPath = path.join(workspaceDir, "skills", "group", "demo", "SKILL.md");
+    watched.watcher.emit("all", "change", changedPath);
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(seen).toEqual([
+      {
         workspaceDir,
-        config: { skills: { load: {} } },
-      });
-
-      const calls = watchMock.mock.calls as unknown as Array<
-        [string, { depth?: number; ignored?: unknown }]
-      >;
-      const workspaceSkillsRoot = path.join(workspaceDir, "skills").replaceAll("\\", "/");
-      const firstIndex = calls.findIndex(([p]) => p.replaceAll("\\", "/") === workspaceSkillsRoot);
-      expect(calls[firstIndex]?.[1]?.depth).toBe(7);
-
-      const changedPath = path.join(workspaceDir, "skills", "group", "demo", "SKILL.md");
-      createdWatchers[firstIndex]?.emit("all", "change", changedPath);
-      await vi.advanceTimersByTimeAsync(250);
-
-      expect(seen).toEqual([
-        {
-          workspaceDir,
-          reason: "watch",
-          changedPath,
-        },
-      ]);
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-    }
+        reason: "watch",
+        changedPath,
+      },
+    ]);
   });
 
   it("refreshes snapshots from raw directory events for SKILL.md files", async () => {
     vi.useFakeTimers();
-    const workspaceDir = "/tmp/workspace";
+    const workspaceDir = fixtureWorkspaceDir;
     const seen: SkillsChangeEvent[] = [];
     refreshModule.registerSkillsChangeListener((change) => {
       seen.push(change);
@@ -280,14 +231,19 @@ describe("ensureSkillsWatcher", () => {
       config: { skills: { load: {} } },
     });
 
-    createdWatchers[0]?.emit("raw", "rename", "README.md", {
-      watchedPath: "/tmp/workspace/skills/demo",
-    });
+    watchForSkillRoot(path.join(workspaceDir, "skills")).watcher.emit(
+      "raw",
+      "rename",
+      "README.md",
+      {
+        watchedPath: path.join(fixtureWorkspaceDir, "skills", "demo"),
+      },
+    );
     await vi.advanceTimersByTimeAsync(250);
     expect(seen).toEqual([]);
 
-    createdWatchers[0]?.emit("raw", "rename", "SKILL.md", {
-      watchedPath: "/tmp/workspace/skills/demo",
+    watchForSkillRoot(path.join(workspaceDir, "skills")).watcher.emit("raw", "rename", "SKILL.md", {
+      watchedPath: path.join(fixtureWorkspaceDir, "skills", "demo"),
     });
     await Promise.resolve();
     await vi.advanceTimersByTimeAsync(250);
@@ -296,14 +252,14 @@ describe("ensureSkillsWatcher", () => {
       {
         workspaceDir,
         reason: "watch",
-        changedPath: "/tmp/workspace/skills/demo/SKILL.md",
+        changedPath: path.join(fixtureWorkspaceDir, "skills", "demo", "SKILL.md"),
       },
     ]);
   });
 
   it("falls back to a watched-directory refresh when raw events omit a filename", async () => {
     vi.useFakeTimers();
-    const workspaceDir = "/tmp/workspace";
+    const workspaceDir = fixtureWorkspaceDir;
     const seen: SkillsChangeEvent[] = [];
     refreshModule.registerSkillsChangeListener((change) => {
       seen.push(change);
@@ -314,8 +270,8 @@ describe("ensureSkillsWatcher", () => {
       config: { skills: { load: {} } },
     });
 
-    createdWatchers[0]?.emit("raw", "rename", undefined, {
-      watchedPath: "/tmp/workspace/skills",
+    watchForSkillRoot(path.join(workspaceDir, "skills")).watcher.emit("raw", "rename", undefined, {
+      watchedPath: path.join(fixtureWorkspaceDir, "skills"),
     });
     await vi.advanceTimersByTimeAsync(250);
 
@@ -323,45 +279,62 @@ describe("ensureSkillsWatcher", () => {
       {
         workspaceDir,
         reason: "watch",
-        changedPath: "/tmp/workspace/skills",
+        changedPath: path.join(fixtureWorkspaceDir, "skills"),
       },
     ]);
   });
 
   it("waits for raw SKILL.md files to stabilize before refreshing", async () => {
     vi.useFakeTimers();
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-watch-stable-"));
+    const workspaceDir = await createFixtureDirectory("watch-stable");
     const skillDir = path.join(workspaceDir, "skills", "demo");
     const skillFile = path.join(skillDir, "SKILL.md");
     const seen: SkillsChangeEvent[] = [];
-    try {
-      await fs.mkdir(skillDir, { recursive: true });
-      await fs.writeFile(skillFile, "---\nname: demo\ndescription: Demo\n---\n");
-      refreshModule.registerSkillsChangeListener((change) => {
-        seen.push(change);
-      });
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(skillFile, "---\nname: demo\ndescription: Demo\n---\n");
+    refreshModule.registerSkillsChangeListener((change) => {
+      seen.push(change);
+    });
 
-      refreshModule.ensureSkillsWatcher({
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir,
+      config: { skills: { load: {} } },
+    });
+
+    watchForSkillRoot(path.join(workspaceDir, "skills")).watcher.emit("raw", "change", "SKILL.md", {
+      watchedPath: skillDir,
+    });
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+    expect(seen).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(250);
+    expect(seen).toEqual([
+      {
         workspaceDir,
-        config: { skills: { load: {} } },
-      });
+        reason: "watch",
+        changedPath: skillFile,
+      },
+    ]);
+  });
 
-      createdWatchers[0]?.emit("raw", "change", "SKILL.md", { watchedPath: skillDir });
-      await Promise.resolve();
-      await vi.advanceTimersByTimeAsync(250);
-      expect(seen).toEqual([]);
+  it("does not publish a pending raw-file refresh after watchers close", async () => {
+    vi.useFakeTimers();
+    const skillDir = await createFixtureDirectory("workspace/skills/demo");
+    await fs.writeFile(path.join(skillDir, "SKILL.md"), "skill content");
+    const seen: SkillsChangeEvent[] = [];
+    refreshModule.registerSkillsChangeListener((change) => seen.push(change));
+    refreshModule.ensureSkillsWatcher({ workspaceDir: fixtureWorkspaceDir });
+    const watched = watchForSkillRoot(path.join(fixtureWorkspaceDir, "skills"));
+    const versionBefore = getSkillsSnapshotVersion(fixtureWorkspaceDir);
 
-      await vi.advanceTimersByTimeAsync(250);
-      expect(seen).toEqual([
-        {
-          workspaceDir,
-          reason: "watch",
-          changedPath: skillFile,
-        },
-      ]);
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-    }
+    watched.watcher.emit("raw", "change", "SKILL.md", { watchedPath: skillDir });
+    await refreshModule.closeSkillsWatchers();
+    expect(watched.watcher.close).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(seen).toEqual([]);
+    expect(getSkillsSnapshotVersion(fixtureWorkspaceDir)).toBe(versionBefore);
   });
 
   it.runIf(process.platform !== "win32")(
@@ -401,30 +374,19 @@ describe("ensureSkillsWatcher", () => {
   );
 
   it.runIf(process.platform !== "win32")("watches symlinked skill root targets", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-watch-root-link-"));
-    const targetSkillsDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-watch-root-link-target-"),
+    const workspaceDir = await createFixtureDirectory("watch-root-link");
+    const targetSkillsDir = await createFixtureDirectory("watch-root-link-target");
+    await fs.writeFile(
+      path.join(targetSkillsDir, "SKILL.md"),
+      "---\nname: linked-root\ndescription: Linked root\n---\n",
     );
-    try {
-      await fs.writeFile(
-        path.join(targetSkillsDir, "SKILL.md"),
-        "---\nname: linked-root\ndescription: Linked root\n---\n",
-      );
-      await fs.symlink(targetSkillsDir, path.join(workspaceDir, "skills"), "dir");
+    await fs.symlink(targetSkillsDir, path.join(workspaceDir, "skills"), "dir");
 
-      refreshModule.ensureSkillsWatcher({ workspaceDir });
+    refreshModule.ensureSkillsWatcher({ workspaceDir });
 
-      const calls = watchMock.mock.calls as unknown as Array<
-        [string, { followSymlinks?: boolean }]
-      >;
-      const target = (await fs.realpath(targetSkillsDir)).replaceAll("\\", "/");
-      expect(calls.find(([p]) => p.replaceAll("\\", "/") === target)?.[1].followSymlinks).toBe(
-        false,
-      );
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-      await fs.rm(targetSkillsDir, { recursive: true, force: true });
-    }
+    const calls = watchMock.mock.calls as unknown as Array<[string, { followSymlinks?: boolean }]>;
+    const target = (await fs.realpath(targetSkillsDir)).replaceAll("\\", "/");
+    expect(calls.find(([p]) => p.replaceAll("\\", "/") === target)?.[1].followSymlinks).toBe(false);
   });
 
   it.runIf(process.platform !== "win32")(
@@ -463,83 +425,71 @@ describe("ensureSkillsWatcher", () => {
   );
 
   it("watches nested skills roots for repo-style extra dirs", async () => {
-    const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-watch-"));
-    try {
-      await fs.mkdir(path.join(repoDir, "skills", "group", "demo"), { recursive: true });
-      await fs.writeFile(
-        path.join(repoDir, "skills", "group", "demo", "SKILL.md"),
-        "---\nname: demo\ndescription: Demo\n---\n",
-      );
+    const repoDir = await createFixtureDirectory("skills-watch");
+    await fs.mkdir(path.join(repoDir, "skills", "group", "demo"), { recursive: true });
+    await fs.writeFile(
+      path.join(repoDir, "skills", "group", "demo", "SKILL.md"),
+      "---\nname: demo\ndescription: Demo\n---\n",
+    );
 
-      refreshModule.ensureSkillsWatcher({
-        workspaceDir: "/tmp/workspace",
-        config: { skills: { load: { extraDirs: [repoDir] } } },
-      });
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir: fixtureWorkspaceDir,
+      config: { skills: { load: { extraDirs: [repoDir] } } },
+    });
 
-      const calls = watchMock.mock.calls as unknown as Array<[string, { depth?: number }]>;
-      const targets = calls.map(([p]) => p.replaceAll("\\", "/"));
-      const repoRoot = repoDir.replaceAll("\\", "/");
-      const nestedRoot = path.join(repoDir, "skills").replaceAll("\\", "/");
-      expect(targets).toContain(nestedRoot);
-      expect(targets).toContain(repoRoot);
-      expect(targets).not.toContain(path.join(repoDir, "SKILL.md").replaceAll("\\", "/"));
-      expect(calls.find(([p]) => p.replaceAll("\\", "/") === repoRoot)?.[1].depth).toBe(2);
-      expect(calls.find(([p]) => p.replaceAll("\\", "/") === nestedRoot)?.[1].depth).toBe(6);
-    } finally {
-      await fs.rm(repoDir, { recursive: true, force: true });
-    }
+    const calls = watchMock.mock.calls as unknown as Array<[string, { depth?: number }]>;
+    const targets = calls.map(([p]) => p.replaceAll("\\", "/"));
+    const repoRoot = repoDir.replaceAll("\\", "/");
+    const nestedRoot = path.join(repoDir, "skills").replaceAll("\\", "/");
+    expect(targets).toContain(nestedRoot);
+    expect(targets).toContain(repoRoot);
+    expect(targets).not.toContain(path.join(repoDir, "SKILL.md").replaceAll("\\", "/"));
+    expect(calls.find(([p]) => p.replaceAll("\\", "/") === repoRoot)?.[1].depth).toBe(2);
+    expect(calls.find(([p]) => p.replaceAll("\\", "/") === nestedRoot)?.[1].depth).toBe(6);
   });
 
   it("watches nested skills roots for built-in workspace skill dirs", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-skills-"));
-    try {
-      await fs.mkdir(path.join(workspaceDir, "skills", "skills", "group", "demo"), {
-        recursive: true,
-      });
-      await fs.writeFile(
-        path.join(workspaceDir, "skills", "skills", "group", "demo", "SKILL.md"),
-        "---\nname: demo\ndescription: Demo\n---\n",
-      );
+    const workspaceDir = await createFixtureDirectory("workspace-skills");
+    await fs.mkdir(path.join(workspaceDir, "skills", "skills", "group", "demo"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(workspaceDir, "skills", "skills", "group", "demo", "SKILL.md"),
+      "---\nname: demo\ndescription: Demo\n---\n",
+    );
 
-      refreshModule.ensureSkillsWatcher({ workspaceDir });
+    refreshModule.ensureSkillsWatcher({ workspaceDir });
 
-      const targets = (watchMock.mock.calls as unknown as Array<[string, object]>).map(([p]) =>
-        p.replaceAll("\\", "/"),
-      );
-      expect(targets).toContain(path.join(workspaceDir, "skills").replaceAll("\\", "/"));
-      expect(targets).toContain(path.join(workspaceDir, "skills", "skills").replaceAll("\\", "/"));
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-    }
+    const targets = (watchMock.mock.calls as unknown as Array<[string, object]>).map(([p]) =>
+      p.replaceAll("\\", "/"),
+    );
+    expect(targets).toContain(path.join(workspaceDir, "skills").replaceAll("\\", "/"));
+    expect(targets).toContain(path.join(workspaceDir, "skills", "skills").replaceAll("\\", "/"));
   });
 
   it("reuses watch roots while config is unchanged", async () => {
-    const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-watch-cache-"));
-    try {
-      await fs.mkdir(path.join(repoDir, "skills", "group", "demo"), { recursive: true });
-      await fs.writeFile(
-        path.join(repoDir, "skills", "group", "demo", "SKILL.md"),
-        "---\nname: demo\ndescription: Demo\n---\n",
-      );
-      const config = { skills: { load: { extraDirs: [repoDir] } } };
+    const repoDir = await createFixtureDirectory("skills-watch-cache");
+    await fs.mkdir(path.join(repoDir, "skills", "group", "demo"), { recursive: true });
+    await fs.writeFile(
+      path.join(repoDir, "skills", "group", "demo", "SKILL.md"),
+      "---\nname: demo\ndescription: Demo\n---\n",
+    );
+    const config = { skills: { load: { extraDirs: [repoDir] } } };
 
-      refreshModule.ensureSkillsWatcher({ workspaceDir: "/tmp/workspace", config });
-      const firstCallCount = watchMock.mock.calls.length;
-      await fs.rm(path.join(repoDir, "skills"), { recursive: true, force: true });
-      refreshModule.ensureSkillsWatcher({ workspaceDir: "/tmp/workspace", config });
+    refreshModule.ensureSkillsWatcher({ workspaceDir: fixtureWorkspaceDir, config });
+    const firstCallCount = watchMock.mock.calls.length;
+    await fs.rm(path.join(repoDir, "skills"), { recursive: true, force: true });
+    refreshModule.ensureSkillsWatcher({ workspaceDir: fixtureWorkspaceDir, config });
 
-      const calls = watchMock.mock.calls as unknown as Array<[string, { depth?: number }]>;
-      const targets = calls.map(([p]) => p.replaceAll("\\", "/"));
-      const repoRoot = repoDir.replaceAll("\\", "/");
-      const nestedRoot = path.join(repoDir, "skills").replaceAll("\\", "/");
-      expect(watchMock).toHaveBeenCalledTimes(firstCallCount);
-      expect(targets).toContain(nestedRoot);
-      expect(targets).toContain(repoRoot);
-      expect(calls.find(([p]) => p.replaceAll("\\", "/") === repoRoot)?.[1].depth).toBe(2);
-      expect(calls.find(([p]) => p.replaceAll("\\", "/") === nestedRoot)?.[1].depth).toBe(6);
-    } finally {
-      await fs.rm(repoDir, { recursive: true, force: true });
-    }
+    const calls = watchMock.mock.calls as unknown as Array<[string, { depth?: number }]>;
+    const targets = calls.map(([p]) => p.replaceAll("\\", "/"));
+    const repoRoot = repoDir.replaceAll("\\", "/");
+    const nestedRoot = path.join(repoDir, "skills").replaceAll("\\", "/");
+    expect(watchMock).toHaveBeenCalledTimes(firstCallCount);
+    expect(targets).toContain(nestedRoot);
+    expect(targets).toContain(repoRoot);
+    expect(calls.find(([p]) => p.replaceAll("\\", "/") === repoRoot)?.[1].depth).toBe(2);
+    expect(calls.find(([p]) => p.replaceAll("\\", "/") === nestedRoot)?.[1].depth).toBe(6);
   });
 
   it("reuses prepared plugin metadata when reconciling watch targets", () => {
@@ -547,194 +497,209 @@ describe("ensureSkillsWatcher", () => {
     const pluginMetadataSnapshot = { policyHash: "prepared" } as PluginMetadataSnapshot;
 
     refreshModule.ensureSkillsWatcher({
-      workspaceDir: "/tmp/workspace",
+      workspaceDir: fixtureWorkspaceDir,
       config,
       pluginMetadataSnapshot,
     });
     refreshModule.ensureSkillsWatcher({
-      workspaceDir: "/tmp/workspace",
+      workspaceDir: fixtureWorkspaceDir,
       config,
       pluginMetadataSnapshot,
     });
 
-    expect(pluginSkillsMocks.resolvePluginSkillDirs).not.toHaveBeenCalled();
-    expect(pluginSkillsMocks.resolvePluginSkillDirsFromMetadata).toHaveBeenCalledTimes(2);
-    expect(pluginSkillsMocks.resolvePluginSkillDirsFromMetadata).toHaveBeenLastCalledWith({
-      workspaceDir: "/tmp/workspace",
+    expect(pluginSkillsMocks.resolvePluginSkillRoots).not.toHaveBeenCalled();
+    expect(pluginSkillsMocks.resolvePluginSkillRootsFromMetadata).toHaveBeenCalledTimes(2);
+    expect(pluginSkillsMocks.resolvePluginSkillRootsFromMetadata).toHaveBeenLastCalledWith({
+      workspaceDir: fixtureWorkspaceDir,
       config,
       metadataSnapshot: pluginMetadataSnapshot,
     });
   });
 
   it("watches extra-dir roots and companion skills folders without resolving them", async () => {
-    const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-watch-pair-"));
-    try {
-      refreshModule.ensureSkillsWatcher({
-        workspaceDir: "/tmp/workspace",
-        config: { skills: { load: { extraDirs: [repoDir] } } },
-      });
+    const repoDir = await createFixtureDirectory("skills-watch-pair");
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir: fixtureWorkspaceDir,
+      config: { skills: { load: { extraDirs: [repoDir] } } },
+    });
 
-      const calls = watchMock.mock.calls as unknown as Array<[string, { depth?: number }]>;
-      const targets = calls.map(([p]) => p.replaceAll("\\", "/"));
-      const repoRoot = repoDir.replaceAll("\\", "/");
-      const nestedRoot = path.join(repoDir, "skills").replaceAll("\\", "/");
-      expect(targets).toContain(nestedRoot);
-      expect(targets).toContain(repoRoot);
-      expect(calls.find(([p]) => p.replaceAll("\\", "/") === repoRoot)?.[1].depth).toBe(2);
-      expect(calls.find(([p]) => p.replaceAll("\\", "/") === nestedRoot)?.[1].depth).toBe(7);
-    } finally {
-      await fs.rm(repoDir, { recursive: true, force: true });
-    }
+    const rootWatch = watchForSkillRoot(repoDir);
+    const companionWatch = watchForSkillRoot(path.join(repoDir, "skills"));
+    expect(rootWatch.watchRoot).toBe(repoDir.replaceAll("\\", "/"));
+    expect(companionWatch.watchRoot).toBe(rootWatch.watchRoot);
+    expect(rootWatch.options.depth).toBe(2);
+    expect(companionWatch.options.depth).toBe(7);
+    expect(companionWatch.options.ignored(path.join(repoDir, "other"))).toBe(true);
   });
 
   it("bumps missing configured root depth for first nested skill creation", async () => {
-    const parentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-missing-skill-root-"));
-    try {
-      const missingRoot = path.join(parentDir, "repo");
-      refreshModule.ensureSkillsWatcher({
-        workspaceDir: "/tmp/workspace",
-        config: { skills: { load: { extraDirs: [missingRoot] } } },
-      });
+    const parentDir = await createFixtureDirectory("missing-skill-root");
+    const missingRoot = path.join(parentDir, "repo");
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir: fixtureWorkspaceDir,
+      config: { skills: { load: { extraDirs: [missingRoot] } } },
+    });
 
-      const calls = watchMock.mock.calls as unknown as Array<[string, { depth?: number }]>;
-      const root = missingRoot.replaceAll("\\", "/");
-      const nestedRoot = path.join(missingRoot, "skills").replaceAll("\\", "/");
-      expect(calls.find(([p]) => p.replaceAll("\\", "/") === root)?.[1].depth).toBe(3);
-      expect(calls.find(([p]) => p.replaceAll("\\", "/") === nestedRoot)?.[1].depth).toBe(8);
-    } finally {
-      await fs.rm(parentDir, { recursive: true, force: true });
-    }
+    const rootWatch = watchForSkillRoot(missingRoot);
+    const companionWatch = watchForSkillRoot(path.join(missingRoot, "skills"));
+    expect(rootWatch.watchRoot).toBe(parentDir.replaceAll("\\", "/"));
+    expect(companionWatch.watchRoot).toBe(rootWatch.watchRoot);
+    expect(rootWatch.options.depth).toBe(3);
+    expect(companionWatch.options.depth).toBe(8);
   });
 
   it("watches configured roots named skills at grouped depth", async () => {
-    const parentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-configured-skills-root-"));
-    try {
-      const skillsDir = path.join(parentDir, "skills");
-      await fs.mkdir(skillsDir, { recursive: true });
-      refreshModule.ensureSkillsWatcher({
-        workspaceDir: "/tmp/workspace",
-        config: { skills: { load: { extraDirs: [skillsDir] } } },
-      });
+    const parentDir = await createFixtureDirectory("configured-skills-root");
+    const skillsDir = path.join(parentDir, "skills");
+    await fs.mkdir(skillsDir, { recursive: true });
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir: fixtureWorkspaceDir,
+      config: { skills: { load: { extraDirs: [skillsDir] } } },
+    });
 
-      const calls = watchMock.mock.calls as unknown as Array<[string, { depth?: number }]>;
-      const root = skillsDir.replaceAll("\\", "/");
-      expect(calls.find(([p]) => p.replaceAll("\\", "/") === root)?.[1].depth).toBe(6);
-    } finally {
-      await fs.rm(parentDir, { recursive: true, force: true });
-    }
+    const calls = watchMock.mock.calls as unknown as Array<[string, { depth?: number }]>;
+    const root = skillsDir.replaceAll("\\", "/");
+    expect(calls.find(([p]) => p.replaceAll("\\", "/") === root)?.[1].depth).toBe(6);
   });
 
   it("dedupes overlapping watch roots by path while keeping the deepest depth", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-watch-dedupe-"));
-    try {
-      const skillsDir = path.join(workspaceDir, "skills");
-      await fs.mkdir(skillsDir, { recursive: true });
-      refreshModule.ensureSkillsWatcher({
-        workspaceDir,
-        config: { skills: { load: { extraDirs: [skillsDir] } } },
-      });
+    const workspaceDir = await createFixtureDirectory("watch-dedupe");
+    const skillsDir = path.join(workspaceDir, "skills");
+    await fs.mkdir(path.join(skillsDir, "skills"), { recursive: true });
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir,
+      config: { skills: { load: { extraDirs: [skillsDir] } } },
+    });
 
-      const calls = watchMock.mock.calls as unknown as Array<[string, { depth?: number }]>;
-      const root = skillsDir.replaceAll("\\", "/");
-      const overlapping = calls.filter(([p]) => p.replaceAll("\\", "/") === root);
-      expect(overlapping).toHaveLength(1);
-      expect(overlapping[0]?.[1].depth).toBe(6);
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-    }
+    const calls = watchMock.mock.calls as unknown as Array<[string, { depth?: number }]>;
+    const root = skillsDir.replaceAll("\\", "/");
+    const overlapping = calls.filter(([p]) => p.replaceAll("\\", "/") === root);
+    expect(overlapping).toHaveLength(1);
+    expect(overlapping[0]?.[1].depth).toBe(6);
   });
 
   it("does not downgrade a shared watcher when a shallow subscriber arrives later", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-watch-share-a-"));
-    const otherDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-watch-share-b-"));
-    try {
-      const skillsDir = path.join(workspaceDir, "skills");
-      await fs.mkdir(skillsDir, { recursive: true });
-      refreshModule.ensureSkillsWatcher({ workspaceDir });
-      const firstCalls = watchMock.mock.calls as unknown as Array<[string, { depth?: number }]>;
-      const root = skillsDir.replaceAll("\\", "/");
-      const firstIndex = firstCalls.findIndex(([p]) => p.replaceAll("\\", "/") === root);
+    const workspaceDir = await createFixtureDirectory("watch-share-a");
+    const otherDir = await createFixtureDirectory("watch-share-b");
+    const skillsDir = path.join(workspaceDir, "skills");
+    await fs.mkdir(path.join(skillsDir, "skills"), { recursive: true });
+    refreshModule.ensureSkillsWatcher({ workspaceDir });
+    const firstCalls = watchMock.mock.calls as unknown as Array<[string, { depth?: number }]>;
+    const root = skillsDir.replaceAll("\\", "/");
+    const firstIndex = firstCalls.findIndex(([p]) => p.replaceAll("\\", "/") === root);
 
-      refreshModule.ensureSkillsWatcher({
-        workspaceDir: otherDir,
-        config: { skills: { load: { extraDirs: [skillsDir] } } },
-      });
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir: otherDir,
+      config: { skills: { load: { extraDirs: [skillsDir] } } },
+    });
 
-      const calls = watchMock.mock.calls as unknown as Array<[string, { depth?: number }]>;
-      const overlapping = calls.filter(([p]) => p.replaceAll("\\", "/") === root);
-      expect(overlapping).toHaveLength(1);
-      expect(overlapping[0]?.[1].depth).toBe(6);
-      expect(createdWatchers[firstIndex]?.close).not.toHaveBeenCalled();
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-      await fs.rm(otherDir, { recursive: true, force: true });
-    }
+    const calls = watchMock.mock.calls as unknown as Array<[string, { depth?: number }]>;
+    const overlapping = calls.filter(([p]) => p.replaceAll("\\", "/") === root);
+    expect(overlapping).toHaveLength(1);
+    expect(overlapping[0]?.[1].depth).toBe(6);
+    expect(createdWatchers[firstIndex]?.close).not.toHaveBeenCalled();
+  });
+
+  it("preserves deeper shared coverage when a physical ancestor is replaced", async () => {
+    vi.useFakeTimers();
+    const ancestor = await createFixtureDirectory("ancestor");
+    const logicalRoot = path.join(ancestor, "a", "b", "c", "d", "repo");
+    const secondWorkspace = await createFixtureDirectory("second-workspace");
+    const config = { skills: { load: { extraDirs: [logicalRoot] } } };
+    refreshModule.ensureSkillsWatcher({ workspaceDir: fixtureWorkspaceDir, config });
+    const shallow = watchForSkillRoot(logicalRoot);
+    expect(shallow.watchRoot).toBe(ancestor.replaceAll("\\", "/"));
+    expect(shallow.options.depth).toBe(7);
+
+    await fs.mkdir(logicalRoot, { recursive: true });
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir: secondWorkspace,
+      executionSkillsDir: logicalRoot,
+    });
+    const deeper = watchForSkillRoot(logicalRoot);
+    expect(shallow.watcher.close).toHaveBeenCalledOnce();
+    expect(deeper.watchRoot).toBe(logicalRoot.replaceAll("\\", "/"));
+    // The old physical depth was seven, but covered only two logical levels.
+    expect(deeper.options.depth).toBe(6);
+
+    const seen: SkillsChangeEvent[] = [];
+    refreshModule.registerSkillsChangeListener((change) => seen.push(change));
+    const versionBefore = getSkillsSnapshotVersion(fixtureWorkspaceDir);
+    const removedParent = path.dirname(logicalRoot);
+    await fs.rm(removedParent, { recursive: true });
+    deeper.watcher.emit("all", "unlinkDir", logicalRoot);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(getSkillsSnapshotVersion(fixtureWorkspaceDir)).toBeGreaterThan(versionBefore);
+
+    // A shallow subscriber reconciles first; the surviving deeper subscriber
+    // still requires six levels below the logical root on the new ancestor.
+    refreshModule.ensureSkillsWatcher({ workspaceDir: fixtureWorkspaceDir, config });
+    const rebuilt = watchForSkillRoot(logicalRoot);
+    expect(deeper.watcher.close).toHaveBeenCalledOnce();
+    expect(rebuilt.watchRoot).toBe(path.dirname(removedParent).replaceAll("\\", "/"));
+    expect(rebuilt.options.depth).toBe(8);
+    seen.length = 0;
+    const changedPath = path.join(logicalRoot, "group", "nested", "demo", "SKILL.md");
+    rebuilt.watcher.emit("all", "change", changedPath);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(seen).toEqual([
+      { workspaceDir: fixtureWorkspaceDir, reason: "watch", changedPath },
+      { workspaceDir: secondWorkspace, reason: "watch", changedPath },
+    ]);
   });
 
   it("watches extra-dir skills folders for first nested skill creation", async () => {
-    const repoDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-watch-create-"));
-    try {
-      refreshModule.ensureSkillsWatcher({
-        workspaceDir: "/tmp/workspace",
-        config: { skills: { load: { extraDirs: [repoDir] } } },
-      });
+    const repoDir = await createFixtureDirectory("skills-watch-create");
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir: fixtureWorkspaceDir,
+      config: { skills: { load: { extraDirs: [repoDir] } } },
+    });
 
-      const calls = watchMock.mock.calls as unknown as Array<[string, { depth?: number }]>;
-      const targets = calls.map(([p]) => p.replaceAll("\\", "/"));
-      const nestedRoot = path.join(repoDir, "skills").replaceAll("\\", "/");
-      expect(targets).toContain(repoDir.replaceAll("\\", "/"));
-      expect(targets).toContain(nestedRoot);
-      expect(calls.find(([p]) => p.replaceAll("\\", "/") === nestedRoot)?.[1].depth).toBe(7);
-    } finally {
-      await fs.rm(repoDir, { recursive: true, force: true });
-    }
+    const nestedRoot = path.join(repoDir, "skills");
+    const watched = watchForSkillRoot(nestedRoot);
+    expect(watched.watchRoot).toBe(repoDir.replaceAll("\\", "/"));
+    expect(watched.options.depth).toBe(7);
+    expect(watched.options.ignored(path.join(repoDir, "unrelated"))).toBe(true);
   });
 
   it("watches nested skills roots for plugin skill dirs", async () => {
-    const pluginDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-skills-watch-"));
-    try {
-      await fs.mkdir(path.join(pluginDir, "skills", "group", "demo"), { recursive: true });
-      await fs.writeFile(
-        path.join(pluginDir, "skills", "group", "demo", "SKILL.md"),
-        "---\nname: demo\ndescription: Demo\n---\n",
-      );
-      const pluginSkills = await import("../loading/plugin-skills.js");
-      vi.mocked(pluginSkills.resolvePluginSkillDirs).mockReturnValueOnce([pluginDir]);
+    const pluginDir = await createFixtureDirectory("plugin-skills-watch");
+    await fs.mkdir(path.join(pluginDir, "skills", "group", "demo"), { recursive: true });
+    await fs.writeFile(
+      path.join(pluginDir, "skills", "group", "demo", "SKILL.md"),
+      "---\nname: demo\ndescription: Demo\n---\n",
+    );
+    const pluginSkills = await import("../loading/plugin-skills.js");
+    vi.mocked(pluginSkills.resolvePluginSkillRoots).mockReturnValueOnce([
+      { dir: pluginDir, rejectHardlinks: true },
+    ]);
 
-      refreshModule.ensureSkillsWatcher({ workspaceDir: "/tmp/workspace" });
+    refreshModule.ensureSkillsWatcher({ workspaceDir: fixtureWorkspaceDir });
 
-      const calls = watchMock.mock.calls as unknown as Array<[string, { depth?: number }]>;
-      const targets = calls.map(([p]) => p.replaceAll("\\", "/"));
-      const pluginRoot = pluginDir.replaceAll("\\", "/");
-      const nestedRoot = path.join(pluginDir, "skills").replaceAll("\\", "/");
-      expect(targets).toContain(nestedRoot);
-      expect(targets).toContain(pluginRoot);
-      expect(calls.find(([p]) => p.replaceAll("\\", "/") === pluginRoot)?.[1].depth).toBe(2);
-      expect(calls.find(([p]) => p.replaceAll("\\", "/") === nestedRoot)?.[1].depth).toBe(6);
-    } finally {
-      await fs.rm(pluginDir, { recursive: true, force: true });
-    }
+    const calls = watchMock.mock.calls as unknown as Array<[string, { depth?: number }]>;
+    const targets = calls.map(([p]) => p.replaceAll("\\", "/"));
+    const pluginRoot = pluginDir.replaceAll("\\", "/");
+    const nestedRoot = path.join(pluginDir, "skills").replaceAll("\\", "/");
+    expect(targets).toContain(nestedRoot);
+    expect(targets).toContain(pluginRoot);
+    expect(calls.find(([p]) => p.replaceAll("\\", "/") === pluginRoot)?.[1].depth).toBe(2);
+    expect(calls.find(([p]) => p.replaceAll("\\", "/") === nestedRoot)?.[1].depth).toBe(6);
   });
 
   it("watches plugin skills folders for first nested skill creation", async () => {
-    const pluginDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-plugin-skills-watch-create-"),
-    );
-    try {
-      const pluginSkills = await import("../loading/plugin-skills.js");
-      vi.mocked(pluginSkills.resolvePluginSkillDirs).mockReturnValueOnce([pluginDir]);
+    const pluginDir = await createFixtureDirectory("plugin-skills-watch-create");
+    const pluginSkills = await import("../loading/plugin-skills.js");
+    vi.mocked(pluginSkills.resolvePluginSkillRoots).mockReturnValueOnce([
+      { dir: pluginDir, rejectHardlinks: true },
+    ]);
 
-      refreshModule.ensureSkillsWatcher({ workspaceDir: "/tmp/workspace" });
+    refreshModule.ensureSkillsWatcher({ workspaceDir: fixtureWorkspaceDir });
 
-      const calls = watchMock.mock.calls as unknown as Array<[string, { depth?: number }]>;
-      const targets = calls.map(([p]) => p.replaceAll("\\", "/"));
-      const nestedRoot = path.join(pluginDir, "skills").replaceAll("\\", "/");
-      expect(targets).toContain(pluginDir.replaceAll("\\", "/"));
-      expect(targets).toContain(nestedRoot);
-      expect(calls.find(([p]) => p.replaceAll("\\", "/") === nestedRoot)?.[1].depth).toBe(7);
-    } finally {
-      await fs.rm(pluginDir, { recursive: true, force: true });
-    }
+    const nestedRoot = path.join(pluginDir, "skills");
+    const watched = watchForSkillRoot(nestedRoot);
+    expect(watched.watchRoot).toBe(pluginDir.replaceAll("\\", "/"));
+    expect(watched.options.depth).toBe(7);
+    expect(watched.options.ignored(path.join(pluginDir, "unrelated"))).toBe(true);
   });
 
   it.runIf(process.platform !== "win32")(
@@ -754,9 +719,11 @@ describe("ensureSkillsWatcher", () => {
         );
         await fs.symlink(outsideDir, path.join(pluginDir, "skills", "untrusted"), "dir");
         const pluginSkills = await import("../loading/plugin-skills.js");
-        vi.mocked(pluginSkills.resolvePluginSkillDirs).mockReturnValueOnce([pluginDir]);
+        vi.mocked(pluginSkills.resolvePluginSkillRoots).mockReturnValueOnce([
+          { dir: pluginDir, rejectHardlinks: true },
+        ]);
 
-        refreshModule.ensureSkillsWatcher({ workspaceDir: "/tmp/workspace" });
+        refreshModule.ensureSkillsWatcher({ workspaceDir: fixtureWorkspaceDir });
 
         const target = (await fs.realpath(outsideDir)).replaceAll("\\", "/");
         const targets = (watchMock.mock.calls as unknown as Array<[string]>).map(([p]) =>
@@ -779,18 +746,22 @@ describe("ensureSkillsWatcher", () => {
         seen.push(change);
       });
       refreshModule.ensureSkillsWatcher({
-        workspaceDir: "/tmp/workspace",
+        workspaceDir: fixtureWorkspaceDir,
         config: { skills: { load: {} } },
       });
 
-      createdWatchers[0]?.emit("all", event, "/tmp/workspace/skills/demo/SKILL.md");
+      watchForSkillRoot(path.join(fixtureWorkspaceDir, "skills")).watcher.emit(
+        "all",
+        event,
+        path.join(fixtureWorkspaceDir, "skills", "demo", "SKILL.md"),
+      );
       await vi.advanceTimersByTimeAsync(250);
 
       expect(seen).toEqual([
         {
-          workspaceDir: "/tmp/workspace",
+          workspaceDir: fixtureWorkspaceDir,
           reason: "watch",
-          changedPath: "/tmp/workspace/skills/demo/SKILL.md",
+          changedPath: path.join(fixtureWorkspaceDir, "skills", "demo", "SKILL.md"),
         },
       ]);
     },
@@ -800,22 +771,17 @@ describe("ensureSkillsWatcher", () => {
     "refreshes the owning snapshot when an execution-directory skill emits %s",
     async (event) => {
       vi.useFakeTimers();
-      const workspaceDir = "/tmp/agent-workspace";
-      const executionSkillsDir = "/tmp/execution-workspace/skills";
+      const workspaceDir = fixtureWorkspaceDir;
+      const executionSkillsDir = await createFixtureDirectory("execution-workspace/skills");
       const seen: SkillsChangeEvent[] = [];
       refreshModule.registerSkillsChangeListener((change) => {
         seen.push(change);
       });
       refreshModule.ensureSkillsWatcher({ workspaceDir, executionSkillsDir });
       const versionBefore = getSkillsSnapshotVersion(workspaceDir);
-      const callPaths = (watchMock.mock.calls as unknown as Array<[string]>).map(([target]) =>
-        target.replaceAll("\\", "/"),
-      );
-      const executionWatcherIndex = callPaths.indexOf(executionSkillsDir);
-      const changedPath = `${executionSkillsDir}/demo/SKILL.md`;
-
-      expect(executionWatcherIndex).toBeGreaterThanOrEqual(0);
-      createdWatchers[executionWatcherIndex]?.emit("all", event, changedPath);
+      const watched = watchForSkillRoot(executionSkillsDir);
+      const changedPath = path.join(executionSkillsDir, "demo", "SKILL.md");
+      watched.watcher.emit("all", event, changedPath);
       await vi.advanceTimersByTimeAsync(250);
 
       const versionAfter = getSkillsSnapshotVersion(workspaceDir);
@@ -828,130 +794,175 @@ describe("ensureSkillsWatcher", () => {
     },
   );
 
-  it("refreshes skills snapshots when watched skill roots change", () => {
+  it("refreshes skills snapshots when watched skill roots change", async () => {
+    const sharedA = await createFixtureDirectory("shared-a");
+    const sharedB = await createFixtureDirectory("shared-b");
     const seen: SkillsChangeEvent[] = [];
     refreshModule.registerSkillsChangeListener((change) => {
       seen.push(change);
     });
     refreshModule.ensureSkillsWatcher({
-      workspaceDir: "/tmp/workspace",
-      config: { skills: { load: { extraDirs: ["/tmp/shared-a"] } } },
+      workspaceDir: fixtureWorkspaceDir,
+      config: { skills: { load: { extraDirs: [sharedA] } } },
     });
+    const previousWatcher = watchForSkillRoot(sharedA).watcher;
 
     refreshModule.ensureSkillsWatcher({
-      workspaceDir: "/tmp/workspace",
-      config: { skills: { load: { extraDirs: ["/tmp/shared-b"] } } },
+      workspaceDir: fixtureWorkspaceDir,
+      config: { skills: { load: { extraDirs: [sharedB] } } },
     });
 
-    const callPaths = (watchMock.mock.calls as unknown as Array<[string]>).map((call) => call[0]);
-    const sharedAIndex = callPaths.findIndex((target) => target.includes("/tmp/shared-a"));
-    // The dropped extra dir is unsubscribed and its watcher closed; the new dir
-    // gets a fresh watcher.
-    expect(sharedAIndex).toBeGreaterThanOrEqual(0);
-    expect(createdWatchers[sharedAIndex]?.close).toHaveBeenCalledTimes(1);
-    expect(callPaths.some((target) => target.includes("/tmp/shared-b"))).toBe(true);
+    expect(previousWatcher.close).toHaveBeenCalledTimes(1);
+    expect(watchForSkillRoot(sharedB).watchRoot).toBe(sharedB.replaceAll("\\", "/"));
     expect(seen).toEqual([
       {
-        workspaceDir: "/tmp/workspace",
+        workspaceDir: fixtureWorkspaceDir,
         reason: "watch-targets",
-        changedPath: expect.stringContaining("/tmp/shared-b"),
+        changedPath: expect.stringContaining(sharedB.replaceAll("\\", "/")),
       },
     ]);
   });
 
-  it("reuses one watcher when multiple workspaces watch the same shared skill root", () => {
-    refreshModule.ensureSkillsWatcher({
-      workspaceDir: "/tmp/ws-a",
-      config: { skills: { load: { extraDirs: ["/tmp/shared"] } } },
-    });
-    refreshModule.ensureSkillsWatcher({
-      workspaceDir: "/tmp/ws-b",
-      config: { skills: { load: { extraDirs: ["/tmp/shared"] } } },
-    });
+  it("reuses one watcher when multiple workspaces watch the same shared skill root", async () => {
+    const secondWorkspace = await createFixtureDirectory("second-workspace");
+    const sharedSkillsRoot = await createFixtureDirectory("shared/skills");
+    const sharedRoot = path.dirname(sharedSkillsRoot);
+    const config = { skills: { load: { extraDirs: [sharedRoot] } } };
+    refreshModule.ensureSkillsWatcher({ workspaceDir: fixtureWorkspaceDir, config });
+    const firstRootWatcher = watchForSkillRoot(sharedRoot).watcher;
+    const firstSkillsWatcher = watchForSkillRoot(sharedSkillsRoot).watcher;
+    refreshModule.ensureSkillsWatcher({ workspaceDir: secondWorkspace, config });
 
-    const callPaths = (watchMock.mock.calls as unknown as Array<[string]>).map((call) => call[0]);
-    // Each shared target is watched exactly once even though two workspaces
-    // include it, instead of one watcher per workspace (the EMFILE root cause).
-    expect(callPaths.filter((target) => target === "/tmp/shared")).toHaveLength(1);
-    expect(callPaths.filter((target) => target === "/tmp/shared/skills")).toHaveLength(1);
+    expect(watchForSkillRoot(sharedRoot).watcher).toBe(firstRootWatcher);
+    expect(watchForSkillRoot(sharedSkillsRoot).watcher).toBe(firstSkillsWatcher);
+    const callPaths = watchMock.mock.calls.map(([watchRoot]) => watchRoot);
+    expect(callPaths.filter((target) => target === sharedRoot.replaceAll("\\", "/"))).toHaveLength(
+      1,
+    );
+    expect(
+      callPaths.filter((target) => target === sharedSkillsRoot.replaceAll("\\", "/")),
+    ).toHaveLength(1);
+  });
+
+  it("isolates logical roots sharing an ancestor across traversal and event streams", async () => {
+    vi.useFakeTimers();
+    const ancestor = await createFixtureDirectory("shared-ancestor");
+    const secondWorkspace = await createFixtureDirectory("second-workspace");
+    const firstRoot = path.join(ancestor, "left", "skills");
+    const secondRoot = path.join(ancestor, "right", "skills");
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir: fixtureWorkspaceDir,
+      config: { skills: { load: { extraDirs: [firstRoot] } } },
+    });
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir: secondWorkspace,
+      config: { skills: { load: { extraDirs: [secondRoot] } } },
+    });
+    const first = watchForSkillRoot(firstRoot);
+    const second = watchForSkillRoot(secondRoot);
+    expect(first.watchRoot).toBe(ancestor.replaceAll("\\", "/"));
+    expect(second.watchRoot).toBe(first.watchRoot);
+    expect(first.watcher).not.toBe(second.watcher);
+    for (const [watched, root, sibling] of [
+      [first, firstRoot, secondRoot],
+      [second, secondRoot, firstRoot],
+    ] as const) {
+      for (const included of [ancestor, path.dirname(root), root, path.join(root, "group")]) {
+        expect(watched.options.ignored(included, { isDirectory: () => true })).toBe(false);
+      }
+      for (const excluded of [sibling, path.join(path.dirname(root), "unrelated")]) {
+        expect(watched.options.ignored(excluded, { isDirectory: () => true })).toBe(true);
+      }
+    }
+    const seen: SkillsChangeEvent[] = [];
+    refreshModule.registerSkillsChangeListener((change) => seen.push(change));
+    const watchers = [first.watcher, second.watcher];
+    for (const watcher of watchers) {
+      watcher.emit("all", "addDir", path.join(ancestor, "unrelated"));
+      watcher.emit("raw", "change", "SKILL.md", { watchedPath: ancestor });
+      watcher.emit("raw", "rename", undefined, { watchedPath: ancestor });
+    }
+    await vi.advanceTimersByTimeAsync(500);
+    expect(seen).toEqual([]);
+
+    const firstChanged = path.join(firstRoot, "demo", "SKILL.md");
+    for (const watcher of watchers) {
+      watcher.emit("all", "change", firstChanged);
+    }
+    await vi.advanceTimersByTimeAsync(250);
+    expect(seen).toEqual([
+      { workspaceDir: fixtureWorkspaceDir, reason: "watch", changedPath: firstChanged },
+    ]);
+    seen.length = 0;
+    const secondChanged = path.join(secondRoot, "demo", "SKILL.md");
+    for (const watcher of watchers) {
+      watcher.emit("raw", "change", "SKILL.md", { watchedPath: path.dirname(secondChanged) });
+    }
+    await vi.advanceTimersByTimeAsync(500);
+    expect(seen).toEqual([
+      { workspaceDir: secondWorkspace, reason: "watch", changedPath: secondChanged },
+    ]);
+    seen.length = 0;
+    for (const watcher of watchers) {
+      watcher.emit("raw", "rename", undefined, { watchedPath: firstRoot });
+    }
+    await vi.advanceTimersByTimeAsync(250);
+    expect(seen).toEqual([
+      { workspaceDir: fixtureWorkspaceDir, reason: "watch", changedPath: firstRoot },
+    ]);
   });
 
   it("fans out a shared-directory change to every subscribed workspace", async () => {
     vi.useFakeTimers();
+    const secondWorkspace = await createFixtureDirectory("second-workspace");
+    const sharedRoot = await createFixtureDirectory("shared");
+    const config = { skills: { load: { extraDirs: [sharedRoot] } } };
     const seen: SkillsChangeEvent[] = [];
     refreshModule.registerSkillsChangeListener((change) => {
       seen.push(change);
     });
-    refreshModule.ensureSkillsWatcher({
-      workspaceDir: "/tmp/ws-a",
-      config: { skills: { load: { extraDirs: ["/tmp/shared"] } } },
-    });
-    refreshModule.ensureSkillsWatcher({
-      workspaceDir: "/tmp/ws-b",
-      config: { skills: { load: { extraDirs: ["/tmp/shared"] } } },
-    });
-
-    const callPaths = (watchMock.mock.calls as unknown as Array<[string]>).map((call) => call[0]);
-    const sharedIndex = callPaths.findIndex((target) => target.includes("/tmp/shared"));
-    expect(sharedIndex).toBeGreaterThanOrEqual(0);
-
-    createdWatchers[sharedIndex]?.emit("all", "change", "/tmp/shared/demo/SKILL.md");
+    refreshModule.ensureSkillsWatcher({ workspaceDir: fixtureWorkspaceDir, config });
+    refreshModule.ensureSkillsWatcher({ workspaceDir: secondWorkspace, config });
+    const changedPath = path.join(sharedRoot, "demo", "SKILL.md");
+    watchForSkillRoot(sharedRoot).watcher.emit("all", "change", changedPath);
     await vi.advanceTimersByTimeAsync(250);
 
-    expect(seen).toContainEqual({
-      workspaceDir: "/tmp/ws-a",
-      reason: "watch",
-      changedPath: "/tmp/shared/demo/SKILL.md",
-    });
-    expect(seen).toContainEqual({
-      workspaceDir: "/tmp/ws-b",
-      reason: "watch",
-      changedPath: "/tmp/shared/demo/SKILL.md",
-    });
+    expect(seen).toEqual([
+      { workspaceDir: fixtureWorkspaceDir, reason: "watch", changedPath },
+      { workspaceDir: secondWorkspace, reason: "watch", changedPath },
+    ]);
   });
 
   it("stops fanning a shared-directory change to a workspace after it unsubscribes", async () => {
     vi.useFakeTimers();
+    const secondWorkspace = await createFixtureDirectory("second-workspace");
+    const sharedRoot = await createFixtureDirectory("shared");
+    const config = { skills: { load: { extraDirs: [sharedRoot] } } };
     const seen: SkillsChangeEvent[] = [];
     refreshModule.registerSkillsChangeListener((change) => {
       seen.push(change);
     });
-    refreshModule.ensureSkillsWatcher({
-      workspaceDir: "/tmp/ws-a",
-      config: { skills: { load: { extraDirs: ["/tmp/shared"] } } },
-    });
-    refreshModule.ensureSkillsWatcher({
-      workspaceDir: "/tmp/ws-b",
-      config: { skills: { load: { extraDirs: ["/tmp/shared"] } } },
-    });
+    refreshModule.ensureSkillsWatcher({ workspaceDir: fixtureWorkspaceDir, config });
+    refreshModule.ensureSkillsWatcher({ workspaceDir: secondWorkspace, config });
+    const sharedWatcher = watchForSkillRoot(sharedRoot).watcher;
 
-    // ws-a turns watching off: it unsubscribes, but the shared watcher stays
-    // alive for ws-b (torn down only when the last subscriber leaves).
     refreshModule.ensureSkillsWatcher({
-      workspaceDir: "/tmp/ws-a",
-      config: { skills: { load: { extraDirs: ["/tmp/shared"], watch: false } } },
+      workspaceDir: fixtureWorkspaceDir,
+      config: { skills: { load: { extraDirs: [sharedRoot], watch: false } } },
     });
     seen.length = 0;
-
-    const callPaths = (watchMock.mock.calls as unknown as Array<[string]>).map((call) => call[0]);
-    const sharedIndex = callPaths.findIndex((target) => target.includes("/tmp/shared"));
-    expect(sharedIndex).toBeGreaterThanOrEqual(0);
-
-    createdWatchers[sharedIndex]?.emit("all", "change", "/tmp/shared/demo/SKILL.md");
+    expect(sharedWatcher.close).not.toHaveBeenCalled();
+    const changedPath = path.join(sharedRoot, "demo", "SKILL.md");
+    sharedWatcher.emit("all", "change", changedPath);
     await vi.advanceTimersByTimeAsync(250);
 
-    expect(seen).toContainEqual({
-      workspaceDir: "/tmp/ws-b",
-      reason: "watch",
-      changedPath: "/tmp/shared/demo/SKILL.md",
-    });
-    expect(seen.some((change) => change.workspaceDir === "/tmp/ws-a")).toBe(false);
+    expect(seen).toEqual([{ workspaceDir: secondWorkspace, reason: "watch", changedPath }]);
   });
 
   it("clears workspace version state on watch disable without losing pending invalidation", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
-    const workspaceDir = "/tmp/workspace-version-cleanup";
+    const workspaceDir = fixtureWorkspaceDir;
     refreshModule.ensureSkillsWatcher({
       workspaceDir,
       config: { skills: { load: {} } },
@@ -978,19 +989,16 @@ describe("ensureSkillsWatcher", () => {
     expect(followupVersion).toBeGreaterThan(nextVersion);
   });
 
-  it("evicts idle workspace subscriptions on a later ensure call", () => {
+  it("evicts idle workspace subscriptions on a later ensure call", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
-    const idleWorkspaceDir = "/tmp/workspace-idle";
+    const idleWorkspaceDir = fixtureWorkspaceDir;
+    const activeWorkspaceDir = await createFixtureDirectory("workspace-active");
     refreshModule.ensureSkillsWatcher({
       workspaceDir: idleWorkspaceDir,
       config: { skills: { load: {} } },
     });
-    const callPaths = (watchMock.mock.calls as unknown as Array<[string]>).map((call) => call[0]);
-    const idleSkillsIndex = callPaths.findIndex(
-      (target) => target === `${idleWorkspaceDir}/skills`,
-    );
-    expect(idleSkillsIndex).toBeGreaterThanOrEqual(0);
+    const idleSkillsWatcher = watchForSkillRoot(path.join(idleWorkspaceDir, "skills")).watcher;
     const firstVersion = bumpSkillsSnapshotVersion({
       workspaceDir: idleWorkspaceDir,
       reason: "watch",
@@ -998,11 +1006,11 @@ describe("ensureSkillsWatcher", () => {
 
     vi.advanceTimersByTime(60 * 60_000 + 1_000);
     refreshModule.ensureSkillsWatcher({
-      workspaceDir: "/tmp/workspace-active",
+      workspaceDir: activeWorkspaceDir,
       config: { skills: { load: {} } },
     });
 
-    expect(createdWatchers[idleSkillsIndex]?.close).toHaveBeenCalledTimes(1);
+    expect(idleSkillsWatcher.close).toHaveBeenCalledTimes(1);
     const evictedVersion = getSkillsSnapshotVersion(idleWorkspaceDir);
     expect(evictedVersion).toBeGreaterThan(firstVersion);
     expect(shouldRefreshSnapshotForVersion(firstVersion, evictedVersion)).toBe(true);
@@ -1013,19 +1021,16 @@ describe("ensureSkillsWatcher", () => {
     expect(followupVersion).toBeGreaterThan(evictedVersion);
   });
 
-  it("keeps refreshed workspace subscriptions within the idle TTL", () => {
+  it("keeps refreshed workspace subscriptions within the idle TTL", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
-    const activeWorkspaceDir = "/tmp/workspace-active-refresh";
+    const activeWorkspaceDir = fixtureWorkspaceDir;
+    const otherWorkspaceDir = await createFixtureDirectory("workspace-other");
     refreshModule.ensureSkillsWatcher({
       workspaceDir: activeWorkspaceDir,
       config: { skills: { load: {} } },
     });
-    const callPaths = (watchMock.mock.calls as unknown as Array<[string]>).map((call) => call[0]);
-    const activeSkillsIndex = callPaths.findIndex(
-      (target) => target === `${activeWorkspaceDir}/skills`,
-    );
-    expect(activeSkillsIndex).toBeGreaterThanOrEqual(0);
+    const activeSkillsWatcher = watchForSkillRoot(path.join(activeWorkspaceDir, "skills")).watcher;
 
     vi.advanceTimersByTime(30 * 60_000);
     refreshModule.ensureSkillsWatcher({
@@ -1034,10 +1039,10 @@ describe("ensureSkillsWatcher", () => {
     });
     vi.advanceTimersByTime(31 * 60_000);
     refreshModule.ensureSkillsWatcher({
-      workspaceDir: "/tmp/workspace-other",
+      workspaceDir: otherWorkspaceDir,
       config: { skills: { load: {} } },
     });
 
-    expect(createdWatchers[activeSkillsIndex]?.close).not.toHaveBeenCalled();
+    expect(activeSkillsWatcher.close).not.toHaveBeenCalled();
   });
 });

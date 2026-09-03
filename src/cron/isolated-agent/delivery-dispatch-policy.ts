@@ -27,6 +27,7 @@ import { createCronExecutionId } from "../run-id.js";
 import { hasScheduledNextRunAtMs } from "../service/jobs-scheduling.js";
 import type { CronJob } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
+import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 type SuccessfulDeliveryTarget = Extract<DeliveryTargetResolution, { ok: true }>;
 
@@ -102,10 +103,75 @@ const deliverySubagentRegistryRuntimeLoader = createLazyImportLoader(
   () => import("./delivery-subagent-registry.runtime.js"),
 );
 
-export async function loadDeliverySubagentRegistryRuntime(): Promise<
-  typeof import("./delivery-subagent-registry.runtime.js")
-> {
-  return await deliverySubagentRegistryRuntimeLoader.load();
+const subagentFollowupRuntimeLoader = createLazyImportLoader(
+  () => import("./subagent-followup.runtime.js"),
+);
+
+/** Descendant-run outcome that decides which text cron delivery finalizes. */
+type DescendantSubagentFollowup = {
+  /** Descendant reply that replaces the interim cron text; undefined keeps the original. */
+  finalReply: string | undefined;
+  activeSubagentRuns: number;
+  hadDescendants: boolean;
+};
+
+/** Resolves whether descendant subagent output should replace the interim cron text. */
+export async function resolveDescendantSubagentFollowup(params: {
+  sessionKey: string;
+  runStartedAt: number;
+  timeoutMs: number;
+  deliveryBestEffort: boolean;
+  spawnOnlyHandoff: boolean;
+  initialSynthesizedText: string;
+}): Promise<DescendantSubagentFollowup> {
+  const expectedFollowup = expectsSubagentFollowup(params.initialSynthesizedText);
+  const subagentRegistryRuntime = await deliverySubagentRegistryRuntimeLoader.load();
+  let activeSubagentRuns = subagentRegistryRuntime.countActiveDescendantRuns(params.sessionKey);
+  const shouldCheckCompletedDescendants =
+    activeSubagentRuns === 0 &&
+    (params.spawnOnlyHandoff || isLikelyInterimCronMessage(params.initialSynthesizedText));
+  const needsFollowupRuntime =
+    shouldCheckCompletedDescendants || activeSubagentRuns > 0 || expectedFollowup;
+  const followupRuntime = needsFollowupRuntime
+    ? await subagentFollowupRuntimeLoader.load()
+    : undefined;
+  // Also check for already-completed descendants. If the subagent finished
+  // before delivery-dispatch runs, activeSubagentRuns is 0 and
+  // expectedFollowup may be false (e.g. cron said "on it" which doesn't
+  // match the narrow hint list). We still need to use the descendant's
+  // output instead of the interim cron text.
+  const completedDescendantReply = shouldCheckCompletedDescendants
+    ? await followupRuntime?.readDescendantSubagentFallbackReply({
+        sessionKey: params.sessionKey,
+        runStartedAt: params.runStartedAt,
+      })
+    : undefined;
+  const hadDescendants = activeSubagentRuns > 0 || Boolean(completedDescendantReply);
+  if (
+    (!params.deliveryBestEffort || params.spawnOnlyHandoff) &&
+    (activeSubagentRuns > 0 || expectedFollowup)
+  ) {
+    let finalReply = await followupRuntime?.waitForDescendantSubagentSummary({
+      sessionKey: params.sessionKey,
+      initialReply: params.initialSynthesizedText,
+      timeoutMs: params.timeoutMs,
+      observedActiveDescendants: activeSubagentRuns > 0 || expectedFollowup,
+    });
+    activeSubagentRuns = subagentRegistryRuntime.countActiveDescendantRuns(params.sessionKey);
+    if (!finalReply && activeSubagentRuns === 0) {
+      finalReply = await followupRuntime?.readDescendantSubagentFallbackReply({
+        sessionKey: params.sessionKey,
+        runStartedAt: params.runStartedAt,
+      });
+    }
+    // Apply only once every descendant settled; a live run still owns the turn.
+    return {
+      finalReply: finalReply && activeSubagentRuns === 0 ? finalReply : undefined,
+      activeSubagentRuns,
+      hadDescendants,
+    };
+  }
+  return { finalReply: completedDescendantReply, activeSubagentRuns, hadDescendants };
 }
 
 export async function logCronDeliveryWarn(message: string): Promise<void> {
@@ -254,8 +320,9 @@ function summarizeDirectCronDeliveryError(error: unknown): string {
 }
 
 function isTransientDirectCronDeliveryError(error: unknown): boolean {
-  if (deliveryRecovery.findPlatformMessageRejectedError(error)) {
-    return false;
+  const typedRetryability = deliveryRecovery.resolveDeliveryNotSentRetryability(error);
+  if (typedRetryability !== undefined) {
+    return typedRetryability;
   }
   const message = summarizeDirectCronDeliveryError(error);
   if (!message) {

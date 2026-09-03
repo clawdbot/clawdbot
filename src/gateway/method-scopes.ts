@@ -206,9 +206,9 @@ function findMissingOperatorScope(
   requiredScopes: readonly OperatorScope[],
   scopes: readonly string[],
 ): OperatorScope | undefined {
-  return requiredScopes.find((scope) => {
-    return !scopes.includes(scope) && !(scope === READ_SCOPE && scopes.includes(WRITE_SCOPE));
-  });
+  return requiredScopes.find(
+    (scope) => !authorizeOperatorScopesForRequiredScope(scope, scopes).allowed,
+  );
 }
 
 /** Returns the narrowest known operator scopes needed to call a gateway method. */

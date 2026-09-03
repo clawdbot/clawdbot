@@ -1,6 +1,10 @@
 // Doctor lint flow tests cover lint diagnostics surfaced by doctor.
 import { describe, expect, it } from "vitest";
-import { exitCodeFromFindings, runDoctorLintChecks } from "./doctor-lint-flow.js";
+import {
+  exitCodeFromFindings,
+  runDoctorLintChecks,
+  selectUpdateReadinessChecks,
+} from "./doctor-lint-flow.js";
 import { normalizeHealthCheck } from "./health-check-adapter.js";
 import {
   clearHealthChecksForTest,
@@ -251,6 +255,30 @@ describe("runDoctorLintChecks", () => {
       checksSkipped: 0,
       findings: [expect.objectContaining({ checkId: "targeted" })],
     });
+  });
+
+  it("runs only checks that own the selected update-readiness phase", async () => {
+    const detections: string[] = [];
+    const checks = [
+      Object.assign(
+        check("plugin/example/post-plugin", async () => {
+          detections.push("post-plugin");
+          return [];
+        }),
+        { updateReadiness: "post-plugin" as const },
+      ),
+      check("plugin/example/default", async () => {
+        detections.push("default");
+        return [];
+      }),
+    ];
+
+    const result = await runDoctorLintChecks(ctx, {
+      checks: selectUpdateReadinessChecks(checks, "post-plugin"),
+    });
+
+    expect(result).toEqual({ findings: [], checksRun: 1, checksSkipped: 0 });
+    expect(detections).toEqual(["post-plugin"]);
   });
 
   it("supports single-run checks in lint mode", async () => {

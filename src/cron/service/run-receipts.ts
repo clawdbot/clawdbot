@@ -84,6 +84,7 @@ export function cronRunReceiptOwnerMutationHooks(params: {
   const prepared = prepareCronRunReceiptAdjudication({
     storePath: params.state.deps.storePath,
     jobId: params.jobId,
+    nowMs: params.state.deps.nowMs(),
   });
   return {
     beforeWrite: (database) => {

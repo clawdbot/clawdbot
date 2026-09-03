@@ -2,7 +2,7 @@
 import { isCronMachineOutput } from "../cron-cli/output-mode.js";
 import { isDevicesMachineOutput } from "../devices-output-mode.js";
 import { isGatewayMachineOutput } from "../gateway-cli/output-mode.js";
-import { isModelsStatusJsonOutput } from "../models-output-mode.js";
+import { isModelsPlainMachineOutput, isModelsStatusJsonOutput } from "../models-output-mode.js";
 import { isNodesMachineOutput } from "../nodes-cli/output-mode.js";
 import { isProxyMachineOutput } from "../proxy-output-mode.js";
 import { isSkillsMachineOutput } from "../skills-output-mode.js";
@@ -38,12 +38,18 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     name: "models",
     description: "Model discovery, scanning, and configuration",
     hasSubcommands: true,
-    machineOutput: ({ argv }) => isModelsStatusJsonOutput(argv),
+    machineOutput: ({ argv }) => isModelsStatusJsonOutput(argv) || isModelsPlainMachineOutput(argv),
   },
   {
     name: "promos",
     description: "Discover and claim promotional model offers from ClawHub",
     hasSubcommands: true,
+  },
+  {
+    name: "telemetry",
+    description: "Inspect and manage anonymous usage telemetry",
+    hasSubcommands: true,
+    parentDefaultHelp: true,
   },
   {
     name: "infer",

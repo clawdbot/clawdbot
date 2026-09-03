@@ -1,9 +1,7 @@
-// Slack tests cover progress blocks plugin behavior.
 import type { ChannelProgressDraftLine } from "openclaw/plugin-sdk/channel-outbound";
 import { describe, expect, it } from "vitest";
 import {
   buildSlackProgressCardBlocks,
-  buildSlackProgressStreamCompletionChunks,
   buildSlackProgressStreamChunks,
   EMPTY_SLACK_NATIVE_STREAM_SNAPSHOT,
   reconcileSlackNativeTaskChunks,
@@ -17,10 +15,6 @@ function progressLine(index: number) {
     detail: `run ${index}`,
     text: `🛠️ Exec ${index}: run ${index}`,
   };
-}
-
-function itemLine(text: string, label = text) {
-  return { kind: "item" as const, label, text };
 }
 
 function toolLine(detail: string, label = "Exec") {
@@ -47,117 +41,263 @@ function taskUpdate(
   return { type: "task_update", id, title, status, ...extra };
 }
 
-function contentTaskId(prefix: string) {
-  return expect.stringMatching(new RegExp(`^${prefix}_[a-f0-9]{8}_1$`, "u"));
-}
-
-function expectTaskUpdate(
-  task: unknown,
-  fields: { id: unknown; title: string; status: string; details?: string },
-) {
-  expect(task).toEqual({
-    type: "task_update",
-    id: fields.id,
-    title: fields.title,
-    status: fields.status,
-    ...(fields.details ? { details: fields.details } : {}),
-  });
-}
-
-describe("buildSlackProgressCardBlocks", () => {
-  it("renders the working card with narration, plan, one activity block, and live footer", () => {
-    const blocks = buildSlackProgressCardBlocks({
-      state: "working",
-      title: "Implementing",
-      narration: "Checking the workspace.",
-      plan: [
-        { step: "Inspect", status: "completed" },
-        { step: "Patch", status: "in_progress" },
-      ],
-      lines: [toolLine("run tests"), itemLine("prepare the workspace", "Preamble")],
-      toolCalls: 3,
-      elapsedSeconds: 12,
-      diffStat: { files: 4, added: 2, removed: 1 },
-    });
-
-    expect(blocks).toEqual([
-      { type: "section", text: { type: "mrkdwn", text: "🔄 *Implementing*" } },
-      {
-        type: "section",
-        text: { type: "mrkdwn", text: "_Checking the workspace._" },
-      },
-      { type: "section", text: { type: "mrkdwn", text: "✅ Inspect\n▸ Patch" } },
-      {
-        type: "section",
-        text: { type: "mrkdwn", text: "🛠️ *Exec* — run tests\n• *Preamble* — —" },
-      },
-      {
-        type: "context",
-        elements: [{ type: "mrkdwn", text: "🛠️ 3 tools · 📝 4 files +2 −1 · ⏱ 12s" }],
-      },
-    ]);
-  });
-
+describe("Slack progress presentation", () => {
   it.each([
-    { state: "success" as const, icon: "✅" },
-    { state: "error" as const, icon: "❌" },
+    { state: "working" as const, prefix: "" },
+    { state: "success" as const, prefix: "Completed: " },
+    { state: "error" as const, prefix: "Failed: " },
   ])(
-    "renders $state terminal cards and gates the session action on public URL",
-    ({ state, icon }) => {
+    "renders $state without activity decoration and links only settled cards",
+    ({ state, prefix }) => {
       const blocks = buildSlackProgressCardBlocks({
         state,
-        title: "Implementing",
+        title: "Checking the workspace",
         lines: [toolLine("run tests")],
-        diffStat: { files: 2, added: 1, removed: 1 },
-        sessionUrl: "https://team.openclaw.ai/openclaw/chat/main",
+        sessionUrl: "https://example.test/chat/main",
       });
 
       expect(blocks[0]).toEqual({
         type: "section",
-        text: { type: "mrkdwn", text: `${icon} *Implementing*` },
+        text: { type: "mrkdwn", text: `${prefix}*Checking the workspace*` },
       });
-      // Finished cards keep the diff stat only: no tool-call/elapsed receipt.
-      expect(blocks).toContainEqual({
-        type: "context",
-        elements: [{ type: "mrkdwn", text: "📝 2 files +1 −1" }],
-      });
-      expect(blocks.at(-1)).toEqual({
-        type: "actions",
-        elements: [
-          {
-            type: "button",
-            action_id: "openclaw:session_link",
-            text: { type: "plain_text", text: "Open in OpenClaw" },
-            url: "https://team.openclaw.ai/openclaw/chat/main",
-          },
-        ],
-      });
-
+      expect(blocks).toHaveLength(state === "working" ? 1 : 2);
+      if (state !== "working") {
+        expect(blocks[1]).toEqual({
+          type: "actions",
+          elements: [
+            {
+              type: "button",
+              action_id: "openclaw:session_link",
+              text: { type: "plain_text", text: "Open in OpenClaw" },
+              url: "https://example.test/chat/main",
+            },
+          ],
+        });
+      }
       expect(
-        buildSlackProgressCardBlocks({ state, title: "Implementing", lines: [] }),
+        buildSlackProgressCardBlocks({ state, title: "Checking the workspace", lines: [] }),
       ).toHaveLength(1);
     },
   );
 
-  it("keeps the newest activity rows inside one section and the Slack block budget", () => {
+  it("preserves authored commentary and reasoning without generated tool rows", () => {
+    const blocks = buildSlackProgressCardBlocks({
+      state: "working",
+      title: "Checking the workspace",
+      lines: [
+        { id: "reasoning", kind: "item", label: "Reasoning", text: "Compare the approaches 🔍" },
+        { id: "commentary:1", kind: "item", label: "Update", text: "Checking **the fix** 🔧" },
+        toolLine("run tests"),
+      ],
+    });
+    expect(blocks[1]).toEqual({
+      type: "section",
+      text: { type: "mrkdwn", text: "Compare the approaches 🔍\nChecking *the fix* 🔧" },
+    });
+  });
+
+  it("uses a quiet fallback instead of promoting a tool label into a milestone", () => {
+    expect(buildSlackProgressStreamChunks({ lines: [toolLine("run tests")] })).toEqual([
+      planUpdate("Working"),
+      taskUpdate("openclaw_summary", "Working", "in_progress"),
+    ]);
+    expect(buildSlackProgressStreamChunks({ title: "Reviewing source 🔍", lines: [] })).toEqual([
+      planUpdate("Reviewing source 🔍"),
+      taskUpdate("openclaw_summary", "Reviewing source 🔍", "in_progress"),
+    ]);
+  });
+
+  it("updates the summary in place and retires it when authored milestones arrive", () => {
+    const first = reconcileSlackNativeTaskChunks({
+      previous: EMPTY_SLACK_NATIVE_STREAM_SNAPSHOT,
+      chunks: buildSlackProgressStreamChunks({
+        title: "Reading source",
+        lines: [toolLine("read source")],
+      }),
+    });
+    const revised = reconcileSlackNativeTaskChunks({
+      previous: first.snapshot,
+      chunks: buildSlackProgressStreamChunks({
+        title: "Running checks",
+        lines: [toolLine("run tests")],
+      }),
+    });
+    expect(revised.chunks).toEqual([
+      planUpdate("Running checks"),
+      taskUpdate("openclaw_summary", "Running checks", "in_progress"),
+    ]);
+    const planned = reconcileSlackNativeTaskChunks({
+      previous: revised.snapshot,
+      chunks: buildSlackProgressStreamChunks({
+        title: "Running checks",
+        lines: [],
+        plan: [{ step: "Run tests", status: "in_progress" }],
+      }),
+    });
+    expect(planned.chunks).toEqual([
+      taskUpdate("plan_step_1", "Run tests", "in_progress"),
+      taskUpdate("openclaw_summary", "Running checks", "complete"),
+    ]);
+  });
+
+  it("keeps pending approval visible through tool activity and retires it once resolved", () => {
+    const approval: ChannelProgressDraftLine = {
+      kind: "approval",
+      label: "Approval",
+      detail: "Run the command",
+      status: "requested",
+      text: "Approval required",
+    };
+    const first = reconcileSlackNativeTaskChunks({
+      previous: EMPTY_SLACK_NATIVE_STREAM_SNAPSHOT,
+      chunks: buildSlackProgressStreamChunks({
+        title: "Working",
+        lines: [approval, toolLine("read source")],
+      }),
+    });
+    expect(first.chunks).toContainEqual(
+      taskUpdate("openclaw_attention", "Approval required: Run the command", "pending"),
+    );
+    const resolved = reconcileSlackNativeTaskChunks({
+      previous: first.snapshot,
+      chunks: buildSlackProgressStreamChunks({
+        title: "Working",
+        lines: [toolLine("read source")],
+      }),
+    });
+    expect(resolved.chunks).toEqual([
+      taskUpdate("openclaw_attention", "Approval required: Run the command", "complete"),
+    ]);
     const blocks = buildSlackProgressCardBlocks({
       state: "working",
       title: "Working",
-      lines: Array.from({ length: 60 }, (_value, index) => progressLine(index)),
-      elapsedSeconds: 1,
+      lines: [approval, toolLine("read source")],
     });
-    const activity = blocks.find(
-      (block) => block.type === "section" && JSON.stringify(block).includes("Exec 59"),
-    );
-
-    expect(blocks.length).toBeLessThanOrEqual(50);
-    expect(activity).toBeDefined();
-    expect(JSON.stringify(activity)).toContain("🛠️ *Exec 59* — run 59");
-    expect(JSON.stringify(activity)).not.toContain("Exec 0");
+    expect(blocks.at(-1)).toEqual({
+      type: "section",
+      text: { type: "mrkdwn", text: "Approval required: Run the command" },
+    });
   });
-});
 
-describe("native Slack progress stream chunks", () => {
+  it("shows a failed tool without declaring the whole run failed", () => {
+    const failed: ChannelProgressDraftLine = {
+      kind: "command-output",
+      label: "Bash",
+      detail: "run checks",
+      status: "exit 1",
+      text: "🛠️ Bash: run checks · exit 1",
+    };
+    const chunks = buildSlackProgressStreamChunks({
+      title: "Checking the workspace",
+      lines: [failed],
+    });
+    expect(chunks).toEqual([
+      planUpdate("Checking the workspace"),
+      taskUpdate("openclaw_summary", "Checking the workspace", "in_progress"),
+      taskUpdate("openclaw_attention", "Bash — run checks — exit 1", "error"),
+    ]);
+    const blocks = buildSlackProgressCardBlocks({
+      state: "working",
+      title: "Checking the workspace",
+      lines: [failed],
+    });
+    expect(blocks.at(-1)).toEqual({
+      type: "section",
+      text: { type: "mrkdwn", text: "Bash — run checks — exit 1" },
+    });
+  });
+
+  it.each(["complete", "error"] as const)(
+    "settles the summary as %s and adds the session source only once",
+    (status) => {
+      const first = reconcileSlackNativeTaskChunks({
+        previous: EMPTY_SLACK_NATIVE_STREAM_SNAPSHOT,
+        chunks: buildSlackProgressStreamChunks({ title: "Checking the workspace", lines: [] }),
+      });
+      const completion = buildSlackProgressStreamChunks({
+        title: "Checking the workspace",
+        lines: [],
+        finalInProgressStatus: status,
+        sessionUrl: "https://example.test/chat/main",
+      });
+      const final = reconcileSlackNativeTaskChunks({
+        previous: first.snapshot,
+        chunks: completion,
+      });
+      expect(final.chunks).toEqual([
+        taskUpdate("openclaw_summary", "Checking the workspace", status, {
+          sources: [
+            { type: "url_source", url: "https://example.test/chat/main", text: "Open in OpenClaw" },
+          ],
+        }),
+      ]);
+      expect(
+        reconcileSlackNativeTaskChunks({ previous: final.snapshot, chunks: completion }).chunks,
+      ).toBeUndefined();
+    },
+  );
+
+  it("shows terminal failure even when all authored milestones were already completed", () => {
+    expect(
+      buildSlackProgressStreamChunks({
+        title: "Checking the workspace",
+        lines: [],
+        finalInProgressStatus: "error",
+        plan: [{ step: "Run checks", status: "completed" }],
+      }),
+    ).toEqual([
+      planUpdate("Checking the workspace"),
+      taskUpdate("plan_step_1", "Run checks", "complete"),
+      taskUpdate("openclaw_attention", "Failed", "error"),
+    ]);
+  });
+
+  it("keeps one stable work summary across a rolling window of tool calls", () => {
+    let snapshot = EMPTY_SLACK_NATIVE_STREAM_SNAPSHOT;
+    for (let index = 0; index < 60; index += 1) {
+      const next = reconcileSlackNativeTaskChunks({
+        previous: snapshot,
+        chunks: buildSlackProgressStreamChunks({
+          title: "Checking the workspace",
+          lines: [progressLine(index)],
+        }),
+      });
+      expect([...next.snapshot.tasks.values()]).toEqual([
+        { title: "Checking the workspace", status: "in_progress" },
+      ]);
+      if (index > 0) {
+        expect(next.chunks).toBeUndefined();
+      }
+      snapshot = next.snapshot;
+    }
+    const complete = reconcileSlackNativeTaskChunks({
+      previous: snapshot,
+      chunks: buildSlackProgressStreamChunks({
+        title: "Checking the workspace",
+        lines: [progressLine(59)],
+        finalInProgressStatus: "complete",
+      }),
+    });
+    expect(complete.chunks).toEqual([
+      taskUpdate("openclaw_summary", "Checking the workspace", "complete"),
+    ]);
+  });
+
+  it("does not decorate authored milestones or add a tool inventory and counter footer", () => {
+    const blocks = buildSlackProgressCardBlocks({
+      state: "working",
+      title: "Checking the workspace",
+      narration: "Reviewing the changes 🔍",
+      plan: [{ step: "Inspect source 🔍", status: "in_progress" }],
+      lines: Array.from({ length: 20 }, (_value, index) => progressLine(index)),
+    });
+    expect(blocks).toEqual([
+      { type: "section", text: { type: "mrkdwn", text: "*Checking the workspace*" } },
+      { type: "section", text: { type: "mrkdwn", text: "_Reviewing the changes 🔍_" } },
+      { type: "section", text: { type: "mrkdwn", text: "In progress: Inspect source 🔍" } },
+    ]);
+  });
+
   it("uses typed plan steps instead of tool lines when a plan exists", () => {
     const chunks = buildSlackProgressStreamChunks({
       title: "Implementation",
@@ -238,89 +378,6 @@ describe("native Slack progress stream chunks", () => {
     ]);
   });
 
-  it("terminalizes tool-line tasks when the source switches to a typed plan", () => {
-    const lineChunks = reconcileSlackNativeTaskChunks({
-      previous: EMPTY_SLACK_NATIVE_STREAM_SNAPSHOT,
-      chunks: buildSlackProgressStreamChunks({
-        lines: [itemLine("run tests", "Running tests")],
-      }),
-    });
-    const planChunks = reconcileSlackNativeTaskChunks({
-      previous: lineChunks.snapshot,
-      chunks: buildSlackProgressStreamChunks({
-        title: "Implementation",
-        lines: [],
-        plan: [{ step: "Inspect code", status: "in_progress" }],
-      }),
-    });
-
-    const tasks = (planChunks.chunks ?? []).filter((chunk) => chunk.type === "task_update");
-    expect(tasks).toHaveLength(2);
-    expect(tasks[0]).toMatchObject({ id: "plan_step_1", status: "in_progress" });
-    expect(tasks[1]).toMatchObject({ status: "complete" });
-  });
-
-  it("keeps content-derived task ids stable when a rolling line window shifts", () => {
-    const first = reconcileSlackNativeTaskChunks({
-      previous: EMPTY_SLACK_NATIVE_STREAM_SNAPSHOT,
-      chunks: buildSlackProgressStreamChunks({
-        lines: [itemLine("first task"), itemLine("shared task")],
-      }),
-    });
-    const shifted = reconcileSlackNativeTaskChunks({
-      previous: first.snapshot,
-      chunks: buildSlackProgressStreamChunks({
-        lines: [itemLine("shared task"), itemLine("new task")],
-      }),
-    });
-    const firstShared = [...first.snapshot.tasks].find(([, task]) => task.title === "shared task");
-    const shiftedShared = [...shifted.snapshot.tasks].find(
-      ([, task]) => task.title === "shared task",
-    );
-
-    expect(firstShared?.[0]).toBeDefined();
-    expect(shiftedShared?.[0]).toBe(firstShared?.[0]);
-    expect(shifted.chunks).toContainEqual(
-      taskUpdate(contentTaskId("item"), "first task", "complete"),
-    );
-  });
-
-  it("keeps a singleton content-derived task id when an identical line joins", () => {
-    const singletonChunks = buildSlackProgressStreamChunks({
-      lines: [itemLine("same task")],
-    });
-    const duplicateChunks = buildSlackProgressStreamChunks({
-      lines: [itemLine("same task"), itemLine("same task")],
-    });
-    const singletonTasks = (singletonChunks ?? []).filter((chunk) => chunk.type === "task_update");
-    const duplicateTasks = (duplicateChunks ?? []).filter((chunk) => chunk.type === "task_update");
-
-    expect(singletonTasks).toHaveLength(1);
-    expect(singletonTasks[0]).toEqual(
-      taskUpdate(expect.stringMatching(/^item_[a-f0-9]{8}_1$/u), "same task", "in_progress"),
-    );
-    expect(duplicateTasks).toHaveLength(2);
-    expect(duplicateTasks[0]?.id).toBe(singletonTasks[0]?.id);
-    expect(duplicateTasks[1]).toEqual(
-      taskUpdate(expect.stringMatching(/^item_[a-f0-9]{8}_2$/u), "same task", "in_progress"),
-    );
-  });
-
-  it("suffixes duplicate content-derived task ids within one snapshot", () => {
-    const chunks = buildSlackProgressStreamChunks({
-      lines: [itemLine("same task"), itemLine("same task")],
-    });
-    const tasks = (chunks ?? []).filter((chunk) => chunk.type === "task_update");
-
-    expect(tasks).toHaveLength(2);
-    expect(tasks[0]).toEqual(
-      taskUpdate(expect.stringMatching(/^item_[a-f0-9]{8}_1$/u), "same task", "in_progress"),
-    );
-    expect(tasks[1]).toEqual(
-      taskUpdate(expect.stringMatching(/^item_[a-f0-9]{8}_2$/u), "same task", "in_progress"),
-    );
-  });
-
   it("emits nothing when the snapshot matches what the stream already holds", () => {
     const build = () =>
       buildSlackProgressStreamChunks({
@@ -339,192 +396,6 @@ describe("native Slack progress stream chunks", () => {
     expect(repeated.snapshot).toEqual(first.snapshot);
   });
 
-  it("streams task details and output as append-only deltas", () => {
-    // Slack concatenates details/output per task_update for the same id, so a
-    // resent field must carry only the unsent suffix.
-    const line = (status: string): ChannelProgressDraftLine => ({
-      id: "call-1",
-      kind: "command-output",
-      label: "Bash",
-      detail: "pnpm test",
-      status,
-      text: `🛠️ Bash: pnpm test · ${status}`,
-      toolName: "bash",
-    });
-    const first = reconcileSlackNativeTaskChunks({
-      previous: EMPTY_SLACK_NATIVE_STREAM_SNAPSHOT,
-      chunks: buildSlackProgressStreamChunks({ title: "Shelling", lines: [line("running")] }),
-    });
-    const repeated = reconcileSlackNativeTaskChunks({
-      previous: first.snapshot,
-      chunks: buildSlackProgressStreamChunks({ title: "Shelling", lines: [line("running")] }),
-    });
-    const failed = reconcileSlackNativeTaskChunks({
-      previous: repeated.snapshot,
-      chunks: buildSlackProgressStreamChunks({ title: "Shelling", lines: [line("exit 1")] }),
-    });
-    const finished = reconcileSlackNativeTaskChunks({
-      previous: failed.snapshot,
-      chunks: buildSlackProgressStreamCompletionChunks({
-        title: "Shelling",
-        lines: [line("exit 1")],
-        diffStat: { files: 2, added: 5, removed: 2 },
-      }),
-    });
-
-    const taskId = expect.stringMatching(/^call_1_[a-f0-9]{8}$/u);
-    expect(first.chunks).toEqual([
-      planUpdate("Shelling"),
-      taskUpdate(taskId, "bash", "in_progress", { details: "pnpm test" }),
-    ]);
-    expect(repeated.chunks).toBeUndefined();
-    expect(failed.chunks).toEqual([taskUpdate(taskId, "bash", "error", { output: "exit 1" })]);
-    expect(finished.chunks).toEqual([taskUpdate(taskId, "bash", "error", { output: " · +5 −2" })]);
-  });
-
-  it("starts native Slack progress with plan/task chunks instead of a static blocks plan", () => {
-    expect(
-      buildSlackProgressStreamChunks({
-        lines: [itemLine("tool one", "Tool one"), itemLine("tool two", "Tool two")],
-      }),
-    ).toEqual([
-      planUpdate("tool two"),
-      taskUpdate(contentTaskId("item"), "tool one", "in_progress"),
-      taskUpdate(contentTaskId("item"), "tool two", "in_progress"),
-    ]);
-  });
-
-  it("uses configured max line chars for native task details", () => {
-    expect(
-      buildSlackProgressStreamChunks({
-        title: "Shelling...",
-        maxLineChars: 64,
-        lines: [
-          {
-            kind: "tool",
-            icon: "🛠️",
-            label: "Exec",
-            detail: "run tests in /Users/example/Projects/openclaw/packages/very/deep/path/example",
-            text: "🛠️ Exec: run tests in /Users/example/Projects/openclaw/packages/very/deep/path/example",
-          },
-        ],
-      }),
-    ).toEqual([
-      planUpdate("Shelling..."),
-      taskUpdate(contentTaskId("tool"), "Exec", "in_progress", {
-        details: "run tests in /Users/example/P…aw/packages/very/deep/path/example",
-      }),
-    ]);
-  });
-
-  it("separates inline file deltas from native task details", () => {
-    expect(
-      buildSlackProgressStreamChunks({
-        lines: [toolLine("src/native-card.ts +4 -2", "Write")],
-      }),
-    ).toEqual([
-      planUpdate("Write — src/native-card.ts"),
-      taskUpdate(contentTaskId("write"), "Write", "in_progress", {
-        details: "src/native-card.ts",
-        output: "+4 −2",
-      }),
-    ]);
-  });
-
-  it("maps completed and failed progress statuses onto native task states", () => {
-    expect(
-      buildSlackProgressStreamChunks({
-        title: "Shelling...",
-        lines: [
-          {
-            kind: "command-output",
-            label: "Exec",
-            detail: "command finished",
-            status: "completed",
-            text: "🛠️ Exec: completed",
-            toolName: "exec",
-          },
-          {
-            kind: "command-output",
-            label: "Exec",
-            detail: "command failed",
-            status: "exit 1",
-            text: "🛠️ Exec: exit 1",
-            toolName: "exec",
-          },
-        ],
-      }),
-    ).toEqual([
-      planUpdate("Shelling..."),
-      taskUpdate(contentTaskId("exec"), "exec", "complete", {
-        details: "command finished",
-      }),
-      taskUpdate(contentTaskId("exec"), "exec", "error", {
-        details: "command failed",
-        output: "exit 1",
-      }),
-    ]);
-  });
-
-  it("keeps newest native task chunks when capping progress lines", () => {
-    const chunksWithTitle = buildSlackProgressStreamChunks({
-      title: "Shelling...",
-      lines: Array.from({ length: 60 }, (_value, index) => progressLine(index)),
-    });
-    expect(chunksWithTitle).toHaveLength(51);
-    expect(chunksWithTitle?.[0]).toEqual(planUpdate("Shelling..."));
-    expectTaskUpdate(chunksWithTitle?.[1], {
-      id: contentTaskId("tool"),
-      title: "Exec 10",
-      status: "in_progress",
-      details: "run 10",
-    });
-    expectTaskUpdate(chunksWithTitle?.at(-1), {
-      id: contentTaskId("tool"),
-      title: "Exec 59",
-      status: "in_progress",
-      details: "run 59",
-    });
-
-    const chunksWithoutTitle = buildSlackProgressStreamChunks({
-      lines: Array.from({ length: 60 }, (_value, index) => progressLine(index)),
-    });
-    expect(chunksWithoutTitle).toHaveLength(51);
-    expect(chunksWithoutTitle?.[0]).toEqual(planUpdate("Exec 59 — run 59"));
-    expectTaskUpdate(chunksWithoutTitle?.[1], {
-      id: contentTaskId("tool"),
-      title: "Exec 10",
-      status: "in_progress",
-      details: "run 10",
-    });
-    expectTaskUpdate(chunksWithoutTitle?.at(-1), {
-      id: contentTaskId("tool"),
-      title: "Exec 59",
-      status: "in_progress",
-      details: "run 59",
-    });
-  });
-
-  it("uses the newest meaningful progress step as the native plan title when no title is provided", () => {
-    expect(
-      buildSlackProgressStreamChunks({
-        lines: [toolLine("run tests")],
-      }),
-    ).toEqual([
-      planUpdate("Exec — run tests"),
-      taskUpdate(contentTaskId("exec"), "Exec", "in_progress", { details: "run tests" }),
-    ]);
-  });
-
-  it("keeps a native status headline when no task rows are visible", () => {
-    expect(
-      buildSlackProgressStreamChunks({
-        title: "Checking the workspace",
-        lines: [],
-      }),
-    ).toEqual([planUpdate("Checking the workspace")]);
-  });
-
   it("caps explicit native plan titles to Slack chunk limits", () => {
     const chunks = buildSlackProgressStreamChunks({
       title: `Shelling ${"x".repeat(300)}`,
@@ -539,155 +410,11 @@ describe("native Slack progress stream chunks", () => {
     expect(title?.endsWith("…")).toBe(true);
   });
 
-  it("preserves visible text in native tasks without structured detail", () => {
-    expect(
-      buildSlackProgressStreamChunks({
-        lines: [itemLine("prepare the workspace", "Preamble"), toolLine("run tests")],
-      }),
-    ).toEqual([
-      planUpdate("Exec — run tests"),
-      taskUpdate(contentTaskId("item"), "prepare the workspace", "in_progress"),
-      taskUpdate(contentTaskId("exec"), "Exec", "in_progress", { details: "run tests" }),
-    ]);
-  });
-
-  it("renders identical command progress lines as distinct native tasks when ids differ", () => {
-    expect(
-      buildSlackProgressStreamChunks({
-        title: "Shelling...",
-        lines: [
-          {
-            id: "cmd-1",
-            kind: "item",
-            icon: "🛠️",
-            label: "Exec",
-            text: "🛠️ Exec",
-            toolName: "exec",
-          },
-          {
-            id: "cmd-2",
-            kind: "item",
-            icon: "🛠️",
-            label: "Exec",
-            text: "🛠️ Exec",
-            toolName: "exec",
-          },
-        ],
-      }),
-    ).toEqual([
-      planUpdate("Shelling..."),
-      taskUpdate(expect.stringMatching(/^cmd_1_[a-f0-9]{8}$/u), "🛠️ Exec", "in_progress"),
-      taskUpdate(expect.stringMatching(/^cmd_2_[a-f0-9]{8}$/u), "🛠️ Exec", "in_progress"),
-    ]);
-  });
-
-  it("keeps id-derived native task ids stable when completion changes visible status text", () => {
-    const running = buildSlackProgressStreamChunks({
-      title: "Shelling...",
-      lines: [
-        {
-          id: "call-2",
-          kind: "tool",
-          icon: "🛠️",
-          label: "Bash",
-          text: "🛠️ Bash",
-          toolName: "bash",
-        },
-      ],
-    });
-    const completed = buildSlackProgressStreamChunks({
-      title: "Shelling...",
-      lines: [
-        {
-          id: "call-2",
-          kind: "command-output",
-          icon: "🛠️",
-          label: "Bash",
-          status: "completed",
-          text: "🛠️ completed",
-          toolName: "bash",
-        },
-      ],
-    });
-
-    const runningTaskId =
-      running?.[1] && typeof running[1] === "object" && "id" in running[1]
-        ? running[1].id
-        : undefined;
-    expect(running?.[1]).toMatchObject({ id: expect.stringMatching(/^call_2_[a-f0-9]{8}$/u) });
-    expect(completed?.[1]).toEqual({
-      type: "task_update",
-      id: runningTaskId,
-      status: "complete",
-      title: "bash",
-    });
-  });
-
   it("does not emit native stream chunks when there are no tasks or title", () => {
     expect(
       buildSlackProgressStreamChunks({
         lines: [],
       }),
     ).toBeUndefined();
-  });
-
-  it("updates native Slack progress without creating duplicate plan blocks", () => {
-    expect(
-      buildSlackProgressStreamChunks({
-        title: "Shelling",
-        lines: [itemLine("tool one", "Tool one"), itemLine("tool two", "Tool two")],
-      }),
-    ).toEqual([
-      planUpdate("Shelling"),
-      taskUpdate(contentTaskId("item"), "tool one", "in_progress"),
-      taskUpdate(contentTaskId("item"), "tool two", "in_progress"),
-    ]);
-  });
-
-  it("marks unfinished native Slack progress tasks complete for finalization", () => {
-    expect(
-      buildSlackProgressStreamCompletionChunks({
-        lines: [
-          { kind: "item", label: "Tool one", text: "tool one" },
-          {
-            kind: "command-output",
-            label: "Exec",
-            detail: "command failed",
-            status: "exit 1",
-            text: "Exec: exit 1",
-          },
-        ],
-      }),
-    ).toEqual([
-      planUpdate("Exec — command failed"),
-      taskUpdate(contentTaskId("item"), "tool one", "complete"),
-      taskUpdate(contentTaskId("command_output"), "Exec", "error", {
-        details: "command failed",
-        output: "exit 1",
-      }),
-    ]);
-  });
-
-  it("puts task detail, diff output, and the session source on the terminal row", () => {
-    expect(
-      buildSlackProgressStreamCompletionChunks({
-        lines: [toolLine("src/native-card.ts", "Write")],
-        diffStat: { files: 1, added: 3, removed: 1 },
-        sessionUrl: "https://team.openclaw.ai/openclaw/chat/main",
-      }),
-    ).toEqual([
-      planUpdate("Write — src/native-card.ts"),
-      taskUpdate(contentTaskId("write"), "Write", "complete", {
-        details: "src/native-card.ts",
-        output: "+3 −1",
-        sources: [
-          {
-            type: "url_source",
-            url: "https://team.openclaw.ai/openclaw/chat/main",
-            text: "Open in OpenClaw",
-          },
-        ],
-      }),
-    ]);
   });
 });

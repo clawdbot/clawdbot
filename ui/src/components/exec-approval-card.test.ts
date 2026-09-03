@@ -33,7 +33,6 @@ function renderCard(request: ExecApprovalRequest, variant: "inline" | "modal" = 
       busy: false,
       canGrant: true,
       error: null,
-      nowMs: 1_000,
       variant,
       onDecision: vi.fn(),
     }),
@@ -99,6 +98,12 @@ describe("exec approval card", () => {
     expect(card?.querySelector('[data-approval-chip="agent"]')).toBeNull();
     expect(card?.querySelector(".exec-approval-details")).toBeNull();
     expect(card?.textContent).not.toContain("agent:main:session-1");
+  });
+
+  it("labels an approval projected from a child session", () => {
+    const card = renderCard(approval({ sourceSessionKey: "agent:main:cloud-child" }), "inline");
+
+    expect(card?.textContent).toContain("Approval requested by session cloud-child");
   });
 
   it("keeps host and cwd visible while collapsing lower-value exec metadata", () => {

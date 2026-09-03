@@ -92,7 +92,7 @@ describe("registerNodeCli", () => {
         "--host",
         "gateway.example",
         "--runtime",
-        "node",
+        "bun",
         "--force",
         "--json",
       ],
@@ -103,7 +103,7 @@ describe("registerNodeCli", () => {
       expect.objectContaining({
         port: "19000",
         host: "gateway.example",
-        runtime: "node",
+        runtime: "bun",
         force: true,
         json: true,
       }),
@@ -138,7 +138,7 @@ describe("registerNodeCli", () => {
     await program.parseAsync(["node", "run", "--ephemeral"], { from: "user" });
 
     expect(daemonMocks.runNodeHost).toHaveBeenCalledWith(
-      expect.objectContaining({ forceWorkerRuns: true }),
+      expect.objectContaining({ forceWorkerRuns: true, ephemeral: true }),
     );
     const nodeCommand = program.commands.find((command) => command.name() === "node");
     const runCommand = nodeCommand?.commands.find((command) => command.name() === "run");

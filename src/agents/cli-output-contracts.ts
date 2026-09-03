@@ -2,7 +2,9 @@ import type {
   CliBackendConfig,
   CliBackendJsonlUsage,
   CliBackendParseJsonlEvent,
+  CliBackendParseJsonlLifecycleEvent,
 } from "../plugins/cli-backend.types.js";
+import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
@@ -29,7 +31,15 @@ export type CliTerminalFailure =
       reason: "max_turns";
       limit?: number;
     }
-  | { reason: "synthetic_no_response" };
+  | { reason: "synthetic_no_response" }
+  // The backend ended the turn on purpose without a reply (hook stop, aborted
+  // tools, budget). Keeping the CLI's own `terminal_reason` here is what lets
+  // consumers name the cause instead of reporting a transport-shaped failure.
+  | { reason: "turn_stopped"; terminalReason: string; stopReason?: string };
+
+export type CliTerminalInterruption = {
+  reason: "aborted" | "timeout";
+};
 
 /** Normalized result from a CLI-backed model provider turn. */
 export type CliOutput = {
@@ -44,6 +54,8 @@ export type CliOutput = {
   toolSummary?: ToolSummaryTrace;
   errorText?: string;
   terminalFailure?: CliTerminalFailure;
+  /** A caller interruption that ended the turn after usable assistant text was streamed. */
+  terminalInterruption?: CliTerminalInterruption;
   diagnostics?: {
     process?: CliProcessDiagnostics;
   };
@@ -58,6 +70,8 @@ export type CliOutput = {
   toolMediaUrls?: string[];
   toolAudioAsVoice?: boolean;
   toolTrustedLocalMedia?: boolean;
+  /** Child sessions accepted by the turn-scoped loopback tool capture. */
+  acceptedSessionSpawns?: AcceptedSessionSpawn[];
   yielded?: true;
   yieldAcknowledgment?: string;
 };
@@ -86,6 +100,8 @@ export type CliThinkingProgress = {
   progressTokens: number;
 };
 
+export type CliCompactionDelta = { phase: "start" } | { phase: "end"; completed: boolean };
+
 /** Tool-call start event reconstructed from CLI stream output. */
 export type CliToolUseStartDelta = {
   toolCallId: string;
@@ -107,9 +123,11 @@ export type CliJsonlStreamingParserOptions = {
   backend: CliBackendConfig;
   providerId: string;
   parseJsonlEvent?: CliBackendParseJsonlEvent;
+  parseJsonlLifecycleEvent?: CliBackendParseJsonlLifecycleEvent;
   onAssistantDelta: (delta: CliStreamingDelta) => void;
   onThinkingDelta?: (delta: CliThinkingDelta) => void;
   onThinkingProgress?: (progress: CliThinkingProgress) => void;
+  onCompaction?: (delta: CliCompactionDelta) => void;
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
   onDisplayToolUseStart?: (delta: CliToolUseStartDelta) => void;
