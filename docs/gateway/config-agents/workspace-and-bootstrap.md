@@ -121,6 +121,8 @@ Per-agent override: `agents.entries.*.contextInjection`. Omitted values inherit
 ## `agents.defaults.bootstrapMaxChars`
 
 Max characters per workspace bootstrap file before truncation. Default: `20000`.
+Exception: `USER.md` has a fixed 4,000-character cap; this setting can only
+lower it for `USER.md`, never raise it. See [User model](/concepts/user-model).
 
 ```json5
 {

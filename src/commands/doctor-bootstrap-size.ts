@@ -14,6 +14,7 @@ import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
 } from "../agents/embedded-agent-helpers.js";
+import { USER_BOOTSTRAP_MAX_CHARS } from "../agents/embedded-agent-helpers/bootstrap.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 // Every warning uses the same locale; silent checks never need a formatter.
@@ -39,6 +40,11 @@ function formatCauses(causes: Array<"per-file-limit" | "total-limit">): string {
   }
   return causes.map((cause) => (cause === "per-file-limit" ? "max/file" : "max/total")).join(", ");
 }
+
+// USER.md carries a deliberate fixed cap: tuning bootstrapMaxChars can only
+// lower it, so per-file tips must never suggest raising that setting for it.
+const isFixedUserCapFile = (file: { name: string; effectiveFileLimit: number }) =>
+  file.name.toLowerCase() === "user.md" && file.effectiveFileLimit === USER_BOOTSTRAP_MAX_CHARS;
 
 /**
  * Analyzes configured bootstrap files and emits warnings when injection will truncate content.
@@ -110,14 +116,23 @@ export async function noteBootstrapFileSize(cfg: OpenClawConfig) {
       `Total bootstrap raw chars (before truncation): ${formatInt(analysis.totals.rawChars)}.`,
     );
 
+    const fixedUserCapApplied = analysis.truncatedFiles.some(
+      (file) => isFixedUserCapFile(file) && file.causes.includes("per-file-limit"),
+    );
     const needsPerFileTip =
-      analysis.truncatedFiles.some((file) => file.causes.includes("per-file-limit")) ||
-      analysis.nearLimitFiles.length > 0;
+      analysis.truncatedFiles.some(
+        (file) => file.causes.includes("per-file-limit") && !isFixedUserCapFile(file),
+      ) || analysis.nearLimitFiles.some((file) => !isFixedUserCapFile(file));
     const needsTotalTip =
       analysis.truncatedFiles.some((file) => file.causes.includes("total-limit")) ||
       analysis.totalNearLimit;
-    if (needsPerFileTip || needsTotalTip) {
+    if (needsPerFileTip || needsTotalTip || fixedUserCapApplied) {
       lines.push("");
+    }
+    if (fixedUserCapApplied) {
+      lines.push(
+        `USER.md has a fixed ${formatInt(USER_BOOTSTRAP_MAX_CHARS)}-character bootstrap cap; keep it compact.`,
+      );
     }
     if (needsPerFileTip) {
       lines.push(
