@@ -90,13 +90,24 @@ export function createBeamRequestHandler(params: {
         return true;
       }
       const receivedAt = params.now?.() ?? Date.now();
-      const existing = await params.store.get(parsed.value.beamId);
-      await params.store.put({
-        ...parsed.value,
-        // An anonymous replacement must not inherit a previous publisher's identity.
-        ...(client.profileId ? { uploaderProfileId: client.profileId } : {}),
-        createdAt: existing?.createdAt ?? receivedAt,
-        receivedAt,
+      const updatedAt = Date.parse(parsed.value.updatedAt);
+      await params.store.update(parsed.value.beamId, (existing) => {
+        const previousUpdatedAt = existing ? Date.parse(existing.updatedAt) : undefined;
+        // Completion is monotonic within one source revision; a newer revision may reopen it.
+        if (
+          previousUpdatedAt !== undefined &&
+          (updatedAt < previousUpdatedAt ||
+            (updatedAt === previousUpdatedAt && existing?.completed && !parsed.value.completed))
+        ) {
+          return undefined;
+        }
+        return {
+          ...parsed.value,
+          // An anonymous replacement must not inherit a previous publisher's identity.
+          ...(client.profileId ? { uploaderProfileId: client.profileId } : {}),
+          createdAt: existing?.createdAt ?? receivedAt,
+          receivedAt,
+        };
       });
       sendJson(res, 200, {
         ok: true,
