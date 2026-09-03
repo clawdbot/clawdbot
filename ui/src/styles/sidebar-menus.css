@@ -20,11 +20,6 @@ wa-dropdown-item.session-menu__item--compact-details {
   min-width: 0;
 }
 
-html[dir="rtl"] .session-menu__chevron,
-html[dir="rtl"] .session-menu__back > .session-menu__icon {
-  transform: scaleX(-1);
-}
-
 wa-dropdown.sidebar-session-sort-menu::part(menu) {
   box-sizing: border-box;
   width: min(220px, calc(100dvw - 16px));
