@@ -169,13 +169,18 @@ export function buildSlackProgressCardBlocks(params: {
   const statusLabels = { completed: "Completed", in_progress: "In progress", pending: "Pending" };
   const planLines = (params.plan ?? [])
     .slice(-SLACK_MAX_BLOCKS)
-    .map((entry) => `${statusLabels[entry.status]}: ${compactDetail(entry.step, maxLineChars)}`);
+    .map(
+      (entry) =>
+        `${statusLabels[entry.status]}: ${normalizeSlackOutboundText(compactDetail(entry.step, maxLineChars), { mentions: "escape" })}`,
+    );
   const narration = params.narration?.replace(/\s+/g, " ").trim();
   const authoredText = params.lines
     .filter(isAuthoredProgressLine)
     .map((line) => line.text.trim())
     .filter((text, index, values) => text && text !== narration && values.indexOf(text) === index)
-    .map((text) => normalizeSlackOutboundText(compactDetail(text, maxLineChars)))
+    .map((text) =>
+      normalizeSlackOutboundText(compactDetail(text, maxLineChars), { mentions: "escape" }),
+    )
     .join("\n");
   const finalStatus =
     params.state === "working" ? undefined : params.state === "success" ? "complete" : "error";
@@ -183,9 +188,11 @@ export function buildSlackProgressCardBlocks(params: {
   const status =
     params.state === "success" ? "Completed: " : params.state === "error" ? "Failed: " : "";
   const sections = [
-    `${status}*${escapeSlackMrkdwn(params.title.trim() || "Working")}*`,
-    narration ? `_${escapeSlackMrkdwn(narration)}_` : "",
-    planLines.map((line) => escapeSlackMrkdwn(line)).join("\n"),
+    `${status}*${normalizeSlackOutboundText(params.title.trim() || "Working", { mentions: "escape", enclosingStyle: "bold" })}*`,
+    narration
+      ? `_${normalizeSlackOutboundText(narration, { mentions: "escape", enclosingStyle: "italic" })}_`
+      : "",
+    planLines.join("\n"),
     authoredText,
     attention ? escapeSlackMrkdwn(attention.title) : "",
   ];

@@ -51,6 +51,69 @@ function taskUpdate(
 
 describe("Slack progress presentation", () => {
   it.each([
+    ["Run `pnpm test`", "*Run `pnpm test`*"],
+    ["Run **bold** checks", "*Run bold checks*"],
+    ["Read C:\\path", "*Read C:\\path*"],
+    [
+      "Check `code` for <@U123> & <!channel>",
+      "*Check `code` for &lt;@U123&gt; &amp; &lt;!channel&gt;*",
+    ],
+  ])("renders authored card title %s inside one bold wrapper", (title, expected) => {
+    expect(buildSlackProgressCardBlocks({ state: "working", title, lines: [] })).toEqual([
+      { type: "section", text: { type: "mrkdwn", text: expected } },
+    ]);
+  });
+
+  it("renders authored narration inside one italic wrapper while preserving inline code", () => {
+    const blocks = buildSlackProgressCardBlocks({
+      state: "working",
+      title: "Working",
+      narration: "Check _x_ and *x* with `pnpm test` for <@U123> & <!channel>",
+      lines: [],
+    });
+    expect(blocks[1]).toEqual({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: "_Check x and x with `pnpm test` for &lt;@U123&gt; &amp; &lt;!channel&gt;_",
+      },
+    });
+  });
+
+  it("renders authored plan Markdown without activating Slack mentions", () => {
+    const blocks = buildSlackProgressCardBlocks({
+      state: "working",
+      title: "Working",
+      plan: [
+        { step: "Run `pnpm test` for **checks** <@U123> & <!channel>", status: "in_progress" },
+      ],
+      lines: [],
+    });
+    expect(blocks[1]).toEqual({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: "In progress: Run `pnpm test` for *checks* &lt;@U123&gt; &amp; &lt;!channel&gt;",
+      },
+    });
+  });
+
+  it("escapes only entities in literal attention text", () => {
+    const blocks = buildSlackProgressCardBlocks({
+      state: "working",
+      title: "Working",
+      lines: [{ ...toolLine("`pnpm test` <@U123> & <!channel>"), status: "exit 1" }],
+    });
+    expect(blocks[1]).toEqual({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: "Exec — `pnpm test` &lt;@U123&gt; &amp; &lt;!channel&gt; — exit 1",
+      },
+    });
+  });
+
+  it.each([
     { state: "working" as const, prefix: "" },
     { state: "success" as const, prefix: "Completed: " },
     { state: "error" as const, prefix: "Failed: " },
@@ -93,14 +156,27 @@ describe("Slack progress presentation", () => {
       state: "working",
       title: "Checking the workspace",
       lines: [
-        { id: "reasoning", kind: "item", label: "Reasoning", text: "Compare the approaches 🔍" },
-        { id: "commentary:1", kind: "item", label: "Update", text: "Checking **the fix** 🔧" },
+        {
+          id: "reasoning",
+          kind: "item",
+          label: "Reasoning",
+          text: "Compare <#C123> approaches 🔍",
+        },
+        {
+          id: "commentary:1",
+          kind: "item",
+          label: "Update",
+          text: "Checking **the fix** <@U123> & <!channel> 🔧",
+        },
         toolLine("run tests"),
       ],
     });
     expect(blocks[1]).toEqual({
       type: "section",
-      text: { type: "mrkdwn", text: "Compare the approaches 🔍\nChecking *the fix* 🔧" },
+      text: {
+        type: "mrkdwn",
+        text: "Compare &lt;#C123&gt; approaches 🔍\nChecking *the fix* &lt;@U123&gt; &amp; &lt;!channel&gt; 🔧",
+      },
     });
   });
 
