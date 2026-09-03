@@ -115,6 +115,15 @@ G --> S`;
     expect(recovered.textContent).toContain("Recovered");
   });
 
+  it("preserves Unicode at the sandbox error boundary", async () => {
+    const source = `flowchart LR\n${"a".repeat(980)}😀 -->`;
+
+    const error = await renderMermaidSvg(source, theme).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).not.toMatch(/[\uD800-\uDBFF]$/u);
+  });
+
   it("blocks image decoding inside Mermaid before the SVG reaches the host", async () => {
     const image = btoa(
       '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>',

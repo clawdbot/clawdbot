@@ -263,7 +263,7 @@ function createMermaidFrame(): MermaidFrame {
     pending = undefined;
     window.clearTimeout(timeout);
     if (typeof result.error === "string") {
-      request.reject(new Error(result.error.slice(0, 1_000)));
+      request.reject(new Error(result.error));
     } else if (typeof result.svg === "string" && result.svg.length <= MAX_SVG_LENGTH) {
       request.resolve(result.svg);
     } else {

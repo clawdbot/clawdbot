@@ -145,4 +145,23 @@ describe("native Mermaid document", () => {
     await window.renderMermaid({ ...job, id: "recovered" });
     expect(replies[1]).toMatchObject({ id: "recovered", success: true });
   });
+
+  it("keeps native error replies valid at a UTF-16 boundary", async () => {
+    const prefix = "x".repeat(999);
+    vi.spyOn(HTMLImageElement.prototype, "decode").mockRejectedValueOnce(new Error(`${prefix}🤖`));
+
+    await window.renderMermaid({
+      id: "unicode-error",
+      source: "flowchart LR\nA --> B",
+      widthCssPx: 320,
+      theme,
+    });
+
+    expect(replies[0]).toMatchObject({
+      id: "unicode-error",
+      success: false,
+      retryable: true,
+      error: prefix,
+    });
+  });
 });
