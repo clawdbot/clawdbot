@@ -426,7 +426,7 @@ printf '[{"filename":"openclaw-%s.tgz"}]\\n' "$version"
     const packageJson = await new Promise<string>((resolve, reject) => {
       execFile("tar", ["-xOf", candidate, "package/package.json"], (error, stdout) => {
         if (error) {
-          reject(error);
+          reject(toLintErrorObject(error, "Non-Error rejection"));
           return;
         }
         resolve(stdout);
