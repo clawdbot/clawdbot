@@ -66,9 +66,7 @@ export function runWithOperatorToolGatewayCleanupContext<T>(run: () => T): T {
   if (!authority) {
     return run();
   }
-  if (!authority.active) {
-    throw new Error("operator tool invocation authority expired");
-  }
+  authority.signal.throwIfAborted();
   const scope = getPluginRuntimeGatewayRequestScope();
   // Retain the effective actor and scopes after releasing the invocation;
   // profile attribution alone does not establish authority.

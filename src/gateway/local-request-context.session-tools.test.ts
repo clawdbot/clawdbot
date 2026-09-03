@@ -263,10 +263,11 @@ describe("built-in session tool role authority", () => {
       const listed = await createSessionsListTool(options).execute("discover", {});
       // Keep archive in the same reproduction even if discovery regresses to an empty result.
       expect.soft(listed.details).toMatchObject({
-        count: 2,
+        count: 3,
         sessions: expect.arrayContaining([
           expect.objectContaining({ key: REQUESTER }),
           expect.objectContaining({ key: TARGET, sessionId: TARGET_ID }),
+          expect.objectContaining({ key: "agent:other:dashboard:session-tools-other" }),
         ]),
       });
       await expect(
