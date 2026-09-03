@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { ScheduledTaskAutoStartRecoveryError } from "../../daemon/schtasks-update-recovery.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { DevUpdateTarget } from "../../infra/update-dev-target.js";
@@ -60,6 +61,90 @@ type MutableUpdateExecutionResult = {
   recoveryEnv: NodeJS.ProcessEnv | undefined;
 };
 
+type ExpectedManagedService = Pick<PreManagedServiceStop, "serviceEnv" | "serviceUpdateVerdict">;
+
+function snapshotExpectedManagedService(
+  service: PreManagedServiceStop | undefined,
+): ExpectedManagedService | undefined {
+  if (!service) {
+    return undefined;
+  }
+  const serviceUpdateVerdict = service.serviceUpdateVerdict;
+  return Object.freeze({
+    serviceEnv: service.serviceEnv ? Object.freeze({ ...service.serviceEnv }) : undefined,
+    serviceUpdateVerdict: serviceUpdateVerdict
+      ? Object.freeze({ ...serviceUpdateVerdict })
+      : undefined,
+  });
+}
+
+const PREPARED_ARTIFACT_ISSUER = Symbol("UpdateGenerationPreparedArtifact.issuer");
+declare const updateGenerationPreparedArtifactBrand: unique symbol;
+
+export type UpdateGenerationPreparedArtifact = Readonly<{
+  formatVersion: 1;
+  token: string;
+  readonly [updateGenerationPreparedArtifactBrand]: true;
+}>;
+
+let isPreparedArtifactOwnedBy: (
+  prepared: unknown,
+  owner: UpdateGenerationPackageUpdateExecutor,
+) => boolean;
+
+class IssuedUpdateGenerationPreparedArtifact {
+  readonly formatVersion = 1 as const;
+  readonly token: string;
+  readonly #owner: UpdateGenerationPackageUpdateExecutor;
+
+  constructor(
+    issuer: typeof PREPARED_ARTIFACT_ISSUER,
+    owner: UpdateGenerationPackageUpdateExecutor,
+  ) {
+    if (issuer !== PREPARED_ARTIFACT_ISSUER) {
+      throw new TypeError("Prepared generation tokens can only be issued by their executor");
+    }
+    this.token = randomBytes(32).toString("base64url");
+    this.#owner = owner;
+    Object.freeze(this);
+  }
+
+  static {
+    isPreparedArtifactOwnedBy = (prepared, owner) =>
+      typeof prepared === "object" &&
+      prepared !== null &&
+      #owner in prepared &&
+      prepared.#owner === owner;
+  }
+}
+
+const issuePreparedArtifact = (
+  owner: UpdateGenerationPackageUpdateExecutor,
+): UpdateGenerationPreparedArtifact => {
+  return new IssuedUpdateGenerationPreparedArtifact(
+    PREPARED_ARTIFACT_ISSUER,
+    owner,
+    // SAFETY: The runtime-private owner and issuer-checked constructor enforce this nominal type.
+  ) as unknown as UpdateGenerationPreparedArtifact;
+};
+
+export type UpdateGenerationPackagePreparationParams = Omit<
+  PackageInstallUpdateParams,
+  "allowGatewayActivation" | "allowGatewayServiceRepair"
+>;
+
+function assertPreparedArtifactOwner(
+  owner: UpdateGenerationPackageUpdateExecutor,
+  prepared: unknown,
+): void {
+  if (!isPreparedArtifactOwnedBy(prepared, owner)) {
+    throw new UpdatePreMutationError(
+      "generation-activation-preflight",
+      "Generation preparation did not return a token owned by the selected package executor.",
+    );
+  }
+}
+
 /**
  * Generation-aware package mutation owner supplied by the protected broker stack.
  * The current package updater remains the compatibility owner until that stack is installed.
@@ -74,19 +159,46 @@ export abstract class UpdateGenerationPackageUpdateExecutor {
     void this.#opaqueGenerationPackageUpdateExecutor;
   }
 
-  abstract execute(params: {
+  abstract prepare(params: {
+    update: UpdateGenerationPackagePreparationParams;
+    filesystem: UpdateGenerationConfinedFilesystem;
+    ledger: UpdateGenerationLedgerHook;
+    runtime: UpdateGenerationRuntime;
+    issuePreparedArtifact: () => UpdateGenerationPreparedArtifact;
+  }): Promise<UpdateGenerationPreparedArtifact>;
+
+  abstract activate(params: {
+    prepared: UpdateGenerationPreparedArtifact;
     update: PackageInstallUpdateParams;
     filesystem: UpdateGenerationConfinedFilesystem;
     ledger: UpdateGenerationLedgerHook;
     runtime: UpdateGenerationRuntime;
   }): Promise<UpdateRunResult>;
+
+  abstract discard(
+    prepared: UpdateGenerationPreparedArtifact,
+    reason: "pre-activation-failed" | "update-aborted",
+  ): Promise<void>;
 }
+
+type ResolvedPackageUpdateExecutor =
+  | Readonly<{
+      kind: "generation";
+      executor: UpdateGenerationPackageUpdateExecutor;
+      filesystem: UpdateGenerationConfinedFilesystem;
+      ledger: UpdateGenerationLedgerHook;
+      runtime: UpdateGenerationRuntime;
+    }>
+  | Readonly<{
+      kind: "legacy";
+      execute: typeof runPackageInstallUpdate;
+    }>;
 
 async function resolvePackageUpdateExecutor(
   executor: UpdateGenerationPackageUpdateExecutor | undefined,
-): Promise<(params: PackageInstallUpdateParams) => Promise<UpdateRunResult>> {
+): Promise<ResolvedPackageUpdateExecutor> {
   if (!executor) {
-    return runPackageInstallUpdate;
+    return { kind: "legacy", execute: runPackageInstallUpdate };
   }
   const { UPDATE_GENERATION_RUNTIME: runtime } =
     await import("../../infra/update-generation-runtime.js");
@@ -102,7 +214,7 @@ async function resolvePackageUpdateExecutor(
   }
   const filesystem = executor.filesystem;
   const ledger = executor.ledger;
-  return async (update) => await executor.execute({ update, filesystem, ledger, runtime });
+  return { kind: "generation", executor, filesystem, ledger, runtime };
 }
 
 export async function executeMutableUpdate(params: {
@@ -156,6 +268,7 @@ export async function executeMutableUpdate(params: {
   const stopManagedServiceBeforeMutableUpdate = async (
     mutationRoots: readonly string[] = [params.root],
     phase: "inspect" | "prepare" = "prepare",
+    expectedService?: ExpectedManagedService,
   ) => {
     if (params.updateInstallKind !== "package" && params.updateInstallKind !== "git") {
       return;
@@ -170,6 +283,7 @@ export async function executeMutableUpdate(params: {
           jsonMode: Boolean(params.opts.json),
           timeoutMs: params.updateStepTimeoutMs,
           phase,
+          expectedService,
           handoffFromGateway: (state) =>
             handoffUpdateFromGateway({
               state,
@@ -265,14 +379,79 @@ export async function executeMutableUpdate(params: {
     }
   };
 
+  const buildPackagePreparationParams = (
+    managedServiceEnv: NodeJS.ProcessEnv | undefined,
+  ): UpdateGenerationPackagePreparationParams => ({
+    root: params.root,
+    installKind: params.installKind,
+    tag: params.tag,
+    installSpec: params.packageInstallSpec ?? undefined,
+    timeoutMs: params.updateStepTimeoutMs,
+    startedAt: params.startedAt,
+    progress: params.progress,
+    jsonMode: Boolean(params.opts.json),
+    managedServiceEnv,
+    invocationCwd: params.invocationCwd,
+    honorPackageRoot:
+      params.managedServiceRootRedirect !== null || params.managedServiceNodeRunner !== undefined,
+    nodeRunner: params.packageUpdateNodeRunner,
+    installEnv: params.packageInstallEnv,
+    installTarget: params.packageInstallTarget,
+  });
+
+  const buildPackageActivationParams = (): PackageInstallUpdateParams => ({
+    ...buildPackagePreparationParams(preManagedServiceStop?.serviceEnv),
+    ...resolvePreparedGatewayUpdatePolicy(preManagedServiceStop, params.shouldRestart),
+  });
+
   let result: UpdateRunResult;
   let failure: MutableUpdateExecutionResult["failure"];
+  let packageUpdateExecutor: ResolvedPackageUpdateExecutor | undefined;
+  let preparedArtifact: UpdateGenerationPreparedArtifact | undefined;
+  let preparedArtifactOwned = false;
+  let generationActivationStarted = false;
   try {
-    const packageUpdateExecutor =
+    packageUpdateExecutor =
       params.updateInstallKind === "package"
         ? await resolvePackageUpdateExecutor(params.generationPackageUpdateExecutor)
-        : runPackageInstallUpdate;
-    if (params.updateInstallKind === "package" || params.updateInstallKind === "git") {
+        : undefined;
+    if (packageUpdateExecutor?.kind === "generation") {
+      await stopManagedServiceBeforeMutableUpdate(undefined, "inspect");
+      const { executor, filesystem, ledger, runtime } = packageUpdateExecutor;
+      const expectedService = snapshotExpectedManagedService(preManagedServiceStop);
+      let issuanceOpen = true;
+      let returnedArtifact: UpdateGenerationPreparedArtifact;
+      try {
+        returnedArtifact = await executor.prepare({
+          update: buildPackagePreparationParams(
+            expectedService?.serviceEnv ? { ...expectedService.serviceEnv } : undefined,
+          ),
+          filesystem,
+          ledger,
+          runtime,
+          issuePreparedArtifact: () => {
+            if (!issuanceOpen || preparedArtifact) {
+              throw new TypeError(
+                "Generation preparation may issue exactly one token before returning",
+              );
+            }
+            preparedArtifact = issuePreparedArtifact(executor);
+            preparedArtifactOwned = true;
+            return preparedArtifact;
+          },
+        });
+      } finally {
+        issuanceOpen = false;
+      }
+      assertPreparedArtifactOwner(executor, returnedArtifact);
+      if (returnedArtifact !== preparedArtifact) {
+        throw new UpdatePreMutationError(
+          "generation-activation-preflight",
+          "Generation preparation did not return its current one-shot token.",
+        );
+      }
+      await stopManagedServiceBeforeMutableUpdate(undefined, "prepare", expectedService);
+    } else if (params.updateInstallKind === "package" || params.updateInstallKind === "git") {
       await stopManagedServiceBeforeMutableUpdate(
         gitMutationRoots ?? undefined,
         params.updateInstallKind === "git" ? "inspect" : "prepare",
@@ -292,56 +471,79 @@ export async function executeMutableUpdate(params: {
       );
     }
     preManagedServiceStop?.windowsTaskAutoStartRecovery?.beginMutation();
-    result =
-      params.updateInstallKind === "package"
-        ? await packageUpdateExecutor({
-            root: params.root,
-            installKind: params.installKind,
-            tag: params.tag,
-            installSpec: params.packageInstallSpec ?? undefined,
-            timeoutMs: params.updateStepTimeoutMs,
-            startedAt: params.startedAt,
-            progress: params.progress,
-            jsonMode: Boolean(params.opts.json),
-            ...resolvePreparedGatewayUpdatePolicy(preManagedServiceStop, params.shouldRestart),
-            managedServiceEnv: preManagedServiceStop?.serviceEnv,
-            invocationCwd: params.invocationCwd,
-            honorPackageRoot:
-              params.managedServiceRootRedirect !== null ||
-              params.managedServiceNodeRunner !== undefined,
-            nodeRunner: params.packageUpdateNodeRunner,
-            installEnv: params.packageInstallEnv,
-            installTarget: params.packageInstallTarget,
-          })
-        : await updateGitInstall({
-            root: params.root,
-            switchToGit: params.switchToGit,
-            installKind: params.installKind,
-            timeoutMs: params.timeoutMs,
-            startedAt: params.startedAt,
-            progress: params.progress,
-            channel: params.channel,
-            tag: params.tag,
-            devTarget: params.devTarget,
-            beforeGitMutation:
-              params.updateInstallKind === "git"
-                ? createBeforeGitMutation({
-                    roots: gitMutationRoots ?? [params.root],
-                    shouldRestart: params.shouldRestart,
-                    stopManagedService: stopManagedServiceBeforeMutableUpdate,
-                    getPreManagedServiceStop: () => preManagedServiceStop,
-                    switchToGit: params.switchToGit,
-                  })
-                : undefined,
-            allowGatewayServiceRepair: false,
-            allowGatewayActivation: false,
-          });
-  } catch (err) {
+    if (packageUpdateExecutor?.kind === "generation") {
+      if (!preparedArtifact) {
+        throw new UpdatePreMutationError(
+          "generation-activation-preflight",
+          "Generation activation requires a prepared package token.",
+        );
+      }
+      const { executor, filesystem, ledger, runtime } = packageUpdateExecutor;
+      const activation = {
+        prepared: preparedArtifact,
+        update: buildPackageActivationParams(),
+        filesystem,
+        ledger,
+        runtime,
+      };
+      generationActivationStarted = true;
+      result = await executor.activate(activation);
+    } else if (packageUpdateExecutor?.kind === "legacy") {
+      result = await packageUpdateExecutor.execute(buildPackageActivationParams());
+    } else {
+      result = await updateGitInstall({
+        root: params.root,
+        switchToGit: params.switchToGit,
+        installKind: params.installKind,
+        timeoutMs: params.timeoutMs,
+        startedAt: params.startedAt,
+        progress: params.progress,
+        channel: params.channel,
+        tag: params.tag,
+        devTarget: params.devTarget,
+        beforeGitMutation:
+          params.updateInstallKind === "git"
+            ? createBeforeGitMutation({
+                roots: gitMutationRoots ?? [params.root],
+                shouldRestart: params.shouldRestart,
+                stopManagedService: stopManagedServiceBeforeMutableUpdate,
+                getPreManagedServiceStop: () => preManagedServiceStop,
+                switchToGit: params.switchToGit,
+              })
+            : undefined,
+        allowGatewayServiceRepair: false,
+        allowGatewayActivation: false,
+      });
+    }
+  } catch (caught) {
+    let err = caught;
+    if (
+      packageUpdateExecutor?.kind === "generation" &&
+      preparedArtifact &&
+      preparedArtifactOwned &&
+      !generationActivationStarted
+    ) {
+      const discardReason =
+        err instanceof UpdateCommandAbort ? "update-aborted" : "pre-activation-failed";
+      try {
+        await packageUpdateExecutor.executor.discard(preparedArtifact, discardReason);
+      } catch (discardError) {
+        err = new AggregateError(
+          [err, discardError],
+          `Generation preparation cleanup failed after ${discardReason}`,
+        );
+      }
+    }
     params.stop();
-    if (err instanceof UpdateCommandAbort) {
+    const generationPostActivationFailure =
+      packageUpdateExecutor?.kind === "generation" && generationActivationStarted;
+    if (err instanceof UpdateCommandAbort && !generationPostActivationFailure) {
       return null;
     }
-    const preMutationFailure = err instanceof UpdatePreMutationError;
+    const preMutationError =
+      err instanceof UpdatePreMutationError && !generationPostActivationFailure ? err : undefined;
+    const generationRuntimeUnchanged =
+      packageUpdateExecutor?.kind === "generation" && !generationActivationStarted;
     const message = formatErrorMessage(err);
     failure = { cause: err, detail: message };
     defaultRuntime.error(message);
@@ -356,13 +558,14 @@ export async function executeMutableUpdate(params: {
           ? "git"
           : (params.packageInstallTarget?.manager ?? "unknown"),
       root: params.root,
-      reason: preMutationFailure ? err.reason : "update-failed",
-      recovery: preMutationFailure
-        ? await originalRecovery()
-        : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+      reason: preMutationError?.reason ?? "update-failed",
+      recovery:
+        preMutationError || generationRuntimeUnchanged
+          ? await originalRecovery()
+          : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
       steps: [
         {
-          name: preMutationFailure ? err.reason : "update",
+          name: preMutationError?.reason ?? "update",
           command: "openclaw update",
           cwd: params.root,
           durationMs,
