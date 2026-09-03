@@ -1,6 +1,11 @@
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { prepareGithubIssue, submitGithubIssue, type RunGithubCli } from "./github-issue.js";
+import {
+  prepareGithubIssue,
+  reconcileGithubIssue,
+  submitGithubIssue,
+  type RunGithubCli,
+} from "./github-issue.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 
@@ -288,6 +293,34 @@ describe("GitHub issue transport", () => {
       url: "https://github.com/openclaw/openclaw/issues/456",
     });
     expect(runGh.mock.calls[2]?.[0]).toContain(`"${issue.marker}" in:body`);
+  });
+
+  it("reconciles a persisted attempt without issuing a create request", async () => {
+    const issue = prepare("cross-process-retry");
+    const runGh = vi.fn<RunGithubCli>().mockResolvedValueOnce(
+      cliResult({
+        started: true,
+        status: 0,
+        stdout: Buffer.from(
+          JSON.stringify([
+            {
+              body: issue.body,
+              title: issue.title,
+              url: "https://github.com/openclaw/openclaw/issues/456",
+            },
+          ]),
+        ),
+      }),
+    );
+
+    await expect(reconcileGithubIssue(issue, runGh)).resolves.toEqual({
+      status: "created",
+      url: "https://github.com/openclaw/openclaw/issues/456",
+    });
+    expect(runGh).toHaveBeenCalledOnce();
+    expect(runGh.mock.calls[0]?.[0][0]).toBe("issue");
+    expect(runGh.mock.calls[0]?.[0]).not.toContain("api");
+    expect(runGh.mock.calls[0]?.[1]).toEqual({ input: "" });
   });
 
   it.each([

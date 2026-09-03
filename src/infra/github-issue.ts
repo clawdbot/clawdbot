@@ -33,6 +33,11 @@ export type GithubIssueSubmitResult =
     }
   | { reason: "creation-outcome-unknown"; status: "outcome-unknown" };
 
+export type GithubIssueReconcileResult =
+  | { status: "created"; url: string }
+  | { status: "not-found" }
+  | { status: "unavailable" };
+
 type GithubCliResult = {
   errorCode?: string;
   started: boolean;
@@ -192,25 +197,26 @@ function browserFallbackReason(
     : "authentication-unavailable";
 }
 
-async function reconcileGithubIssue(
+/** Looks up one exact prepared issue without creating or mutating remote state. */
+export async function reconcileGithubIssue(
   issue: PreparedGithubIssue,
-  runGh: RunGithubCli,
-): Promise<string | undefined> {
+  runGh: RunGithubCli = runGithubCli,
+): Promise<GithubIssueReconcileResult> {
   if (!GITHUB_MARKER_RE.test(issue.marker)) {
-    return undefined;
+    return { status: "unavailable" };
   }
   const lookup = await runGh(issueLookupArgs(issue.marker), { input: "" });
   if (lookup.errorCode || lookup.status !== 0) {
-    return undefined;
+    return { status: "unavailable" };
   }
   let rows: unknown;
   try {
     rows = JSON.parse(lookup.stdout.toString("utf8"));
   } catch {
-    return undefined;
+    return { status: "unavailable" };
   }
   if (!Array.isArray(rows)) {
-    return undefined;
+    return { status: "unavailable" };
   }
   for (const row of rows) {
     if (
@@ -226,10 +232,10 @@ async function reconcileGithubIssue(
     }
     const url = createdIssueUrl(row.url);
     if (url) {
-      return url;
+      return { status: "created", url };
     }
   }
-  return undefined;
+  return { status: "not-found" };
 }
 
 async function submitGithubIssueOnce(
@@ -266,9 +272,9 @@ async function submitGithubIssueOnce(
   }
   // Once creation starts, a lost response can still hide a created issue. Only exact marker
   // reconciliation may resolve that ambiguity; a browser fallback could duplicate the report.
-  const reconciledUrl = await reconcileGithubIssue(issue, runGh);
-  return reconciledUrl
-    ? { status: "created", url: reconciledUrl }
+  const reconciled = await reconcileGithubIssue(issue, runGh);
+  return reconciled.status === "created"
+    ? reconciled
     : { reason: "creation-outcome-unknown", status: "outcome-unknown" };
 }
 

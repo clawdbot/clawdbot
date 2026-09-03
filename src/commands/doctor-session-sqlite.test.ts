@@ -43,7 +43,11 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { sessionDeliveryRoute } from "../utils/delivery-context.shared.js";
 import * as migrationArtifact from "./doctor-session-sqlite-artifact.js";
-import { createSessionSqliteMigrationFailureIssue } from "./doctor-session-sqlite-failure.js";
+import {
+  claimSessionSqliteMigrationGithubIssue,
+  createSessionSqliteMigrationFailureIssue,
+  writeSessionSqliteMigrationFailureReports,
+} from "./doctor-session-sqlite-failure.js";
 import * as migrationRun from "./doctor-session-sqlite-migration-run.js";
 import {
   assertSafeSessionSqliteMigrationMove,
@@ -5087,6 +5091,121 @@ describe("runDoctorSessionSqlite", () => {
       expect(recover.supportIssue?.body).not.toContain(process.env.HOME);
     }
     expect(recover.supportIssue).not.toHaveProperty("url");
+  });
+
+  it.each([1, 2, 3] as const)(
+    "persists one support issue receipt on a historical v%s manifest",
+    (manifestVersion) => {
+      const store = createLegacyStore();
+      const manifestPath = path.join(store.tempDir, `historical-v${manifestVersion}.json`);
+      const failureJsonPath = path.join(
+        store.tempDir,
+        `historical-v${manifestVersion}.failure.json`,
+      );
+      const failureMarkdownPath = path.join(
+        store.tempDir,
+        `historical-v${manifestVersion}.failure.md`,
+      );
+      const manifest: SessionSqliteMigrationManifest = {
+        failedAt: "2030-01-01T00:00:00.000Z",
+        failureReports: { jsonPath: failureJsonPath, markdownPath: failureMarkdownPath },
+        manifestVersion,
+        openClawVersion: "historical",
+        runId: `historical-v${manifestVersion}`,
+        startedAt: "2030-01-01T00:00:00.000Z",
+        targets: [
+          {
+            ...trustedMigrationTarget(store),
+            completedMoves: [],
+            issues: [{ code: "startup_failure", message: "sanitized failure" }],
+            plannedMoves: [],
+            validationBeforeArchive: "failed",
+          },
+        ],
+      };
+      fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
+      const authority = { assertCurrent: vi.fn() };
+      const issue = {
+        marker: `openclaw-report:${"b".repeat(64)}`,
+        title: `Stable report v${manifestVersion}`,
+      };
+      fs.writeFileSync(failureMarkdownPath, `stable sanitized report v${manifestVersion}\n`, {
+        mode: 0o600,
+      });
+
+      expect(claimSessionSqliteMigrationGithubIssue(manifestPath, issue, authority)).toMatchObject({
+        issue: { ...issue, status: "attempted" },
+        status: "claimed",
+      });
+      expect(
+        claimSessionSqliteMigrationGithubIssue(
+          manifestPath,
+          { ...issue, title: "regenerated title must not replace the claim" },
+          authority,
+        ),
+      ).toMatchObject({ issue: { ...issue, status: "attempted" }, status: "existing" });
+
+      writeSessionSqliteMigrationFailureReports(manifestPath, { reason: "retry" });
+      expect(createSessionSqliteMigrationFailureIssue(manifestPath)).toMatchObject({
+        body: expect.stringContaining(`stable sanitized report v${manifestVersion}`),
+        title: issue.title,
+      });
+      expect(readMigrationManifest(manifestPath)).toMatchObject({
+        failureReports: { githubIssue: { ...issue, status: "attempted" } },
+        manifestVersion,
+      });
+      const receiptJson = fs.readFileSync(manifestPath, "utf8");
+      expect(receiptJson).not.toContain(`stable sanitized report v${manifestVersion}`);
+      expect(receiptJson).not.toContain("github.com/openclaw/openclaw/issues/");
+      expect(fs.readFileSync(failureMarkdownPath, "utf8")).toBe(
+        `stable sanitized report v${manifestVersion}\n`,
+      );
+      expect(authority.assertCurrent).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("derives private report paths instead of trusting persisted destinations", () => {
+    const store = createLegacyStore();
+    const manifestPath = path.join(store.tempDir, "path-ownership.json");
+    const expectedJsonPath = path.join(store.tempDir, "path-ownership.failure.json");
+    const expectedMarkdownPath = path.join(store.tempDir, "path-ownership.failure.md");
+    const untrustedJsonPath = path.join(store.tempDir, "untrusted-destination.json");
+    const untrustedMarkdownPath = path.join(store.tempDir, "untrusted-destination.md");
+    const manifest: SessionSqliteMigrationManifest = {
+      failedAt: "2030-01-01T00:00:00.000Z",
+      failureReports: { jsonPath: untrustedJsonPath, markdownPath: untrustedMarkdownPath },
+      manifestVersion: 3,
+      openClawVersion: "test",
+      runId: "path-ownership",
+      startedAt: "2030-01-01T00:00:00.000Z",
+      targets: [
+        {
+          ...trustedMigrationTarget(store),
+          completedMoves: [],
+          issues: [{ code: "startup_failure", message: "sanitized failure" }],
+          plannedMoves: [],
+          validationBeforeArchive: "failed",
+        },
+      ],
+    };
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
+    fs.writeFileSync(untrustedJsonPath, "private json sentinel\n", { mode: 0o600 });
+    fs.writeFileSync(untrustedMarkdownPath, "private markdown sentinel\n", { mode: 0o600 });
+
+    expect(writeSessionSqliteMigrationFailureReports(manifestPath, { reason: "failed" })).toEqual({
+      jsonPath: expectedJsonPath,
+      markdownPath: expectedMarkdownPath,
+    });
+    expect(createSessionSqliteMigrationFailureIssue(manifestPath)).toMatchObject({
+      body: expect.not.stringContaining("private markdown sentinel"),
+      bodyPath: expectedMarkdownPath,
+    });
+    expect(fs.readFileSync(untrustedJsonPath, "utf8")).toBe("private json sentinel\n");
+    expect(fs.readFileSync(untrustedMarkdownPath, "utf8")).toBe("private markdown sentinel\n");
+    expect(readMigrationManifest(manifestPath).failureReports).toEqual({
+      jsonPath: expectedJsonPath,
+      markdownPath: expectedMarkdownPath,
+    });
   });
 
   it("keeps bounded GitHub issue bodies on a valid UTF-16 boundary", () => {

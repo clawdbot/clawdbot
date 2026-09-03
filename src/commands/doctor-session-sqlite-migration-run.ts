@@ -45,10 +45,17 @@ export type SessionSqliteMigrationTargetManifest = SessionSqliteMigrationTargetI
   validationBeforeArchive: "not_run" | "passed" | "failed";
 };
 
+export type SessionSqliteMigrationGithubIssue = {
+  marker: string;
+  status: "attempted";
+  title: string;
+};
+
 export type SessionSqliteMigrationManifest = {
   completedAt?: string;
   failedAt?: string;
   failureReports?: {
+    githubIssue?: SessionSqliteMigrationGithubIssue;
     jsonPath: string;
     markdownPath: string;
   };
@@ -110,6 +117,12 @@ const RestoreConflictSchema = z.object({
   reason: z.string(),
   sourcePath: AbsolutePathSchema,
 });
+const GithubIssueMarkerSchema = z.string().regex(/^openclaw-report:[a-f0-9]{64}$/u);
+const MigrationGithubIssueSchema = z.object({
+  marker: GithubIssueMarkerSchema,
+  status: z.literal("attempted"),
+  title: z.string().min(1).max(512),
+});
 const MigrationTargetSchema = z
   .object({
     agentId: z.string().min(1),
@@ -161,6 +174,7 @@ const MigrationManifestSchema = z
     failedAt: z.string().optional(),
     failureReports: z
       .object({
+        githubIssue: MigrationGithubIssueSchema.optional(),
         jsonPath: AbsolutePathSchema,
         markdownPath: AbsolutePathSchema,
       })
