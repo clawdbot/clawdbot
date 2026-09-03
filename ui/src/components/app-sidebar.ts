@@ -21,6 +21,7 @@ import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-gro
 import { showToast } from "../lib/toast.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { SETTINGS_ROUTE_TARGETS } from "../pages/config/route-data.ts";
+import "../styles/app-sidebar.css";
 import { sidebarPluginTabs } from "./app-sidebar-nav-menus.ts";
 import {
   renderAppSidebarBrand,
