@@ -1,6 +1,7 @@
 // Openclaw Cross Os Release Workflow tests cover openclaw cross os release workflow script behavior.
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
@@ -12,6 +13,7 @@ const HARNESS = "bash workflow/scripts/github/run-openclaw-cross-os-release-chec
 const BASH_BIN = process.platform === "win32" ? "bash" : "/bin/bash";
 
 type WorkflowStep = {
+  "continue-on-error"?: boolean | string;
   env?: Record<string, unknown>;
   id?: string;
   if?: string;
@@ -23,6 +25,7 @@ type WorkflowStep = {
 };
 
 type WorkflowJob = {
+  "continue-on-error"?: boolean | string;
   if?: string;
   needs?: string | string[];
   outputs?: Record<string, unknown>;
@@ -62,6 +65,25 @@ describe("cross-OS release checks workflow", () => {
     expect(workflow).toContain("suite_filter:");
     expect(workflow).toContain('--suite-filter "${INPUT_SUITE_FILTER}"');
     expect(workflow).not.toContain("TSX_VERSION");
+  });
+
+  it.each([
+    ["ubuntu", false],
+    ["windows", true],
+    ["macos", true],
+  ])("makes %s cross-OS coverage advisory=%s without masking failed steps", (osId, advisory) => {
+    const workflow = readWorkflow(WORKFLOW_PATH);
+    const prepare = job(workflow, "prepare");
+    const lane = job(workflow, "cross_os_release_checks");
+    const context = { inputs: { advisory: false }, matrix: { os_id: osId } };
+    const evaluate = (expression: unknown) =>
+      runInNewContext(String(expression).replace(/^\$\{\{(.*)\}\}$/u, "$1"), context);
+
+    expect(evaluate(prepare["continue-on-error"])).toBe(false);
+    expect(evaluate(lane["continue-on-error"])).toBe(advisory);
+    expect(step(lane, "Run cross-OS release checks")["continue-on-error"]).toBeUndefined();
+    context.inputs.advisory = true;
+    expect(evaluate(lane["continue-on-error"])).toBe(true);
   });
 
   it("pins only Windows packaged-fresh checks to the known-good Node release", () => {
