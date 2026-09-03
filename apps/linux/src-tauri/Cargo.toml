@@ -17,7 +17,7 @@ base64 = "0.23.1"
 ed25519-dalek = "3.0.0"
 futures-util = "0.3.34"
 getrandom = "0.4.3"
-mdns-sd = { version = "0.21.0", default-features = false }
+mdns-sd = { version = "0.21.1", default-features = false }
 rustls = { version = "0.23.43", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
@@ -34,17 +34,19 @@ tauri = { version = "2.11.5", features = [
   "unstable",
 ] }
 tauri-plugin-autostart = "2.5.1"
-tauri-plugin-deep-link = "2.4.9"
+tauri-plugin-deep-link = "2.4.10"
 tauri-plugin-global-shortcut = "2.3.2"
-tauri-plugin-opener = "2.5.4"
+tauri-plugin-opener = "2.5.5"
 tauri-plugin-process = "2.3.1"
-tauri-plugin-single-instance = { version = "2.4.3", features = ["deep-link"] }
-tauri-plugin-updater = "2.10.1"
+tauri-plugin-single-instance = { version = "2.4.4", features = ["deep-link"] }
+# 2.11.0 returns Windows installer errors after Tauri has torn down the UI.
+# Lift this pin once cleanup runs only after a successful installer launch.
+tauri-plugin-updater = "=2.10.1"
 tauri-plugin-window-state = "2.4.1"
 tauri-utils = { version = "2.9.3", features = ["config-json5"] }
 tokio = { version = "1.53.1", features = ["macros", "sync", "time"] }
 tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-native-roots"] }
-uuid = { version = "1.24.1", features = ["v4"] }
+uuid = { version = "1.26.0", features = ["v4"] }
 zeroize = "1.9.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]

@@ -56,11 +56,7 @@ function resolveQrTempPathSegment(name: string, value: string): string {
   return value;
 }
 
-/** Renders QR text as raw PNG base64 after validating bounded renderer options. */
-export async function renderQrPngBase64(
-  input: string,
-  opts: QrPngRenderOptions = {},
-): Promise<string> {
+async function renderQrPngBuffer(input: string, opts: QrPngRenderOptions): Promise<Buffer> {
   const scale = resolveQrPngIntegerOption({
     name: "scale",
     value: opts.scale,
@@ -76,16 +72,18 @@ export async function renderQrPngBase64(
     max: MAX_QR_PNG_MARGIN_MODULES,
   });
   const qrCode = await loadQrCodeRuntime();
-  const png = await qrCode.toBuffer(input, {
+  return await qrCode.toBuffer(input, {
     margin: marginModules,
     scale,
   });
-  return png.toString("base64");
 }
 
-/** Wraps PNG base64 in the exact data URL prefix expected by chat/media callers. */
-function formatQrPngDataUrl(base64: string): string {
-  return `${QR_PNG_DATA_URL_PREFIX}${base64}`;
+/** Renders QR text as raw PNG base64 after validating bounded renderer options. */
+export async function renderQrPngBase64(
+  input: string,
+  opts: QrPngRenderOptions = {},
+): Promise<string> {
+  return (await renderQrPngBuffer(input, opts)).toString("base64");
 }
 
 /** Renders QR text as a PNG data URL. */
@@ -93,7 +91,7 @@ export async function renderQrPngDataUrl(
   input: string,
   opts: QrPngRenderOptions = {},
 ): Promise<string> {
-  return formatQrPngDataUrl(await renderQrPngBase64(input, opts));
+  return `${QR_PNG_DATA_URL_PREFIX}${await renderQrPngBase64(input, opts)}`;
 }
 
 /** Writes QR PNG output into a scoped temp directory and returns that directory as a media root. */
@@ -103,11 +101,11 @@ export async function writeQrPngTempFile(
 ): Promise<QrPngTempFile> {
   const dirPrefix = resolveQrTempPathSegment("dirPrefix", opts.dirPrefix);
   const fileName = resolveQrTempPathSegment("fileName", opts.fileName ?? "qr.png");
-  const pngBase64 = await renderQrPngBase64(input, opts);
+  const png = await renderQrPngBuffer(input, opts);
   const workspace = await tempWorkspace({ rootDir: opts.tmpRoot, prefix: dirPrefix });
   const dirPath = workspace.dir;
   try {
-    const filePath = await workspace.write(fileName, Buffer.from(pngBase64, "base64"));
+    const filePath = await workspace.write(fileName, png);
     return {
       filePath,
       dirPath,

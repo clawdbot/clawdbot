@@ -275,6 +275,7 @@ export async function probeGateway(opts: {
   detailLevel?: GatewayProbeDetailLevel;
   tlsFingerprint?: string;
   env?: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
 }): Promise<GatewayProbeResult> {
   const startedAt = Date.now();
   const instanceId = randomUUID();
@@ -347,6 +348,7 @@ export async function probeGateway(opts: {
   return await new Promise<GatewayProbeResult>((resolve) => {
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let onAbort: (() => void) | undefined;
     const startAbort = new AbortController();
     const clearProbeTimer = () => {
       if (timer) {
@@ -367,6 +369,10 @@ export async function probeGateway(opts: {
         return;
       }
       settled = true;
+      if (onAbort) {
+        opts.signal?.removeEventListener("abort", onAbort);
+        onAbort = undefined;
+      }
       startAbort.abort();
       clearProbeTimer();
       void (async () => {
@@ -578,6 +584,26 @@ export async function probeGateway(opts: {
         })();
       },
     });
+
+    if (opts.signal) {
+      onAbort = () => {
+        settleProbe({
+          ok: false,
+          error: "aborted",
+          health: null,
+          status: null,
+          presence: null,
+          configSnapshot: null,
+        });
+      };
+      opts.signal.addEventListener("abort", onAbort, { once: true });
+      if (opts.signal.aborted) {
+        onAbort();
+      }
+    }
+    if (settled) {
+      return;
+    }
 
     armProbeTimer(() => {
       const error = connectError ? `connect failed: ${connectError}` : "timeout";

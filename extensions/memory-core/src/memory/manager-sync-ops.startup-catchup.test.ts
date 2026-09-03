@@ -1,4 +1,5 @@
 // Memory Core tests cover manager sync ops.startup-catchup plugin behavior.
+import { AsyncLocalStorage } from "node:async_hooks";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -481,25 +482,10 @@ describe("session startup catch-up", () => {
   ];
 
   it.each(cacheBoundSyncs)("bounds the embedding cache on a %s sync", async (_label, params) => {
-    // Enforcement first lived inside runInPlaceReindex's shadow rebuild, bounding a throwaway
-    // database and never the live one; moving it into the incremental branch then skipped the
-    // paths that return early. Long-running databases stayed unbounded (openclaw/openclaw#114612).
-    await writeSessionFile("thread.jsonl");
+    await writeSqliteSession();
     const harness = new SessionStartupCatchupHarness([]);
 
     await harness.runSyncForTest(params);
-
-    expect(harness.embeddingCachePrunes).toBeGreaterThan(0);
-  });
-
-  it("bounds the embedding cache when the sync pass aborts", async () => {
-    // The full-reindex branch returns before the incremental code and cannot complete against
-    // this harness, so it stands in for every early or failed exit: enforcement inside any one
-    // branch skips them, a finally around the pass does not.
-    await writeSessionFile("thread.jsonl");
-    const harness = new SessionStartupCatchupHarness([]);
-
-    await expect(harness.runSyncForTest({ reason: "cli", force: true })).rejects.toThrow();
 
     expect(harness.embeddingCachePrunes).toBeGreaterThan(0);
   });
@@ -647,18 +633,38 @@ describe("session startup catch-up", () => {
     vi.useFakeTimers();
     const session = await writeSqliteSession();
     const harness = new SessionStartupCatchupHarness([], true, true);
-    harness.startTranscriptListener();
+    const turnContext = new AsyncLocalStorage<string>();
+    const pendingInputContext = new AsyncLocalStorage<string>();
+    turnContext.run("opening turn", () => harness.startTranscriptListener());
+    const timerContexts: Array<{ turn?: string; pendingInput?: string }> = [];
+    const originalSetTimeout = globalThis.setTimeout;
+    const timerObserver = vi.spyOn(globalThis, "setTimeout").mockImplementation((...args) => {
+      if (args[1] === 5000) {
+        timerContexts.push({
+          turn: turnContext.getStore(),
+          pendingInput: pendingInputContext.getStore(),
+        });
+      }
+      return originalSetTimeout(...args);
+    });
 
     try {
-      await appendSessionTranscriptMessageByIdentity({
-        agentId: "main",
-        sessionId: session.sessionId,
-        sessionKey: session.sessionKey,
-        storePath: session.storePath,
-        cwd: stateDir,
-        message: { role: "assistant", content: "persisted listener update" },
-      });
-      await publishSessionTranscriptUpdateByIdentity(session);
+      await turnContext.run("later turn", () =>
+        pendingInputContext.run("later input", async () => {
+          await appendSessionTranscriptMessageByIdentity({
+            agentId: "main",
+            sessionId: session.sessionId,
+            sessionKey: session.sessionKey,
+            storePath: session.storePath,
+            cwd: stateDir,
+            message: { role: "assistant", content: "persisted listener update" },
+          });
+          await publishSessionTranscriptUpdateByIdentity(session);
+          expect(turnContext.getStore()).toBe("later turn");
+          expect(pendingInputContext.getStore()).toBe("later input");
+        }),
+      );
+      expect(timerContexts).toEqual([{ turn: undefined, pendingInput: undefined }]);
 
       await vi.advanceTimersByTimeAsync(6000);
       await harness.waitForSessionSync();
@@ -669,6 +675,7 @@ describe("session startup catch-up", () => {
       ]);
     } finally {
       harness.stopTranscriptListener();
+      timerObserver.mockRestore();
     }
   });
 

@@ -25,7 +25,6 @@ import {
   adoptGeneration,
   issueFrame,
   verifyFrame,
-  verifyReferenceWidth,
   type CuaDesktopGeometry,
   type CuaFrameState,
   type CuaLastFrame,
@@ -71,7 +70,7 @@ type ImageProcessor = {
     options: {
       format: "jpeg" | "png";
       quality?: number;
-      resize?: { width: number; enlarge: false };
+      resize?: { maxSide: number; enlarge: false };
     },
   ): Promise<{ data: Buffer; width: number; height: number }>;
 };
@@ -234,13 +233,14 @@ function createImageProcessor(env: NodeJS.ProcessEnv): ImageProcessor {
 }
 
 function clickArgs(
+  platform: NodeJS.Platform,
   frame: CuaLastFrame,
   params: CuaComputerActParams,
   button: ClickButton,
   count: 1 | 2 | 3,
 ) {
   const point = scalePoint(frame, params.x, params.y, params.action);
-  const modifiers = normalizeModifiers(params.modifiers);
+  const modifiers = normalizeModifiers(params.modifiers, platform);
   if (modifiers.length > 0) {
     throw new Error(
       "COMPUTER_UNSUPPORTED_ACTION: modifier-held desktop clicks are unsupported by cua-driver",
@@ -264,12 +264,11 @@ async function currentFrame(
     frameState.lastFrame = undefined;
     throw new Error("COMPUTER_STALE_FRAME: the computer driver reconnected; take a new screenshot");
   }
-  const frame = verifyFrame(frameState, params.displayFrameId, current);
-  verifyReferenceWidth(frameState, frame, params.refWidth);
-  return frame;
+  return verifyFrame(frameState, params.displayFrameId, current, params.refWidth);
 }
 
 async function handleDesktopAct(
+  platform: NodeJS.Platform,
   driver: CuaDriverSession,
   frameState: CuaFrameState,
   params: ComputerActParams,
@@ -308,24 +307,15 @@ async function handleDesktopAct(
       // press_key applies the modifier array on every backend: X11 via XTest,
       // and native Wayland by internally promoting a modifier chord to
       // hotkey_focused. No separate hotkey call is needed for chords.
-      const chord = parseKeyChord(desktopParams.keys);
-      assertToolSuccess(
-        await driver.pressKey(
-          {
-            key: chord.key,
-            modifiers: chord.modifiers,
-          },
-          signal,
-        ),
-        "press_key",
-      );
+      const chord = parseKeyChord(desktopParams.keys, platform);
+      assertToolSuccess(await driver.pressKey(chord, signal), "press_key");
       break;
     }
     case "scroll": {
       if (!desktopParams.scrollDirection) {
         throw new Error("COMPUTER_INVALID_REQUEST: scrollDirection is required for scroll");
       }
-      if (normalizeModifiers(desktopParams.modifiers).length > 0) {
+      if (normalizeModifiers(desktopParams.modifiers, platform).length > 0) {
         throw new Error(
           "COMPUTER_UNSUPPORTED_ACTION: modifier-held scroll is unsupported by cua-driver",
         );
@@ -361,31 +351,46 @@ async function handleDesktopAct(
       switch (desktopParams.action) {
         case "left_click":
           assertToolSuccess(
-            await driver.click(clickArgs(frame, desktopParams, ClickButton.Left, 1), signal),
+            await driver.click(
+              clickArgs(platform, frame, desktopParams, ClickButton.Left, 1),
+              signal,
+            ),
             "click",
           );
           break;
         case "right_click":
           assertToolSuccess(
-            await driver.click(clickArgs(frame, desktopParams, ClickButton.Right, 1), signal),
+            await driver.click(
+              clickArgs(platform, frame, desktopParams, ClickButton.Right, 1),
+              signal,
+            ),
             "click",
           );
           break;
         case "middle_click":
           assertToolSuccess(
-            await driver.click(clickArgs(frame, desktopParams, ClickButton.Middle, 1), signal),
+            await driver.click(
+              clickArgs(platform, frame, desktopParams, ClickButton.Middle, 1),
+              signal,
+            ),
             "click",
           );
           break;
         case "double_click":
           assertToolSuccess(
-            await driver.click(clickArgs(frame, desktopParams, ClickButton.Left, 2), signal),
+            await driver.click(
+              clickArgs(platform, frame, desktopParams, ClickButton.Left, 2),
+              signal,
+            ),
             "click",
           );
           break;
         case "triple_click":
           assertToolSuccess(
-            await driver.click(clickArgs(frame, desktopParams, ClickButton.Left, 3), signal),
+            await driver.click(
+              clickArgs(platform, frame, desktopParams, ClickButton.Left, 3),
+              signal,
+            ),
             "click",
           );
           break;
@@ -397,13 +402,6 @@ async function handleDesktopAct(
         case "left_click_drag": {
           const from = scalePoint(frame, desktopParams.fromX, desktopParams.fromY, "drag start");
           const to = scalePoint(frame, desktopParams.x, desktopParams.y, "drag end");
-          // The typed desktop drag API has no modifier field. Refuse instead of
-          // silently widening a model request into an unmodified drag.
-          if (normalizeModifiers(desktopParams.modifiers).length > 0) {
-            throw new Error(
-              "COMPUTER_UNSUPPORTED_ACTION: modifier-held drag is unsupported by cua-driver",
-            );
-          }
           assertToolSuccess(
             await driver.drag(
               {
@@ -557,18 +555,22 @@ export function createCuaComputerProvider(
             let encoded = nativePng;
             let width = geometry.screenshotWidth;
             let height = geometry.screenshotHeight;
-            if (format === "jpeg" || width > maxWidth) {
+            if (format === "jpeg" || Math.max(width, height) > maxWidth) {
               const result = await imageProcessor.encode(nativePng, {
                 format,
                 ...(format === "jpeg" ? { quality: Math.round(quality * 100) } : {}),
-                ...(width > maxWidth ? { resize: { width: maxWidth, enlarge: false } } : {}),
+                resize: { maxSide: maxWidth, enlarge: false },
               });
               encoded = result.data;
               width = result.width;
               height = result.height;
             }
             adoptGeneration(frameState, executionDriver.generation);
-            const displayFrameId = issueFrame(frameState, geometry, { width, height });
+            const displayFrameId = issueFrame(frameState, geometry, {
+              width,
+              height,
+              referenceWidth: maxWidth,
+            });
             return JSON.stringify({
               format,
               base64: encoded.toString("base64"),

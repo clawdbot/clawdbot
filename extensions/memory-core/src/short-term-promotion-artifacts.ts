@@ -12,10 +12,8 @@ import {
   readMemoryCoreWorkspaceEntries,
 } from "./dreaming-state.js";
 import {
-  SHORT_TERM_LOCK_STALE_MS,
   deleteShortTermLockEntryIfCurrent,
-  isProcessLikelyAlive,
-  parseLockOwnerPid,
+  isShortTermLockStealable,
   resolveLockPath,
   withMemoryWorkspaceLock,
 } from "./memory-workspace-lock.js";
@@ -137,12 +135,7 @@ export async function auditShortTermPromotionArtifacts(params: {
   });
   const lockEntry = await lockStore.lookup(lockKey);
   if (lockEntry) {
-    const ageMs = Date.now() - lockEntry.acquiredAt;
-    const ownerPid = parseLockOwnerPid(lockEntry.owner);
-    if (
-      ageMs > SHORT_TERM_LOCK_STALE_MS &&
-      (ownerPid === null || !isProcessLikelyAlive(ownerPid))
-    ) {
+    if (isShortTermLockStealable(lockKey, lockEntry, Date.now())) {
       issues.push({
         severity: "warn",
         code: "recall-lock-stale",
@@ -185,11 +178,8 @@ export async function repairShortTermPromotionArtifacts(params: {
     maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
   });
   const lockEntry = await lockStore.lookup(lockKey);
-  if (lockEntry && Date.now() - lockEntry.acquiredAt > SHORT_TERM_LOCK_STALE_MS) {
-    const ownerPid = parseLockOwnerPid(lockEntry.owner);
-    if (ownerPid === null || !isProcessLikelyAlive(ownerPid)) {
-      removedStaleLock = await deleteShortTermLockEntryIfCurrent(lockStore, lockKey, lockEntry);
-    }
+  if (lockEntry && isShortTermLockStealable(lockKey, lockEntry, Date.now())) {
+    removedStaleLock = await deleteShortTermLockEntryIfCurrent(lockStore, lockKey, lockEntry);
   }
 
   await withMemoryWorkspaceLock(workspaceDir, async () => {

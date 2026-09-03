@@ -350,6 +350,30 @@ describe("control-ui-i18n process runner", () => {
     ).toEqual(new Map([["configView.viewPendingChange", "Pending change ({count})"]]));
   });
 
+  it("runs an optional result validator before accepting a batch reply", () => {
+    const items = [
+      {
+        cacheKey: "cache-key",
+        key: "native.apple.progress",
+        text: "Processed %lld of %@",
+        textHash: "text-hash",
+      },
+    ];
+
+    expect(() =>
+      parseTranslationBatchReply(
+        JSON.stringify({ "native.apple.progress": "Bearbetade %@" }),
+        items,
+        "sv",
+        (source, translated, key, locale) => {
+          if (source.includes("%lld") && !translated.includes("%lld")) {
+            throw new Error(`invalid structural tokens for ${locale}:${key}`);
+          }
+        },
+      ),
+    ).toThrow("invalid structural tokens for sv:native.apple.progress");
+  });
+
   it("makes placeholder-incompatible existing copy pending for bot repair", () => {
     const reusable = filterPlaceholderCompatibleTranslations(
       new Map([

@@ -2030,6 +2030,35 @@ describe("node.invoke APNs wake path", () => {
     expect(nodeRegistry.get).toHaveBeenCalledWith("ios-node-never-reconnects");
   });
 
+  it.each([-3_600_000, 3_600_000])(
+    "keeps the reconnect wait interval across a %i ms wall-clock change",
+    async (clockChange) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(10_000_000);
+      const nodeRegistry = {
+        get: vi.fn(() => undefined),
+        getForPairingGeneration: vi.fn(() => undefined),
+      };
+      let settled = false;
+      const reconnect = waitForNodeReconnect({
+        nodeId: "clock-node",
+        context: { nodeRegistry },
+        timeoutMs: 300,
+        pollMs: 50,
+      }).then((result) => {
+        settled = true;
+        return result;
+      });
+
+      vi.setSystemTime(10_000_000 + clockChange);
+      await vi.advanceTimersByTimeAsync(299);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toBe(true);
+      await expect(reconnect).resolves.toBe(false);
+    },
+  );
+
   it("broadcasts canonical Talk capture events for successful PTT node commands", async () => {
     const respond = vi.fn();
     const broadcast = vi.fn();

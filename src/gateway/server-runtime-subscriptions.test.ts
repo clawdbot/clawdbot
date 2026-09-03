@@ -23,6 +23,10 @@ import {
   releaseAgentRunContext,
 } from "../infra/agent-run-registry.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
+import {
+  resetGatewayWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
+} from "../process/gateway-work-admission.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import {
   emitSessionTranscriptUpdate,
@@ -215,6 +219,14 @@ function lifecycleState(
   };
 }
 
+const sessionTaskDefaults = {
+  requesterSessionKey: "agent:main:main",
+  ownerKey: "agent:main:main",
+  scopeKind: "session",
+  deliveryStatus: "not_applicable",
+  notifyPolicy: "silent",
+} as const;
+
 function createParams(): SubscriptionParams {
   return {
     log: mockLog,
@@ -268,6 +280,30 @@ describe("startGatewayEventSubscriptions", () => {
     resetAgentEventsForTest();
     resetTaskRegistryForTests({ persist: false });
     configureExecutionIdentityAdmissionSink(() => false)();
+  });
+
+  it("broadcasts suspension immediately and stops with the gateway lifecycle", () => {
+    resetGatewayWorkAdmission();
+    const params = createParams();
+    unsubs = startGatewayEventSubscriptions(params);
+    try {
+      const suspension = tryBeginGatewaySuspendAdmission(() => {});
+      suspension?.drain();
+      suspension?.commit();
+      suspension?.release();
+      expect(vi.mocked(params.broadcast).mock.calls).toEqual([
+        ["gateway.suspension", { phase: "preparing" }],
+        ["gateway.suspension", { phase: "draining" }],
+        ["gateway.suspension", { phase: "prepared" }],
+        ["gateway.suspension", { phase: "accepting" }],
+      ]);
+      unsubs.lifecycleUnsub();
+      vi.mocked(params.broadcast).mockClear();
+      tryBeginGatewaySuspendAdmission(() => {})?.rollback();
+      expect(params.broadcast).not.toHaveBeenCalled();
+    } finally {
+      resetGatewayWorkAdmission();
+    }
   });
 
   it("records audit events by default and stops the recorder on unsubscribe", async () => {
@@ -706,24 +742,16 @@ describe("startGatewayEventSubscriptions", () => {
 
     const completed = createTaskRecord({
       runtime: "subagent",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
+      ...sessionTaskDefaults,
       task: "Completed task",
       status: "succeeded",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
       terminalSummary: "x".repeat(10_000),
     });
     const lost = createTaskRecord({
       runtime: "cli",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
+      ...sessionTaskDefaults,
       task: "Lost task",
       status: "lost",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
     });
 
     if (!completed || !lost) {
@@ -748,13 +776,9 @@ describe("startGatewayEventSubscriptions", () => {
     broadcast.mockClear();
     createTaskRecord({
       runtime: "cli",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
+      ...sessionTaskDefaults,
       task: "After dispose",
       status: "queued",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
     });
     expect(broadcast).not.toHaveBeenCalled();
   });
@@ -768,27 +792,19 @@ describe("startGatewayEventSubscriptions", () => {
 
     const primary = createTaskRecord({
       runtime: "subagent",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
+      ...sessionTaskDefaults,
       childSessionKey: "agent:main:subagent:primary",
       runId: "run-throttle-primary",
       task: "Implement live progress",
       status: "running",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
     });
     const secondary = createTaskRecord({
       runtime: "subagent",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
+      ...sessionTaskDefaults,
       childSessionKey: "agent:main:subagent:secondary",
       runId: "run-throttle-secondary",
       task: "Review live progress",
       status: "running",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
     });
     if (!primary || !secondary) {
       throw new Error("expected task records");
@@ -867,15 +883,11 @@ describe("startGatewayEventSubscriptions", () => {
     const runId = "run-identical-task-summary";
     const task = createTaskRecord({
       runtime: "subagent",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
+      ...sessionTaskDefaults,
       childSessionKey: "agent:main:subagent:summary",
       runId,
       task: "Avoid duplicate broadcasts",
       status: "running",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
       startedAt: 100,
       lastEventAt: 100,
     });
@@ -1073,13 +1085,9 @@ describe("startGatewayEventSubscriptions", () => {
 
     createTaskRecord({
       runtime: "cli",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
+      ...sessionTaskDefaults,
       task: "After stale dispose",
       status: "queued",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
     });
     expect(replacementBroadcast.mock.calls.some(([event]) => event === "task")).toBe(true);
     expect(staleBroadcast.mock.calls.some(([event]) => event === "task")).toBe(false);

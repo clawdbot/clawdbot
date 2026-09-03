@@ -301,6 +301,8 @@ describe("runEmbeddedAgentEntry", () => {
             classification: options.isFallbackRetry ? undefined : "empty",
             meta: options.isFallbackRetry
               ? {
+                  finalAssistantVisibleText: "fallback complete",
+                  finalAssistantRawText: "fallback complete",
                   executionTrace: {
                     winnerProvider: provider,
                     winnerModel: model,
@@ -308,7 +310,7 @@ describe("runEmbeddedAgentEntry", () => {
                       {
                         provider,
                         model,
-                        result: "same_model_rate_limit",
+                        result: "same_model_transient",
                         reason: "rate_limit",
                       },
                       { provider, model, result: "success" },
@@ -325,7 +327,7 @@ describe("runEmbeddedAgentEntry", () => {
                       sessionId: "session-1",
                       turnId: "turn-1",
                       requested: { provider, model },
-                      effective: { provider, model, responseModel: model },
+                      effective: { provider, model, responseModel: "producer-model" },
                       successfulToolNames: [],
                       rerouted: false,
                     },
@@ -362,7 +364,7 @@ describe("runEmbeddedAgentEntry", () => {
         {
           provider: "fallback-provider",
           model: "fallback-model",
-          result: "same_model_rate_limit",
+          result: "same_model_transient",
           reason: "rate_limit",
         },
         { provider: "fallback-provider", model: "fallback-model", result: "success" },
@@ -372,14 +374,28 @@ describe("runEmbeddedAgentEntry", () => {
     });
     expect(channel.result.result.meta.agentMeta?.terminalReceipt).toMatchObject({
       requested: { provider: "primary-provider", model: "primary-model" },
-      effective: { provider: "fallback-provider", model: "fallback-model" },
+      effective: {
+        provider: "fallback-provider",
+        model: "fallback-model",
+        responseModel: "producer-model",
+      },
       rerouted: true,
     });
     expect(channel.result.terminal.metadata.terminalReceipt).toMatchObject({
       requested: { provider: "primary-provider", model: "primary-model" },
-      effective: { provider: "fallback-provider", model: "fallback-model" },
+      effective: {
+        provider: "fallback-provider",
+        model: "fallback-model",
+        responseModel: "producer-model",
+      },
       rerouted: true,
-      terminalDisposition: "not-visible",
+      terminalDisposition: "visible",
+    });
+    expect(channel.result.terminal.metadata.terminalReply).toEqual({
+      disposition: "visible",
+      text: "fallback complete",
+      modelRouteChange:
+        "Model route changed: primary-provider/primary-model → fallback-provider/producer-model.",
     });
     expect(channel.candidateLeases[0]).toBe(channel.candidateLeases[1]);
     expect(state.selectAgentHarness).toHaveBeenCalledWith(
@@ -532,6 +548,7 @@ describe("runEmbeddedAgentEntry", () => {
   });
 
   it("accepts an empty result after a committed side effect and finalizes it once", async () => {
+    const hasCommittedSideEffect = vi.fn(() => true);
     state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       const result = await params.run(params.provider, params.model, initialAttemptOptions(params));
       expect(
@@ -560,15 +577,18 @@ describe("runEmbeddedAgentEntry", () => {
         preparation: { kind: "direct" },
         resolveRuntimeOverride: () => undefined,
       },
-      behavior: { kind: "command-rpc", hasCommittedSideEffect: () => true },
+      behavior: { kind: "command-rpc", hasCommittedSideEffect },
       sessionOverride: { kind: "preserve" },
       runCandidate: async (provider, model, options) => {
         recordTurnAttempt(options.onContextEngineTurnCandidate, "candidate");
-        return makeResult({ provider, model, classification: "empty" });
+        const result = makeResult({ provider, model, classification: "empty" });
+        expect(options.classifyResult(result)).toBeUndefined();
+        return result;
       },
     });
 
     expect(state.finalizedAttempts).toEqual(["candidate"]);
+    expect(hasCommittedSideEffect).toHaveBeenCalledOnce();
   });
 
   it("does not finalize any candidate when fallback is exhausted", async () => {

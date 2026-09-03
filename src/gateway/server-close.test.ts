@@ -13,7 +13,12 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
+import {
+  PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS,
+  startPluginServices,
+} from "../plugins/services.js";
 import { getProcessSupervisor, type ManagedRun } from "../process/supervisor/index.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 type TriggerInternalHookMock = (event: InternalHookEvent) => Promise<void>;
@@ -841,6 +846,69 @@ describe("createGatewayCloseHandler", () => {
       }
     }
   });
+
+  it.each(["settles", "stalls"] as const)(
+    "uses final shutdown grace after a strict replacement timeout when cleanup %s",
+    async (cleanupOutcome) => {
+      vi.useFakeTimers();
+      const cleanup = createDeferredCore();
+      const stop = vi.fn(() => cleanup.promise);
+      const registry = createEmptyPluginRegistry();
+      registry.services.push({
+        pluginId: "shutdown-test",
+        service: { id: "pending-cleanup", start() {}, stop },
+        source: "test",
+        origin: "workspace",
+      });
+      const pluginServices = await startPluginServices({ registry, config: {} });
+      const strictStopping = pluginServices.stop({
+        strict: true,
+        deadlineAtMs: Date.now() + PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS,
+      });
+      const strictFailure = strictStopping.catch((error: unknown) => error);
+      let closing: ReturnType<ReturnType<typeof createGatewayCloseHandler>> | undefined;
+
+      try {
+        await vi.advanceTimersByTimeAsync(PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS);
+        expect(await strictFailure).toMatchObject({
+          errors: [expect.objectContaining({ message: expect.stringContaining("timed out") })],
+        });
+        expect(stop).toHaveBeenCalledOnce();
+
+        const deps = createGatewayCloseTestDeps({ channelIds: ["discord"], pluginServices });
+        const close = createGatewayCloseHandler(deps);
+        let closed = false;
+        closing = close({ reason: "gateway restarting", restartExpectedMs: 1_500 }).then(
+          (result) => {
+            closed = true;
+            return result;
+          },
+        );
+        await vi.advanceTimersByTimeAsync(0);
+
+        if (cleanupOutcome === "settles") {
+          expect(closed).toBe(false);
+          expect(deps.stopChannel).not.toHaveBeenCalled();
+          await vi.advanceTimersByTimeAsync(300);
+          cleanup.resolve();
+          await vi.advanceTimersByTimeAsync(0);
+        } else {
+          await vi.advanceTimersByTimeAsync(5_000);
+        }
+
+        expect(closed).toBe(true);
+        const result = await closing;
+        expect(stop).toHaveBeenCalledOnce();
+        expect(deps.stopChannel).toHaveBeenCalledWith("discord");
+        if (cleanupOutcome === "stalls") {
+          expect(result.warnings).toContain("plugin-services");
+        }
+      } finally {
+        cleanup.resolve();
+        await Promise.allSettled([strictStopping, closing]);
+      }
+    },
+  );
 
   it("drains the active-session tracker with reason=shutdown on SIGTERM/SIGINT close", async () => {
     const drainActiveSessionsForShutdown = vi.fn<DrainActiveSessionsForShutdown>(async () => ({

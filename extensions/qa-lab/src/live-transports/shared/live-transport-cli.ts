@@ -183,3 +183,36 @@ export function createLiveTransportQaAdapterFactory(params: {
     create: params.create,
   };
 }
+
+export function createStandardLiveTransportQaCliRegistration(params: {
+  channelId: string;
+  channelLabel: string;
+  createAdapter: NonNullable<LiveTransportQaCliRegistrationOptions["adapterFactory"]>["create"];
+  description: string;
+}): LiveTransportQaCliRegistration {
+  const adapterFactory = createLiveTransportQaAdapterFactory({
+    id: params.channelId,
+    supportsModuleFlows: true,
+    create: params.createAdapter,
+  });
+  return createLiveTransportQaCliRegistration({
+    commandName: params.channelId,
+    adapterFactory,
+    credentialOptions: {
+      sourceDescription: `Credential source for ${params.channelLabel} QA: env or convex (default: env)`,
+      roleDescription:
+        "Credential role for convex auth: maintainer or ci (default: ci in CI, maintainer otherwise)",
+    },
+    description: params.description,
+    outputDirHelp: `${params.channelLabel} QA artifact directory`,
+    scenarioHelp: `Run only the named ${params.channelLabel} QA scenario (repeatable)`,
+    sutAccountHelp: `Temporary ${params.channelLabel} account id inside the QA gateway config`,
+    async run(options) {
+      const runtime = await loadLiveTransportQaSuiteRuntime();
+      await runtime.runStandardLiveTransportQaSuiteCommand({
+        channelId: params.channelId,
+        options,
+      });
+    },
+  });
+}

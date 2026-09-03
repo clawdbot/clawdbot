@@ -2,7 +2,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
 import { buildAgentRunTerminalOutcome } from "../agent-run-terminal-outcome.js";
-import { normalizeAgentRunTerminalReceipt } from "../agent-run-terminal-receipt.js";
+import {
+  formatAgentRunRouteChange,
+  normalizeAgentRunTerminalReceipt,
+} from "../agent-run-terminal-receipt.js";
 import {
   buildAgentRunTerminalReplySnapshot,
   normalizeAgentRunTerminalReplySnapshot,
@@ -35,6 +38,7 @@ import {
 import type { EmbeddedAgentRunResult, TraceAttempt } from "./types.js";
 
 type RunEntryCandidateOptions = {
+  classifyResult: (result: EmbeddedAgentRunResult) => ModelFallbackResultClassification;
   allowTransientCooldownProbe?: boolean;
   isFinalFallbackAttempt?: boolean;
   isFallbackRetry: boolean;
@@ -45,6 +49,7 @@ type RunEntryCandidateOptions = {
 
 type RunEntryCandidate<T> = {
   result: T;
+  classification?: ModelFallbackResultClassification;
   turnAttempt?: ContextEngineTurnAttemptFacts;
 };
 
@@ -280,20 +285,35 @@ function buildTerminal(params: {
     timeoutPhase: meta.timeoutPhase,
     providerStarted: meta.providerStarted,
   });
-  const terminalReply =
+  let terminalReply =
     normalizeAgentRunTerminalReplySnapshot(meta.terminalReply) ??
     buildAgentRunTerminalReplySnapshot({
       visibleText: meta.finalAssistantVisibleText,
       rawText: meta.finalAssistantRawText,
       terminalReplyKind: meta.terminalReplyKind,
     });
+  const normalizedTerminalReceipt = normalizeAgentRunTerminalReceipt(
+    meta.agentMeta?.terminalReceipt,
+  );
+  const terminalReceipt =
+    normalizedTerminalReceipt?.runId === params.runId
+      ? {
+          ...normalizedTerminalReceipt,
+          terminalDisposition:
+            terminalReply.disposition === "visible"
+              ? ("visible" as const)
+              : ("not-visible" as const),
+        }
+      : undefined;
+  const modelRouteChange = formatAgentRunRouteChange(terminalReceipt, params.runId);
+  if (modelRouteChange && terminalReply.disposition === "visible") {
+    // Carry one receipt-owned fact beside assistant text so internal parents can
+    // report the reroute without exposing it through raw external delivery.
+    terminalReply = { ...terminalReply, modelRouteChange };
+  }
   const metadata: Record<string, unknown> = { terminalReply };
-  const terminalReceipt = normalizeAgentRunTerminalReceipt(meta.agentMeta?.terminalReceipt);
-  if (terminalReceipt?.runId === params.runId) {
-    metadata.terminalReceipt = {
-      ...terminalReceipt,
-      terminalDisposition: terminalReply.disposition === "visible" ? "visible" : "not-visible",
-    };
+  if (terminalReceipt) {
+    metadata.terminalReceipt = terminalReceipt;
   }
   if (params.behavior.kind === "channel-delivery" || params.behavior.kind === "followup-delivery") {
     for (const key of [
@@ -447,33 +467,7 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
       ...(params.behavior.kind === "maintenance"
         ? {}
         : {
-            classifyResult: ({
-              result: candidate,
-              provider,
-              model,
-            }: {
-              result: RunEntryCandidate<T>;
-              provider: string;
-              model: string;
-            }) => {
-              const deliveryEvidence =
-                params.behavior.kind === "channel-delivery"
-                  ? params.behavior.readDeliveryEvidence()
-                  : undefined;
-              const classification = classifyEmbeddedAgentRunResultForModelFallback({
-                result: candidate.result,
-                provider,
-                model,
-                ...deliveryEvidence,
-              });
-              const effectiveClassification =
-                params.behavior.kind === "followup-delivery"
-                  ? preserveFollowupResultForDelivery(classification)
-                  : classification;
-              return effectiveClassification && committedSideEffect?.()
-                ? undefined
-                : effectiveClassification;
-            },
+            classifyResult: ({ result }: { result: RunEntryCandidate<T> }) => result.classification,
           }),
       ...(canFallbackAfterError ? { canFallbackAfterError } : {}),
       ...(params.behavior.kind === "maintenance"
@@ -500,7 +494,35 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
         const isFallbackRetry = candidateIndex > 0;
         candidateIndex += 1;
         let contextEngineTurnCandidate: ContextEngineTurnAttemptFacts | undefined;
+        let classified: { value: ModelFallbackResultClassification } | undefined;
+        const classifyResult = (result: EmbeddedAgentRunResult) => {
+          if (!classified) {
+            const classification =
+              params.behavior.kind === "maintenance"
+                ? undefined
+                : classifyEmbeddedAgentRunResultForModelFallback({
+                    result,
+                    provider,
+                    model,
+                    ...readChannelDeliveryEvidence?.(),
+                  });
+            const effectiveClassification =
+              params.behavior.kind === "followup-delivery"
+                ? preserveFollowupResultForDelivery(classification)
+                : classification;
+            // CLI continuity settles while the session lane is held. The outer
+            // fallback loop consumes this same decision after that owner releases.
+            classified = {
+              value:
+                effectiveClassification && committedSideEffect?.()
+                  ? undefined
+                  : effectiveClassification,
+            };
+          }
+          return classified.value;
+        };
         const result = await params.runCandidate(provider, model, {
+          classifyResult,
           allowTransientCooldownProbe: options?.allowTransientCooldownProbe,
           isFinalFallbackAttempt: options?.isFinalFallbackAttempt,
           isFallbackRetry,
@@ -511,7 +533,11 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
             unsettledContextEngineTurnAttempt = facts;
           },
         });
-        return { result, turnAttempt: contextEngineTurnCandidate };
+        return {
+          result,
+          classification: classifyResult(result),
+          turnAttempt: contextEngineTurnCandidate,
+        };
       },
     });
     const abortFields =

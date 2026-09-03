@@ -1,5 +1,6 @@
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
+import { HumanMentionsSchema } from "./human-mentions.js";
 import { ChatAttachmentsSchema } from "./logs-chat.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
 import { SessionPermissionModeSchema, SessionToolOverridesSchema } from "./sessions-row.js";
@@ -14,6 +15,14 @@ export const SessionsCreateParamsSchema = closedObject({
   idempotencyKey: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
   label: Type.Optional(SessionLabelString),
+  displayName: Type.Optional(
+    Type.String({
+      minLength: 1,
+      maxLength: 500,
+      description:
+        "Prepared presentation title for a newly created session. Unlike label it is not unique and never claims a label; ignored when adopting an existing key.",
+    }),
+  ),
   category: Type.Optional(SessionLabelString),
   model: Type.Optional(NonEmptyString),
   contextWindow: Type.Optional(NonEmptyString),
@@ -50,6 +59,7 @@ export const SessionsCreateParamsSchema = closedObject({
   ),
   task: Type.Optional(Type.String()),
   message: Type.Optional(Type.String()),
+  mentions: Type.Optional(HumanMentionsSchema),
   attachments: Type.Optional(ChatAttachmentsSchema),
   projectId: Type.Optional(
     Type.String({

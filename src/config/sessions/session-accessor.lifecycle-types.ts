@@ -48,6 +48,8 @@ export type ResetSessionEntryLifecycleMutation = Omit<
 >;
 
 export type ResetSessionEntryLifecycleParams = {
+  /** Revalidate caller authority before preparation and synchronous reset commit. */
+  commitGuard?: () => void;
   /** Preserve legacy rotation archival unless the caller appended an in-log boundary. */
   archivePreviousTranscript?: boolean;
   /** Runs after the persisted entry changes and any requested archival completes. */
@@ -156,7 +158,6 @@ export type SessionEntryLifecycleUpsert = {
       buildEntry: (context: {
         currentEntry?: SessionEntry;
         sessionKey: string;
-        store: Record<string, SessionEntry>;
       }) => Promise<SessionEntry | null | undefined> | SessionEntry | null | undefined;
       entry?: never;
     }
@@ -172,6 +173,7 @@ export type SessionEntryLifecycleMutationResult = {
   removedEntries: number;
   removedSessionKeys: string[];
   archived: number;
+  capArchived?: number;
   modelRunPruned: number;
   pruned: number;
   capped: number;

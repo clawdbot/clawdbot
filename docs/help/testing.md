@@ -761,14 +761,16 @@ Native dependency policy:
 
 - Command: `pnpm test:ui:e2e`
 - Config: `test/vitest/vitest.ui-e2e.config.ts`
-- Files: `ui/src/**/*.e2e.test.ts`
+- Files: `ui/src/**/*.e2e.test.ts` and the QA Lab media-transcript real-Gateway suite
 - Scope:
-  - Starts the Vite Control UI
-  - Drives a real Chromium page through Playwright
-  - Replaces the Gateway WebSocket with deterministic in-browser mocks
+  - Uses four resource groups in two execution phases: `ui-e2e-bundled` and `ui-e2e-standalone` share the parallel phase (at most two workers total); `ui-e2e-serial` and `ui-e2e-serial-standalone` share the later single-worker phase
+  - The two bundle-consuming projects lazily acquire one temporary UI bundle/preview per invocation; standalone projects own their fixture, source, or custom-build servers
+  - Selecting only standalone suites skips the shared bundle build; new E2E files default to bundled ownership
+  - Every selected project discovers Chromium and drives real pages through Playwright; the root config retains the complete discovery inventory
+  - Most suites replace the Gateway WebSocket with deterministic in-browser mocks; some start isolated real Gateways
 - Expectations:
-  - Runs in CI as part of `pnpm test:e2e`
-  - No real Gateway, agents, or provider keys required
+  - Runs in CI as part of `pnpm test:e2e`; the resource groups add no CI jobs
+  - No provider keys required; `OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY=1` excludes real-Gateway suites
   - Browser dependency must be present (`pnpm --dir ui exec playwright install chromium`)
 
 ### E2E: OpenShell backend smoke

@@ -1,4 +1,6 @@
 import os from "node:os";
+import { tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope-config.js";
+import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -10,16 +12,15 @@ import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db.js";
 import { repairOpenClawStateDatabaseSchemaIfNeeded } from "../state/openclaw-state-db.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
-import {
-  createPluginDoctorStateMigrationContext,
-  type PluginDoctorRepairAuthority,
-} from "./state-migrations.plugin-doctor-context.js";
+import { formatStartupMigrationFailure } from "./state-migrations.messages.js";
+import { createPluginDoctorStateMigrationContext } from "./state-migrations.plugin-doctor-context.js";
 import { autoMigrateLegacyStateDir } from "./state-migrations.state-dir.js";
 import type {
   DetectedPluginDoctorStateMigrationPlan,
   LegacyStateDetection,
   MigrationLogger,
   MigrationMessages,
+  PluginDoctorRepairAuthority,
 } from "./state-migrations.types.js";
 
 type PluginDoctorInput = Omit<
@@ -52,6 +53,9 @@ export async function collectPluginDoctorStateMigrationPlans(
     try {
       detected = await entry.migration.detectLegacyState({
         ...input,
+        serviceWorkspaceDir:
+          tryResolveConfiguredAgentWorkspaceDir(config, env) ??
+          resolveDefaultAgentWorkspaceDir(env),
         context: createPluginDoctorStateMigrationContext({
           pluginId: entry.pluginId,
           env,
@@ -155,6 +159,9 @@ async function migratePluginDoctorStatePlans(
         repairAuthority?.assertCurrent();
         const result = await plan.migration.migrateLegacyState({
           ...input,
+          serviceWorkspaceDir:
+            tryResolveConfiguredAgentWorkspaceDir(input.config, input.env) ??
+            resolveDefaultAgentWorkspaceDir(input.env),
           context: createPluginDoctorStateMigrationContext({
             pluginId: plan.pluginId,
             env: input.env,
@@ -329,20 +336,17 @@ export async function autoMigrateLegacyPluginDoctorState(params: {
   const changes = [...stateDirResult.changes, ...stateSchema.changes];
   const warnings = [...stateDirResult.warnings, ...stateSchema.warnings];
   const notices = [...(stateDirResult.notices ?? [])];
-  if (stateSchema.warnings.length > 0) {
-    return {
-      migrated: stateDirResult.migrated || stateSchema.changes.length > 0,
-      skipped: false,
-      changes,
-      warnings,
-      ...(notices.length > 0 ? { notices } : {}),
-    };
+  if (stateSchema.warnings.length > 0 && params.doctorOnlyStateMigrations !== true) {
+    throw new Error(formatStartupMigrationFailure(stateSchema.warnings));
   }
   const input: PluginDoctorInput = { config: params.config, env, stateDir, oauthDir };
-  const plans = await collectPluginDoctorStateMigrationPlans(input, {
-    includeDoctorOnly: params.doctorOnlyStateMigrations === true,
-    warnings,
-  });
+  const plans =
+    stateSchema.warnings.length > 0
+      ? []
+      : await collectPluginDoctorStateMigrationPlans(input, {
+          includeDoctorOnly: params.doctorOnlyStateMigrations === true,
+          warnings,
+        });
   const migrated = await migratePluginDoctorStatePlans(input, plans);
   changes.push(...migrated.changes);
   warnings.push(...migrated.warnings);

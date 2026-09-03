@@ -2,7 +2,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { isPathInside } from "../../../infra/path-guards.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { listOpenClawAgentDatabasesForTest as listSeedAgentDatabases } from "../../../state/openclaw-agent-db.js";
@@ -24,6 +25,7 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 const { announceSpy } = vi.hoisted(() => ({
   announceSpy: vi.fn(async () => "delivered" as const),
 }));
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 vi.mock("../announce/subagent-announce.js", () => ({
   runSubagentAnnounceFlow: announceSpy,
 }));
@@ -386,6 +388,64 @@ describe("subagent registry persistence resume", () => {
     });
   });
 
+  it("settles a restored delivered wake rejected before attempt admission", async () => {
+    const stateDir = tempDirs.make("openclaw-subagent-");
+    await withRegistryState(stateDir, async () => {
+      const endedAt = Date.now();
+      const run: SubagentRunRecord = {
+        runId: "run-rejected-requester-wake",
+        childSessionKey: "agent:main:subagent:rejected-requester-wake",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "settle one rejected requester wake",
+        cleanup: "keep",
+        createdAt: endedAt - 1_000,
+        endedReason: "subagent-complete",
+        execution: {
+          status: "terminal",
+          startedAt: endedAt - 500,
+          endedAt,
+          outcome: { status: "ok" },
+        },
+        expectsCompletionMessage: true,
+        completion: { required: true, resultText: "done", capturedAt: endedAt },
+        delivery: { status: "delivered", deliveredAt: endedAt },
+        cleanupHandled: true,
+        cleanupCompletedAt: endedAt,
+        requesterSettleWake: {
+          status: "pending",
+          attemptCount: 0,
+          batchRunIds: ["run-rejected-requester-wake"],
+          requesterYieldBatch: true,
+          afterRequesterYield: true,
+          rearmGeneration: 1,
+        },
+      };
+      const wakeRequester = vi.fn(async () => {
+        throw new Error("requester wake rejected before attempt admission");
+      });
+      mod.testing.setDepsForTest({
+        ...createSubagentRegistryTestDeps({
+          callGateway: vi.mocked(callGatewayModule.callGateway),
+          maybeWakeRequesterAfterAllChildrenSettled: wakeRequester,
+        }),
+      });
+      saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+
+      mod.initSubagentRegistry();
+      activateRegistry();
+
+      await vi.waitFor(() => expect(wakeRequester).toHaveBeenCalledOnce());
+      await vi.waitFor(() => {
+        const restored = loadSubagentRegistryFromSqlite().get(run.runId);
+        expect(restored?.delivery).toMatchObject({ status: "delivered" });
+        expect(restored?.requesterSettleWake).toBeUndefined();
+      });
+      await mod.testing.sweepOnceForTests();
+      expect(wakeRequester).toHaveBeenCalledOnce();
+    });
+  });
+
   it.each([
     { status: "suspended" as const, disposition: undefined, queueId: undefined },
     { status: "in_progress" as const, disposition: "session_queued" as const, queueId: "queue-1" },
@@ -713,14 +773,13 @@ describe("subagent registry persistence resume", () => {
             requesterYieldBatch: true,
             afterRequesterYield: true,
           });
-          await vi.waitFor(() => expect(wakeRequester).toHaveBeenCalledOnce(), {
-            timeout: 1_000,
-            interval: 10,
-          });
         } else {
           expect(restored?.requesterSettleWake).toBeUndefined();
-          expect(wakeRequester).not.toHaveBeenCalled();
         }
+        await vi.waitFor(() => expect(wakeRequester).toHaveBeenCalledOnce(), {
+          timeout: 1_000,
+          interval: 10,
+        });
       });
     },
   );

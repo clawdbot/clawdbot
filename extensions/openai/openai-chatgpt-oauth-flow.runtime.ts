@@ -170,7 +170,26 @@ function resolveOpenAICredentials(
   result: Awaited<ReturnType<typeof refreshOpenAIAccessToken>>,
 ): OAuthCredentials {
   if (result.type !== "success") {
-    throw new Error(result.message);
+    if (result.cancelled) {
+      throw createOAuthLoginCancelledError();
+    }
+    const facts = [
+      result.status ? `HTTP ${result.status}` : undefined,
+      result.code ? `code=${result.code}` : undefined,
+      result.errorType ? `type=${result.errorType}` : undefined,
+    ].filter((value): value is string => Boolean(value));
+    const diagnostic =
+      facts.length > 0
+        ? `OpenAI Codex token ${result.operation} failed (${facts.join("; ")}).`
+        : undefined;
+    throw Object.assign(new Error([result.summary, diagnostic].filter(Boolean).join("\n\n")), {
+      oauthRefreshFailure: {
+        summary: result.summary,
+        ...(result.errorType ? { errorType: result.errorType } : {}),
+        ...(result.reason ? { reason: result.reason } : {}),
+        ...(result.status ? { status: result.status } : {}),
+      },
+    });
   }
   const accountId = resolveOpenAICodexAuthIdentity({ access: result.access }).accountId;
   if (!accountId) {

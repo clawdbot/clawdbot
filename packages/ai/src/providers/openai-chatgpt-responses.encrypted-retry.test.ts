@@ -298,7 +298,6 @@ describe("ChatGPT Responses encrypted replay recovery", () => {
       {
         apiKey: createJwt(),
         transport: "sse" as const,
-        maxRetries: 0,
         onCompactionRejected,
         ...REPLAY_IDENTITY,
       },
@@ -350,7 +349,7 @@ describe("ChatGPT Responses encrypted replay recovery", () => {
       }),
     );
     const options = createObservedOptions(
-      { apiKey: createJwt(), transport: "sse" as const, maxRetries: 0, ...REPLAY_IDENTITY },
+      { apiKey: createJwt(), transport: "sse" as const, ...REPLAY_IDENTITY },
       observations,
     );
 
@@ -389,7 +388,6 @@ describe("ChatGPT Responses encrypted replay recovery", () => {
     const options = {
       apiKey: createJwt(),
       transport: "sse" as const,
-      maxRetries: 0,
       onCompactionRejected,
       ...REPLAY_IDENTITY,
     };
@@ -427,7 +425,6 @@ describe("ChatGPT Responses encrypted replay recovery", () => {
     const aborted = await streamOpenAICodexResponses(model, context, {
       apiKey: createJwt(),
       transport: "sse",
-      maxRetries: 0,
       signal: controller.signal,
       ...REPLAY_IDENTITY,
     }).result();
@@ -444,7 +441,6 @@ describe("ChatGPT Responses encrypted replay recovery", () => {
     await streamOpenAICodexResponses(model, nextTurn(context, aborted), {
       apiKey: createJwt(),
       transport: "sse",
-      maxRetries: 0,
       ...REPLAY_IDENTITY,
     }).result();
     expect(hasInputType(requireItem(requests, 2), "compaction")).toBe(true);
@@ -472,7 +468,6 @@ describe("ChatGPT Responses encrypted replay recovery", () => {
     const result = await streamOpenAICodexResponses(model, createReplayContext("compaction"), {
       apiKey: createJwt(),
       transport: "sse",
-      maxRetries: 0,
       ...REPLAY_IDENTITY,
     }).result();
 
@@ -487,7 +482,6 @@ describe("ChatGPT Responses encrypted replay recovery", () => {
     const options = {
       apiKey: createJwt(),
       transport: "sse" as const,
-      maxRetries: 0,
       ...REPLAY_IDENTITY,
     };
     responsesPromptObserver.set(options, () => {

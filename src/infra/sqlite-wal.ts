@@ -1,6 +1,8 @@
 // Configures SQLite WAL and related pragmas for local stores.
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs, { type BigIntStats } from "node:fs";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
@@ -40,6 +42,10 @@ const SQLITE_WAL_SPLIT_BRAIN_FATAL_MESSAGE =
   "SQLite WAL sidecar identity mismatch; terminating without SQLite cleanup";
 
 const log = createSubsystemLogger("infra/sqlite-wal");
+
+// Gateway bootstrap loads the database owner before admitting turns. Long-lived
+// maintenance timers must not retain the context of a turn that opens a database.
+const runInSqliteMaintenanceContext = AsyncLocalStorage.snapshot();
 
 type IntervalHandle = ReturnType<typeof setInterval> & {
   unref?: () => void;
@@ -498,7 +504,7 @@ function enableWalJournalMode(
   retryTimeoutMs: number,
   options: SqliteWalMaintenanceOptions,
 ): boolean {
-  const deadline = Date.now() + retryTimeoutMs;
+  const deadline = performance.now() + retryTimeoutMs;
   let restoreBusyTimeout = false;
   try {
     while (true) {
@@ -519,7 +525,7 @@ function enableWalJournalMode(
           `${label}${location} could not enable WAL; SQLite kept journal_mode=${journalMode ?? "unknown"}.`,
         );
       } catch (error) {
-        const remainingMs = deadline - Date.now();
+        const remainingMs = Math.max(0, deadline - performance.now());
         if (!isSqliteLockError(error) || remainingMs <= 0) {
           throw error;
         }
@@ -644,34 +650,37 @@ export function configureSqliteWalMaintenance(
 
   let timer: IntervalHandle | null = null;
   if (timerIntervalMs > 0) {
-    timer = setInterval(() => {
-      if (tripwireDatabasePath && splitBrainDetectionEnabled) {
-        let splitBrain: SqliteWalSplitBrainEvent | undefined;
-        try {
-          splitBrain = detectSqliteWalSplitBrain(tripwireDatabasePath);
-        } catch (error) {
-          splitBrainDetectionEnabled = false;
-          if (!splitBrainDetectionWarningLogged) {
-            splitBrainDetectionWarningLogged = true;
-            log.warn("SQLite WAL split-brain detection disabled", {
-              databaseLabel: options.databaseLabel,
-              databasePath: tripwireDatabasePath,
-              error: error instanceof Error ? error.message : String(error),
-            });
+    timer = runInSqliteMaintenanceContext(
+      () =>
+        setInterval(() => {
+          if (tripwireDatabasePath && splitBrainDetectionEnabled) {
+            let splitBrain: SqliteWalSplitBrainEvent | undefined;
+            try {
+              splitBrain = detectSqliteWalSplitBrain(tripwireDatabasePath);
+            } catch (error) {
+              splitBrainDetectionEnabled = false;
+              if (!splitBrainDetectionWarningLogged) {
+                splitBrainDetectionWarningLogged = true;
+                log.warn("SQLite WAL split-brain detection disabled", {
+                  databaseLabel: options.databaseLabel,
+                  databasePath: tripwireDatabasePath,
+                  error: error instanceof Error ? error.message : String(error),
+                });
+              }
+            }
+            if (splitBrain) {
+              invalidated = true;
+              if (timer) {
+                clearInterval(timer);
+                timer = null;
+              }
+              terminateForSqliteWalSplitBrain(splitBrain, options.databaseLabel);
+            }
           }
-        }
-        if (splitBrain) {
-          invalidated = true;
-          if (timer) {
-            clearInterval(timer);
-            timer = null;
-          }
-          terminateForSqliteWalSplitBrain(splitBrain, options.databaseLabel);
-        }
-      }
-      runCheckpoint(periodicCheckpointMode);
-      runIncrementalVacuum();
-    }, timerIntervalMs) as IntervalHandle;
+          runCheckpoint(periodicCheckpointMode);
+          runIncrementalVacuum();
+        }, timerIntervalMs) as IntervalHandle,
+    );
     timer.unref?.();
   }
 

@@ -207,6 +207,8 @@ model-alias, session, and image fields as the bundled
 | `freshSessionRecovery`                                    | Fresh recovery policy after a recoverable resumed-session failure                 |
 | `reliability.watchdog`                                    | No-output timeout tuning, separate for fresh vs resumed runs                      |
 
+`claude-stream-json` is more than a parser choice: it declares that the backend's `result` records carry Claude Code's terminal semantics, including `terminal_reason`. A reply-less `result` whose `terminal_reason` is `hook_stopped`, `stop_hook_prevented`, `aborted_tools`, `aborted_streaming`, `budget_exhausted`, or `max_turns` is a recorded turn stop: OpenClaw reports that reason to the user and does not replay the turn on a fallback model, because the backend's tool actions may already have run.
+
 Omit `reliability.watchdog` to inherit the standard profiles, including the
 longer resumed-run budget for cron and explicit timeouts. Set it only when a
 backend intentionally needs its own watchdog policy.
@@ -334,9 +336,25 @@ may include final text, usage, an error, and a successor session id. Session ids
 reported by either event shape participate in resumed-session and fork
 persistence.
 
+Lifecycle events are intentionally separate from this return union so existing
+plugins can continue to match it exhaustively. Use `parseJsonlLifecycleEvent`
+for backend-owned lifecycle records instead.
+
 Tool events describe work the backend already performed. OpenClaw renders and
 summarizes them, but does not treat them as host tool execution, trusted
 diagnostics, loopback correlation, or message-delivery evidence.
+
+### `parseJsonlLifecycleEvent`: provider-native lifecycle records
+
+Set `parseJsonlLifecycleEvent` when a backend emits JSONL records for lifecycle
+state that is independent of assistant text, tools, sessions, and terminal
+results. The hook receives the same line and context as `parseJsonlEvent` and is
+tried first. Returning a lifecycle event consumes that line; returning `null`
+lets the source-compatible `parseJsonlEvent` hook or built-in parser handle it.
+
+The current lifecycle contract supports native compaction start and end records.
+An end record includes `completed` so channels can distinguish successful and
+incomplete compaction without inferring an outcome from later messages.
 
 ### `ownsNativeCompaction`: opting out of OpenClaw compaction
 

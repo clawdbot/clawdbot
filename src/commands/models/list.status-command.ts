@@ -378,7 +378,7 @@ export async function modelsStatusCommand(
     }
     const pending = (async () => {
       const { runPluginPayloadSmokeCheckForManifestRecords } =
-        await import("../../cli/update-cli/plugin-payload-validation.js");
+        await import("../../plugins/payload-verification.js");
       const ownerPluginIds = resolveAgentHarnessOwnerPluginIds({
         runtime: "codex",
         provider,
@@ -832,7 +832,6 @@ export async function modelsStatusCommand(
     const applied = getShellEnvAppliedKeys();
     const shellFallbackEnabled =
       shouldEnableShellEnvFallback(process.env) || cfg.env?.shellEnv?.enabled === true;
-
     const providerAuth = Array.from(
       new Set([
         ...providers,

@@ -203,6 +203,51 @@ with `operator.write`; invalid declarations fail the plugin load. The validated
 registry is rebuilt only with plugin lifecycle changes, while widget grants
 remain per-widget and byte-and-revision-bound.
 
+`show_widget` uses this validated active registry for bounded author discovery,
+including complete descriptions and action parameter schemas where available.
+It never loads plugins merely to describe their dashboard capabilities.
+
+### Authenticated GitHub reads
+
+Core's existing GitHub identity and HTTP owners serve `github.actions.runs`
+through `board.data.read`. The closed parameter contract constructs only the
+repository or workflow run-list operation at `api.github.com`. Authorization
+requires the exact normalized `github.actions.runs:<owner>/<repo>` tool grant;
+network-origin grants never supply GitHub identity authority. Approval discloses
+that Actions metadata, including private repository data accessible to the
+agent, is shared with the widget/session audience.
+
+Author guidance is conditional on a usable connected agent identity, not a
+tool-construction-time probe. `board.widget.put` verifies and revalidates that
+identity before saving HTML (including materialized Canvas documents) or
+registered widgets declaring this host capability. The same preparation owner
+serves pinning and reads, including source-config preview-credential scrubbing
+and OAuth refresh. Caller cancellation and session mutation authorization are
+rechecked before persistence; failure leaves existing content and grants intact.
+MCP App tool names use their own contract and do not trigger this preflight.
+
+The board capability owner carries the canonical agent/session privately and
+rechecks the live Gateway, ticket generation, widget revision and grant across
+awaits for both data and action paths. GitHub selects the agent override, System,
+or native identity using the existing credential owner and OAuth refresh
+service. Read authority additionally revalidates selection and credential
+rotation before fetch and before returning data. This does not change the
+personal publication broker or its admitted credential-snapshot semantics.
+
+Authenticated reads never use preview authentication or anonymous retry.
+Redirects are refused. Only this Actions read permits an upstream body up to
+1 MiB; other GitHub JSON callers retain their 256 KiB default. The owner validates
+and projects at most 30 runs into a small response, without raw repository
+objects or secrets. A Gateway-local cache holds at most 32 successful results
+for 30 seconds; at most 32 concurrent callers can prepare or await reads.
+The shared transport caches only validated projections under its captured
+credential scope; this internal cache write is not delivery to a widget.
+Every caller, including the initiator, followers, and cache hits, revalidates its
+own live authority before delivery. Removing one caller does not invalidate
+another authorized caller's result, and failed transport reads are not cached
+as success. See the
+[authoring contract and example](/tools/show-widget#read-github-actions-runs).
+
 ### Modeled residual: WebRTC data channels
 
 The sandbox CSP emits the proposed `webrtc 'block'` directive, but

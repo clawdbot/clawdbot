@@ -254,7 +254,7 @@ export function renderPersonActivityCard(input: PersonCardInput) {
         presenceMatchesProfile(user, actor?.identity),
       ),
   );
-  const activity = personActivityLink(user.identity?.id, input.routing);
+  const activity = personActivityLink(user.identity?.id, input.routing, user.name);
   return html`<div class="person-activity-card">
     <header class="person-activity-card__header">
       <openclaw-viewer-avatar

@@ -1,14 +1,15 @@
 import type {
   BoardCommand,
   BoardCommandEvent,
+  BoardGetParams,
   BoardOp,
   BoardSnapshot,
 } from "@openclaw/gateway-protocol";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import {
-  buildAgentMainSessionKey,
-  normalizeSessionKeyForUiComparison,
+  normalizeDefaultMainSessionAliasForUi,
+  resolveUiConversationIdentity,
 } from "../sessions/session-key.ts";
 import { GatewayBoardProvider } from "./gateway-provider.ts";
 import { applyMockBoardOp, normalizeMockBoardSnapshot } from "./mock-ops.ts";
@@ -364,24 +365,29 @@ function isMockBoardSession(sessionKey: string): boolean {
   return /^agent:[^:]+:[^:]+$/u.test(sessionKey);
 }
 
-export function boardProviderCacheKey(sessionKey: string): string {
-  const normalized = normalizeSessionKeyForUiComparison(sessionKey);
-  return normalized === "main" ? buildAgentMainSessionKey({ agentId: "main" }) : normalized;
+export function boardProviderCacheKey(session: BoardGetParams): string {
+  const identity = resolveUiConversationIdentity(
+    {},
+    normalizeDefaultMainSessionAliasForUi(session.sessionKey),
+    session.agentId,
+  );
+  return JSON.stringify([session.agentId ?? identity.agentId, identity.sessionKey]);
 }
 
 // Session lookups are read-only: only a lifecycle-owned lease may create and
 // subscribe a gateway transport, so hidden panes cannot orphan subscriptions.
-export function boardProviderForSession(sessionKey: string, available = true): BoardProvider {
-  const key = boardProviderCacheKey(sessionKey);
+export function boardProviderForSession(session: BoardGetParams, available = true): BoardProvider {
+  const key = boardProviderCacheKey(session);
+  const sessionKey = normalizeDefaultMainSessionAliasForUi(session.sessionKey);
   const mockScope = resolveMockBoardScope();
-  if (mockScope && isMockBoardSession(key)) {
+  if (mockScope && isMockBoardSession(sessionKey)) {
     if (mockScope !== mockProviderScope) {
       mockProviders.clear();
       mockProviderScope = mockScope;
     }
     let provider = mockProviders.get(key);
     if (!provider) {
-      provider = new MockBoardProvider(key);
+      provider = new MockBoardProvider(sessionKey);
       mockProviders.set(key, provider);
     }
     return provider;
@@ -392,7 +398,7 @@ export function boardProviderForSession(sessionKey: string, available = true): B
   }
   let provider = nullProviders.get(key);
   if (!provider) {
-    provider = new NullProvider(key);
+    provider = new NullProvider(sessionKey);
     nullProviders.set(key, provider);
   }
   return provider;
@@ -409,7 +415,7 @@ export type BoardProviderLease = {
 };
 
 export function acquireBoardProviderForSession(
-  sessionKey: string,
+  session: BoardGetParams,
   client: BoardGatewayClient,
   connected = true,
   canPinWidgets = true,
@@ -417,14 +423,18 @@ export function acquireBoardProviderForSession(
   canMutate = true,
   canGrant = true,
 ): BoardProviderLease {
-  const key = boardProviderCacheKey(sessionKey);
-  const provider = boardProviderForSession(key);
+  const key = boardProviderCacheKey(session);
+  const provider = boardProviderForSession(session);
   if (provider instanceof MockBoardProvider) {
     return { provider, update: () => undefined, release: () => undefined };
   }
   let entry = gatewayProviders.get(key);
   if (!entry) {
-    entry = { provider: new GatewayBoardProvider(key, client, connected), consumers: 0 };
+    const target = {
+      ...session,
+      sessionKey: normalizeDefaultMainSessionAliasForUi(session.sessionKey),
+    };
+    entry = { provider: new GatewayBoardProvider(target, client, connected), consumers: 0 };
     gatewayProviders.set(key, entry);
   } else {
     entry.provider.attachClient(client, connected);

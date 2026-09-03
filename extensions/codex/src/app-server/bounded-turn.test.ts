@@ -1,10 +1,14 @@
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { runBoundedCodexAppServerTurn } from "./bounded-turn.js";
-import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
+import {
+  createFakeCodexAppServerClient,
+  threadStartResult as createThreadStartResult,
+  turnStartResult,
+} from "./codex-app-server.test-fixtures.js";
 import type { JsonValue } from "./protocol.js";
 import type { CodexAppServerClientFactory } from "./shared-client.js";
-import { CODEX_APP_SERVER_VERSION } from "./version.js";
+import { createClientHarness } from "./test-support.js";
 
 function codexModel(model = "gpt-5.4", id = model) {
   return {
@@ -28,31 +32,14 @@ function codexModel(model = "gpt-5.4", id = model) {
   };
 }
 
-function threadStartResult(model: string) {
+function threadStartResult(model: string, modelProvider = "openai") {
+  const result = createThreadStartResult("thread-finalizer", "/tmp/finalizer");
   return {
-    thread: {
-      id: "thread-finalizer",
-      sessionId: "session-finalizer",
-      preview: "",
-      ephemeral: true,
-      modelProvider: "openai",
-      createdAt: 1,
-      updatedAt: 1,
-      status: { type: "idle" },
-      cwd: "/tmp/finalizer",
-      projectId: null,
-      cliVersion: CODEX_APP_SERVER_VERSION,
-      source: "unknown",
-      agentNickname: null,
-      agentRole: null,
-      name: null,
-      turns: [],
-    },
+    ...result,
+    thread: { ...result.thread, sessionId: "session-finalizer", ephemeral: true, modelProvider },
     model,
-    modelProvider: "openai",
-    cwd: "/tmp/finalizer",
+    modelProvider,
     approvalPolicy: "on-request",
-    approvalsReviewer: "user",
     sandbox: { type: "readOnly", networkAccess: false },
   };
 }
@@ -60,26 +47,8 @@ function threadStartResult(model: string) {
 function completedTurnResult() {
   return {
     turn: {
-      id: "turn-finalizer",
-      status: "completed",
-      items: [
-        {
-          id: "answer",
-          type: "agentMessage",
-          text: "The message was sent successfully.",
-          title: null,
-          status: "completed",
-          name: null,
-          tool: null,
-          server: null,
-          command: null,
-          cwd: null,
-          query: null,
-          aggregatedOutput: null,
-          changes: [],
-        },
-      ],
-      error: null,
+      ...turnStartResult("turn-finalizer", "completed").turn,
+      items: [{ id: "answer", type: "agentMessage", text: "The message was sent successfully." }],
       startedAt: 1,
       completedAt: 2,
       durationMs: 1,
@@ -88,17 +57,7 @@ function completedTurnResult() {
 }
 
 function inProgressTurnResult() {
-  return {
-    turn: {
-      id: "turn-finalizer",
-      status: "inProgress",
-      items: [],
-      error: null,
-      startedAt: 1,
-      completedAt: null,
-      durationMs: null,
-    },
-  };
+  return { turn: { ...turnStartResult("turn-finalizer").turn, startedAt: 1 } };
 }
 
 function createClientFactory(
@@ -110,6 +69,7 @@ function createClientFactory(
     emptyAnswer?: boolean;
     completeTurn?: boolean;
     models?: ReturnType<typeof codexModel>[];
+    modelProvider?: string;
   } = {},
 ) {
   const methods: string[] = [];
@@ -132,7 +92,7 @@ function createClientFactory(
       return { requirements: null };
     }
     if (method === "thread/start" && isRecord(params) && typeof params.model === "string") {
-      return threadStartResult(params.model);
+      return threadStartResult(params.model, options.modelProvider);
     }
     if (method === "mcpServerStatus/list") {
       return {
@@ -244,6 +204,62 @@ function createClientFactory(
 }
 
 describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
+  it.each(["thread/start", "turn/start"] as const)(
+    "rejects expired authority before the physical %s write after setup",
+    async (blockedMethod) => {
+      let current = true;
+      const expired = new Error("completion owner expired during setup");
+      const harness = createClientHarness({
+        onWrite: (line, send) => {
+          const request = JSON.parse(line) as { id: number; method: string };
+          const results: Record<string, unknown> = {
+            "model/list": { data: [codexModel()], nextCursor: null },
+            "config/read": { config: {}, layers: [] },
+            "configRequirements/read": { requirements: null },
+            "thread/start": threadStartResult("gpt-5.4"),
+            "mcpServerStatus/list": { data: [], nextCursor: null },
+            "turn/start": completedTurnResult(),
+          };
+          if (request.method === "mcpServerStatus/list" && blockedMethod === "turn/start") {
+            current = false;
+          }
+          send({ id: request.id, result: results[request.method] });
+        },
+      });
+      const releaseFence = vi.fn();
+      harness.client.setThreadSessionRequestGuard(async () => {
+        if (blockedMethod === "thread/start") {
+          current = false;
+        }
+        return releaseFence;
+      });
+      try {
+        await expect(
+          runBoundedCodexAppServerTurn({
+            model: { mode: "required", id: "gpt-5.4" },
+            timeoutMs: 5_000,
+            assertCurrent: () => {
+              if (!current) {
+                throw expired;
+              }
+            },
+            options: { clientFactory: async () => harness.client },
+            taskLabel: "isolated completion",
+            developerInstructions: "Answer only.",
+            input: [{ type: "text", text: "Name this conversation.", text_elements: [] }],
+            requiredModalities: ["text"],
+            isolation: "configured-transport",
+            requireNoExternalCapabilities: true,
+          }),
+        ).rejects.toBe(expired);
+        expect(harness.writes.map((line) => JSON.parse(line).method)).not.toContain(blockedMethod);
+        expect(releaseFence).toHaveBeenCalledOnce();
+      } finally {
+        harness.client.close();
+      }
+    },
+  );
+
   it("returns an explicit unsupported decline for interactive MCP input", async () => {
     const fake = createClientFactory({ completeTurn: false });
     const run = runBoundedCodexAppServerTurn({
@@ -561,11 +577,15 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     ).toMatchObject({ sandbox: "read-only", approvalPolicy: "on-request" });
   });
 
-  it("preserves the configured native model provider when no override is supplied", async () => {
-    const fake = createClientFactory();
+  it("preserves and reports the configured native provider when no override is supplied", async () => {
+    const model = "gpt-5.6-luna";
+    const fake = createClientFactory({
+      modelProvider: "synthetic-native-provider",
+      models: [codexModel(model)],
+    });
 
-    await runBoundedCodexAppServerTurn({
-      model: { mode: "required", id: "gpt-5.4" },
+    const result = await runBoundedCodexAppServerTurn({
+      model: { mode: "required", id: model },
       timeoutMs: 5_000,
       options: {
         clientFactory: fake.factory,
@@ -581,6 +601,10 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
 
     const startParams = fake.request.mock.calls.find(([method]) => method === "thread/start")?.[1];
     expect(startParams).not.toHaveProperty("modelProvider");
+    expect(result.nativeSelection).toEqual({
+      model,
+      modelProvider: "synthetic-native-provider",
+    });
     expect(fake.factory).toHaveBeenCalledWith(
       expect.objectContaining({ startOptions: expect.objectContaining({ homeScope: "user" }) }),
     );
@@ -619,12 +643,16 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
         requiredModalities: ["text"],
         isolation: "configured-transport",
       }),
-    ).resolves.toMatchObject({ model: id, text: "The message was sent successfully." });
+    ).resolves.toMatchObject({
+      model: id,
+      nativeSelection: { model: "codex-execution-model", modelProvider: "openai" },
+      text: "The message was sent successfully.",
+    });
 
     const threadStart = fake.request.mock.calls.find(([method]) => method === "thread/start")?.[1];
     const turnStart = fake.request.mock.calls.find(([method]) => method === "turn/start")?.[1];
     expect(threadStart).toMatchObject({ model: "codex-execution-model" });
-    expect(turnStart).toMatchObject({ model: "codex-execution-model" });
+    expect(turnStart).not.toHaveProperty("model");
   });
 
   it("keeps hidden models out of live-default selection", async () => {
@@ -649,13 +677,14 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
       }),
     ).resolves.toMatchObject({
       model: "visible-model",
+      nativeSelection: { model: "visible-execution-model", modelProvider: "openai" },
       text: "The message was sent successfully.",
     });
 
     const threadStart = fake.request.mock.calls.find(([method]) => method === "thread/start")?.[1];
     const turnStart = fake.request.mock.calls.find(([method]) => method === "turn/start")?.[1];
     expect(threadStart).toMatchObject({ model: "visible-execution-model" });
-    expect(turnStart).toMatchObject({ model: "visible-execution-model" });
+    expect(turnStart).not.toHaveProperty("model");
   });
 
   it("rejects a missing required model before starting a thread", async () => {

@@ -114,7 +114,9 @@ type BuildCodexPluginThreadConfigParams = {
   nowMs?: number;
 };
 
-const CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION = 3;
+// Admission changes must rebuild existing bindings too, or an app omitted by
+// an older rule stays missing even after the gateway has been upgraded.
+const CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION = 4;
 const CODEX_PLUGIN_THREAD_CONFIG_FINGERPRINT_VERSION = 2;
 
 /** Returns true when plugin config exists and thread config may need app patches. */
@@ -674,15 +676,18 @@ function readPersistedAppToolApprovalOverrideNames(
   if (!isJsonObject(tools)) {
     return [];
   }
+  const keys = app.approvalOverrideToolConfigKeys;
   return Object.entries(tools)
-    .filter(([toolName]) => !app.readOnlyToolConfigKeys?.includes(toolName))
-    .filter(([, value]) => hasPersistedToolApprovalOverride(value))
-    .map(([toolName]) => toolName)
+    .flatMap(([name, value]) =>
+      (!keys || keys.includes(name)) && hasPersistedToolApprovalOverride(value) ? [name] : [],
+    )
     .toSorted();
 }
 
 function hasPersistedToolApprovalOverride(value: JsonValue): boolean {
-  return isJsonObject(value) && value.approval_mode !== undefined;
+  // Codex serializes an unset optional approval mode as null. Treating null as
+  // an override turns a successful cleanup into an app-wide admission failure.
+  return isJsonObject(value) && value.approval_mode !== undefined && value.approval_mode !== null;
 }
 
 function quoteConfigKeyPathSegment(segment: string): string {

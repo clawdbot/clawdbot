@@ -728,20 +728,23 @@ describe("prepared provider auth state", () => {
       workerPath,
       `
         import fs from "node:fs";
-        import { parentPort, workerData } from "node:worker_threads";
-        setTimeout(() => {
-          fs.writeFileSync(workerData.cfg.markerPath, "finished");
+        import { parentPort } from "node:worker_threads";
+        parentPort.on("message", ({ input }) => setTimeout(() => {
+          fs.writeFileSync(input.cfg.markerPath, "finished");
           parentPort.postMessage({
             status: "ok",
-            snapshot: {
-              agents: [{
-                agentId: "default",
-                configFingerprint: "fingerprint",
-                providers: [["openai", true]]
-              }]
+            value: {
+              status: "ok",
+              snapshot: {
+                agents: [{
+                  agentId: "default",
+                  configFingerprint: "fingerprint",
+                  providers: [["openai", true]]
+                }]
+              }
             }
           });
-        }, 200);
+        }, 200));
       `,
     );
     let cancelled = false;

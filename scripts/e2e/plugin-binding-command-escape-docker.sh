@@ -12,7 +12,9 @@ IMAGE_NAME="${OPENCLAW_PLUGIN_BINDING_COMMAND_ESCAPE_E2E_IMAGE:-openclaw-plugin-
 CONTAINER_NAME="openclaw-plugin-binding-command-escape-e2e-$$"
 DOCKER_RUN_TIMEOUT="${OPENCLAW_PLUGIN_BINDING_COMMAND_ESCAPE_DOCKER_RUN_TIMEOUT:-900s}"
 RUN_LOG="$(mktemp -t openclaw-plugin-binding-command-escape-log.XXXXXX)"
-FOCUSED_TEST_REGEX="lets authorized gateway-style plugin commands escape plugin-owned bindings|keeps authorized unknown slash text in a plugin-owned binding routed to the bound plugin|keeps unauthorized plugin-owned binding slash replies suppressed while routed to the bound plugin"
+# The command-path test was renamed when main split this suite. The two names
+# describe the same required behavior, and only one exists in a target source.
+FOCUSED_TEST_REGEX="lets authorized (plugin-owned binding commands fall through to command processing|gateway-style plugin commands escape plugin-owned bindings)|keeps authorized unknown slash text in a plugin-owned binding routed to the bound plugin|keeps unauthorized plugin-owned binding slash replies suppressed while routed to the bound plugin"
 
 cleanup() {
   docker_e2e_docker_cmd rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true

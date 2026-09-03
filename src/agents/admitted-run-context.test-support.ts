@@ -26,14 +26,19 @@ export function withTestAdmittedRunContext<T extends { runId: string }>(
 }
 
 /** Exercises the real post-selection admission boundary without enabling audit collection. */
-export function wrapRunWithTestPreparedAdmission<P extends { runId: string }, R>(
+export function wrapRunWithTestPreparedAdmission<P extends { runId: string; agentId?: string }, R>(
   run: (params: P) => Promise<R>,
 ): (params: Omit<P, "admittedRunContext" | "preparedRunAdmission">) => Promise<R> {
   return async (params) => {
     // Fixtures reset modules before loading runners; authority must use that same
     // module instance and remain owned until the complete runner call settles.
     const { prepareSystemAgentRunAdmission } = await import("./admitted-run-context.js");
-    const admission = prepareSystemAgentRunAdmission({}, params.runId, "test", "runner-fixture");
+    const admission = prepareSystemAgentRunAdmission(
+      {},
+      params.runId,
+      params.agentId ?? "test",
+      "runner-fixture",
+    );
     try {
       return await run({ ...params, preparedRunAdmission: admission } as unknown as P);
     } finally {

@@ -236,60 +236,69 @@ describe("renderWorkboard", () => {
     expect(container.querySelector("openclaw-workboard-card-dashboard")).toBeNull();
   });
 
-  it("releases the card dashboard provider when the details panel closes", async () => {
-    const host = {};
-    const state = getWorkboardState(host);
-    const sessionKey = "agent:main:dashboard-panel-close";
-    state.loaded = true;
-    state.detailCardId = "card-1";
-    state.cards = [
-      createWorkboardCard({
-        title: "Disposable dashboard card",
-        status: "running",
-        position: 1,
+  it.each([
+    { sessionKey: "agent:main:dashboard-panel-close", agentId: undefined, expectedAgentId: "main" },
+    { sessionKey: "global", agentId: "work", expectedAgentId: "work" },
+  ])(
+    "releases the $sessionKey card dashboard provider when the details panel closes",
+    async ({ sessionKey, agentId, expectedAgentId }) => {
+      const host = {};
+      const state = getWorkboardState(host);
+      state.loaded = true;
+      state.detailCardId = "card-1";
+      state.cards = [
+        createWorkboardCard({
+          title: "Disposable dashboard card",
+          status: "running",
+          position: 1,
+          sessionKey,
+          agentId,
+        }),
+      ];
+      const removeListener = vi.fn();
+      const request = vi.fn(async () => ({
         sessionKey,
-      }),
-    ];
-    const removeListener = vi.fn();
-    const request = vi.fn(async () => ({
-      sessionKey,
-      revision: 0,
-      tabs: [],
-      widgets: [],
-    }));
-    const container = document.createElement("div");
-    document.body.append(container);
-    const props = createWorkboardRenderProps(host, {
-      client: {
-        request,
-        addEventListener: vi.fn(() => removeListener),
-      } as unknown as GatewayBrowserClient,
-    });
+        revision: 0,
+        tabs: [],
+        widgets: [],
+      }));
+      const container = document.createElement("div");
+      document.body.append(container);
+      const props = createWorkboardRenderProps(host, {
+        client: {
+          request,
+          addEventListener: vi.fn(() => removeListener),
+        } as unknown as GatewayBrowserClient,
+      });
 
-    try {
-      renderInto(container, props);
-      // The dashboard element is lazily imported; on loaded CI runners that
-      // import can outlive vi.waitFor's default timeout. Await the definition
-      // and the upgraded element's first update, which acquires the provider
-      // and issues board.get synchronously.
-      await customElements.whenDefined("openclaw-workboard-card-dashboard");
-      const dashboard = container.querySelector("openclaw-workboard-card-dashboard");
-      expect(dashboard).not.toBeNull();
-      await dashboard!.updateComplete;
-      expect(request).toHaveBeenCalledWith("board.get", { sessionKey });
+      try {
+        renderInto(container, props);
+        // The dashboard element is lazily imported; on loaded CI runners that
+        // import can outlive vi.waitFor's default timeout. Await the definition
+        // and the upgraded element's first update, which acquires the provider
+        // and issues board.get synchronously.
+        await customElements.whenDefined("openclaw-workboard-card-dashboard");
+        const dashboard = container.querySelector("openclaw-workboard-card-dashboard");
+        expect(dashboard).not.toBeNull();
+        await dashboard!.updateComplete;
+        expect(request).toHaveBeenCalledWith("board.get", {
+          sessionKey,
+          agentId: expectedAgentId,
+        });
 
-      state.detailCardId = null;
-      renderInto(container, props);
-      await nextFrame();
+        state.detailCardId = null;
+        renderInto(container, props);
+        await nextFrame();
 
-      expect(removeListener).toHaveBeenCalledOnce();
-    } finally {
-      // A leaked open drawer poisons later dialog tests in this shared jsdom
-      // document, so tear down even when an assertion above fails.
-      render(nothing, container);
-      container.remove();
-    }
-  });
+        expect(removeListener).toHaveBeenCalledOnce();
+      } finally {
+        // A leaked open drawer poisons later dialog tests in this shared jsdom
+        // document, so tear down even when an assertion above fails.
+        render(nothing, container);
+        container.remove();
+      }
+    },
+  );
 
   it("keeps manual recovery refresh visible while data is loading", () => {
     const { state, container, renderView } = createWorkboardView();

@@ -9,8 +9,15 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
-import { onUserProfilesChanged } from "./user-profile-events.js";
-import { ensureProfileForEmail, linkEmail, readUserProfileAliases } from "./user-profiles.js";
+import { onUserProfilesChanged, readUserProfileVersion } from "./user-profile-events.js";
+import {
+  ensureProfileForEmail,
+  linkEmail,
+  listProfiles,
+  readUserProfileAliases,
+  resolveUserProfileId,
+  setDisplayName,
+} from "./user-profiles.js";
 
 const roots = createTempDirTracker();
 const statePaths: string[] = [];
@@ -67,6 +74,65 @@ describe("profile alias reader lifecycle", () => {
     linkEmail("source@aliases.test", target.id, options);
     expect(readUserProfileAliases(target.id, options)).toEqual(new Set([target.id]));
     expect(readUserProfileAliases(source.id, options)).toEqual(new Set([source.id]));
+  });
+
+  it("moves aliases and leaves an aliasless source profile as a one-hop tombstone", () => {
+    const options = stateOptions();
+    const source = ensureProfileForEmail("source@example.com", options);
+    const target = ensureProfileForEmail("target@example.com", options);
+
+    const version = readUserProfileVersion();
+    const linked = linkEmail("source@example.com", target.id, options);
+    expect(readUserProfileVersion()).toBe(version + 1);
+
+    expect(ensureProfileForEmail("source@example.com", options).id).toBe(target.id);
+    expect(linked).toMatchObject({
+      id: target.id,
+      emails: ["source@example.com", "target@example.com"],
+      hasAvatar: false,
+    });
+    expect(listProfiles(options)).toContainEqual(
+      expect.objectContaining({ id: source.id, mergedInto: target.id, emails: [] }),
+    );
+  });
+
+  it("compresses tombstones so durable profile references resolve to the merge head", () => {
+    const options = stateOptions();
+    const a = ensureProfileForEmail("a@example.com", options);
+    const b = ensureProfileForEmail("b@example.com", options);
+    const c = ensureProfileForEmail("c@example.com", options);
+
+    linkEmail("a@example.com", b.id, options);
+    linkEmail("a@example.com", c.id, options);
+    linkEmail("b@example.com", c.id, options);
+
+    expect(setDisplayName(a.id, "Durable A", options)).toMatchObject({ id: c.id });
+    expect(resolveUserProfileId(a.id, options)).toBe(c.id);
+    expect(listProfiles(options)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: a.id, mergedInto: c.id }),
+        expect.objectContaining({ id: b.id, mergedInto: c.id }),
+      ]),
+    );
+  });
+
+  it("resolves a tombstoned link target to its head without forming a cycle", () => {
+    const options = stateOptions();
+    const a = ensureProfileForEmail("a@example.com", options);
+    const b = ensureProfileForEmail("b@example.com", options);
+
+    linkEmail("a@example.com", b.id, options);
+    const version = readUserProfileVersion();
+    linkEmail("a@example.com", a.id, options);
+    expect(readUserProfileVersion()).toBe(version);
+
+    expect(ensureProfileForEmail("a@example.com", options).id).toBe(b.id);
+    expect(listProfiles(options)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: a.id, mergedInto: b.id }),
+        expect.objectContaining({ id: b.id, mergedInto: null }),
+      ]),
+    );
   });
 
   it.each([false, true])(

@@ -15,6 +15,7 @@ import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import {
   deleteRestartSentinelRowSync,
   readRestartSentinelRowSync,
+  readRestartSentinelSnapshotSync,
   readUpdateInstallReceiptRowSync,
   writeRestartSentinelRowIfRevisionSync,
   writeRestartSentinelRowSync,
@@ -56,6 +57,44 @@ export async function writeRestartSentinel(
     ({ db }) => writeRestartSentinelRowSync(db, payload),
     { env },
     { operationLabel: "restart-sentinel.write" },
+  );
+}
+
+/** Publish an outcome only while its producer and the captured notification are unchanged. */
+export async function writeRestartSentinelIfUnchanged(params: {
+  payload: RestartSentinelPayload;
+  expectedRevision: number | null;
+  isCurrent: () => boolean;
+}): Promise<RestartSentinel | null> {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const current = readRestartSentinelSnapshotSync(db);
+      if (current.state.kind === "invalid" || !params.isCurrent()) {
+        return null;
+      }
+      return current.revision === params.expectedRevision
+        ? writeRestartSentinelRowSync(db, params.payload)
+        : null;
+    },
+    {},
+    { operationLabel: "restart-sentinel.write-if-unchanged" },
+  );
+}
+
+export async function readRestartSentinelSnapshot(): Promise<{
+  sentinel: RestartSentinel | null;
+  revision: number | null;
+}> {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const snapshot = readRestartSentinelSnapshotSync(db);
+      return {
+        sentinel: snapshot.state.kind === "valid" ? snapshot.state.sentinel : null,
+        revision: snapshot.revision,
+      };
+    },
+    {},
+    { operationLabel: "restart-sentinel.read-snapshot" },
   );
 }
 

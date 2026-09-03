@@ -27,8 +27,6 @@ import { canCreateChatSession } from "./chat-state-route.ts";
 export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentation {
   protected recoveringSession = false;
 
-  protected abstract confirmConversationReset(): Promise<boolean>;
-
   protected sessionDisabledBanner(params: {
     catalogDisabledReason: string | null | undefined;
     modelSetupRequired: boolean;
@@ -283,6 +281,9 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     preparePaneSessionHandoff(this.context, this.paneId, nextSessionKey, {
       attachments: cloneChatAttachmentsForIndependentOwner(state.chatAttachments),
       draft: state.chatMessage,
+      ...(state.chatMentions?.length
+        ? { mentions: state.chatMentions.map((mention) => ({ ...mention })) }
+        : {}),
       ...(state.chatGoalDraftMode ? { goalMode: state.chatGoalDraftMode } : {}),
     });
     return true;

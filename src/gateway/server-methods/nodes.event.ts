@@ -106,6 +106,7 @@ export const nodeEventHandlers: GatewayRequestHandlers = {
         },
         clearNodePresenceActivity: (activity) =>
           context.nodeRegistry.clearPresenceActivity(activity),
+        updateNodeHostStats: (stats) => context.nodeRegistry.updateHostStats(stats),
         logGateway: { warn: context.logGateway.warn },
       };
       const result = await handleNodeEvent(

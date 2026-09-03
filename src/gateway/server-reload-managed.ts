@@ -371,6 +371,7 @@ export function startManagedGatewayConfigReloader(
       // object from the source-derived candidate. Record the committed one so a
       // rebuild below stamps owners with the identity readers actually supply.
       lastCommittedRuntimeConfig = committedRuntimeConfig;
+      params.resolveGatewayContext?.()?.mentionInbox?.invalidate();
       if (canAdvancePreparedModelRuntimeConfigInPlace(plan)) {
         advancePreparedModelRuntimeConfig(committedRuntimeConfig);
       }
@@ -379,7 +380,7 @@ export function startManagedGatewayConfigReloader(
       ? { prepareConfigCandidate: params.prepareConfigCandidate }
       : {}),
     initialInternalWriteHash: params.initialInternalWriteHash,
-    runTransaction: runWithGatewayIndependentRootWorkAdmission,
+    runTransaction: (run) => runWithGatewayIndependentRootWorkAdmission(run, "reload:config"),
     readSnapshot: params.readSnapshot,
     promoteSnapshot: async (snapshot, _reason) => await params.promoteSnapshot(snapshot),
     subscribeToWrites: params.subscribeToWrites,

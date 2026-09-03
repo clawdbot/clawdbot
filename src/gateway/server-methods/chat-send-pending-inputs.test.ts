@@ -1,5 +1,8 @@
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { Static } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ChatSendParamsSchema } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
@@ -14,11 +17,13 @@ import {
   loadSessionEntry,
   loadTranscriptEventsSync,
   patchSessionEntryCore,
+  replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { initializeGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookBeforeMessageWriteEvent } from "../../plugins/types.js";
 import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
@@ -28,6 +33,8 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { ensureSessionPendingInputsSchema } from "../../state/openclaw-agent-pending-inputs-schema.js";
+import { ensureProfileForEmail, setDisplayName } from "../../state/user-profiles.js";
+import { createMentionInbox } from "../mention-inbox.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import {
   dispatchInboundMessageMock,
@@ -43,7 +50,9 @@ installGatewayTestHooks();
 const temporaryDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("ordinary browser input admission", () => {
-  async function createBrowserFollowupFixture(options: { active?: boolean } = {}) {
+  async function createBrowserFollowupFixture(
+    options: { active?: boolean; preserveContent?: boolean } = {},
+  ) {
     const active = options.active !== false;
     const storePath = path.join(temporaryDirs.make("openclaw-chat-custody-"), "sessions.json");
     testState.sessionStorePath = storePath;
@@ -59,6 +68,11 @@ describe("ordinary browser input admission", () => {
           sessionId: scope.sessionId,
           updatedAt: Date.now(),
           status: active ? "running" : "done",
+        },
+        unrelated: {
+          sessionId: "unrelated-browser-session",
+          updatedAt: Date.now(),
+          skillsSnapshot: { prompt: "Unrelated session context. ".repeat(128), skills: [] },
         },
       },
     });
@@ -90,7 +104,9 @@ describe("ordinary browser input admission", () => {
             return undefined;
           }
           beforeApprove();
-          return { message: { ...message, content: approvedContent } };
+          return {
+            message: options.preserveContent ? message : { ...message, content: approvedContent },
+          };
         },
       });
     }
@@ -117,7 +133,7 @@ describe("ordinary browser input admission", () => {
         client: { id: "openclaw-control-ui", version: "test", platform: "web", mode: "webchat" },
       },
     };
-    const params = {
+    const params: Static<typeof ChatSendParamsSchema> = {
       sessionKey: scope.sessionKey,
       sessionId: scope.sessionId,
       message: "Raw follow-up awaiting approval.",
@@ -145,6 +161,7 @@ describe("ordinary browser input admission", () => {
     return {
       scope,
       context,
+      client,
       params,
       approvedContent,
       beforeApprove,
@@ -159,8 +176,149 @@ describe("ordinary browser input admission", () => {
     };
   }
 
+  async function createMentionFixture(
+    options: { active?: boolean; preserveContent?: boolean } = {},
+  ) {
+    const fixture = await createBrowserFollowupFixture({ preserveContent: true, ...options });
+    const profiles = ["Alice", "Bob", "Carol"].map((name) => {
+      const profile = ensureProfileForEmail(`${name.toLowerCase()}@mentions.example.test`);
+      setDisplayName(profile.id, name);
+      return { profileId: profile.id, displayName: name, hasAvatar: false, updatedAt: 1 };
+    });
+    const [alice, bob, carol] = profiles;
+    if (!alice || !bob || !carol) {
+      throw new Error("Mention test profiles were not created");
+    }
+    fixture.client.authenticatedUserProfile = alice;
+    const bobClient = { ...fixture.client, connId: "bob-one", authenticatedUserProfile: bob };
+    const carolClient = { ...fixture.client, connId: "carol", authenticatedUserProfile: carol };
+    const inbox = createMentionInbox({
+      gatewayInstanceId: "chat-mention-commit-test",
+      getRuntimeConfig,
+      getClients: () => [fixture.client, bobClient, carolClient],
+      broadcastToConnIds: vi.fn(),
+    });
+    fixture.context.mentionInbox = inbox;
+    fixture.params.message = "@Bob could you review this?";
+    fixture.params.mentions = [{ profileId: bob.profileId, start: 0, end: 4 }];
+    const read = (client: GatewayClient = bobClient) => {
+      const result = inbox.list(client);
+      if (!result.ok) {
+        throw new Error(result.error.message);
+      }
+      return result.value.items;
+    };
+    return {
+      ...fixture,
+      bobClient,
+      carolClient,
+      inbox,
+      read,
+      cleanup: async () => {
+        inbox.dispose();
+        await fixture.cleanup();
+      },
+    };
+  }
+
+  it("creates recipient-only mentions at original message commit, never at the queued ACK", async () => {
+    const fixture = await createMentionFixture();
+    try {
+      const ack = await fixture.send();
+      expect(ack).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ status: "started" }),
+        undefined,
+        expect.anything(),
+      );
+      expect(fixture.read()).toEqual([]);
+      const recorder = await fixture.dispatchedRecorder;
+      const committed = await recorder.persistApproved();
+      expect(committed?.appended).toBe(true);
+      expect(fixture.read()).toMatchObject([
+        {
+          messageId: committed?.messageId,
+          senderProfileId: fixture.client.authenticatedUserProfile?.profileId,
+          excerpt: fixture.params.message,
+        },
+      ]);
+      expect(fixture.read(fixture.client)).toEqual([]);
+      expect(fixture.read(fixture.carolClient)).toEqual([]);
+      const id = fixture.read()[0]?.id;
+      expect(id).toBeDefined();
+      fixture.inbox.dismiss(fixture.bobClient, id ? [id] : []);
+      await recorder.persistApproved();
+      await fixture.send();
+      expect(fixture.read()).toEqual([]);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("includes an idle first commit in the Inbox before ACK without waiting for the agent", async () => {
+    const fixture = await createMentionFixture({ active: false });
+    let atAck = 0;
+    try {
+      const ack = await fixture.send(
+        vi.fn((ok) => {
+          if (ok) {
+            atAck = fixture.read().length;
+          }
+        }),
+      );
+      expect(ack).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ status: "started", messageSeq: 2 }),
+        undefined,
+        expect.anything(),
+      );
+      expect(atAck).toBe(1);
+      await fixture.finishDispatch();
+      expect(fixture.read()).toHaveLength(1);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("does not notify when approval replaces the selected token", async () => {
+    const fixture = await createMentionFixture({ preserveContent: false });
+    try {
+      await fixture.send();
+      const recorder = await fixture.dispatchedRecorder;
+      const committed = await recorder.persistApproved();
+      expect(committed?.message.content).toBe(fixture.approvedContent);
+      expect(committed?.message["__openclaw"]?.humanMentions).toBeUndefined();
+      expect(fixture.read()).toEqual([]);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("rejects changed recipients on a same-ID retry while preserving the queued original", async () => {
+    const fixture = await createMentionFixture();
+    try {
+      await fixture.send();
+      fixture.params.mentions = [
+        { profileId: fixture.carolClient.authenticatedUserProfile.profileId, start: 0, end: 4 },
+      ];
+      const replay = await fixture.send();
+      expect(replay).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ message: expect.stringMatching(/different|conflict|reused/i) }),
+      );
+      const recorder = await fixture.dispatchedRecorder;
+      await recorder.persistApproved();
+      expect(fixture.read()).toHaveLength(1);
+      expect(fixture.read(fixture.carolClient)).toEqual([]);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
   it("durably stages the approved cloud follow-up before ACK without changing the active transcript", async () => {
     const fixture = await createBrowserFollowupFixture();
+    const clone = vi.spyOn(globalThis, "structuredClone");
     const { scope, params, approvedContent, activeTranscript } = fixture;
     let transcriptAtAck: ReturnType<typeof loadTranscriptEventsSync> | undefined;
     let pendingAtAck: ReturnType<typeof listSessionPendingInputs> | undefined;
@@ -198,13 +356,21 @@ describe("ordinary browser input admission", () => {
           },
         ],
       });
+      // Initial resolution detaches the store; custody needs only the current target binding.
+      expect(
+        clone.mock.calls.filter(
+          ([entry]) => isRecord(entry) && entry.sessionId === "unrelated-browser-session",
+        ).length,
+      ).toBeLessThanOrEqual(1);
     } finally {
+      clone.mockRestore();
       await fixture.cleanup();
     }
   });
 
   it("commits an existing idle session input before ACK through restart-safe admission", async () => {
     const fixture = await createBrowserFollowupFixture({ active: false });
+    const clone = vi.spyOn(globalThis, "structuredClone");
     let transcriptAtAck: ReturnType<typeof loadTranscriptEventsSync> | undefined;
     const respond = vi.fn<RespondFn>((ok) => {
       if (ok) {
@@ -228,7 +394,13 @@ describe("ordinary browser input admission", () => {
         },
       });
       expect(listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
+      expect(
+        clone.mock.calls.filter(
+          ([entry]) => isRecord(entry) && entry.sessionId === "unrelated-browser-session",
+        ).length,
+      ).toBeLessThanOrEqual(1);
     } finally {
+      clone.mockRestore();
       await fixture.cleanup();
     }
   });
@@ -278,34 +450,54 @@ describe("ordinary browser input admission", () => {
     }
   });
 
-  it("revalidates cancellation after message approval before committing custody", async () => {
-    const fixture = await createBrowserFollowupFixture();
-    fixture.beforeApprove.mockImplementation(() => {
-      const active = fixture.context.chatAbortControllers.get(fixture.params.idempotencyKey);
-      if (!active) {
-        throw new Error("Expected the browser admission to own its cancellation controller");
+  it.each(["cancellation", "lifecycle rotation", "session replacement"] as const)(
+    "revalidates %s after message approval before committing custody",
+    async (change) => {
+      const fixture = await createBrowserFollowupFixture();
+      fixture.beforeApprove.mockImplementation(() => {
+        if (change === "lifecycle rotation") {
+          rotateAgentEventLifecycleGeneration();
+          return;
+        }
+        if (change === "session replacement") {
+          replaceSessionEntrySync(fixture.scope, {
+            sessionId: "successor-session",
+            updatedAt: Date.now(),
+          });
+          return;
+        }
+        const active = fixture.context.chatAbortControllers.get(fixture.params.idempotencyKey);
+        if (!active) {
+          throw new Error("Expected the browser admission to own its cancellation controller");
+        }
+        active.abortStopReason = "rpc";
+        active.controller.abort();
+      });
+      try {
+        const respond = await fixture.send();
+        expect(fixture.beforeApprove).toHaveBeenCalledOnce();
+        expect(respond).toHaveBeenCalledOnce();
+        expect(respond).not.toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ status: "started" }),
+          undefined,
+          expect.anything(),
+        );
+        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+        expect(listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
+        expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
+        if (change === "session replacement") {
+          expect(loadSessionEntry(fixture.scope)?.sessionId).toBe("successor-session");
+          expect(
+            loadTranscriptEventsSync({ ...fixture.scope, sessionId: "successor-session" }),
+          ).toEqual([]);
+        }
+        expect(fixture.context.chatAbortControllers.has(fixture.params.idempotencyKey)).toBe(false);
+      } finally {
+        await fixture.cleanup();
       }
-      active.abortStopReason = "rpc";
-      active.controller.abort();
-    });
-    try {
-      const respond = await fixture.send();
-      expect(fixture.beforeApprove).toHaveBeenCalledOnce();
-      expect(respond).toHaveBeenCalledOnce();
-      expect(respond).not.toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ status: "started" }),
-        undefined,
-        expect.anything(),
-      );
-      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      expect(listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
-      expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
-      expect(fixture.context.chatAbortControllers.has(fixture.params.idempotencyKey)).toBe(false);
-    } finally {
-      await fixture.cleanup();
-    }
-  });
+    },
+  );
 
   it("keeps one approved source when an accepted browser request is retried", async () => {
     const fixture = await createBrowserFollowupFixture();

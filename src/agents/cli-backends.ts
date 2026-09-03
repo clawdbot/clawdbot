@@ -60,6 +60,7 @@ export type ResolvedCliBackend = {
   resolveExecutionArgs?: CliBackendPlugin["resolveExecutionArgs"];
   resolveModelId?: CliBackendPlugin["resolveModelId"];
   parseJsonlEvent?: CliBackendPlugin["parseJsonlEvent"];
+  parseJsonlLifecycleEvent?: CliBackendPlugin["parseJsonlLifecycleEvent"];
   toolAvailabilityEnforcement?: CliBackendToolAvailabilityEnforcement;
   nativeToolMode?: CliBackendNativeToolMode;
   sideQuestionToolMode?: CliBackendSideQuestionToolMode;
@@ -325,6 +326,7 @@ export function resolveCliBackendConfig(
     resolveExecutionArgs: backend.resolveExecutionArgs,
     resolveModelId: backend.resolveModelId,
     parseJsonlEvent: backend.parseJsonlEvent,
+    parseJsonlLifecycleEvent: backend.parseJsonlLifecycleEvent,
     toolAvailabilityEnforcement: backend.toolAvailabilityEnforcement,
     nativeToolMode: backend.nativeToolMode,
     sideQuestionToolMode: backend.sideQuestionToolMode,

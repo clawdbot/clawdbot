@@ -47,6 +47,7 @@ import {
 import { getMediaDir, MEDIA_MAX_BYTES, saveMediaBuffer, saveMediaSource } from "../media/store.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
+import { readAssistantDisplayContent } from "../shared/assistant-display-content.js";
 import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -119,9 +120,14 @@ type ManagedMediaKind = Extract<MediaKind, "image" | "audio" | "video" | "docume
 
 const MANAGED_DOCUMENT_MIME_TYPES = new Set([
   "application/json",
+  "application/msword",
   "application/pdf",
+  "application/vnd.ms-excel",
+  "application/vnd.ms-powerpoint",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/x-cfb",
   "application/yaml",
   "application/zip",
   "text/csv",
@@ -1319,9 +1325,7 @@ async function getSessionManagedOutgoingAttachmentIndex(
       continue;
     }
     for (const ref of collectManagedOutgoingAttachmentRefs(
-      Array.isArray((message as { content?: unknown[] } | null)?.content)
-        ? ((message as { content: unknown[] }).content as Record<string, unknown>[])
-        : [],
+      readAssistantDisplayContent(message),
       sessionKey,
     )) {
       index.add(buildManagedOutgoingAttachmentRefKey(messageId, ref.attachmentId));

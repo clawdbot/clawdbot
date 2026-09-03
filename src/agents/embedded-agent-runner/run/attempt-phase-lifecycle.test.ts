@@ -64,6 +64,7 @@ describe("embedded attempt phase lifecycle state", () => {
       sessionId: "session-1",
     };
 
+    const runAbortDeadlineAtMs = Date.now() + 60_000;
     const result = await settleEmbeddedAttemptStream({
       attempt: {
         runId: "run-1",
@@ -102,7 +103,7 @@ describe("embedded attempt phase lifecycle state", () => {
       markTimedOutDuringCompaction: () => {
         timedOutDuringCompaction = true;
       },
-      runAbortDeadlineAtMs: Date.now() + 60_000,
+      getRunAbortDeadlineAtMs: () => runAbortDeadlineAtMs,
       runAbortSignal: new AbortController().signal,
       isProbeSession: true,
       abortable: async (promise) => await promise,
@@ -143,6 +144,7 @@ describe("embedded attempt phase lifecycle state", () => {
       sessionId: "session-1",
     };
 
+    const runAbortDeadlineAtMs = Date.now() + 60_000;
     const result = await settleEmbeddedAttemptStream({
       attempt: {
         runId: "run-1",
@@ -177,7 +179,7 @@ describe("embedded attempt phase lifecycle state", () => {
         timedOutDuringCompaction: false,
       }),
       markTimedOutDuringCompaction: () => {},
-      runAbortDeadlineAtMs: Date.now() + 60_000,
+      getRunAbortDeadlineAtMs: () => runAbortDeadlineAtMs,
       runAbortSignal: AbortSignal.abort(),
       isProbeSession: true,
       abortable: async (promise) => await promise,
@@ -228,6 +230,7 @@ describe("embedded attempt phase lifecycle state", () => {
       removeTrailingEntries: vi.fn(() => 0),
     };
 
+    const runAbortDeadlineAtMs = Date.now() + 60_000;
     const result = await settleEmbeddedAttemptStream({
       attempt: {
         runId: "run-1",
@@ -265,7 +268,7 @@ describe("embedded attempt phase lifecycle state", () => {
         timedOutDuringCompaction: false,
       }),
       markTimedOutDuringCompaction: () => {},
-      runAbortDeadlineAtMs: Date.now() + 60_000,
+      getRunAbortDeadlineAtMs: () => runAbortDeadlineAtMs,
       runAbortSignal: new AbortController().signal,
       isProbeSession: true,
       abortable: async (promise) => await promise,

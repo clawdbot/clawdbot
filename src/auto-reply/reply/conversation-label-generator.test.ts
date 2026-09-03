@@ -231,6 +231,57 @@ describe("generateConversationLabelWithFallback", () => {
     },
   );
 
+  it("keeps only the compatible runtime per attempt when providers differ", async () => {
+    runIsolatedCompletion
+      .mockRejectedValueOnce(new Error("utility unavailable"))
+      .mockResolvedValueOnce({ text: "Primary title" });
+
+    await expect(
+      generateConversationLabelWithFallback({
+        ...params,
+        utilityModelRef: "anthropic/claude-haiku",
+        agentHarnessRuntimeOverride: "codex",
+      }),
+    ).resolves.toBe("Primary title");
+
+    expect(
+      runIsolatedCompletion.mock.calls.map(([request]) => [
+        request.provider,
+        request.agentHarnessRuntimeOverride,
+      ]),
+    ).toEqual([
+      ["anthropic", undefined],
+      ["openai", "codex"],
+    ]);
+  });
+
+  it("utilityOnly runs one utility attempt and never the regular model", async () => {
+    runIsolatedCompletion.mockRejectedValueOnce(new Error("utility unavailable"));
+    await expect(
+      generateConversationLabelWithFallback({ ...params, utilityOnly: true }),
+    ).rejects.toThrow("conversation label generation failed (utility)");
+    expect(runIsolatedCompletion).toHaveBeenCalledOnce();
+    expect(runIsolatedCompletion.mock.calls[0]?.[0]?.model).toBe("gpt-mini");
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["resolving onto the primary", "openai/gpt-main@work"],
+  ])(
+    "utilityOnly returns null without inference when the utility model is %s",
+    async (_case, ref) => {
+      const { utilityModelRef: _utilityModelRef, ...regularOnlyParams } = params;
+      await expect(
+        generateConversationLabelWithFallback({
+          ...regularOnlyParams,
+          ...(ref ? { utilityModelRef: ref } : {}),
+          utilityOnly: true,
+        }),
+      ).resolves.toBeNull();
+      expect(runIsolatedCompletion).not.toHaveBeenCalled();
+    },
+  );
+
   it("uses the regular candidate directly when no utility model exists", async () => {
     const { utilityModelRef: _utilityModelRef, ...regularOnlyParams } = params;
     await generateConversationLabelWithFallback(regularOnlyParams);

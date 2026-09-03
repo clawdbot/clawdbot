@@ -34,7 +34,6 @@ import {
   type LocaleEntry,
   type LocaleMeta,
   type TranslationBatchItem,
-  type TranslationMap,
 } from "./lib/control-ui-i18n-sync-plan.ts";
 import { toErrorObject as toLintErrorObject } from "./lib/error-format.mts";
 import { sleep } from "./lib/sleep.mjs";
@@ -51,12 +50,7 @@ const DEFAULT_ANTHROPIC_MODEL = "claude-opus-4-6";
 const DEFAULT_PROVIDER = "openai";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
-const LOCALES_DIR = path.join(ROOT, "ui", "src", "i18n", "locales");
 const I18N_ASSETS_DIR = path.join(ROOT, "ui", "src", "i18n", ".i18n");
-const SOURCE_LOCALE_PATH = path.join(LOCALES_DIR, "en.ts");
-const ACTIVITY_SOURCE_LOCALE_PATH = path.join(LOCALES_DIR, "en-activity.ts");
-const SESSION_PLACEMENT_SOURCE_LOCALE_PATH = path.join(LOCALES_DIR, "en-session-placement.ts");
-const PLUGIN_CONSENT_SOURCE_LOCALE_PATH = path.join(LOCALES_DIR, "en-plugin-consent.ts");
 const SOURCE_LOCALE = "en";
 const MAX_BATCH_ITEMS = 20;
 const DEFAULT_BATCH_CHAR_BUDGET = 2_000;
@@ -280,24 +274,6 @@ function metaPath(entry: LocaleEntry): string {
 
 function tmPath(entry: LocaleEntry): string {
   return path.join(I18N_ASSETS_DIR, `${entry.locale}.tm.jsonl`);
-}
-
-async function loadSourceLocaleMap(): Promise<TranslationMap> {
-  return await loadControlUiSourceCatalog(
-    SOURCE_LOCALE_PATH,
-    ACTIVITY_SOURCE_LOCALE_PATH,
-    SESSION_PLACEMENT_SOURCE_LOCALE_PATH,
-    PLUGIN_CONSENT_SOURCE_LOCALE_PATH,
-  );
-}
-
-async function readSourceLocaleRaw(): Promise<string> {
-  return await readControlUiSourceCatalog(
-    SOURCE_LOCALE_PATH,
-    ACTIVITY_SOURCE_LOCALE_PATH,
-    SESSION_PLACEMENT_SOURCE_LOCALE_PATH,
-    PLUGIN_CONSENT_SOURCE_LOCALE_PATH,
-  );
 }
 
 type PlaceholderMismatch = {
@@ -780,7 +756,10 @@ type TranslationBatchContext = LocaleRunContext & {
   locale: string;
   splitDepth?: number;
   segmentLabel?: string;
+  validateTranslation?: TranslationValidator;
 };
+
+type TranslationValidator = (source: string, target: string, key: string, locale: string) => void;
 
 type ClientAccess = {
   getClient: () => Promise<TranslationClient>;
@@ -951,6 +930,7 @@ export function parseTranslationBatchReply(
   raw: string,
   items: readonly TranslationBatchItem[],
   locale: string,
+  validateTranslation?: TranslationValidator,
 ): Map<string, string> {
   const parsed = parseTranslationReply(raw);
   const translated = new Map<string, string>();
@@ -959,6 +939,7 @@ export function parseTranslationBatchReply(
     if (typeof value !== "string" || !value.trim()) {
       throw new Error(`missing translation for ${item.key}`);
     }
+    validateTranslation?.(item.text, value, item.key, locale);
     translated.set(item.key, value);
   }
   assertPlaceholderParity(new Map(items.map((item) => [item.key, item.text])), translated, locale);
@@ -985,7 +966,12 @@ async function translateBatch(
         await clientAccess.getClient()
       ).prompt(buildBatchPrompt(items, validationError), attemptLabel);
       promptCompleted = true;
-      const translated = parseTranslationBatchReply(raw, items, context.locale);
+      const translated = parseTranslationBatchReply(
+        raw,
+        items,
+        context.locale,
+        context.validateTranslation,
+      );
       logProgress(`${attemptLabel}: done (${formatDuration(Date.now() - startedAt)})`);
       return translated;
     } catch (error) {
@@ -1037,6 +1023,7 @@ export async function translateNativeEntries(
   entries: readonly NativeTranslationEntry[],
   targetLocale: string,
   glossary: readonly GlossaryEntry[] = [],
+  validateTranslation?: TranslationValidator,
 ): Promise<Map<string, string>> {
   if (!hasTranslationProvider()) {
     throw new Error("native app translation requires OPENAI_API_KEY or ANTHROPIC_API_KEY");
@@ -1058,6 +1045,7 @@ export async function translateNativeEntries(
         localeIndex: 1,
         batchCount: batches.length,
         batchIndex: batchIndex + 1,
+        validateTranslation,
       });
       for (const [id, value] of result) {
         translated.set(id, value);
@@ -1100,9 +1088,9 @@ async function syncLocale(
 ) {
   const localeLabel = formatLocaleLabel(entry.locale, context);
   const localeStartedAt = Date.now();
-  const sourceRaw = await readSourceLocaleRaw();
+  const sourceRaw = await readControlUiSourceCatalog();
   const sourceHash = sha256(sourceRaw);
-  const sourceMap = await loadSourceLocaleMap();
+  const sourceMap = loadControlUiSourceCatalog();
   const sourceFlat = flattenTranslations(sourceMap);
   const tm = loadControlUiTranslationMemory(tmPath(entry));
   const existingMap = materializeControlUiLocaleCatalog(sourceFlat, tm);

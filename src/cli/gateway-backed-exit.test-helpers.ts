@@ -237,6 +237,37 @@ export async function startGatewayStabilityRpcServer(
   return { authTokens, calls, url: `ws://${host}:${address.port}` };
 }
 
+export async function startStateDirStatusGateway(target: {
+  stateDir: string;
+  configPath: string;
+}): Promise<{ url: string }> {
+  const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  activeServers.add(wss);
+  wss.on("connection", (ws) => {
+    sendMinimalGatewayConnectChallenge(ws);
+    ws.on("message", (data) => {
+      const frame = parseMinimalGatewayRequestFrame(data);
+      if (frame.type !== "req" || !frame.id) {
+        return;
+      }
+      if (frame.method === "connect") {
+        sendMinimalGatewayResponse(
+          ws,
+          frame.id,
+          buildMinimalGatewayHelloOkPayload({ methods: ["status"], snapshot: target }),
+        );
+        return;
+      }
+      if (frame.method === "status") {
+        sendMinimalGatewayResponse(ws, frame.id, { status: "ok" });
+      }
+    });
+  });
+  await once(wss, "listening");
+  const address = wss.address() as AddressInfo;
+  return { url: `ws://127.0.0.1:${address.port}` };
+}
+
 /** Mock Gateway that answers one agent turn with the requested terminal status. */
 export async function startAgentTurnGateway(params: {
   status: "ok" | "error";

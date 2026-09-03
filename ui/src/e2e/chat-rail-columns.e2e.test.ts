@@ -996,12 +996,12 @@ suite.define(() => {
         expect(companionGeometry.railTop).toBeGreaterThanOrEqual(companionGeometry.bodyTop - 1);
         expect(companionGeometry.railBottom).toBeLessThanOrEqual(companionGeometry.bodyBottom + 1);
 
-        const mainComposer = page.getByRole("textbox", { name: "Message OpenClaw", exact: true });
+        const mainComposer = page.getByRole("textbox", { name: "Chat composer", exact: true });
         await mainComposer.click();
         expect(await mainComposer.evaluate((element) => element === document.activeElement)).toBe(
           true,
         );
-        const input = companion.getByRole("textbox", { name: "Ask the session companion" });
+        const input = companion.getByRole("textbox", { name: "Ask in side chat" });
         await input.fill("Can I use side chat here?");
         await companion.getByRole("button", { name: "Ask", exact: true }).click();
         const request = await gateway.waitForRequest("sessions.companion.ask");
@@ -1013,14 +1013,9 @@ suite.define(() => {
         await companion
           .getByText("The mobile side chat stayed inside its panel.", { exact: true })
           .waitFor();
-        const companionActions = sidePanel(page).getByRole("button", {
-          name: "More companion actions",
-        });
-        await companionActions.click();
         await sidePanel(page)
-          .locator('wa-dropdown-item[value="clear"]')
-          .waitFor({ state: "visible" });
-        await page.keyboard.press("Escape");
+          .getByRole("button", { name: "Clear side chat", exact: true })
+          .waitFor();
         await captureRichPanel(page, "rails-side-chat-mobile-light");
 
         await sidePanel(page).getByRole("button", { name: "Expand side panel" }).click();

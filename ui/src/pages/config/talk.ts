@@ -12,6 +12,7 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { renderSettingsSelectRow } from "./settings-select-row.ts";
 import { isTalkGptLiveModel, type TalkRealtimeSelection } from "./talk-schema.ts";
 
 /** One realtime provider row from talk.catalog, reduced to what the pickers use. */
@@ -120,38 +121,6 @@ export function effectiveTalkValues(
     speakerVoice ??= entry?.speakerVoice ?? null;
   }
   return { model, speakerVoice };
-}
-
-function renderTalkSelectRow(params: {
-  title: string;
-  description?: string;
-  value: string;
-  options: ReadonlyArray<{ value: string; label: string }>;
-  disabled: boolean;
-  onChange: (value: string) => void;
-}) {
-  return renderSettingsRow({
-    title: params.title,
-    description: params.description,
-    control: html`
-      <select
-        class="settings-select"
-        aria-label=${params.title}
-        ?disabled=${params.disabled}
-        .value=${params.value}
-        @change=${(event: Event) =>
-          params.onChange((event.currentTarget as HTMLSelectElement).value)}
-      >
-        ${params.options.map(
-          (option) => html`
-            <option value=${option.value} ?selected=${params.value === option.value}>
-              ${option.label}
-            </option>
-          `,
-        )}
-      </select>
-    `,
-  });
 }
 
 function renderStatusRow(props: TalkViewProps) {
@@ -271,7 +240,7 @@ function renderVoiceRow(props: TalkViewProps) {
     ...voices.map((value) => ({ value, label: value })),
     ...(voice && !voices.includes(voice) ? [{ value: voice, label: voice }] : []),
   ];
-  return renderTalkSelectRow({
+  return renderSettingsSelectRow({
     title: t("talkPage.voice.title"),
     description: t("talkPage.voice.description"),
     value: voice ?? TALK_PICKER_UNSET,

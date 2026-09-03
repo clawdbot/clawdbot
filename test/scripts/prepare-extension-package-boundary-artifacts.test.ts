@@ -9,6 +9,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readArtifactRecord } from "../../scripts/lib/build-artifact-cache.mts";
 import { BOUNDARY_PLUGIN_UNITS } from "../../scripts/lib/extension-boundary-inputs.mts";
+import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import {
   createPrefixedOutputWriter,
   parseMode,
@@ -60,8 +61,8 @@ describe("prepare-extension-package-boundary-artifacts", () => {
   it.for(["package-boundary", "all"])(
     "prunes only obsolete native declarations after success and repairs a failed partial emit (%s)",
     { timeout: 30_000 },
-    async (mode, { signal }) => {
-      return fixture.run(async () => {
+    (mode, { signal }) =>
+      fixture.run(async () => {
         const root = fs.realpathSync(createTempDir("native-preparer-"));
         const write = (file: string, text: string) => {
           signal.throwIfAborted();
@@ -133,7 +134,18 @@ describe("prepare-extension-package-boundary-artifacts", () => {
             `extensions/${id}/tsconfig.json`,
             JSON.stringify({ extends: "../../tsconfig.json", files: [`${entry}.ts`] }),
           );
-          write(`extensions/${id}/${entry}.ts`, 'export { value } from "fixture-sdk";');
+          write(
+            `extensions/${id}/node_modules/boundary-private-dep/package.json`,
+            '{"name":"boundary-private-dep","types":"index.d.ts"}',
+          );
+          write(
+            `extensions/${id}/node_modules/boundary-private-dep/index.d.ts`,
+            "export declare function consume(callback: (value: string) => string): void;",
+          );
+          write(
+            `extensions/${id}/${entry}.ts`,
+            'export { value } from "fixture-sdk"; export { consume } from "boundary-private-dep";',
+          );
         }
         const recordPath = path.join(root, ".artifacts/extension-package-boundary/plugin-sdk.json");
         const output = "packages/plugin-sdk/dist";
@@ -160,6 +172,28 @@ describe("prepare-extension-package-boundary-artifacts", () => {
           }
         };
         await run();
+        if (mode === "all") {
+          write(
+            "consumer.ts",
+            'import { consume } from "./.artifacts/extension-package-boundary/plugins/slack/api.js"; consume(value => value.toUpperCase());',
+          );
+          await runNodeStep(
+            "isolated-boundary-consumer",
+            [
+              path.join(root, "scripts/run-tsgo.mts"),
+              "--ignoreConfig",
+              "--module",
+              "nodenext",
+              "--target",
+              "es2023",
+              "--strict",
+              "--skipLibCheck",
+              "--noEmit",
+              path.join(root, "consumer.ts"),
+            ],
+            30_000,
+          );
+        }
         const first = readArtifactRecord(recordPath)!;
         expect(first.outputs[`${output}/src/nested.d.ts`]).toBeDefined();
         write("src/plugin-sdk/core.ts", 'export { value } from "../renamed.js";');
@@ -197,8 +231,7 @@ describe("prepare-extension-package-boundary-artifacts", () => {
         const unchanged = fs.statSync(path.join(root, output, "src/renamed.d.ts")).mtimeMs;
         await run();
         expect(fs.statSync(path.join(root, output, "src/renamed.d.ts")).mtimeMs).toBe(unchanged);
-      });
-    },
+      }),
   );
   it("prefixes each completed line and flushes the trailing partial line", () => {
     let output = "";
@@ -215,91 +248,91 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     expect(output).toBe("[boundary] first line\n[boundary] second line\n[boundary] third");
   });
 
-  it("aborts sibling steps after the first failure", async () => {
-    return fixture.run(async () => {
-      const startedAt = Date.now();
-      const slowStepTimeoutMs = 60_000;
-      const abortBudgetMs = 30_000;
+  it(
+    "aborts sibling steps after the first failure",
+    () =>
+      fixture.run(async () => {
+        const startedAt = Date.now();
+        const slowStepTimeoutMs = 60_000;
+        const abortBudgetMs = 30_000;
 
-      await expect(
-        runNodeStepsInParallel([
-          {
-            label: "slow-step",
-            args: ["--eval", "setTimeout(() => {}, 60_000)"],
-            timeoutMs: slowStepTimeoutMs,
-          },
-          {
-            label: "fail-fast",
-            args: ["--eval", "process.exit(2)"],
-            timeoutMs: slowStepTimeoutMs,
-          },
-        ]),
-      ).rejects.toThrow("fail-fast failed with exit code 2");
-
-      expect(Date.now() - startedAt).toBeLessThan(abortBudgetMs);
-    });
-  }, 45_000);
-
-  it.runIf(process.platform !== "win32")(
-    "force-kills aborted sibling step process groups",
-    async () => {
-      return fixture.run(async () => {
-        const rootDir = createTempDir("openclaw-boundary-abort-group-");
-        const descendantPidPath = path.join(rootDir, "descendant.pid");
-        let descendantPid = 0;
-        const descendantScript = [
-          "const fs = require('node:fs');",
-          `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));`,
-          "process.on('SIGTERM', () => {});",
-          "setInterval(() => {}, 1000);",
-        ].join("\n");
-        const parentScript = [
-          "const { spawn } = require('node:child_process');",
-          `spawn(process.execPath, ["--eval", ${JSON.stringify(descendantScript)}], { stdio: "ignore" });`,
-          "process.on('SIGTERM', () => process.exit(0));",
-          "setInterval(() => {}, 1000);",
-        ].join("\n");
-
-        // Fail the sibling only once the descendant reported its pid so the
-        // group abort cannot race the descendant's boot under suite load.
-        const failWhenDescendantReady = [
-          "const fs = require('node:fs');",
-          "setInterval(() => {",
-          `  try { if (fs.readFileSync(${JSON.stringify(descendantPidPath)}, 'utf8').trim()) { process.exit(2); } } catch {}`,
-          "}, 25);",
-        ].join("\n");
-
-        try {
-          const command = runNodeStepsInParallel([
+        await expect(
+          runNodeStepsInParallel([
             {
-              label: "delayed-fail",
-              args: ["--eval", failWhenDescendantReady],
-              timeoutMs: 30_000,
+              label: "slow-step",
+              args: ["--eval", "setTimeout(() => {}, 60_000)"],
+              timeoutMs: slowStepTimeoutMs,
             },
             {
-              label: "abort-group-prep",
-              args: ["--eval", parentScript],
-              abortKillGraceMs: 100,
-              timeoutMs: 60_000,
+              label: "fail-fast",
+              args: ["--eval", "process.exit(2)"],
+              timeoutMs: slowStepTimeoutMs,
             },
-          ]);
-          const expectedFailure = fixture.track(
-            expect(command).rejects.toThrow("delayed-fail failed with exit code 2"),
-          );
-          descendantPid = Number.parseInt(await waitForFile(descendantPidPath, 10_000), 10);
+          ]),
+        ).rejects.toThrow("fail-fast failed with exit code 2");
 
-          await expectedFailure;
-          await waitForDead(descendantPid, 2_000);
-        } finally {
-          await fixture.verifyCleanup(async () => {
-            if (descendantPid && isProcessAlive(descendantPid)) {
-              process.kill(descendantPid, "SIGKILL");
-              await waitForDead(descendantPid, 2_000);
-            }
-          });
-        }
-      });
-    },
+        expect(Date.now() - startedAt).toBeLessThan(abortBudgetMs);
+      }),
+    45_000,
+  );
+
+  it.runIf(process.platform !== "win32")("force-kills aborted sibling step process groups", () =>
+    fixture.run(async () => {
+      const rootDir = createTempDir("openclaw-boundary-abort-group-");
+      const descendantPidPath = path.join(rootDir, "descendant.pid");
+      let descendantPid = 0;
+      const descendantScript = [
+        "const fs = require('node:fs');",
+        `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));`,
+        "process.on('SIGTERM', () => {});",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      const parentScript = [
+        "const { spawn } = require('node:child_process');",
+        `spawn(process.execPath, ["--eval", ${JSON.stringify(descendantScript)}], { stdio: "ignore" });`,
+        "process.on('SIGTERM', () => process.exit(0));",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+
+      // Fail the sibling only once the descendant reported its pid so the
+      // group abort cannot race the descendant's boot under suite load.
+      const failWhenDescendantReady = [
+        "const fs = require('node:fs');",
+        "setInterval(() => {",
+        `  try { if (fs.readFileSync(${JSON.stringify(descendantPidPath)}, 'utf8').trim()) { process.exit(2); } } catch {}`,
+        "}, 25);",
+      ].join("\n");
+
+      try {
+        const command = runNodeStepsInParallel([
+          {
+            label: "delayed-fail",
+            args: ["--eval", failWhenDescendantReady],
+            timeoutMs: 30_000,
+          },
+          {
+            label: "abort-group-prep",
+            args: ["--eval", parentScript],
+            abortKillGraceMs: 100,
+            timeoutMs: 60_000,
+          },
+        ]);
+        const expectedFailure = fixture.track(
+          expect(command).rejects.toThrow("delayed-fail failed with exit code 2"),
+        );
+        descendantPid = Number.parseInt(await waitForFile(descendantPidPath, 10_000), 10);
+
+        await expectedFailure;
+        await waitForDead(descendantPid, 2_000);
+      } finally {
+        await fixture.verifyCleanup(async () => {
+          if (descendantPid && isProcessAlive(descendantPid)) {
+            process.kill(descendantPid, "SIGKILL");
+            await waitForDead(descendantPid, 2_000);
+          }
+        });
+      }
+    }),
   );
 
   it
@@ -311,7 +344,14 @@ describe("prepare-extension-package-boundary-artifacts", () => {
       const signal = AbortSignal.any([contextSignal, controller.signal]);
       const observationFailure = new Error("drain observation failed");
       const originalNow = Date.now;
-      const rootDir = createTempDir("openclaw-boundary-abort-drain-");
+      // Only the injected fixture-write failure owns a separate namespace.
+      // Real step claims and their cleanup failures still belong to the outer fixture.
+      const retainedOwner =
+        mode === "cleanup write failure"
+          ? createVitestResourceOwner(createTempDir("boundary-cleanup-owner-"))
+          : undefined;
+      const driverFixture = retainedOwner ? createFixtureLifetime(retainedOwner.root) : fixture;
+      const rootDir = driverFixture.createTempDir("openclaw-boundary-abort-drain-");
       let descendantPid = 0;
       let command: ReturnType<typeof runNodeStepsInParallel> | undefined;
       let outcome: Promise<unknown> | undefined;
@@ -319,7 +359,7 @@ describe("prepare-extension-package-boundary-artifacts", () => {
       let joined = false;
       let requiredRescue = false;
       let heldAtRescue = false;
-      const driver = fixture.run(async () => {
+      const driver = driverFixture.run(async () => {
         const readyPath = path.join(rootDir, "descendant.ready");
         const drainedPath = path.join(rootDir, "descendant.drained");
         const failPath = path.join(rootDir, "fail");
@@ -411,7 +451,7 @@ describe("prepare-extension-package-boundary-artifacts", () => {
               });
             });
           }
-          await fixture.verifyCleanup(async () => {
+          await driverFixture.verifyCleanup(async () => {
             try {
               fs.writeFileSync(mode === "cleanup write failure" ? rootDir : failPath, "fail");
             } finally {
@@ -435,8 +475,9 @@ describe("prepare-extension-package-boundary-artifacts", () => {
       if (mode === "cleanup write failure") {
         expect(error).toHaveProperty("code", "EISDIR");
         try {
-          await expect(fixture.cleanup()).rejects.toThrow("Fixture cleanup unverified");
+          await expect(driverFixture.cleanup()).rejects.toThrow("Fixture cleanup unverified");
           expect(fs.existsSync(rootDir)).toBe(true);
+          expect(() => retainedOwner!.assertReleased()).toThrow("Unreleased Vitest resource claim");
         } finally {
           // Only the injected filesystem failure is disposable, after the real join.
           fs.rmSync(rootDir, { recursive: true, force: true });
@@ -452,8 +493,8 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     },
   );
 
-  it("clamps oversized prep step timers before scheduling", async () => {
-    return fixture.run(async () => {
+  it("clamps oversized prep step timers before scheduling", () =>
+    fixture.run(async () => {
       await expect(
         runNodeStep(
           "slow-success",
@@ -461,13 +502,12 @@ describe("prepare-extension-package-boundary-artifacts", () => {
           MAX_TIMER_TIMEOUT_MS + 1,
         ),
       ).resolves.toBeUndefined();
-    });
-  });
+    }));
 
   it.runIf(process.platform !== "win32").each(["spawn", "execFileSync"])(
     "joins timed-out prep groups launched with %s",
-    async (launch) => {
-      return fixture.run(async () => {
+    (launch) =>
+      fixture.run(async () => {
         const rootDir = createTempDir("openclaw-boundary-timeout-group-");
         const descendantPidPath = path.join(rootDir, "descendant.pid");
         let descendantPid = 0;
@@ -522,14 +562,13 @@ describe("prepare-extension-package-boundary-artifacts", () => {
             }
           });
         }
-      });
-    },
+      }),
   );
 
   it.runIf(process.platform !== "win32")(
     "forwards wrapper termination to detached prep step groups",
-    async () => {
-      return fixture.run(async () => {
+    () =>
+      fixture.run(async () => {
         const rootDir = createTempDir("openclaw-boundary-signal-group-");
         const descendantPidPath = path.join(rootDir, "descendant.pid");
         let descendantPid = 0;
@@ -577,14 +616,13 @@ describe("prepare-extension-package-boundary-artifacts", () => {
             }
           });
         }
-      });
-    },
+      }),
   );
 
   it.runIf(process.platform !== "win32").each([0, 2])(
     "rejects and joins descendants left behind by a step exiting %s",
-    async (exitCode) => {
-      return fixture.run(async () => {
+    (exitCode) =>
+      fixture.run(async () => {
         const rootDir = createTempDir("openclaw-boundary-unjoined-");
         const pidFile = path.join(rootDir, "descendant.pid");
         const leafScript = `
@@ -621,12 +659,11 @@ child.once("message", () => process.exit(${exitCode}));
             }
           });
         }
-      });
-    },
+      }),
   );
 
-  it("does not admit work after sibling cancellation", async () => {
-    return fixture.run(async () => {
+  it("does not admit work after sibling cancellation", () =>
+    fixture.run(async () => {
       const rootDir = createTempDir("openclaw-boundary-canceled-");
       const startedPath = path.join(rootDir, "started");
       const abortController = new AbortController();
@@ -640,13 +677,12 @@ child.once("message", () => process.exit(${exitCode}));
         ),
       ).rejects.toThrow("canceled before starting");
       expect(fs.existsSync(startedPath)).toBe(false);
-    });
-  });
+    }));
 
   it.runIf(process.platform !== "win32")(
     "keeps cancellation a failure when the child handles SIGTERM with exit zero",
-    async () => {
-      return fixture.run(async () => {
+    () =>
+      fixture.run(async () => {
         const rootDir = createTempDir("openclaw-boundary-canceled-zero-");
         const readyPath = path.join(rootDir, "ready");
         const stoppedPath = path.join(rootDir, "stopped");
@@ -678,31 +714,27 @@ child.once("message", () => process.exit(${exitCode}));
             }
           });
         }
-      });
-    },
+      }),
   );
 
-  it.each([false, true])(
-    "runs the declared compiler directly (invalid args=%s)",
-    async (invalid) => {
-      return fixture.run(async () => {
-        const command = prepareTsgoCommand([invalid ? "--invalid-boundary-proof" : "--version"]);
-        expect(command).not.toBeNull();
-        if (!command) {
-          throw new Error("compiler unexpectedly skipped");
-        }
-        const result = runNodeStep("compiler-prep", command.args, 10_000, command);
-        if (invalid) {
-          await expect(result).rejects.toThrow("compiler-prep failed with exit code 1");
-        } else {
-          await expect(result).resolves.toBeUndefined();
-        }
-      });
-    },
+  it.each([false, true])("runs the declared compiler directly (invalid args=%s)", (invalid) =>
+    fixture.run(async () => {
+      const command = prepareTsgoCommand([invalid ? "--invalid-boundary-proof" : "--version"]);
+      expect(command).not.toBeNull();
+      if (!command) {
+        throw new Error("compiler unexpectedly skipped");
+      }
+      const result = runNodeStep("compiler-prep", command.args, 10_000, command);
+      if (invalid) {
+        await expect(result).rejects.toThrow("compiler-prep failed with exit code 1");
+      } else {
+        await expect(result).resolves.toBeUndefined();
+      }
+    }),
   );
 
-  it("runs boundary prep steps serially for local checks", async () => {
-    return fixture.run(async () => {
+  it("runs boundary prep steps serially for local checks", () =>
+    fixture.run(async () => {
       const rootDir = createTempDir("openclaw-boundary-serial-");
       const logPath = path.join(rootDir, "steps.log");
       const appendScript = (label: string) =>
@@ -725,11 +757,10 @@ child.once("message", () => process.exit(${exitCode}));
         "second-start",
         "second-end",
       ]);
-    });
-  });
+    }));
 
-  it("passes step-specific environment overrides to child steps", async () => {
-    return fixture.run(async () => {
+  it("passes step-specific environment overrides to child steps", () =>
+    fixture.run(async () => {
       const rootDir = createTempDir("openclaw-boundary-env-");
       const outputPath = path.join(rootDir, "env.txt");
       const writeEnvScript =
@@ -746,8 +777,7 @@ child.once("message", () => process.exit(${exitCode}));
       ]);
 
       expect(fs.readFileSync(outputPath, "utf8")).toBe("passed");
-    });
-  });
+    }));
 
   it("parses prep mode and rejects unknown values", () => {
     expect(parseMode([])).toBe("all");

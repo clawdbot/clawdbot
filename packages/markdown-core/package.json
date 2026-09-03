@@ -60,7 +60,7 @@
     "mdast-util-from-markdown": "2.0.3",
     "mdast-util-gfm-table": "2.0.0",
     "markdown-it": "15.0.0",
-    "markdown-it-cjk-friendly": "2.0.3",
+    "markdown-it-cjk-friendly": "3.0.0",
     "micromark-extension-gfm-table": "2.1.1",
     "yaml": "2.9.0"
   }

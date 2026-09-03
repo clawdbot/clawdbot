@@ -225,14 +225,16 @@ describe("sessions_spawn tool", () => {
       "Spawn hidden subagent (ephemeral) or visible work session (durable).",
     );
     expect(tool.description).toContain('runtime="acp"');
-    expect(tool.description).toContain('unless ACP `streamTo="parent"`');
+    expect(tool.description).toContain("follow the receipt's completion mode");
     expect(schema.properties?.runtime?.enum).toEqual(["subagent", "acp"]);
     const resumeSessionId = requireSchemaProperty(schema.properties, "resumeSessionId");
     const streamTo = requireSchemaProperty(schema.properties, "streamTo");
     expect(resumeSessionId.description).toContain("ACP resume id");
     expect(resumeSessionId.description).toContain("ignored by subagent");
     expect(resumeSessionId.description).toContain("already recorded for requester");
+    expect(streamTo.enum).toEqual(["parent"]);
     expect(streamTo.description).toContain("ACP only");
+    expect(streamTo.description).toContain('"parent" streams turn to requester');
     expect(streamTo.description).toContain("Ignored by subagent");
   });
 
@@ -422,6 +424,60 @@ describe("sessions_spawn tool", () => {
     });
   });
 
+  it.each([
+    { name: "default", input: {}, expected: true },
+    { name: "announcing", input: { expectsCompletionMessage: true }, expected: true },
+    { name: "quiet", input: { expectsCompletionMessage: false }, expected: false },
+  ])(
+    "declares completion policy and forwards $name to hidden, ACP, and visible spawns",
+    async ({ input, expected }) => {
+      registerAcpBackendForTest();
+      await withTestDir({ prefix: "openclaw-spawn-completion-" }, async (dir) => {
+        const callGateway = vi.fn(async () => ({
+          key: "agent:main:dashboard:child",
+          runStarted: true,
+          runId: "run-visible",
+        }));
+        const registerRun = vi.fn();
+        const tool = createSessionsSpawnTool({
+          agentSessionKey: "agent:main:main",
+          config: { session: { store: path.join(dir, "sessions.json") } },
+          callGateway: callGateway as never,
+          registerRun,
+          countActiveRuns: () => 0,
+        });
+        const schema = tool.parameters as {
+          properties?: Record<string, { type?: string } | undefined>;
+        };
+        expect(schema.properties?.expectsCompletionMessage).toMatchObject({ type: "boolean" });
+
+        await tool.execute("hidden", { task: "hidden child", ...input });
+        expect(
+          mockCallArg(hoisted.spawnSubagentDirectMock, 0, 0, "spawnSubagentDirect")
+            .expectsCompletionMessage,
+        ).toBe(expected);
+
+        await tool.execute("acp", {
+          task: "ACP child",
+          runtime: "acp",
+          ...input,
+        });
+        expect(
+          mockCallArg(hoisted.spawnAcpDirectMock, 0, 0, "spawnAcpDirect").expectsCompletionMessage,
+        ).toBe(expected);
+
+        await tool.execute("visible", {
+          task: "visible child",
+          visible: true,
+          ...input,
+        });
+        expect(registerRun).toHaveBeenCalledWith(
+          expect.objectContaining({ expectsCompletionMessage: expected }),
+        );
+      });
+    },
+  );
+
   it("forwards collector parameters and requesting run identity when enabled", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
@@ -525,6 +581,7 @@ describe("sessions_spawn tool", () => {
     );
     expect(tool.description).toContain("`visible=true`: durable visible session");
     expect(tool.description).toContain("Default for coding, multi-step work");
+    expect(tool.description).toContain("announcing runs report back");
     expect(tool.description).toContain('`mode="run"` is also accepted');
     expect(tool.description).toContain(
       "`attachments=[]` and omitted/blank `attachAs.mountPath` are accepted",
@@ -1273,6 +1330,58 @@ describe("sessions_spawn tool", () => {
     });
     expect(callGateway).not.toHaveBeenCalled();
   });
+
+  it.each(["inherit", "require"] as const)(
+    "admits a required parent's visible child with sandbox=%s while agent sandboxing is off",
+    async (sandbox) => {
+      await withTestDir({ prefix: "openclaw-visible-required-parent-" }, async (dir) => {
+        const storePath = path.join(dir, "sessions.json");
+        const parentSessionKey = "agent:main:main";
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: parentSessionKey, storePath },
+          {
+            sessionId: "required-parent",
+            updatedAt: 1,
+            createdVia: "operator",
+            createdActor: { type: "human", source: "profile", id: "guest-profile" },
+            sandbox: "required",
+          },
+        );
+        hoisted.inProcessCreationMock.mockResolvedValue({
+          key: "agent:main:dashboard:required-child",
+          runStarted: true,
+          runId: "required-visible-run",
+        });
+        const tool = createSessionsSpawnTool({
+          agentSessionKey: parentSessionKey,
+          config: {
+            session: { store: storePath },
+            agents: {
+              defaults: { sandbox: { mode: "off" } },
+              entries: { main: { workspace: dir } },
+            },
+          },
+          countActiveRuns: () => 0,
+        });
+
+        const result = await tool.execute("required-visible-spawn", {
+          task: "inspect the project in an isolated child",
+          visible: true,
+          sandbox,
+        });
+
+        expect(result.details).toMatchObject({
+          status: "accepted",
+          childSessionKey: "agent:main:dashboard:required-child",
+        });
+        expect(hoisted.inProcessCreationMock).toHaveBeenCalledWith(
+          "sessions.create",
+          expect.objectContaining({ parentSessionKey }),
+          expect.objectContaining({ requesterSessionKey: parentSessionKey }),
+        );
+      });
+    },
+  );
 
   it.each(["off", "all"] as const)(
     "uses the global requester sandbox mode %s for visible children",
@@ -2637,13 +2746,14 @@ describe("sessions_spawn tool", () => {
     expect(runContext.agentSessionKey).toBe(runSessionKey);
   });
 
-  it("passes completionOwnerKey through to spawnSubagentDirect separately from agentSessionKey", async () => {
+  it("passes completion ownership and active thinking separately from agentSessionKey", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:telegram:default:direct:456",
       completionOwnerKey: "agent:main:main",
       agentChannel: "telegram",
       agentAccountId: "default",
       agentTo: "telegram:direct:456",
+      requesterThinkingLevel: "ultra",
     });
 
     await tool.execute("call-completion-owner", { task: "background work" });
@@ -2651,6 +2761,7 @@ describe("sessions_spawn tool", () => {
     const spawnContext = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 1, "spawnSubagentDirect");
     expect(spawnContext.agentSessionKey).toBe("agent:main:telegram:default:direct:456");
     expect(spawnContext.completionOwnerKey).toBe("agent:main:main");
+    expect(spawnContext.requesterThinkingLevel).toBe("ultra");
   });
 
   it("forwards completionOwnerKey to the ACP registration pipeline", async () => {

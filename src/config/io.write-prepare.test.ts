@@ -448,6 +448,25 @@ const writeCases: WriteCase[] = [
     error: "cannot safely match renamed agent entries",
   },
   {
+    name: "preserves each duplicate legacy occurrence through compound migrations",
+    current: listRoster([
+      { id: "Research", workspace: "/srv/shared", memorySearch: { enabled: false } },
+      { id: "Research", workspace: "/srv/shared", memorySearch: { enabled: false } },
+    ]),
+    authored: listRoster([
+      { id: "Research", workspace: "${FIRST_WORKSPACE}", memorySearch: { enabled: false } },
+      { id: "Research", workspace: "${SECOND_WORKSPACE}", memorySearch: { enabled: false } },
+    ]),
+    next: roster({
+      research: { workspace: "/srv/shared", memory: { search: { enabled: false } } },
+      "research-2": { workspace: "/srv/shared", memory: { search: { enabled: false } } },
+    }),
+    expected: roster({
+      research: { workspace: "${FIRST_WORKSPACE}", memory: { search: { enabled: false } } },
+      "research-2": { workspace: "${SECOND_WORKSPACE}", memory: { search: { enabled: false } } },
+    }),
+  },
+  {
     name: "keeps the normalized default when authored legacy input marked it false",
     current: roster({ main, ops: { workspace: "/srv/ops" } }),
     before: listRoster([

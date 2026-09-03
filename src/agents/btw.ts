@@ -33,7 +33,7 @@ import { prepareCliRunContext } from "./cli-runner/prepare.runtime.js";
 import { EmbeddedBlockChunker, type BlockReplyChunking } from "./embedded-agent-block-chunker.js";
 import { resolveModelAsync, resolveModelWithRegistry } from "./embedded-agent-runner/model.js";
 import { getActiveEmbeddedRunSnapshot } from "./embedded-agent-runner/runs.js";
-import { resolveEmbeddedAgentStreamFn } from "./embedded-agent-runner/stream-resolution.js";
+import { resolveEmbeddedAgentStream } from "./embedded-agent-runner/stream-resolution.js";
 import { createAgentHarnessHostCapabilities } from "./harness/host-capability.js";
 import { resolveAgentHarnessOwnerPluginId } from "./harness/registry.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
@@ -97,13 +97,6 @@ function collectTextContent(content: Array<{ type?: string; text?: string }>): s
   return content
     .filter((part): part is { type: "text"; text: string } => part.type === "text")
     .map((part) => part.text)
-    .join("");
-}
-
-function collectThinkingContent(content: Array<{ type?: string; thinking?: string }>): string {
-  return content
-    .filter((part): part is { type: "thinking"; thinking: string } => part.type === "thinking")
-    .map((part) => part.thinking)
     .join("");
 }
 
@@ -1274,7 +1267,7 @@ export async function runBtwSideQuestion(
       env: process.env,
       apiRegistry: modelRegistryRuntime.apiRegistry,
     });
-    const streamFn = resolveEmbeddedAgentStreamFn({
+    const { streamFn } = resolveEmbeddedAgentStream({
       llmRuntime: modelRegistryRuntime.llmRuntime,
       currentStreamFn: modelRegistryRuntime.llmRuntime.streamSimple,
       providerStreamFn,
@@ -1376,8 +1369,8 @@ export async function runBtwSideQuestion(
       }
 
       if (event.type === "thinking_delta") {
-        reasoningText += event.delta;
         if (params.resolvedReasoningLevel !== "off") {
+          reasoningText += event.delta;
           await params.opts?.onReasoningStream?.({ text: reasoningText, isReasoning: true });
         }
         continue;
@@ -1399,13 +1392,8 @@ export async function runBtwSideQuestion(
     }
 
     const finalMessage = finalEvent?.type === "done" ? finalEvent.message : undefined;
-    if (finalMessage) {
-      if (!sawTextEvent) {
-        answerText = collectTextContent(finalMessage.content);
-      }
-      if (!reasoningText) {
-        collectThinkingContent(finalMessage.content);
-      }
+    if (finalMessage && !sawTextEvent) {
+      answerText = collectTextContent(finalMessage.content);
     }
 
     const answer = answerText.trim();

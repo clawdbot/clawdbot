@@ -603,8 +603,8 @@ describe("doctor session transcript repair", () => {
         archivedTranscriptFiles: 0,
         archivedUnreferencedJsonlFiles: 0,
         importedTranscriptEvents: 0,
-        issues: 0,
-        legacyEntries: 0,
+        issues: 1,
+        legacyEntries: 1,
         sqliteEntries: 0,
         unreferencedJsonlFiles: 0,
         validatedTranscriptEvents: 0,
@@ -634,6 +634,12 @@ describe("doctor session transcript repair", () => {
       env,
       maintenanceAuthority: undefined,
     });
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Inspect with "openclaw doctor --session-sqlite dry-run --session-sqlite-all-agents".',
+      ),
+      "Session SQLite",
+    );
   });
 
   it("reports post-session plugin changes and actionable ownership warnings", async () => {

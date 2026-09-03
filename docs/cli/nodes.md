@@ -24,7 +24,9 @@ openclaw nodes list
 openclaw nodes describe --node <idOrNameOrIp>
 ```
 
-`status` and `list` both accept `--connected` (only connected nodes) and `--last-connected <duration>` (e.g. `24h`, `7d`; only nodes that connected within the duration). `list` shows pending and paired nodes in separate tables, with paired rows including the most recent connect age (Last Connect); `status` shows one merged table with per-node capability, version, and last-input detail. A connected macOS node reports last input only after the user enables **Active computer detection** and grants Accessibility; the freshest row is marked `active`. See [Active computer presence](/nodes/presence). `describe` prints one node's capabilities, permissions, activity, and effective/pending invoke commands.
+`status` and `list` both accept `--connected` (only connected nodes) and `--last-connected <duration>` (e.g. `24h`, `7d`; only nodes that connected within the duration). Both use the Gateway's recorded last connection time, including recent reconnects and disconnected nodes with known connection history. `list` shows pending and paired nodes in separate tables, with paired rows including the most recent connect age (Last Connect); `status` shows one merged table with per-node capability, version, and last-input detail. A connected macOS node reports last input only after the user enables **Active computer detection** and grants Accessibility; the freshest row is marked `active`. See [Active computer presence](/nodes/presence). `describe` prints one node's capabilities, permissions, activity, and effective/pending invoke commands.
+
+`--node` accepts an exact ID, IP address, display name, or ID prefix of at least six characters. Exact ID and IP matches take precedence over names and prefixes. Within the strongest match, connected nodes take precedence. If current clients share a name, use an exact ID to disambiguate; client type does not choose the target. The legacy migration exception prefers a unique OpenClaw client only when every other tied entry is a known Clawdbot or Moldbot client.
 
 ## Pairing
 
@@ -36,9 +38,9 @@ openclaw nodes remove --node <id|name|ip>
 openclaw nodes rename --node <id|name|ip> --name <displayName>
 ```
 
-These commands drive the gateway-owned `node.pair.*` store, separate from device pairing (`openclaw devices approve`) that gates the node's WS `connect` handshake. See [Nodes](/nodes) for how the two relate.
+These commands manage the node's approved command/capability surface on its paired-device record. Device pairing (`openclaw devices approve`) gates the node's WebSocket `connect` handshake. See [Nodes](/nodes) for how the two relate.
 
-- `remove` revokes the node's paired-role entry. For a device-backed node this revokes the `node` role in the device pairing store and disconnects its node-role sessions: a mixed-role device keeps its row and only loses the `node` role, a node-only device row is deleted. It also clears any matching legacy gateway-owned node pairing record.
+- `remove` revokes the device's `node` role and clears its approved and pending command/capability surfaces. It disconnects the device's node-role sessions. A mixed-role device keeps its record and other roles; a node-only device record is deleted.
 - `pending` only needs `operator.pairing` scope.
 - `gateway.nodes.pairing.autoApproveCidrs` can skip the pending step for explicitly trusted, first-time `role: node` device pairing. Off by default; does not approve role upgrades.
 - `gateway.nodes.pairing.sshVerify` (on by default) auto-approves first-time `role: node` device pairing when the gateway can verify the device key over SSH to the node host; the first capability surface is approved in the same step. See [Node pairing](/gateway/pairing#ssh-verified-device-auto-approval-default).

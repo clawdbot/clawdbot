@@ -307,7 +307,7 @@ describe("agent session scope continuity", () => {
         repoRoot: process.cwd(),
         command: {
           executablePath: process.execPath,
-          argsPrefix: ["--import", "tsx", "src/entry.ts"],
+          argsPrefix: ["dist/entry.js"],
           cwd: process.cwd(),
           usePackagedPlugins: true,
         },
@@ -319,11 +319,10 @@ describe("agent session scope continuity", () => {
         controlUiEnabled: false,
         fastMode: true,
         runtimeEnvPatch: {
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
           OPENCLAW_SKIP_CHANNELS: "1",
           OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
         },
-        mutateConfig: ({ plugins: _plugins, ...config }) => config,
+        mutateConfig: (config) => ({ ...config, plugins: { enabled: false } }),
       });
       const client = await connectOperator(gateway);
       cleanups.push(() => client.stopAndWait({ timeoutMs: 1_000 }));

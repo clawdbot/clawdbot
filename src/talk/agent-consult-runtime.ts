@@ -14,6 +14,7 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
 import { isModelSelectionLocked, ModelSelectionLockedError } from "../sessions/model-overrides.js";
 import {
   deliveryContextFromSession,
+  hasDeliveryTargetFields,
   normalizeDeliveryContext,
   normalizeSessionDeliveryState,
   type DeliveryContext,
@@ -114,12 +115,6 @@ function resolveRealtimeVoiceAgentSandboxSessionKey(agentId: string, sessionKey:
   return `agent:${agentId}:${trimmed}`;
 }
 
-function hasRoutableDeliveryContext(
-  context: DeliveryContext | undefined,
-): context is DeliveryContext & { channel: string; to: string } {
-  return Boolean(context?.channel && context?.to);
-}
-
 function resolveDeliverySessionFields(context?: DeliveryContext): Partial<SessionEntry> {
   const normalized = normalizeDeliveryContext(context);
   if (!normalized?.channel || !normalized.to) {
@@ -163,7 +158,7 @@ function resolveRealtimeVoiceAgentDeliveryContext(params: {
         sessionKey: candidate.sessionKey,
       });
       const context = deliveryContextFromSession(entry);
-      if (hasRoutableDeliveryContext(context)) {
+      if (hasDeliveryTargetFields(context)) {
         return context;
       }
     }

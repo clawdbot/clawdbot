@@ -5,7 +5,10 @@ import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.
 import { getActiveCronJobCount } from "../cron/active-jobs.js";
 import { getSuspensionVisibleCronTaskRunCount } from "../cron/service/active-run-cancellation.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
-import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import {
+  getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
+} from "../process/gateway-work-admission.js";
 import {
   getActiveSessionLifecycleMutationCount,
   getActiveSessionWorkAdmissionCount,
@@ -74,6 +77,7 @@ export type GatewayActiveWorkInspectors = {
   getActiveTasks: () => number;
   getTaskBlockers: () => ActiveTaskRestartBlocker[];
   getRootRequests: () => number;
+  getRootRequestHolders?: () => string[];
   getSessionAdmissions: () => number;
   getSessionMutations: () => number;
   getChatRuns: () => number;
@@ -91,6 +95,7 @@ const defaultInspectors: GatewayActiveWorkInspectors = {
   getActiveTasks: () => getInspectableActiveTaskRestartBlockers().length,
   getTaskBlockers: getInspectableActiveTaskRestartBlockers,
   getRootRequests: () => getActiveGatewayRootWorkCount({ excludeCurrent: true }),
+  getRootRequestHolders: () => getActiveGatewayRootWorkHolders({ excludeCurrent: true }),
   getSessionAdmissions: getActiveSessionWorkAdmissionCount,
   getSessionMutations: getActiveSessionLifecycleMutationCount,
   getChatRuns: () => 0,
@@ -147,7 +152,21 @@ export function createGatewayActiveWorkSnapshot(
     `${counts.backgroundExecSessions} active background exec session(s)`,
   );
   add(counts.cronRuns, "cron-run", `${counts.cronRuns} active cron run(s)`);
-  add(counts.rootRequests, "root-request", `${counts.rootRequests} active gateway request(s)`);
+  const rootRequestHolders =
+    inspectors.getRootRequests && !inspectors.getRootRequestHolders
+      ? []
+      : (resolved.getRootRequestHolders?.() ?? []);
+  const rootRequestHolderNames = rootRequestHolders.toSorted().slice(0, 8);
+  if (rootRequestHolders.length > rootRequestHolderNames.length) {
+    rootRequestHolderNames.push(
+      `+${rootRequestHolders.length - rootRequestHolderNames.length} more`,
+    );
+  }
+  add(
+    counts.rootRequests,
+    "root-request",
+    `${counts.rootRequests} active gateway request(s)${rootRequestHolderNames.length > 0 ? `: ${rootRequestHolderNames.join(", ")}` : ""}`,
+  );
   add(
     counts.sessionAdmissions,
     "session-admission",

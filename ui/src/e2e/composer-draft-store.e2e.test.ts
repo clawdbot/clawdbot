@@ -637,7 +637,8 @@ suite.define(() => {
             oversizedScope,
             {
               revision: 30,
-              text: "oversized",
+              text: "@Alex oversized",
+              mentions: [{ profileId: "profile-alex", start: 0, end: 5 }],
               attachments: [
                 {
                   blob: tooLargeBlob,
@@ -924,6 +925,8 @@ suite.define(() => {
             oversized: oversized.status,
             oversizedRead: oversizedRead.status,
             oversizedText: oversizedRead.status === "found" ? oversizedRead.draft.text : null,
+            oversizedMentions:
+              oversizedRead.status === "found" ? oversizedRead.draft.mentions : null,
             oversizedAttachmentCount:
               oversizedRead.status === "found" ? oversizedRead.draft.attachments.length : null,
             oversizeConflict: oversizeConflict.status,
@@ -972,7 +975,8 @@ suite.define(() => {
         missingPredecessor: "conflict",
         oversized: "payload-too-large",
         oversizedRead: "found",
-        oversizedText: "oversized",
+        oversizedText: "@Alex oversized",
+        oversizedMentions: [{ profileId: "profile-alex", start: 0, end: 5 }],
         oversizedAttachmentCount: 0,
         oversizeConflict: "conflict",
         oversizeConflictRead: "found",

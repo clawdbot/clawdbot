@@ -243,9 +243,7 @@ export function installEmbeddedAttemptStreamGuards(input: {
   session.agent.streamFn = (model, context, options) => {
     const signal = input.abortSignal as AbortSignal & { reason?: unknown };
     if (input.isYieldDetected() && signal.aborted && isSessionsYieldAbortReason(signal.reason)) {
-      return createYieldAbortedResponse(model) as unknown as Awaited<
-        ReturnType<typeof innerStreamFn>
-      >;
+      return createYieldAbortedResponse(model);
     }
     return innerStreamFn(model, context, options);
   };

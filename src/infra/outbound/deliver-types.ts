@@ -159,6 +159,14 @@ export class OutboundDeliveryError extends Error {
   }
 }
 
+/** Internal control flow for lifecycle closure before recipient-visible dispatch. */
+export class OutboundDeliveryAdmissionClosedError extends Error {}
+
+export const isOutboundDeliveryAdmissionClosedError = (error: unknown): boolean =>
+  error instanceof OutboundDeliveryAdmissionClosedError ||
+  (error instanceof OutboundDeliveryError &&
+    error.cause instanceof OutboundDeliveryAdmissionClosedError);
+
 /** Narrows unknown failures to outbound delivery errors with partial-send metadata. */
 export function isOutboundDeliveryError(error: unknown): error is OutboundDeliveryError {
   return error instanceof OutboundDeliveryError;

@@ -176,16 +176,8 @@ const BASE_USAGE_RANGE = {
   limit: 10,
 } as const;
 
-function mockCall(mockFn: ReturnType<typeof vi.fn>, callIndex = 0): ReadonlyArray<unknown> {
-  const call = mockFn.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`expected mock call ${callIndex + 1}`);
-  }
-  return call;
-}
-
-function mockArg(mockFn: ReturnType<typeof vi.fn>, callIndex: number, argIndex: number) {
-  return mockCall(mockFn, callIndex)[argIndex];
+function mockArg(mockFn: ReturnType<typeof vi.fn>, callIndex: number, argIndex: number): unknown {
+  return expectDefined(mockFn.mock.calls[callIndex], `mock call ${callIndex + 1}`)[argIndex];
 }
 
 function expectSuccessfulSessionsUsage(
@@ -473,6 +465,8 @@ describe("sessions.usage", () => {
 
   it("keeps explicit gateway response date labels on DST-short days", async () => {
     await withEnvAsync({ TZ: "America/New_York" }, async () => {
+      expect(new Date("2026-03-08T05:00:00.000Z").getTimezoneOffset()).toBe(300);
+      expect(new Date("2026-03-09T04:00:00.000Z").getTimezoneOffset()).toBe(240);
       const respond = await runSessionsUsage({
         ...BASE_USAGE_RANGE,
         startDate: "2026-03-08",
@@ -482,6 +476,13 @@ describe("sessions.usage", () => {
 
       expect(respond).toHaveBeenCalledTimes(1);
       expect(mockArg(respond, 0, 0)).toBe(true);
+      expect(vi.mocked(loadSessionCostSummariesFromCache)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          startMs: Date.parse("2026-03-08T05:00:00.000Z"),
+          endMs: Date.parse("2026-03-09T04:00:00.000Z") - 1,
+          dayBucket: undefined,
+        }),
+      );
       const result = mockArg(respond, 0, 1) as { startDate: string; endDate: string };
       expect(result.startDate).toBe("2026-03-08");
       expect(result.endDate).toBe("2026-03-08");

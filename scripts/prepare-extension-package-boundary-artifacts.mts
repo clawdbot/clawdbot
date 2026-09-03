@@ -20,7 +20,7 @@ import {
   LOCAL_SDK_ROOT,
   BoundaryInputSnapshot,
 } from "./lib/extension-boundary-inputs.mts";
-import { isLocalCheckEnabled } from "./lib/local-check-runtime.mts";
+import { ensureRepoNodeModulesLink, isLocalCheckEnabled } from "./lib/local-check-runtime.mts";
 import { runManagedCommand, signalExitCode } from "./lib/managed-child-process.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { pluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mts";
@@ -253,6 +253,12 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
   const batches = [[sdk], mode === "all" ? plugins : []].map((batch) =>
     batch.map((unit) => {
       fs.mkdirSync(resolve(repoRoot, unit.outDir), { recursive: true });
+      if (unit.id !== "plugin-sdk") {
+        // Relocated declarations still resolve third-party types through their package owner.
+        ensureRepoNodeModulesLink(resolve(repoRoot, unit.rootDir, "node_modules"), {
+          cwd: resolve(repoRoot, unit.outDir),
+        });
+      }
       return { ...unit, outputRoot: fs.realpathSync(resolve(repoRoot, unit.outDir)) };
     }),
   );

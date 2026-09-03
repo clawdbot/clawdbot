@@ -59,6 +59,7 @@ export async function prepareGatewayLifecycle(params: {
     sessionMessageSubscribers,
     isConnectionActive,
     clients,
+    mentionInbox,
     broadcast,
     cfgAtStart,
     pluginRuntime,
@@ -390,6 +391,7 @@ export async function prepareGatewayLifecycle(params: {
       return;
     }
     lifecycle.closePreludeStarted = true;
+    mentionInbox.dispose();
     postReadySidecarStopOwner.beginClose();
     gatewayLifetimeSidecarStopOwner.beginClose();
     // Fence background owners before any awaited close step can tear down the

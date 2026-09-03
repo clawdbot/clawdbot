@@ -651,11 +651,7 @@ export function truncateOversizedToolResultsInMessages(
     maxCharsOverride,
     aggregateMaxCharsOverride,
   });
-  const sourceBranch = messages.map((message, index) => ({
-    id: `message-${index}`,
-    type: "message",
-    message,
-  }));
+  const sourceBranch = buildToolResultPlanningBranch(messages);
   const projection = projectionState
     ? projectToolResultBranch({
         branch: sourceBranch,
@@ -663,10 +659,8 @@ export function truncateOversizedToolResultsInMessages(
         recordSources: true,
       })
     : undefined;
-  const branch = projection?.branch ?? sourceBranch;
-  const projectionKeys = projection?.keys ?? [];
   const plan = buildToolResultReplacementPlan({
-    branch,
+    branch: projection?.branch ?? sourceBranch,
     maxChars,
     aggregateBudgetChars,
     minKeepChars: RECOVERY_MIN_KEEP_CHARS,
@@ -674,9 +668,9 @@ export function truncateOversizedToolResultsInMessages(
   });
   const replacedBranch = plan.branch;
   if (projectionState) {
-    for (const [index, originalMessage] of messages.entries()) {
+    for (const [index, { message: originalMessage }] of sourceBranch.entries()) {
       const projectedMessage = replacedBranch[index]?.message;
-      const projectionKey = projectionKeys[index];
+      const projectionKey = projection?.keys[index];
       if (projectionKey) {
         projectionState.frozen.add(projectionKey);
         if (
@@ -738,6 +732,17 @@ type ToolResultBranchEntry = {
   message?: AgentMessage;
   aggregateEligible?: boolean;
 };
+
+type ToolResultMessageBranchEntry = ToolResultBranchEntry & { message: AgentMessage };
+// Non-tool messages cannot affect a plan; avoid allocating a full branch for that common path.
+function buildToolResultPlanningBranch(messages: AgentMessage[]): ToolResultMessageBranchEntry[] {
+  const sourceMessages = messages.some((message) => message.role === "toolResult") ? messages : [];
+  return sourceMessages.map((message, index) => ({
+    id: `message-${index}`,
+    type: "message",
+    message,
+  }));
+}
 
 type ToolResultReplacement = {
   entryId: string;
@@ -1218,18 +1223,13 @@ export function estimateToolResultReductionPotential(params: {
   maxCharsOverride?: number;
   aggregateMaxCharsOverride?: number;
 }): ToolResultReductionPotential {
-  const { messages } = params;
   const { maxChars, aggregateBudgetChars } = resolveToolResultBudgets(params);
-  const branch = messages.map((message, index) => ({
-    id: `message-${index}`,
-    type: "message",
-    message,
-  }));
+  const branch = buildToolResultPlanningBranch(params.messages);
 
   let toolResultCount = 0;
   let totalToolResultChars = 0;
-  for (const msg of messages) {
-    if ((msg as { role?: string }).role !== "toolResult") {
+  for (const { message: msg } of branch) {
+    if (msg.role !== "toolResult") {
       continue;
     }
     const textLength = getToolResultTextBudget(msg);

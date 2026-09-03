@@ -4,7 +4,6 @@
  * cursor mode.
  */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { escapeRegExp } from "../utils.js";
 
 const ESC = "\x1b";
 const CR = "\r";
@@ -217,21 +216,13 @@ function encodeKeyToken(
 
   const baseSeq = namedKeyMap.get(baseLower);
   if (baseSeq) {
-    let seq = baseSeq;
     if (modifiableNamedKeys.has(baseLower) && hasAnyModifier(parsed.mods)) {
-      const mod = xtermModifier(parsed.mods);
-      if (mod > 1) {
-        const modified = applyXtermModifier(seq, mod);
-        if (modified) {
-          seq = modified;
-          return seq;
-        }
-      }
+      // Every modifiable named key is a CSI sequence from namedKeyMap.
+      // Bare cursor sequences omit the first parameter; xterm modifiers require it.
+      const parameter = baseSeq.slice(2, -1) || "1";
+      return `${ESC}[${parameter};${xtermModifier(parsed.mods)}${baseSeq.at(-1)}`;
     }
-    if (parsed.mods.alt) {
-      return `${ESC}${seq}`;
-    }
-    return seq;
+    return parsed.mods.alt ? `${ESC}${baseSeq}` : baseSeq;
   }
 
   if (base.length === 1) {
@@ -310,24 +301,6 @@ function xtermModifier(mods: Modifiers): number {
     mod += 4;
   }
   return mod;
-}
-
-function applyXtermModifier(sequence: string, modifier: number): string | null {
-  const escPattern = escapeRegExp(ESC);
-  const csiNumber = new RegExp(`^${escPattern}\\[(\\d+)([~A-Z])$`);
-  const csiArrow = new RegExp(`^${escPattern}\\[(A|B|C|D|H|F)$`);
-
-  const numberMatch = sequence.match(csiNumber);
-  if (numberMatch) {
-    return `${ESC}[${numberMatch[1]};${modifier}${numberMatch[2]}`;
-  }
-
-  const arrowMatch = sequence.match(csiArrow);
-  if (arrowMatch) {
-    return `${ESC}[1;${modifier}${arrowMatch[1]}`;
-  }
-
-  return null;
 }
 
 function hasAnyModifier(mods: Modifiers): boolean {

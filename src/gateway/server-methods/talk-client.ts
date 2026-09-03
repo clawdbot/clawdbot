@@ -15,7 +15,6 @@ import {
   parseRealtimeVoiceAgentConsultArgs,
 } from "../../talk/agent-consult-tool.js";
 import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
-import { resolveTalkSessionAgentId } from "../../talk/agent-target.js";
 import {
   authorizeClientVoiceConfirmation,
   bindAuthorizedClientVoiceConfirmation,
@@ -31,10 +30,7 @@ import {
   resolveClientVoiceSessionOrigin,
   resolveOpenClientVoiceSessionId,
 } from "../../talk/client-voice-session.js";
-import {
-  authorizeGatewaySessionCreation,
-  resolveSandboxedSessionCreation,
-} from "../operator-role-policy.js";
+import { resolveSandboxedSessionCreation } from "../operator-role-policy.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { startTalkRealtimeAgentConsult } from "../talk-agent-consult.js";
 import { closeTalkClientGatewayControlSession } from "../talk-client-gateway-control.js";
@@ -42,7 +38,10 @@ import {
   ensureTalkRealtimeRelayVoiceSession,
   flushTalkRealtimeRelayVoiceWrites,
 } from "../talk-realtime-relay.js";
-import { prepareTalkSessionTarget } from "../talk-session-target.js";
+import {
+  prepareTalkSessionTarget,
+  requirePreparedTalkSessionTarget,
+} from "../talk-session-target.js";
 import { formatForLog } from "../ws-log.js";
 import { createTalkClient } from "./talk-client-create.js";
 import {
@@ -79,16 +78,11 @@ export const talkClientHandlers: GatewayRequestHandlers = {
     }
 
     const config = request.context.getRuntimeConfig();
-    const agentId = resolveTalkSessionAgentId(config, params.sessionKey);
-    const creationError = authorizeGatewaySessionCreation({
-      cfg: config,
-      client: request.client,
-      agentId,
-    });
-    if (creationError) {
-      respond(false, undefined, creationError);
-      return;
-    }
+    const target = requirePreparedTalkSessionTarget(
+      request.sessionMutationAuthorization?.talkSessionTarget,
+    );
+    const { agentId } = target;
+    request.sessionMutationAuthorization?.assertCurrent();
     const relaySessionId = normalizeOptionalString(params.relaySessionId);
     const connId = normalizeOptionalString(request.client?.connId);
     const explicitVoiceSessionId = normalizeOptionalString(params.voiceSessionId);
@@ -157,12 +151,8 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const result = await startTalkRealtimeAgentConsult({
-      context: request.context,
-      client: request.client,
-      isWebchatConnect: request.isWebchatConnect,
-      requestId: request.req.id,
-      sessionKey: params.sessionKey,
+    const result = await startTalkRealtimeAgentConsult(request, {
+      sessionTarget: target,
       callId: params.callId,
       args: params.args ?? {},
       relaySessionId: normalizeOptionalString(params.relaySessionId),
@@ -189,6 +179,8 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       {
         runId: result.runId,
         idempotencyKey: result.idempotencyKey,
+        agentId,
+        agentSessionKey: target.canonicalKey,
       },
       undefined,
     );

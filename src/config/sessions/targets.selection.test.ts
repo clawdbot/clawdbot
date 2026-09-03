@@ -7,4 +7,11 @@ describe("session store target selection", () => {
       "--agent must not be blank",
     );
   });
+
+  it.each([
+    ["empty", ""],
+    ["whitespace-only", "   "],
+  ])("rejects an %s store instead of selecting the default store", (_label, store) => {
+    expect(() => resolveSessionStoreTargets({}, { store })).toThrow("--store must not be blank");
+  });
 });

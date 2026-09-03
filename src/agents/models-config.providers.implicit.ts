@@ -11,6 +11,7 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { ManifestModelIdNormalizationSource } from "../plugins/manifest-model-id-normalization.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
 import {
@@ -250,6 +251,23 @@ function appendNormalizedPluginMetadataOwners(
   }
 }
 
+export function resolveImplicitProviderDiscoveryScope(
+  params: Pick<
+    ImplicitProviderParams,
+    "config" | "workspaceDir" | "env" | "pluginMetadataSnapshot" | "providerDiscoveryProviderIds"
+  >,
+): ProviderDiscoveryScope | undefined {
+  return resolveProviderDiscoveryScope({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env ?? process.env,
+    resolveOwners: params.pluginMetadataSnapshot
+      ? (provider) => resolvePluginMetadataProviderOwners(params.pluginMetadataSnapshot, provider)
+      : undefined,
+    providerIds: params.providerDiscoveryProviderIds,
+  });
+}
+
 function mergeImplicitProviderSet(
   target: Record<string, ProviderConfig>,
   additions: Record<string, ProviderConfig> | undefined,
@@ -268,7 +286,7 @@ function mergeImplicitProviderConfig(params: {
   implicit: ProviderConfig;
   dynamicProviderModels?: boolean;
   sourceModelFields?: SourceModelFields;
-  manifestPlugins?: PluginMetadataSnapshot["manifestRegistry"]["plugins"];
+  manifestPlugins?: ManifestModelIdNormalizationSource;
 }): ProviderConfig {
   const { providerId, existing, implicit } = params;
   if (!existing) {
@@ -483,7 +501,7 @@ async function resolvePluginImplicitProviders(
           providerId,
         }),
         sourceModelFields: ctx.sourceModelFields,
-        manifestPlugins: ctx.pluginMetadataSnapshot?.manifestRegistry.plugins,
+        manifestPlugins: ctx.pluginMetadataSnapshot,
       });
       discovered[providerId] = resolveImplicitProviderAuthMarker({
         ctx,
@@ -572,15 +590,7 @@ export async function prepareImplicitProviderStaticCatalog(
   >,
 ): Promise<PreparedProviderStaticCatalog> {
   const env = params.env ?? process.env;
-  const discoveryScope = resolveProviderDiscoveryScope({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env,
-    resolveOwners: params.pluginMetadataSnapshot
-      ? (provider) => resolvePluginMetadataProviderOwners(params.pluginMetadataSnapshot, provider)
-      : undefined,
-    providerIds: params.providerDiscoveryProviderIds,
-  });
+  const discoveryScope = resolveImplicitProviderDiscoveryScope(params);
   const providers = await resolveRuntimePluginDiscoveryProviders({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -634,15 +644,7 @@ export async function resolveImplicitProviders(
       allowKeychainPrompt: false,
       externalCliProviderIds: params.providerDiscoveryProviderIds,
     }));
-  const discoveryScope = resolveProviderDiscoveryScope({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env,
-    resolveOwners: params.pluginMetadataSnapshot
-      ? (provider) => resolvePluginMetadataProviderOwners(params.pluginMetadataSnapshot, provider)
-      : undefined,
-    providerIds: params.providerDiscoveryProviderIds,
-  });
+  const discoveryScope = resolveImplicitProviderDiscoveryScope(params);
   const discoveryPluginIds = discoveryScope ? [...discoveryScope.keys()] : undefined;
   // The runtime config has already resolved SecretRefs at its owning boundary.
   // Re-resolving source refs here would execute unrelated file/exec providers on catalog reads.

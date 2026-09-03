@@ -40,7 +40,6 @@ import {
   attachManagedOutgoingMediaToMessage,
   createManagedOutgoingMediaBlocks,
 } from "./managed-image-attachments.js";
-import { prepareGatewayInjectedAssistantContent } from "./server-methods/chat-transcript-inject.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { dispatchGatewayLifecycleMethod as dispatchGatewayMethodInProcess } from "./server-recovery-runtime-context.js";
 import { loadSessionEntry } from "./session-utils.js";
@@ -395,7 +394,8 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
                     params.sessionEntry.cronRunContinuation.lifecycleRevision,
                 }
               : {}),
-            content: prepareGatewayInjectedAssistantContent(content),
+            content: [],
+            displayContent: content,
             idempotencyKey: `${queuedRunId}:generated-media-transcript`,
             updateMode: "inline",
           });
