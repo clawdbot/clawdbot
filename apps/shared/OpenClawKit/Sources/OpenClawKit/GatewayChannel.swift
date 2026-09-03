@@ -905,7 +905,6 @@ extension GatewayChannelActor {
         -> (receivedRoles: Set<String>, persistedRoles: Set<String>, hello: HelloOk)
     {
         let role = options.role
-        let allowStoredDeviceAuth = options.allowStoredDeviceAuth
         let deviceAuthGatewayID = options.deviceAuthGatewayID
         let deviceIdentityProfile = options.deviceIdentityProfile
         if res.ok == false {
@@ -970,7 +969,9 @@ extension GatewayChannelActor {
             let sameStoredToken = authRole == role && deviceToken == selectedAuth.storedToken
             // Hello scopes describe this socket. Reissuing the stored token must not narrow its reusable grant.
             let scopes = sameStoredToken ? (selectedAuth.storedScopes ?? helloScopes) : helloScopes
-            if let identity, allowStoredDeviceAuth, self.persistIssuedDeviceToken(
+            // Fresh pairing can suppress stored-token lookup. Stable Gateway ownership,
+            // not lookup permission, authorizes persisting newly issued credentials.
+            if let identity, let deviceAuthGatewayID, self.persistIssuedDeviceToken(
                 authSource: self.lastAuthSource,
                 deviceId: identity.deviceId,
                 role: authRole,
@@ -992,7 +993,7 @@ extension GatewayChannelActor {
                 }
                 let scopes = rawEntry["scopes"]?.arrayValue?.compactMap(\.stringValue) ?? []
                 receivedRoles.insert(authRole)
-                if let identity, allowStoredDeviceAuth, self.shouldPersistBootstrapHandoffTokens(),
+                if let identity, let deviceAuthGatewayID, self.shouldPersistBootstrapHandoffTokens(),
                    self.persistBootstrapHandoffToken(
                        deviceId: identity.deviceId,
                        role: authRole,
