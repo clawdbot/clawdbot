@@ -24,11 +24,6 @@ const AGENT_RUNTIME_LABELS: Readonly<Record<string, string>> = {
   "google-gemini-cli": "Gemini CLI",
 };
 
-/** Renders one runtime id with the operator-facing vocabulary, sanitizing unknown ids. */
-function formatAgentRuntimeLabel(runtime: string): string {
-  return AGENT_RUNTIME_LABELS[runtime] ?? sanitizeTerminalText(runtime);
-}
-
 type AgentRuntimeLabelArgs = {
   config?: OpenClawConfig;
   sessionEntry?: Pick<
@@ -101,7 +96,9 @@ export function resolveAgentRuntimeLabel(args: AgentRuntimeLabelArgs): string {
   // Comparing raw ids there reports `OpenAI Codex (previous runtime: OpenAI Codex)`
   // — a runtime transition that never happened. Two ids the operator sees under one
   // name are one runtime for this annotation's purpose, so compare what is rendered.
-  const recordedLabel = recordedRuntime ? formatAgentRuntimeLabel(recordedRuntime) : undefined;
+  const recordedLabel = recordedRuntime
+    ? (AGENT_RUNTIME_LABELS[recordedRuntime] ?? sanitizeTerminalText(recordedRuntime))
+    : undefined;
   if (
     !recordedRuntime ||
     isDefaultAgentRuntimeId(recordedRuntime) ||
