@@ -348,7 +348,7 @@ describe("embedded-agent runner run lifecycle", () => {
   });
 
   it("does not let a stale recovery marker mutate a replacement timeout", () => {
-    const firstHandle = createRunHandle();
+    const firstHandle = createRunHandle({ runId: "run-first" });
     setActiveEmbeddedRun("session-recovery-replaced", firstHandle, "agent:main:replaced");
     expect(
       markActiveEmbeddedRunAbandoned({
@@ -358,6 +358,15 @@ describe("embedded-agent runner run lifecycle", () => {
         reason: "timeout",
       }),
     ).toBe(true);
+    expect(
+      markEmbeddedRunRecoveringTimeout({
+        sessionId: "session-recovery-replaced",
+        runId: "run-other",
+      }),
+    ).toBeUndefined();
+    expect(resolveEmbeddedRunAbandonment({ sessionId: "session-recovery-replaced" })).toBe(
+      "timeout",
+    );
     const staleMarker = markEmbeddedRunRecoveringTimeout({
       sessionId: "session-recovery-replaced",
       runId: "run-first",
