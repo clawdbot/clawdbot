@@ -631,6 +631,16 @@ describe("sessions_send label lookup", () => {
 });
 
 describe("sessions_send agent targeting", () => {
+  // The announce/ping-pong flow is detached from the tool request and keeps
+  // running agent steps for agent:orion:main; drain it outside the row's own
+  // timeout budget so a slow tail neither fails the row nor pollutes the next.
+  afterEach(
+    async () => {
+      await waitForGatewayActiveWork(SESSION_SEND_E2E_TIMEOUT_MS * 3);
+    },
+    SESSION_SEND_E2E_TIMEOUT_MS * 3 + 1_000,
+  );
+
   it.each([
     { name: "default cross-agent access", tools: undefined },
     {
@@ -734,10 +744,6 @@ describe("sessions_send agent targeting", () => {
         });
         expect(stored?.sessionId).toBe(orionCall?.sessionId);
       } finally {
-        // The announce/ping-pong flow is detached from the tool request and keeps
-        // running agent steps for agent:orion:main; drain it so the next row's
-        // mock calls are not polluted by this row's follow-ups.
-        await waitForGatewayActiveWork(SESSION_SEND_E2E_TIMEOUT_MS);
         testState.agentsConfig = undefined;
         testState.sessionStorePath = undefined;
         await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
