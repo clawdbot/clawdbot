@@ -146,18 +146,16 @@ describe("system disk snapshots", () => {
     expect(await readSystemDisks()).toHaveLength(1);
   });
 
-  it("keeps completed disk rows when a later filesystem probe times out", async () => {
+  it("returns unavailable when df times out before printing its table", async () => {
     mocks.readFile.mockResolvedValue(
       "1 0 8:1 / / rw - ext4 /dev/sda1 rw\n2 1 8:2 / /data rw - xfs /dev/sdb1 rw",
     );
     mocks.runCommandWithTimeout.mockResolvedValue({
       code: 124,
       termination: "timeout",
-      stdout: "/dev/sda1 2000 1000 1000 50% /\n",
+      stdout: "",
     });
     const { readSystemDisks } = await import("./system-disks.js");
-    expect(await readSystemDisks()).toEqual([
-      { path: "/", totalBytes: 2_048_000, availableBytes: 1_024_000 },
-    ]);
+    expect(await readSystemDisks()).toBeUndefined();
   });
 });
