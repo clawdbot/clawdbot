@@ -52,14 +52,6 @@ const CLAUDE_CLI_DEFAULT_ARGS = [
   "--verbose",
   "--setting-sources",
   "user",
-  // Allowlist over Claude Code's built-in tool set. OpenClaw exposes its own
-  // filesystem/exec/browser tools over MCP, so the built-ins are duplicates that
-  // sit outside OpenClaw's approval and sandbox policy. `Skill` is kept because
-  // OpenClaw injects its skills as a Claude Code plugin (--plugin-dir) and they
-  // are invoked through the native Skill tool.
-  // NOTE: `--tools ""` cannot be used here — it disables MCP tools as well.
-  "--tools",
-  "Skill",
   "--allowedTools",
   "mcp__openclaw__*",
   "--disallowedTools",
