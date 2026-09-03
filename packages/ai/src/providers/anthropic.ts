@@ -312,21 +312,18 @@ async function* iterateAnthropicEvents(
       throw new Error(sse.data);
     }
 
-    const isMessageEvent = ANTHROPIC_MESSAGE_EVENTS.has(sse.event ?? "");
+    notifyLlmRequestActivity(signal);
+    if (!ANTHROPIC_MESSAGE_EVENTS.has(sse.event ?? "")) {
+      continue;
+    }
+
     try {
       const event = parseJsonWithRepair(sse.data) as RawMessageStreamEvent;
-      notifyLlmRequestActivity(signal);
-      if (!isMessageEvent) {
-        continue;
-      }
       if (event.type === "message_stop") {
         sawMessageEnd = true;
       }
       yield event;
     } catch (error) {
-      if (!isMessageEvent) {
-        continue;
-      }
       // Frame payloads carry model output, so surface the shared malformed-fragment
       // error instead of echoing them. The SyntaxError stays reachable on `cause`.
       if (error instanceof SyntaxError) {
