@@ -73,7 +73,11 @@ export function attachLinuxMemoryDirectoryTreeWatchForDir(
   let capacityExhausted = false;
 
   const closeAndFallback = (message: string, options?: { capacity?: boolean }) => {
-    log.warn(message);
+    // Capacity degradation emits its own single warning; logging the raw
+    // failure message first would double-report the same condition.
+    if (options?.capacity !== true) {
+      log.warn(message);
+    }
     if (pair) {
       ctx.closePair(pair);
     }

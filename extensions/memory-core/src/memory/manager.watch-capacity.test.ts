@@ -434,6 +434,16 @@ describe("memory watcher kernel capacity degrade", () => {
     expect(createdChokidarWatchers.length).toBe(chokidarBaseline);
     expect(readIntervalTimer(active)).toBeTruthy();
     expect(fallbackSpy).not.toHaveBeenCalled();
+    // Exactly one warning reports the condition: the degrade warning, without
+    // the raw attach-failure line double-reporting it.
+    const capacityWarns = memoryLoggerWarn.mock.calls.filter((call) =>
+      String(call[0]).includes("kernel watch capacity exhausted"),
+    );
+    const rawFailureWarns = memoryLoggerWarn.mock.calls.filter((call) =>
+      String(call[0]).includes("failed to attach Linux memory directory watcher"),
+    );
+    expect(capacityWarns).toHaveLength(1);
+    expect(rawFailureWarns).toHaveLength(0);
   });
 
   it("root reattachment under capacity degrades instead of dropping coverage", async () => {

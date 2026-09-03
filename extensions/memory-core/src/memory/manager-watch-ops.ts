@@ -282,7 +282,11 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
         return;
       }
       const message = err instanceof Error ? err.message : String(err);
-      log.warn(`memory native watcher error on ${dir}: ${message}`);
+      // Capacity exhaustion reports once through the degrade warning; the
+      // raw error line would double-report the same condition.
+      if (!isKernelWatchCapacityError(err)) {
+        log.warn(`memory native watcher error on ${dir}: ${message}`);
+      }
       // Per Node docs the FSWatcher is no longer usable after an error.
       this.closeNativeMemoryWatchPair(pair);
       if (this.closed) {
@@ -400,7 +404,10 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
           return;
         }
         const message = err instanceof Error ? err.message : String(err);
-        log.warn(`memory ${label} parent watcher error on ${path.dirname(dir)}: ${message}`);
+        // Capacity exhaustion reports once through the degrade warning.
+        if (!isKernelWatchCapacityError(err)) {
+          log.warn(`memory ${label} parent watcher error on ${path.dirname(dir)}: ${message}`);
+        }
         try {
           attachedParent.close();
         } catch {
