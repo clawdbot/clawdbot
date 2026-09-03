@@ -11,6 +11,7 @@ import {
   type PreparedAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+import { resetContextWindowCacheForTest } from "../../agents/context.js";
 import { acceptCompactionSuccessor } from "../../agents/embedded-agent-runner/compaction-successor.js";
 import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { CompactionAccountingFact } from "../../agents/embedded-agent-runner/run/internal-params.js";
@@ -651,6 +652,36 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(result.outcome).toBe("skipped");
     expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
     expect(resolver).toHaveBeenCalledWith(expect.objectContaining({ contextWindowTokens: 32_000 }));
+  });
+
+  it("passes prepared catalog context to memory flush on a cold cache", async () => {
+    resetContextWindowCacheForTest();
+    const resolver = vi.fn<MemoryFlushPlanResolver>(createMemoryFlushPlan);
+    registerMemoryFlushPlanResolverForTest(resolver);
+    const provider = "synthetic-provider";
+    const model = "synthetic-model";
+    const sessionEntry = createFlushSessionEntry();
+
+    await runMemoryFlushIfNeededRaw({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({
+        provider,
+        model,
+        thinkingCatalog: [{ provider, id: model, contextWindow: 1_000_000 }],
+      }),
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
+      defaultModel: `${provider}/${model}`,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(resolver).toHaveBeenCalledWith(
+      expect.objectContaining({ contextWindowTokens: 1_000_000 }),
+    );
   });
 
   it.each([

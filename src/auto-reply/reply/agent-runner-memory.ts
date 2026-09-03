@@ -750,6 +750,7 @@ export async function runSessionCompactionIfNeeded(params: {
       config: params.cfg,
     }),
     modelId: params.followupRun.run.model ?? params.defaultModel,
+    catalog: params.followupRun.run.thinkingCatalog,
   });
   const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg, contextWindowTokens });
   const reserveTokensFloor =
@@ -766,6 +767,7 @@ export async function runSessionCompactionIfNeeded(params: {
     cfg: params.cfg,
     provider: params.followupRun.run.provider,
     modelId: params.followupRun.run.model ?? params.defaultModel,
+    catalog: params.followupRun.run.thinkingCatalog,
   });
   const threshold = resolveCompactionThreshold({
     contextWindowTokens,
@@ -1226,6 +1228,7 @@ export async function runMemoryFlushIfNeeded(params: {
       config: params.cfg,
     }),
     modelId: params.followupRun.run.model ?? params.defaultModel,
+    catalog: params.followupRun.run.thinkingCatalog,
   });
   let memoryFlushPlan: MemoryFlushPlan | null;
   try {

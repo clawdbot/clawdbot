@@ -2,14 +2,53 @@ import {
   applyOpenAIResponsesPayloadPolicy,
   resolveOpenAIResponsesPayloadPolicy,
 } from "@openclaw/ai/transports";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { resetContextWindowCacheForTest } from "../../agents/context.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { modelKey } from "../../shared/model-key.js";
-import { resolveResponsesServerCompactionThreshold } from "./memory-flush.js";
+import {
+  resolveMemoryFlushContextWindowTokens,
+  resolveResponsesServerCompactionThreshold,
+} from "./memory-flush.js";
 
 const TEST_MODEL_ID = "gpt-5.4";
 const TEST_CONTEXT_WINDOW = 200_000;
+
+describe("memory flush context window resolution", () => {
+  const provider = "synthetic-provider";
+  const modelId = TEST_MODEL_ID;
+
+  beforeEach(() => resetContextWindowCacheForTest());
+
+  it("uses a prepared catalog context window on a cold cache", () => {
+    expect(
+      resolveMemoryFlushContextWindowTokens({
+        provider,
+        modelId,
+        catalog: [{ provider, id: modelId, contextWindow: 1_000_000 }],
+      }),
+    ).toBe(1_000_000);
+  });
+
+  it("keeps an authored context token cap below the prepared catalog context window", () => {
+    const cfg = buildHostConfig({
+      provider,
+      api: "openai-responses",
+      baseUrl: "https://example.invalid/v1",
+      contextTokens: 100_000,
+    });
+
+    expect(
+      resolveMemoryFlushContextWindowTokens({
+        cfg,
+        provider,
+        modelId,
+        catalog: [{ provider, id: modelId, contextWindow: 1_000_000 }],
+      }),
+    ).toBe(100_000);
+  });
+});
 
 function buildModelConfig(
   route: Pick<

@@ -3,6 +3,7 @@ import { resolveAnthropicServerCompactionPlan } from "@openclaw/ai/internal/anth
 import { resolveOpenAIResponsesServerCompactionPlan } from "@openclaw/ai/internal/openai-responses-payload-policy";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import { resolveModelExtraParamSources } from "../../agents/model-extra-params.js";
 import { normalizeStaticProviderModelId } from "../../agents/model-ref-shared.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
@@ -13,17 +14,25 @@ import {
 } from "../../config/model-provider-config.js";
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ThinkingCatalogEntry } from "../thinking.js";
 
 export function resolveMemoryFlushContextWindowTokens(params: {
   modelId?: string;
   cfg?: OpenClawConfig;
   provider?: string;
+  catalog?: readonly ThinkingCatalogEntry[];
 }): number {
+  const catalogEntry =
+    params.provider && params.modelId
+      ? findModelInCatalog(params.catalog ?? [], params.provider, params.modelId)
+      : undefined;
   return (
     resolveContextTokensForModel({
       cfg: params.cfg,
       provider: params.provider,
       model: params.modelId,
+      modelContextWindow: catalogEntry?.contextWindow,
+      modelContextTokens: catalogEntry?.contextTokens,
       allowAsyncLoad: false,
     }) ?? DEFAULT_CONTEXT_TOKENS
   );
@@ -57,6 +66,7 @@ export function resolveResponsesServerCompactionThreshold(params: {
   cfg?: OpenClawConfig;
   provider?: string;
   modelId?: string;
+  catalog?: readonly ThinkingCatalogEntry[];
 }): number | undefined {
   const provider = params.provider?.trim();
   const modelId = params.modelId?.trim();
@@ -85,7 +95,7 @@ export function resolveResponsesServerCompactionThreshold(params: {
         baseUrl: configuredModel?.baseUrl ?? providerConfig?.baseUrl,
         contextWindow:
           configuredModel?.contextWindow ??
-          resolveMemoryFlushContextWindowTokens({ cfg: params.cfg, provider, modelId }),
+          resolveMemoryFlushContextWindowTokens({ ...params, provider, modelId }),
       },
       extraParams,
     ).threshold;
@@ -93,7 +103,7 @@ export function resolveResponsesServerCompactionThreshold(params: {
   const defaultOpenAIBaseUrl =
     normalizedProvider === "openai" ? "https://api.openai.com/v1" : undefined;
   const activeContextTokens = resolveMemoryFlushContextWindowTokens({
-    cfg: params.cfg,
+    ...params,
     provider,
     modelId,
   });
