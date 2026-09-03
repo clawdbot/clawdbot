@@ -648,10 +648,14 @@ describe("subagent registry persistence resume", () => {
   });
 
   it.each([
-    { activationSettlement: false, requesterYielded: false, label: "persisted" },
-    { activationSettlement: true, requesterYielded: false, label: "activation-created normal" },
+    { activationSettlement: false, requesterYielded: undefined, label: "persisted" },
+    {
+      activationSettlement: true,
+      requesterYielded: undefined,
+      label: "activation-created normal",
+    },
     { activationSettlement: true, requesterYielded: true, label: "activation-created yielded" },
-  ])(
+  ] as const)(
     "bounds restored $label requester-settle wakes after Gateway activation",
     async ({ activationSettlement, requesterYielded }) => {
       const stateDir = tempDirs.make("openclaw-subagent-");
@@ -703,7 +707,7 @@ describe("subagent registry persistence resume", () => {
             ...(activationSettlement
               ? {
                   requesterTurnRunId: `requester-turn-${index}`,
-                  requesterTurnYielded: requesterYielded,
+                  requesterTurnYielded: requesterYielded ?? undefined,
                   taskRunId: runId,
                 }
               : { requesterSettleWake: { status: "pending", attemptCount: 0 } }),
