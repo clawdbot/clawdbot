@@ -3781,6 +3781,104 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
   });
 
+  it("skips ownership attachment when the canonical retry row has no managed media", async () => {
+    const displayContent = [
+      {
+        type: "image",
+        url: "/api/chat/media/outgoing/source-session-id/attachment/retry.png",
+      },
+    ];
+    const committedDisplayContent = [
+      { type: "text", text: "Report attached." },
+      {
+        type: "attachment_error",
+        attachment: { code: "delivery-failed", kind: "image", label: "report.png" },
+      },
+    ];
+    buildAssistantDisplayContentFromReplyPayloadsMock.mockResolvedValueOnce(displayContent);
+    commitBackgroundResultToSessionMock.mockImplementationOnce(
+      async (params: {
+        onMessageCommitted?: (result: {
+          appended: boolean;
+          message: Record<string, unknown>;
+          messageId: string;
+        }) => void;
+      }) => {
+        const messageId = "existing-current-completion-message";
+        params.onMessageCommitted?.({
+          appended: false,
+          message: { [ASSISTANT_DISPLAY_CONTENT_FIELD]: committedDisplayContent },
+          messageId,
+        });
+        return { ok: true, messageId, appended: false };
+      },
+    );
+    const params = makeCurrentSessionMediaParams({
+      text: "Report attached.",
+      mediaUrl: "https://example.com/retry.png?token=redacted",
+      runStartedAt: 2_575,
+    });
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state).toMatchObject({ delivered: true, deliveryAttempted: true });
+    expect(attachManagedOutgoingMediaToMessageMock).not.toHaveBeenCalled();
+    expect(removeManagedOutgoingMediaBlocksMock).toHaveBeenCalledWith({
+      blocks: displayContent,
+      messageId: null,
+    });
+  });
+
+  it("repairs canonical managed ownership when retry media preparation fails", async () => {
+    const displayContent = [
+      { type: "text", text: "Report attached." },
+      {
+        type: "attachment_error",
+        attachment: { code: "delivery-failed", kind: "image", label: "report.png" },
+      },
+    ];
+    const committedDisplayContent = [
+      {
+        type: "image",
+        url: "/api/chat/media/outgoing/source-session-id/attachment/original.png",
+      },
+    ];
+    buildAssistantDisplayContentFromReplyPayloadsMock.mockResolvedValueOnce(displayContent);
+    commitBackgroundResultToSessionMock.mockImplementationOnce(
+      async (params: {
+        onMessageCommitted?: (result: {
+          appended: boolean;
+          message: Record<string, unknown>;
+          messageId: string;
+        }) => void;
+      }) => {
+        const messageId = "existing-current-completion-message";
+        params.onMessageCommitted?.({
+          appended: false,
+          message: { [ASSISTANT_DISPLAY_CONTENT_FIELD]: committedDisplayContent },
+          messageId,
+        });
+        return { ok: true, messageId, appended: false };
+      },
+    );
+    const params = makeCurrentSessionMediaParams({
+      text: "Report attached.",
+      runStartedAt: 2_590,
+    });
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state).toMatchObject({ delivered: true, deliveryAttempted: true });
+    expect(attachManagedOutgoingMediaToMessageMock).toHaveBeenCalledWith({
+      messageId: "existing-current-completion-message",
+      blocks: committedDisplayContent,
+    });
+    expect(removeManagedOutgoingMediaBlocksMock).toHaveBeenCalledWith({
+      blocks: displayContent,
+      messageId: null,
+    });
+  });
+
   it("commits text and media from the finalized current-target payload", async () => {
     const displayContent = [
       { type: "text", text: "Report attached." },

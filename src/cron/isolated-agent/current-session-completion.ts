@@ -84,8 +84,6 @@ export async function commitCurrentSessionCronCompletion(
       })
     : undefined;
   const hasDisplayMedia = mediaRuntime?.hasAssistantDisplayMediaContent(assistantContent) ?? false;
-  const hasManagedMedia =
-    mediaRuntime?.hasManagedOutgoingAssistantContent(assistantContent) ?? false;
   const displayContent = hasDisplayMedia ? assistantContent : undefined;
   const cleanupPreparedMedia = async () => {
     if (mediaRuntime && displayContent) {
@@ -104,16 +102,22 @@ export async function commitCurrentSessionCronCompletion(
     expectedGeneration: params.sourceSessionGeneration,
     text: completionText,
     ...(displayContent ? { displayContent } : {}),
-    ...(hasManagedMedia && mediaRuntime
+    ...(mediaRuntime
       ? {
           onMessageCommitted: (result) => {
             // The committed row owns either these prepared blocks or the original
             // bytes from an idempotent retry; bind exactly that durable content.
             preparedMediaCommitted = result.appended;
+            const committedDisplayContent = mediaRuntime.readAssistantDisplayContent(
+              result.message,
+            );
+            if (!mediaRuntime.hasManagedOutgoingAssistantContent(committedDisplayContent)) {
+              return;
+            }
             if (
               !mediaRuntime.attachManagedOutgoingMediaToMessage({
                 messageId: result.messageId,
-                blocks: mediaRuntime.readAssistantDisplayContent(result.message),
+                blocks: committedDisplayContent,
               })
             ) {
               throw new Error("current-session media ownership could not be persisted");
