@@ -9,8 +9,14 @@ import android.util.Log
 
 /**
  * Listens for Android transport restores and signals [onValidatedNetworkAvailable] when the device
- * regains a validated internet connection. Used to trigger an immediate gateway
- * reconnect instead of waiting out the time-based backoff slot in [GatewaySession].
+ * regains a validated internet connection, or when any network newly attaches at all. Used to
+ * trigger an immediate gateway reconnect instead of waiting out the time-based backoff slot in
+ * [GatewaySession].
+ *
+ * Validation (`NET_CAPABILITY_VALIDATED`) only confirms general internet reachability; a saved
+ * Gateway on a private LAN or a split-tunnel VPN route can be reachable without ever validating,
+ * so this monitor also wakes on the plain network-attach event. A wake that turns out to be wrong
+ * (the attached network cannot actually reach the Gateway) just costs one failed connect attempt.
  *
  * This monitor only reports "transport came back". Each gateway session still owns
  * desired-connection and auth-pause decisions. The application context keeps this
@@ -51,6 +57,17 @@ internal class NetworkMonitor(
 
   private val callback =
     object : ConnectivityManager.NetworkCallback() {
+      override fun onAvailable(network: Network) {
+        // Fires once per network attach, before validation resolves, so it also covers a
+        // restored private LAN/VPN route that never reaches NET_CAPABILITY_VALIDATED. Same
+        // registration-replay hazard as onCapabilitiesChanged below: registerNetworkCallback()
+        // replays onAvailable for every network already connected at registration time, so the
+        // same bootstrap grace absorbs it.
+        if (!isWithinNetworkMonitorBootstrapGrace(registeredAtNanos, System.nanoTime())) {
+          notifyValidatedNetworkAvailableDebounced()
+        }
+      }
+
       override fun onCapabilitiesChanged(
         network: Network,
         capabilities: NetworkCapabilities,
