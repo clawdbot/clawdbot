@@ -1,7 +1,9 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNonArrayRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import { t } from "../../../i18n/index.ts";
+import { formatBytes } from "../../../lib/agents/display.ts";
 import type { MessageContentItem } from "../../../lib/chat/chat-types.ts";
 import { readTranscriptMediaEntries } from "../../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
@@ -431,15 +433,16 @@ export function projectMessageMedia(
     if (block.type === "image") {
       const factIndex = inlineSlots[inlineIndex++]?.factIndex;
       // The structured SVG reference is independent of inline data in the same block.
-      const svg = appendSvgAttachment(block.url, block.mimeType ?? source?.media_type, block);
+      const imageUrl = normalizeOptionalString(block.url) ?? normalizeOptionalString(source?.url);
+      const svg = appendSvgAttachment(imageUrl, block.mimeType ?? source?.media_type, block);
       const base64Source =
         source?.type === "base64" && typeof source.data === "string" ? source : undefined;
       const data = base64Source ? base64Source.data : block.data;
       const url =
         typeof data === "string"
           ? buildBase64ImageUrl(data, base64Source ? base64Source.media_type : block.mimeType)
-          : !svg && typeof block.url === "string"
-            ? block.url
+          : !svg && imageUrl !== undefined
+            ? imageUrl
             : undefined;
       if (url !== undefined) {
         images.push({
@@ -455,22 +458,22 @@ export function projectMessageMedia(
         });
       }
     } else if (block.type === "image_url") {
-      const url = asOptionalRecord(block.image_url)?.url;
-      if (typeof url === "string" && !appendSvgAttachment(url)) {
+      const url = normalizeOptionalString(asOptionalRecord(block.image_url)?.url);
+      if (url !== undefined && !appendSvgAttachment(url)) {
         images.push({ url });
       }
     } else if (block.type === "input_image") {
       const blockImages: ImageBlock[] = [];
       const url =
-        typeof block.image_url === "string"
-          ? block.image_url
-          : asOptionalRecord(block.image_url)?.url;
-      if (typeof url === "string" && !appendSvgAttachment(url)) {
+        normalizeOptionalString(block.image_url) ??
+        normalizeOptionalString(asOptionalRecord(block.image_url)?.url);
+      if (url !== undefined && !appendSvgAttachment(url)) {
         blockImages.push({ url });
       }
-      const svg = appendSvgAttachment(source?.url, source?.media_type);
-      if (typeof source?.url === "string" && !svg) {
-        appendImageBlock(blockImages, { url: source.url });
+      const sourceUrl = normalizeOptionalString(source?.url);
+      const svg = appendSvgAttachment(sourceUrl, source?.media_type);
+      if (sourceUrl !== undefined && !svg) {
+        appendImageBlock(blockImages, { url: sourceUrl });
       } else if (typeof source?.data === "string") {
         appendImageBlock(blockImages, {
           url: buildBase64ImageUrl(source.data, source.media_type),
@@ -487,9 +490,10 @@ export function projectMessageMedia(
         }
         nextPairingQrExpiresAt = Math.min(nextPairingQrExpiresAt ?? expiresAt, expiresAt);
       }
-      if (typeof block.image_url === "string") {
+      const imageUrl = normalizeOptionalString(block.image_url);
+      if (imageUrl !== undefined) {
         images.push({
-          url: block.image_url,
+          url: imageUrl,
           alt: typeof block.alt === "string" ? block.alt : undefined,
         });
       }
@@ -580,6 +584,18 @@ export function extractMessageMediaText(
     ...images.map(
       (image) => image.fileName?.trim() || image.alt?.trim() || t("chat.imageLightbox.untitled"),
     ),
+    ...content.flatMap((item) => {
+      if (item.type !== "omitted_media") {
+        return [];
+      }
+      const reason =
+        item.media.sizeBytes === undefined
+          ? t("chat.attachments.omittedFromHistory")
+          : t("chat.attachments.omittedFromHistoryWithSize", {
+              size: formatBytes(item.media.sizeBytes),
+            });
+      return [`${t("chat.attachments.image")} · ${reason}`];
+    }),
     ...attachments.map(
       (item) => item.attachment.label.trim() || t("chat.attachments.attachedFile"),
     ),

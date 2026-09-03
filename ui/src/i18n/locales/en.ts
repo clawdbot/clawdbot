@@ -6122,7 +6122,11 @@ export const en: TranslationMap & {
       failureFileNotFound: "File not found. Check the path and try again.",
       failureUnsupportedFormat:
         "Rejected by the local attachment allowlist. Send a supported file type.",
+      history: "History",
+      image: "Image",
       notSent: "Not sent",
+      omittedFromHistory: "Omitted from history",
+      omittedFromHistoryWithSize: "Omitted from history · {size}",
       video: "Video",
     },
     voice: {

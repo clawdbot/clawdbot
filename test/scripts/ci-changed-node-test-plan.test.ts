@@ -531,7 +531,7 @@ describe("CI changed Node test plan", () => {
       expect(new Set(bundle.groups!.flatMap((group) => group.configs)).size).toBe(
         bundle.groups!.length,
       );
-      expect(bundle.predictedSeconds).toBeLessThanOrEqual(150);
+      expect(bundle.predictedSeconds).toBeLessThanOrEqual(240);
       expect(bundle.configs).toEqual([]);
       expect(bundle.pretestBuildMode).toBeUndefined();
       expect(bundle.groups!.every((group) => !group.pretestBuildMode)).toBe(true);
@@ -549,7 +549,7 @@ describe("CI changed Node test plan", () => {
           shard.runner === other.runner &&
           shard.requiresDist === other.requiresDist &&
           new Set(combined.flatMap((group) => group.configs)).size === combined.length &&
-          shard.predictedSeconds! + other.predictedSeconds! <= 150;
+          shard.predictedSeconds! + other.predictedSeconds! <= 240;
         expect(canShareJob, `${shard.shardName} and ${other.shardName} fit one job`).toBe(false);
       }
     }
