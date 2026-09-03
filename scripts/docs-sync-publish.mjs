@@ -22,6 +22,10 @@ const DEFAULT_CLAWHUB_REPO_CANDIDATES = [
   path.resolve(ROOT, "..", "clawhub"),
 ];
 const SYNC_SUPPORT_FILES = [
+  ...["docs-markdown.mjs", "docs-redirects.mjs"].map((name) => ({
+    source: path.join(ROOT, "scripts", "lib", name),
+    target: path.join(".openclaw-sync", "lib", name),
+  })),
   {
     source: path.join(ROOT, "scripts", "check-docs-mdx.mjs"),
     target: path.join(".openclaw-sync", "check-docs-mdx.mjs"),

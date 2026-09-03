@@ -36,7 +36,7 @@ function collectPages(entry: unknown, pages: string[] = []): string[] {
 }
 
 describe("docs-sync-publish", () => {
-  it("executes the copied MDX checker runtime closure", () => {
+  it("executes the copied MDX checker and shared anchor runtime closures", () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docs-sync-runtime-"));
     const publishRoot = path.join(tempRoot, "publish");
     const clawhubRoot = path.join(tempRoot, "clawhub");
@@ -64,6 +64,21 @@ describe("docs-sync-publish", () => {
         [path.join(publishRoot, ".openclaw-sync", "check-docs-mdx.mjs"), minimalMdx],
         { cwd: publishRoot, stdio: "pipe" },
       );
+      const anchors = execFileSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `
+        import { parseDocsDocument } from './.openclaw-sync/lib/docs-markdown.mjs';
+        import { resolveRedirects } from './.openclaw-sync/lib/docs-redirects.mjs';
+        console.log(JSON.stringify(parseDocsDocument('## agents.defaults.cwd').ids));
+        console.log(resolveRedirects({redirects: [], pages: [], localeCodes: ['en'], prefixes: [], publicPath: x => x}).length);
+      `,
+        ],
+        { cwd: publishRoot, encoding: "utf8" },
+      );
+      expect(anchors).toBe('["agents.defaults.cwd","agents-defaults-cwd"]\n0\n');
     } finally {
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
