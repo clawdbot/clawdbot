@@ -1,6 +1,7 @@
 // Builds the status summary used by human and JSON status output.
 // It aggregates sessions, tasks, heartbeat, channel summary, and model/runtime metadata.
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
@@ -23,7 +24,7 @@ import {
 import type { OpenClawConfig } from "../config/types.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
 import { resolveHeartbeatSessionKey } from "../infra/heartbeat-runner-session.js";
-import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
+import { resolveHeartbeatSummariesForAgents } from "../infra/heartbeat-summary.js";
 import { hasResolvableHeartbeatOwnerRoute } from "../infra/outbound/targets.js";
 import { readStartupMigrationWarning } from "../infra/state-migrations.messages.js";
 import { peekSystemEvents } from "../infra/system-events.js";
@@ -410,8 +411,13 @@ export async function getStatusSummary(
         )
     : null;
   const agentList = listGatewayAgentsBasic(cfg);
-  const heartbeatAgents: HeartbeatStatus[] = agentList.agents.map((agent) => {
-    const summary = resolveHeartbeatSummaryForAgent(cfg, agent.id);
+  // One roster pass for every agent; see resolveHeartbeatSummariesForAgents (#137570).
+  const heartbeatSummaries = resolveHeartbeatSummariesForAgents(
+    cfg,
+    agentList.agents.map((agent) => agent.id),
+  );
+  const heartbeatAgents: HeartbeatStatus[] = agentList.agents.map((agent, index) => {
+    const summary = expectDefined(heartbeatSummaries[index], "heartbeat summary");
     let waitingForRoute = false;
     if (summary.enabled && (summary.target === "last" || summary.target === "owner")) {
       const heartbeatSession = resolveHeartbeatSessionKey(
