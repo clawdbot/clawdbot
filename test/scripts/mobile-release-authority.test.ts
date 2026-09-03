@@ -223,7 +223,7 @@ if (args[0] !== "api") {
 }
 const endpoint = args[1] || "";
 if (endpoint.includes("/collaborators/")) {
-  process.stdout.write((process.env.GH_PERMISSION || "write") + "\\n");
+  process.stdout.write(next("GH_PERMISSIONS", process.env.GH_PERMISSION || "write") + "\\n");
 } else if (endpoint.includes("/actions/runs/") && endpoint.includes("/attempts/")) {
   const runId = endpoint.match(/\\/actions\\/runs\\/(\\d+)\\//)[1];
   const isCurrent = runId === process.env.GITHUB_RUN_ID;
@@ -698,6 +698,63 @@ describe("mobile release authority", () => {
     expect(dirty.stderr).toContain("tracked changes");
   });
 
+  it("rejects permission revocation after upload candidate validation", () => {
+    const fixture = createFixture();
+    const outputs = authorize(fixture);
+    resetState(fixture);
+    const result = runAuthority(fixture, "revalidate", {
+      ...receiptOverrides(outputs),
+      GH_PERMISSIONS: "write,read",
+    });
+    const trace = readGhTrace(fixture.ghLog);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("lacks write, maintain, or admin permission");
+    expect(fs.readFileSync(fixture.outputPath, "utf8")).toBe("");
+    expect(trace.filter(({ args }) => args[1]?.includes("/collaborators/"))).toHaveLength(2);
+    expect(trace.some(({ args }) => args.includes("POST"))).toBe(false);
+    expect(trace.every(({ token }) => token === "")).toBe(true);
+  });
+
+  it("rejects permission revocation after record validation before token-bearing ref work", () => {
+    const fixture = createFixture();
+    const outputs = authorize(fixture);
+    signIntentFile(fixture, outputs);
+    resetState(fixture);
+    const result = runAuthority(fixture, "validate-record", {
+      ...recordOverrides(fixture, outputs),
+      GH_PERMISSIONS: "write,read",
+    });
+    const trace = readGhTrace(fixture.ghLog);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("lacks write, maintain, or admin permission");
+    expect(fs.readFileSync(fixture.outputPath, "utf8")).toBe("");
+    expect(trace.filter(({ args }) => args[1]?.includes("/collaborators/"))).toHaveLength(2);
+    expect(trace.some(({ args }) => args.includes("POST"))).toBe(false);
+    expect(trace.every(({ token }) => token === "")).toBe(true);
+  });
+
+  it("rechecks permission after live ref reads immediately before immutable ref creation", () => {
+    const fixture = createFixture();
+    const outputs = authorize(fixture);
+    signIntentFile(fixture, outputs);
+    resetState(fixture);
+    const result = runAuthority(fixture, "record", {
+      ...recordOverrides(fixture, outputs),
+      GH_PERMISSIONS: "write,write,read",
+      MOBILE_RELEASE_REF_TOKEN: "write-token",
+    });
+    const trace = readGhTrace(fixture.ghLog);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("lacks write, maintain, or admin permission");
+    expect(fs.readFileSync(fixture.outputPath, "utf8")).toBe("");
+    expect(trace.filter(({ args }) => args[1]?.includes("/collaborators/"))).toHaveLength(3);
+    expect(trace.some(({ args }) => args.includes("POST"))).toBe(false);
+    expect(fs.existsSync(path.join(fixture.stateDir, "release-ref"))).toBe(false);
+  });
+
   it("records exact iOS and Android intents and handles an identical create race idempotently", () => {
     for (const platform of ["ios", "android"] as const) {
       const fixture = createFixture({ platform });
@@ -860,7 +917,10 @@ describe("mobile release authority", () => {
         name: "iOS Beta Release",
         platform: "ios",
         signingCheckoutName: "Checkout encrypted iOS signing assets",
+        signingCheckoutRevalidateName:
+          "Revalidate release authority immediately before iOS signing checkout",
         signingMaterializeName: undefined,
+        signingMaterializeRevalidateName: undefined,
         setupBeforeSigning: [],
       },
       {
@@ -869,7 +929,11 @@ describe("mobile release authority", () => {
         name: "Android Beta Release",
         platform: "android",
         signingCheckoutName: "Checkout encrypted Android signing assets",
+        signingCheckoutRevalidateName:
+          "Revalidate release authority immediately before Android signing checkout",
         signingMaterializeName: "Materialize Android release signing",
+        signingMaterializeRevalidateName:
+          "Revalidate release authority immediately before Android signing materialization",
         setupBeforeSigning: [
           "Setup Node environment",
           "Setup Android toolchain",
@@ -885,7 +949,9 @@ describe("mobile release authority", () => {
       name,
       platform,
       signingCheckoutName,
+      signingCheckoutRevalidateName,
       signingMaterializeName,
+      signingMaterializeRevalidateName,
       setupBeforeSigning,
     } of workflows) {
       const source = fs.readFileSync(file, "utf8");
@@ -940,9 +1006,13 @@ describe("mobile release authority", () => {
       const signingCheckoutIndex = release.steps.findIndex(
         (step) => step.name === signingCheckoutName,
       );
+      const signingCheckoutRevalidateIndex = release.steps.findIndex(
+        (step) => step.name === signingCheckoutRevalidateName,
+      );
       expect(signingRevalidateIndex).toBeGreaterThan(-1);
       expect(signingTokenIndex).toBe(signingRevalidateIndex + 1);
-      expect(signingCheckoutIndex).toBe(signingTokenIndex + 1);
+      expect(signingCheckoutRevalidateIndex).toBe(signingTokenIndex + 1);
+      expect(signingCheckoutIndex).toBe(signingCheckoutRevalidateIndex + 1);
       for (const setupName of setupBeforeSigning) {
         expect(
           release.steps.findIndex((step) => step.name === setupName),
@@ -953,14 +1023,36 @@ describe("mobile release authority", () => {
       const signingBoundaryIndexes = [
         signingRevalidateIndex,
         signingTokenIndex,
+        signingCheckoutRevalidateIndex,
         signingCheckoutIndex,
       ];
+      const signingAuthorityIndexes = [signingRevalidateIndex, signingCheckoutRevalidateIndex];
       if (signingMaterializeName) {
+        const signingMaterializeRevalidateIndex = release.steps.findIndex(
+          (step) => step.name === signingMaterializeRevalidateName,
+        );
         const signingMaterializeIndex = release.steps.findIndex(
           (step) => step.name === signingMaterializeName,
         );
-        expect(signingMaterializeIndex).toBe(signingCheckoutIndex + 1);
-        signingBoundaryIndexes.push(signingMaterializeIndex);
+        expect(signingMaterializeRevalidateIndex).toBe(signingCheckoutIndex + 1);
+        expect(signingMaterializeIndex).toBe(signingMaterializeRevalidateIndex + 1);
+        signingBoundaryIndexes.push(signingMaterializeRevalidateIndex, signingMaterializeIndex);
+        signingAuthorityIndexes.push(signingMaterializeRevalidateIndex);
+      }
+      for (const stepIndex of signingAuthorityIndexes) {
+        expect(release.steps[stepIndex]?.uses, `${file}:${stepIndex}:uses`).toBe(
+          "./.mobile-release-authority/.github/actions/mobile-release-authority",
+        );
+        expect(release.steps[stepIndex]?.with, `${file}:${stepIndex}:with`).toEqual({
+          "authority-run-id": "${{ needs.authorize.outputs.run_id }}",
+          operation: "revalidate",
+          platform,
+          "target-ref": "${{ needs.authorize.outputs.target_ref }}",
+          "target-sha": "${{ env.RELEASE_TARGET_SHA }}",
+          "workflow-full-ref": "${{ github.workflow_ref }}",
+          "workflow-path": file,
+          "workflow-sha": "${{ github.workflow_sha }}",
+        });
       }
       for (const stepIndex of signingBoundaryIndexes) {
         expect(release.steps[stepIndex]?.if, `${file}:${stepIndex}:if`).toBeUndefined();

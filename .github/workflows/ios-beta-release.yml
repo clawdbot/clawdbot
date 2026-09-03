@@ -156,6 +156,18 @@ jobs:
           repositories: apps-signing
           permission-contents: read
 
+      - name: Revalidate release authority immediately before iOS signing checkout
+        uses: ./.mobile-release-authority/.github/actions/mobile-release-authority
+        with:
+          operation: revalidate
+          platform: ios
+          workflow-path: .github/workflows/ios-beta-release.yml
+          workflow-full-ref: ${{ github.workflow_ref }}
+          workflow-sha: ${{ github.workflow_sha }}
+          target-ref: ${{ needs.authorize.outputs.target_ref }}
+          target-sha: ${{ env.RELEASE_TARGET_SHA }}
+          authority-run-id: ${{ needs.authorize.outputs.run_id }}
+
       - name: Checkout encrypted iOS signing assets
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

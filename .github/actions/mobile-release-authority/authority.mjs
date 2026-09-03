@@ -867,6 +867,7 @@ async function revalidateUpload() {
   const candidate = await validateStableReleaseCandidate(receipt.workflowSha, false);
   validateCandidateAgainstReceipt(candidate, receipt);
   validateTargetCheckout();
+  collaboratorPermission(receipt.actor);
   output({
     gateway_version: receipt.gatewayVersion,
     receipt_digest: receiptDigest,
@@ -936,6 +937,7 @@ async function validateRecordAuthority() {
   const candidate = await validateStableReleaseCandidate(receipt.workflowSha, false);
   validateCandidateAgainstReceipt(candidate, receipt);
   verifyRecoveryRefs?.();
+  collaboratorPermission(receipt.actor);
   return { intent, receipt };
 }
 
@@ -962,7 +964,7 @@ async function recordReleaseRef() {
   if (!releaseRefToken) {
     fail("MOBILE_RELEASE_REF_TOKEN is required only for the trusted record phase.");
   }
-  const { intent } = await validateRecordAuthority();
+  const { intent, receipt } = await validateRecordAuthority();
   const ref = mobileReleaseRefForIntent(intent);
   const existing = readReleaseRef(ref);
   if (existing && existing !== targetSha) {
@@ -972,6 +974,7 @@ async function recordReleaseRef() {
     if (readRef(`refs/heads/${targetRef}`) !== targetSha) {
       fail("Mobile release branch changed immediately before immutable ref creation.");
     }
+    collaboratorPermission(receipt.actor);
     try {
       createReleaseRef(ref);
     } catch {
