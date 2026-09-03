@@ -171,6 +171,7 @@ export type UpdateGenerationLedgerHook = {
 export type UpdateGenerationProjection = {
   intent: Extract<UpdateGenerationTransactionReceipt, { kind: "intent" }>;
   latest: UpdateGenerationTransactionReceipt;
+  latestTransition: Exclude<UpdateGenerationTransactionReceipt, { kind: "failure" }>;
   materializationIntents: Partial<
     Record<
       UpdateGenerationRole,
@@ -248,7 +249,7 @@ function assertReceiptFollowsLatest(
     }
     return;
   }
-  const latest = projection.latest;
+  const latest = projection.latestTransition;
   const follows =
     (latest.kind === "intent" &&
       receipt.kind === "generation-materialization-intent" &&
@@ -285,6 +286,12 @@ function assertReceiptTransition(
   if (!record) {
     if (receipt.kind !== "intent" || receipt.sequence !== 0) {
       throw new Error("An update generation transaction must start with intent sequence 0");
+    }
+    if (receipt.stableBindingAlreadyVerified && !receipt.previousSelection) {
+      throw new Error("A verified stable binding requires a previous generation selection");
+    }
+    if (receipt.previousSelection) {
+      assertSelection(receipt.previousSelection);
     }
     return;
   }
@@ -524,6 +531,7 @@ export function projectUpdateGenerationTransaction(
   const projection: UpdateGenerationProjection = {
     intent,
     latest: intent,
+    latestTransition: intent,
     materializationIntents: {},
     generations: {},
     baselineSelection: intent.previousSelection,
@@ -535,6 +543,9 @@ export function projectUpdateGenerationTransaction(
   };
   for (const receipt of record.receipts.slice(1)) {
     projection.latest = receipt;
+    if (receipt.kind !== "failure") {
+      projection.latestTransition = receipt;
+    }
     if (receipt.kind === "generation-materialization-intent") {
       projection.materializationIntents[receipt.role] = receipt;
     } else if (receipt.kind === "generation-materialized") {

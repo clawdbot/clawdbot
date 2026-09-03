@@ -89,6 +89,25 @@ async function withGenerationTestDir(
 }
 
 describe("immutable update generation activation", () => {
+  it("uses locale-independent manifest ordering", async () => {
+    await withGenerationTestDir("openclaw-generation-manifest-order-", async (base) => {
+      const stageRoot = path.join(base, "stage");
+      await writeRuntime(stageRoot, "1.0.0");
+      await fs.writeFile(path.join(stageRoot, "ä"), "umlaut");
+      const localeCompare = vi.spyOn(String.prototype, "localeCompare").mockImplementation(() => {
+        throw new Error("ambient locale collation must not be used");
+      });
+      try {
+        await expect(captureUpdateGenerationManifest(stageRoot)).resolves.toMatchObject({
+          algorithm: "sha256",
+          entryCount: 3,
+        });
+      } finally {
+        localeCompare.mockRestore();
+      }
+    });
+  });
+
   it("keeps an escaped native writer confined to disposable staging", async () => {
     await withGenerationTestDir("openclaw-generation-native-writer-", async (base) => {
       const namespaceRoot = path.join(base, "managed");
@@ -464,6 +483,36 @@ describe("update generation fail-closed boundaries", () => {
         "injected launcher race",
       );
       rename.mockRestore();
+    });
+  });
+
+  it("reports a directory-sync failure after committing a launcher", async () => {
+    await withGenerationTestDir("openclaw-generation-launcher-sync-", async (base) => {
+      const namespaceRoot = path.join(base, "managed");
+      const launcherPath = path.join(namespaceRoot, UPDATE_GENERATION_LAUNCHER_FILE_NAME);
+      const realRename = fs.rename.bind(fs);
+      let restoreOpen: () => void = () => undefined;
+      const rename = vi.spyOn(fs, "rename").mockImplementationOnce(async (from, to) => {
+        await realRename(from, to);
+        const open = vi
+          .spyOn(fs, "open")
+          .mockRejectedValueOnce(
+            Object.assign(new Error("injected directory sync failure"), { code: "EIO" }),
+          );
+        restoreOpen = () => open.mockRestore();
+      });
+      try {
+        await expect(ensureUpdateGenerationLauncher(namespaceRoot)).rejects.toThrow(
+          "injected directory sync failure",
+        );
+        await expect(fs.readFile(launcherPath, "utf8")).resolves.toBe(
+          UPDATE_GENERATION_LAUNCHER_SOURCE,
+        );
+      } finally {
+        restoreOpen();
+        rename.mockRestore();
+      }
+      await expect(ensureUpdateGenerationLauncher(namespaceRoot)).resolves.toBe(launcherPath);
     });
   });
 

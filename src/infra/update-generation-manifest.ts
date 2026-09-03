@@ -47,7 +47,7 @@ export async function captureUpdateGenerationManifest(
 
   const walk = async (current: string, relativeDirectory: string): Promise<void> => {
     const children = (await fs.readdir(current)).toSorted((left, right) =>
-      left.localeCompare(right),
+      left < right ? -1 : left > right ? 1 : 0,
     );
     for (const child of children) {
       const childPath = path.join(current, child);

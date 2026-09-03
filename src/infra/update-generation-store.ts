@@ -554,6 +554,7 @@ export async function ensureUpdateGenerationLauncher(namespaceRoot: string): Pro
     return launcherPath;
   }
   const temporaryPath = path.join(root, `.launcher-${randomBytes(8).toString("hex")}.tmp`);
+  let launcherCommitted = false;
   try {
     const handle = await fs.open(temporaryPath, "wx", 0o500);
     try {
@@ -563,10 +564,14 @@ export async function ensureUpdateGenerationLauncher(namespaceRoot: string): Pro
       await handle.close();
     }
     await fs.rename(temporaryPath, launcherPath);
+    launcherCommitted = true;
     await syncUpdateGenerationPath(root);
     return launcherPath;
   } catch (error) {
     await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
+    if (launcherCommitted) {
+      throw error;
+    }
     try {
       await verifyLauncher();
       return launcherPath;

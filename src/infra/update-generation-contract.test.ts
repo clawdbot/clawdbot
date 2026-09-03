@@ -369,7 +369,22 @@ describe("durable update generation transaction contract", () => {
     record = append(record, receipt("candidate-selected", 4, { selection: candidate }));
     record = append(
       record,
-      receipt("rollback-intent", 5, {
+      receipt("failure", 5, {
+        operation: "doctor",
+        reason: "Doctor failed",
+        serviceRestored: false,
+      }),
+    );
+    expect(
+      adjudicateUpdateGenerationTransaction(record, {
+        selector: candidate,
+        generations: [],
+        bindingConverged: true,
+      }),
+    ).toMatchObject({ action: "adjudicate-failure" });
+    record = append(
+      record,
+      receipt("rollback-intent", 6, {
         from: candidate,
         to: previous,
         reason: "Doctor failed",
@@ -384,7 +399,7 @@ describe("durable update generation transaction contract", () => {
     ).toMatchObject({ action: "record-rolled-back" });
     record = append(
       record,
-      receipt("rolled-back", 6, {
+      receipt("rolled-back", 7, {
         selection: previous,
         launcherVersion: "1.0.0",
         serviceRunning: true,
@@ -414,7 +429,7 @@ describe("durable update generation transaction contract", () => {
     expect(() =>
       append(
         record,
-        receipt("cleanup-intent", 7, {
+        receipt("cleanup-intent", 8, {
           generationIds: [candidate.generationId],
           protectedGenerationIds: [previous.generationId, candidate.generationId],
         }),
@@ -423,7 +438,7 @@ describe("durable update generation transaction contract", () => {
     expect(() =>
       append(
         record,
-        receipt("cleanup-intent", 7, {
+        receipt("cleanup-intent", 8, {
           generationIds: [],
           protectedGenerationIds: [previous.generationId],
         }),
@@ -433,7 +448,7 @@ describe("durable update generation transaction contract", () => {
     const obsolete = "d".repeat(32);
     record = append(
       record,
-      receipt("cleanup-intent", 7, {
+      receipt("cleanup-intent", 8, {
         generationIds: [obsolete],
         protectedGenerationIds: [previous.generationId, candidate.generationId],
       }),
@@ -441,7 +456,7 @@ describe("durable update generation transaction contract", () => {
     expect(() =>
       append(
         record,
-        receipt("cleanup-completed", 8, {
+        receipt("cleanup-completed", 9, {
           removedGenerationIds: [],
           deferred: [],
         }),
@@ -508,6 +523,20 @@ describe("durable update generation transaction contract", () => {
         }),
       ),
     ).toThrow("completion cannot follow intent");
+  });
+
+  it("rejects a verified binding without a previous generation", () => {
+    expect(() => append(null, intent(null, true))).toThrow(
+      "A verified stable binding requires a previous generation selection",
+    );
+    expect(() =>
+      parseUpdateGenerationTransactionRecord({
+        formatVersion: 1,
+        transactionId: TRANSACTION_ID,
+        namespaceKey: NAMESPACE_KEY,
+        receipts: [intent(null, true)],
+      }),
+    ).toThrow("A verified stable binding requires a previous generation selection");
   });
 
   it("requires materialization and binding acknowledgements to match their intents", () => {

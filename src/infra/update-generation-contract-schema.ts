@@ -67,7 +67,7 @@ const receiptBase = {
   recordedAtMs: nonNegativeIntegerSchema,
 };
 
-export const updateGenerationTransactionReceiptSchema = z.discriminatedUnion("kind", [
+const updateGenerationTransactionReceiptUnion = z.discriminatedUnion("kind", [
   z
     .object({
       ...receiptBase,
@@ -198,6 +198,21 @@ export const updateGenerationTransactionReceiptSchema = z.discriminatedUnion("ki
     })
     .strict(),
 ]);
+
+export const updateGenerationTransactionReceiptSchema =
+  updateGenerationTransactionReceiptUnion.superRefine((receipt, context) => {
+    if (
+      receipt.kind === "intent" &&
+      receipt.stableBindingAlreadyVerified &&
+      !receipt.previousSelection
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["previousSelection"],
+        message: "A verified stable binding requires a previous generation selection",
+      });
+    }
+  });
 
 export const updateGenerationTransactionRecordSchema = z
   .object({
