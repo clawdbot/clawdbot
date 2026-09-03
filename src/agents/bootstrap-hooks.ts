@@ -29,7 +29,7 @@ export async function applyBootstrapHookOverrides(params: {
     agentId,
   };
   const event = createInternalHookEvent("agent", "bootstrap", sessionKey, context);
-  await triggerInternalHook(event);
+  await triggerInternalHook(event, { yieldBetweenHandlers: true });
   const updated = (event.context as AgentBootstrapHookContext).bootstrapFiles;
   return Array.isArray(updated) ? updated : params.files;
 }

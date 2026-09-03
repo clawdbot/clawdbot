@@ -5,6 +5,8 @@
  * like command processing, session lifecycle, etc.
  */
 
+import { performance } from "node:perf_hooks";
+import { setImmediate as yieldImmediate } from "node:timers/promises";
 import type { SessionsPatchParams } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import type { CliDeps } from "../cli/outbound-send-deps.js";
@@ -191,6 +193,12 @@ const internalHooksEnabledState = resolveGlobalSingleton<{ enabled: boolean }>(
   () => ({ enabled: true }),
 );
 const log = createSubsystemLogger("internal-hooks");
+const INTERNAL_HOOK_SLOW_HANDLER_WARN_MS = 500;
+
+export type InternalHookTriggerOptions = {
+  yieldBetweenHandlers?: boolean;
+  onHandlerTiming?: (info: { index: number; durationMs: number }) => void;
+};
 
 /**
  * Register a hook handler for a specific event type or event:action combination
@@ -280,8 +288,12 @@ export function hasInternalHookListeners(type: InternalHookEventType, action: st
  * but don't prevent other handlers from running.
  *
  * @param event - The event to trigger
+ * @param options - Optional handler scheduling and timing callbacks
  */
-export async function triggerInternalHook(event: InternalHookEvent): Promise<void> {
+export async function triggerInternalHook(
+  event: InternalHookEvent,
+  options?: InternalHookTriggerOptions,
+): Promise<void> {
   if (!internalHooksEnabledState.enabled) {
     return;
   }
@@ -301,12 +313,23 @@ export async function triggerInternalHook(event: InternalHookEvent): Promise<voi
   ];
   const allHandlers = [...typeHandlers, ...specificHandlers];
 
-  for (const handler of allHandlers) {
+  for (const [index, handler] of allHandlers.entries()) {
+    const handlerStartedAt = performance.now();
     try {
       await handler(event);
     } catch (err) {
       const message = formatErrorMessage(err);
       log.error(`Hook error [${event.type}:${event.action}]: ${message}`);
+    }
+    const durationMs = performance.now() - handlerStartedAt;
+    options?.onHandlerTiming?.({ index, durationMs });
+    if (durationMs > INTERNAL_HOOK_SLOW_HANDLER_WARN_MS) {
+      log.warn(
+        `Slow hook handler [${event.type}:${event.action}] index=${index} durationMs=${durationMs.toFixed(1)}`,
+      );
+    }
+    if (options?.yieldBetweenHandlers === true && index < allHandlers.length - 1) {
+      await yieldImmediate();
     }
   }
 }

@@ -71,6 +71,47 @@ describe("loadExtraBootstrapFilesWithDiagnostics", () => {
     ]);
   });
 
+  it("skips bootstrap glob matches in ignored directories", async () => {
+    const workspaceDir = await createWorkspaceDir("glob-ignored-dirs");
+    const packageDir = path.join(workspaceDir, "packages", "core");
+    await fs.mkdir(path.join(workspaceDir, "node_modules", "pkg"), { recursive: true });
+    await fs.mkdir(path.join(workspaceDir, ".git", "hooks"), { recursive: true });
+    await fs.mkdir(packageDir, { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, "node_modules", "pkg", "AGENTS.md"),
+      "deps",
+      "utf-8",
+    );
+    await fs.writeFile(path.join(workspaceDir, ".git", "hooks", "AGENTS.md"), "git", "utf-8");
+    await fs.writeFile(path.join(packageDir, "AGENTS.md"), "project", "utf-8");
+
+    const files = await loadExtraBootstrapFileList(workspaceDir, ["**/AGENTS.md"]);
+
+    expect(files).toStrictEqual([
+      {
+        name: "AGENTS.md",
+        path: path.join(packageDir, "AGENTS.md"),
+        content: "project",
+        missing: false,
+      },
+    ]);
+  });
+
+  it("caps expanded bootstrap glob matches", async () => {
+    const workspaceDir = await createWorkspaceDir("glob-match-limit");
+    await Promise.all(
+      Array.from({ length: 140 }, async (_, index) => {
+        const packageDir = path.join(workspaceDir, "packages", `pkg-${index}`);
+        await fs.mkdir(packageDir, { recursive: true });
+        await fs.writeFile(path.join(packageDir, "AGENTS.md"), `agents ${index}`, "utf-8");
+      }),
+    );
+
+    const files = await loadExtraBootstrapFileList(workspaceDir, ["packages/*/AGENTS.md"]);
+
+    expect(files).toHaveLength(128);
+  });
+
   it("loads literal bootstrap paths with square brackets", async () => {
     const workspaceDir = await createWorkspaceDir("literal-brackets");
     const packageDir = path.join(workspaceDir, "pkg[1]");

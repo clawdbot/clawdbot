@@ -1,4 +1,5 @@
 // Internal hook tests cover dispatch for command, session, agent, and gateway hooks.
+import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -20,11 +21,33 @@ import {
 } from "./internal-hooks.js";
 
 const INTERNAL_HOOK_HANDLERS_KEY = Symbol.for("openclaw.internalHookHandlers");
+const loggerMocks = vi.hoisted(() => ({
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
+
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => ({
+    subsystem: "internal-hooks",
+    isEnabled: () => false,
+    trace: vi.fn(),
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: loggerMocks.warn,
+    error: loggerMocks.error,
+    fatal: vi.fn(),
+    raw: vi.fn(),
+    child: vi.fn(),
+  }),
+}));
 
 describe("hooks", () => {
   beforeEach(() => {
     clearInternalHooks();
     setInternalHooksEnabled(true);
+    vi.restoreAllMocks();
+    loggerMocks.warn.mockClear();
+    loggerMocks.error.mockClear();
   });
 
   afterEach(() => {
@@ -179,6 +202,53 @@ describe("hooks", () => {
       globalHooks.set("command:new", [injectedHandler]);
       await triggerInternalHook(event);
       expect(injectedHandler).toHaveBeenCalledWith(event);
+    });
+
+    it("executes all handlers in order when yielding between handlers", async () => {
+      const calls: string[] = [];
+      registerInternalHook("command:new", () => {
+        calls.push("first");
+      });
+      registerInternalHook("command:new", () => {
+        calls.push("second");
+      });
+
+      await triggerInternalHook(createInternalHookEvent("command", "new", "test-session"), {
+        yieldBetweenHandlers: true,
+      });
+
+      expect(calls).toStrictEqual(["first", "second"]);
+    });
+
+    it("reports handler timing with handler indexes", async () => {
+      vi.spyOn(performance, "now")
+        .mockReturnValueOnce(10)
+        .mockReturnValueOnce(25)
+        .mockReturnValueOnce(30)
+        .mockReturnValueOnce(45);
+      registerInternalHook("command:new", () => {});
+      registerInternalHook("command:new", () => {});
+      const timings: Array<{ index: number; durationMs: number }> = [];
+
+      await triggerInternalHook(createInternalHookEvent("command", "new", "test-session"), {
+        onHandlerTiming: (info) => timings.push(info),
+      });
+
+      expect(timings).toStrictEqual([
+        { index: 0, durationMs: 15 },
+        { index: 1, durationMs: 15 },
+      ]);
+    });
+
+    it("logs a warning for slow handlers", async () => {
+      vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValueOnce(501);
+      registerInternalHook("command:new", () => {});
+
+      await triggerInternalHook(createInternalHookEvent("command", "new", "test-session"));
+
+      expect(loggerMocks.warn).toHaveBeenCalledWith(
+        "Slow hook handler [command:new] index=0 durationMs=501.0",
+      );
     });
   });
 
