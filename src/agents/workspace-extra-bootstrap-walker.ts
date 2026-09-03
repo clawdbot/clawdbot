@@ -236,6 +236,12 @@ async function* walkFallbackMatches(
   normalizedPattern: string,
 ): AsyncGenerator<string> {
   const matcher = new Minimatch(normalizedPattern, EXTRA_BOOTSTRAP_FALLBACK_MINIMATCH_OPTIONS);
+  // fs.glob yields a directory (or descended directory symlink) that fully matches
+  // the pattern, not just files, so the fallback must too or it silently drops the
+  // match. The trailing-slash form covers directory-only patterns (`pkg/*/`), which
+  // Minimatch full-matches only against `dir/`, never `dir`.
+  const patternMatchesDirectory = (key: string): boolean =>
+    matcher.match(key, false) || matcher.match(`${key}/`, false);
   // Brace alternations expand to independent literal alternatives in Node's
   // globber (`pkg/{linked,other}/**` -> `pkg/linked/**` and `pkg/other/**`), and
   // its symlink rule runs per alternative, so expand once here (off the symlink
@@ -270,6 +276,11 @@ async function* walkFallbackMatches(
         : entry.name;
       const matchKey = toPortableMatchPath(childRelativePath);
       if (entry.isDirectory()) {
+        // A directory that fully matches is a match in its own right (fs.glob parity),
+        // independent of whether it is also a descent prefix below.
+        if (patternMatchesDirectory(matchKey)) {
+          yield childRelativePath;
+        }
         // Descend only where a partial match can still be completed: a shallow
         // pattern never enters a deeper subtree, bounding the walk to fs.glob's. A
         // real directory is never a symlink crossing, so inherit the parent's
@@ -290,6 +301,12 @@ async function* walkFallbackMatches(
           matcher.match(matchKey, true) &&
           (await fallbackSymlinkTargetIsDirectory(path.resolve(workspaceDir, childRelativePath)))
         ) {
+          // A descended directory symlink that also fully matches is itself a match
+          // (fs.glob parity), the same directory full-match yield as the plain
+          // directory branch above.
+          if (patternMatchesDirectory(matchKey)) {
+            yield childRelativePath;
+          }
           const childSymlinkDepths = new Set(frame.symlinkDepths);
           childSymlinkDepths.add(childSegments.length - 1);
           stack.push({ relativeDir: childRelativePath, symlinkDepths: childSymlinkDepths });

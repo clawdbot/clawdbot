@@ -494,4 +494,118 @@ describe("resolveExtraBootstrapPatternPaths fs.glob-absent fallback symlink desc
       });
     },
   );
+
+  it.runIf(process.platform !== "win32")(
+    "(14) yields a fully-matching literal directory under the fallback (fs.glob parity)",
+    async () => {
+      // Directory full-match parity: fs.glob yields a directory that fully matches
+      // the pattern (`pkg/*` -> `pkg/core`), not just files. The pre-fix fallback
+      // descended the directory but never yielded it, silently dropping the match on
+      // a no-fs.glob runtime.
+      const workspaceDir = await createWorkspaceDir("dir-full-match");
+      await fs.mkdir(path.join(workspaceDir, "pkg", "core"), { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, "pkg", "notes.md"), "notes", "utf-8");
+
+      const pattern = "pkg/*";
+      const oracle = await nodeGlobRelative(workspaceDir, pattern);
+      await withoutNativeGlobApis(async () => {
+        const matches = (await resolveExtraBootstrapPatternPaths(workspaceDir, pattern)).toSorted();
+        expect(matches).toStrictEqual(["pkg/core", "pkg/notes.md"]);
+        expect(matches).toStrictEqual(oracle);
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "(15) yields the directory for a trailing-slash directory-only pattern (fs.glob parity)",
+    async () => {
+      // Trailing-slash parity: `pkg/*/` matches directories only, so fs.glob yields
+      // `pkg/core` and excludes the sibling file. The directory full-match yield must
+      // also test the trailing-slash form (`matchKey + "/"`) since Minimatch does not
+      // full-match `pkg/core` against `pkg/*/`, only `pkg/core/`.
+      const workspaceDir = await createWorkspaceDir("dir-trailing-slash");
+      await fs.mkdir(path.join(workspaceDir, "pkg", "core"), { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, "pkg", "notes.md"), "notes", "utf-8");
+
+      const pattern = "pkg/*/";
+      const oracle = await nodeGlobRelative(workspaceDir, pattern);
+      await withoutNativeGlobApis(async () => {
+        const matches = (await resolveExtraBootstrapPatternPaths(workspaceDir, pattern)).toSorted();
+        expect(matches).toStrictEqual(["pkg/core"]);
+        expect(matches).toStrictEqual(oracle);
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "(16) yields a descended literal-named directory symlink on full match (fs.glob parity)",
+    async () => {
+      // Descended-symlink full-match parity: `pkg/linked -> ../target` is a directory
+      // symlink named literally in `**/pkg/linked`, so it is descended AND fully
+      // matches the pattern. fs.glob yields `pkg/linked`; the pre-fix fallback
+      // descended it and `continue`d without yielding, dropping the directory match.
+      const workspaceDir = await createWorkspaceDir("descended-symlink-yield");
+      const pkgDir = path.join(workspaceDir, "pkg");
+      const target = path.join(workspaceDir, "target");
+      await fs.mkdir(pkgDir, { recursive: true });
+      await fs.mkdir(target, { recursive: true });
+      await fs.writeFile(path.join(target, "AGENTS.md"), "behind-link", "utf-8");
+      if (!(await trySymlink(path.join("..", "target"), path.join(pkgDir, "linked")))) {
+        return;
+      }
+
+      const pattern = "**/pkg/linked";
+      const oracle = await nodeGlobRelative(workspaceDir, pattern);
+      await withoutNativeGlobApis(async () => {
+        const matches = (await resolveExtraBootstrapPatternPaths(workspaceDir, pattern)).toSorted();
+        expect(matches).toStrictEqual(["pkg/linked"]);
+        expect(matches).toStrictEqual(oracle);
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "(17) does not yield a directory that only partially (prefix) matches the pattern",
+    async () => {
+      // Negative parity: `pkg/*/inner` fully matches the directory `pkg/core/inner`
+      // but only PARTIALLY matches its prefix `pkg/core`. fs.glob yields only the full
+      // match, so the directory full-match yield must key off full match, never the
+      // partial-match descent gate, or it would emit the prefix directory too.
+      const workspaceDir = await createWorkspaceDir("dir-prefix-negative");
+      await fs.mkdir(path.join(workspaceDir, "pkg", "core", "inner"), { recursive: true });
+
+      const pattern = "pkg/*/inner";
+      const oracle = await nodeGlobRelative(workspaceDir, pattern);
+      await withoutNativeGlobApis(async () => {
+        const matches = (await resolveExtraBootstrapPatternPaths(workspaceDir, pattern)).toSorted();
+        expect(matches).toStrictEqual(["pkg/core/inner"]);
+        expect(matches).toStrictEqual(oracle);
+        // The prefix directory `pkg/core` is only a partial match and must not appear.
+        expect(matches).not.toContain("pkg/core");
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "(18) yields a directory that both fully matches and is descended exactly once",
+    async () => {
+      // No double-yield: `pkg/core` fully matches `pkg/*` AND is descended (its prefix
+      // partially matches). The directory must be emitted exactly once; descending
+      // into it produces its children, never a second copy of the directory itself.
+      const workspaceDir = await createWorkspaceDir("dir-match-and-descend");
+      await fs.mkdir(path.join(workspaceDir, "pkg", "core"), { recursive: true });
+      // A child that cannot match the shallow `pkg/*`, proving descent adds no spurious
+      // yield alongside the single directory match.
+      await fs.writeFile(path.join(workspaceDir, "pkg", "core", "x.md"), "child", "utf-8");
+
+      const pattern = "pkg/*";
+      const oracle = await nodeGlobRelative(workspaceDir, pattern);
+      await withoutNativeGlobApis(async () => {
+        const matches = (await resolveExtraBootstrapPatternPaths(workspaceDir, pattern)).toSorted();
+        expect(matches).toStrictEqual(["pkg/core"]);
+        expect(matches).toStrictEqual(oracle);
+        expect(matches.filter((m) => m === "pkg/core")).toHaveLength(1);
+      });
+    },
+  );
 });
