@@ -31,7 +31,7 @@ describe("prepared title creation handoff", () => {
 
   it("uses a ready title at creation without changing an explicit worktree name", async () => {
     const { flow, context, place, titles } = createDraftTitleFixture();
-    place.toggleWorktree();
+    place.selectWorktree(true);
     place.setWorktreeName("my-explicit-branch");
     flow.setMessage("repair the sidebar naming");
     titles.hostUpdated();

@@ -384,15 +384,18 @@ suite.define(() => {
       await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("Claude Code");
       expect(await page.locator(".new-session-page__start-split").count()).toBe(0);
 
-      await page.locator("#new-session-detail-trigger").click();
-      const placePopover = page.locator("wa-popover.new-session-page__detail-popover");
-      const worktreeButton = placePopover.getByRole("button", { name: "Worktree" });
+      await page.locator("#new-session-checkout-trigger").click();
+      const placePopover = page.locator("wa-popover.new-session-page__checkout-popover");
+      const worktreeButton = placePopover.getByRole("button", {
+        name: "New worktree Isolated copy of the repo",
+        exact: true,
+      });
       await worktreeButton.waitFor({ state: "visible" });
       const initialBranchRequestCount = (await gateway.getRequests("worktrees.branches")).length;
       await worktreeButton.click();
-      await expect.poll(() => placePopover.getByLabel("Base branch").inputValue()).toBe("main");
-      await placePopover.getByLabel("Worktree name").fill("terminal-task");
-      await page.locator("#new-session-detail-trigger").click();
+      await expect.poll(() => placePopover.getByLabel("From").inputValue()).toBe("main");
+      await placePopover.getByLabel("Name", { exact: true }).fill("terminal-task");
+      await page.locator("#new-session-checkout-trigger").click();
       await page.locator(".new-session-page__message").fill("  inspect the checkout  ");
 
       expect(await page.getByRole("button", { name: "Add attachment" }).count()).toBe(0);
@@ -934,12 +937,15 @@ suite.define(() => {
         includeRepositoryStatus: true,
       });
 
-      const placeSelect = page.locator("wa-popover.new-session-page__detail-popover");
-      const placeTrigger = page.locator("#new-session-detail-trigger");
+      const placeSelect = page.locator("wa-popover.new-session-page__checkout-popover");
+      const placeTrigger = page.locator("#new-session-checkout-trigger");
       await placeTrigger.click();
-      const worktreeItem = placeSelect.getByRole("button", { name: "Worktree" });
+      const worktreeItem = placeSelect.getByRole("button", {
+        name: "New worktree Isolated copy of the repo",
+        exact: true,
+      });
       await worktreeItem.click();
-      const baseInput = page.getByLabel("Base branch");
+      const baseInput = page.getByLabel("From", { exact: true });
       await expect.poll(() => baseInput.inputValue()).toBe("main");
       await page.keyboard.press("Escape");
 

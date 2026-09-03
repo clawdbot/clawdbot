@@ -7,7 +7,7 @@ import type { AgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import * as catalog from "./catalog-target.ts";
-import { renderDetailChip, resolveDetailChip } from "./detail-chip.ts";
+import { renderCheckoutChip, resolveCheckoutChip } from "./checkout-chip.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
 import type { NewSessionRouteData } from "./location.ts";
@@ -101,10 +101,12 @@ export function renderNewSessionPlaceControls({
     recents,
     projectQuery: browser.projectQuery,
   });
-  const detailState = resolveDetailChip({
+  const checkoutState = resolveCheckoutChip({
     destination: place.remotePlacement ? "remote" : "local",
     worktree: place.worktree,
     worktreeAvailable: place.worktreeAvailable(),
+    headBranch: branches?.headBranch,
+    baseRef: place.baseRef,
   });
   const gatewayLabel = gateway.gatewayName
     ? t("newSession.gatewayNamed", { name: gateway.gatewayName })
@@ -181,11 +183,6 @@ export function renderNewSessionPlaceControls({
         projectSearchError: browser.projectSearchError,
         projectId: browser.projectId,
         gatewayLabel,
-        remotePlacement: place.remotePlacement,
-        branches,
-        branchesLoading: place.repository.kind === "checking",
-        baseRef: place.baseRef,
-        worktreeName: place.worktreeName,
         submitting,
         pendingPlacement,
         ...browser.popoverCallbacks("project"),
@@ -201,8 +198,6 @@ export function renderNewSessionPlaceControls({
         onProjectQueryInput: (query) => browser.changeProjectQuery(query),
         onSelectRemoteProject: (project) => place.selectRemoteProject(project),
         onApplyFolder: (folder) => place.applyFolder(folder),
-        onBaseRefInput: (baseRef) => place.setBaseRef(baseRef),
-        onWorktreeNameInput: (worktreeName) => place.setWorktreeName(worktreeName),
         onBrowse: () => browser.selectGatewayBrowser(place.folder.trim() || place.workspacePath()),
         onBrowserPathDraftChange: (value) => {
           browser.browserPathDraft = value;
@@ -211,9 +206,11 @@ export function renderNewSessionPlaceControls({
         onBrowserBack: () => browser.showRoot(),
         onRegisterProject: (path) => void browser.registerBrowserProject(path),
         onClose: () => browser.close(),
-      })}${detailState && !(nativeTerminal && place.terminalOnNode)
-    ? renderDetailChip({
-        state: detailState,
+      })}${checkoutState && !(nativeTerminal && place.terminalOnNode)
+    ? renderCheckoutChip({
+        state: checkoutState,
+        remotePlacement: place.remotePlacement,
+        folderLabel: projectState.label,
         worktree: place.worktree,
         worktreeAvailable: place.worktreeAvailable(),
         repositoryUnavailable: place.repository.kind === "unavailable",
@@ -223,8 +220,8 @@ export function renderNewSessionPlaceControls({
         worktreeName: place.worktreeName,
         submitting,
         pendingPlacement,
-        ...browser.popoverCallbacks("detail"),
-        onToggleWorktree: () => place.toggleWorktree(),
+        ...browser.popoverCallbacks("checkout"),
+        onSelectWorktree: (value) => place.selectWorktree(value),
         onBaseRefInput: (baseRef) => place.setBaseRef(baseRef),
         onWorktreeNameInput: (worktreeName) => place.setWorktreeName(worktreeName),
       })
