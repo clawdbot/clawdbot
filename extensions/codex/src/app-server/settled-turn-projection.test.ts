@@ -40,6 +40,34 @@ function projectedCallIds(messages: AgentMessage[]): string[] {
     .map((item) => item.call_id);
 }
 
+function guardCasesFor(label: string, id: string) {
+  return [
+    {
+      name: `missing result (${label})`,
+      messages: [toolCall(id)],
+      error: "incomplete tool transcript",
+    },
+    {
+      name: `duplicate call id (${label})`,
+      messages: [toolCall(id), toolCall(id), toolResult(id)],
+      error: "duplicate tool call",
+    },
+    {
+      name: `tool-name mismatch (${label})`,
+      messages: [
+        toolCall(id),
+        message({
+          role: "toolResult",
+          toolCallId: id,
+          toolName: "different",
+          content: [{ type: "text", text: "done" }],
+        }),
+      ],
+      error: "ambiguous tool transcript",
+    },
+  ];
+}
+
 describe("projectSettledCodexMessages", () => {
   it("projects a canonical completed tool exchange without exposing reasoning", () => {
     expect(
@@ -129,6 +157,23 @@ describe("projectSettledCodexMessages", () => {
     expect(ids[0]).toBe(ids[1]);
     expect(ids[2]).toBe(ids[3]);
     expect(ids[0]).not.toBe(ids[2]);
+  });
+
+  it("passes a 64-character call id through untouched and rewrites at 65", () => {
+    const atLimit = "b".repeat(64);
+    const overLimit = "c".repeat(65);
+
+    // The Responses contract is maxLength 64, so a 64-character id must stay
+    // byte-identical: narrowing the gate to `< 64` would silently rewrite ids
+    // that already replay correctly today.
+    expect(projectedCallIds([toolCall(atLimit), toolResult(atLimit)])).toEqual([atLimit, atLimit]);
+
+    const rewritten = projectedCallIds([toolCall(overLimit), toolResult(overLimit)]);
+    expect(rewritten).toHaveLength(2);
+    expect(rewritten[0]).not.toBe(overLimit);
+    expect(rewritten[0]).toMatch(/^call_[A-Za-z0-9_-]{1,59}$/);
+    expect(rewritten[0]?.length).toBeLessThanOrEqual(64);
+    expect(rewritten[1]).toBe(rewritten[0]);
   });
 
   it("projects dotted namespaced tool names recorded from Codex MCP calls", () => {
@@ -360,33 +405,8 @@ describe("projectSettledCodexMessages", () => {
       messages: [toolResult()],
       error: "ambiguous tool transcript",
     },
-    {
-      name: "missing result",
-      messages: [toolCall(OVERLENGTH_CALL_ID)],
-      error: "incomplete tool transcript",
-    },
-    {
-      name: "duplicate call id",
-      messages: [
-        toolCall(OVERLENGTH_CALL_ID),
-        toolCall(OVERLENGTH_CALL_ID),
-        toolResult(OVERLENGTH_CALL_ID),
-      ],
-      error: "duplicate tool call",
-    },
-    {
-      name: "tool-name mismatch",
-      messages: [
-        toolCall(OVERLENGTH_CALL_ID),
-        message({
-          role: "toolResult",
-          toolCallId: OVERLENGTH_CALL_ID,
-          toolName: "different",
-          content: [{ type: "text", text: "done" }],
-        }),
-      ],
-      error: "ambiguous tool transcript",
-    },
+    ...guardCasesFor("short id", "call-1"),
+    ...guardCasesFor("overlength id", OVERLENGTH_CALL_ID),
   ])("fails closed for $name", ({ messages, error }) => {
     expect(() => projectSettledCodexMessages(messages)).toThrow(error);
   });
